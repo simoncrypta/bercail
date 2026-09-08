@@ -74,7 +74,7 @@ parse_install_args() {
 main() {
   parse_install_args "$@"
 
-  log "agentic-dev-setup v${AGENTIC_DEV_VERSION}"
+  log "bercail v${AGENTIC_DEV_VERSION}"
   info "platform: $(detect_platform) shell: $(detect_shell_name)"
   is_omarchy && info "omarchy detected"
   is_ubuntu && info "ubuntu detected"
@@ -84,7 +84,7 @@ main() {
   deploy_configs
   deploy_omarchy_integration
   if ! install_shell_integration; then
-    warn "shell integration was not installed — run 'agentic-dev update' after resolving conflicts"
+    warn "shell integration was not installed — run 'bercail update' after resolving conflicts"
   fi
   show_summary
 }

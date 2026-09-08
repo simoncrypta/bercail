@@ -12,7 +12,7 @@ marker_block_content() {
       cat <<EOF
 ${AGENTIC_DEV_MARKER_START} v${AGENTIC_DEV_VERSION}
 ${brew_env}export PATH="\$HOME/.local/bin:\$PATH"
-source "\$HOME/.config/agentic-dev/shell/agentic-dev.zsh"
+source "\$HOME/.config/bercail/shell/bercail.zsh"
 ${AGENTIC_DEV_MARKER_END}
 EOF
       ;;
@@ -20,7 +20,7 @@ EOF
       cat <<EOF
 ${AGENTIC_DEV_MARKER_START} v${AGENTIC_DEV_VERSION}
 ${brew_env}export PATH="\$HOME/.local/bin:\$PATH"
-source "\$HOME/.config/agentic-dev/shell/agentic-dev.sh"
+source "\$HOME/.config/bercail/shell/bercail.sh"
 ${AGENTIC_DEV_MARKER_END}
 EOF
       ;;
@@ -40,10 +40,11 @@ upsert_marker_block() {
       return 0
     fi
     tmp="$(mktemp)"
-    awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" '
-      $0 ~ start { skip=1 }
+    awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" \
+        -v lstart="$LEGACY_AGENTIC_DEV_MARKER_START" -v lend="$LEGACY_AGENTIC_DEV_MARKER_END" '
+      $0 ~ start || $0 ~ lstart { skip=1 }
       !skip { print }
-      $0 ~ end { skip=0 }
+      $0 ~ end || $0 ~ lend { skip=0 }
     ' "$rc" >"$tmp"
     printf '\n%s\n' "$content" >>"$tmp"
     mv "$tmp" "$rc"
@@ -68,9 +69,10 @@ remove_marker_block() {
   fi
   local tmp
   tmp="$(mktemp)"
-  awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" '
-    $0 ~ start { skip=1; next }
-    $0 ~ end { skip=0; next }
+  awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" \
+      -v lstart="$LEGACY_AGENTIC_DEV_MARKER_START" -v lend="$LEGACY_AGENTIC_DEV_MARKER_END" '
+    $0 ~ start || $0 ~ lstart { skip=1; next }
+    $0 ~ end || $0 ~ lend { skip=0; next }
     !skip { print }
   ' "$rc" >"$tmp"
   mv "$tmp" "$rc"
@@ -88,7 +90,7 @@ install_shell_integration() {
       [[ -n "$line" ]] && warn "  - $line"
     done <<< "$conflicts"
     if [[ "$FORCE" -ne 1 ]]; then
-      warn "skipping shell integration (use: agentic-dev update --force)"
+      warn "skipping shell integration (use: bercail update --force)"
       return 1
     fi
   fi

@@ -1,182 +1,161 @@
-# agentic-dev-setup
+# bercail
 
-A ready-made [Herdr](https://herdr.dev) workspace for agentic coding: sticky agent on the left, shell in the center, files and git on the right — one layout per worktree, with Worktrunk hooks and a `handoff` skill so agents can spawn sibling worktrees for you. Review ([hunk](https://github.com/modem-dev/hunk)) opens on demand.
+**an ADE on [herdr](https://herdr.dev).**
 
-Works on **Omarchy**, **Ubuntu/Debian**, and **macOS**.
+Bercail is an agentic development environment: Herdr-based, cursor-agent focused, built for working in parallel with control and observability. One git worktree, one Herdr workspace. [cursor-agent](https://cursor.com) stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. When it goes `done`, [hunk](https://github.com/modem-dev/hunk) opens the whole branch vs main. `handoff` clones that desk onto a sibling worktree and starts a [pstack](https://github.com/cursor/plugins/tree/main/pstack) child (`/poteto-mode`). You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
 
-<img width="2138" height="1386" alt="image" src="https://github.com/user-attachments/assets/52d372ae-a51f-4260-b95f-d9daa3b335c1" />
+Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
+<img width="2138" height="1386" alt="sticky agent, review, files" src="https://github.com/user-attachments/assets/52d372ae-a51f-4260-b95f-d9daa3b335c1" />
 
-## Quick install
+- **sticky agent** — cursor-agent does not live in a tab. Tabs move around it.
+- **one worktree, one workspace** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; Herdr follows.
+- **control and observability** — every pane is working, blocked, or idle. Review opens on `done`. You choose what gets a GitHub comment.
+- **review when the agent is done** — `hunk diff origin/main --watch` on a feature branch (working tree vs main). `prefix+2` anytime.
+- **handoff is parallel, not a chat fork** — sibling checkout, optional dirty copy, always cursor-agent + pstack. Install pstack in Cursor: `/add-plugin pstack`.
+- **keyboard and mouse** — prefix is `Ctrl-Space` (Omarchy tmux). Click the file tree; `j`/`k` in hunk.
 
-Full stack (recommended):
+```
+┌──────────────┬────────────────────────────┬─────────┐
+│ cursor-agent │ shell  |  review*  |  edit │ files   │
+│ sticky       │ hunk on agent done / +2    │ git     │
+│ prefix+1     │ prefix+2 / +3 / +4         │ +4 / +g │
+└──────────────┴────────────────────────────┴─────────┘
+```
+
+## install
 
 ```bash
 curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
 ```
 
-Non-interactive (skip layout prompts):
+`--yes` is non-interactive. From a clone: `./install.sh`.
+
+Then, in a repo:
 
 ```bash
-curl -fsSL https://setup.simoncrypta.dev/install.sh | bash -s -- --yes
+dev          # attach this directory
+# or: t      # launch herdr
+# then prefix+d
 ```
 
-From a local clone:
+Default sticky agent is **cursor-agent**. There is no picker. Another command in the left pane is `[agent] command` in `~/.config/bercail/config.toml`, then `bercail reconfigure`. Handoff children stay cursor-agent + `/poteto-mode`.
+
+## commands
+
+### install / CLI
+
+| Command | What |
+|---------|------|
+| `./install.sh` | Full install |
+| `./install.sh --yes` | Non-interactive |
+| `./install.sh --help` | Installer help |
+| `bercail help` | This reference |
+| `bercail doctor` | Deps, plugin, skills, pstack, Herdr integration |
+| `bercail update` | Re-sync configs, helper, skills (`--force` ok) |
+| `bercail reconfigure` | Re-read `config.toml`, refresh skills/integrations |
+| `bercail dry-run` | Show install actions, write nothing |
+| `bercail uninstall` | Remove managed files and the shell marker |
+
+### shell
+
+| Command | What |
+|---------|------|
+| `dev` | Attach or switch the Herdr workspace for `$PWD` |
+| `d` | Apply the sticky-agent layout (inside Herdr only) |
+| `t` | `herdr` |
+| `wtc [branch]` | Create worktree + Herdr workspace |
+| `wts [branch]` | Switch worktree (fzf if omitted) |
+| `wtd [branch]` | Remove worktree + close Herdr workspace |
+
+### skills (agent pane)
+
+Call by name. Cursor reads `~/.agents/skills`.
+
+| Skill | What |
+|-------|------|
+| `handoff` | Spawn a sibling worktree; child is cursor-agent + `/poteto-mode` |
+| `review` | Wait for **human** hunk notes; publish to GitHub only if asked |
 
 ```bash
-cd /path/to/agentic-dev-setup
-./install.sh
+# handoff (parent: --info, then spawn — never put the prompt on argv)
+~/.agents/skills/handoff/scripts/handoff-spawn --info
+~/.agents/skills/handoff/scripts/handoff-spawn --stash-prompt
+~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME \
+  [--dirty|--clean] [--plan] [--workspace ID] \
+  [--take-pending|--prompt-file PATH]
+
+# review helpers
+~/.agents/skills/review/scripts/wait-comments.sh --repo . [--timeout N]
+~/.agents/skills/review/scripts/publish-github.sh --repo . \
+  [--event comment|approve|request-changes] [--body TEXT] [--dry-run]
 ```
 
-Already running Herdr and only want the layout plugin? Jump to [Plugin only](#plugin-only).
+`--info` includes `pstack`. If it is false, install pstack in Cursor (`/add-plugin pstack`) and still spawn.
 
-## What you get
+Manual skill install: `npx skills add simoncrypta/agentic-dev-setup --skill handoff -g`
 
-- **Sticky-agent layout**: agent (~⅓) + shell center + files/git sidebar — agent stays put while you switch tabs; Review opens when needed
-- **In-repo layout plugin**: `agentic-dev.layout` (files/git sidebar is our fork of [alexarthurs/herdr-sidebar](https://github.com/alexarthurs/herdr-sidebar))
-- **Review**: [hunk](https://github.com/modem-dev/hunk) on demand (`hunk diff --watch` in a Review tab; `prefix+2` or the `review` skill)
-- **Editor opens**: [fresh](https://github.com/sinelaw/fresh) from the sidebar tree
-- **Worktrunk plugin**: in-Herdr git worktree pickers (`prefix+shift+g/c/r`)
-- **Shell commands**: `dev`, `wtc`, `wts`, `wtd`, `d`, `t`
-- **worktrunk hooks**: auto-create/close Herdr workspaces on worktree start/remove
-- **`handoff` skill**: any parent agent runs `handoff-spawn --info` then `handoff-spawn`; the child is always **cursor-agent** with `/poteto-mode` and the task as argv. Dirty main is copied as a working tree by default. The child is told to call **`review`** after a coherent unit of work.
-- **`review` skill**: open hunk, wait for human comments, close the Review tab
-- **Config**: `~/.config/agentic-dev/config.toml` (agent command; review/editor fixed to hunk + fresh)
-- **Omarchy/Linux**: fcitx5 hint hotkeys cleared; optional Hyprland binding patch
-- **Ubuntu/Debian**: apt + GitHub/mise installs when needed
+### layout plugin
 
-### Layout
+`herdr plugin action invoke agentic-dev.layout.<action>`
 
-One Herdr workspace per worktree. Switching tabs moves the agent pane with you — it is not its own tab.
+| Action | Key |
+|--------|-----|
+| `apply` / `create` | `prefix+d` |
+| `focus-agent` / `start-agent` | `prefix+1` |
+| `select-review` | `prefix+2` |
+| `select-shell` | `prefix+3` |
+| `select-files` | `prefix+4` |
+| `select-source-control` | sidebar git |
+| `refresh-review` | sidebar `v` |
+| `close-review` / `close-tab` | `prefix+k` |
+| `close-pane` | `prefix+x` |
+| `toggle-sidebar` | — |
+| `open-editor` | click a file |
+| `select-tab-1` … `select-tab-9` | `Alt+1`…`9` (Option on macOS) |
+| `select-prev-tab` / `select-next-tab` | `Alt+Left` / `Alt+Right` |
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  workspace tabs   shell   review*  editor           PREFIX  #h │
-├─────────────────────────┬────────────────────────────────────────┤
-│                         │                                        │
-│   agent                 │   active tool tab                      │
-│   (cursor / grok / pi / │                                        │
-│    codex / opencode /   │   shell     → terminal                 │
-│    claude)              │                                        │
-│                         │   review*   → hunk diff --watch        │
-│   sticky left pane      │     (created by prefix+2 / review skill)│
-│                         │                                        │
-│                         │   editor    → fresh                    │
-│                         │                                        │
-│   prefix+1              │   prefix+2/3/4  or  Alt/Option+1/2/3   │
-└─────────────────────────┴────────────────────────────────────────┘
-```
+Review launch: feature branch → `hunk diff origin/main --watch --agent-notes`; on main → `hunk diff --watch --agent-notes`. `auto_review = false` disables the agent-done hook.
 
-Prefix is `Ctrl-Space` (same as [Omarchy tmux](https://learn.omacom.io/2/the-omarchy-manual/53/hotkeys#tmux)). `prefix+d` applies this layout in the current workspace.
+## keys
 
-### First-run prompt
+Prefix is **`Ctrl-Space`**. Linux: [`config/herdr/config.toml`](config/herdr/config.toml) (Alt). macOS: [`config/herdr/config.macos.toml`](config/herdr/config.macos.toml) (Option).
 
-On install you'll pick the **agent** command. Review is always [hunk](https://github.com/modem-dev/hunk); file opens are always [fresh](https://github.com/sinelaw/fresh).
+Native Herdr owns splits, workspaces, detach. This plugin owns the sticky layout. [herdr-worktrunk](https://github.com/devashish2203/herdr-worktrunk) owns worktree pickers. `prefix+shift+d` is Herdr close-workspace, so remove is `prefix+shift+r`. Close this workspace: `prefix+shift+k`. Child worktrees stay open unless `herdr workspace close --group`.
 
-**Agent**
+| Key | Action |
+|-----|--------|
+| `prefix+d` | Apply / ensure layout |
+| `prefix+1` | Focus agent (recreate if dead) |
+| `prefix+2` | Review |
+| `prefix+3` | Shell |
+| `prefix+4` | Files |
+| `Alt+1`…`9` | Tab N (Option on macOS) |
+| `prefix+c` | New tab |
+| `prefix+k` | Close file tab or Review |
+| `prefix+shift+t` | Rename tab |
+| `prefix+n` / `p` | Next / previous tab |
+| `Alt+Left` / `Right` | Previous / next tab |
+| `Alt+Up` / `Down` | Previous / next workspace |
+| `prefix+w` | Workspace picker |
+| `prefix+shift+n` | New workspace |
+| `prefix+shift+w` | Rename workspace |
+| `prefix+shift+k` | Close this workspace |
+| `prefix+shift+q` | Detach |
+| `prefix+h` / `v` | Split below / beside |
+| `prefix+x` | Close pane |
+| `prefix+z` | Zoom pane |
+| `Ctrl+Alt+arrows` | Focus pane (Ctrl+Option on macOS) |
+| `prefix+shift+g` | Worktree from default branch |
+| `prefix+shift+c` | Worktree from current branch |
+| `prefix+shift+r` | Remove worktree |
+| `prefix+q` | Reload Herdr config |
 
-1. `cursor` (runs `cursor-agent`)
-2. `grok`
-3. `pi`
-4. `codex`
-5. `opencode`
-6. `claude`
-7. custom
+`prefix+1`…`4` no-op until `prefix+d` has created a layout. Missing agent pane is recreated on the next tab switch or `prefix+1`.
 
-Saved to `~/.config/agentic-dev/config.toml`. Change the agent later with `agentic-dev reconfigure`.
+## config
 
-### Handoff and review skills
-
-The full installer deploys [`skills/handoff/`](skills/handoff/) and [`skills/review/`](skills/review/) to `~/.agents/skills/<id>`. Call them by name: **`handoff`**, **`review`**.
-
-From the main repo checkout inside Herdr, `handoff` runs `scripts/handoff-spawn`: sibling worktree, dirty working-tree copy when main is dirty, sticky layout, **cursor-agent** with `/poteto-mode` and the original prompt. It prints `{label, path, branch}` and refuses to spawn if the child agent did not start.
-
-Agents that already discover `~/.agents/skills` (Cursor) need no extra link. Grok, Codex, OpenCode, Claude, and pi get a symlink into their agent-specific skills dir. Manual install:
-
-```bash
-npx skills add simoncrypta/agentic-dev-setup --skill handoff -g
-```
-
-## Plugin only
-
-Use this when you already have Herdr set up and only want the **layout plugin** (`agentic-dev.layout`).
-
-```bash
-herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.3.9
-```
-
-| Comes with plugin install | Full install also adds |
-|---------------------------|------------------------|
-| Sticky agent + shell + files/git sidebar (Review on demand) | Shell commands (`dev`, `wtc`, `wts`, `wtd`, `d`, `t`) |
-| Layout actions (`create`, `apply`, tab focus, …) | `agentic-dev` CLI (`doctor`, `update`, `reconfigure`, `uninstall`) |
-| Sidebar fork of [herdr-sidebar](https://github.com/alexarthurs/herdr-sidebar) (built on install) | `handoff` and `review` skills |
-| | Worktrunk hooks + herdr-worktrunk plugin |
-| | Herdr keybindings / config templates |
-| | Dependency install (Herdr, worktrunk, [hunk](https://github.com/modem-dev/hunk), [fresh](https://github.com/sinelaw/fresh), agents) |
-| | Omarchy / Hyprland / fcitx5 desktop fixes |
-
-**Requires:** [Herdr](https://herdr.dev) 0.8+, `jq`, a Rust toolchain (sidebar build), [hunk](https://github.com/modem-dev/hunk), and [fresh](https://github.com/sinelaw/fresh). You wire keybindings yourself (see below).
-
-### Trust and security
-
-Herdr plugins are ordinary code that runs as your user. See [Herdr: Trust and security](https://herdr.dev/docs/plugins/#trust-and-security). Skim [`plugins/agentic-layout/herdr-plugin.toml`](plugins/agentic-layout/herdr-plugin.toml) and [`plugins/agentic-layout/layout.sh`](plugins/agentic-layout/layout.sh) first; prefer interactive install (no `--yes`) the first time.
-
-**Unpinned / local:**
-
-```bash
-herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout
-
-git clone https://github.com/simoncrypta/agentic-dev-setup.git
-cd agentic-dev-setup/plugins/agentic-layout && cargo build --release -p herdr-sidebar
-herdr plugin link ~/path/to/agentic-dev-setup/plugins/agentic-layout
-```
-
-**Verify:**
-
-```bash
-herdr plugin list
-herdr plugin action invoke agentic-dev.layout.create
-```
-
-### Wire up keybindings
-
-Add plugin actions to `~/.config/herdr/config.toml`. Also set `close_tab = ""` and `close_pane = ""`. Minimum bindings:
-
-```toml
-[[keys.command]]
-key = "prefix+d"
-type = "plugin_action"
-command = "agentic-dev.layout.apply"
-
-[[keys.command]]
-key = "prefix+1"
-type = "plugin_action"
-command = "agentic-dev.layout.focus-agent"
-
-[[keys.command]]
-key = "prefix+2"
-type = "plugin_action"
-command = "agentic-dev.layout.select-review"
-
-[[keys.command]]
-key = "prefix+3"
-type = "plugin_action"
-command = "agentic-dev.layout.select-shell"
-
-[[keys.command]]
-key = "prefix+k"
-type = "plugin_action"
-command = "agentic-dev.layout.close-tab"
-
-[[keys.command]]
-key = "prefix+x"
-type = "plugin_action"
-command = "agentic-dev.layout.close-pane"
-```
-
-Or copy the full example from [`config/herdr/config.toml`](config/herdr/config.toml) (Linux / Alt) or [`config/herdr/config.macos.toml`](config/herdr/config.macos.toml) (macOS / Option), then `herdr server reload-config`.
-
-Optional agent config (`~/.config/agentic-dev/config.toml`):
+`~/.config/bercail/config.toml`:
 
 ```toml
 [agent]
@@ -184,194 +163,48 @@ command = "cursor-agent"
 
 [layout]
 review = "hunk diff"
-editor = "fresh"
+auto_review = true
+# editor = "nvim"   # else $EDITOR / $VISUAL (macOS: nano, then vi)
 ```
 
-Without config: agent defaults to `cursor-agent`, review to `hunk diff`, file opens to `fresh`. `select-review` / `prefix+2` launches `hunk diff --watch`. Use `refresh-review` (sidebar `v`) to restart watch.
+Also: `~/.config/herdr/config.toml`, worktrunk hooks, `~/.agents/skills/{handoff,review}`.
 
-## Shell commands
+## plugin only
 
-| Command | Description |
-|---------|-------------|
-| `dev` | Dev layout for current directory |
-| `wtc [branch]` | Create worktree + new Herdr workspace |
-| `wts [branch]` | Switch to existing worktree (fzf picker) |
-| `wtd [branch]` | Remove worktree + close Herdr workspace |
-| `d` | Apply layout in current Herdr workspace |
-| `t` | Launch herdr |
-
-## Herdr keys
-
-Prefix is **`Ctrl-Space`**, matching [Omarchy tmux](https://learn.omacom.io/2/the-omarchy-manual/53/hotkeys#tmux). Bindings live in [`config/herdr/config.toml`](config/herdr/config.toml) (Linux / Alt) and [`config/herdr/config.macos.toml`](config/herdr/config.macos.toml) (macOS / Option).
-
-### Roles
-
-| Layer | Owns | Examples |
-|-------|------|----------|
-| Native Herdr | Panes, tabs, workspaces | splits, close workspace, detach |
-| Layout plugin | Sticky agent layout | apply layout, review/shell/sidebar |
-| herdr-worktrunk plugin | Git worktree pickers | open / open-current / remove |
-
-`prefix+shift+d` is **not** bound to worktrunk remove — that key is Herdr’s native close-workspace by default, so remove lives on `prefix+shift+r` instead. Workspace close is on `prefix+shift+k` (Omarchy’s kill-session analog).
-
-### Dev layout
-
-| Key | Action |
-|-----|--------|
-| `prefix+d` | Apply / ensure sticky-agent layout |
-| `prefix+1` | Focus agent pane (recreates if crashed) |
-| `prefix+2` | Open or focus Review (`hunk diff --watch`) |
-| `prefix+3` | Shell tab |
-| `prefix+4` | Files pane |
-| `Alt+1` / `Alt+2` / `Alt+3` (Option on macOS) | Same tabs in a **dev** workspace; otherwise focus tab 1/2/3 |
-
-Prefix `1–4` no-op outside a valid dev-layout workspace. Only `prefix+d` / `create` / `apply` create one.
-
-### Tabs (≈ Omarchy windows)
-
-| Key | Action |
-|-----|--------|
-| `prefix+c` | New tab |
-| `prefix+k` | Close file tab (or Review; docks back to Shell) |
-| `prefix+shift+t` | Rename tab |
-| `prefix+n` / `Alt+Right` (Option on macOS) | Next tab |
-| `prefix+p` / `Alt+Left` (Option on macOS) | Previous tab |
-
-### Workspaces (≈ Omarchy sessions)
-
-| Key | Action |
-|-----|--------|
-| `Alt+Up` / `Alt+Down` (Option on macOS) | Previous / next workspace |
-| `prefix+w` | Workspace picker |
-| `prefix+shift+n` | New workspace |
-| `prefix+shift+w` | Rename workspace |
-| `prefix+shift+k` | Close workspace |
-| `prefix+shift+q` | Detach |
-
-### Panes
-
-| Key | Action |
-|-----|--------|
-| `prefix+h` | Split below |
-| `prefix+v` | Split beside |
-| `prefix+x` | Close pane (file tabs: same as prefix+k) |
-| `prefix+z` | Zoom pane |
-| `Ctrl+Alt+Left/Right/Up/Down` (Ctrl+Option on macOS) | Focus left / right / up / down |
-
-### Git worktrees (herdr-worktrunk)
-
-| Key | Action |
-|-----|--------|
-| `prefix+shift+g` | Open / create worktree from default branch |
-| `prefix+shift+c` | Open / create worktree from current branch |
-| `prefix+shift+r` | Remove worktree |
-
-Shell equivalents outside Herdr: `wtc`, `wts`, `wtd`.
-
-### General
-
-| Key | Action |
-|-----|--------|
-| `prefix+q` | Reload Herdr config |
-
-Tab switching works even when the agent pane is missing — the agent is recreated lazily on the next tab switch or `prefix+1`.
-
-## Post-install CLI
+Already on Herdr and only want the layout:
 
 ```bash
-agentic-dev help         # full reference
-agentic-dev doctor       # check deps + integration
-agentic-dev update       # re-sync configs, helper, and skill
-agentic-dev reconfigure  # change agent command (not a full redeploy)
-agentic-dev dry-run      # preview changes
-agentic-dev uninstall    # remove integration
+herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.4.0
 ```
 
-## Omarchy / Linux notes
+Needs Herdr 0.9+, `jq`, a Rust toolchain, hunk. Copy keys from [`config/herdr/config.toml`](config/herdr/config.toml). Set `close_tab = ""` and `close_pane = ""`. Full install also adds shell commands, CLI, skills, worktrunk hooks, and desktop fixes.
 
-### Omarchy Quattro
-
-Hyprland user config is Lua (`~/.config/hypr/bindings.lua`), not `bindings.conf`. The installer:
-
-- Detects Omarchy via the `omarchy` CLI / `$OMARCHY_PATH` / `~/.local/share/omarchy`
-- Installs tools with **mise** first (`mise use -g`), matching `omarchy default agent`
-- Installs Arch packages with `omarchy pkg add` (not raw `pacman`)
-- Restarts fcitx5 with `omarchy restart xcompose`
-- Patches `bindings.lua` using Omarchy's helper: `{ omarchy = "terminal-herdr" }`
-- Treats native `SUPER+CTRL+RETURN` → Herdr as first-class
-- Optionally remaps `SUPER+ALT+RETURN` from Tmux to Herdr
-- Syncs `~/.config/omarchy/defaults/agent` when you pick `grok` / `pi` / `claude` / `codex` / `opencode`
-
-### Ubuntu / Debian
-
-Dependencies install via **mise** when available, then **apt**:
+Plugins run as your user. Skim [`plugins/agentic-layout/herdr-plugin.toml`](plugins/agentic-layout/herdr-plugin.toml) and [`layout.sh`](plugins/agentic-layout/layout.sh). Prefer no `--yes` the first time.
 
 ```bash
-sudo apt-get install -y git fzf jq lazygit curl
+herdr plugin list
+herdr plugin action invoke agentic-dev.layout.create
 ```
 
-Tools not in apt are fetched automatically:
+Local: `cargo build --release -p herdr-sidebar` in `plugins/agentic-layout`, then `herdr plugin link …`.
 
-- **herdr** — mise, then [herdr.dev/install.sh](https://herdr.dev/install.sh)
-- **worktrunk** (`wt`) — mise, then GitHub release binary to `~/.local/bin`
-- **hunk** — mise, brew, or [hunk.dev/install.sh](https://hunk.dev/install.sh) ([modem-dev/hunk](https://github.com/modem-dev/hunk))
-- **fresh** — brew `fresh-editor` or the [Fresh installer](https://getfresh.dev/) ([sinelaw/fresh](https://github.com/sinelaw/fresh))
-- **grok** — `mise use -g npm:@xai-official/grok` when selected as the agent
-- **pi** — `mise use -g pi` when selected as the agent
+## linux
 
-On Ubuntu with **Hyprland**, the installer can optionally add `SUPER+ALT+RETURN` → `herdr`. If you use **fcitx5**, the `Ctrl+Alt+H/J` hint hotkey fix applies the same way as on Omarchy.
+On Omarchy: mise first, `omarchy pkg add`, native `SUPER+CTRL+RETURN` → Herdr, optional `SUPER+ALT+RETURN` remap, fcitx5 `Ctrl+Alt+H/J` hint keys cleared. On Ubuntu: mise then apt (`git fzf jq lazygit curl`); herdr, worktrunk, hunk from upstream. Hyprland: same optional `SUPER+ALT+RETURN` binding.
 
-### fcitx5 `Ctrl+Alt+H` conflict
+## dependencies
 
-Omarchy runs fcitx5 for emoji and compose. By default fcitx5 binds `Ctrl+Alt+H/J` to spell-hint toggles. This installer clears those hotkeys in `~/.config/fcitx5/conf/keyboard.conf` so the chords stay free.
+Installed if missing: [herdr](https://herdr.dev) 0.9+ (`herdr integration install cursor`), worktrunk, fzf, jq, lazygit, [hunk](https://github.com/modem-dev/hunk) ≥ 0.20.1, cursor-agent. pstack is a Cursor plugin, not a package: `/add-plugin pstack`.
 
-See [Omarchy discussion #1578](https://github.com/basecamp/omarchy/discussions/1578).
-
-### Hyprland launcher
-
-On Omarchy or any Hyprland system, the installer can patch `SUPER+ALT+RETURN` to launch Herdr. Omarchy Quattro uses `{ omarchy = "terminal-herdr" }` in `bindings.lua`; other setups get a generic `xdg-terminal-exec herdr` binding.
-
-## Dependencies
-
-Installed only if missing (mise first, then Omarchy `pkg add`, Homebrew, apt, pacman, or upstream installers):
-
-- [herdr](https://herdr.dev) (`mise use -g herdr`, brew, or `curl -fsSL https://herdr.dev/install.sh | sh`)
-- Official [Herdr agent integration](https://herdr.dev/docs/integrations/) for the selected agent
-- git, worktrunk (`wt`), fzf, jq, lazygit
-- [hunk](https://github.com/modem-dev/hunk) (>= 0.20.1; `hunk diff --watch` when Review opens)
-- [fresh](https://github.com/sinelaw/fresh) (sidebar file opens)
-- [grok](https://github.com/xai-org) (`mise use -g npm:@xai-official/grok`) when selected as the agent
-- pi (`mise use -g pi`) when selected as the agent
-
-## Files installed
-
-```
-~/.config/agentic-dev/config.toml
-~/.config/agentic-dev/shell/agentic-dev.{sh,zsh,inc.sh}
-~/.config/herdr/config.toml
-~/.config/herdr/plugins/               layout plugin (managed GitHub install)
-~/.config/worktrunk/herdr-layout.sh
-~/.config/worktrunk/config.toml   (created if missing; update rewrites Repo_Branch session labels to Branch_Repo)
-~/.config/fcitx5/conf/keyboard.conf   (Linux, when fcitx5/Omarchy)
-~/.config/nvim/lua/plugins/agentic-dev-explorer.lua   (LazyVim only; tree on the right)
-~/.config/fresh/config.json   (file_explorer.side = right, if unset)
-~/.local/bin/agentic-dev
-~/.local/share/agentic-dev/lib/  (for CLI)
-~/.agents/skills/handoff/        handoff skill
-~/.agents/skills/review/         on-demand hunk review skill
-```
-
-Shell rc gets a fenced marker block in `~/.bashrc` and/or `~/.zshrc`.
-
-## Development
+## development
 
 ```bash
-shellcheck install.sh lib/*.sh bin/agentic-dev config/shell/agentic-dev.inc.sh plugins/agentic-layout/layout.sh
+shellcheck install.sh lib/*.sh bin/bercail config/shell/bercail.inc.sh plugins/agentic-layout/layout.sh
 ./install.sh --help
-agentic-dev dry-run
-npm run deploy   # publish to Cloudflare Pages
+bercail dry-run
+npm run deploy   # Cloudflare Pages
 ```
 
-## License
+## license
 
-MIT — see [LICENSE](LICENSE).
+MIT — [LICENSE](LICENSE).

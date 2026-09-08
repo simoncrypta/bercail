@@ -3,7 +3,7 @@
 
 show_help() {
   cat <<EOF
-agentic-dev-setup v${AGENTIC_DEV_VERSION}
+bercail v${AGENTIC_DEV_VERSION}
 
 Install:
   curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
@@ -11,13 +11,13 @@ Install:
 
 install.sh options:
   -h, --help   Show this help
-  -y, --yes    Non-interactive (skip layout prompts; use existing/default config)
+  -y, --yes    Non-interactive (existing/default config; agent is cursor-agent)
 
-Post-install CLI (agentic-dev):
+Post-install CLI (bercail):
   help          This help
   doctor        Check dependencies and integration
   update        Re-sync configs, helper, and skill from the install source
-  reconfigure   Re-prompt agent command (does not re-sync the helper)
+  reconfigure   Refresh skills/integrations from config.toml (not a full redeploy)
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
 
@@ -30,8 +30,8 @@ Shell commands:
   t             Launch herdr
 
 Layout:
-  Left 2/6: agent pane (sticky) — command from ~/.config/agentic-dev/config.toml
-  Center 3/6: review (`hunk diff`; refresh for live watch) or shell tab
+  Left 5/12: agent pane (sticky) — command from ~/.config/bercail/config.toml
+  Center 5/12: review (`hunk diff --watch --agent-notes`; auto-opens on agent done) or shell tab
   Right 1/6: files / git pane
 
 Herdr keys (prefix = Ctrl-Space):
@@ -45,7 +45,7 @@ Herdr keys (prefix = Ctrl-Space):
   prefix+x           Close pane (or file tab)
   Alt+Up/Down        Previous/next workspace (Option on macOS)
   prefix+w           Workspace picker
-  prefix+shift+k     Close workspace
+  prefix+shift+k     Close this workspace (not the worktree group)
   prefix+shift+g/c/r Worktree open / open-current / remove
   prefix+q           Reload herdr config
   prefix+shift+q     Detach
@@ -60,33 +60,35 @@ Omarchy / Linux:
   Native Omarchy Herdr is SUPER+CTRL+RETURN; packages via omarchy pkg add
 
 Install order:
-  mise first (herdr, worktrunk, fzf, jq, lazygit, grok, hunk)
+  mise first (herdr, worktrunk, fzf, jq, lazygit, hunk)
   then omarchy pkg add on Omarchy, then brew / apt / pacman / upstream
-  selected layout tools: hunk (review) and fresh (editor)
+  layout tools: hunk (review); sticky agent is cursor-agent; editor follows $EDITOR
 
 Ubuntu / Debian:
   Uses apt for git, fzf, jq, lazygit, curl when mise is unavailable
-  Downloads herdr, worktrunk, hunk, and fresh from upstream when needed
+  Downloads herdr, worktrunk, and hunk from upstream when needed
 
 Config:
-  ~/.config/agentic-dev/config.toml      agent, review, and editor commands
+  ~/.config/bercail/config.toml          agent (default cursor-agent), review, editor
   ~/.config/herdr/config.toml            keybindings + plugin actions (Option on macOS)
   ~/.config/herdr/plugins/               layout plugin (managed install)
   ~/.config/worktrunk/herdr-layout.sh
   ~/.config/worktrunk/config.toml        worktrunk hooks
   ~/.agents/skills/handoff/              handoff skill (canonical)
-  ~/.agents/skills/review/               on-demand hunk review skill (canonical)
+  ~/.agents/skills/review/               hunk review skill (wait / optional GH publish)
   ~/.config/fcitx5/conf/keyboard.conf    Linux fcitx5 hint trigger override
 
 Agent skills (`handoff`, `review`):
-  Installed to ~/.agents/skills/<id> (https://agentskills.io). Extra symlink
-  only for grok/pi/codex/opencode/claude. cursor (`cursor-agent`) uses ~/.agents/skills.
+  Installed to ~/.agents/skills/<id> (https://agentskills.io). cursor-agent
+  reads that dir. Extra symlink only if you set another [agent] command.
   Source: skills/handoff/, skills/review/.
   Manual: npx skills add simoncrypta/agentic-dev-setup -s handoff -g
+  Handoff children: cursor-agent + /poteto-mode. Install pstack in Cursor:
+  /add-plugin pstack
 
 Plugin only (see README — review manifest/scripts before install):
   herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout
-  herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.3.9
+  herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.4.0
   herdr plugin link /path/to/agentic-dev-setup/plugins/agentic-layout
   herdr plugin config-dir agentic-dev.layout
   herdr plugin action invoke agentic-dev.layout.create
@@ -95,15 +97,15 @@ EOF
 
 show_summary() {
   log ""
-  log "agentic-dev-setup installed (v${AGENTIC_DEV_VERSION})"
+  log "bercail installed (v${AGENTIC_DEV_VERSION})"
   log ""
-  log "Agent command: $(read_agent_command 2>/dev/null || echo agent)"
+  log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff children: cursor-agent + pstack)"
   log "Review command: $(read_layout_review 2>/dev/null || echo 'hunk diff')"
-  log "Editor command: $(read_layout_editor 2>/dev/null || echo fresh)"
+  log "Editor command: $(read_layout_editor 2>/dev/null || echo "\$EDITOR")"
   log "Config: ${AGENTIC_DEV_USER_CONFIG}"
   log "Skills: ${AGENTS_SKILLS_DIR}/handoff, ${AGENTS_SKILLS_DIR}/review"
   log ""
   log "Try: dev"
-  log "Help: agentic-dev help"
+  log "Help: bercail help"
   log ""
 }

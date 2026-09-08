@@ -59,31 +59,50 @@ SHELL="$saved_shell"
 
 assert_contains "$(default_user_config)" 'command = "cursor-agent"' \
   "default config uses cursor-agent"
+grep -q 'Choice \[1-7\]' "$ROOT/lib/config.sh" \
+  && fail "install must not prompt for an agent picker"
+
+YES=1
+prompt_user_config
+assert_eq "cursor-agent" "$(read_agent_command)" "prompt_user_config writes cursor-agent with no picker"
+YES=0
+
+cursor_dir="$TMP_DIR/cursor-home"
+export CURSOR_CONFIG_DIR="$cursor_dir"
+pstack_plugin_present && fail "pstack_plugin_present must be false without the plugin"
+mkdir -p "$cursor_dir/plugins/cache/cursor-public/pstack/abc/skills/poteto-mode"
+printf '# poteto-mode\n' >"$cursor_dir/plugins/cache/cursor-public/pstack/abc/skills/poteto-mode/SKILL.md"
+pstack_plugin_present || fail "pstack_plugin_present must be true when poteto-mode exists"
+unset CURSOR_CONFIG_DIR
 assert_contains "$(default_user_config)" 'review = "hunk diff"' \
   "default config includes review"
-assert_contains "$(default_user_config)" 'editor = "fresh"' \
-  "default config includes editor"
+assert_contains "$(default_user_config)" 'auto_review = true' \
+  "default config enables auto_review"
+[[ "$(default_user_config)" != *'editor = "fresh"'* ]] \
+  || fail "default config must not pin fresh as the editor"
 
 mkdir -p "$AGENTIC_DEV_CONFIG_DIR"
 cp "$ROOT/config/agentic-dev/config-reader.sh" "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh"
 
+export EDITOR=nano
 assert_eq "cursor-agent" "$(read_agent_command)" "agent defaults to cursor-agent"
 assert_eq "hunk diff" "$(read_layout_review)" "review defaults to hunk diff"
-assert_eq "fresh" "$(read_layout_file_editor)" "editor defaults to fresh"
+assert_eq "nano" "$(read_layout_file_editor)" "editor defaults to EDITOR"
 
 write_user_config grok
 assert_eq "grok" "$(read_agent_command)" "write_user_config stores agent"
 assert_eq "hunk diff" "$(read_layout_review)" "write_user_config stores review"
-assert_eq "fresh" "$(read_layout_file_editor)" "write_user_config stores fresh"
-grep -q 'editor = "fresh"' "$AGENTIC_DEV_USER_CONFIG" \
-  || fail "write_user_config writes editor key"
+grep -q 'auto_review = true' "$AGENTIC_DEV_USER_CONFIG" \
+  || fail "write_user_config should enable auto_review"
+assert_eq "nano" "$(read_layout_file_editor)" "write_user_config leaves editor to EDITOR"
+grep -q 'editor =' "$AGENTIC_DEV_USER_CONFIG" \
+  && fail "write_user_config should omit editor so EDITOR wins"
 
 write_user_config agent
 migrate_cursor_cli_command
 assert_eq "cursor-agent" "$(read_agent_command)" "migrates agent command to cursor-agent"
 
-# Doctor always checks hunk and fresh, not tuicr/nvim.
-case_dir="$TMP_DIR/doctor-hunk-fresh"
+case_dir="$TMP_DIR/doctor-hunk-editor"
 mkdir -p "$case_dir/bin" "$case_dir/home/.config/agentic-dev"
 cat >"$case_dir/home/.config/agentic-dev/config.toml" <<'EOF'
 [agent]
@@ -91,16 +110,15 @@ command = "agent"
 
 [layout]
 review = "hunk"
-file_editor = "fresh"
 EOF
 cp "$ROOT/config/agentic-dev/config-reader.sh" \
   "$case_dir/home/.config/agentic-dev/config-reader.sh"
 cat >"$case_dir/bin/herdr" <<'EOF'
 #!/usr/bin/env bash
-printf 'herdr 0.7.5\n'
+printf 'herdr 0.9.0\n'
 EOF
 chmod +x "$case_dir/bin/herdr"
-for cmd in git wt fzf jq lazygit hunk fresh; do
+for cmd in git wt fzf jq lazygit hunk nano; do
   ln -s /bin/true "$case_dir/bin/$cmd"
 done
 
@@ -109,25 +127,43 @@ output="$(
     XDG_CONFIG_HOME="$case_dir/home/.config" \
     AGENTIC_DEV_CONFIG_DIR="$case_dir/home/.config/agentic-dev" \
     AGENTIC_DEV_USER_CONFIG="$case_dir/home/.config/agentic-dev/config.toml" \
+    EDITOR=nano \
     PATH="$case_dir/bin:/usr/bin:/bin" \
     doctor_dependencies 2>&1
 )" || rc=$?
 rc="${rc:-0}"
-assert_eq "0" "$rc" "doctor exits 0 for hunk+fresh layout"
+assert_eq "0" "$rc" "doctor exits 0 for hunk + EDITOR layout"
 assert_contains "$output" "ok  hunk" "doctor accepts configured hunk"
-assert_contains "$output" "ok  fresh" "doctor accepts configured fresh"
+assert_contains "$output" "ok  nano" "doctor accepts EDITOR binary"
 [[ "$output" != *"missing  tuicr"* ]] || fail "doctor should not require tuicr when review is hunk"
-[[ "$output" != *"missing  nvim"* ]] || fail "doctor should not require nvim when file editor is fresh"
+[[ "$output" != *"missing  fresh"* ]] || fail "doctor should not require fresh"
 
 cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
 [layout]
-file_editor = "fresh"
+file_editor = "nvim"
 EOF
 migrate_file_editor_config
-assert_eq "fresh" "$(read_layout_file_editor)" "migrate_file_editor_config keeps the editor command"
-grep -q 'editor = "fresh"' "$AGENTIC_DEV_USER_CONFIG" \
+assert_eq "nvim" "$(read_layout_file_editor)" "migrate_file_editor_config keeps a custom editor"
+grep -q 'editor = "nvim"' "$AGENTIC_DEV_USER_CONFIG" \
   || fail "migrate_file_editor_config writes editor"
 grep -q 'file_editor' "$AGENTIC_DEV_USER_CONFIG" \
   && fail "migrate_file_editor_config should rename file_editor away"
 
-printf 'PASS: layout config, write, migration, and doctor follow hunk and fresh\n'
+cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
+[layout]
+editor = "fresh"
+EOF
+migrate_fresh_editor_default
+grep -q 'editor =' "$AGENTIC_DEV_USER_CONFIG" \
+  && fail "migrate_fresh_editor_default should drop editor=fresh"
+assert_eq "nano" "$(read_layout_file_editor)" "after dropping fresh, EDITOR wins"
+
+cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
+[layout]
+review = "hunk diff"
+auto_review = false
+EOF
+ensure_config_reader || fail "ensure_config_reader"
+assert_eq "false" "$(agentic_dev_layout_auto_review)" "auto_review=false is honored"
+
+printf 'PASS: layout config, write, migration, and doctor follow hunk and EDITOR\n'

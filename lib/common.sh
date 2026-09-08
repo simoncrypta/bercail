@@ -2,13 +2,16 @@
 # shellcheck shell=bash
 set -euo pipefail
 
-AGENTIC_DEV_VERSION="${AGENTIC_DEV_VERSION:-0.3.9}"
-AGENTIC_DEV_MARKER_START="# >>> agentic-dev-setup"
-AGENTIC_DEV_MARKER_END="# <<< agentic-dev-setup"
+AGENTIC_DEV_VERSION="${AGENTIC_DEV_VERSION:-0.4.0}"
+AGENTIC_DEV_MARKER_START="# >>> bercail"
+AGENTIC_DEV_MARKER_END="# <<< bercail"
+LEGACY_AGENTIC_DEV_MARKER_START="# >>> agentic-dev-setup"
+LEGACY_AGENTIC_DEV_MARKER_END="# <<< agentic-dev-setup"
 
-AGENTIC_DEV_CONFIG_DIR="${HOME}/.config/agentic-dev"
+AGENTIC_DEV_CONFIG_DIR="${HOME}/.config/bercail"
 AGENTIC_DEV_SHELL_DIR="${AGENTIC_DEV_CONFIG_DIR}/shell"
 AGENTIC_DEV_USER_CONFIG="${AGENTIC_DEV_CONFIG_DIR}/config.toml"
+LEGACY_AGENTIC_DEV_CONFIG_DIR="${HOME}/.config/agentic-dev"
 HERDR_CONFIG_DIR="${HOME}/.config/herdr"
 # Legacy local-link path retained only for migrating pre-v0.2.0 installs.
 HERDR_DEV_LAYOUT_LEGACY_DIR="${HERDR_CONFIG_DIR}/plugins/dev-layout"
@@ -27,8 +30,9 @@ AGENTIC_DEV_SKILL_DIR="${AGENTS_SKILLS_DIR}/${AGENTIC_DEV_SKILL_ID}"
 skill_canonical_dir() {
   printf '%s/%s' "$AGENTS_SKILLS_DIR" "$1"
 }
-AGENTIC_DEV_SHARE_DIR="${HOME}/.local/share/agentic-dev"
+AGENTIC_DEV_SHARE_DIR="${HOME}/.local/share/bercail"
 AGENTIC_DEV_SOURCE_PATH_FILE="${AGENTIC_DEV_SHARE_DIR}/source-path"
+LEGACY_AGENTIC_DEV_SHARE_DIR="${HOME}/.local/share/agentic-dev"
 
 DRY_RUN=0
 YES=0

@@ -3,25 +3,37 @@
 
 uninstall_agentic_dev() {
   local managed_plugin_kind="" remove_managed_plugin_files=0
-  info "uninstalling agentic-dev-setup..."
+  info "uninstalling bercail..."
 
   remove_marker_block "$(shell_rc_for bash)"
   remove_marker_block "$(shell_rc_for zsh)"
 
+  if [[ -e "$LOCAL_BIN/bercail" ]]; then
+    info "remove: $LOCAL_BIN/bercail"
+    run rm -f "$LOCAL_BIN/bercail"
+  fi
   if [[ -e "$LOCAL_BIN/agentic-dev" ]]; then
     info "remove: $LOCAL_BIN/agentic-dev"
     run rm -f "$LOCAL_BIN/agentic-dev"
   fi
 
-  if [[ -d "${HOME}/.local/share/agentic-dev" ]]; then
-    info "remove: ${HOME}/.local/share/agentic-dev"
-    run rm -rf "${HOME}/.local/share/agentic-dev"
+  if [[ -d "$AGENTIC_DEV_SHARE_DIR" ]]; then
+    info "remove: $AGENTIC_DEV_SHARE_DIR"
+    run rm -rf "$AGENTIC_DEV_SHARE_DIR"
+  fi
+  if [[ -d "$LEGACY_AGENTIC_DEV_SHARE_DIR" ]]; then
+    info "remove: $LEGACY_AGENTIC_DEV_SHARE_DIR"
+    run rm -rf "$LEGACY_AGENTIC_DEV_SHARE_DIR"
   fi
 
-  if confirm "Remove ~/.config/agentic-dev (includes config.toml)?"; then
+  if confirm "Remove ~/.config/bercail (includes config.toml)?"; then
     if [[ -e "$AGENTIC_DEV_CONFIG_DIR" ]]; then
       info "remove: $AGENTIC_DEV_CONFIG_DIR"
       run rm -rf "$AGENTIC_DEV_CONFIG_DIR"
+    fi
+    if [[ -e "$LEGACY_AGENTIC_DEV_CONFIG_DIR" ]]; then
+      info "remove: $LEGACY_AGENTIC_DEV_CONFIG_DIR"
+      run rm -rf "$LEGACY_AGENTIC_DEV_CONFIG_DIR"
     fi
   else
     info "keeping user config: $AGENTIC_DEV_USER_CONFIG"

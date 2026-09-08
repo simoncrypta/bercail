@@ -1,5 +1,5 @@
-# agentic-dev-setup shell integration (shared)
-# Managed by agentic-dev — do not edit; use ~/.config/agentic-dev/config.toml
+# bercail shell integration (shared)
+# Managed by bercail — do not edit; use ~/.config/bercail/config.toml
 
 source "${HOME}/.config/worktrunk/herdr-layout.sh"
 

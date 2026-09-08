@@ -90,7 +90,9 @@ brew_shellenv_snippet() {
 
 has_marker_block() {
   local file="$1"
-  [[ -f "$file" ]] && grep -qF "$AGENTIC_DEV_MARKER_START" "$file"
+  [[ -f "$file" ]] || return 1
+  grep -qF "$AGENTIC_DEV_MARKER_START" "$file" \
+    || grep -qF "$LEGACY_AGENTIC_DEV_MARKER_START" "$file"
 }
 
 shell_rc_for() {

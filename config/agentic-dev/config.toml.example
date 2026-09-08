@@ -1,9 +1,14 @@
 [agent]
-# cursor (command: cursor-agent) | grok | pi | codex | opencode | claude | <custom>
+# Intended sticky agent is cursor-agent. Handoff children always use
+# cursor-agent + /poteto-mode (pstack). To put another command in the left
+# pane, set this yourself, then run: bercail reconfigure
 command = "cursor-agent"
 
 [layout]
-# refresh-review adds --watch
+# refresh-review adds --watch --agent-notes
 review = "hunk diff"
-# Sidebar file opens always run: fresh <path>
-editor = "fresh"
+# Open hunk when the layout agent pane goes done (diff vs origin/main /
+# main, or a dirty tree on main). Set false to disable the hook.
+auto_review = true
+# Omit editor to use $EDITOR / $VISUAL (Linux) or nano/vi (macOS).
+# editor = "nvim"

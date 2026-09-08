@@ -8,7 +8,9 @@ command = "cursor-agent"
 
 [layout]
 review = "hunk diff"
-editor = "fresh"
+# Open hunk when the layout agent pane goes done (diff vs origin/main /
+# main, or a dirty tree on main). Set false to disable the hook.
+auto_review = true
 EOF
 }
 
@@ -43,6 +45,30 @@ read_agent_command() {
   fi
 }
 
+agentic_dev_default_file_editor() {
+  local cmd bin
+  for cmd in "${EDITOR:-}" "${VISUAL:-}"; do
+    [[ -n "$cmd" ]] || continue
+    printf '%s' "$cmd"
+    return 0
+  done
+  case "$(uname -s)" in
+    Darwin)
+      command -v nano >/dev/null 2>&1 && { printf 'nano'; return 0; }
+      printf 'vi'
+      ;;
+    *)
+      for bin in nvim vim nano vi; do
+        if command -v "$bin" >/dev/null 2>&1; then
+          printf '%s' "$bin"
+          return 0
+        fi
+      done
+      printf 'vi'
+      ;;
+  esac
+}
+
 read_layout_file_editor() {
   ensure_config_reader || true
   if declare -F agentic_dev_layout_file_editor >/dev/null 2>&1; then
@@ -50,7 +76,7 @@ read_layout_file_editor() {
   elif declare -F agentic_dev_layout_editor >/dev/null 2>&1; then
     agentic_dev_layout_editor
   else
-    printf '%s' "${EDITOR:-fresh}"
+    agentic_dev_default_file_editor
   fi
 }
 
@@ -70,7 +96,7 @@ read_layout_review() {
 RECONFIGURE=0
 
 export DEV_LAYOUT_PLUGIN_REPO="simoncrypta/agentic-dev-setup/plugins/agentic-layout"
-export DEV_LAYOUT_PLUGIN_REF="v0.3.9"
+export DEV_LAYOUT_PLUGIN_REF="v0.4.0"
 export LEGACY_DEV_LAYOUT_PLUGIN_REPO="simoncrypta/herdr-dev-layout"
 PICKR_PLUGIN_REPO="tomasvarga/herdr-pickr"
 PICKR_PLUGIN_REF="e393ef593e44d2497f43d20aa7b0e4a26ea3d445"
@@ -531,11 +557,33 @@ deploy_fresh_explorer_defaults() {
   info "set Fresh file explorer side to right"
 }
 
+# Move ~/.config/agentic-dev and ~/.local/share/agentic-dev to bercail names.
+migrate_agentic_dev_to_bercail() {
+  if [[ ! -d "$AGENTIC_DEV_CONFIG_DIR" && -d "$LEGACY_AGENTIC_DEV_CONFIG_DIR" ]]; then
+    info "migrating $LEGACY_AGENTIC_DEV_CONFIG_DIR → $AGENTIC_DEV_CONFIG_DIR"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      info "[dry-run] would mv $LEGACY_AGENTIC_DEV_CONFIG_DIR $AGENTIC_DEV_CONFIG_DIR"
+    else
+      ensure_dir "$(dirname "$AGENTIC_DEV_CONFIG_DIR")"
+      mv "$LEGACY_AGENTIC_DEV_CONFIG_DIR" "$AGENTIC_DEV_CONFIG_DIR"
+    fi
+  fi
+  if [[ ! -d "$AGENTIC_DEV_SHARE_DIR" && -d "$LEGACY_AGENTIC_DEV_SHARE_DIR" ]]; then
+    info "migrating $LEGACY_AGENTIC_DEV_SHARE_DIR → $AGENTIC_DEV_SHARE_DIR"
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      info "[dry-run] would mv $LEGACY_AGENTIC_DEV_SHARE_DIR $AGENTIC_DEV_SHARE_DIR"
+    else
+      ensure_dir "$(dirname "$AGENTIC_DEV_SHARE_DIR")"
+      mv "$LEGACY_AGENTIC_DEV_SHARE_DIR" "$AGENTIC_DEV_SHARE_DIR"
+    fi
+  fi
+}
+
 write_user_config() {
   local cmd="$1"
   ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would write $AGENTIC_DEV_USER_CONFIG (agent=$cmd review=hunk diff editor=fresh)"
+    info "[dry-run] would write $AGENTIC_DEV_USER_CONFIG (agent=$cmd review=hunk diff)"
     return 0
   fi
   cat >"$AGENTIC_DEV_USER_CONFIG" <<EOF
@@ -544,59 +592,26 @@ command = "$cmd"
 
 [layout]
 review = "hunk diff"
-editor = "fresh"
+auto_review = true
 EOF
   info "saved config to $AGENTIC_DEV_USER_CONFIG"
 }
 
+# No install-time agent picker. Default is cursor-agent + pstack.
+# Override [agent] command in config.toml yourself, then bercail reconfigure.
 prompt_user_config() {
-  if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]] && [[ "$RECONFIGURE" -ne 1 ]]; then
+  if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
     info "using existing agent command: $(read_agent_command)"
-    info "review: hunk diff  editor: fresh"
+    info "review: hunk diff  editor: $(read_layout_file_editor)"
     return 0
   fi
-
-  if [[ "$YES" -eq 1 ]]; then
-    if [[ ! -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
-      if [[ "$DRY_RUN" -eq 1 ]]; then
-        info "[dry-run] would write default $AGENTIC_DEV_USER_CONFIG"
-      else
-        ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
-        default_user_config >"$AGENTIC_DEV_USER_CONFIG"
-      fi
-    fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "[dry-run] would write default $AGENTIC_DEV_USER_CONFIG (agent=cursor-agent)"
     return 0
   fi
-
-  log ""
-  log "Which command should the agent pane auto-start?"
-  log "  1) cursor"
-  log "  2) grok"
-  log "  3) pi"
-  log "  4) codex"
-  log "  5) opencode"
-  log "  6) claude"
-  log "  7) custom"
-  log ""
-  printf 'Choice [1-7]: '
-  local choice custom_cmd cmd="cursor-agent"
-  read_tty choice
-  case "$choice" in
-    1|cursor|agent|cursor-agent) cmd="cursor-agent" ;;
-    2|grok) cmd="grok" ;;
-    3|pi) cmd="pi" ;;
-    4|codex) cmd="codex" ;;
-    5|opencode) cmd="opencode" ;;
-    6|claude) cmd="claude" ;;
-    7|custom)
-      printf 'Enter custom command: '
-      read_tty custom_cmd
-      cmd="${custom_cmd:-cursor-agent}"
-      ;;
-    ""|*) cmd="cursor-agent" ;;
-  esac
-
-  write_user_config "$cmd"
+  ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
+  default_user_config >"$AGENTIC_DEV_USER_CONFIG"
+  info "saved default config to $AGENTIC_DEV_USER_CONFIG (agent=cursor-agent)"
 }
 
 prompt_agent_command() {
@@ -716,6 +731,28 @@ migrate_file_editor_config() {
   info "migrated layout file_editor → editor in $dest"
 }
 
+# Drop the previous fresh default so EDITOR/VISUAL (or a stock terminal
+# editor) wins. An explicit non-fresh editor= in config is kept.
+migrate_fresh_editor_default() {
+  local dest="$AGENTIC_DEV_USER_CONFIG" tmp
+  [[ -f "$dest" ]] || return 0
+  grep -qE '^[[:space:]]*(file_)?editor[[:space:]]*=[[:space:]]*"fresh"[[:space:]]*$' "$dest" || return 0
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "[dry-run] would drop default editor=fresh in $dest"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  awk '
+    BEGIN { in_layout = 0 }
+    /^\[layout\]/ { in_layout = 1 }
+    /^\[/ && $0 != "[layout]" { in_layout = 0 }
+    in_layout && /^[[:space:]]*(file_)?editor[[:space:]]*=[[:space:]]*"fresh"[[:space:]]*$/ { next }
+    { print }
+  ' "$dest" >"$tmp"
+  mv "$tmp" "$dest"
+  info "dropped default editor=fresh in $dest (using EDITOR or a stock terminal editor)"
+}
+
 migrate_legacy_layout_plugin() {
   local old_id="$LEGACY_LAYOUT_PLUGIN_ID"
   local status kind repo ref path
@@ -806,12 +843,37 @@ migrate_worktrunk_clear_handoff_prompt() {
   info "migrated worktrunk post-start to unset WT_HERDR_AGENT_PROMPT in $dest"
 }
 
+# Existing installs kept the old 3-tab (review/explorer/terminal) echo copy.
+migrate_worktrunk_layout_echo() {
+  local dest="$WORKTRUNK_CONFIG_DIR/config.toml" tmp
+  [[ -f "$dest" ]] || return 0
+  grep -Fq 'tabs: review, explorer, terminal' "$dest" || return 0
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "[dry-run] would migrate worktrunk post-start layout echo in $dest"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  awk '
+    /tabs: review, explorer, terminal/ {
+      sub(/Layout: agent pane \(left, sticky\) \| tabs: review, explorer, terminal/,
+          "Layout: agent pane | review/shell center | files pane")
+    }
+    /review\/explorer\/terminal/ {
+      sub(/Switch tabs: Alt\+1\.\.3 \(review\/explorer\/terminal\), prefix\+1 focuses agent, prefix\+2\.\.4 same tabs/,
+          "Switch: prefix+1 agent, +2 review, +3 shell, +b/+e files, +g git")
+    }
+    { print }
+  ' "$dest" >"$tmp"
+  mv "$tmp" "$dest"
+  info "migrated worktrunk post-start layout echo in $dest"
+}
+
 deploy_finalize_permissions() {
-  run chmod +x "$LOCAL_BIN/agentic-dev" \
+  run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/agentic-dev" \
     "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
-    "$AGENTIC_DEV_SHELL_DIR/agentic-dev.sh" \
-    "$AGENTIC_DEV_SHELL_DIR/agentic-dev.zsh" \
-    "$AGENTIC_DEV_SHELL_DIR/agentic-dev.inc.sh" \
+    "$AGENTIC_DEV_SHELL_DIR/bercail.sh" \
+    "$AGENTIC_DEV_SHELL_DIR/bercail.zsh" \
+    "$AGENTIC_DEV_SHELL_DIR/bercail.inc.sh" \
     "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh" 2>/dev/null || true
   find "${AGENTIC_DEV_SHARE_DIR}/lib" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 }
@@ -820,18 +882,21 @@ deploy_configs() {
   local herdr_rel
   herdr_rel="$(herdr_template_for_platform)"
   local -a files=(
-    "config/shell/agentic-dev.inc.sh|${AGENTIC_DEV_SHELL_DIR}/agentic-dev.inc.sh"
-    "config/bash/agentic-dev.sh|${AGENTIC_DEV_SHELL_DIR}/agentic-dev.sh"
-    "config/zsh/agentic-dev.zsh|${AGENTIC_DEV_SHELL_DIR}/agentic-dev.zsh"
+    "config/shell/bercail.inc.sh|${AGENTIC_DEV_SHELL_DIR}/bercail.inc.sh"
+    "config/bash/bercail.sh|${AGENTIC_DEV_SHELL_DIR}/bercail.sh"
+    "config/zsh/bercail.zsh|${AGENTIC_DEV_SHELL_DIR}/bercail.zsh"
     "${herdr_rel}|${HERDR_CONFIG_DIR}/config.toml"
     "config/worktrunk/herdr-layout.sh|${WORKTRUNK_CONFIG_DIR}/herdr-layout.sh"
+    "bin/bercail|${LOCAL_BIN}/bercail"
     "bin/agentic-dev|${LOCAL_BIN}/agentic-dev"
   )
   local entry rel dest
 
+  migrate_agentic_dev_to_bercail
   prompt_user_config
   migrate_cursor_cli_command
   migrate_file_editor_config
+  migrate_fresh_editor_default
 
   ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
   ensure_dir "$AGENTIC_DEV_SHELL_DIR"
@@ -861,6 +926,7 @@ deploy_configs() {
     info "keeping existing worktrunk config: $WORKTRUNK_CONFIG_DIR/config.toml"
     migrate_worktrunk_session_labels
     migrate_worktrunk_clear_handoff_prompt
+    migrate_worktrunk_layout_echo
   fi
 
   deploy_finalize_permissions

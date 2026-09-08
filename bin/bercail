@@ -1,0 +1,186 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+find_lib_dir() {
+  local bin dir
+  for dir in "${BERCAIL_LIB:-}" "${AGENTIC_DEV_LIB:-}"; do
+    if [[ -n "$dir" && -d "$dir" ]]; then
+      printf '%s' "$dir"
+      return 0
+    fi
+  done
+  bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  if [[ -f "$bin/../lib/common.sh" ]]; then
+    printf '%s' "$(cd "$bin/../lib" && pwd)"
+    return 0
+  fi
+  for dir in "${HOME}/.local/share/bercail/lib" "${HOME}/.local/share/agentic-dev/lib"; do
+    if [[ -d "$dir" ]]; then
+      printf '%s' "$dir"
+      return 0
+    fi
+  done
+  return 1
+}
+
+load_libs() {
+  local lib
+  lib="$(find_lib_dir)" || {
+    printf 'error: cannot find bercail lib (re-run install.sh)\n' >&2
+    exit 1
+  }
+  # shellcheck source=/dev/null
+  source "$lib/common.sh"
+  # shellcheck source=/dev/null
+  source "$lib/detect.sh"
+  # shellcheck source=/dev/null
+  source "$lib/deps.sh"
+  # shellcheck source=/dev/null
+  source "$lib/config.sh"
+  # shellcheck source=/dev/null
+  source "$lib/skills.sh"
+  # shellcheck source=/dev/null
+  source "$lib/shell-rc.sh"
+  # shellcheck source=/dev/null
+  source "$lib/uninstall.sh"
+  # shellcheck source=/dev/null
+  source "$lib/help.sh"
+  # shellcheck source=/dev/null
+  source "$lib/omarchy.sh"
+  # shellcheck source=/dev/null
+  source "$lib/doctor.sh"
+}
+
+cmd_doctor() {
+  local failures=0 shell_rc
+  log "bercail doctor (v${AGENTIC_DEV_VERSION})"
+  log ""
+  log "Platform: $(detect_platform)"
+  log ""
+  log "Dependencies:"
+  doctor_dependencies || failures=1
+  log ""
+  log "Integration:"
+  shell_rc="$(shell_rc_for "$(detect_shell_name)")"
+  if has_marker_block "$shell_rc"; then
+    log "  ok  marker block in $shell_rc"
+  else
+    log "  missing  marker block in $shell_rc"
+    failures=1
+  fi
+  if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
+    log "  ok  $AGENTIC_DEV_USER_CONFIG (agent=$(read_agent_command) review=$(read_layout_review) editor=$(read_layout_file_editor))"
+  else
+    log "  missing  $AGENTIC_DEV_USER_CONFIG"
+    failures=1
+  fi
+  if [[ -f "$HERDR_CONFIG_DIR/config.toml" ]]; then
+    log "  ok  herdr config.toml"
+  else
+    log "  missing  herdr config.toml"
+    failures=1
+  fi
+  if plugin_inspect "$PLUGIN_ID" && plugin_is_exact_github "$DEV_LAYOUT_PLUGIN_REPO" "$DEV_LAYOUT_PLUGIN_REF"; then
+    log "  ok  plugin $PLUGIN_ID [github:$DEV_LAYOUT_PLUGIN_REPO@$DEV_LAYOUT_PLUGIN_REF]"
+  elif plugin_inspect "$PLUGIN_ID" && plugin_is_exact_local "$HERDR_DEV_LAYOUT_LEGACY_DIR"; then
+    log "  ok  plugin $PLUGIN_ID [local:$HERDR_DEV_LAYOUT_LEGACY_DIR] (legacy; migrate on update)"
+  else
+    log "  missing  managed plugin $PLUGIN_ID [github:$DEV_LAYOUT_PLUGIN_REPO@$DEV_LAYOUT_PLUGIN_REF]"
+    failures=1
+  fi
+  if doctor_helper; then
+    :
+  else
+    failures=1
+  fi
+  doctor_plugin || failures=1
+  doctor_skill || failures=1
+  doctor_pstack || failures=1
+  doctor_omarchy_integration || failures=1
+  return "$failures"
+}
+
+cmd_update() {
+  deploy_configs
+  deploy_omarchy_integration
+  install_shell_integration || true
+  show_summary
+}
+
+cmd_reconfigure() {
+  RECONFIGURE=1
+  prompt_user_config
+  deploy_skills
+  ensure_selected_agent
+  ensure_selected_layout_tools
+  sync_omarchy_default_agent
+  info "sticky agent: $(read_agent_command)  review=$(read_layout_review)  editor=$(read_layout_file_editor)"
+  info "handoff children are always cursor-agent + /poteto-mode (pstack)"
+  info "to use another command in the left pane, set [agent] command in $AGENTIC_DEV_USER_CONFIG, then re-run reconfigure"
+  info "restart panes or run 'dev' in a new workspace to apply"
+}
+
+usage() {
+  cat <<EOF
+Usage: bercail <command>
+
+Commands:
+  help          Show full help
+  doctor        Check dependencies and integration
+  update        Re-sync configs, helper, and skill
+  reconfigure   Refresh skills/integrations from config.toml (not a full redeploy)
+  dry-run       Show planned install actions
+  uninstall     Remove integration
+
+Run 'bercail help' for shell commands and keybindings.
+EOF
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+
+  case "$cmd" in
+    help|-h|--help)
+      load_libs
+      show_help
+      ;;
+    doctor)
+      load_libs
+      cmd_doctor
+      ;;
+    update)
+      load_libs
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --force|-f) FORCE=1; shift ;;
+          *) die "unknown option: $1" ;;
+        esac
+      done
+      cmd_update
+      ;;
+    reconfigure)
+      load_libs
+      cmd_reconfigure
+      ;;
+    dry-run)
+      load_libs
+      DRY_RUN=1
+      YES=1
+      install_dependencies
+      deploy_configs
+      deploy_omarchy_integration
+      install_shell_integration || true
+      ;;
+    uninstall)
+      load_libs
+      uninstall_agentic_dev
+      ;;
+    *)
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
