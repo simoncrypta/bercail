@@ -216,12 +216,19 @@ test_rejects_prompt_after_double_dash() {
 }
 
 test_stash_and_take_pending() {
-  local out path rc=0 err
+  local out path rc=0 err saved_path
   export XDG_STATE_HOME="$TMP_DIR/xdg-state"
   export HOME="$TMP_DIR/empty-home"
   unset HERDR_ENV HERDR_WORKSPACE_ID
   printf '#!/bin/sh\nexit 1\n' >"$TMP_DIR/no-herdr"
   chmod +x "$TMP_DIR/no-herdr"
+  # CI images may not have wt. Stub it so spawn fails later at the missing
+  # helper, after --take-pending has already consumed the pending file.
+  mkdir -p "$TMP_DIR/bin"
+  printf '#!/bin/sh\nexit 1\n' >"$TMP_DIR/bin/wt"
+  chmod +x "$TMP_DIR/bin/wt"
+  saved_path="$PATH"
+  export PATH="$TMP_DIR/bin:$PATH"
   out="$(printf 'QA cedar-pg beta' | "$ROOT/skills/handoff/scripts/handoff-spawn" --stash-prompt)"
   path="$(printf '%s' "$out" | jq -r '.pending_prompt')"
   [[ -f "$path" ]] || fail "stash should write $path ($out)"
@@ -234,6 +241,7 @@ test_stash_and_take_pending() {
   [[ ! -f "$path" ]] || fail "take-pending must consume the pending file"
   printf '%s' "$err" | grep -q 'missing' \
     || fail "expected missing helper after consume: $err"
+  PATH="$saved_path"
   unset XDG_STATE_HOME HOME
   printf 'PASS: --stash-prompt / --take-pending keep the prompt off argv\n'
 }
