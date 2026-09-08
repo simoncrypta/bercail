@@ -1,16 +1,11 @@
-//! File-type icons, VS Code Explorer style, in two selectable themes:
+//! File-type icons, VS Code Explorer style, using the Material theme:
+//! Nerd Font glyphs matching
+//! [vscode-material-icon-theme](https://github.com/material-extensions/vscode-material-icon-theme)
+//! via the nvim-material-icon mapping.
 //!
-//! - `Material` (default): Nerd Font glyphs matching
-//!   [vscode-material-icon-theme](https://github.com/material-extensions/vscode-material-icon-theme)
-//!   via the nvim-material-icon mapping. Requires a Nerd-Font-patched terminal
-//!   font; the `i` key toggles to emoji if glyphs render as boxes.
-//! - `Emoji`: colored emoji, renders in any terminal font. Avoids
-//!   variation-selector (VS16) sequences — their rendered width is inconsistent
-//!   across terminal emulators and would misalign the tree columns.
-//!
-//! Classification happens once (`Kind`), so both themes always agree on what a
-//! file is and only differ in how they draw it. Folders use vscode-material
-//! folder names (src, node_modules, .github, …) on the Material theme only.
+//! Classification happens once (`Kind`). Folders use vscode-material folder
+//! names (src, node_modules, .github, …). Emoji drawing remains as a fallback
+//! for tests and terminals without a Nerd Font, but it is not a user option.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IconTheme {
@@ -30,12 +25,9 @@ impl IconTheme {
         }
     }
 
-    /// Pick the startup theme: env override → the user's persisted choice →
-    /// Material. A TUI cannot observe whether the terminal font actually
-    /// renders a glyph (missing glyphs still occupy their cells); `i` toggles
-    /// to emoji if the Nerd Font is missing from the active profile.
-    pub fn resolve(env: Option<&str>, persisted: Option<Self>) -> Self {
-        Self::from_env(env).or(persisted).unwrap_or(Self::Material)
+    /// Always Material. Env and persisted emoji choices are ignored.
+    pub fn resolve(_env: Option<&str>, _persisted: Option<Self>) -> Self {
+        Self::Material
     }
 
     pub fn from_state_name(name: &str) -> Option<Self> {
@@ -50,13 +42,6 @@ impl IconTheme {
         match self {
             Self::Emoji => "emoji",
             Self::Material => "material",
-        }
-    }
-
-    pub fn toggled(self) -> Self {
-        match self {
-            Self::Emoji => Self::Material,
-            Self::Material => Self::Emoji,
         }
     }
 }
@@ -554,24 +539,20 @@ mod tests {
     }
 
     #[test]
-    fn theme_selection_from_env_and_toggle() {
+    fn theme_selection_is_always_material() {
         assert_eq!(IconTheme::from_env(None), None);
         assert_eq!(
             IconTheme::from_env(Some("material")),
             Some(IconTheme::Material)
         );
-        assert_eq!(IconTheme::from_env(Some(" EMOJI ")), Some(IconTheme::Emoji));
-        // Env beats persisted; persisted beats the font probe.
         assert_eq!(
-            IconTheme::resolve(Some("emoji"), Some(IconTheme::Material)),
-            IconTheme::Emoji
+            IconTheme::resolve(Some("emoji"), Some(IconTheme::Emoji)),
+            IconTheme::Material
         );
         assert_eq!(
             IconTheme::resolve(None, Some(IconTheme::Emoji)),
-            IconTheme::Emoji
+            IconTheme::Material
         );
-        assert_eq!(IconTheme::Emoji.toggled(), IconTheme::Material);
-        assert_eq!(IconTheme::Material.toggled(), IconTheme::Emoji);
         assert_eq!(IconTheme::resolve(None, None), IconTheme::Material);
     }
 }

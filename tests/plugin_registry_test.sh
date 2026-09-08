@@ -112,7 +112,7 @@ registry="${XDG_CONFIG_HOME}/herdr/plugins.json"
 printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
 
 if [[ "${1:-}" == "--version" ]]; then
-  printf '%s\n' "${FAKE_HERDR_VERSION_OUTPUT:-herdr 0.7.5}"
+  printf '%s\n' "${FAKE_HERDR_VERSION_OUTPUT:-herdr 0.9.0}"
   exit 0
 fi
 
@@ -461,7 +461,7 @@ test_repeated_external_deploy() {
 
 test_deploy_refuses_incompatible_herdr_before_mutation() {
   local version before_registry after_registry before_source after_source
-  for version in 'herdr 0.7.1' 'herdr version unknown'; do
+  for version in 'herdr 0.7.1' 'herdr 0.8.2' 'herdr version unknown'; do
     reset_fixture
     mkdir -p "$HERDR_DEV_LAYOUT_LEGACY_DIR"
     printf 'keep-source\n' >"$HERDR_DEV_LAYOUT_LEGACY_DIR/sentinel"

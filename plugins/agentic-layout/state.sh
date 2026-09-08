@@ -74,7 +74,9 @@ _layout_lock_release() {
   case "${LAYOUT_LOCK_KIND:-}" in
     flock)
       flock -u 9 2>/dev/null || true
-      exec 9>&- 2>/dev/null || true
+      # Do not write `exec 9>&- 2>/dev/null`: exec would redirect the
+      # shell's stderr to /dev/null for the rest of the process.
+      exec 9>&- || true
       ;;
     mkdir)
       [[ -n "${LAYOUT_LOCKDIR:-}" ]] || return 0

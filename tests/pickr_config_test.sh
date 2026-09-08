@@ -98,7 +98,7 @@ registry="${XDG_CONFIG_HOME}/herdr/plugins.json"
 printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
 
 if [[ "${1:-}" == "--version" ]]; then
-  printf 'herdr 0.7.5\n'
+  printf 'herdr 0.9.0\n'
   exit 0
 fi
 

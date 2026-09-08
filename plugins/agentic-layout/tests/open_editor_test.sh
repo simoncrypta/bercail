@@ -54,7 +54,7 @@ export HERDR_PLUGIN_ROOT="$PLUGIN_ROOT"
 export XDG_STATE_HOME="$TMP_DIR/state-home"
 export HOME="$TMP_DIR/home"
 export HERDR_WORKSPACE_ID=w1
-unset EDITOR
+export EDITOR=nano
 unset AGENTIC_OPEN_PATH
 
 # shellcheck disable=SC1090
@@ -84,7 +84,7 @@ _open_editor "$FILE_PATH"
 grep -q 'tab create --workspace w1' "$HERDR_CALL_LOG" || fail "should create a new editor tab"
 grep -q -- "--label main.rs" "$HERDR_CALL_LOG" || fail "tab label should be the filename"
 grep -q "pane run w1:pE" "$HERDR_CALL_LOG" || fail "should run the editor in the new tab pane"
-grep -q "fresh" "$HERDR_CALL_LOG" || fail "default editor command should be fresh"
+grep -q "nano" "$HERDR_CALL_LOG" || fail "default editor command should follow EDITOR"
 grep -q "$FILE_PATH" "$HERDR_CALL_LOG" || fail "editor command should include the file path"
 grep -q "tab focus w1:tE" "$HERDR_CALL_LOG" || fail "should focus the new editor tab"
 grep -q "pane move pane-agent" "$HERDR_CALL_LOG" || fail "should dock agent onto the editor tab"
@@ -118,8 +118,8 @@ if _open_editor 2>/dev/null; then
   fail "open-editor without a path should fail"
 fi
 
-[[ "$(_review_launch)" == "hunk diff --watch" ]] \
-  || fail "review should launch hunk diff --watch, got $(_review_launch)"
+[[ "$(_review_launch)" == "hunk diff --watch --agent-notes" ]] \
+  || fail "review should launch hunk diff --watch --agent-notes, got $(_review_launch)"
 
 # Close-tab: dock stickies onto the previous tab, then close. Never pane-close
 # the editor center (that 3-column teardown has crashed Herdr).

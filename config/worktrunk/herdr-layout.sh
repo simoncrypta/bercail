@@ -235,6 +235,15 @@ _wt_herdr_plugin_root() {
     printf '%s' "$root"
     return 0
   fi
+  # Leftover agentic-dev.dev-layout registrations that actually point at this
+  # plugin (a tree with layout.sh) still count.
+  root="$(jq -r \
+    '.[] | select(.plugin_id == "agentic-dev.dev-layout") | .plugin_root // .source.managed_path // empty' \
+    "$registry" | head -1)"
+  if [[ -n "$root" && -f "$root/layout.sh" ]]; then
+    printf '%s' "$root"
+    return 0
+  fi
   return 1
 }
 
@@ -342,7 +351,9 @@ wt_herdr_layout_close() {
   workspace_id="$(_wt_herdr_workspace_id_by_label "$label")"
   [[ -n "$workspace_id" ]] || return 0
 
-  # Herdr subspace only; Worktrunk owns git worktree removal.
+  # Close this worktree workspace only. Herdr 0.9 refuses to close a primary
+  # while linked children are open unless `--group` is passed; wtd/remove
+  # always target the child, so a bare close is correct.
   "$HERDR" workspace close "$workspace_id" >/dev/null 2>&1 || true
 }
 

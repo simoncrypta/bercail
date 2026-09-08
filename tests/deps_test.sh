@@ -59,7 +59,7 @@ test_installed_herdr_short_circuits_install() {
   cat >"$case_dir/bin/herdr" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
-printf 'herdr 0.7.5\n'
+printf 'herdr 0.9.0\n'
 EOF
   chmod +x "$case_dir/bin/herdr"
   : >"$case_dir/calls.log"
@@ -84,7 +84,7 @@ printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
 if [[ "$*" == "--version" ]]; then
   printf 'herdr %s\n' "$(<"$HERDR_VERSION_FILE")"
 elif [[ "$*" == "update --handoff" ]]; then
-  printf '0.7.5\n' >"$HERDR_VERSION_FILE"
+  printf '0.9.0\n' >"$HERDR_VERSION_FILE"
 fi
 EOF
   chmod +x "$case_dir/home/.local/bin/herdr"
@@ -133,7 +133,7 @@ EOF
 
 test_version_parser_does_not_expand_globs() {
   local case_dir="$tmp/glob-version" rc
-  mkdir -p "$case_dir/0.8.0"
+  mkdir -p "$case_dir/0.9.0"
   if (cd "$case_dir" && herdr_parse_version '*') >/dev/null 2>&1; then
     rc=0
   else
@@ -144,12 +144,12 @@ test_version_parser_does_not_expand_globs() {
 
 test_version_comparison_matrix() {
   local rc
-  if herdr_version_at_least 0.7.1 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
-  assert_eq "1" "$rc" "comparator: 0.7.1 is below 0.7.5"
-  if herdr_version_at_least 0.7.5 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
-  assert_eq "0" "$rc" "comparator: 0.7.5 meets 0.7.5"
-  if herdr_version_at_least 0.8.0 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
-  assert_eq "0" "$rc" "comparator: 0.8.0 exceeds 0.7.5"
+  if herdr_version_at_least 0.8.2 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
+  assert_eq "1" "$rc" "comparator: 0.8.2 is below 0.9.0"
+  if herdr_version_at_least 0.9.0 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
+  assert_eq "0" "$rc" "comparator: 0.9.0 meets 0.9.0"
+  if herdr_version_at_least 0.9.1 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
+  assert_eq "0" "$rc" "comparator: 0.9.1 exceeds 0.9.0"
   if herdr_version_at_least garbage "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
   assert_eq "2" "$rc" "comparator: malformed input is rejected"
 }
@@ -161,14 +161,14 @@ test_newer_herdr_skips_update() {
   cat >"$case_dir/bin/herdr" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
-printf 'herdr 0.8.0\n'
+printf 'herdr 0.9.0\n'
 EOF
   chmod +x "$case_dir/bin/herdr"
 
   HOME="$case_dir/home" PATH="$case_dir/bin:/usr/bin:/bin" \
     HERDR_CALL_LOG="$case_dir/calls.log" install_herdr_binary
   assert_eq "--version" "$(<"$case_dir/calls.log")" \
-    "0.8.0 passes without an update"
+    "0.9.0 passes without an update"
 }
 
 test_package_managed_old_herdr() {
@@ -220,7 +220,7 @@ cat <<'INSTALLER'
 cat >"$HOME/.local/bin/herdr" <<'HERDR'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
-printf 'herdr 0.7.5\n'
+printf 'herdr 0.9.0\n'
 HERDR
 chmod +x "$HOME/.local/bin/herdr"
 INSTALLER
@@ -267,7 +267,7 @@ EOF
   fi
   assert_eq "$expected_rc" "$rc" "doctor exit for Herdr $version"
   assert_contains "$output" "$status  herdr" "doctor reports $status for Herdr $version"
-  assert_contains "$output" "found $version, required >=0.7.5" \
+  assert_contains "$output" "found $version, required >=$HERDR_MIN_VERSION" \
     "doctor reports found and required versions for $version"
 }
 
@@ -386,7 +386,7 @@ printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
 if [[ "$*" == "--version" ]]; then
   printf 'herdr %s\n' "$(<"$HERDR_VERSION_FILE")"
 else
-  printf '0.7.5\n' >"$HERDR_VERSION_FILE"
+  printf '0.9.0\n' >"$HERDR_VERSION_FILE"
 fi
 EOF
   chmod +x "$case_dir/home/.local/bin/herdr"
@@ -437,7 +437,7 @@ EOF
   stdout="$(<"$case_dir/doctor.stdout")"
   stderr="$(<"$case_dir/doctor.stderr")"
   assert_eq "1" "$rc" "subshell doctor returns nonzero below minimum"
-  assert_contains "$stdout" "found 0.7.1, required >=0.7.5" \
+  assert_contains "$stdout" "found 0.7.1, required >=$HERDR_MIN_VERSION" \
     "subshell doctor reports version contract on stdout"
   assert_eq "" "$stderr" "subshell doctor emits no unexpected stderr"
 }
@@ -465,7 +465,7 @@ EOF
     rc=$?
   fi
   assert_eq "1" "$rc" "top-level doctor fails for Herdr below minimum"
-  assert_contains "$output" "found 0.7.1, required >=0.7.5" \
+  assert_contains "$output" "found 0.7.1, required >=$HERDR_MIN_VERSION" \
     "top-level doctor still prints the Herdr version failure"
   assert_contains "$output" "Integration:" \
     "top-level doctor continues through integration checks"
@@ -482,8 +482,8 @@ test_package_managed_old_herdr mise "mise use -g herdr"
 test_package_managed_old_herdr nix "nix profile upgrade <index-or-name>"
 test_missing_herdr_uses_upstream_installer
 test_doctor_version 0.7.1 1 outdated
-test_doctor_version 0.7.5 0 ok
-test_doctor_version 0.8.0 0 ok
+test_doctor_version 0.8.2 1 outdated
+test_doctor_version 0.9.0 0 ok
 test_hung_version_times_out
 test_term_ignoring_version_probe_is_killed
 test_misleading_update_success_fails

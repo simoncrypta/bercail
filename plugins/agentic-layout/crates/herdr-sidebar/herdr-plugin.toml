@@ -2,7 +2,7 @@
 # and source control in one plugin (one pane by default, separated panes on
 # request via the ⚙ settings).
 #
-# Cross-platform notes (verified against herdr 0.8; see CLAUDE.md for the
+# Cross-platform notes (verified against herdr 0.9; see CLAUDE.md for the
 # full findings list):
 #  - Action ids must be GLOBALLY unique across platforms, so Windows launchers
 #    use `-windows`-suffixed ids; both variants gate with the item-level

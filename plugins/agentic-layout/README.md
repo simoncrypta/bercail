@@ -3,7 +3,7 @@
 Herdr plugin for the agentic-dev three-column workspace:
 
 ```text
-Herdr dock | agent (2/6) | review or shell (3/6) | files/git sidebar (1/6)
+Herdr dock | agent (5/12) | review or shell (5/12) | files/git sidebar (1/6)
 ```
 
 Install the full stack (Herdr, Worktrunk, agents, keybindings) via [agentic-dev-setup](https://github.com/simoncrypta/agentic-dev-setup).
@@ -11,7 +11,7 @@ Install the full stack (Herdr, Worktrunk, agents, keybindings) via [agentic-dev-
 ## Plugin only
 
 ```bash
-herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.3.9 --yes
+herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.4.0 --yes
 ```
 
 Local development:
@@ -29,9 +29,9 @@ herdr plugin link ~/path/to/agentic-dev-setup/plugins/agentic-layout
 | `apply` | Idempotently repair plugin-owned panes |
 | `start-agent` | Start or replace the agent (`WT_HERDR_AGENT_CMD`, optional prompt file) |
 | `focus-agent` | Focus the persistent agent pane; start it if the pane is a shell |
-| `select-review` | Open or focus review (`hunk diff --watch`; creates the tab if needed) |
+| `select-review` | Open or focus review (`hunk diff origin/main --watch --agent-notes` on a feature branch; creates the tab if needed) |
 | `close-review` | Close the Review tab and return to Shell |
-| `refresh-review` | Focus review and restart `hunk diff --watch` |
+| `refresh-review` | Focus review and restart `hunk diff --watch --agent-notes` |
 | `select-shell` | Show live shell pane (no respawn) |
 | `toggle-sidebar` | Toggle files pane zoom |
 | `select-files` | Files view |
@@ -44,13 +44,14 @@ Sidebar keys in embedded mode: `v` opens hunk in Review. Source Control splits *
 
 ## Config
 
-Reads `~/.config/agentic-dev/config.toml` when present:
+Reads `~/.config/bercail/config.toml` when present:
 
 ```toml
 [layout]
 review = "hunk diff"
-editor = "fresh"
-agent_ratio = 0.333333
+auto_review = true   # open hunk when the agent pane goes done
+# editor = "nvim"   # optional; default is $EDITOR / $VISUAL
+agent_ratio = 0.416667
 sidebar_ratio = 0.166667
 ```
 

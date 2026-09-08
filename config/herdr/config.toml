@@ -6,6 +6,7 @@
 # - Native Herdr keys own panes/tabs/workspaces (Omarchy session/window analogs)
 # - Dev-layout plugin owns the sticky-agent layout
 # - herdr-worktrunk owns git worktree pickers (not workspace close)
+# Herdr 0.9: native close_workspace does not close linked worktree children.
 #
 # Worktree paths: Worktrunk keeps sibling checkouts (<repo>.<branch> next to main).
 # Herdr groups those as child workspaces via `herdr worktree open|create --path`

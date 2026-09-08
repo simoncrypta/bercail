@@ -88,6 +88,8 @@ case "\$*" in
       else
         printf '{"result":{"workspaces":[{"workspace_id":"w-user","label":"user","focused":true}]}}\\n'
       fi
+    elif [[ "\$mode" == "labeled-child" ]]; then
+      printf '{"result":{"workspaces":[{"workspace_id":"w-parent","label":"parent","focused":true},{"workspace_id":"w-child","label":"Feature_Main","focused":false}]}}\\n'
     else
       printf '{"result":{"workspaces":[{"workspace_id":"w-parent","label":"parent","focused":true}]}}\\n'
     fi
@@ -217,6 +219,15 @@ fi
 grep -qE '^workspace create ' "$HERDR_CALL_LOG" \
   && fail "linked failure must not fall through to flat workspace create; log=$(cat "$HERDR_CALL_LOG")"
 printf 'PASS: linked worktree fails without flat fallback\n'
+
+write_fake_herdr labeled-child
+: >"$HERDR_CALL_LOG"
+wt_herdr_layout_close "Feature_Main"
+grep -qE '^workspace close w-child$' "$HERDR_CALL_LOG" \
+  || fail "worktree close should target the child workspace; log=$(cat "$HERDR_CALL_LOG")"
+grep -qE 'workspace close --group' "$HERDR_CALL_LOG" \
+  && fail "worktree close must not pass --group; log=$(cat "$HERDR_CALL_LOG")"
+printf 'PASS: worktree close targets the child workspace without --group\n'
 
 unset WT_HERDR_PLUGIN_ROOT
 mkdir -p "$XDG_CONFIG_HOME/herdr"

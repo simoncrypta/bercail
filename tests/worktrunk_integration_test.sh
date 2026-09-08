@@ -88,7 +88,7 @@ registry="${XDG_CONFIG_HOME}/herdr/plugins.json"
 printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
 
 if [[ "${1:-}" == "--version" ]]; then
-  printf '%s\n' "${FAKE_HERDR_VERSION_OUTPUT:-herdr 0.7.5}"
+  printf '%s\n' "${FAKE_HERDR_VERSION_OUTPUT:-herdr 0.9.0}"
   exit 0
 fi
 
@@ -422,6 +422,32 @@ EOF
   printf 'PASS: existing worktrunk post-start unsets WT_HERDR_AGENT_PROMPT\n'
 }
 
+test_worktrunk_layout_echo_migrated_on_update() {
+  local deploy_log="$TMP_DIR/deploy-layout-echo.output"
+  reset_fixture
+  mkdir -p "$WORKTRUNK_CONFIG_DIR"
+  cat >"$WORKTRUNK_CONFIG_DIR/config.toml" <<'EOF'
+[post-start]
+herdr = """
+S="{{ branch | capitalize }}_{{ repo | capitalize }}"
+source "$HOME/.config/worktrunk/herdr-layout.sh"
+unset WT_HERDR_AGENT_PROMPT
+wt_herdr_layout_create "$S" "$W"
+echo "  Layout: agent pane (left, sticky) | tabs: review, explorer, terminal"
+echo "  Switch tabs: Alt+1..3 (review/explorer/terminal), prefix+1 focuses agent, prefix+2..4 same tabs"
+"""
+EOF
+
+  deploy_configs >"$deploy_log"
+  grep -Fq 'tabs: review, explorer, terminal' "$WORKTRUNK_CONFIG_DIR/config.toml" \
+    && fail "old 3-tab layout echo still present"
+  grep -Fq 'review/shell center | files pane' "$WORKTRUNK_CONFIG_DIR/config.toml" \
+    || fail "did not migrate post-start layout echo"
+  grep -q "migrated worktrunk post-start layout echo" "$deploy_log" \
+    || fail "did not report layout echo migration"
+  printf 'PASS: existing worktrunk post-start layout echo migrates off the old 3-tab copy\n'
+}
+
 test_herdr_config_keybindings
 test_herdr_linux_uses_alt_macos_uses_option
 test_deploy_macos_writes_option_herdr_config
@@ -432,4 +458,5 @@ test_mismatched_source_preserved_with_warning
 test_existing_worktrunk_config_preserved_across_install_and_update
 test_worktrunk_session_label_migrated_on_update
 test_worktrunk_post_start_unsets_handoff_prompt
+test_worktrunk_layout_echo_migrated_on_update
 printf 'ALL PASS: worktrunk integration fixture matrix\n'

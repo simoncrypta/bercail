@@ -197,12 +197,11 @@ fn run(
                         started: Instant::now(),
                     };
                 }
-                // Only an explicit decline answers "no" — a stray arrow key
-                // must not silently commit the user to emoji icons.
+                // Decline the installer; still draw Material (no emoji option).
                 KeyCode::Char('n' | 'N') => {
                     *st = state::update_state(|state| {
                         state.font_prompt_done = true;
-                        state.icons = Some(icons::IconTheme::Emoji);
+                        state.icons = Some(icons::IconTheme::Material);
                     });
                     return Ok(());
                 }

@@ -48,15 +48,21 @@ _agent_cmd() {
 }
 
 _file_editor() {
-  printf '%s' "fresh"
+  if declare -F agentic_dev_layout_file_editor >/dev/null 2>&1; then
+    agentic_dev_layout_file_editor
+  elif declare -F agentic_dev_default_file_editor >/dev/null 2>&1; then
+    agentic_dev_default_file_editor
+  else
+    printf '%s' "${EDITOR:-${VISUAL:-vi}}"
+  fi
 }
 
-# Column shares of the full tab: agent 2/6, center 3/6 (biggest), sidebar 1/6.
+# Column shares of the full tab: agent 5/12, center 5/12, sidebar 1/6.
 _agent_ratio() {
   if declare -F agentic_dev_layout_agent_ratio >/dev/null 2>&1; then
     agentic_dev_layout_agent_ratio
   else
-    printf '%s' "0.333333"
+    printf '%s' "0.416667"
   fi
 }
 
@@ -112,16 +118,84 @@ _review_cmd() {
   fi
 }
 
+# Upstream/main used to detect "this branch has commits to review".
+# Skip refs that are the current branch (do not diff main against main).
+_review_merge_base() {
+  local workdir="$1" head short ref
+  [[ -n "$workdir" ]] || return 1
+  head="$(git -C "$workdir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  for ref in origin/main origin/master main master; do
+    git -C "$workdir" rev-parse --verify --quiet "$ref^{commit}" >/dev/null 2>&1 || continue
+    short="${ref#origin/}"
+    [[ "$head" == "$short" ]] && continue
+    printf '%s' "$ref"
+    return 0
+  done
+  return 1
+}
+
+# Open Review when there is a PR-shaped diff: untracked/uncommitted files,
+# or the working tree differs from origin/main / main.
+_review_should_open() {
+  local workdir="$1" base
+  if ! git -C "$workdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+  [[ -n "$(git -C "$workdir" status --porcelain 2>/dev/null)" ]] && return 0
+  base="$(_review_merge_base "$workdir")" || return 1
+  ! git -C "$workdir" diff --quiet "$base" -- 2>/dev/null
+}
+
+_review_auto_enabled() {
+  if declare -F agentic_dev_layout_auto_review >/dev/null 2>&1; then
+    [[ "$(agentic_dev_layout_auto_review)" == "true" ]]
+  else
+    return 0
+  fi
+}
+
+_review_workdir() {
+  local state workdir
+  if [[ -n "${1:-}" ]]; then
+    printf '%s' "$1"
+    return 0
+  fi
+  if [[ -n "${HERDR_WORKSPACE_ID:-}" ]]; then
+    state="$(_state_load "$HERDR_WORKSPACE_ID" 2>/dev/null || true)"
+    workdir="$(printf '%s' "${state:-}" | _jq '.workdir // empty')"
+    [[ -n "$workdir" ]] && { printf '%s' "$workdir"; return 0; }
+  fi
+  printf '%s' "$PWD"
+}
+
+# Feature branch: working tree vs origin/main / main (committed + uncommitted).
+# On main with no PR base: working tree only, including untracked.
+_review_hunk_cmd() {
+  local workdir="$1" base
+  base="$(_review_merge_base "$workdir" || true)"
+  if [[ -n "$base" ]]; then
+    printf '%s' "hunk diff ${base} --watch --agent-notes"
+    return 0
+  fi
+  printf '%s' "hunk diff --watch --agent-notes"
+}
+
 # On-demand Review is a hunk session. Always watch so comments stream.
+# --agent-notes keeps AI vs human comments visible in the TUI.
 _review_launch() {
-  local cmd
+  local cmd workdir
   cmd="$(_review_cmd)"
+  workdir="$(_review_workdir "${1:-}")"
   case "$cmd" in
     hunk|"hunk diff")
-      printf '%s' "hunk diff --watch"
+      _review_hunk_cmd "$workdir"
       ;;
     hunk\ diff*)
-      [[ "$cmd" == *"--watch"* ]] && printf '%s' "$cmd" || printf '%s' "$cmd --watch"
+      [[ "$cmd" == *"--watch"* ]] || cmd="$cmd --watch"
+      if [[ "$cmd" != *"--agent-notes"* && "$cmd" != *"--no-agent-notes"* ]]; then
+        cmd="$cmd --agent-notes"
+      fi
+      printf '%s' "$cmd"
       ;;
     *)
       printf '%s' "$cmd"
@@ -351,6 +425,38 @@ _on_tab_focused() {
   _activate_tab "$tab_id" 1
 }
 
+# Open hunk when the layout agent pane finishes a turn (`done`). Idle is too
+# noisy (includes never-started). Skip empty trees (unless the working tree
+# differs from origin/main / main) and debounce. auto_review=false disables this.
+_on_agent_status_changed() {
+  local status pane workspace_id state agent workdir now last focused
+  status="$(_event_id agent_status)"
+  pane="$(_event_id pane_id)"
+  workspace_id="$(_event_id workspace_id)"
+  [[ "$status" == "done" ]] || return 0
+  _review_auto_enabled || return 0
+  [[ -n "$pane" && -n "$workspace_id" ]] || return 0
+  export HERDR_WORKSPACE_ID="$workspace_id"
+  state="$(_state_load "$workspace_id" 2>/dev/null || true)"
+  [[ -n "$state" ]] || return 0
+  agent="$(printf '%s' "$state" | _jq '.agent_pane_id // empty')"
+  [[ "$pane" == "$agent" ]] || return 0
+  now="$(_unix_now)"
+  last="$(printf '%s' "$state" | _jq '.last_auto_review_unix // 0')"
+  if [[ "$last" =~ ^[0-9]+$ ]] && (( now - last < 15 && last > 0 )); then
+    return 0
+  fi
+  workdir="$(printf '%s' "$state" | _jq '.workdir // empty')"
+  workdir="${workdir:-$PWD}"
+  _review_should_open "$workdir" || return 0
+  _state_update "$workspace_id" --argjson now "$now" '.last_auto_review_unix = $now' || true
+  _open_review || return 0
+  focused="$(_focused_workspace_id)"
+  if [[ "$focused" == "$workspace_id" ]]; then
+    _activate_center_view review
+  fi
+}
+
 _resolve_context() {
   local focused
   if [[ -n "${WT_HERDR_LABEL:-}" && -n "${WT_HERDR_WORKDIR:-}" ]]; then
@@ -414,7 +520,7 @@ main() {
       _resolve_context
       _toggle_sidebar
       ;;
-    select-files)
+    select-files|select_files|select-explorer|select_explorer)
       _resolve_context
       _select_files
       ;;
@@ -458,6 +564,9 @@ main() {
       ;;
     event-tab-focused|event_tab_focused|tab.focused)
       _on_tab_focused "$(_event_id tab_id)"
+      ;;
+    event-agent-status|event_agent_status|pane.agent_status_changed)
+      _on_agent_status_changed
       ;;
     *)
       echo "agentic-layout: unknown command '$cmd'" >&2

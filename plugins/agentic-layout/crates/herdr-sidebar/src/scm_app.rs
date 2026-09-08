@@ -411,7 +411,6 @@ enum Setting {
     UnifiedSidebar,
     DockRight,
     SidebarWidth,
-    IconTheme,
     AutoOpen,
     FollowCwd,
     GitDecorations,
@@ -1165,7 +1164,6 @@ impl App {
             KeyCode::Char('a') => self.stage_all(),
             KeyCode::Char('u') => self.unstage_all(),
             KeyCode::Char('r') => self.refresh(),
-            KeyCode::Char('i') => self.set_theme(self.theme.toggled()),
             KeyCode::Char('A') if self.ctx.git_actions() => self.suggest_message(),
             KeyCode::Char('s') => self.open_settings(),
             KeyCode::Char('S') if self.ctx.git_actions() => self.sync_changes(),
@@ -1729,16 +1727,6 @@ impl App {
                 true,
             ),
             (
-                Setting::IconTheme,
-                "Icon theme",
-                match self.theme {
-                    IconTheme::Material => "material",
-                    IconTheme::Emoji => "emoji",
-                }
-                .to_string(),
-                true,
-            ),
-            (
                 Setting::Hotkeys,
                 "Footer hotkeys",
                 if self.show_hotkeys() {
@@ -1808,7 +1796,6 @@ impl App {
                     sidebar::update_state(|state| state.dock_right = !state.dock_right);
             }
             Setting::SidebarWidth => self.adjust_sidebar_width(true),
-            Setting::IconTheme => self.set_theme(self.theme.toggled()),
             Setting::Hotkeys => {
                 self.sidebar_state =
                     sidebar::update_state(|state| state.show_hotkeys = !state.show_hotkeys);
@@ -3256,12 +3243,6 @@ impl App {
             hints.extend([("1", "files"), ("2", "git")]);
         }
         hints
-    }
-
-    /// Switch icon themes and REMEMBER it (see the explorer's twin).
-    fn set_theme(&mut self, theme: IconTheme) {
-        self.theme = theme;
-        self.sidebar_state = sidebar::update_state(|state| state.icons = Some(theme));
     }
 
     /// The persisted "show hotkeys in the footer" setting.

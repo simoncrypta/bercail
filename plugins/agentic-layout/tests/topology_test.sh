@@ -123,8 +123,8 @@ grep -q 'pane move pane-sidebar' "$HERDR_CALL_LOG" || fail "select-tab 1 should 
 agent_line="$(grep -n 'pane move pane-agent' "$HERDR_CALL_LOG" | head -1 | cut -d: -f1)"
 sidebar_line="$(grep -n 'pane move pane-sidebar' "$HERDR_CALL_LOG" | head -1 | cut -d: -f1)"
 [[ "$agent_line" -lt "$sidebar_line" ]] || fail "agent should dock before sidebar so it keeps its final width"
-grep -q -- '--ratio 0.333333' "$HERDR_CALL_LOG" || fail "agent move left-keep should be 2/6 (then swap into that slot)"
-grep -q -- '--ratio 0.750000' "$HERDR_CALL_LOG" || fail "sidebar move left-keep should be 3/4 of remaining (center 3/6, sidebar 1/6)"
+grep -q -- '--ratio 0.416667' "$HERDR_CALL_LOG" || fail "agent move left-keep should be 5/12 (then swap into that slot)"
+grep -q -- '--ratio 0.714285' "$HERDR_CALL_LOG" || fail "sidebar move left-keep should keep equal center share of remaining"
 focus_line="$(grep -n 'tab focus w1:t1' "$HERDR_CALL_LOG" | head -1 | cut -d: -f1)"
 [[ "$sidebar_line" -lt "$focus_line" ]] || fail "dock onto the hidden tab before focusing it"
 got="$(jq -r '.active_center_view' "$(_state_path w1)")"
@@ -218,8 +218,8 @@ chmod +x "$TMP_DIR/herdr"
 state="$(cat "$(_state_path w1)")"
 _dock_shared_panes w1:t1 pane-shell "$state" >/dev/null
 grep -q 'pane move' "$HERDR_CALL_LOG" && fail "same-tab dock should not pane-move"
-grep -q 'pane resize --pane pane-shell --direction right --amount 0.500000' "$HERDR_CALL_LOG" \
-  || fail "enforce should grow inner split from 0.25 to 0.75, log: $(cat "$HERDR_CALL_LOG")"
+grep -q 'pane resize --pane pane-shell --direction right --amount 0.464285' "$HERDR_CALL_LOG" \
+  || fail "enforce should grow inner split from 0.25 to 0.714285, log: $(cat "$HERDR_CALL_LOG")"
 
 # Shrink a too-wide center via the sidebar's left edge (negative amount is ignored).
 cat >"$TMP_DIR/herdr" <<'FAKE_HERDR'
@@ -242,10 +242,10 @@ chmod +x "$TMP_DIR/herdr"
 : >"$HERDR_CALL_LOG"
 state="$(cat "$(_state_path w1)")"
 _dock_shared_panes w1:t1 pane-shell "$state" >/dev/null
-grep -q 'pane resize --pane pane-sidebar --direction left --amount 0.150000' "$HERDR_CALL_LOG" \
-  || fail "enforce should shrink inner split from 0.9 to 0.75 via sidebar, log: $(cat "$HERDR_CALL_LOG")"
-grep -q 'pane resize --pane pane-agent --direction right --amount 0.150333' "$HERDR_CALL_LOG" \
-  || fail "enforce should grow agent split from 0.183 to 0.333, log: $(cat "$HERDR_CALL_LOG")"
+grep -q 'pane resize --pane pane-sidebar --direction left --amount 0.185715' "$HERDR_CALL_LOG" \
+  || fail "enforce should shrink inner split from 0.9 to 0.714285 via sidebar, log: $(cat "$HERDR_CALL_LOG")"
+grep -q 'pane resize --pane pane-agent --direction right --amount 0.233667' "$HERDR_CALL_LOG" \
+  || fail "enforce should grow agent split from 0.183 to 0.416667, log: $(cat "$HERDR_CALL_LOG")"
 
 printf 'PASS: tab identity chooses Shell first and does not destroy editors\n'
 printf 'PASS: select-tab docks agent+sidebar onto the hidden tab before focusing it\n'
@@ -253,4 +253,4 @@ printf 'PASS: tab.focused nested payload docks without re-focusing the tab\n'
 printf 'PASS: tab.focused no-ops when stickies already live on the tab\n'
 printf 'PASS: source-tab tab.focused echo does not ping-pong stickies\n'
 printf 'PASS: select-next-tab focuses the neighbor tab\n'
-printf 'PASS: same-tab dock enforces 2/6 3/6 1/6 column ratios\n'
+printf 'PASS: same-tab dock enforces equal agent/shell column ratios\n'

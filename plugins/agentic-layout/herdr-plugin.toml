@@ -1,6 +1,6 @@
 id = "agentic-dev.layout"
 name = "Agentic Layout"
-version = "0.3.9"
+version = "0.4.0"
 min_herdr_version = "0.8.0"
 description = "Three-column agent workspace: persistent agent, review/shell center, files/git sidebar"
 platforms = ["linux", "macos"]
@@ -173,3 +173,7 @@ command = ["bash", "layout.sh", "event-workspace-closed"]
 [[events]]
 on = "tab.focused"
 command = ["bash", "layout.sh", "event-tab-focused"]
+
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "layout.sh", "event-agent-status"]

@@ -143,9 +143,8 @@ pub struct State {
     /// Show the hotkey chips at the bottom of the sidebar (they always
     /// live in the ⚙ Settings modal; the footer copy is opt-in).
     pub show_hotkeys: bool,
-    /// The user's explicit icon-theme choice; `None` = Material (vscode
-    /// material icon theme). Set the moment they toggle `i` or the Settings
-    /// row, so a wrong default is corrected once and stays corrected.
+    /// Legacy persisted icon-theme choice. The sidebar always draws Material;
+    /// emoji values are ignored.
     pub icons: Option<crate::icons::IconTheme>,
     /// The first-run "install a Nerd Font?" prompt was answered (either
     /// way) — never show it again.

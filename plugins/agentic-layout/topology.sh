@@ -155,7 +155,7 @@ _dock_shared_panes() {
     printf '%s' "$state"
     return 0
   }
-  # Agent first, at final 2/6 width, then swap onto the left. Same-width swap
+  # Agent first, at final width, then swap onto the left. Same-width swap
   # is how the sidebar avoids a respawn: the PTY never changes size mid-dock.
   while IFS=$'\t' read -r role split ratio swap; do
     [[ -n "$role" ]] || continue
@@ -197,7 +197,7 @@ _ratio_delta() {
 }
 
 # pane move/split --ratio is left-keep. Same-tab dock is a no-op, so push
-# existing 3-column tabs to agent 2/6 | center 3/6 | sidebar 1/6.
+# existing 3-column tabs to agent 5/12 | center 5/12 | sidebar 1/6.
 # herdr pane resize ignores a negative --amount; grow and shrink use
 # opposite pane edges instead.
 _enforce_column_ratios() {

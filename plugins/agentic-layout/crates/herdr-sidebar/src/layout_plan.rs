@@ -5,7 +5,9 @@ use serde::Serialize;
 
 use crate::herdr_json::{LayoutState, Tab};
 
-pub const AGENT_RATIO: f64 = 0.333333;
+// Agent and shell/review (center) share the remaining width equally.
+// Sidebar stays 1/6: agent 5/12, center 5/12, sidebar 1/6.
+pub const AGENT_RATIO: f64 = 0.416667;
 pub const SIDEBAR_RATIO: f64 = 0.166667;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -171,7 +173,7 @@ fn dock_steps(state: &LayoutState, agent: f64, sidebar: f64) -> Vec<DockStep> {
         steps.push(DockStep {
             pane_role: "agent",
             split: "right",
-            // Left-keep of the full tab, then swap: agent occupies that left slot at 2/6.
+            // Left-keep of the full tab, then swap: agent occupies that left slot.
             ratio: agent_move_ratio(agent),
             swap: true,
         });
@@ -180,8 +182,8 @@ fn dock_steps(state: &LayoutState, agent: f64, sidebar: f64) -> Vec<DockStep> {
         steps.push(DockStep {
             pane_role: "sidebar",
             split: "right",
-            // Left-keep of the remaining 4/6: center keeps 3/4 (3/6 of tab),
-            // sidebar is the right 1/4 (1/6 of tab). Same as pane split.
+            // Left-keep of the remaining width: center keeps its equal share,
+            // sidebar is the right 1/6 of the tab. Same as pane split.
             ratio: sidebar_split_ratio(agent, sidebar),
             swap: false,
         });
@@ -316,10 +318,10 @@ mod tests {
 
     #[test]
     fn dock_ratios_match_split_left_keep() {
-        assert!((agent_move_ratio(AGENT_RATIO) - 0.333333).abs() < 1e-9);
-        assert!((sidebar_move_ratio(AGENT_RATIO, SIDEBAR_RATIO) - 0.25).abs() < 1e-9);
-        assert!((agent_split_ratio(AGENT_RATIO) - 0.666667).abs() < 1e-9);
-        assert!((sidebar_split_ratio(AGENT_RATIO, SIDEBAR_RATIO) - 0.75).abs() < 1e-9);
+        assert!((agent_move_ratio(AGENT_RATIO) - 0.416667).abs() < 1e-6);
+        assert!((sidebar_move_ratio(AGENT_RATIO, SIDEBAR_RATIO) - 0.285715).abs() < 1e-6);
+        assert!((agent_split_ratio(AGENT_RATIO) - 0.583333).abs() < 1e-6);
+        assert!((sidebar_split_ratio(AGENT_RATIO, SIDEBAR_RATIO) - 0.714285).abs() < 1e-6);
     }
 
     #[test]
@@ -335,10 +337,10 @@ mod tests {
         assert_eq!(plan.center_pane_id, "pane-shell");
         assert_eq!(plan.steps[0].pane_role, "agent");
         assert!(plan.steps[0].swap);
-        assert!((plan.steps[0].ratio - 0.333333).abs() < 1e-9);
+        assert!((plan.steps[0].ratio - 0.416667).abs() < 1e-6);
         assert_eq!(plan.steps[1].pane_role, "sidebar");
         assert!(!plan.steps[1].swap);
-        assert!((plan.steps[1].ratio - 0.75).abs() < 1e-9);
+        assert!((plan.steps[1].ratio - 0.714285).abs() < 1e-6);
     }
 
     #[test]

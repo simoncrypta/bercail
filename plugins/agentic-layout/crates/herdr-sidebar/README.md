@@ -10,7 +10,7 @@ keys, and settings.
 
 ## Install
 
-Requires herdr 0.8 or newer.
+Requires herdr 0.9 or newer.
 
 ```
 herdr plugin install alexarthurs/herdr-sidebar/plugins/herdr-sidebar

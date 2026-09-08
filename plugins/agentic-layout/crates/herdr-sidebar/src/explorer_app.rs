@@ -186,7 +186,6 @@ enum Setting {
     UnifiedSidebar,
     DockRight,
     SidebarWidth,
-    IconTheme,
     AutoOpen,
     FollowCwd,
     HiddenFiles,
@@ -739,7 +738,6 @@ impl App {
                 self.tree.show_hidden = !self.tree.show_hidden;
                 self.rebuild();
             }
-            KeyCode::Char('i') => self.set_theme(self.theme.toggled()),
             KeyCode::Char('c') => self.change_folder_dialog(),
             KeyCode::Char('m') => self.open_menu_for_selection(),
             KeyCode::Char('s') => self.open_settings(),
@@ -1164,16 +1162,6 @@ impl App {
                 true,
             ),
             (
-                Setting::IconTheme,
-                "Icon theme",
-                match self.theme {
-                    IconTheme::Material => "material",
-                    IconTheme::Emoji => "emoji",
-                }
-                .to_string(),
-                true,
-            ),
-            (
                 Setting::HiddenFiles,
                 "Hidden files",
                 if self.tree.show_hidden {
@@ -1251,7 +1239,6 @@ impl App {
                     sidebar::update_state(|state| state.dock_right = !state.dock_right);
             }
             Setting::SidebarWidth => self.adjust_sidebar_width(true),
-            Setting::IconTheme => self.set_theme(self.theme.toggled()),
             Setting::HiddenFiles => {
                 self.tree.show_hidden = !self.tree.show_hidden;
                 self.rebuild();
@@ -1871,14 +1858,6 @@ impl App {
             spans.push(gear);
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
-    }
-
-    /// Switch icon themes and REMEMBER it — an auto-detected theme that
-    /// guessed wrong (font installed but not selected, or vice versa) must
-    /// stay corrected across restarts.
-    fn set_theme(&mut self, theme: IconTheme) {
-        self.theme = theme;
-        self.sidebar_state = sidebar::update_state(|state| state.icons = Some(theme));
     }
 
     /// The persisted "show hotkeys in the footer" setting.

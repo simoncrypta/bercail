@@ -1,10 +1,15 @@
 [agent]
+# Intended sticky agent is cursor-agent (handoff children always are).
 command = "cursor-agent"
 
 [layout]
 review = "hunk diff"
-editor = "fresh"
-agent_ratio = 0.333333
+# Open hunk when the layout agent pane goes done (diff vs origin/main /
+# main, or a dirty tree on main). Set false to disable the hook.
+auto_review = true
+# Omit editor to use $EDITOR / $VISUAL, or nano/vi on macOS.
+# editor = "nvim"
+agent_ratio = 0.416667
 sidebar_ratio = 0.166667
 
 [files]

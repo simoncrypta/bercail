@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-HERDR_MIN_VERSION=0.7.5
+HERDR_MIN_VERSION=0.9.0
 HUNK_MIN_VERSION=0.20.1
 GROK_MISE_SPEC="npm:@xai-official/grok"
 
@@ -395,38 +395,25 @@ install_hunk_binary() {
   return 1
 }
 
-install_fresh_binary() {
-  if dep_present fresh; then
-    info "present: fresh"
-    return 0
-  fi
-  if has_brew; then
-    info "installing via brew: fresh-editor"
-    if run brew install fresh-editor && dep_present fresh; then
-      return 0
-    fi
-    warn "brew install fresh-editor failed — trying upstream installer"
-  fi
-  maybe_omarchy_pkg_install fresh-editor fresh && return 0
-  dep_present curl || maybe_omarchy_pkg_install curl curl \
-    || maybe_apt_install curl curl || maybe_pacman_install curl curl || true
-  info "installing via https://raw.githubusercontent.com/sinelaw/fresh/master/scripts/install.sh"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    return 0
-  fi
-  curl -fsSL https://raw.githubusercontent.com/sinelaw/fresh/refs/heads/master/scripts/install.sh | sh
-  ensure_mise_shims
-  hash -r 2>/dev/null || true
-  if dep_present fresh; then
-    return 0
-  fi
-  warn "fresh install may have succeeded but fresh is not on PATH"
-  return 1
-}
-
 ensure_selected_layout_tools() {
   install_hunk_binary || warn "missing hunk (review tab needs it)"
-  install_fresh_binary || warn "missing fresh (editor tabs need it)"
+}
+
+# Cursor pstack plugin (poteto-mode). Not vendored here; install with /add-plugin pstack.
+pstack_plugin_present() {
+  local cursor="${CURSOR_CONFIG_DIR:-$HOME/.cursor}" match
+  shopt -s nullglob
+  for match in \
+    "$cursor/plugins/cache/cursor-public/pstack/"*/skills/poteto-mode/SKILL.md \
+    "$cursor/plugins/local/pstack/skills/poteto-mode/SKILL.md"
+  do
+    if [[ -f "$match" ]]; then
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+  return 1
 }
 
 install_grok_binary() {
@@ -618,7 +605,12 @@ doctor_dependencies() {
     fi
   done
   _doctor_versioned_bin hunk "$HUNK_MIN_VERSION" review || missing=$((missing + 1))
-  _doctor_configured_bin fresh editor || missing=$((missing + 1))
+  if declare -F read_layout_file_editor >/dev/null; then
+    local editor_cmd editor_bin
+    editor_cmd="$(read_layout_file_editor 2>/dev/null || true)"
+    editor_bin="${editor_cmd%% *}"
+    _doctor_configured_bin "$editor_bin" editor || missing=$((missing + 1))
+  fi
   if declare -F read_agent_command >/dev/null; then
     local agent_cmd agent_bin target status_out status_line
     agent_cmd="$(read_agent_command 2>/dev/null || printf '%s' "cursor-agent")"
