@@ -13,7 +13,7 @@ Prefix is **Ctrl-Space**.
 | `prefix+k` | Close file tab |
 | `prefix+x` | Close pane (file tabs: same as prefix+k) |
 | `prefix+shift+g` / `c` / `r` | Worktree open / open-current / remove (plugin) |
-| `prefix+shift+k` | Close workspace |
+| `prefix+shift+k` | Close this workspace (not linked worktree children) |
 | `Ctrl+Alt+Left/Right/Up/Down` (Ctrl+Option on macOS) | Focus pane left / right / up / down |
 
 Shell: `wtc` / `wts` / `wtd` / `dev` / `d` / `t`.

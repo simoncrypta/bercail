@@ -63,7 +63,7 @@ Prefer `recent-unwrapped` for logs. If alternate-screen output cannot be recover
 ### Focus
 
 - `herdr worktree create|open` / `herdr workspace create` support `--no-focus` for background subspaces.
-- Sticky layout create runs the plugin script directly with `WT_HERDR_LABEL` / `WT_HERDR_WORKDIR` / `HERDR_WORKSPACE_ID` for the child. Do not `herdr plugin action invoke` for background create: that binds the focused parent workspace and drops `WT_HERDR_*`.
+- Sticky layout create runs the plugin script directly with `WT_HERDR_LABEL` / `WT_HERDR_WORKDIR` / `HERDR_WORKSPACE_ID` for the child. Do not `herdr plugin action invoke` for background create: that binds the focused parent workspace and drops `WT_HERDR_*`. Plugin id is `agentic-dev.layout` (never `agentic-dev.dev-layout`).
 - Worktrunk `post-start` opens layout only (`unset WT_HERDR_AGENT_PROMPT`). The handoff skill is the only path that starts the child agent with the task (`wt_herdr_start_agent`). Socket-attached parents (no `HERDR_ENV`) pass `--workspace`.
 - Create does not `workspace focus` the child. If some Herdr call still moves TUI focus, the helper restores `WT_HERDR_KEEP_FOCUS` (the parent workspace).
 - `herdr worktree open --path` needs `--cwd <main-repo>` (or `--workspace` of that repo). Path-only open uses the focused workspace as the source and fails with `not_git_worktree` when that workspace is not a git checkout.

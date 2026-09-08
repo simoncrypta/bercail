@@ -58,6 +58,7 @@ test_deploy_agents_path_for_cursor() {
   [[ -f "$AGENTS_SKILLS_DIR/review/SKILL.md" ]] || fail "canonical review skill missing"
   grep -q '^name: review$' "$AGENTS_SKILLS_DIR/review/SKILL.md" || fail "review frontmatter missing"
   [[ -f "$AGENTS_SKILLS_DIR/review/scripts/wait-comments.sh" ]] || fail "wait-comments helper missing"
+  [[ -x "$AGENTS_SKILLS_DIR/review/scripts/publish-github.sh" ]] || fail "publish-github helper missing or not executable"
   [[ ! -e "$HOME/.cursor/skills/handoff" ]] || fail "cursor should use ~/.agents/skills only"
   printf 'PASS: deploy_skills installs ~/.agents/handoff and review for cursor-agent\n'
 }
@@ -123,6 +124,18 @@ test_pi_gets_extra_skill_link() {
   printf 'PASS: deploy_skills links ~/.pi/agent/skills/handoff for pi\n'
 }
 
+test_review_skill_recipe() {
+  grep -q 'wait-comments.sh' "$ROOT/skills/review/SKILL.md" \
+    || fail "review skill must wait for human hunk comments"
+  grep -q 'publish-github.sh' "$ROOT/skills/review/SKILL.md" \
+    || fail "review skill must publish user comments via publish-github.sh"
+  grep -q -- '--type user' "$ROOT/skills/review/SKILL.md" \
+    || fail "review skill must distinguish user comments"
+  grep -q 'publish-github.sh' "$ROOT/skills/review/MANIFEST" \
+    || fail "MANIFEST must list publish-github.sh"
+  printf 'PASS: review skill waits for user notes and publishes only on request\n'
+}
+
 test_handoff_spawn_is_the_recipe() {
   grep -q 'scripts/handoff-spawn' "$ROOT/skills/handoff/SKILL.md" \
     || fail "SKILL.md must tell the parent to run handoff-spawn"
@@ -139,6 +152,8 @@ test_handoff_spawn_is_the_recipe() {
     || fail "SKILL.md must forbid prompt-on-argv"
   grep -q 'handoff-spawn' "$ROOT/skills/handoff/MANIFEST" \
     || fail "MANIFEST must list handoff-spawn"
+  grep -q 'pstack' "$ROOT/skills/handoff/SKILL.md" \
+    || fail "SKILL.md must mention pstack"
   printf 'PASS: handoff skill recipe is the spawn script\n'
 }
 
@@ -149,3 +164,4 @@ test_custom_agent_canonical_only
 test_grok_gets_extra_skill_link
 test_pi_gets_extra_skill_link
 test_handoff_spawn_is_the_recipe
+test_review_skill_recipe

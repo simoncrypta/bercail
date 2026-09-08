@@ -147,3 +147,12 @@ doctor_skill() {
   fi
   [[ "$missing" -eq 0 ]]
 }
+
+doctor_pstack() {
+  if pstack_plugin_present; then
+    log "  ok  pstack (cursor plugin, /poteto-mode)"
+    return 0
+  fi
+  log "  missing  pstack (in Cursor: /add-plugin pstack — required for handoff children)"
+  return 1
+}

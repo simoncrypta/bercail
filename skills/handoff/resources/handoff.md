@@ -16,8 +16,8 @@ run `--info` then spawn — not assemble these steps.
    `git diff HEAD` plus untracked files into the sibling as a **working tree**.
    Never `git add`.
 4. If Graphite config exists (`handoff_graphite_config`), `gt track`.
-5. Wrap intro (worktree + review checkpoint; optional `--plan` / Graphite line)
-   around the original prompt, prefix `/poteto-mode`, write a prompt file.
+5. Wrap intro (worktree only; hunk opens on agent `done`) around the original
+   prompt, prefix `/poteto-mode`, write a prompt file.
 6. `WT_HERDR_AGENT_CMD=cursor-agent WT_HERDR_AGENT_PROMPT_FILE=… wt_herdr_start_agent`.
    Layout create is not called again. start-agent waits up to 30s for Herdr to
    tag the Agent pane (or a non-shell FG process). A timeout does **not**

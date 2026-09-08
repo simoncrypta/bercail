@@ -128,6 +128,7 @@ test_info_json_reports_graphite_and_dirty() {
   chmod +x "$TMP_DIR/no-herdr"
   unset HERDR_ENV HERDR_WORKSPACE_ID HANDOFF_WORKSPACE
   out="$(cd "$repo" && HERDR_BIN_PATH="$TMP_DIR/no-herdr" \
+    CURSOR_CONFIG_DIR="$TMP_DIR/no-cursor" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
   printf '%s' "$out" | jq -e '.dirty == true' >/dev/null || fail "info dirty: $out"
   printf '%s' "$out" | jq -e '.graphite == true' >/dev/null || fail "info graphite: $out"
@@ -136,7 +137,23 @@ test_info_json_reports_graphite_and_dirty() {
   printf '%s' "$out" | jq -e '.herdr_env == false' >/dev/null || fail "info herdr_env: $out"
   printf '%s' "$out" | jq -e '.socket == false' >/dev/null || fail "info socket: $out"
   printf '%s' "$out" | jq -e '.main_checkout == true' >/dev/null || fail "info main_checkout: $out"
+  printf '%s' "$out" | jq -e '.pstack == false' >/dev/null || fail "info pstack without plugin: $out"
   printf 'PASS: --info reports dirty, graphite, and herdr without agent inspection\n'
+}
+
+test_info_json_reports_pstack_when_plugin_present() {
+  local repo="$TMP_DIR/info-pstack" out cursor
+  git_init "$repo"
+  cursor="$TMP_DIR/cursor-home"
+  mkdir -p "$cursor/plugins/cache/cursor-public/pstack/deadbeef/skills/poteto-mode"
+  printf '# poteto-mode\n' >"$cursor/plugins/cache/cursor-public/pstack/deadbeef/skills/poteto-mode/SKILL.md"
+  printf '#!/bin/sh\nexit 1\n' >"$TMP_DIR/no-herdr"
+  chmod +x "$TMP_DIR/no-herdr"
+  unset HERDR_ENV HERDR_WORKSPACE_ID HANDOFF_WORKSPACE
+  out="$(cd "$repo" && HERDR_BIN_PATH="$TMP_DIR/no-herdr" CURSOR_CONFIG_DIR="$cursor" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
+  printf '%s' "$out" | jq -e '.pstack == true' >/dev/null || fail "info pstack: $out"
+  printf 'PASS: --info reports pstack when poteto-mode is installed\n'
 }
 
 test_info_json_socket_without_herdr_env() {
@@ -228,9 +245,22 @@ test_usage
 test_prompt_text_prefixes_poteto_mode
 test_graphite_track_uses_resolved_config_path
 test_info_json_reports_graphite_and_dirty
+test_info_json_reports_pstack_when_plugin_present
 test_info_json_socket_without_herdr_env
 test_result_json_records_unconfirmed_agent
 test_parent_workspace_required_without_herdr_env
 test_prompt_file_missing_dies
 test_rejects_prompt_after_double_dash
 test_stash_and_take_pending
+
+test_intro_does_not_invoke_review_skill() {
+  grep -q 'agentic-dev.layout' "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    || fail "handoff intro should name agentic-dev.layout"
+  grep -q 'never agentic-dev.dev-layout' "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    || fail "handoff intro should forbid the old plugin id"
+  grep -q 'review/SKILL.md' "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    && fail "handoff intro must not tell the child to load the review skill"
+  printf 'PASS: handoff intro does not open hunk via the review skill\n'
+}
+
+test_intro_does_not_invoke_review_skill

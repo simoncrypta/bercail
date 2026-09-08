@@ -18,12 +18,13 @@ Do not inspect git, Graphite, Herdr, or worktrees yourself. Run `--info`, then s
 ```
 
 That JSON is the only context you need: `herdr`, `herdr_env`, `socket`,
-`main_checkout`, `cwd`, `branch`, `dirty`, `graphite`, `default_copy`,
-`helper`, `workspace`, `pending_prompt`.
+`main_checkout`, `cwd`, `branch`, `dirty`, `graphite`, `pstack`,
+`default_copy`, `helper`, `workspace`, `pending_prompt`.
 
 - If `herdr` is false, report that and stop.
 - If `main_checkout` is false, report that and stop (do not spawn from a linked worktree).
 - `main_checkout` means the primary git worktree, not “on trunk”.
+- If `pstack` is false, tell the user to install it in Cursor (`/add-plugin pstack`). Still spawn; the child is cursor-agent with `/poteto-mode`.
 
 Never put the original user prompt on the spawn command line. Never `python -c`,
 never a wrapper `.sh`, never `handoff-spawn <branch> -- <prompt>`. Auto-review

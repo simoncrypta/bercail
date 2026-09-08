@@ -69,6 +69,23 @@ handoff_is_graphite() {
   handoff_graphite_config "$1" >/dev/null
 }
 
+# Cursor pstack (/poteto-mode). Same glob as lib/deps.sh pstack_plugin_present.
+handoff_has_pstack() {
+  local cursor="${CURSOR_CONFIG_DIR:-$HOME/.cursor}" match
+  shopt -s nullglob
+  for match in \
+    "$cursor/plugins/cache/cursor-public/pstack/"*/skills/poteto-mode/SKILL.md \
+    "$cursor/plugins/local/pstack/skills/poteto-mode/SKILL.md"
+  do
+    if [[ -f "$match" ]]; then
+      shopt -u nullglob
+      return 0
+    fi
+  done
+  shopt -u nullglob
+  return 1
+}
+
 # Copy main's uncommitted tracked+untracked files into sibling as a working
 # tree. Never git-add. After this: git diff --cached is empty; git diff HEAD
 # matches main's dirty tracked files; untracked files exist on disk only.
@@ -197,7 +214,7 @@ handoff_result_json() {
 
 handoff_info_json() {
   local cwd branch helper default_copy pending
-  local herdr_env=0 socket=0 herdr=0 main_ok=0 dirty=0 graphite=0 helper_present=0 pending_present=0
+  local herdr_env=0 socket=0 herdr=0 main_ok=0 dirty=0 graphite=0 pstack=0 helper_present=0 pending_present=0
   cwd="$(handoff_realpath "$PWD")"
   [[ "${HERDR_ENV:-}" == 1 ]] && herdr_env=1
   if handoff_herdr_socket_ok; then
@@ -214,6 +231,9 @@ handoff_info_json() {
   fi
   if command -v git >/dev/null 2>&1 && handoff_is_graphite "$cwd"; then
     graphite=1
+  fi
+  if handoff_has_pstack; then
+    pstack=1
   fi
   branch="$(git -C "$cwd" branch --show-current 2>/dev/null || true)"
   helper="${HOME}/.config/worktrunk/herdr-layout.sh"
@@ -239,6 +259,7 @@ handoff_info_json() {
     --argjson main_checkout "$(handoff_bool_json "$main_ok")" \
     --argjson dirty "$(handoff_bool_json "$dirty")" \
     --argjson graphite "$(handoff_bool_json "$graphite")" \
+    --argjson pstack "$(handoff_bool_json "$pstack")" \
     --argjson helper_present "$(handoff_bool_json "$helper_present")" \
     --argjson pending_prompt_present "$(handoff_bool_json "$pending_present")" \
     '{
@@ -250,6 +271,7 @@ handoff_info_json() {
       branch:$branch,
       dirty:$dirty,
       graphite:$graphite,
+      pstack:$pstack,
       default_copy:$default_copy,
       helper:$helper,
       helper_present:$helper_present,
@@ -386,7 +408,7 @@ handoff_spawn_main() {
 
   label="$(_wt_generate_session_name "$sibling")"
 
-  intro="$(printf 'You are in linked worktree %s (branch %s). Stay in this checkout.\nWhen a coherent unit of work is ready (tests pass, before commit/PR), load ~/.agents/skills/review/SKILL.md and follow it: open Review, wait for hunk comments, address them, close Review.' \
+  intro="$(printf 'You are in linked worktree %s (branch %s). Stay in this checkout. Do not open Review or invoke the review skill; hunk opens itself when you go idle. Layout plugin id is agentic-dev.layout — never agentic-dev.dev-layout.' \
     "$sibling" "$branch")"
   if [[ "$plan" -eq 1 ]]; then
     intro="$(printf '%s\nPlan/design only; do not implement yet.' "$intro")"
@@ -399,6 +421,10 @@ handoff_spawn_main() {
   file="$(handoff_state_dir)/handoff-prompt-${branch}.txt"
   body="$(printf '%s\n\n%s' "$intro" "$prompt")"
   printf '%s' "$(handoff_prompt_text "$body")" >"$file"
+
+  if ! handoff_has_pstack; then
+    echo "handoff-spawn: pstack not found under ${CURSOR_CONFIG_DIR:-$HOME/.cursor}; install in Cursor with /add-plugin pstack. Child still starts as cursor-agent with /poteto-mode." >&2
+  fi
 
   if WT_HERDR_KEEP_FOCUS="$parent_ws" \
     WT_HERDR_AGENT_CMD=cursor-agent \
