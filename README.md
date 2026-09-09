@@ -8,7 +8,6 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
 <img width="2133" height="1386" alt="sticky agent, review, files" src="https://github.com/user-attachments/assets/98ab9c52-22f2-4bec-818c-61685df6299d" />
 
-
 - **sticky agent** — cursor-agent does not live in a tab. Tabs move around it.
 - **one worktree, one workspace** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; Herdr follows.
 - **control and observability** — every pane is working, blocked, or idle. Review opens on `done`. You choose what gets a GitHub comment.
@@ -23,6 +22,10 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 │ prefix+1     │ prefix+2 / +3 / +4         │ +4 / +g │
 └──────────────┴────────────────────────────┴─────────┘
 ```
+
+## grok bot
+
+[Shep](https://x.ai/bot/pjuM6P_92QUE6jF6H6dpw) is the bercail orchestrator. Add this Grok Bot template; it can help you set up bercail, spin worktrees, run handoffs, and ping you when agents finish or get blocked.
 
 ## install
 
