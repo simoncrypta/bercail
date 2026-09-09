@@ -6,7 +6,7 @@ Bercail is an agentic development environment: Herdr-based, cursor-agent focused
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
-<img width="2133" height="1386" alt="sticky agent, review, files" src="https://github.com/user-attachments/assets/98ab9c52-22f2-4bec-818c-61685df6299d" />
+<img width="2138" height="1386" alt="sticky agent, review, files" src="https://github.com/user-attachments/assets/b58e8e78-c78b-4cc3-9f56-8040d561f2d9" />
 
 - **sticky agent** — cursor-agent does not live in a tab. Tabs move around it.
 - **one worktree, one workspace** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; Herdr follows.
