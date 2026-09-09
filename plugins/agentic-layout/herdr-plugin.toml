@@ -1,6 +1,6 @@
 id = "agentic-dev.layout"
 name = "Agentic Layout"
-version = "0.5.0"
+version = "0.5.1"
 min_herdr_version = "0.8.0"
 description = "Three-column agent workspace: persistent agent, review/shell center, files/git sidebar"
 platforms = ["linux", "macos"]

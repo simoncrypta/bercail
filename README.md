@@ -176,7 +176,7 @@ Also: `~/.config/herdr/config.toml`, worktrunk hooks, `~/.agents/skills/{handoff
 Already on Herdr and only want the layout:
 
 ```bash
-herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.5.0
+herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.5.1
 ```
 
 Needs Herdr 0.9+, `jq`, a Rust toolchain, tuicr. Copy keys from [`config/herdr/config.toml`](config/herdr/config.toml). Set `close_tab = ""` and `close_pane = ""`. Full install also adds shell commands, CLI, skills, worktrunk hooks, and desktop fixes.
