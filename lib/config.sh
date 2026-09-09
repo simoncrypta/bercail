@@ -97,7 +97,7 @@ read_layout_review() {
 RECONFIGURE=0
 
 export DEV_LAYOUT_PLUGIN_REPO="simoncrypta/agentic-dev-setup/plugins/agentic-layout"
-export DEV_LAYOUT_PLUGIN_REF="v0.4.0"
+export DEV_LAYOUT_PLUGIN_REF="v0.5.0"
 export LEGACY_DEV_LAYOUT_PLUGIN_REPO="simoncrypta/herdr-dev-layout"
 PICKR_PLUGIN_REPO="tomasvarga/herdr-pickr"
 PICKR_PLUGIN_REF="e393ef593e44d2497f43d20aa7b0e4a26ea3d445"

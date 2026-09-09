@@ -88,7 +88,7 @@ Agent skills (`handoff`, `review`):
 
 Plugin only (see README — review manifest/scripts before install):
   herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout
-  herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.4.0
+  herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.5.0
   herdr plugin link /path/to/agentic-dev-setup/plugins/agentic-layout
   herdr plugin config-dir agentic-dev.layout
   herdr plugin action invoke agentic-dev.layout.create
