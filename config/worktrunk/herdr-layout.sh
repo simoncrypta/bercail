@@ -294,7 +294,9 @@ wt_herdr_layout_create() {
   return "$rc"
 }
 
-wt_herdr_start_agent() {
+# Clear session of the configured agent (d / dev / apply). Ignores any
+# inherited handoff prompt file.
+wt_herdr_start_default_agent() {
   local label="$1"
   local workdir="$2"
   local workspace_id keep_focus rc=0
@@ -309,12 +311,50 @@ wt_herdr_start_agent() {
     _wt_herdr_keep_user_focus "$keep_focus"
     return 1
   }
-  if ! WT_HERDR_NO_ATTACH=1 _wt_herdr_invoke_plugin start-agent "$workspace_id" "$label" "$workdir"; then
+  if ! WT_HERDR_NO_ATTACH=1 WT_HERDR_AGENT_PROMPT_FILE= \
+    _wt_herdr_invoke_plugin start-agent "$workspace_id" "$label" "$workdir"; then
     echo "Failed to start agent in workspace $workspace_id" >&2
     rc=1
   fi
   _wt_herdr_keep_user_focus "$keep_focus"
   return "$rc"
+}
+
+# Orchestrator / handoff-spawn: start or replace the agent with WT_HERDR_AGENT_PROMPT_FILE.
+wt_herdr_handoff_agent() {
+  local label="$1"
+  local workdir="$2"
+  local workspace_id keep_focus rc=0
+
+  _wt_herdr_ensure_server || {
+    echo "Herdr server is not running. Start it with: herdr" >&2
+    return 1
+  }
+  if [[ -z "${WT_HERDR_AGENT_PROMPT_FILE:-}" ]]; then
+    echo "wt_herdr_handoff_agent requires WT_HERDR_AGENT_PROMPT_FILE" >&2
+    return 1
+  fi
+
+  keep_focus="${WT_HERDR_KEEP_FOCUS:-$(_wt_herdr_focused_workspace_id)}"
+  workspace_id="$(_wt_herdr_resolve_workspace "$label" "$workdir")" || {
+    _wt_herdr_keep_user_focus "$keep_focus"
+    return 1
+  }
+  if ! WT_HERDR_NO_ATTACH=1 _wt_herdr_invoke_plugin handoff-agent "$workspace_id" "$label" "$workdir"; then
+    echo "Failed to hand off agent in workspace $workspace_id" >&2
+    rc=1
+  fi
+  _wt_herdr_keep_user_focus "$keep_focus"
+  return "$rc"
+}
+
+# Backward-compatible alias: prompted start when a prompt file is set, else clear.
+wt_herdr_start_agent() {
+  if [[ -n "${WT_HERDR_AGENT_PROMPT_FILE:-}" ]]; then
+    wt_herdr_handoff_agent "$@"
+  else
+    wt_herdr_start_default_agent "$@"
+  fi
 }
 
 wt_herdr_layout_apply() {
@@ -363,6 +403,7 @@ wt_herdr_attach() {
 
   session_name="$(_wt_generate_session_name "$worktree_path")"
   wt_herdr_layout_create "$session_name" "$worktree_path"
+  wt_herdr_start_default_agent "$session_name" "$worktree_path" || true
   _wt_herdr_focus_workspace "$session_name" "$worktree_path" || true
 
   if [[ -n "${HERDR_ENV:-}" || -n "${HERDR_PANE_ID:-}" ]]; then

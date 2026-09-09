@@ -408,7 +408,7 @@ handoff_spawn_main() {
 
   label="$(_wt_generate_session_name "$sibling")"
 
-  intro="$(printf 'You are in linked worktree %s (branch %s). Stay in this checkout. Do not open Review or invoke the review skill; hunk opens itself when you go idle. Layout plugin id is agentic-dev.layout — never agentic-dev.dev-layout.' \
+  intro="$(printf 'You are in linked worktree %s (branch %s). Stay in this checkout. Do not open Review or invoke the review skill; tuicr opens itself when the agent pane goes done. Layout plugin id is agentic-dev.layout — never agentic-dev.dev-layout.' \
     "$sibling" "$branch")"
   if [[ "$plan" -eq 1 ]]; then
     intro="$(printf '%s\nPlan/design only; do not implement yet.' "$intro")"
@@ -429,10 +429,10 @@ handoff_spawn_main() {
   if WT_HERDR_KEEP_FOCUS="$parent_ws" \
     WT_HERDR_AGENT_CMD=cursor-agent \
     WT_HERDR_AGENT_PROMPT_FILE="$file" \
-    wt_herdr_start_agent "$label" "$sibling"; then
+    wt_herdr_handoff_agent "$label" "$sibling"; then
     started=1
   else
-    echo "handoff-spawn: start-agent did not confirm a live agent; worktree is still $sibling ($label)" >&2
+    echo "handoff-spawn: handoff-agent did not confirm a live agent; worktree is still $sibling ($label)" >&2
   fi
 
   json="$(handoff_result_json "$label" "$sibling" "$branch" "$prompt" "$started" "$copied" "$graphite")"

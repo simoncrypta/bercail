@@ -192,15 +192,25 @@ write_fake_herdr open-ok
 WT_HERDR_AGENT_CMD=cursor-agent
 WT_HERDR_AGENT_PROMPT_FILE="$TMP_DIR/prompt.txt"
 printf 'task\n' >"$TMP_DIR/prompt.txt"
-wt_herdr_start_agent "Main_Feature" "$TMP_DIR/main.feature" >/dev/null
-grep -qE '^plugin start-agent workspace=w-child label=Main_Feature no_attach=1 prompt_file=set agent_cmd=cursor-agent$' "$HERDR_CALL_LOG" \
-  || fail "start-agent must forward prompt file and agent cmd; log=$(cat "$HERDR_CALL_LOG")"
+wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature" >/dev/null
+grep -qE '^plugin handoff-agent workspace=w-child label=Main_Feature no_attach=1 prompt_file=set agent_cmd=cursor-agent$' "$HERDR_CALL_LOG" \
+  || fail "handoff-agent must forward prompt file and agent cmd; log=$(cat "$HERDR_CALL_LOG")"
 grep -q 'plugin action invoke' "$HERDR_CALL_LOG" \
-  && fail "start-agent must not use plugin action invoke; log=$(cat "$HERDR_CALL_LOG")"
+  && fail "handoff-agent must not use plugin action invoke; log=$(cat "$HERDR_CALL_LOG")"
 grep -qE '^agent prompt ' "$HERDR_CALL_LOG" \
-  && fail "helper must not agent prompt; start-agent owns launch; log=$(cat "$HERDR_CALL_LOG")"
+  && fail "helper must not agent prompt; handoff-agent owns launch; log=$(cat "$HERDR_CALL_LOG")"
 unset WT_HERDR_AGENT_CMD WT_HERDR_AGENT_PROMPT_FILE
-printf 'PASS: start-agent forwards prompt file and agent cmd to the plugin\n'
+printf 'PASS: handoff-agent forwards prompt file and agent cmd to the plugin\n'
+
+write_fake_herdr open-ok
+: >"$HERDR_CALL_LOG"
+WT_HERDR_AGENT_CMD=cursor-agent
+WT_HERDR_AGENT_PROMPT_FILE="$TMP_DIR/prompt.txt"
+wt_herdr_start_default_agent "Main_Feature" "$TMP_DIR/main.feature" >/dev/null
+grep -qE '^plugin start-agent workspace=w-child label=Main_Feature no_attach=1 prompt_file= agent_cmd=cursor-agent$' "$HERDR_CALL_LOG" \
+  || fail "default start must clear the prompt file; log=$(cat "$HERDR_CALL_LOG")"
+unset WT_HERDR_AGENT_CMD WT_HERDR_AGENT_PROMPT_FILE
+printf 'PASS: start-default-agent starts a clear agent session\n'
 
 write_fake_herdr open-ok
 : >"$HERDR_CALL_LOG"

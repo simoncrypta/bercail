@@ -268,7 +268,7 @@ test_intro_does_not_invoke_review_skill() {
     || fail "handoff intro should forbid the old plugin id"
   grep -q 'review/SKILL.md' "$ROOT/skills/handoff/scripts/handoff-spawn" \
     && fail "handoff intro must not tell the child to load the review skill"
-  printf 'PASS: handoff intro does not open hunk via the review skill\n'
+  printf 'PASS: handoff intro does not open review via the review skill\n'
 }
 
 test_intro_does_not_invoke_review_skill
