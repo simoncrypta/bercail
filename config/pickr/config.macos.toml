@@ -9,7 +9,7 @@ default = "tuicr"
 [[backend]]
 key = "t"
 id  = "tuicr"
-name = "tuicr — full review"
+name = "tuicr — PR review"
 run  = "tuicr pr {url}"
 where = "pane"
 needs = ["tuicr"]

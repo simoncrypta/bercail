@@ -1,10 +1,11 @@
-//! TUI state and rendering: the VS Code Source Control panel — commit message
-//! box (with the ✨ suggest button), Commit button, collapsible Staged/Changes
-//! sections, Git-Graph-style drawers (GRAPH, COMMITS, FILE HISTORY, BRANCHES,
-//! REMOTES, STASHES, TAGS), theme-matched file icons, mouse support, and a
-//! Ctrl+right-click context menu — kept interaction-consistent with
-//! herdr-aa-filetree. No own border/title: herdr already frames the pane and
-//! titles it with the pane label.
+//! TUI state and rendering: the VS Code Source Control panel — collapsible
+//! Staged/Changes sections, Git-Graph-style drawers (GRAPH, COMMITS, FILE
+//! HISTORY, BRANCHES, REMOTES, STASHES, TAGS), theme-matched file icons,
+//! mouse support, and a Ctrl+right-click context menu — kept
+//! interaction-consistent with herdr-aa-filetree. In the agentic layout the
+//! commit box is omitted: click a changed file to open the editor, Review
+//! opens tuicr on uncommitted changes. Standalone still has the message box
+//! and Commit button. No own border/title: herdr already frames the pane.
 //!
 //! When herdr-aa-filetree is also installed, the panel can merge with it into
 //! a single "Sidebar" pane with an activity-bar view switcher (see sidebar.rs).
@@ -442,7 +443,7 @@ struct ClickZones {
     message: Rect,
     sparkle: Rect,
     button: Rect,
-    /// Review-with-hunk control next to Commit (zero-sized when hidden).
+    /// Review control next to Commit (zero-sized when hidden).
     review: Rect,
     /// The Sync Changes row (zero-sized when hidden).
     sync: Rect,
@@ -977,10 +978,12 @@ impl App {
                 if repo.collapsed {
                     continue;
                 }
-                // VS Code gives every repo its own message box and Commit
-                // button, inline in the list.
-                self.rows.push(Row::Message(r));
-                self.rows.push(Row::Commit(r));
+                // Standalone: VS Code-style per-repo message box + Commit.
+                // Embedded layout: Review is a single top button, not a row.
+                if !self.ctx.uses_external_editor() {
+                    self.rows.push(Row::Message(r));
+                    self.rows.push(Row::Commit(r));
+                }
             }
             // Like VS Code, the Staged section only exists while something is staged.
             if !repo.status.staged.is_empty() {
@@ -1085,6 +1088,9 @@ impl App {
             self.overlay_key(key);
             return None;
         }
+        if self.hide_commit_ui() {
+            return self.on_list_key(key);
+        }
         match self.focus {
             Focus::Message => self.on_message_key(key),
             Focus::Commit => self.on_button_key(key),
@@ -1151,9 +1157,9 @@ impl App {
             KeyCode::Char('q') => return Some(Exit::Quit),
             // Esc never quits the sidebar — it closes the preview instead.
             KeyCode::Esc => self.close_preview(),
-            KeyCode::Tab => self.focus = Focus::Message,
-            KeyCode::BackTab => self.focus = Focus::Commit,
-            KeyCode::Char('c') => self.focus = Focus::Message,
+            KeyCode::Tab if !self.hide_commit_ui() => self.focus = Focus::Message,
+            KeyCode::BackTab if !self.hide_commit_ui() => self.focus = Focus::Commit,
+            KeyCode::Char('c') if !self.hide_commit_ui() => self.focus = Focus::Message,
             KeyCode::Up | KeyCode::Char('k') => self.move_by(-1),
             KeyCode::Down | KeyCode::Char('j') => self.move_by(1),
             KeyCode::PageUp => self.move_by(-(self.page as isize)),
@@ -1168,7 +1174,7 @@ impl App {
             KeyCode::Char('s') => self.open_settings(),
             KeyCode::Char('S') if self.ctx.git_actions() => self.sync_changes(),
             KeyCode::Char('o') if self.ctx.git_actions() => self.open_selected_diff(),
-            KeyCode::Char('v') if self.ctx.uses_external_editor() => self.open_hunk_review(),
+            KeyCode::Char('v') if self.ctx.uses_external_editor() => self.open_worktree_review(),
             KeyCode::Char('m') => self.open_menu_for_selection(),
             KeyCode::Char('1') => return self.switch_to(View::Explorer),
             KeyCode::Char('2') => return self.switch_to(View::SourceControl),
@@ -1229,21 +1235,21 @@ impl App {
             }
             return None;
         }
-        if hits(z.sparkle, x, y) {
+        if !self.hide_commit_ui() && hits(z.sparkle, x, y) {
             self.suggest_message();
             return None;
         }
-        if hits(z.message, x, y) {
+        if !self.hide_commit_ui() && hits(z.message, x, y) {
             self.focus = Focus::Message;
             return None;
         }
-        if hits(z.button, x, y) {
+        if !self.hide_commit_ui() && hits(z.button, x, y) {
             self.focus = Focus::Commit;
             self.commit();
             return None;
         }
         if hits(z.review, x, y) {
-            self.open_hunk_review();
+            self.open_worktree_review();
             return None;
         }
         if hits(z.sync, x, y) {
@@ -1272,6 +1278,8 @@ impl App {
                                 self.flash = Some((e, true));
                             }
                             self.refresh();
+                        } else if self.hide_commit_ui() {
+                            self.open_changed_file(r, &entry);
                         } else if double && self.pin_if_open(index) {
                             // pinned the first click's tab
                         } else {
@@ -1288,6 +1296,8 @@ impl App {
                                 self.flash = Some((e, true));
                             }
                             self.refresh();
+                        } else if self.hide_commit_ui() {
+                            self.open_changed_file(r, &entry);
                         } else if double && self.pin_if_open(index) {
                             // pinned the first click's tab
                         } else {
@@ -1311,7 +1321,7 @@ impl App {
                     // Right half is Review when the layout plugin is embedded.
                     if line == 1 {
                         if self.hits_review_half(x) {
-                            self.open_hunk_review();
+                            self.open_worktree_review();
                         } else {
                             self.commit_repo(r);
                         }
@@ -1323,9 +1333,12 @@ impl App {
                     // Right-side action icons: ⟳ sync · ✓ commit (fixed
                     // offsets from the right edge, see repo_header_item).
                     let w = self.last_width;
-                    if x >= w.saturating_sub(3) && x < w {
+                    if !self.hide_commit_ui() && x >= w.saturating_sub(3) && x < w {
                         self.commit_repo(r);
-                    } else if x >= w.saturating_sub(6) && x < w.saturating_sub(3) {
+                    } else if !self.hide_commit_ui()
+                        && x >= w.saturating_sub(6)
+                        && x < w.saturating_sub(3)
+                    {
                         self.sync_repo(r);
                     } else {
                         self.activate();
@@ -1403,7 +1416,12 @@ impl App {
             _ => return, // section headers have no menu
         };
         let Some(entry) = entry.cloned() else { return };
-        let mut entries = vec![MenuEntry::Action(MenuAction::OpenDiff, "Open Diff")];
+        let open_label = if self.hide_commit_ui() {
+            "Open"
+        } else {
+            "Open Diff"
+        };
+        let mut entries = vec![MenuEntry::Action(MenuAction::OpenDiff, open_label)];
         // A deleted file has nothing left on disk to hand to the shell.
         if entry.letter != 'D' {
             entries.push(MenuEntry::Action(
@@ -1985,6 +2003,7 @@ impl App {
                 }
                 self.refresh();
             }
+            MenuAction::OpenDiff if self.hide_commit_ui() => self.open_changed_file(repo, &entry),
             MenuAction::OpenDiff => self.open_diff(repo, &entry, staged),
             MenuAction::Discard => self.overlay = Some(Overlay::ConfirmDiscard { repo, entry }),
             MenuAction::CopyPath | MenuAction::CopyRelativePath => {
@@ -2493,8 +2512,34 @@ impl App {
                 self.reload_expanded_drawers();
                 self.rebuild();
             }
-            Row::Staged(r, i) => self.run_op(|git, e| git.unstage(e), r, i, true),
-            Row::Unstaged(r, i) => self.run_op(|git, e| git.stage(e), r, i, false),
+            Row::Staged(r, i) => {
+                if self.hide_commit_ui() {
+                    if let Some(entry) = self
+                        .repos
+                        .get(r)
+                        .and_then(|repo| repo.status.staged.get(i))
+                        .cloned()
+                    {
+                        self.open_changed_file(r, &entry);
+                    }
+                } else {
+                    self.run_op(|git, e| git.unstage(e), r, i, true);
+                }
+            }
+            Row::Unstaged(r, i) => {
+                if self.hide_commit_ui() {
+                    if let Some(entry) = self
+                        .repos
+                        .get(r)
+                        .and_then(|repo| repo.status.unstaged.get(i))
+                        .cloned()
+                    {
+                        self.open_changed_file(r, &entry);
+                    }
+                } else {
+                    self.run_op(|git, e| git.stage(e), r, i, false);
+                }
+            }
         }
         self.persist_scm();
     }
@@ -2586,9 +2631,24 @@ impl App {
         self.syncing = Some(rx);
     }
 
-    fn open_hunk_review(&mut self) {
-        match herdr_sidebar::embed::open_review() {
-            Ok(()) => self.flash = Some(("Opened hunk review".into(), false)),
+    fn hide_commit_ui(&self) -> bool {
+        self.ctx.uses_external_editor()
+    }
+
+    fn open_worktree_review(&mut self) {
+        match herdr_sidebar::embed::open_worktree_review() {
+            Ok(()) => self.flash = Some(("Opened review".into(), false)),
+            Err(e) => self.flash = Some((e, true)),
+        }
+    }
+
+    fn open_changed_file(&mut self, repo: usize, entry: &FileEntry) {
+        let Some(root) = self.repos.get(repo).map(|r| r.git.root().to_path_buf()) else {
+            return;
+        };
+        let path = root.join(entry.path.replace('/', std::path::MAIN_SEPARATOR_STR));
+        match herdr_sidebar::embed::open_file_editor(&path) {
+            Ok(()) => self.flash = None,
             Err(e) => self.flash = Some((e, true)),
         }
     }
@@ -2710,17 +2770,23 @@ impl App {
             return;
         }
 
-        // With several repos, VS Code puts a message box + Commit button
-        // INSIDE each repo's section (rendered as list rows); the single-repo
-        // view keeps them fixed at the top. The Sync Changes row only appears
-        // when there is something to sync (or a sync is running).
+        // Standalone: VS Code puts a message box + Commit button inside each
+        // repo section (or fixed at the top for a single repo). Embedded
+        // layout: no commit UI — a Review button opens tuicr -w.
         let multi = self.multi();
-        let message_height = if multi {
+        let hide_commit = self.hide_commit_ui();
+        let message_height = if multi || hide_commit {
             0
         } else {
             2 + self.single_message_rows(area.width) as u16
         };
-        let button_height = if multi { 0 } else { 3 };
+        let button_height = if hide_commit {
+            3
+        } else if multi {
+            0
+        } else {
+            3
+        };
         let sync_height = if self.ctx.git_actions() {
             u16::from(!multi && self.sync_label().is_some())
         } else {
@@ -2746,7 +2812,13 @@ impl App {
             self.draw_activity_bar(frame, activity);
         }
         self.draw_header(frame, header);
-        if !multi {
+        if hide_commit {
+            self.zones.message = Rect::default();
+            self.zones.sparkle = Rect::default();
+            self.zones.button = Rect::default();
+            self.draw_review_button(frame, button);
+            self.zones.sync = Rect::default();
+        } else if !multi {
             self.draw_message(frame, message);
             self.draw_button(frame, button);
             self.draw_sync(frame, sync);
@@ -2968,6 +3040,20 @@ impl App {
         self.ctx.uses_external_editor() && x >= self.last_width / 2
     }
 
+    fn draw_review_button(&mut self, frame: &mut Frame, area: Rect) {
+        let inner = if area.height >= 3 {
+            Rect::new(area.x, area.y + 1, area.width, 1)
+        } else {
+            area
+        };
+        frame.render_widget(
+            Paragraph::new(review_only_line(inner.width as usize)),
+            inner,
+        );
+        self.zones.review = inner;
+        self.zones.button = Rect::default();
+    }
+
     fn draw_button(&mut self, frame: &mut Frame, area: Rect) {
         let focused = self.focus == Focus::Commit;
         let with_review = self.ctx.uses_external_editor();
@@ -3084,9 +3170,13 @@ impl App {
             .map(|(i, row)| {
                 let row_hovered = hovered == Some(i);
                 let item = match *row {
-                    Row::RepoHeader(r) => {
-                        repo_header_item(&self.repos[r], r == active, theme, width)
-                    }
+                    Row::RepoHeader(r) => repo_header_item(
+                        &self.repos[r],
+                        r == active,
+                        theme,
+                        width,
+                        !self.hide_commit_ui(),
+                    ),
                     Row::Message(r) => message_box_item(
                         &self.repos[r],
                         r == active && self.focus == Focus::Message,
@@ -3223,22 +3313,32 @@ impl App {
 
     /// The hotkey hints, shown in Settings (and optionally the footer).
     fn hints(&self) -> Vec<(&'static str, &'static str)> {
-        let mut hints: Vec<(&'static str, &'static str)> = vec![
-            ("⏎", "stage"),
-            ("a", "all"),
-            ("u", "none"),
-            ("c", "msg"),
-            ("A", "suggest"),
-            ("o", "diff"),
-            ("m", "menu"),
-            ("S", "sync"),
-            ("s", "settings"),
-            ("r", "refresh"),
-            ("q", "quit"),
-        ];
-        if self.ctx.uses_external_editor() {
-            hints.insert(6, ("v", "review"));
-        }
+        let mut hints: Vec<(&'static str, &'static str)> = if self.hide_commit_ui() {
+            vec![
+                ("⏎", "open"),
+                ("a", "all"),
+                ("u", "none"),
+                ("v", "review"),
+                ("m", "menu"),
+                ("s", "settings"),
+                ("r", "refresh"),
+                ("q", "quit"),
+            ]
+        } else {
+            vec![
+                ("⏎", "stage"),
+                ("a", "all"),
+                ("u", "none"),
+                ("c", "msg"),
+                ("A", "suggest"),
+                ("o", "diff"),
+                ("m", "menu"),
+                ("S", "sync"),
+                ("s", "settings"),
+                ("r", "refresh"),
+                ("q", "quit"),
+            ]
+        };
         if self.merged() {
             hints.extend([("1", "files"), ("2", "git")]);
         }
@@ -3340,6 +3440,7 @@ fn repo_header_item(
     active: bool,
     theme: IconTheme,
     width: usize,
+    with_actions: bool,
 ) -> ListItem<'static> {
     let arrow = if repo.collapsed { "▸" } else { "▾" };
     let repo_icon = icon(theme, "", true, false);
@@ -3363,7 +3464,11 @@ fn repo_header_item(
         format!("{} {}{}", branch_icon(theme), repo.branch_decor(), counts),
         Style::default().dim(),
     );
-    let icons = Span::styled(" ⇅  ✓ ", Style::default().dim());
+    let icons = if with_actions {
+        Span::styled(" ⇅  ✓ ", Style::default().dim())
+    } else {
+        Span::raw("")
+    };
     let used: usize = left.iter().map(Span::width).sum::<usize>() + branch.width() + icons.width();
     let pad = width.saturating_sub(used).max(1);
     let mut spans = left;
@@ -3492,6 +3597,13 @@ fn review_button_style() -> Style {
     Style::default()
         .bg(Color::Rgb(0x3a, 0x3d, 0x41))
         .fg(Color::White)
+}
+
+fn review_only_line(width: usize) -> Line<'static> {
+    Line::from(Span::styled(
+        pad_center("Review", width),
+        review_button_style(),
+    ))
 }
 
 fn commit_review_line(

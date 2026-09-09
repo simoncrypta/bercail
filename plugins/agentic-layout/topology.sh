@@ -452,7 +452,8 @@ _open_review() {
   review_pane="$(printf '%s' "$state" | _jq '.review_pane_id // empty')"
   if [[ -n "$review_tab" ]] && _tab_exists "$workspace_id" "$review_tab" \
     && [[ -n "$review_pane" ]] && _pane_exists "$review_pane"; then
-    if _pane_is_shell "$review_pane"; then
+    # Herdr does not tag tuicr as an agent; process-info detects a live TUI.
+    if ! _pane_agent_started "$review_pane"; then
       _restart_pane_cmd "$review_pane" "$(_review_launch)"
     fi
     return 0

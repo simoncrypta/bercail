@@ -5,10 +5,10 @@
 command = "cursor-agent"
 
 [layout]
-# refresh-review adds --watch --agent-notes
-review = "hunk diff"
-# Open hunk when the layout agent pane goes done (diff vs origin/main /
-# main, or a dirty tree on main). Set false to disable the hook.
+# Bare "tuicr" expands to `tuicr -r origin/main -w` on a feature branch
+# (watching committed + uncommitted) or `tuicr pr N` for someone else's PR.
+review = "tuicr"
+# Open tuicr when the layout agent pane goes done. Set false to disable the hook.
 auto_review = true
 # Omit editor to use $EDITOR / $VISUAL (Linux) or nano/vi (macOS).
 # editor = "nvim"

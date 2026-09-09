@@ -30,6 +30,12 @@ contexts = ["workspace"]
 command = ["bash", "layout.sh", "start-agent"]
 
 [[actions]]
+id = "handoff-agent"
+title = "Start agent with handoff prompt"
+contexts = ["workspace"]
+command = ["bash", "layout.sh", "handoff-agent"]
+
+[[actions]]
 id = "focus-agent"
 title = "Focus agent pane"
 contexts = ["workspace"]
@@ -76,6 +82,12 @@ id = "refresh-review"
 title = "Refresh review view"
 contexts = ["workspace"]
 command = ["bash", "layout.sh", "refresh-review"]
+
+[[actions]]
+id = "select-review-worktree"
+title = "Review uncommitted changes"
+contexts = ["workspace"]
+command = ["bash", "layout.sh", "select-review-worktree"]
 
 [[actions]]
 id = "open-editor"

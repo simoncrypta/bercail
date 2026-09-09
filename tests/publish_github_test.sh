@@ -9,25 +9,25 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
 SCRIPT="$ROOT/skills/review/scripts/publish-github.sh"
-export HUNK_BIN="$TMP_DIR/hunk"
+export TUICR_BIN="$TMP_DIR/tuicr"
 export GH_BIN="$TMP_DIR/gh"
-export WAIT_COMMENTS_POLL_SECONDS=0
 
-cat >"$HUNK_BIN" <<FAKE
+cat >"$TUICR_BIN" <<FAKE
 #!/usr/bin/env bash
 set -euo pipefail
 action="\$*"
-if [[ "\$action" != *"comment list"* ]]; then
-  echo "unexpected hunk: \$action" >&2
-  exit 1
+if [[ "\$1" == "review" && "\$2" == "list" ]]; then
+  cat "$TMP_DIR/tuicr-list"
+  exit 0
 fi
-if [[ "\$action" != *"--type user"* ]]; then
-  echo "must list --type user only: \$action" >&2
-  exit 1
+if [[ "\$1" == "review" && "\$2" == "comments" ]]; then
+  cat "$TMP_DIR/tuicr-comments"
+  exit 0
 fi
-cat "$TMP_DIR/hunk-state"
+echo "unexpected tuicr: \$action" >&2
+exit 1
 FAKE
-chmod +x "$HUNK_BIN"
+chmod +x "$TUICR_BIN"
 
 cat >"$GH_BIN" <<FAKE
 #!/usr/bin/env bash
@@ -51,8 +51,9 @@ exit 1
 FAKE
 chmod +x "$GH_BIN"
 
-printf '%s\n' '{"comments":[{"noteId":"user:1","filePath":"src/a.rs","newLine":12,"summary":"rename this"}]}' \
-  >"$TMP_DIR/hunk-state"
+printf '%s\n' '[{"slug":"local/worktree","kind":"local","active":true}]' >"$TMP_DIR/tuicr-list"
+printf '%s\n' '[{"id":"user:1","author":"user","path":"src/a.rs","start_line":12,"side":"new","content":"rename this"}]' \
+  >"$TMP_DIR/tuicr-comments"
 
 out="$("$SCRIPT" --repo "$TMP_DIR" --dry-run)"
 printf '%s' "$out" | jq -e '.event == "COMMENT"' >/dev/null || fail "dry-run event: $out"
@@ -69,21 +70,26 @@ jq -e '.comments[0].body == "rename this"' "$TMP_DIR/posted.json" >/dev/null \
   || fail "posted body $(cat "$TMP_DIR/posted.json")"
 printf 'PASS: publish-github posts a COMMENT review\n'
 
-printf '%s\n' '{"comments":[{"noteId":"agent:1","filePath":"src/a.rs","newLine":12,"summary":"ai note"}]}' \
-  >"$TMP_DIR/hunk-state"
-# Fake hunk still dumps this file; the script asks --type user. The fixture
-# here simulates a user-list that is empty of mappable notes.
-printf '%s\n' '{"comments":[]}' >"$TMP_DIR/hunk-state"
+printf '%s\n' '[{"id":"agent:1","author":"cursor-agent","path":"src/a.rs","start_line":12,"content":"ai note"}]' \
+  >"$TMP_DIR/tuicr-comments"
+set +e
+"$SCRIPT" --repo "$TMP_DIR" >/dev/null 2>"$TMP_DIR/err"
+rc=$?
+set -e
+[[ "$rc" -eq 2 ]] || fail "agent-only comments should exit 2, got $rc"
+grep -q 'no user comments' "$TMP_DIR/err" || fail "empty comments error: $(cat "$TMP_DIR/err")"
+printf 'PASS: publish-github refuses agent-only comments\n'
+
+printf '%s\n' '[]' >"$TMP_DIR/tuicr-comments"
 set +e
 "$SCRIPT" --repo "$TMP_DIR" >/dev/null 2>"$TMP_DIR/err"
 rc=$?
 set -e
 [[ "$rc" -eq 2 ]] || fail "empty user comments should exit 2, got $rc"
-grep -q 'no user comments' "$TMP_DIR/err" || fail "empty comments error: $(cat "$TMP_DIR/err")"
 printf 'PASS: publish-github refuses an empty user-comment list\n'
 
-printf '%s\n' '{"comments":[{"noteId":"user:1","filePath":"src/a.rs","newLine":12,"summary":"rename this"}]}' \
-  >"$TMP_DIR/hunk-state"
+printf '%s\n' '[{"id":"user:1","author":"user","path":"src/a.rs","start_line":12,"side":"new","content":"rename this"}]' \
+  >"$TMP_DIR/tuicr-comments"
 touch "$TMP_DIR/no-pr"
 set +e
 "$SCRIPT" --repo "$TMP_DIR" >/dev/null 2>"$TMP_DIR/err"

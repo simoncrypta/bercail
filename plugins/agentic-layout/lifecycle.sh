@@ -189,6 +189,27 @@ _wait_agent_running() {
   return 1
 }
 
+# Clear session: configured agent, no prompt. Used by apply / d / dev.
+# Never inherit a handoff prompt from the parent environment.
+_start_default_agent() {
+  unset WT_HERDR_AGENT_PROMPT_FILE
+  _start_agent
+}
+
+# Orchestrator / handoff-spawn: start or replace the agent with the prompt file.
+_start_handoff_agent() {
+  local file="${WT_HERDR_AGENT_PROMPT_FILE:-}"
+  if [[ -z "$file" ]]; then
+    echo "agentic-layout: handoff-agent requires WT_HERDR_AGENT_PROMPT_FILE" >&2
+    return 1
+  fi
+  if [[ ! -f "$file" ]]; then
+    echo "agentic-layout: prompt file not found: $file" >&2
+    return 1
+  fi
+  _start_agent
+}
+
 # start-agent action: replace a live agent only when a prompt file is set
 # (re-handoff). Unprompted start is a no-op if the pane is already an agent.
 _start_agent() {
@@ -224,6 +245,9 @@ _ensure_pane_live() {
       _ensure_pane_process "$pane" "$(_shell_launch)"
       ;;
     center_review)
+      if _pane_agent_started "$pane"; then
+        return 1
+      fi
       _restart_pane_cmd "$pane" "$(_review_launch)"
       ;;
     sidebar)

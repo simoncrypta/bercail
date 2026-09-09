@@ -2,7 +2,7 @@
 
 **an ADE on [herdr](https://herdr.dev).**
 
-Bercail is an agentic development environment: Herdr-based, cursor-agent focused, built for working in parallel with control and observability. One git worktree, one Herdr workspace. [cursor-agent](https://cursor.com) stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. When it goes `done`, [hunk](https://github.com/modem-dev/hunk) opens the whole branch vs main. `handoff` clones that desk onto a sibling worktree and starts a [pstack](https://github.com/cursor/plugins/tree/main/pstack) child (`/poteto-mode`). You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
+Bercail is an agentic development environment: Herdr-based, cursor-agent focused, built for working in parallel with control and observability. One git worktree, one Herdr workspace. [cursor-agent](https://cursor.com) stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. When it goes `done`, [tuicr](https://github.com/agavra/tuicr) opens the whole branch vs main and watches further edits. `handoff` clones that desk onto a sibling worktree and starts a [pstack](https://github.com/cursor/plugins/tree/main/pstack) child (`/poteto-mode`). You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
@@ -12,14 +12,14 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 - **sticky agent** — cursor-agent does not live in a tab. Tabs move around it.
 - **one worktree, one workspace** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; Herdr follows.
 - **control and observability** — every pane is working, blocked, or idle. Review opens on `done`. You choose what gets a GitHub comment.
-- **review when the agent is done** — `hunk diff origin/main --watch` on a feature branch (working tree vs main). `prefix+2` anytime.
+- **review when the agent is done** — `tuicr -r origin/main -w` on a feature branch (working tree vs main, watching). Other people's PRs open with `tuicr pr`. `prefix+2` anytime.
 - **handoff is parallel, not a chat fork** — sibling checkout, optional dirty copy, always cursor-agent + pstack. Install pstack in Cursor: `/add-plugin pstack`.
-- **keyboard and mouse** — prefix is `Ctrl-Space` (Omarchy tmux). Click the file tree; `j`/`k` in hunk.
+- **keyboard and mouse** — prefix is `Ctrl-Space` (Omarchy tmux). Click the file tree; `j`/`k` in tuicr.
 
 ```
 ┌──────────────┬────────────────────────────┬─────────┐
 │ cursor-agent │ shell  |  review*  |  edit │ files   │
-│ sticky       │ hunk on agent done / +2    │ git     │
+│ sticky       │ tuicr on agent done / +2   │ git     │
 │ prefix+1     │ prefix+2 / +3 / +4         │ +4 / +g │
 └──────────────┴────────────────────────────┴─────────┘
 ```
@@ -62,8 +62,8 @@ Default sticky agent is **cursor-agent**. There is no picker. Another command in
 
 | Command | What |
 |---------|------|
-| `dev` | Attach or switch the Herdr workspace for `$PWD` |
-| `d` | Apply the sticky-agent layout (inside Herdr only) |
+| `dev` | Attach or switch the Herdr workspace for `$PWD` and start the configured agent |
+| `d` | Apply the sticky-agent layout and start the configured agent (inside Herdr only) |
 | `t` | `herdr` |
 | `wtc [branch]` | Create worktree + Herdr workspace |
 | `wts [branch]` | Switch worktree (fzf if omitted) |
@@ -76,7 +76,7 @@ Call by name. Cursor reads `~/.agents/skills`.
 | Skill | What |
 |-------|------|
 | `handoff` | Spawn a sibling worktree; child is cursor-agent + `/poteto-mode` |
-| `review` | Wait for **human** hunk notes; publish to GitHub only if asked |
+| `review` | Wait for **human** tuicr notes; publish to GitHub only if asked |
 
 ```bash
 # handoff (parent: --info, then spawn — never put the prompt on argv)
@@ -102,8 +102,9 @@ Manual skill install: `npx skills add simoncrypta/agentic-dev-setup --skill hand
 
 | Action | Key |
 |--------|-----|
-| `apply` / `create` | `prefix+d` |
+| `apply` / `create` | `prefix+d` (`apply` starts a clear agent session) |
 | `focus-agent` / `start-agent` | `prefix+1` |
+| `handoff-agent` | handoff-spawn (prompted child session) |
 | `select-review` | `prefix+2` |
 | `select-shell` | `prefix+3` |
 | `select-files` | `prefix+4` |
@@ -116,7 +117,7 @@ Manual skill install: `npx skills add simoncrypta/agentic-dev-setup --skill hand
 | `select-tab-1` … `select-tab-9` | `Alt+1`…`9` (Option on macOS) |
 | `select-prev-tab` / `select-next-tab` | `Alt+Left` / `Alt+Right` |
 
-Review launch: feature branch → `hunk diff origin/main --watch --agent-notes`; on main → `hunk diff --watch --agent-notes`. `auto_review = false` disables the agent-done hook.
+Review launch: feature branch → `tuicr -r origin/main -w` (watches committed + uncommitted); on main → `tuicr -w`; someone else's PR on this checkout → `tuicr pr <n>`. Pickr defaults to `tuicr pr {url}`. `auto_review = false` disables the agent-done hook. A live Review pane is not restarted — tuicr's diff watch keeps it current.
 
 ## keys
 
@@ -163,7 +164,7 @@ Native Herdr owns splits, workspaces, detach. This plugin owns the sticky layout
 command = "cursor-agent"
 
 [layout]
-review = "hunk diff"
+review = "tuicr"
 auto_review = true
 # editor = "nvim"   # else $EDITOR / $VISUAL (macOS: nano, then vi)
 ```
@@ -178,7 +179,7 @@ Already on Herdr and only want the layout:
 herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.4.0
 ```
 
-Needs Herdr 0.9+, `jq`, a Rust toolchain, hunk. Copy keys from [`config/herdr/config.toml`](config/herdr/config.toml). Set `close_tab = ""` and `close_pane = ""`. Full install also adds shell commands, CLI, skills, worktrunk hooks, and desktop fixes.
+Needs Herdr 0.9+, `jq`, a Rust toolchain, tuicr. Copy keys from [`config/herdr/config.toml`](config/herdr/config.toml). Set `close_tab = ""` and `close_pane = ""`. Full install also adds shell commands, CLI, skills, worktrunk hooks, and desktop fixes.
 
 Plugins run as your user. Skim [`plugins/agentic-layout/herdr-plugin.toml`](plugins/agentic-layout/herdr-plugin.toml) and [`layout.sh`](plugins/agentic-layout/layout.sh). Prefer no `--yes` the first time.
 
@@ -191,11 +192,11 @@ Local: `cargo build --release -p herdr-sidebar` in `plugins/agentic-layout`, the
 
 ## linux
 
-On Omarchy: mise first, `omarchy pkg add`, native `SUPER+CTRL+RETURN` → Herdr, optional `SUPER+ALT+RETURN` remap, fcitx5 `Ctrl+Alt+H/J` hint keys cleared. On Ubuntu: mise then apt (`git fzf jq lazygit curl`); herdr, worktrunk, hunk from upstream. Hyprland: same optional `SUPER+ALT+RETURN` binding.
+On Omarchy: mise first, `omarchy pkg add`, native `SUPER+CTRL+RETURN` → Herdr, optional `SUPER+ALT+RETURN` remap, fcitx5 `Ctrl+Alt+H/J` hint keys cleared. On Ubuntu: mise then apt (`git fzf jq lazygit curl`); herdr, worktrunk, tuicr from upstream. Hyprland: same optional `SUPER+ALT+RETURN` binding.
 
 ## dependencies
 
-Installed if missing: [herdr](https://herdr.dev) 0.9+ (`herdr integration install cursor`), worktrunk, fzf, jq, lazygit, [hunk](https://github.com/modem-dev/hunk) ≥ 0.20.1, cursor-agent. pstack is a Cursor plugin, not a package: `/add-plugin pstack`.
+Installed if missing: [herdr](https://herdr.dev) 0.9+ (`herdr integration install cursor`), worktrunk, fzf, jq, lazygit, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0, cursor-agent. pstack is a Cursor plugin, not a package: `/add-plugin pstack`.
 
 ## development
 

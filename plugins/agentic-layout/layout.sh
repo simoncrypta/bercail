@@ -114,7 +114,7 @@ _review_cmd() {
   if declare -F agentic_dev_layout_review >/dev/null 2>&1; then
     agentic_dev_layout_review
   else
-    printf '%s' "hunk diff"
+    printf '%s' "tuicr"
   fi
 }
 
@@ -168,6 +168,23 @@ _review_workdir() {
   printf '%s' "$PWD"
 }
 
+# Someone else's PR on this checkout → tuicr pr (forge review / :submit).
+# Own branch or no PR: local watch instead (PR mode ignores diff_watch).
+_review_foreign_pr_number() {
+  local workdir="$1" gh json number login me
+  gh="${GH_BIN:-gh}"
+  command -v "$gh" >/dev/null 2>&1 || return 1
+  [[ -n "$workdir" ]] || return 1
+  git -C "$workdir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 1
+  json="$(cd "$workdir" && "$gh" pr view --json number,author 2>/dev/null)" || return 1
+  number="$(printf '%s' "$json" | jq -r '.number // empty')"
+  login="$(printf '%s' "$json" | jq -r '.author.login // empty')"
+  [[ -n "$number" && -n "$login" ]] || return 1
+  me="$(cd "$workdir" && "$gh" api user --jq .login 2>/dev/null)" || return 1
+  [[ -n "$me" && "$login" != "$me" ]] || return 1
+  printf '%s' "$number"
+}
+
 # Feature branch: working tree vs origin/main / main (committed + uncommitted).
 # On main with no PR base: working tree only, including untracked.
 _review_hunk_cmd() {
@@ -180,21 +197,63 @@ _review_hunk_cmd() {
   printf '%s' "hunk diff --watch --agent-notes"
 }
 
-# On-demand Review is a hunk session. Always watch so comments stream.
-# --agent-notes keeps AI vs human comments visible in the TUI.
+# Own work: `tuicr -r <base> -w` so committed + uncommitted stay in view.
+# Foreign PR checkout: `tuicr pr N`. diff_watch_interval_ms (tuicr config)
+# reloads the local diff; it does not apply to `tuicr pr`.
+_review_tuicr_cmd() {
+  local workdir="$1" pr base
+  if pr="$(_review_foreign_pr_number "$workdir")"; then
+    printf 'tuicr pr %s --no-update-check' "$pr"
+    return 0
+  fi
+  base="$(_review_merge_base "$workdir" || true)"
+  if [[ -n "$base" ]]; then
+    printf 'tuicr -r %s -w --no-update-check' "$base"
+    return 0
+  fi
+  printf 'tuicr -w --no-update-check'
+}
+
+_review_with_flag() {
+  local cmd="$1" flag="$2"
+  [[ "$cmd" == *"$flag"* ]] && { printf '%s' "$cmd"; return 0; }
+  printf '%s %s' "$cmd" "$flag"
+}
+
+# On-demand Review. Bare `tuicr` picks watch vs `tuicr pr` from the checkout.
+# AGENTIC_REVIEW_SCOPE=worktree forces uncommitted-only (`tuicr -w`).
+# Custom review= still wins. Live tuicr is not restarted (watch keeps it current).
 _review_launch() {
   local cmd workdir
   cmd="$(_review_cmd)"
   workdir="$(_review_workdir "${1:-}")"
+  if [[ "${AGENTIC_REVIEW_SCOPE:-}" == "worktree" ]]; then
+    case "$cmd" in
+      hunk*)
+        printf '%s' "hunk diff --watch --agent-notes"
+        ;;
+      *)
+        printf '%s' "tuicr -w --no-update-check"
+        ;;
+    esac
+    return 0
+  fi
   case "$cmd" in
+    tuicr)
+      _review_tuicr_cmd "$workdir"
+      ;;
     hunk|"hunk diff")
       _review_hunk_cmd "$workdir"
       ;;
     hunk\ diff*)
-      [[ "$cmd" == *"--watch"* ]] || cmd="$cmd --watch"
+      cmd="$(_review_with_flag "$cmd" --watch)"
       if [[ "$cmd" != *"--agent-notes"* && "$cmd" != *"--no-agent-notes"* ]]; then
         cmd="$cmd --agent-notes"
       fi
+      printf '%s' "$cmd"
+      ;;
+    tuicr\ *)
+      cmd="$(_review_with_flag "$cmd" --no-update-check)"
       printf '%s' "$cmd"
       ;;
     *)
@@ -294,6 +353,11 @@ _refresh_review() {
   review="$(printf '%s' "$state" | _jq '.review_pane_id // empty')"
   [[ -n "$review" ]] && _pane_exists "$review" || return 0
   _restart_pane_cmd "$review" "$(_review_launch)"
+}
+
+# Git sidebar Review: uncommitted working tree only (`tuicr -w`).
+_open_worktree_review() {
+  AGENTIC_REVIEW_SCOPE=worktree _refresh_review
 }
 
 _toggle_sidebar() {
@@ -425,9 +489,10 @@ _on_tab_focused() {
   _activate_tab "$tab_id" 1
 }
 
-# Open hunk when the layout agent pane finishes a turn (`done`). Idle is too
+# Open tuicr when the layout agent pane finishes a turn (`done`). Idle is too
 # noisy (includes never-started). Skip empty trees (unless the working tree
 # differs from origin/main / main) and debounce. auto_review=false disables this.
+# A live Review pane is left running; tuicr's diff watch picks up new edits.
 _on_agent_status_changed() {
   local status pane workspace_id state agent workdir now last focused
   status="$(_event_id agent_status)"
@@ -487,13 +552,18 @@ main() {
       state="$(_layout_ensure)"
       pane="$(printf '%s' "$state" | _jq '.sidebar_pane_id // empty')"
       _restart_sidebar_pane "$pane"
+      _start_default_agent || true
       if [[ -z "${WT_HERDR_NO_ATTACH:-}" ]]; then
-        _select_center shell
+        _focus_agent
       fi
       ;;
     start-agent|start_agent)
       _resolve_context
       _start_agent
+      ;;
+    handoff-agent|handoff_agent)
+      _resolve_context
+      _start_handoff_agent
       ;;
     startup) _on_startup ;;
     focus-agent|focus_agent)
@@ -511,6 +581,10 @@ main() {
     refresh-review|refresh_review)
       _resolve_context
       _refresh_review
+      ;;
+    select-review-worktree|select_review_worktree)
+      _resolve_context
+      _open_worktree_review
       ;;
     select-shell|select_terminal)
       _resolve_context

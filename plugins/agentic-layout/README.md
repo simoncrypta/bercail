@@ -25,13 +25,15 @@ herdr plugin link ~/path/to/agentic-dev-setup/plugins/agentic-layout
 
 | Action | Description |
 |--------|-------------|
-| `create` | Create layout (agent pane stays a shell) |
-| `apply` | Idempotently repair plugin-owned panes |
-| `start-agent` | Start or replace the agent (`WT_HERDR_AGENT_CMD`, optional prompt file) |
+| `create` | Create layout (agent pane stays a shell; used by worktrunk/handoff) |
+| `apply` | Repair plugin-owned panes and start a clear session of the configured agent (`d` / `prefix+d`) |
+| `start-agent` | Start the configured agent if the pane is a shell (no prompt; does not replace a live agent) |
+| `handoff-agent` | Start or replace the agent with `WT_HERDR_AGENT_PROMPT_FILE` (orchestrator / handoff-spawn) |
 | `focus-agent` | Focus the persistent agent pane; start it if the pane is a shell |
-| `select-review` | Open or focus review (`hunk diff origin/main --watch --agent-notes` on a feature branch; creates the tab if needed) |
+| `select-review` | Open or focus review (`tuicr -r origin/main -w` on a feature branch, `tuicr pr N` for someone else's PR; creates the tab if needed) |
 | `close-review` | Close the Review tab and return to Shell |
-| `refresh-review` | Focus review and restart `hunk diff --watch --agent-notes` |
+| `refresh-review` | Focus review and restart tuicr (`-r <base> -w` or `tuicr pr`) |
+| `select-review-worktree` | Open Review with uncommitted changes (`tuicr -w`) |
 | `select-shell` | Show live shell pane (no respawn) |
 | `toggle-sidebar` | Toggle files pane zoom |
 | `select-files` | Files view |
@@ -40,7 +42,7 @@ herdr plugin link ~/path/to/agentic-dev-setup/plugins/agentic-layout
 | `close-tab` | Close the current file tab and land on the previous one |
 | `close-pane` | Close an extra split; an editor center closes the tab instead |
 
-Sidebar keys in embedded mode: `v` opens hunk in Review. Source Control splits **✓ Commit | Review** next to each other.
+Sidebar keys in embedded mode: `v` opens tuicr. Source Control lists changes (click a file to edit); **Review** opens tuicr on uncommitted work (`tuicr -w`).
 
 ## Config
 
@@ -48,8 +50,8 @@ Reads `~/.config/bercail/config.toml` when present:
 
 ```toml
 [layout]
-review = "hunk diff"
-auto_review = true   # open hunk when the agent pane goes done
+review = "tuicr"
+auto_review = true   # open tuicr when the agent pane goes done
 # editor = "nvim"   # optional; default is $EDITOR / $VISUAL
 agent_ratio = 0.416667
 sidebar_ratio = 0.166667

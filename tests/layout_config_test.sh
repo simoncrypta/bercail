@@ -74,7 +74,7 @@ mkdir -p "$cursor_dir/plugins/cache/cursor-public/pstack/abc/skills/poteto-mode"
 printf '# poteto-mode\n' >"$cursor_dir/plugins/cache/cursor-public/pstack/abc/skills/poteto-mode/SKILL.md"
 pstack_plugin_present || fail "pstack_plugin_present must be true when poteto-mode exists"
 unset CURSOR_CONFIG_DIR
-assert_contains "$(default_user_config)" 'review = "hunk diff"' \
+assert_contains "$(default_user_config)" 'review = "tuicr"' \
   "default config includes review"
 assert_contains "$(default_user_config)" 'auto_review = true' \
   "default config enables auto_review"
@@ -86,12 +86,12 @@ cp "$ROOT/config/agentic-dev/config-reader.sh" "$AGENTIC_DEV_CONFIG_DIR/config-r
 
 export EDITOR=nano
 assert_eq "cursor-agent" "$(read_agent_command)" "agent defaults to cursor-agent"
-assert_eq "hunk diff" "$(read_layout_review)" "review defaults to hunk diff"
+assert_eq "tuicr" "$(read_layout_review)" "review defaults to tuicr"
 assert_eq "nano" "$(read_layout_file_editor)" "editor defaults to EDITOR"
 
 write_user_config grok
 assert_eq "grok" "$(read_agent_command)" "write_user_config stores agent"
-assert_eq "hunk diff" "$(read_layout_review)" "write_user_config stores review"
+assert_eq "tuicr" "$(read_layout_review)" "write_user_config stores review"
 grep -q 'auto_review = true' "$AGENTIC_DEV_USER_CONFIG" \
   || fail "write_user_config should enable auto_review"
 assert_eq "nano" "$(read_layout_file_editor)" "write_user_config leaves editor to EDITOR"
@@ -163,7 +163,17 @@ cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
 review = "hunk diff"
 auto_review = false
 EOF
+migrate_hunk_review_to_tuicr
+assert_eq "tuicr" "$(read_layout_review)" "migrate_hunk_review_to_tuicr rewrites hunk diff"
+grep -q 'review = "tuicr"' "$AGENTIC_DEV_USER_CONFIG" \
+  || fail "migrate_hunk_review_to_tuicr writes review = tuicr"
+
+cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
+[layout]
+review = "tuicr"
+auto_review = false
+EOF
 ensure_config_reader || fail "ensure_config_reader"
 assert_eq "false" "$(agentic_dev_layout_auto_review)" "auto_review=false is honored"
 
-printf 'PASS: layout config, write, migration, and doctor follow hunk and EDITOR\n'
+printf 'PASS: layout config, write, migration, and doctor follow tuicr and EDITOR\n'

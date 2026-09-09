@@ -3,7 +3,9 @@
 
 HERDR_MIN_VERSION=0.9.0
 HUNK_MIN_VERSION=0.20.1
+TUICR_MIN_VERSION=0.20.0
 GROK_MISE_SPEC="npm:@xai-official/grok"
+TUICR_MISE_SPEC="github:agavra/tuicr"
 
 dep_present() {
   command -v "$1" >/dev/null 2>&1
@@ -395,8 +397,93 @@ install_hunk_binary() {
   return 1
 }
 
+install_tuicr_binary() {
+  if dep_present tuicr; then
+    info "present: tuicr"
+    return 0
+  fi
+  if maybe_mise_install tuicr "$TUICR_MISE_SPEC"; then
+    return 0
+  fi
+  if has_brew; then
+    info "installing via brew: tuicr"
+    if run brew install tuicr && dep_present tuicr; then
+      return 0
+    fi
+    warn "brew install tuicr failed — trying tuicr.dev installer"
+  fi
+  dep_present curl || maybe_omarchy_pkg_install curl curl \
+    || maybe_apt_install curl curl || maybe_pacman_install curl curl || true
+  info "installing via https://tuicr.dev/install.sh"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  curl -fsSL https://tuicr.dev/install.sh | sh
+  ensure_mise_shims
+  hash -r 2>/dev/null || true
+  if dep_present tuicr; then
+    return 0
+  fi
+  warn "tuicr install may have succeeded but tuicr is not on PATH"
+  return 1
+}
+
+# Watch the local diff while the agent writes. Do not overwrite a user's theme.
+ensure_tuicr_watch_config() {
+  local dest="${XDG_CONFIG_HOME:-$HOME/.config}/tuicr/config.toml"
+  local src=""
+  if [[ -f "$dest" ]]; then
+    info "keeping existing tuicr config: $dest"
+    return 0
+  fi
+  if declare -F install_src_dir >/dev/null 2>&1; then
+    src="$(install_src_dir)/config/tuicr/config.toml"
+  fi
+  if declare -F ensure_dir >/dev/null 2>&1; then
+    ensure_dir "$(dirname "$dest")"
+  else
+    mkdir -p "$(dirname "$dest")"
+  fi
+  if [[ -f "$src" ]]; then
+    if declare -F copy_file >/dev/null 2>&1; then
+      copy_file "$src" "$dest"
+    else
+      cp "$src" "$dest"
+    fi
+    return 0
+  fi
+  if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+    info "[dry-run] would write $dest (diff_watch_interval_ms=1000)"
+    return 0
+  fi
+  cat >"$dest" <<'EOF'
+diff_watch_interval_ms = 1000
+review_watch_interval_ms = 1000
+q_quits = true
+EOF
+  info "wrote $dest"
+}
+
+_layout_review_bin() {
+  local cmd="tuicr"
+  if declare -F read_layout_review >/dev/null 2>&1; then
+    cmd="$(read_layout_review 2>/dev/null || printf '%s' "tuicr")"
+  fi
+  printf '%s' "${cmd%% *}"
+}
+
 ensure_selected_layout_tools() {
-  install_hunk_binary || warn "missing hunk (review tab needs it)"
+  local review_bin
+  review_bin="$(_layout_review_bin)"
+  case "$review_bin" in
+    hunk)
+      install_hunk_binary || warn "missing hunk (review tab needs it)"
+      ;;
+    *)
+      install_tuicr_binary || warn "missing tuicr (review tab needs it)"
+      ensure_tuicr_watch_config || true
+      ;;
+  esac
 }
 
 # Cursor pstack plugin (poteto-mode). Not vendored here; install with /add-plugin pstack.
@@ -604,7 +691,19 @@ doctor_dependencies() {
       missing=$((missing + 1))
     fi
   done
-  _doctor_versioned_bin hunk "$HUNK_MIN_VERSION" review || missing=$((missing + 1))
+  local review_bin
+  review_bin="$(_layout_review_bin)"
+  case "$review_bin" in
+    hunk)
+      _doctor_versioned_bin hunk "$HUNK_MIN_VERSION" review || missing=$((missing + 1))
+      ;;
+    tuicr|"")
+      _doctor_versioned_bin tuicr "$TUICR_MIN_VERSION" review || missing=$((missing + 1))
+      ;;
+    *)
+      _doctor_configured_bin "$review_bin" review || missing=$((missing + 1))
+      ;;
+  esac
   if declare -F read_layout_file_editor >/dev/null; then
     local editor_cmd editor_bin
     editor_cmd="$(read_layout_file_editor 2>/dev/null || true)"

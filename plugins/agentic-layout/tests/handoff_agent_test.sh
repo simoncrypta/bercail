@@ -86,6 +86,35 @@ grep -q '/poteto-mode' "$HERDR_CALL_LOG" \
   && fail "no prompt file means no poteto-mode argv; log=$(cat "$HERDR_CALL_LOG")"
 printf 'PASS: unprompted start-agent runs the configured agent\n'
 
+# Default start ignores an inherited handoff prompt file.
+export WT_HERDR_AGENT_CMD=cursor-agent
+export WT_HERDR_AGENT_PROMPT_FILE="$prompt_file"
+export WT_HERDR_AGENT_READY_TIMEOUT_MS=0
+: >"$HERDR_CALL_LOG"
+_start_default_agent || true
+unset WT_HERDR_AGENT_READY_TIMEOUT_MS
+grep -qE '^pane run pane-agent cursor-agent$' "$HERDR_CALL_LOG" \
+  || fail "default start should run a clear agent session; log=$(cat "$HERDR_CALL_LOG")"
+grep -q 'cat' "$HERDR_CALL_LOG" \
+  && fail "default start must not cat a prompt file; log=$(cat "$HERDR_CALL_LOG")"
+printf 'PASS: start-default-agent ignores an inherited prompt file\n'
+
+# Handoff-agent without a prompt file fails.
+unset WT_HERDR_AGENT_PROMPT_FILE
+unset WT_HERDR_AGENT_CMD
+: >"$HERDR_CALL_LOG"
+if _start_handoff_agent 2>"$TMP_DIR/handoff-err"; then
+  fail "handoff-agent without a prompt file should fail"
+fi
+grep -q 'WT_HERDR_AGENT_PROMPT_FILE' "$TMP_DIR/handoff-err" \
+  || fail "handoff-agent should require the prompt file; err=$(cat "$TMP_DIR/handoff-err")"
+grep -q 'pane run' "$HERDR_CALL_LOG" \
+  && fail "handoff-agent without a prompt must not launch; log=$(cat "$HERDR_CALL_LOG")"
+printf 'PASS: handoff-agent requires WT_HERDR_AGENT_PROMPT_FILE\n'
+
+unset WT_HERDR_AGENT_PROMPT_FILE
+unset WT_HERDR_AGENT_CMD
+
 # Live agent + no prompt file: no-op (do not replace).
 cat >"$TMP_DIR/herdr" <<'FAKE_HERDR'
 #!/usr/bin/env bash

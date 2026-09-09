@@ -22,21 +22,21 @@ Post-install CLI (bercail):
   uninstall     Remove marker block and managed files
 
 Shell commands:
-  dev           Dev layout for current directory (attach or switch workspace)
+  dev           Attach/switch workspace for $PWD and start the configured agent
   wtc [branch]  Create worktree + new Herdr workspace
   wts [branch]  Switch to existing worktree (fzf if no branch)
   wtd [branch]  Remove worktree + close Herdr workspace
-  d             Apply dev layout in current Herdr workspace
+  d             Apply layout and start the configured agent (inside Herdr)
   t             Launch herdr
 
 Layout:
   Left 5/12: agent pane (sticky) — command from ~/.config/bercail/config.toml
-  Center 5/12: review (`hunk diff --watch --agent-notes`; auto-opens on agent done) or shell tab
+  Center 5/12: review (`tuicr -r origin/main -w` watching; auto-opens on agent done) or shell tab
   Right 1/6: files / git pane
 
 Herdr keys (prefix = Ctrl-Space):
-  prefix+D           Apply dev layout in current workspace
-  prefix+1           Focus agent pane (recreates if crashed)
+  prefix+D           Apply layout and start the configured agent
+  prefix+1           Focus agent pane (start if the pane is a shell)
   prefix+2/3/4       review / shell / files keys
   Alt+1-9            Focus tab by number (Option+1-9 on macOS)
   Ctrl+Alt+Arrows    Focus panes left/down/up/right (Ctrl+Option on macOS)
@@ -60,13 +60,13 @@ Omarchy / Linux:
   Native Omarchy Herdr is SUPER+CTRL+RETURN; packages via omarchy pkg add
 
 Install order:
-  mise first (herdr, worktrunk, fzf, jq, lazygit, hunk)
+  mise first (herdr, worktrunk, fzf, jq, lazygit, tuicr)
   then omarchy pkg add on Omarchy, then brew / apt / pacman / upstream
-  layout tools: hunk (review); sticky agent is cursor-agent; editor follows $EDITOR
+  layout tools: tuicr (review); sticky agent is cursor-agent; editor follows $EDITOR
 
 Ubuntu / Debian:
   Uses apt for git, fzf, jq, lazygit, curl when mise is unavailable
-  Downloads herdr, worktrunk, and hunk from upstream when needed
+  Downloads herdr, worktrunk, and tuicr from upstream when needed
 
 Config:
   ~/.config/bercail/config.toml          agent (default cursor-agent), review, editor
@@ -75,7 +75,7 @@ Config:
   ~/.config/worktrunk/herdr-layout.sh
   ~/.config/worktrunk/config.toml        worktrunk hooks
   ~/.agents/skills/handoff/              handoff skill (canonical)
-  ~/.agents/skills/review/               hunk review skill (wait / optional GH publish)
+  ~/.agents/skills/review/               tuicr review skill (wait / optional GH publish)
   ~/.config/fcitx5/conf/keyboard.conf    Linux fcitx5 hint trigger override
 
 Agent skills (`handoff`, `review`):
@@ -100,7 +100,7 @@ show_summary() {
   log "bercail installed (v${AGENTIC_DEV_VERSION})"
   log ""
   log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff children: cursor-agent + pstack)"
-  log "Review command: $(read_layout_review 2>/dev/null || echo 'hunk diff')"
+  log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Editor command: $(read_layout_editor 2>/dev/null || echo "\$EDITOR")"
   log "Config: ${AGENTIC_DEV_USER_CONFIG}"
   log "Skills: ${AGENTS_SKILLS_DIR}/handoff, ${AGENTS_SKILLS_DIR}/review"

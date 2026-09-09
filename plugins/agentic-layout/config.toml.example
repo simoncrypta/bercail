@@ -3,9 +3,10 @@
 command = "cursor-agent"
 
 [layout]
-review = "hunk diff"
-# Open hunk when the layout agent pane goes done (diff vs origin/main /
-# main, or a dirty tree on main). Set false to disable the hook.
+review = "tuicr"
+# Open tuicr when the layout agent pane goes done (branch vs origin/main
+# plus uncommitted, watching). Someone else's PR uses `tuicr pr`.
+# Set false to disable the hook.
 auto_review = true
 # Omit editor to use $EDITOR / $VISUAL, or nano/vi on macOS.
 # editor = "nvim"

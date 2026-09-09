@@ -116,6 +116,11 @@ test_mise_allowlist() {
   assert_eq "0" "$rc" "mise_can_install allows hunk"
   (
     has_mise() { return 0; }
+    mise_can_install github:agavra/tuicr
+  ) && rc=0 || rc=$?
+  assert_eq "0" "$rc" "mise_can_install allows tuicr github spec"
+  (
+    has_mise() { return 0; }
     mise_can_install git
   ) && rc=0 || rc=$?
   assert_eq "1" "$rc" "mise_can_install skips git (no registry probe)"

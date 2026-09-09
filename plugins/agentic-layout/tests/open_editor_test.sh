@@ -118,8 +118,9 @@ if _open_editor 2>/dev/null; then
   fail "open-editor without a path should fail"
 fi
 
-[[ "$(_review_launch)" == "hunk diff --watch --agent-notes" ]] \
-  || fail "review should launch hunk diff --watch --agent-notes, got $(_review_launch)"
+got="$(_review_launch)"
+[[ "$got" == tuicr* && "$got" == *"--no-update-check"* ]] \
+  || fail "review should launch tuicr with --no-update-check, got $got"
 
 # Close-tab: dock stickies onto the previous tab, then close. Never pane-close
 # the editor center (that 3-column teardown has crashed Herdr).

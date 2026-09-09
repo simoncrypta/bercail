@@ -126,11 +126,11 @@ test_pi_gets_extra_skill_link() {
 
 test_review_skill_recipe() {
   grep -q 'wait-comments.sh' "$ROOT/skills/review/SKILL.md" \
-    || fail "review skill must wait for human hunk comments"
+    || fail "review skill must wait for human tuicr comments"
   grep -q 'publish-github.sh' "$ROOT/skills/review/SKILL.md" \
     || fail "review skill must publish user comments via publish-github.sh"
-  grep -q -- '--type user' "$ROOT/skills/review/SKILL.md" \
-    || fail "review skill must distinguish user comments"
+  grep -q 'tuicr review list' "$ROOT/skills/review/SKILL.md" \
+    || fail "review skill must discover the live tuicr session"
   grep -q 'publish-github.sh' "$ROOT/skills/review/MANIFEST" \
     || fail "MANIFEST must list publish-github.sh"
   printf 'PASS: review skill waits for user notes and publishes only on request\n'

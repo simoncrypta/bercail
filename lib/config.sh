@@ -7,9 +7,10 @@ default_user_config() {
 command = "cursor-agent"
 
 [layout]
-review = "hunk diff"
-# Open hunk when the layout agent pane goes done (diff vs origin/main /
-# main, or a dirty tree on main). Set false to disable the hook.
+review = "tuicr"
+# Open tuicr when the layout agent pane goes done (branch vs origin/main
+# plus uncommitted, watching). Someone else's PR uses `tuicr pr`.
+# Set false to disable the hook.
 auto_review = true
 EOF
 }
@@ -89,7 +90,7 @@ read_layout_review() {
   if declare -F agentic_dev_layout_review >/dev/null 2>&1; then
     agentic_dev_layout_review
   else
-    printf '%s' "hunk diff"
+    printf '%s' "tuicr"
   fi
 }
 
@@ -583,7 +584,7 @@ write_user_config() {
   local cmd="$1"
   ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would write $AGENTIC_DEV_USER_CONFIG (agent=$cmd review=hunk diff)"
+    info "[dry-run] would write $AGENTIC_DEV_USER_CONFIG (agent=$cmd review=tuicr)"
     return 0
   fi
   cat >"$AGENTIC_DEV_USER_CONFIG" <<EOF
@@ -591,7 +592,7 @@ write_user_config() {
 command = "$cmd"
 
 [layout]
-review = "hunk diff"
+review = "tuicr"
 auto_review = true
 EOF
   info "saved config to $AGENTIC_DEV_USER_CONFIG"
@@ -602,7 +603,7 @@ EOF
 prompt_user_config() {
   if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
     info "using existing agent command: $(read_agent_command)"
-    info "review: hunk diff  editor: $(read_layout_file_editor)"
+    info "review: $(read_layout_review)  editor: $(read_layout_file_editor)"
     return 0
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -733,6 +734,29 @@ migrate_file_editor_config() {
 
 # Drop the previous fresh default so EDITOR/VISUAL (or a stock terminal
 # editor) wins. An explicit non-fresh editor= in config is kept.
+# Default review tool is tuicr. Leave a custom hunk command (extra flags) alone.
+migrate_hunk_review_to_tuicr() {
+  local dest="$AGENTIC_DEV_USER_CONFIG" tmp
+  [[ -f "$dest" ]] || return 0
+  grep -qE '^[[:space:]]*review[[:space:]]*=[[:space:]]*"(hunk|hunk diff)"[[:space:]]*$' "$dest" || return 0
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "[dry-run] would migrate layout review hunk → tuicr in $dest"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  awk '
+    BEGIN { in_layout = 0 }
+    /^\[layout\]/ { in_layout = 1 }
+    /^\[/ && $0 != "[layout]" { in_layout = 0 }
+    in_layout && /^[[:space:]]*review[[:space:]]*=[[:space:]]*"(hunk|hunk diff)"[[:space:]]*$/ {
+      sub(/"(hunk|hunk diff)"/, "\"tuicr\"")
+    }
+    { print }
+  ' "$dest" >"$tmp"
+  mv "$tmp" "$dest"
+  info "migrated layout review to tuicr in $dest"
+}
+
 migrate_fresh_editor_default() {
   local dest="$AGENTIC_DEV_USER_CONFIG" tmp
   [[ -f "$dest" ]] || return 0
@@ -897,6 +921,7 @@ deploy_configs() {
   migrate_cursor_cli_command
   migrate_file_editor_config
   migrate_fresh_editor_default
+  migrate_hunk_review_to_tuicr
 
   ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
   ensure_dir "$AGENTIC_DEV_SHELL_DIR"

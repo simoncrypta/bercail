@@ -1,0 +1,6 @@
+# bercail: keep the local diff current while the agent writes.
+# Ignored for `tuicr pr` and `--all-files` reviews.
+# Installed only when ~/.config/tuicr/config.toml does not already exist.
+diff_watch_interval_ms = 1000
+review_watch_interval_ms = 1000
+q_quits = true

@@ -98,9 +98,11 @@ got="$(jq -r '.review_tab_id' "$(_state_path w1)")"
 got="$(jq -r '.review_pane_id' "$(_state_path w1)")"
 [[ "$got" == "pane-review" ]] || fail "open-review should persist review_pane_id, got $got"
 grep -q 'tab create' "$HERDR_CALL_LOG" || fail "open-review should create the Review tab"
-grep -qE 'hunk(\\ | )diff(\\ | )--watch' "$HERDR_CALL_LOG" \
-  || fail "open-review should launch hunk diff --watch; log=$(cat "$HERDR_CALL_LOG")"
-printf 'PASS: select-review / open-review creates Review and launches hunk --watch\n'
+grep -qE 'tuicr(\\ | ).*-w' "$HERDR_CALL_LOG" \
+  || fail "open-review should launch tuicr -w; log=$(cat "$HERDR_CALL_LOG")"
+grep -q -- '--no-update-check' "$HERDR_CALL_LOG" \
+  || fail "open-review should pass --no-update-check; log=$(cat "$HERDR_CALL_LOG")"
+printf 'PASS: select-review / open-review creates Review and launches tuicr -w\n'
 
 # After open, fake herdr must report the Review tab as live so close can find it.
 cat >"$TMP_DIR/herdr" <<'FAKE_HERDR'
@@ -242,13 +244,13 @@ export HERDR_PLUGIN_EVENT_JSON='{"data":{"agent_status":"done","pane_id":"pane-a
 : >"$HERDR_CALL_LOG"
 _on_agent_status_changed
 grep -q 'tab create' "$HERDR_CALL_LOG" || fail "agent done should open Review; log=$(cat "$HERDR_CALL_LOG")"
-grep -qE 'hunk(\\ | )diff(\\ | )--watch' "$HERDR_CALL_LOG" \
-  || fail "agent done should launch hunk; log=$(cat "$HERDR_CALL_LOG")"
+grep -qE 'tuicr(\\ | ).*-w' "$HERDR_CALL_LOG" \
+  || fail "agent done should launch tuicr; log=$(cat "$HERDR_CALL_LOG")"
 got="$(jq -r '.review_tab_id' "$(_state_path w1)")"
 [[ "$got" == "w1:t2" ]] || fail "agent done should persist review_tab_id, got $got"
-grep -q -- '--agent-notes' "$HERDR_CALL_LOG" \
-  || fail "agent done should launch hunk with --agent-notes; log=$(cat "$HERDR_CALL_LOG")"
-printf 'PASS: agent done opens hunk; idle and other panes do not\n'
+grep -q -- '--no-update-check' "$HERDR_CALL_LOG" \
+  || fail "agent done should launch tuicr with --no-update-check; log=$(cat "$HERDR_CALL_LOG")"
+printf 'PASS: agent done opens tuicr; idle and other panes do not\n'
 
 reset_review_state() {
   cat >"$(_state_path w1)" <<JSON
@@ -281,7 +283,7 @@ _on_agent_status_changed
 grep -q 'tab create' "$HERDR_CALL_LOG" && fail "clean $base_branch must not open Review"
 printf 'PASS: clean default branch does not auto-open Review\n'
 
-# Feature branch vs main/master: always hunk diff <base>, not working-tree-only.
+# Feature branch vs main/master: always tuicr -r <base> -w, not working-tree-only.
 git -C "$git_dir" checkout -q -b feat
 printf 'feat\n' >"$git_dir/file.txt"
 git -C "$git_dir" add file.txt
@@ -290,21 +292,21 @@ reset_review_state
 : >"$HERDR_CALL_LOG"
 _on_agent_status_changed
 grep -q 'tab create' "$HERDR_CALL_LOG" || fail "branch-ahead should open Review; log=$(cat "$HERDR_CALL_LOG")"
-grep -Fq "diff\\ ${base_branch}\\ --watch" "$HERDR_CALL_LOG" \
-  || fail "clean feature should launch hunk diff ${base_branch}; log=$(cat "$HERDR_CALL_LOG")"
+grep -Fq -- "-r\\ ${base_branch}\\ -w" "$HERDR_CALL_LOG" \
+  || fail "clean feature should launch tuicr -r ${base_branch} -w; log=$(cat "$HERDR_CALL_LOG")"
 grep -q "${base_branch}...HEAD" "$HERDR_CALL_LOG" \
   && fail "should not use three-dot range; log=$(cat "$HERDR_CALL_LOG")"
-printf 'PASS: committed feature branch opens hunk diff %s\n' "$base_branch"
+printf 'PASS: committed feature branch opens tuicr -r %s -w\n' "$base_branch"
 
 printf 'wip\n' >"$git_dir/file.txt"
 reset_review_state
 : >"$HERDR_CALL_LOG"
 _on_agent_status_changed
-grep -Fq "diff\\ ${base_branch}\\ --watch" "$HERDR_CALL_LOG" \
-  || fail "dirty feature should still launch hunk diff ${base_branch}; log=$(cat "$HERDR_CALL_LOG")"
-grep -Fq 'diff\ --watch' "$HERDR_CALL_LOG" \
+grep -Fq -- "-r\\ ${base_branch}\\ -w" "$HERDR_CALL_LOG" \
+  || fail "dirty feature should still launch tuicr -r ${base_branch} -w; log=$(cat "$HERDR_CALL_LOG")"
+grep -E 'tuicr(\\ | )-w(\\ | )--no-update-check' "$HERDR_CALL_LOG" \
   && fail "dirty feature must not drop the PR base; log=$(cat "$HERDR_CALL_LOG")"
-printf 'PASS: dirty feature branch still opens hunk diff %s\n' "$base_branch"
+printf 'PASS: dirty feature branch still opens tuicr -r %s -w\n' "$base_branch"
 
 # auto_review = false skips even a dirty tree.
 git -C "$git_dir" checkout -q -f "$base_branch"
@@ -312,7 +314,7 @@ printf 'dirty-again\n' >"$git_dir/file.txt"
 mkdir -p "$HOME/.config/agentic-dev"
 cat >"$HOME/.config/agentic-dev/config.toml" <<'EOF'
 [layout]
-review = "hunk diff"
+review = "tuicr"
 auto_review = false
 EOF
 reset_review_state
@@ -321,6 +323,55 @@ _on_agent_status_changed
 grep -q 'tab create' "$HERDR_CALL_LOG" && fail "auto_review=false must not open Review"
 printf 'PASS: auto_review=false disables the agent-done hook\n'
 
-[[ "$(_review_launch "$git_dir")" == *" --agent-notes" ]] \
-  || fail "review launch should include --agent-notes, got $(_review_launch "$git_dir")"
-printf 'PASS: review launch includes --agent-notes\n'
+got="$(_review_launch "$git_dir")"
+[[ "$got" == tuicr* && "$got" == *"--no-update-check"* ]] \
+  || fail "review launch should be tuicr with --no-update-check, got $got"
+printf 'PASS: review launch is tuicr --no-update-check\n'
+
+# Someone else's PR on this checkout → tuicr pr N, not local -w.
+export GH_BIN="$TMP_DIR/gh"
+cat >"$GH_BIN" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "pr" && "${2:-}" == "view" ]]; then
+  printf '%s\n' '{"number":42,"author":{"login":"other-dev"}}'
+  exit 0
+fi
+if [[ "${1:-}" == "api" && "${2:-}" == "user" ]]; then
+  printf '%s\n' 'me'
+  exit 0
+fi
+exit 1
+EOF
+chmod +x "$GH_BIN"
+got="$(_review_launch "$git_dir")"
+[[ "$got" == "tuicr pr 42 --no-update-check" ]] \
+  || fail "foreign PR should launch tuicr pr 42, got $got"
+printf 'PASS: someone else'\''s PR launches tuicr pr\n'
+
+cat >"$GH_BIN" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == "pr" && "${2:-}" == "view" ]]; then
+  printf '%s\n' '{"number":7,"author":{"login":"me"}}'
+  exit 0
+fi
+if [[ "${1:-}" == "api" && "${2:-}" == "user" ]]; then
+  printf '%s\n' 'me'
+  exit 0
+fi
+exit 1
+EOF
+got="$(_review_launch "$git_dir")"
+[[ "$got" == tuicr*" -w"* ]] \
+  || fail "own PR should keep local watch, got $got"
+[[ "$got" != *"tuicr pr "* ]] \
+  || fail "own PR must not use tuicr pr (no diff watch), got $got"
+printf 'PASS: own PR keeps local tuicr -w watch\n'
+
+export AGENTIC_REVIEW_SCOPE=worktree
+got="$(_review_launch "$git_dir")"
+unset AGENTIC_REVIEW_SCOPE
+[[ "$got" == "tuicr -w --no-update-check" ]] \
+  || fail "worktree scope should launch tuicr -w only, got $got"
+printf 'PASS: AGENTIC_REVIEW_SCOPE=worktree launches tuicr -w\n'

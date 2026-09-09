@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Wait until hunk has new human comments, the live session disappears, or timeout.
+# Wait until tuicr has new human comments, the live session disappears, or timeout.
 # Exit 0: print new comments JSON. Exit 2: no session. Exit 124: timeout.
 set -euo pipefail
 
-HUNK_BIN="${HUNK_BIN:-hunk}"
+TUICR_BIN="${TUICR_BIN:-tuicr}"
 REPO="."
 TIMEOUT=600
 INTERVAL="${WAIT_COMMENTS_POLL_SECONDS:-2}"
@@ -36,25 +36,63 @@ done
 
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || usage
 
+is_agent_author_jq() {
+  cat <<'JQ'
+def is_agent:
+  ((.author // .username // "user") | ascii_downcase) as $a
+  | $a == "cursor-agent" or $a == "cursor" or $a == "codex"
+    or $a == "claude" or $a == "claude-code" or $a == "grok"
+    or $a == "gpt" or $a == "copilot" or $a == "agent"
+    or ($a | startswith("cursor-"))
+    or ($a | startswith("claude"));
+JQ
+}
+
 comment_ids() {
   local json="$1"
   printf '%s' "$json" | jq -r '
-    ((.comments // .notes // .) | if type == "array" then . else [] end)
+    '"$(is_agent_author_jq)"'
+    ((.comments // .) | if type == "array" then . else [] end)
     | .[]
-    | (.noteId // .id // .commentId // empty)
+    | select(is_agent | not)
+    | (.id // .noteId // .commentId // empty)
+  ' 2>/dev/null || true
+}
+
+list_sessions() {
+  local out rc=0
+  set +e
+  out="$("$TUICR_BIN" review list --repo "$REPO" 2>/dev/null)"
+  rc=$?
+  set -e
+  [[ "$rc" -eq 0 ]] || return 2
+  printf '%s' "$out"
+  return 0
+}
+
+active_slug() {
+  local json="$1"
+  printf '%s' "$json" | jq -r '
+    (if type == "array" then . else [] end)
+    | map(select(.active == true))
+    | first
+    | .slug // empty
   ' 2>/dev/null || true
 }
 
 list_comments() {
-  local out rc=0
+  local slug="$1" out rc=0
   set +e
-  out="$("$HUNK_BIN" session comment list --repo "$REPO" --type user --json 2>&1)"
+  out="$("$TUICR_BIN" review comments --repo "$REPO" --session "$slug" 2>/dev/null)"
   rc=$?
   set -e
-  if [[ "$rc" -ne 0 ]] || printf '%s' "$out" | grep -qiE 'no active hunk sessions|no active session'; then
-    return 2
-  fi
-  printf '%s' "$out"
+  [[ "$rc" -eq 0 ]] || return 2
+  printf '%s' "$out" | jq '
+    if type == "array" then {comments: .}
+    elif type == "object" then .
+    else {comments: []}
+    end
+  ' 2>/dev/null || printf '%s' '{"comments":[]}'
   return 0
 }
 
@@ -74,22 +112,35 @@ filter_comments() {
   local jq_ids
   jq_ids="$(printf '%s\n' "${ids[@]}" | jq -R . | jq -s .)"
   printf '%s' "$json" | jq --argjson ids "$jq_ids" '
-    def items: (.comments // .notes // .) | if type == "array" then . else [] end;
-    def cid: .noteId // .id // .commentId // "";
-    {comments: [items[] | select(cid as $c | $ids | index($c))]}
+    '"$(is_agent_author_jq)"'
+    def items: (.comments // .) | if type == "array" then . else [] end;
+    def cid: .id // .noteId // .commentId // "";
+    {comments: [items[] | select(is_agent | not) | select(cid as $c | $ids | index($c))]}
   '
 }
 
 start="$SECONDS"
+sessions=""
+if ! sessions="$(list_sessions)"; then
+  exit 2
+fi
+slug="$(active_slug "$sessions")"
+[[ -n "$slug" ]] || exit 2
+
 json=""
-if ! json="$(list_comments)"; then
+if ! json="$(list_comments "$slug")"; then
   exit 2
 fi
 baseline="$(ids_to_lines "$json")"
 
 while (( SECONDS - start < TIMEOUT )); do
   sleep "$INTERVAL"
-  if ! json="$(list_comments)"; then
+  if ! sessions="$(list_sessions)"; then
+    exit 2
+  fi
+  slug="$(active_slug "$sessions")"
+  [[ -n "$slug" ]] || exit 2
+  if ! json="$(list_comments "$slug")"; then
     exit 2
   fi
   current="$(ids_to_lines "$json")"

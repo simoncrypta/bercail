@@ -67,7 +67,7 @@ agentic_dev_layout_editor() {
 }
 
 agentic_dev_layout_review() {
-  local config="" review="hunk diff"
+  local config="" review="tuicr"
   config="$(_agentic_dev_user_config)" || config=""
   if [[ -n "$config" && -r "$config" ]]; then
     local from_config

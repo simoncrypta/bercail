@@ -107,6 +107,10 @@ pub fn open_review() -> Result<(), String> {
     invoke_layout("select-review", &[])
 }
 
+pub fn open_worktree_review() -> Result<(), String> {
+    invoke_layout("select-review-worktree", &[])
+}
+
 pub fn refresh_review() -> Result<(), String> {
     invoke_layout("refresh-review", &[])
 }

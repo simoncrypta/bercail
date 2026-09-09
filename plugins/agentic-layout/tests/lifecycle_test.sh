@@ -92,5 +92,5 @@ mv "$TMP_DIR/w1.json" "$(_state_path w1)"
 : >"$HERDR_CALL_LOG"
 _startup_one w1
 grep -q 'tab create' "$HERDR_CALL_LOG" && fail "startup must not create a Review tab when review is absent"
-grep -q 'pane run pane-review' "$HERDR_CALL_LOG" && fail "startup must not launch hunk when review is absent"
+grep -q 'pane run pane-review' "$HERDR_CALL_LOG" && fail "startup must not launch tuicr when review is absent"
 printf 'PASS: startup with empty review ids does not re-ensure Review\n'

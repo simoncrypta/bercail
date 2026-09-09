@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Post hunk --type user notes as one GitHub PR review. Never posts AI notes.
+# Post tuicr user comments as one GitHub PR review. Never posts agent comments.
 # Exit 0: posted (or dry-run). Exit 2: usage / no session / no PR / nothing to post.
 set -euo pipefail
 
-HUNK_BIN="${HUNK_BIN:-hunk}"
+TUICR_BIN="${TUICR_BIN:-tuicr}"
 GH_BIN="${GH_BIN:-gh}"
 REPO="."
 EVENT="COMMENT"
@@ -52,8 +52,8 @@ done
 
 cd "$REPO"
 
-if ! command -v "$HUNK_BIN" >/dev/null 2>&1; then
-  printf 'publish-github: hunk not found\n' >&2
+if ! command -v "$TUICR_BIN" >/dev/null 2>&1; then
+  printf 'publish-github: tuicr not found\n' >&2
   exit 2
 fi
 if ! command -v "$GH_BIN" >/dev/null 2>&1; then
@@ -64,27 +64,53 @@ fi
 list_out=""
 list_rc=0
 set +e
-list_out="$("$HUNK_BIN" session comment list --repo . --type user --json 2>&1)"
+list_out="$("$TUICR_BIN" review list --repo . 2>/dev/null)"
 list_rc=$?
 set -e
-if [[ "$list_rc" -ne 0 ]] || printf '%s' "$list_out" | grep -qiE 'no active hunk sessions|no active session'; then
-  printf 'publish-github: no live hunk session\n' >&2
+if [[ "$list_rc" -ne 0 ]]; then
+  printf 'publish-github: no tuicr session\n' >&2
   exit 2
 fi
 
-comments="$(printf '%s' "$list_out" | jq -c '
-  def items: (.comments // .notes // .) | if type == "array" then . else [] end;
+slug="$(printf '%s' "$list_out" | jq -r '
+  (if type == "array" then . else [] end) as $all
+  | ($all | map(select(.active == true)) | first)
+    // ($all | map(select(.kind == "pr")) | first)
+    // ($all | first)
+  | .slug // empty
+')"
+if [[ -z "$slug" ]]; then
+  printf 'publish-github: no tuicr session\n' >&2
+  exit 2
+fi
+
+comments_out=""
+set +e
+comments_out="$("$TUICR_BIN" review comments --repo . --session "$slug" 2>/dev/null)"
+set -e
+
+comments="$(printf '%s' "$comments_out" | jq -c '
+  def is_agent:
+    ((.author // .username // "user") | ascii_downcase) as $a
+    | $a == "cursor-agent" or $a == "cursor" or $a == "codex"
+      or $a == "claude" or $a == "claude-code" or $a == "grok"
+      or $a == "gpt" or $a == "copilot" or $a == "agent"
+      or ($a | startswith("cursor-"))
+      or ($a | startswith("claude"));
+  def items: if type == "array" then . else (.comments // []) end;
   [
     items[]
+    | select(is_agent | not)
     | {
-        path: (.filePath // .path // .file // ""),
-        newLine: (.newLine // .new_line // null),
+        path: (.path // .filePath // .file // ""),
+        line: (.start_line // .newLine // .new_line // .line // null),
         oldLine: (.oldLine // .old_line // null),
+        sideRaw: (.side // "new"),
         body: (.content // .summary // .body // .text // "")
       }
     | select(.path != "" and .body != "")
-    | if .newLine != null then
-        {path, line: (.newLine | tonumber), side: "RIGHT", body}
+    | if .line != null then
+        {path, line: (.line | tonumber), side: (if .sideRaw == "old" then "LEFT" else "RIGHT" end), body}
       elif .oldLine != null then
         {path, line: (.oldLine | tonumber), side: "LEFT", body}
       else
