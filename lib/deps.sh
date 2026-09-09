@@ -433,7 +433,16 @@ ensure_tuicr_watch_config() {
   local dest="${XDG_CONFIG_HOME:-$HOME/.config}/tuicr/config.toml"
   local src=""
   if [[ -f "$dest" ]]; then
-    info "keeping existing tuicr config: $dest"
+    if grep -qE '^[[:space:]]*diff_watch_interval_ms[[:space:]]*=' "$dest"; then
+      info "keeping existing tuicr config: $dest"
+      return 0
+    fi
+    if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+      info "[dry-run] would set diff_watch_interval_ms in $dest"
+      return 0
+    fi
+    printf '\n# bercail: keep the local diff current while the agent writes.\ndiff_watch_interval_ms = 1000\n' >>"$dest"
+    info "enabled tuicr diff watch in $dest"
     return 0
   fi
   if declare -F install_src_dir >/dev/null 2>&1; then

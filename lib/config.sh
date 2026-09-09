@@ -97,7 +97,7 @@ read_layout_review() {
 RECONFIGURE=0
 
 export DEV_LAYOUT_PLUGIN_REPO="simoncrypta/agentic-dev-setup/plugins/agentic-layout"
-export DEV_LAYOUT_PLUGIN_REF="v0.5.0"
+export DEV_LAYOUT_PLUGIN_REF="v0.5.1"
 export LEGACY_DEV_LAYOUT_PLUGIN_REPO="simoncrypta/herdr-dev-layout"
 PICKR_PLUGIN_REPO="tomasvarga/herdr-pickr"
 PICKR_PLUGIN_REF="e393ef593e44d2497f43d20aa7b0e4a26ea3d445"
@@ -941,6 +941,11 @@ deploy_configs() {
     # deploy_lib may have pulled a newer lib/; reload the plugin pin before install.
     # shellcheck source=/dev/null
     source "${AGENTIC_DEV_SHARE_DIR}/lib/config.sh"
+  fi
+  # First update from an older bercail still runs the previous deploy_configs,
+  # so re-run after the new lib is on disk.
+  if declare -F migrate_hunk_review_to_tuicr >/dev/null; then
+    migrate_hunk_review_to_tuicr
   fi
   deploy_plugin
   deploy_skills

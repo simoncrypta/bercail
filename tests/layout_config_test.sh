@@ -176,4 +176,12 @@ EOF
 ensure_config_reader || fail "ensure_config_reader"
 assert_eq "false" "$(agentic_dev_layout_auto_review)" "auto_review=false is honored"
 
+mkdir -p "$XDG_CONFIG_HOME/tuicr"
+printf 'theme = "dark"\n' >"$XDG_CONFIG_HOME/tuicr/config.toml"
+ensure_tuicr_watch_config
+grep -q 'theme = "dark"' "$XDG_CONFIG_HOME/tuicr/config.toml" \
+  || fail "ensure_tuicr_watch_config must keep an existing theme"
+grep -q 'diff_watch_interval_ms = 1000' "$XDG_CONFIG_HOME/tuicr/config.toml" \
+  || fail "ensure_tuicr_watch_config should add diff watch to an existing config"
+
 printf 'PASS: layout config, write, migration, and doctor follow tuicr and EDITOR\n'
