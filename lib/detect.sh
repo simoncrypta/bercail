@@ -74,18 +74,37 @@ has_mise() {
   command -v mise >/dev/null 2>&1
 }
 
+brew_executable() {
+  if [[ -x /opt/homebrew/bin/brew ]]; then
+    printf '%s' /opt/homebrew/bin/brew
+  elif [[ -x /usr/local/bin/brew ]]; then
+    printf '%s' /usr/local/bin/brew
+  elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
+    printf '%s' /home/linuxbrew/.linuxbrew/bin/brew
+  elif command -v brew >/dev/null 2>&1; then
+    command -v brew
+  fi
+}
+
+# Put Homebrew on PATH when it is installed but invisible (typical macOS
+# curl|bash: brew lives in /opt/homebrew, not in non-interactive PATH).
+ensure_brew_on_path() {
+  command -v brew >/dev/null 2>&1 && return 0
+  local brew
+  brew="$(brew_executable)"
+  [[ -n "$brew" ]] || return 1
+  eval "$("$brew" shellenv)"
+}
+
 has_brew() {
-  command -v brew >/dev/null 2>&1
+  ensure_brew_on_path
 }
 
 brew_shellenv_snippet() {
-  if [[ -x /opt/homebrew/bin/brew ]]; then
-    printf '%s\n' 'eval "$(/opt/homebrew/bin/brew shellenv)"'
-  elif [[ -x /usr/local/bin/brew ]]; then
-    printf '%s\n' 'eval "$(/usr/local/bin/brew shellenv)"'
-  elif [[ -x /home/linuxbrew/.linuxbrew/bin/brew ]]; then
-    printf '%s\n' 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"'
-  fi
+  local brew
+  brew="$(brew_executable)"
+  [[ -n "$brew" ]] || return 1
+  printf 'eval "$(%s shellenv)"\n' "$brew"
 }
 
 has_marker_block() {

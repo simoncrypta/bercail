@@ -12,14 +12,22 @@ dep_present() {
 }
 
 ensure_mise_shims() {
-  local dir
-  for dir in "${HOME}/.local/bin" "${HOME}/.local/share/mise/shims"; do
+  local dir p new=""
+  local -a parts
+  IFS=':' read -ra parts <<< "${PATH}"
+  # mise shims first so they win over brew / pacman even if those are already on PATH.
+  for dir in "${HOME}/.local/share/mise/shims" "${HOME}/.local/bin"; do
     [[ -d "$dir" ]] || continue
-    case ":${PATH}:" in
-      *":${dir}:"*) ;;
-      *) PATH="${dir}:${PATH}" ;;
-    esac
+    new="${new:+$new:}$dir"
   done
+  for p in "${parts[@]}"; do
+    [[ -n "$p" ]] || continue
+    case ":$new:" in
+      *":$p:"*) continue ;;
+    esac
+    new="${new:+$new:}$p"
+  done
+  PATH="$new"
 }
 
 # Allowlist only — never probe `mise registry` (network) or eval `mise hook-env`.
@@ -34,23 +42,30 @@ mise_can_install() {
   esac
 }
 
+mise_use_global() {
+  local spec="$1"
+  mise_can_install "$spec" || return 1
+  info "installing via mise: $spec"
+  if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+    return 0
+  fi
+  if run mise use -g "$spec"; then
+    ensure_mise_shims
+    hash -r 2>/dev/null || true
+    return 0
+  fi
+  return 1
+}
+
 maybe_mise_install() {
   local bin="$1" spec="${2:-$1}"
   if dep_present "$bin"; then
     info "present: $bin"
     return 0
   fi
-  mise_can_install "$spec" || return 1
-  info "installing via mise: $spec"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    return 0
-  fi
-  if run mise use -g "$spec"; then
-    ensure_mise_shims
-    hash -r 2>/dev/null || true
-    dep_present "$bin" && return 0
-  fi
-  return 1
+  mise_use_global "$spec" || return 1
+  [[ "${DRY_RUN:-0}" -eq 1 ]] && return 0
+  dep_present "$bin"
 }
 
 maybe_omarchy_pkg_install() {
@@ -248,6 +263,21 @@ require_herdr_min_version() {
   if herdr_version_at_least "$found" "$HERDR_MIN_VERSION"; then
     info "present: herdr $found (required >=$HERDR_MIN_VERSION)"
     return 0
+  fi
+
+  if mise_can_install herdr; then
+    info "updating Herdr $found to >=$HERDR_MIN_VERSION via mise"
+    if mise_use_global herdr; then
+      if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+        return 0
+      fi
+      if found="$(herdr_installed_version)" \
+        && herdr_version_at_least "$found" "$HERDR_MIN_VERSION"; then
+        info "updated: herdr $found via mise (required >=$HERDR_MIN_VERSION)"
+        return 0
+      fi
+      warn "mise could not provide Herdr >=$HERDR_MIN_VERSION"
+    fi
   fi
 
   manager="$(herdr_install_manager)"
@@ -620,6 +650,8 @@ ensure_herdr_agent_integration() {
 
 install_dependencies() {
   info "checking dependencies..."
+  # Homebrew first (macOS fallback), then mise shims so they win on PATH.
+  ensure_brew_on_path || true
   ensure_mise_shims
 
   install_herdr_binary || {

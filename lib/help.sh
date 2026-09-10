@@ -60,7 +60,8 @@ Omarchy / Linux:
   Native Omarchy Herdr is SUPER+CTRL+RETURN; packages via omarchy pkg add
 
 Install order:
-  mise first (herdr, worktrunk, fzf, jq, lazygit, tuicr)
+  mise first (install and upgrade herdr, worktrunk, fzf, jq, lazygit, tuicr)
+  PATH: mise shims, then ~/.local/bin, then brew (macOS Homebrew stays reachable)
   then omarchy pkg add on Omarchy, then brew / apt / pacman / upstream
   layout tools: tuicr (review); sticky agent is cursor-agent; editor follows $EDITOR
 

@@ -4,14 +4,16 @@
 marker_block_content() {
   local shell_name="$1"
   local brew_env=""
-  if brew_line="$(brew_shellenv_snippet 2>/dev/null)"; then
+  # Keep brew on PATH as a fallback (macOS /opt/homebrew is not default PATH),
+  # then prepend mise shims so they always win.
+  if brew_line="$(brew_shellenv_snippet 2>/dev/null)" && [[ -n "$brew_line" ]]; then
     brew_env="${brew_line}"$'\n'
   fi
   case "$shell_name" in
     zsh)
       cat <<EOF
 ${AGENTIC_DEV_MARKER_START} v${AGENTIC_DEV_VERSION}
-${brew_env}export PATH="\$HOME/.local/bin:\$PATH"
+${brew_env}export PATH="\$HOME/.local/share/mise/shims:\$HOME/.local/bin:\$PATH"
 source "\$HOME/.config/bercail/shell/bercail.zsh"
 ${AGENTIC_DEV_MARKER_END}
 EOF
@@ -19,7 +21,7 @@ EOF
     bash|*)
       cat <<EOF
 ${AGENTIC_DEV_MARKER_START} v${AGENTIC_DEV_VERSION}
-${brew_env}export PATH="\$HOME/.local/bin:\$PATH"
+${brew_env}export PATH="\$HOME/.local/share/mise/shims:\$HOME/.local/bin:\$PATH"
 source "\$HOME/.config/bercail/shell/bercail.sh"
 ${AGENTIC_DEV_MARKER_END}
 EOF

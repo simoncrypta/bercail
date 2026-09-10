@@ -54,7 +54,7 @@ assert_contains() {
 isolated_sys() {
   local dest="$1" cmd
   mkdir -p "$dest"
-  for cmd in bash cat chmod mkdir mktemp rm mv cp ln true false env; do
+  for cmd in bash cat chmod mkdir mktemp rm mv cp ln true false env sleep kill; do
     if [[ -x "/usr/bin/$cmd" ]]; then
       ln -s "/usr/bin/$cmd" "$dest/$cmd"
     elif [[ -x "/bin/$cmd" ]]; then
@@ -269,6 +269,121 @@ EOF
   ok "ensure_herdr_agent_integration creates ~/.cursor"
 }
 
+test_outdated_brew_herdr_upgrades_via_mise() {
+  local case_dir="$tmp/brew-to-mise" rc
+  mkdir -p "$case_dir/homebrew/bin" "$case_dir/bin" \
+    "$case_dir/home/.local/share/mise/shims" "$case_dir/home/.local/bin"
+  isolated_sys "$case_dir/sys"
+  : >"$case_dir/mise.log"
+  cat >"$case_dir/homebrew/bin/herdr" <<'EOF'
+#!/usr/bin/env bash
+printf 'herdr 0.7.1\n'
+EOF
+  cat >"$case_dir/bin/mise" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$MISE_CALL_LOG"
+if [ "$1" = "use" ] && [ "$2" = "-g" ] && [ "$3" = "herdr" ]; then
+  printf '%s\n' '#!/bin/sh' 'printf "herdr 0.9.0\n"' \
+    >"$HOME/.local/share/mise/shims/herdr"
+  chmod +x "$HOME/.local/share/mise/shims/herdr"
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$case_dir/homebrew/bin/herdr" "$case_dir/bin/mise"
+
+  if (
+    unset BASH_ENV
+    export HOME="$case_dir/home"
+    export PATH="$case_dir/homebrew/bin:$case_dir/bin:$case_dir/sys"
+    export MISE_CALL_LOG="$case_dir/mise.log"
+    case "$(command -v mise)" in
+      "$case_dir"/bin/mise) ;;
+      *)
+        printf 'refusing to run: mise resolved to %s\n' "$(command -v mise)" >&2
+        exit 90
+        ;;
+    esac
+    install_herdr_binary
+  ); then
+    rc=0
+  else
+    rc=$?
+  fi
+  assert_eq "0" "$rc" "outdated brew Herdr is upgraded via mise"
+  assert_contains "$(<"$case_dir/mise.log")" "use -g herdr" \
+    "outdated brew Herdr calls mise use -g herdr"
+}
+
+test_ensure_mise_shims_beats_brew() {
+  local case_dir="$tmp/shim-order" got
+  mkdir -p "$case_dir/home/.local/share/mise/shims" \
+    "$case_dir/home/.local/bin" "$case_dir/homebrew/bin"
+  got="$(
+    HOME="$case_dir/home" PATH="$case_dir/homebrew/bin:/usr/bin"
+    ensure_mise_shims
+    printf '%s' "$PATH"
+  )"
+  case "$got" in
+    "$case_dir/home/.local/share/mise/shims":*)
+      ok "ensure_mise_shims puts mise shims ahead of brew"
+      ;;
+    *)
+      not_ok "ensure_mise_shims puts mise shims ahead of brew (got $got)"
+      ;;
+  esac
+}
+
+test_maybe_mise_install_dry_run_without_binary() {
+  local case_dir="$tmp/mise-dry" rc
+  mkdir -p "$case_dir/bin" "$case_dir/home/.local/bin"
+  isolated_sys "$case_dir/sys"
+  : >"$case_dir/mise.log"
+  cat >"$case_dir/bin/mise" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$MISE_CALL_LOG"
+exit 0
+EOF
+  chmod +x "$case_dir/bin/mise"
+
+  if (
+    unset BASH_ENV
+    export HOME="$case_dir/home"
+    export PATH="$case_dir/bin:$case_dir/sys"
+    export MISE_CALL_LOG="$case_dir/mise.log"
+    export DRY_RUN=1
+    maybe_mise_install jq jq
+  ); then
+    rc=0
+  else
+    rc=$?
+  fi
+  assert_eq "0" "$rc" "dry-run maybe_mise_install succeeds when the binary is missing"
+  assert_eq "" "$(<"$case_dir/mise.log")" \
+    "dry-run maybe_mise_install does not invoke mise"
+}
+
+test_marker_block_prefers_mise_path() {
+  local content brew_pos mise_pos
+  # shellcheck source=lib/common.sh
+  source "$ROOT/lib/common.sh"
+  # shellcheck source=lib/shell-rc.sh
+  source "$ROOT/lib/shell-rc.sh"
+  brew_shellenv_snippet() { printf '%s\n' 'eval "$(/opt/homebrew/bin/brew shellenv)"'; }
+  content="$(marker_block_content bash)"
+  assert_contains "$content" '.local/share/mise/shims' \
+    "shell marker puts mise shims on PATH"
+  assert_contains "$content" 'brew shellenv' \
+    "shell marker keeps brew shellenv as a fallback"
+  brew_pos="${content%%brew shellenv*}"
+  mise_pos="${content%%mise/shims*}"
+  if ((${#brew_pos} < ${#mise_pos})); then
+    ok "shell marker evals brew shellenv before prepending mise shims"
+  else
+    not_ok "shell marker evals brew shellenv before prepending mise shims"
+  fi
+}
+
 test_mise_allowlist
 test_maybe_mise_install_jq
 test_omarchy_pkg_add_when_mise_cannot
@@ -276,6 +391,10 @@ test_install_grok_via_mise
 test_maybe_mise_install_herdr_binary_only
 test_herdr_integration_mapping
 test_ensure_herdr_agent_integration_installs_cursor
+test_outdated_brew_herdr_upgrades_via_mise
+test_ensure_mise_shims_beats_brew
+test_maybe_mise_install_dry_run_without_binary
+test_marker_block_prefers_mise_path
 
 printf '%s passed, %s failed\n' "$pass" "$fail"
 ((fail == 0))
