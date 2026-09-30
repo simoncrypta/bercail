@@ -283,7 +283,7 @@ EOF
 #!/bin/sh
 printf '%s\n' "$*" >>"$MISE_CALL_LOG"
 if [ "$1" = "use" ] && [ "$2" = "-g" ] && [ "$3" = "herdr" ]; then
-  printf '%s\n' '#!/bin/sh' 'printf "herdr 0.9.0\n"' \
+  printf '%s\n' '#!/bin/sh' 'printf "herdr 0.9.3\n"' \
     >"$HOME/.local/share/mise/shims/herdr"
   chmod +x "$HOME/.local/share/mise/shims/herdr"
   exit 0

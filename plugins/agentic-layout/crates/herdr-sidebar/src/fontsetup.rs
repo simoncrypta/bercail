@@ -1,6 +1,6 @@
 //! First-run helper: when no Nerd Font is installed, a fullscreen prompt
 //! offers to download + install one (JetBrainsMono Nerd Font — the family
-//! winget carries) so the material icon theme has glyphs to draw. Shown at
+//! winget carries) so the Pierre icon theme has glyphs to draw. Shown at
 //! most once; the answer is persisted either way. The install runs on a
 //! background thread while the UI polls, so nothing blocks for long.
 //!
@@ -50,7 +50,7 @@ fn env_mode() -> Option<String> {
 pub fn bootstrap_icon_theme() -> state::State {
     state::update_state(|st| {
         if crate::embed::is_embedded() || st.icons.is_none() {
-            st.icons = Some(icons::IconTheme::Material);
+            st.icons = Some(icons::IconTheme::Pierre);
         }
         st.font_prompt_done = true;
     })
@@ -161,9 +161,9 @@ fn run(
                 Ok(Progress::Done(result)) => {
                     let probe_ok = result.is_ok() && icons::probe_nerd_font();
                     if result.is_ok() {
-                        // The (re-run) probe now finds it; commit to material
+                        // The (re-run) probe now finds it; commit to Pierre
                         // like any machine that already had a Nerd Font.
-                        st.icons = Some(icons::IconTheme::Material);
+                        st.icons = Some(icons::IconTheme::Pierre);
                     }
                     screen = Screen::Done {
                         result,
@@ -197,11 +197,11 @@ fn run(
                         started: Instant::now(),
                     };
                 }
-                // Decline the installer; still draw Material (no emoji option).
+                // Decline the installer; still draw Pierre (no emoji option).
                 KeyCode::Char('n' | 'N') => {
                     *st = state::update_state(|state| {
                         state.font_prompt_done = true;
-                        state.icons = Some(icons::IconTheme::Material);
+                        state.icons = Some(icons::IconTheme::Pierre);
                     });
                     return Ok(());
                 }
@@ -214,7 +214,7 @@ fn run(
             Screen::Installing { .. } => {
                 // Esc stops waiting (the thread finishes detached; `icons`
                 // stays None, so the next start re-probes and still picks
-                // material if the install landed). Never wedge the pane.
+                // Pierre if the install landed). Never wedge the pane.
                 if key.code == KeyCode::Esc {
                     *st = state::update_state(|state| state.font_prompt_done = true);
                     return Ok(());
@@ -368,7 +368,7 @@ fn ask_lines(width: u16, height: usize) -> Vec<Line<'static>> {
             (
                 0,
                 wrapped(
-                    "The sidebar's material icon theme needs a Nerd-Font-patched terminal \
+                    "The sidebar's Pierre icon theme needs a Nerd-Font-patched terminal \
                      font. Without one, emoji icons are used instead (they render in any font).",
                     width,
                     Style::default(),
@@ -462,7 +462,7 @@ fn done_ok_lines(probe_ok: bool, width: u16, height: usize) -> Vec<Line<'static>
         (
             0,
             wrapped(
-                "Material icons are now the default; press i in the sidebar anytime to \
+                "Pierre icons are now the default; press i in the sidebar anytime to \
                  switch themes.",
                 width,
                 Style::default().dim(),
@@ -759,7 +759,7 @@ mod tests {
         let text = squashed(&lines);
         assert!(text.contains("No Nerd Font detected"), "{text}");
         assert!(
-            text.contains("material icon theme"),
+            text.contains("Pierre icon theme"),
             "explanation shown: {text}"
         );
         assert!(
@@ -867,7 +867,7 @@ mod tests {
         }
         let st = bootstrap_icon_theme();
         assert!(st.font_prompt_done);
-        assert_eq!(st.icons, Some(icons::IconTheme::Material));
+        assert_eq!(st.icons, Some(icons::IconTheme::Pierre));
         unsafe {
             std::env::remove_var("HERDR_PLUGIN_STATE_DIR");
         }

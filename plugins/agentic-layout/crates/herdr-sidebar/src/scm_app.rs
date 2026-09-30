@@ -2862,7 +2862,7 @@ impl App {
         // Both FA glyphs (folder, code-fork) render two cells wide in the
         // non-Mono Nerd Font; reserve the second cell in each chip so the
         // highlights are equal-sized with centered icons.
-        let slack = if self.theme == IconTheme::Material {
+        let slack = if self.theme == IconTheme::Pierre {
             " "
         } else {
             ""
@@ -2992,7 +2992,7 @@ impl App {
 
         // The suggest button lives at the right end of the input line — a
         // monochrome OUTLINE of the ✨ sparkles shape (MDI "creation" in the
-        // material theme) in the normal foreground, never the colored emoji.
+        // Pierre theme) in the normal foreground, never the colored emoji.
         let sparkle_glyph = if self.suggesting.is_some() {
             "…"
         } else {

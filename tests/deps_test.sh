@@ -59,7 +59,7 @@ test_installed_herdr_short_circuits_install() {
   cat >"$case_dir/bin/herdr" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
-printf 'herdr 0.9.0\n'
+printf 'herdr 0.9.3\n'
 EOF
   chmod +x "$case_dir/bin/herdr"
   : >"$case_dir/calls.log"
@@ -84,7 +84,7 @@ printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
 if [[ "$*" == "--version" ]]; then
   printf 'herdr %s\n' "$(<"$HERDR_VERSION_FILE")"
 elif [[ "$*" == "update --handoff" ]]; then
-  printf '0.9.0\n' >"$HERDR_VERSION_FILE"
+  printf '0.9.3\n' >"$HERDR_VERSION_FILE"
 fi
 EOF
   chmod +x "$case_dir/home/.local/bin/herdr"
@@ -145,11 +145,13 @@ test_version_parser_does_not_expand_globs() {
 test_version_comparison_matrix() {
   local rc
   if herdr_version_at_least 0.8.2 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
-  assert_eq "1" "$rc" "comparator: 0.8.2 is below 0.9.0"
-  if herdr_version_at_least 0.9.0 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
-  assert_eq "0" "$rc" "comparator: 0.9.0 meets 0.9.0"
-  if herdr_version_at_least 0.9.1 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
-  assert_eq "0" "$rc" "comparator: 0.9.1 exceeds 0.9.0"
+  assert_eq "1" "$rc" "comparator: 0.8.2 is below 0.9.3"
+  if herdr_version_at_least 0.9.2 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
+  assert_eq "1" "$rc" "comparator: 0.9.2 is below 0.9.3"
+  if herdr_version_at_least 0.9.3 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
+  assert_eq "0" "$rc" "comparator: 0.9.3 meets 0.9.3"
+  if herdr_version_at_least 0.10.0 "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
+  assert_eq "0" "$rc" "comparator: 0.10.0 exceeds 0.9.3"
   if herdr_version_at_least garbage "$HERDR_MIN_VERSION"; then rc=0; else rc=$?; fi
   assert_eq "2" "$rc" "comparator: malformed input is rejected"
 }
@@ -161,14 +163,14 @@ test_newer_herdr_skips_update() {
   cat >"$case_dir/bin/herdr" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
-printf 'herdr 0.9.0\n'
+printf 'herdr 0.9.3\n'
 EOF
   chmod +x "$case_dir/bin/herdr"
 
   HOME="$case_dir/home" PATH="$case_dir/bin:/usr/bin:/bin" \
     HERDR_CALL_LOG="$case_dir/calls.log" install_herdr_binary
   assert_eq "--version" "$(<"$case_dir/calls.log")" \
-    "0.9.0 passes without an update"
+    "0.9.3 passes without an update"
 }
 
 test_package_managed_old_herdr() {
@@ -220,7 +222,7 @@ cat <<'INSTALLER'
 cat >"$HOME/.local/bin/herdr" <<'HERDR'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
-printf 'herdr 0.9.0\n'
+printf 'herdr 0.9.3\n'
 HERDR
 chmod +x "$HOME/.local/bin/herdr"
 INSTALLER
@@ -386,7 +388,7 @@ printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
 if [[ "$*" == "--version" ]]; then
   printf 'herdr %s\n' "$(<"$HERDR_VERSION_FILE")"
 else
-  printf '0.9.0\n' >"$HERDR_VERSION_FILE"
+  printf '0.9.3\n' >"$HERDR_VERSION_FILE"
 fi
 EOF
   chmod +x "$case_dir/home/.local/bin/herdr"
@@ -483,7 +485,8 @@ test_package_managed_old_herdr nix "nix profile upgrade <index-or-name>"
 test_missing_herdr_uses_upstream_installer
 test_doctor_version 0.7.1 1 outdated
 test_doctor_version 0.8.2 1 outdated
-test_doctor_version 0.9.0 0 ok
+test_doctor_version 0.9.0 1 outdated
+test_doctor_version 0.9.3 0 ok
 test_hung_version_times_out
 test_term_ignoring_version_probe_is_killed
 test_misleading_update_success_fails

@@ -179,10 +179,10 @@ Also: `~/.config/herdr/config.toml`, worktrunk hooks, `~/.agents/skills/{handoff
 Already on Herdr and only want the layout:
 
 ```bash
-herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.5.1
+herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.5.3
 ```
 
-Needs Herdr 0.9+, `jq`, a Rust toolchain, tuicr. Copy keys from [`config/herdr/config.toml`](config/herdr/config.toml). Set `close_tab = ""` and `close_pane = ""`. Full install also adds shell commands, CLI, skills, worktrunk hooks, and desktop fixes.
+Needs Herdr 0.9.3+, `jq`, a Rust toolchain, tuicr. Copy keys from [`config/herdr/config.toml`](config/herdr/config.toml). Set `close_tab = ""` and `close_pane = ""`. Full install also adds shell commands, CLI, skills, worktrunk hooks, and desktop fixes.
 
 Plugins run as your user. Skim [`plugins/agentic-layout/herdr-plugin.toml`](plugins/agentic-layout/herdr-plugin.toml) and [`layout.sh`](plugins/agentic-layout/layout.sh). Prefer no `--yes` the first time.
 
@@ -199,7 +199,7 @@ On Omarchy: mise first, `omarchy pkg add`, native `SUPER+CTRL+RETURN` → Herdr,
 
 ## dependencies
 
-Installed if missing: [herdr](https://herdr.dev) 0.9+ (`herdr integration install cursor`), worktrunk, fzf, jq, lazygit, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0, cursor-agent. pstack is a Cursor plugin, not a package: `/add-plugin pstack`.
+Installed if missing: [herdr](https://herdr.dev) 0.9.3+ (`herdr integration install cursor`), worktrunk, fzf, jq, lazygit, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0, cursor-agent. pstack is a Cursor plugin, not a package: `/add-plugin pstack`.
 
 ## development
 

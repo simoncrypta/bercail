@@ -1,39 +1,41 @@
-//! File-type icons, VS Code Explorer style, using the Material theme:
-//! Nerd Font glyphs matching
-//! [vscode-material-icon-theme](https://github.com/material-extensions/vscode-material-icon-theme)
-//! via the nvim-material-icon mapping.
+//! File-type icons, VS Code Explorer style, using the Pierre theme: the
+//! file-name/extension mapping and palette of
+//! [Pierre Icons for VS Code](https://github.com/pierrecomputer/vscode-icons)
+//! ("Complete" tier), drawn with the closest Nerd Font glyph.
 //!
-//! Classification happens once (`Kind`). Folders use vscode-material folder
-//! names (src, node_modules, .github, …). Emoji drawing remains as a fallback
+//! Pierre keeps the tree quiet: folders, documents, data, and generic files
+//! are gray; only languages, frameworks, and tooling get a palette hue.
+//! Classification happens once (`Kind`). Emoji drawing remains as a fallback
 //! for tests and terminals without a Nerd Font, but it is not a user option.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IconTheme {
     Emoji,
-    Material,
+    Pierre,
 }
 
 impl IconTheme {
     /// Explicit theme from `HERDR_SIDEBAR_ICONS` (legacy `HERDR_AA_*_ICONS`
     /// still honored); `None` when unset/unknown so resolution can fall
-    /// through to the persisted choice and then Material.
+    /// through to the persisted choice and then Pierre. `material` is the
+    /// pre-Pierre name and still maps to the glyph theme.
     pub fn from_env(value: Option<&str>) -> Option<Self> {
         match value.map(|v| v.trim().to_lowercase()).as_deref() {
             Some("emoji") => Some(Self::Emoji),
-            Some("material") => Some(Self::Material),
+            Some("pierre" | "material") => Some(Self::Pierre),
             _ => None,
         }
     }
 
-    /// Always Material. Env and persisted emoji choices are ignored.
+    /// Always Pierre. Env and persisted emoji choices are ignored.
     pub fn resolve(_env: Option<&str>, _persisted: Option<Self>) -> Self {
-        Self::Material
+        Self::Pierre
     }
 
     pub fn from_state_name(name: &str) -> Option<Self> {
         match name {
             "emoji" => Some(Self::Emoji),
-            "material" => Some(Self::Material),
+            "pierre" | "material" => Some(Self::Pierre),
             _ => None,
         }
     }
@@ -41,7 +43,7 @@ impl IconTheme {
     pub fn state_name(self) -> &'static str {
         match self {
             Self::Emoji => "emoji",
-            Self::Material => "material",
+            Self::Pierre => "pierre",
         }
     }
 }
@@ -93,7 +95,7 @@ pub fn probe_nerd_font() -> bool {
 }
 
 /// A renderable icon: the glyph plus an optional foreground color. Emoji carry
-/// their own colors (`None`); material glyphs are tinted like Atom Material.
+/// their own colors (`None`); Pierre glyphs are tinted from its palette.
 pub struct Icon {
     pub glyph: &'static str,
     pub rgb: Option<(u8, u8, u8)>,
@@ -106,7 +108,7 @@ pub fn icon(theme: IconTheme, name: &str, is_dir: bool, expanded: bool) -> Icon 
                 glyph: if expanded { "📂" } else { "📁" },
                 rgb: None,
             },
-            IconTheme::Material => material_folder(name, expanded),
+            IconTheme::Pierre => pierre_folder(expanded),
         };
     }
     let kind = kind_of(name);
@@ -115,8 +117,8 @@ pub fn icon(theme: IconTheme, name: &str, is_dir: bool, expanded: bool) -> Icon 
             glyph: emoji(kind),
             rgb: None,
         },
-        IconTheme::Material => {
-            let (glyph, rgb) = material(kind);
+        IconTheme::Pierre => {
+            let (glyph, rgb) = pierre(kind);
             Icon {
                 glyph,
                 rgb: Some(rgb),
@@ -134,6 +136,7 @@ enum Kind {
     React,
     Vue,
     Svelte,
+    Astro,
     Json,
     Markdown,
     Html,
@@ -145,8 +148,10 @@ enum Kind {
     Xml,
     Shell,
     PowerShell,
-    CFamily,
+    C,
+    Cpp,
     CSharp,
+    ObjC,
     Go,
     Ruby,
     Php,
@@ -180,6 +185,22 @@ enum Kind {
     Graphql,
     Prisma,
     Terraform,
+    Wasm,
+    Npm,
+    Bun,
+    Eslint,
+    Prettier,
+    Stylelint,
+    Biome,
+    Babel,
+    Vite,
+    Webpack,
+    PostCss,
+    Svgo,
+    Tailwind,
+    Nextjs,
+    Claude,
+    VsCode,
     File,
 }
 
@@ -194,14 +215,38 @@ fn kind_of(name: &str) -> Kind {
     }
 }
 
-/// Whole-filename matches take priority over the extension.
+/// Whole-filename matches take priority over the extension. Tooling configs
+/// match by prefix (`vite.config.*`, `.eslintrc*`) so every flavor Pierre
+/// lists — and the ones it doesn't yet — resolve the same way.
 fn special_name(lower: &str) -> Option<Kind> {
+    let starts = |prefixes: &[&str]| prefixes.iter().any(|p| lower.starts_with(p));
     let kind = match lower {
-        "cargo.lock" | "package-lock.json" | "yarn.lock" | "pnpm-lock.yaml" => Kind::Lock,
-        "cargo.toml" | "package.json" | "pyproject.toml" | "go.mod" | "gemfile" => Kind::Package,
+        "claude.md" | "claude.local.md" => Kind::Claude,
+        "package.json" | "package-lock.json" | ".npmrc" | ".npmignore" => Kind::Npm,
+        "bun.lock" | "bun.lockb" | "bunfig.toml" => Kind::Bun,
+        "cargo.lock" | "yarn.lock" | "pnpm-lock.yaml" | "composer.lock" | "gemfile.lock" => {
+            Kind::Lock
+        }
+        "cargo.toml" | "pyproject.toml" | "go.mod" => Kind::Package,
+        "gemfile" | "rakefile" => Kind::Ruby,
         "makefile" | "justfile" | "cmakelists.txt" => Kind::Build,
-        ".gitignore" | ".gitattributes" | ".gitmodules" => Kind::Git,
-        _ if lower.starts_with("dockerfile") || lower.starts_with("docker-compose") => Kind::Docker,
+        ".gitignore" | ".gitattributes" | ".gitmodules" | ".gitkeep" => Kind::Git,
+        ".dockerignore" | "compose.yml" | "compose.yaml" => Kind::Docker,
+        ".terraform.lock.hcl" => Kind::Terraform,
+        ".bashrc" | ".bash_profile" | ".zshrc" | ".zshenv" | ".zprofile" => Kind::Shell,
+        ".browserslistrc" => Kind::Config,
+        _ if starts(&["dockerfile", "docker-compose"]) => Kind::Docker,
+        _ if starts(&[".eslintrc", "eslint.config.", ".eslintignore"]) => Kind::Eslint,
+        _ if starts(&[".prettierrc", "prettier.config.", ".prettierignore"]) => Kind::Prettier,
+        _ if starts(&[".stylelintrc", "stylelint.config.", ".stylelintignore"]) => Kind::Stylelint,
+        _ if starts(&["biome.json"]) => Kind::Biome,
+        _ if starts(&[".babelrc", "babel.config."]) => Kind::Babel,
+        _ if starts(&["vite.config.", "vitest.config."]) => Kind::Vite,
+        _ if starts(&["webpack.config."]) => Kind::Webpack,
+        _ if starts(&["postcss.config.", ".postcssrc"]) => Kind::PostCss,
+        _ if starts(&["svgo.config."]) => Kind::Svgo,
+        _ if starts(&["tailwind.config."]) => Kind::Tailwind,
+        _ if starts(&["next.config."]) => Kind::Nextjs,
         _ if lower.starts_with("readme") => Kind::Readme,
         _ if lower.starts_with("license") || lower == "copying" => Kind::License,
         _ if lower == ".env" || lower.starts_with(".env.") => Kind::EnvKey,
@@ -213,51 +258,57 @@ fn special_name(lower: &str) -> Option<Kind> {
 fn extension_kind(ext: &str) -> Kind {
     match ext {
         "rs" => Kind::Rust,
-        "py" | "pyi" => Kind::Python,
+        "py" | "pyi" | "pyw" | "pyx" => Kind::Python,
         "js" | "mjs" | "cjs" => Kind::Js,
-        "ts" => Kind::Ts,
+        "ts" | "mts" | "cts" => Kind::Ts,
         "jsx" | "tsx" => Kind::React,
-        "json" | "jsonc" => Kind::Json,
-        "md" | "markdown" => Kind::Markdown,
-        "html" | "htm" => Kind::Html,
-        "css" => Kind::Css,
-        "scss" | "sass" | "less" => Kind::Scss,
+        "json" | "jsonc" | "json5" | "jsonl" => Kind::Json,
+        "md" | "mdx" | "markdown" => Kind::Markdown,
+        "html" | "htm" | "xhtml" => Kind::Html,
+        "css" | "less" | "postcss" | "styl" => Kind::Css,
+        "scss" | "sass" => Kind::Scss,
         "toml" => Kind::Toml,
         "yaml" | "yml" => Kind::Yaml,
-        "ini" | "cfg" | "conf" => Kind::Config,
+        "ini" | "cfg" | "conf" | "editorconfig" => Kind::Config,
         "xml" => Kind::Xml,
-        "sh" | "bash" | "zsh" | "fish" => Kind::Shell,
+        "sh" | "bash" | "zsh" | "fish" | "ksh" | "csh" => Kind::Shell,
         "ps1" | "psm1" | "psd1" | "bat" | "cmd" => Kind::PowerShell,
-        "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" => Kind::CFamily,
+        "c" | "h" => Kind::C,
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" | "inl" => Kind::Cpp,
         "cs" => Kind::CSharp,
+        "m" | "mm" => Kind::ObjC,
         "go" => Kind::Go,
-        "rb" => Kind::Ruby,
+        "rb" | "erb" | "gemspec" | "rake" => Kind::Ruby,
         "php" => Kind::Php,
-        "java" | "jar" => Kind::Java,
+        "java" => Kind::Java,
         "kt" | "kts" => Kind::Kotlin,
         "swift" => Kind::Swift,
         "lua" => Kind::Lua,
         "sql" | "db" | "sqlite" | "sqlite3" => Kind::Sql,
-        "csv" | "tsv" => Kind::Data,
-        "txt" => Kind::Text,
+        "csv" | "tsv" | "xls" | "xlsx" | "ods" => Kind::Data,
+        "txt" | "rst" | "rtf" => Kind::Text,
         "log" => Kind::Log,
         "pdf" => Kind::Pdf,
         "svg" => Kind::Svg,
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tiff" => Kind::Image,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "avif" | "bmp" | "ico" | "icns" | "tiff"
+        | "tif" => Kind::Image,
         "mp3" | "wav" | "flac" | "ogg" => Kind::Audio,
         "mp4" | "mkv" | "avi" | "mov" | "webm" => Kind::Video,
-        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" => Kind::Archive,
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" | "jar" | "war" => Kind::Archive,
         "lock" => Kind::Lock,
-        "exe" | "dll" | "so" | "dylib" | "a" | "o" | "bin" | "wasm" => Kind::Binary,
-        "ttf" | "otf" | "woff" | "woff2" => Kind::Font,
+        "exe" | "dll" | "so" | "dylib" | "a" | "o" | "bin" => Kind::Binary,
+        "wasm" | "wat" | "wast" => Kind::Wasm,
+        "ttf" | "otf" | "woff" | "woff2" | "eot" => Kind::Font,
         "ipynb" => Kind::Notebook,
         "vue" => Kind::Vue,
         "svelte" => Kind::Svelte,
+        "astro" => Kind::Astro,
         "zig" => Kind::Zig,
         "nix" => Kind::Nix,
         "graphql" | "gql" => Kind::Graphql,
         "prisma" => Kind::Prisma,
-        "tf" | "tfvars" | "hcl" => Kind::Terraform,
+        "tf" | "tfvars" | "tfstate" | "hcl" => Kind::Terraform,
+        "code-workspace" => Kind::VsCode,
         _ => Kind::File,
     }
 }
@@ -271,15 +322,16 @@ fn emoji(kind: Kind) -> &'static str {
         Kind::React => "🟦",
         Kind::Vue => "🟩",
         Kind::Svelte => "🟧",
+        Kind::Astro => "🚀",
         Kind::Json => "🧾",
         Kind::Markdown => "📝",
         Kind::Html => "🌐",
-        Kind::Css | Kind::Scss => "🎨",
+        Kind::Css | Kind::Scss | Kind::PostCss | Kind::Tailwind => "🎨",
         Kind::Config | Kind::Toml | Kind::Yaml => "🔧",
         Kind::Xml => "📰",
         Kind::Shell => "🐚",
         Kind::PowerShell => "💻",
-        Kind::CFamily => "🔩",
+        Kind::C | Kind::Cpp | Kind::ObjC => "🔩",
         Kind::CSharp => "🟣",
         Kind::Go => "🐹",
         Kind::Ruby => "💎",
@@ -293,18 +345,19 @@ fn emoji(kind: Kind) -> &'static str {
         Kind::Text => "📄",
         Kind::Log => "📋",
         Kind::Pdf => "📕",
-        Kind::Image | Kind::Svg => "📷",
+        Kind::Image | Kind::Svg | Kind::Svgo => "📷",
         Kind::Audio => "🎵",
         Kind::Video => "🎬",
         Kind::Archive => "🧳",
         Kind::Lock => "🔒",
-        Kind::Binary => "⚡",
+        Kind::Binary | Kind::Wasm => "⚡",
         Kind::Font => "🔤",
         Kind::Notebook => "📓",
         Kind::Git => "🙈",
         Kind::Docker => "🐳",
-        Kind::Package => "📦",
-        Kind::Build => "🔨",
+        Kind::Package | Kind::Npm | Kind::Bun => "📦",
+        Kind::Build | Kind::Vite | Kind::Webpack | Kind::Babel | Kind::Nextjs => "🔨",
+        Kind::Eslint | Kind::Prettier | Kind::Stylelint | Kind::Biome => "🧹",
         Kind::Readme => "📖",
         Kind::License => "📜",
         Kind::EnvKey => "🔑",
@@ -313,136 +366,121 @@ fn emoji(kind: Kind) -> &'static str {
         Kind::Graphql => "◈",
         Kind::Prisma => "△",
         Kind::Terraform => "💠",
+        Kind::Claude => "✳",
+        Kind::VsCode => "💻",
         Kind::File => "📄",
     }
 }
 
-/// Nerd Font glyph + vscode-material-icon-theme color per kind. Codepoints
-/// follow nvim-material-icon (the Nerd Font port of that VS Code theme).
-fn material(kind: Kind) -> (&'static str, (u8, u8, u8)) {
+type Rgb = (u8, u8, u8);
+
+/// Pierre palette (github.com/pierrecomputer/theme). Pierre ships level 400
+/// for dark themes and 600 for light; the sidebar can't see the terminal
+/// background, so each hue is the 400/600 midpoint, which reads on both.
+/// Gray is Pierre's own 500.
+const GRAY: Rgb = (0x8e, 0x8e, 0x95);
+const RED: Rgb = (0xea, 0x4a, 0x4c);
+const VERMILION: Rgb = (0xea, 0x6f, 0x45);
+const ORANGE: Rgb = (0xea, 0x8d, 0x41);
+const YELLOW: Rgb = (0xea, 0xbf, 0x31);
+const GREEN: Rgb = (0x3c, 0xb6, 0x5a);
+const TEAL: Rgb = (0x3e, 0xbb, 0xc5);
+const CYAN: Rgb = (0x42, 0xb7, 0xdc);
+const BLUE: Rgb = (0x42, 0x9b, 0xea);
+const INDIGO: Rgb = (0x83, 0x52, 0xe5);
+const PURPLE: Rgb = (0xbe, 0x4c, 0xd4);
+const PINK: Rgb = (0xe9, 0x48, 0x77);
+const BROWN: Rgb = (0xac, 0x81, 0x65);
+
+/// Nerd Font glyph + Pierre color per kind. Colors follow Pierre's
+/// "Complete" tier; kinds Pierre has no icon for keep a gray generic glyph
+/// (or a brand glyph in the nearest palette hue for languages).
+fn pierre(kind: Kind) -> (&'static str, Rgb) {
     match kind {
-        Kind::Rust => ("\u{e68b}", (0xff, 0x70, 0x43)),
-        Kind::Python => ("\u{ed1b}", (0x3a, 0x87, 0xcb)),
-        Kind::Js => ("\u{f031e}", (0xff, 0xca, 0x29)),
-        Kind::Ts => ("\u{f06e6}", (0x01, 0x88, 0xd1)),
-        Kind::React => ("\u{ed46}", (0x04, 0xbc, 0xd4)),
-        Kind::Vue => ("\u{e6a0}", (0x40, 0xb8, 0x83)),
-        Kind::Svelte => ("\u{e697}", (0xff, 0x58, 0x21)),
-        Kind::Json => ("\u{e60b}", (0xfa, 0xa8, 0x25)),
-        Kind::Markdown => ("\u{eb1d}", (0x42, 0xa5, 0xf5)),
-        Kind::Html => ("\u{f13b}", (0xe4, 0x4e, 0x27)),
-        Kind::Css => ("\u{e749}", (0x42, 0xa5, 0xf5)),
-        Kind::Scss => ("\u{e603}", (0xec, 0x41, 0x7a)),
-        Kind::Config => ("\u{e615}", (0x6d, 0x80, 0x86)),
-        Kind::Toml => ("\u{e6b2}", (0xef, 0x53, 0x51)),
-        Kind::Yaml => ("\u{f0219}", (0xff, 0x52, 0x52)),
-        Kind::Xml => ("\u{f022e}", (0x8b, 0xc3, 0x4a)),
-        Kind::Shell => ("\u{f018d}", (0xff, 0x70, 0x43)),
-        Kind::PowerShell => ("\u{f0a0a}", (0x53, 0x91, 0xfe)),
-        Kind::CFamily => ("\u{e649}", (0x01, 0x88, 0xd1)),
-        Kind::CSharp => ("\u{f031b}", (0x01, 0x88, 0xd1)),
-        Kind::Go => ("\u{f07d3}", (0x02, 0xac, 0xc1)),
-        Kind::Ruby => ("\u{f0d2d}", (0xf5, 0x44, 0x36)),
-        Kind::Php => ("\u{f031f}", (0x20, 0x88, 0xe5)),
-        Kind::Java => ("\u{f0f4}", (0xf5, 0x44, 0x36)),
-        Kind::Kotlin => ("\u{e634}", (0x1a, 0x95, 0xd9)),
-        Kind::Swift => ("\u{f06e5}", (0xfe, 0x5e, 0x2f)),
-        Kind::Lua => ("\u{e620}", (0x42, 0xa5, 0xf5)),
-        Kind::Sql => ("\u{f1c0}", (0xff, 0xca, 0x29)),
-        Kind::Data => ("\u{f1c3}", (0x33, 0xa8, 0x52)),
-        Kind::Text => ("\u{f15c}", (0x9e, 0x9e, 0x9e)),
-        Kind::Log => ("\u{f15c}", (0x75, 0x75, 0x75)),
-        Kind::Pdf => ("\u{f1c1}", (0xef, 0x53, 0x51)),
-        Kind::Image => ("\u{f021f}", (0x25, 0xa6, 0xa0)),
-        Kind::Svg => ("\u{f0721}", (0xff, 0xb3, 0x00)),
-        Kind::Audio => ("\u{f1c7}", (0xec, 0x40, 0x7a)),
-        Kind::Video => ("\u{f1c8}", (0xff, 0x70, 0x43)),
-        Kind::Archive => ("\u{f05c4}", (0xaf, 0xb4, 0x2b)),
-        Kind::Lock => ("\u{f023}", (0xff, 0xd5, 0x50)),
-        Kind::Binary => ("\u{f471}", (0xef, 0x53, 0x50)),
-        Kind::Font => ("\u{f031}", (0xb0, 0xbe, 0xc5)),
-        Kind::Notebook => ("\u{f082e}", (0xf5, 0x7d, 0x01)),
-        Kind::Git => ("\u{e702}", (0xf1, 0x4e, 0x32)),
-        Kind::Docker => ("\u{f308}", (0x0d, 0xb7, 0xed)),
-        Kind::Package => ("\u{f487}", (0x8d, 0x6e, 0x63)),
-        Kind::Build => ("\u{f0ad}", (0x6d, 0x80, 0x86)),
-        Kind::Readme => ("\u{f02d}", (0x42, 0xa5, 0xf5)),
-        Kind::License => ("\u{f24e}", (0xff, 0xd5, 0x4f)),
-        Kind::EnvKey => ("\u{f084}", (0xff, 0xd5, 0x4f)),
-        Kind::Zig => ("\u{e6a9}", (0xfa, 0xa8, 0x25)),
-        Kind::Nix => ("\u{f313}", (0x51, 0x75, 0xc2)),
-        Kind::Graphql => ("\u{f0877}", (0xec, 0x41, 0x7a)),
-        Kind::Prisma => ("\u{e684}", (0x00, 0xbf, 0xa5)),
-        Kind::Terraform => ("\u{e69a}", (0x5d, 0x6b, 0xc0)),
-        Kind::File => ("\u{f15b}", (0x90, 0xa4, 0xae)),
+        Kind::Rust => ("\u{e68b}", ORANGE),                   // seti-rust
+        Kind::Python => ("\u{ed1b}", BLUE),                   // fa-python
+        Kind::Js => ("\u{f031e}", YELLOW),                    // md-language_javascript
+        Kind::Ts => ("\u{f06e6}", BLUE),                      // md-language_typescript
+        Kind::React => ("\u{ed46}", CYAN),                    // fa-react
+        Kind::Vue => ("\u{e6a0}", GREEN),                     // seti-vue
+        Kind::Svelte => ("\u{e697}", RED),                    // seti-svelte
+        Kind::Astro => ("\u{e6b3}", PURPLE),                  // custom-astro
+        Kind::Json => ("\u{f0169}", GRAY),                    // md-code_braces
+        Kind::Markdown | Kind::Readme => ("\u{f0354}", GRAY), // md-language_markdown
+        Kind::Html => ("\u{f031d}", ORANGE),                  // md-language_html5
+        Kind::Css => ("\u{e749}", INDIGO),                    // dev-css3
+        Kind::Scss => ("\u{e603}", PINK),                     // seti-sass
+        Kind::Config => ("\u{e615}", GRAY),                   // seti-config
+        Kind::Toml => ("\u{e6b2}", GRAY),                     // custom-toml
+        Kind::Yaml => ("\u{e8eb}", RED),                      // dev-yaml
+        Kind::Xml => ("\u{f022e}", GRAY),                     // md-file_code
+        Kind::Shell => ("\u{f018d}", GRAY),                   // md-console
+        Kind::PowerShell => ("\u{f0a0a}", BLUE),              // md-powershell
+        Kind::C => ("\u{f0671}", BLUE),                       // md-language_c
+        Kind::Cpp => ("\u{f0672}", BLUE),                     // md-language_cpp
+        Kind::CSharp => ("\u{f031b}", PURPLE),                // md-language_csharp
+        Kind::ObjC => ("\u{f0671}", VERMILION),               // md-language_c
+        Kind::Go => ("\u{f07d3}", CYAN),                      // md-language_go
+        Kind::Ruby => ("\u{f0d2d}", RED),                     // md-language_ruby
+        Kind::Php => ("\u{f031f}", INDIGO),                   // md-language_php
+        Kind::Java => ("\u{f0f4}", VERMILION),                // fa-coffee
+        Kind::Kotlin => ("\u{e634}", PURPLE),                 // seti-kotlin
+        Kind::Swift => ("\u{f06e5}", ORANGE),                 // md-language_swift
+        Kind::Lua => ("\u{e620}", BLUE),                      // seti-lua
+        Kind::Sql => ("\u{f01bc}", GRAY),                     // md-database
+        Kind::Data => ("\u{f0c7e}", GRAY),                    // md-file_table
+        Kind::Text | Kind::Log | Kind::License => ("\u{f0219}", GRAY), // md-file_document
+        Kind::Pdf => ("\u{f1c1}", RED),                       // fa-file_pdf
+        Kind::Image => ("\u{f021f}", GRAY),                   // md-file_image
+        Kind::Svg => ("\u{f0721}", ORANGE),                   // md-svg
+        Kind::Audio => ("\u{f1c7}", GRAY),                    // fa-file_audio
+        Kind::Video => ("\u{f1c8}", GRAY),                    // fa-file_video
+        Kind::Archive => ("\u{f05c4}", GRAY),                 // md-zip_box
+        Kind::Lock => ("\u{f023}", GRAY),                     // fa-lock
+        Kind::Binary => ("\u{f471}", GRAY),                   // oct-file_binary
+        Kind::Font => ("\u{f06d6}", GRAY),                    // md-format_font
+        Kind::Notebook => ("\u{f082e}", ORANGE),              // md-notebook
+        Kind::Git => ("\u{e702}", VERMILION),                 // dev-git
+        Kind::Docker => ("\u{f308}", BLUE),                   // linux-docker
+        Kind::Package => ("\u{f487}", GRAY),                  // oct-package
+        Kind::Build => ("\u{f0ad}", GRAY),                    // fa-wrench
+        Kind::EnvKey => ("\u{f084}", GRAY),                   // fa-key
+        Kind::Zig => ("\u{e6a9}", ORANGE),                    // seti-zig
+        Kind::Nix => ("\u{f313}", BLUE),                      // linux-nixos
+        Kind::Graphql => ("\u{f0877}", PINK),                 // md-graphql
+        Kind::Prisma => ("\u{e684}", TEAL),                   // seti-prisma
+        Kind::Terraform => ("\u{e69a}", INDIGO),              // seti-terraform
+        Kind::Wasm => ("\u{e6a1}", INDIGO),                   // seti-wasm
+        Kind::Npm => ("\u{f06f7}", RED),                      // md-npm
+        Kind::Bun => ("\u{e76f}", BROWN),                     // dev-bun
+        Kind::Eslint => ("\u{f0c7a}", INDIGO),                // md-eslint
+        Kind::Prettier => ("\u{e6b4}", TEAL),                 // custom-prettier
+        Kind::Stylelint => ("\u{e695}", GRAY),                // seti-stylelint
+        Kind::Biome => ("\u{e8fb}", BLUE),                    // dev-biome
+        Kind::Babel => ("\u{f0a25}", YELLOW),                 // md-babel
+        Kind::Vite => ("\u{e8d6}", PURPLE),                   // dev-vite
+        Kind::Webpack => ("\u{f072b}", BLUE),                 // md-webpack
+        Kind::PostCss => ("\u{e86a}", RED),                   // dev-postcss
+        Kind::Svgo => ("\u{e947}", GREEN),                    // dev-svgo
+        Kind::Tailwind => ("\u{f13ff}", CYAN),                // md-tailwind
+        Kind::Nextjs => ("\u{e83e}", GRAY),                   // dev-nextjs
+        Kind::Claude => ("\u{ec82}", ORANGE),                 // cod-claude
+        Kind::VsCode => ("\u{e8da}", BLUE),                   // dev-vscode
+        Kind::File => ("\u{f0214}", GRAY),                    // md-file
     }
 }
 
-/// vscode-material-icon-theme folder names: leading-dot matches `.github` as
-/// `github`. Named folders keep a tinted folder (or a brand glyph); unknown
-/// names use the generic closed/open Material folder.
-fn material_folder(name: &str, expanded: bool) -> Icon {
-    let lower = name.to_lowercase();
-    let key = lower.strip_prefix('.').unwrap_or(lower.as_str());
-    let generic = if expanded {
-        "\u{f0770}" // nf-md-folder-open
+/// Pierre draws every folder the same: a gray closed/open folder, no
+/// per-name tints or brand folders.
+fn pierre_folder(expanded: bool) -> Icon {
+    let glyph = if expanded {
+        "\u{f0770}" // md-folder_open
     } else {
-        "\u{f024b}" // nf-md-folder
-    };
-    let grey = (0x90_u8, 0xa4, 0xae);
-    let (glyph, rgb) = match key {
-        "src" | "srcs" | "source" | "sources" | "code" => (generic, (0x26, 0xa6, 0x9a)),
-        "dist" | "out" | "output" | "outputs" | "build" | "builds" | "release" | "bin"
-        | "distribution" | "built" | "compiled" | "target" => (generic, (0xf9, 0xa8, 0x25)),
-        "node" | "nodejs" | "node_modules" => ("\u{e718}", (0x8b, 0xc3, 0x4a)),
-        "git" | "patches" | "githooks" | "submodules" => ("\u{e5fb}", (0xe5, 0x39, 0x35)),
-        "github" => ("\u{f408}", (0x54, 0x6e, 0x7a)),
-        "gitlab" => ("\u{f296}", (0xfc, 0x6d, 0x26)),
-        "test" | "tests" | "testing" | "spec" | "specs" | "__tests__" | "__test__"
-        | "snapshots" => (generic, (0x26, 0xa6, 0x9a)),
-        "doc" | "docs" | "document" | "documents" | "documentation" | "wiki" | "notes" => {
-            (generic, (0x42, 0xa5, 0xf5))
-        }
-        "cfg" | "cfgs" | "conf" | "confs" | "config" | "configs" | "configuration"
-        | "configurations" | "setting" | "settings" => (generic, (0xff, 0xcc, 0x80)),
-        "images" | "image" | "imgs" | "img" | "icons" | "icon" | "assets" | "pictures"
-        | "photos" => (generic, (0x26, 0xa6, 0x9a)),
-        "public" | "www" | "static" | "html" | "public_html" => (generic, (0x26, 0xc6, 0xda)),
-        "script" | "scripts" | "scripting" => (generic, (0xff, 0xca, 0x28)),
-        "lib" | "libs" | "library" | "libraries" | "include" | "includes" => {
-            (generic, (0x8d, 0x6e, 0x63))
-        }
-        "vendor" | "vendors" | "third-party" | "third_party" => (generic, (0xbd, 0xbd, 0xbd)),
-        "tmp" | "temp" | "cache" | "cached" => (generic, (0x78, 0x90, 0x9c)),
-        "ci" | "circleci" | ".circleci" | "workflows" => (generic, (0xf4, 0x43, 0x36)),
-        "app" | "apps" | "application" | "applications" => (generic, (0x26, 0xa6, 0x9a)),
-        "package" | "packages" | "pkg" => (generic, (0x8d, 0x6e, 0x63)),
-        "component" | "components" | "widget" | "widgets" => (generic, (0x42, 0xa5, 0xf5)),
-        "hook" | "hooks" => (generic, (0x7e, 0x57, 0xc2)),
-        "css" | "stylesheet" | "stylesheets" | "style" | "styles" | "sass" | "scss" => {
-            (generic, (0xec, 0x40, 0x7a))
-        }
-        "vscode" | "vscode-test" => ("\u{e70c}", (0x29, 0xb6, 0xf6)),
-        "docker" | "dockerfiles" | "dockerhub" => ("\u{f308}", (0x00, 0x83, 0x8f)),
-        "android" => ("\u{e70e}", (0x8b, 0xc3, 0x4a)),
-        "ios" => ("\u{e711}", (0x54, 0x6e, 0x7a)),
-        "font" | "fonts" | "typeface" | "typefaces" => (generic, (0xb0, 0xbe, 0xc5)),
-        "locale" | "locales" | "i18n" | "l10n" | "lang" | "langs" | "translation"
-        | "translations" => (generic, (0x79, 0x86, 0xcb)),
-        "log" | "logs" => (generic, (0x78, 0x90, 0x9c)),
-        "plugin" | "plugins" | "mod" | "mods" | "extension" | "extensions" => {
-            (generic, (0x7e, 0x57, 0xc2))
-        }
-        "env" | "envs" | "environment" | "environments" => (generic, (0xff, 0xcc, 0x80)),
-        "rust" | "cargo" => ("\u{e68b}", (0xff, 0x70, 0x43)),
-        "view" | "views" | "screen" | "screens" | "page" | "pages" => (generic, (0x42, 0xa5, 0xf5)),
-        "prisma" => ("\u{e684}", (0x2d, 0x37, 0x48)),
-        "nix" => ("\u{f313}", (0x51, 0x75, 0xc2)),
-        _ => (generic, grey),
+        "\u{f024b}" // md-folder
     };
     Icon {
         glyph,
-        rgb: Some(rgb),
+        rgb: Some(GRAY),
     }
 }
 
@@ -482,11 +520,15 @@ mod tests {
         assert_eq!(emoji_for("CNAME", false, false), "📄");
     }
 
+    fn pierre(name: &str) -> Icon {
+        icon(IconTheme::Pierre, name, false, false)
+    }
+
     #[test]
-    fn material_theme_tints_glyphs() {
-        let rust = icon(IconTheme::Material, "main.rs", false, false);
+    fn pierre_theme_tints_glyphs() {
+        let rust = pierre("main.rs");
         assert_eq!(rust.glyph, "\u{e68b}");
-        assert_eq!(rust.rgb, Some((0xff, 0x70, 0x43)));
+        assert_eq!(rust.rgb, Some(ORANGE));
         assert!(
             icon(IconTheme::Emoji, "main.rs", false, false)
                 .rgb
@@ -495,33 +537,59 @@ mod tests {
     }
 
     #[test]
-    fn material_folders_match_vscode_names() {
-        let src = icon(IconTheme::Material, "src", true, false);
-        assert_eq!(src.glyph, "\u{f024b}");
-        assert_eq!(src.rgb, Some((0x26, 0xa6, 0x9a)));
-        let github = icon(IconTheme::Material, ".github", true, false);
-        assert_eq!(github.glyph, "\u{f408}");
-        let node = icon(IconTheme::Material, "node_modules", true, false);
-        assert_eq!(node.glyph, "\u{e718}");
-        let open = icon(IconTheme::Material, "misc", true, true);
-        assert_eq!(open.glyph, "\u{f0770}");
+    fn pierre_keeps_documents_and_data_gray() {
+        for name in [
+            "notes.txt",
+            "README.md",
+            "data.json",
+            "table.csv",
+            "font.woff2",
+            "x.xyzq",
+        ] {
+            assert_eq!(pierre(name).rgb, Some(GRAY), "{name}");
+        }
+        assert_eq!(pierre("CNAME").glyph, "\u{f0214}");
+    }
+
+    #[test]
+    fn pierre_folders_are_plain_gray() {
+        for name in ["src", ".github", "node_modules", "misc"] {
+            let closed = icon(IconTheme::Pierre, name, true, false);
+            assert_eq!(closed.glyph, "\u{f024b}", "{name}");
+            assert_eq!(closed.rgb, Some(GRAY), "{name}");
+        }
+        assert_eq!(
+            icon(IconTheme::Pierre, "src", true, true).glyph,
+            "\u{f0770}"
+        );
         assert_eq!(icon(IconTheme::Emoji, "src", true, false).glyph, "📁");
     }
 
     #[test]
-    fn extra_extensions_match_material_icon_theme() {
-        assert_eq!(
-            icon(IconTheme::Material, "App.vue", false, false).glyph,
-            "\u{e6a0}"
-        );
-        assert_eq!(
-            icon(IconTheme::Material, "Widget.svelte", false, false).glyph,
-            "\u{e697}"
-        );
-        assert_eq!(
-            icon(IconTheme::Material, "schema.prisma", false, false).glyph,
-            "\u{e684}"
-        );
+    fn pierre_tooling_file_names() {
+        assert_eq!(pierre("CLAUDE.md").glyph, "\u{ec82}");
+        assert_eq!(pierre("package.json").glyph, "\u{f06f7}");
+        assert_eq!(pierre("package-lock.json").glyph, "\u{f06f7}");
+        assert_eq!(pierre("bun.lock").glyph, "\u{e76f}");
+        assert_eq!(pierre("vite.config.ts").glyph, "\u{e8d6}");
+        assert_eq!(pierre("eslint.config.mjs").glyph, "\u{f0c7a}");
+        assert_eq!(pierre(".prettierrc.json").glyph, "\u{e6b4}");
+        assert_eq!(pierre("tailwind.config.js").glyph, "\u{f13ff}");
+        assert_eq!(pierre("compose.yaml").glyph, "\u{f308}");
+        assert_eq!(pierre("Gemfile").glyph, "\u{f0d2d}");
+        assert_eq!(pierre(".zshrc").glyph, "\u{f018d}");
+    }
+
+    #[test]
+    fn pierre_extension_colors() {
+        assert_eq!(pierre("App.vue").rgb, Some(GREEN));
+        assert_eq!(pierre("Widget.svelte").rgb, Some(RED));
+        assert_eq!(pierre("index.tsx").rgb, Some(CYAN));
+        assert_eq!(pierre("theme.scss").rgb, Some(PINK));
+        assert_eq!(pierre("theme.less").rgb, Some(INDIGO));
+        assert_eq!(pierre("icon.svg").rgb, Some(ORANGE));
+        assert_eq!(pierre("module.wasm").glyph, "\u{e6a1}");
+        assert_eq!(pierre("schema.prisma").glyph, "\u{e684}");
     }
 
     #[test]
@@ -539,20 +607,26 @@ mod tests {
     }
 
     #[test]
-    fn theme_selection_is_always_material() {
+    fn theme_selection_is_always_pierre() {
         assert_eq!(IconTheme::from_env(None), None);
+        assert_eq!(IconTheme::from_env(Some("pierre")), Some(IconTheme::Pierre));
         assert_eq!(
             IconTheme::from_env(Some("material")),
-            Some(IconTheme::Material)
+            Some(IconTheme::Pierre)
         );
         assert_eq!(
+            IconTheme::from_state_name("material"),
+            Some(IconTheme::Pierre)
+        );
+        assert_eq!(IconTheme::Pierre.state_name(), "pierre");
+        assert_eq!(
             IconTheme::resolve(Some("emoji"), Some(IconTheme::Emoji)),
-            IconTheme::Material
+            IconTheme::Pierre
         );
         assert_eq!(
             IconTheme::resolve(None, Some(IconTheme::Emoji)),
-            IconTheme::Material
+            IconTheme::Pierre
         );
-        assert_eq!(IconTheme::resolve(None, None), IconTheme::Material);
+        assert_eq!(IconTheme::resolve(None, None), IconTheme::Pierre);
     }
 }

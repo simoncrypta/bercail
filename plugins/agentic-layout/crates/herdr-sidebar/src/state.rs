@@ -143,7 +143,7 @@ pub struct State {
     /// Show the hotkey chips at the bottom of the sidebar (they always
     /// live in the ⚙ Settings modal; the footer copy is opt-in).
     pub show_hotkeys: bool,
-    /// Legacy persisted icon-theme choice. The sidebar always draws Material;
+    /// Legacy persisted icon-theme choice. The sidebar always draws Pierre;
     /// emoji values are ignored.
     pub icons: Option<crate::icons::IconTheme>,
     /// The first-run "install a Nerd Font?" prompt was answered (either

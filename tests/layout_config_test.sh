@@ -115,7 +115,7 @@ cp "$ROOT/config/agentic-dev/config-reader.sh" \
   "$case_dir/home/.config/agentic-dev/config-reader.sh"
 cat >"$case_dir/bin/herdr" <<'EOF'
 #!/usr/bin/env bash
-printf 'herdr 0.9.0\n'
+printf 'herdr 0.9.3\n'
 EOF
 chmod +x "$case_dir/bin/herdr"
 for cmd in git wt fzf jq lazygit hunk nano; do

@@ -134,11 +134,11 @@ pub fn hits_collapse_button(column: u16, row: u16, pane_width: u16, pane_height:
 }
 
 /// Theme-matched activity-bar icons: (explorer, source control).
-/// Material uses MDI folder + FA code-fork; chips reserve a trailing cell
+/// Pierre uses MDI folder + FA code-fork; chips reserve a trailing cell
 /// because some Nerd Font builds draw those glyphs two cells wide.
 pub fn activity_icons(theme: IconTheme) -> (&'static str, &'static str) {
     match theme {
-        IconTheme::Material => ("\u{f024b}", "\u{f126}"),
+        IconTheme::Pierre => ("\u{f024b}", "\u{f126}"),
         IconTheme::Emoji => ("📁", "🔀"),
     }
 }
@@ -146,7 +146,7 @@ pub fn activity_icons(theme: IconTheme) -> (&'static str, &'static str) {
 /// Theme-matched ⚙ settings glyph.
 pub fn gear_icon(theme: IconTheme) -> &'static str {
     match theme {
-        IconTheme::Material => "\u{f013}",
+        IconTheme::Pierre => "\u{f013}",
         IconTheme::Emoji => "⚙",
     }
 }
@@ -156,7 +156,7 @@ pub fn gear_icon(theme: IconTheme) -> &'static str {
 /// fallback for the emoji theme.
 pub fn sparkle_icon(theme: IconTheme) -> &'static str {
     match theme {
-        IconTheme::Material => "\u{f0674}",
+        IconTheme::Pierre => "\u{f0674}",
         IconTheme::Emoji => "✧",
     }
 }
@@ -164,7 +164,7 @@ pub fn sparkle_icon(theme: IconTheme) -> &'static str {
 /// Theme-matched branch glyph for repo rows.
 pub fn branch_icon(theme: IconTheme) -> &'static str {
     match theme {
-        IconTheme::Material => "\u{e725}",
+        IconTheme::Pierre => "\u{e725}",
         IconTheme::Emoji => "⎇",
     }
 }
@@ -191,14 +191,14 @@ pub fn title_actions_visible(last_mouse: Option<std::time::Instant>) -> bool {
 }
 
 /// Theme-matched glyph for a title-bar action: VS Code's own codicons in the
-/// material theme (the Nerd Font ships the cod- set), VS16-free fallbacks
+/// Pierre theme (the Nerd Font ships the cod- set), VS16-free fallbacks
 /// otherwise.
 pub fn title_action_icon(theme: IconTheme, action: TitleAction) -> &'static str {
     match (theme, action) {
-        (IconTheme::Material, TitleAction::NewFile) => "\u{ea7f}", //  cod-new_file
-        (IconTheme::Material, TitleAction::NewFolder) => "\u{ea80}", //  cod-new_folder
-        (IconTheme::Material, TitleAction::Refresh) => "\u{eb37}", //  cod-refresh
-        (IconTheme::Material, TitleAction::CollapseAll) => "\u{eac5}", //  cod-collapse_all
+        (IconTheme::Pierre, TitleAction::NewFile) => "\u{ea7f}", //  cod-new_file
+        (IconTheme::Pierre, TitleAction::NewFolder) => "\u{ea80}", //  cod-new_folder
+        (IconTheme::Pierre, TitleAction::Refresh) => "\u{eb37}", //  cod-refresh
+        (IconTheme::Pierre, TitleAction::CollapseAll) => "\u{eac5}", //  cod-collapse_all
         (IconTheme::Emoji, TitleAction::NewFile) => "📄",
         (IconTheme::Emoji, TitleAction::NewFolder) => "📁",
         (IconTheme::Emoji, TitleAction::Refresh) => "⟳",
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn title_action_zones_are_contiguous_and_match_width() {
-        for theme in [IconTheme::Material, IconTheme::Emoji] {
+        for theme in [IconTheme::Pierre, IconTheme::Emoji] {
             let actions = [
                 TitleAction::NewFile,
                 TitleAction::NewFolder,

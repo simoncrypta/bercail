@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-HERDR_MIN_VERSION=0.9.0
+HERDR_MIN_VERSION=0.9.3
 HUNK_MIN_VERSION=0.20.1
 TUICR_MIN_VERSION=0.20.0
 GROK_MISE_SPEC="npm:@xai-official/grok"
