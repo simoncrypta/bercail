@@ -137,6 +137,8 @@ EOF
   chmod +x "$FAKE_BIN/herdr"
 }
 
+# The helper ignores a HERDR_BIN_PATH that does not exist yet.
+write_fake_herdr open-ok
 # shellcheck source=config/worktrunk/herdr-layout.sh
 source "$ROOT/config/worktrunk/herdr-layout.sh"
 [[ "$HERDR" == "$FAKE_BIN/herdr" ]] || fail "HERDR bound to live binary: $HERDR"

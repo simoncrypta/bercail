@@ -1,6 +1,11 @@
 # Herdr dev layout helpers for worktrunk and shell integration.
 # Safe to source repeatedly — worktrunk hooks and shell reload pick up updates.
 
+# A server that predates an in-place Herdr upgrade reports its replaced binary
+# ("/usr/bin/herdr (deleted)") until restart; use PATH instead of a dead path.
+if [[ -n "${HERDR_BIN_PATH:-}" && ! -x "$HERDR_BIN_PATH" ]]; then
+  unset HERDR_BIN_PATH
+fi
 HERDR="${HERDR_BIN_PATH:-herdr}"
 PLUGIN_ID="agentic-dev.layout"
 

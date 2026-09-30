@@ -42,8 +42,18 @@ impl SidebarContext {
     }
 }
 
+/// Herdr's own executable path, or `herdr` on PATH when that path is gone: a
+/// server that predates an in-place upgrade keeps reporting the replaced file
+/// (on Linux: "/usr/bin/herdr (deleted)") until it restarts.
 fn herdr_bin() -> String {
-    std::env::var("HERDR_BIN_PATH").unwrap_or_else(|_| "herdr".to_string())
+    usable_herdr_bin(std::env::var("HERDR_BIN_PATH").ok())
+}
+
+fn usable_herdr_bin(path: Option<String>) -> String {
+    match path {
+        Some(p) if !p.is_empty() && (!p.contains('/') || std::path::Path::new(&p).is_file()) => p,
+        _ => "herdr".to_string(),
+    }
 }
 
 /// Walk up from `start` looking for `layout.sh` (release binary lives at
@@ -129,5 +139,18 @@ mod tests {
         fs::write(&bin, "").unwrap();
         assert_eq!(plugin_root_from(&bin).as_deref(), Some(tmp.as_path()));
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn dead_herdr_bin_path_falls_back_to_path() {
+        assert_eq!(
+            usable_herdr_bin(Some("/usr/bin/herdr (deleted)".into())),
+            "herdr"
+        );
+        assert_eq!(usable_herdr_bin(Some(String::new())), "herdr");
+        assert_eq!(usable_herdr_bin(None), "herdr");
+        assert_eq!(usable_herdr_bin(Some("herdr-dev".into())), "herdr-dev");
+        let live = std::env::current_exe().unwrap().display().to_string();
+        assert_eq!(usable_herdr_bin(Some(live.clone())), live);
     }
 }

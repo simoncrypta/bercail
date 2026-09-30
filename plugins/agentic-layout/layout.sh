@@ -3,6 +3,13 @@
 # shellcheck disable=SC1091
 set -euo pipefail
 
+# Herdr hands plugins its own executable path. After an in-place upgrade a
+# server that predates the upgrade reports the replaced file (on Linux:
+# "/usr/bin/herdr (deleted)") until it restarts, so every call would fail.
+# Fall back to PATH, and drop the stale value so child panes don't inherit it.
+if [[ -n "${HERDR_BIN_PATH:-}" && ! -x "$HERDR_BIN_PATH" ]]; then
+  unset HERDR_BIN_PATH
+fi
 HERDR="${HERDR_BIN_PATH:-herdr}"
 METADATA_SOURCE="agentic-dev.layout"
 

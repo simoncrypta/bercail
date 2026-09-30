@@ -35,6 +35,7 @@ jobs:
           bash tests/open_editor_test.sh
           bash tests/handoff_agent_test.sh
           bash tests/review_on_demand_test.sh
+          bash tests/herdr_bin_fallback_test.sh
 
   test:
     needs: rust-plugin
