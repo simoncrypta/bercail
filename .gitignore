@@ -10,3 +10,10 @@ public/lib/
 
 # Headless handoff runtime (job brief, result, logs). Do not commit a session.
 .bercail/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
+*.gate.lock*

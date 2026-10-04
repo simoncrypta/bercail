@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "bercail",
+  "project_id": "83f68b99-c6b9-495c-a394-5eabcee0e512"
+}
