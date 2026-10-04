@@ -84,8 +84,9 @@ Agent skills (`handoff`, `review`):
   reads that dir. Extra symlink only if you set another [agent] command.
   Source: skills/handoff/, skills/review/.
   Manual: npx skills add simoncrypta/agentic-dev-setup -s handoff -g
-  Handoff children: cursor-agent + /poteto-mode. Install pstack in Cursor:
-  /add-plugin pstack
+  Handoff stages: cursor is a sticky cursor-agent pane with /poteto-mode.
+  start is headless claude (brief in, .bercail/handoff-result.json out).
+  Install pstack in Cursor: /add-plugin pstack
 
 Plugin only (see README — review manifest/scripts before install):
   herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout
@@ -100,7 +101,7 @@ show_summary() {
   log ""
   log "bercail installed (v${AGENTIC_DEV_VERSION})"
   log ""
-  log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff children: cursor-agent + pstack)"
+  log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (cursor stage: cursor-agent + pstack; start stage: headless claude)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Editor command: $(read_layout_editor 2>/dev/null || echo "\$EDITOR")"
   log "Config: ${AGENTIC_DEV_USER_CONFIG}"

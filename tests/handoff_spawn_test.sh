@@ -272,3 +272,161 @@ test_intro_does_not_invoke_review_skill() {
 }
 
 test_intro_does_not_invoke_review_skill
+
+test_poteto_only_for_cursor_binary() {
+  local got
+  got="$(handoff_prompt_text $'intro' start)"
+  [[ "$got" == intro ]] || fail "start stage must not prefix poteto, got ${got:0:40}"
+  got="$(handoff_prompt_text $'intro' cursor)"
+  [[ "$got" == /poteto-mode$'\n\n'"intro" ]] || fail "cursor stage should prefix poteto"
+  handoff_stage_field arena binary && fail "arena is not a stage yet"
+  handoff_stage_field implement binary && fail "implement is not a stage yet"
+  handoff_stage_field review binary && fail "review pane is not a stage yet"
+  [[ "$(handoff_stage_field cursor binary)" == cursor-agent ]] || fail "cursor binary"
+  [[ "$(handoff_stage_field start mode)" == headless ]] || fail "start mode"
+  grep -q 'WT_HERDR_AGENT_CMD=cursor-agent' "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    && fail "handoff-spawn must not hardcode WT_HERDR_AGENT_CMD=cursor-agent"
+  grep -q 'WT_HERDR_AGENT_CMD="$binary"' "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    || fail "pane stage must publish the table binary via WT_HERDR_AGENT_CMD"
+  printf 'PASS: poteto and cursor-agent come from the stage table\n'
+}
+
+test_model_resolves_opus_55_not_pstack_slug() {
+  local catalog="$TMP_DIR/catalog.json" id
+  cat >"$catalog" <<'JSON'
+{"catalog":{"config":{"models":[
+  {"id":"claude-opus-5-5-max","name":"Opus 5.5 Max"},
+  {"id":"claude-opus-5-5","name":"Opus 5.5"},
+  {"id":"claude-opus-4-6","name":"Opus 4.6"}
+]}}}
+JSON
+  id="$(BERCAIL_CLAUDE_MODEL_CATALOG="$catalog" handoff_resolve_model opus-5.5)"
+  [[ "$id" == claude-opus-5-5 ]] || fail "expected claude-opus-5-5, got $id"
+  cat >"$catalog" <<'JSON'
+{"catalog":{"config":{"models":[
+  {"id":"claude-opus-4-8-max","name":"nope"},
+  {"id":"claude-opus-4-6","name":"Opus 4.6"}
+]}}}
+JSON
+  id="$(BERCAIL_CLAUDE_MODEL_CATALOG="$catalog" handoff_resolve_model opus-5.5 2>"$TMP_DIR/model-err")"
+  [[ "$id" == claude-opus-4-6 ]] || fail "closest opus should skip -max, got $id"
+  printf '%s' "$(cat "$TMP_DIR/model-err")" | grep -q 'closest opus' \
+    || fail "should say it fell back: $(cat "$TMP_DIR/model-err")"
+  id="$(BERCAIL_CLAUDE_MODEL_CATALOG="$TMP_DIR/no-catalog.json" handoff_resolve_model opus-5.5 2>"$TMP_DIR/model-err")"
+  [[ "$id" == opus ]] || fail "missing catalog should use alias opus, got $id"
+  printf 'PASS: opus-5.5 resolves to the catalog id, never the pstack slug\n'
+}
+
+test_brief_sources_share_one_shape() {
+  local wt="$TMP_DIR/brief-wt" a b c
+  mkdir -p "$wt"
+  printf 'ship the login fix\n' >"$TMP_DIR/ask.txt"
+  "$ROOT/skills/handoff/scripts/handoff-brief" \
+    --source ask --worktree "$wt" --repo https://github.com/acme/app \
+    --ask-file "$TMP_DIR/ask.txt" --link https://example.com/note >/dev/null
+  a="$(jq -c 'keys' "$wt/.bercail/job-brief.json")"
+  "$ROOT/skills/handoff/scripts/handoff-brief" \
+    --source linear --worktree "$wt" --repo https://github.com/acme/app \
+    --link https://linear.app/issue/ABC-1 >/dev/null <<'EOF'
+Linear: fix login
+EOF
+  b="$(jq -c 'keys' "$wt/.bercail/job-brief.json")"
+  printf 'a note\n' | "$ROOT/skills/handoff/scripts/handoff-brief" \
+    --source note --worktree "$wt" --repo /tmp/app >/dev/null
+  c="$(jq -c 'keys' "$wt/.bercail/job-brief.json")"
+  [[ "$a" == "$b" && "$b" == "$c" ]] || fail "brief keys differ: $a $b $c"
+  jq -e '.ask and .repo and (.links|type=="array") and .source=="note"' \
+    "$wt/.bercail/job-brief.json" >/dev/null \
+    || fail "brief shape: $(cat "$wt/.bercail/job-brief.json")"
+  local rc=0 err
+  err="$("$ROOT/skills/handoff/scripts/handoff-brief" --source ask --worktree "$wt" --repo x -- 'on argv' 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "ask on argv should exit 1, got $rc ($err)"
+  printf 'PASS: linear, ask, and note write one job brief\n'
+}
+
+_start_fixture() {
+  local wt="$1" catalog="$TMP_DIR/catalog.json"
+  mkdir -p "$wt"
+  cat >"$catalog" <<'JSON'
+{"catalog":{"config":{"models":[{"id":"claude-opus-5-5","name":"Opus 5.5"}]}}}
+JSON
+  printf 'fix the login timeout\n' >"$TMP_DIR/ask.txt"
+  "$ROOT/skills/handoff/scripts/handoff-brief" \
+    --source ask --worktree "$wt" --repo https://github.com/acme/app \
+    --ask-file "$TMP_DIR/ask.txt" >/dev/null
+  export BERCAIL_CLAUDE_MODEL_CATALOG="$catalog"
+}
+
+test_start_stage_dry_run() {
+  local wt="$TMP_DIR/start-dry" out
+  _start_fixture "$wt"
+  printf '#!/bin/sh\necho herdr-called >>"$TMP_DIR/herdr-hit"\nexit 9\n' >"$TMP_DIR/herdr-bomb"
+  chmod +x "$TMP_DIR/herdr-bomb"
+  out="$(cd "$wt" && HERDR_BIN_PATH="$TMP_DIR/herdr-bomb" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.dry_run == true and .mode == "headless" and .stage == "start"' >/dev/null \
+    || fail "dry-run json: $out"
+  printf '%s' "$out" | jq -e '.model == "claude-opus-5-5"' >/dev/null || fail "model: $out"
+  printf '%s' "$out" | jq -e '.command[1] == "--print" and .command[2] == "--model" and .command[3] == "claude-opus-5-5"' >/dev/null \
+    || fail "argv model: $out"
+  printf '%s' "$out" | jq -e 'any(.command[]; . == "--session-id") and (any(.command[]; . == "--resume") | not)' >/dev/null \
+    || fail "first start should pass --session-id and not --resume: $out"
+  printf '%s' "$out" | jq -e 'any(.command[]; test("poteto"))|not' >/dev/null \
+    || fail "start argv must not mention poteto: $out"
+  printf '%s' "$out" | jq -e 'any(.command[]; test("herdr|cursor-agent"))|not' >/dev/null \
+    || fail "start argv must not launch herdr or cursor-agent: $out"
+  [[ ! -f "$TMP_DIR/herdr-hit" ]] || fail "dry-run must not call herdr"
+  [[ ! -f "$wt/.bercail/handoff-result.json" ]] || fail "dry-run must not write a result"
+  printf 'PASS: start dry-run is headless claude --print --model claude-opus-5-5\n'
+}
+
+test_start_stage_resume_and_fixture_result() {
+  local wt="$TMP_DIR/start-run" out sid stub="$TMP_DIR/bin/claude" rc=0 err
+  mkdir -p "$TMP_DIR/bin"
+  _start_fixture "$wt"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >"${HANDOFF_ARGV_LOG:?}"
+[[ "$*" == *--print* ]] || exit 2
+[[ "$*" == *"--model claude-opus-5-5"* ]] || exit 3
+if [[ "${BERCAIL_EXPECT_RESUME:-}" == 1 ]]; then
+  [[ "$*" == *"--resume ${BERCAIL_SESSION_ID}"* ]] || exit 4
+else
+  [[ "$*" == *"--session-id ${BERCAIL_SESSION_ID}"* ]] || exit 5
+fi
+jq -nc --arg sid "$BERCAIL_SESSION_ID" \
+  '{status:"ready", summary:"restated the ask and wrote a plan", session_id:$sid}' \
+  >"$BERCAIL_RESULT_PATH"
+STUB
+  chmod +x "$stub"
+  export HANDOFF_ARGV_LOG="$TMP_DIR/argv-log"
+  export HANDOFF_CLAUDE_BIN="$stub"
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --worktree "$wt")"
+  printf '%s' "$out" | jq -e '.ok == true and .dry_run == false and .resume == false' >/dev/null \
+    || fail "start json: $out"
+  sid="$(jq -r '.session_id' "$wt/.bercail/handoff-result.json")"
+  jq -e --arg sid "$sid" \
+    '.status=="ready" and (.summary|length>0) and .session_id==$sid' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "result shape: $(cat "$wt/.bercail/handoff-result.json")"
+  grep -q 'herdr' "$HANDOFF_ARGV_LOG" && fail "fixture argv called herdr: $(cat "$HANDOFF_ARGV_LOG")"
+  grep -q 'poteto' "$HANDOFF_ARGV_LOG" && fail "fixture argv used poteto"
+  export BERCAIL_EXPECT_RESUME=1
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    --stage start --worktree "$wt" --resume "$sid")"
+  printf '%s' "$out" | jq -e '.resume == true' >/dev/null || fail "resume json: $out"
+  grep -q -- "--resume $sid" "$HANDOFF_ARGV_LOG" || fail "resume argv: $(cat "$HANDOFF_ARGV_LOG")"
+  grep -q -- '--session-id' "$HANDOFF_ARGV_LOG" && fail "re-handoff must not mint a new --session-id"
+  err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage arena --dry-run 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "unknown stage should exit 1, got $rc ($err)"
+  printf '%s' "$err" | grep -q 'unknown stage' || fail "unknown stage message: $err"
+  unset HANDOFF_CLAUDE_BIN HANDOFF_ARGV_LOG BERCAIL_EXPECT_RESUME BERCAIL_CLAUDE_MODEL_CATALOG
+  printf 'PASS: start fixture writes handoff-result.json; re-handoff uses --resume\n'
+}
+
+test_poteto_only_for_cursor_binary
+test_model_resolves_opus_55_not_pstack_slug
+test_brief_sources_share_one_shape
+test_start_stage_dry_run
+test_start_stage_resume_and_fixture_result

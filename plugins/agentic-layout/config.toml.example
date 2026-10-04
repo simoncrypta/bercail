@@ -1,5 +1,5 @@
 [agent]
-# Intended sticky agent is cursor-agent (handoff children always are).
+# Intended sticky agent is cursor-agent (the cursor handoff stage).
 command = "cursor-agent"
 
 [layout]

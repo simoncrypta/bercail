@@ -1,6 +1,7 @@
 [agent]
-# Intended sticky agent is cursor-agent. Handoff children always use
-# cursor-agent + /poteto-mode (pstack). To put another command in the left
+# Intended sticky agent is cursor-agent. The cursor handoff stage uses
+# cursor-agent + /poteto-mode (pstack). The start stage is headless claude
+# and does not read this command. To put another command in the left
 # pane, set this yourself, then run: bercail reconfigure
 command = "cursor-agent"
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-command Herdr handoff: worktree + dirty copy + layout + cursor-agent prompt.
+# Handoff router: a named stage picks binary, headless vs sticky pane, model, worktree.
 # shellcheck shell=bash
 set -euo pipefail
 
@@ -8,24 +8,39 @@ handoff_die() {
   exit 1
 }
 
+_HANDOFF_SPAWN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=handoff-stages.sh
+source "$_HANDOFF_SPAWN_DIR/handoff-stages.sh"
+
 handoff_usage() {
   cat >&2 <<'EOF'
 usage: handoff-spawn --info
        handoff-spawn --stash-prompt
-       handoff-spawn --branch <name> [--dirty|--clean] [--plan] [--workspace <id>]
-                     [--take-pending|--prompt-file <path>]
+       handoff-spawn --stage start --worktree PATH [--brief PATH]
+                     [--resume SESSION] [--dry-run]
+       handoff-spawn --branch <name> [--stage cursor] [--dirty|--clean] [--plan]
+                     [--workspace <id>] [--take-pending|--prompt-file <path>]
 
   --info          print JSON facts and exit
   --stash-prompt  write stdin to the pending prompt file; print its path as JSON
-  --branch NAME   feature branch (required to spawn; do not pass the prompt on argv)
+  --stage NAME    named stage (see handoff-stages.sh). Default for --branch is cursor.
+                  start is headless claude and does not open a Herdr pane.
+  --worktree PATH checkout for a headless stage (default: cwd)
+  --brief PATH    job brief (default: <worktree>/.bercail/job-brief.json)
+  --resume ID     re-handoff a headless stage with claude --resume (no kill)
+  --dry-run       print the headless command as JSON; do not exec
+  --branch NAME   feature branch for a pane stage (do not pass the prompt on argv)
   --dirty         copy uncommitted main changes into the sibling as a working tree
                   (default when main is dirty)
   --clean         HEAD only; leave uncommitted files on main
-  --plan          add "Plan/design only; do not implement yet."
+  --plan          add "Plan/design only; do not implement yet." (pane stages)
   --workspace ID  parent Herdr workspace to keep focused (required when HERDR_ENV
                   is unset but the Herdr socket works)
   --take-pending  read and consume the pending prompt file from --info
-  --prompt-file   read the original user prompt from a file
+  --prompt-file   read the original user prompt from a file (pane stages)
+
+Intake is handoff-brief, not a stage. /poteto-mode is only applied when the
+stage's binary is cursor or cursor-agent.
 
 A positional branch is still accepted. Do not put the user prompt on argv
 (no `-- prompt`). Grok Bot / Auto-review parents: write the pending file, then
@@ -169,7 +184,11 @@ handoff_remember() {
 }
 
 handoff_prompt_text() {
-  local body="$1"
+  local body="$1" stage="${2:-cursor}"
+  if ! handoff_stage_poteto "$stage"; then
+    printf '%s' "$body"
+    return 0
+  fi
   if [[ "$body" == /poteto-mode* ]]; then
     printf '%s' "$body"
     return 0
@@ -253,6 +272,7 @@ handoff_info_json() {
     --arg helper "$helper" \
     --arg workspace "${HANDOFF_WORKSPACE:-${HERDR_WORKSPACE_ID:-}}" \
     --arg pending_prompt "$pending" \
+    --argjson stages "$(handoff_stage_names_json)" \
     --argjson herdr "$(handoff_bool_json "$herdr")" \
     --argjson herdr_env "$(handoff_bool_json "$herdr_env")" \
     --argjson socket "$(handoff_bool_json "$socket")" \
@@ -277,14 +297,16 @@ handoff_info_json() {
       helper_present:$helper_present,
       workspace:$workspace,
       pending_prompt:$pending_prompt,
-      pending_prompt_present:$pending_prompt_present
+      pending_prompt_present:$pending_prompt_present,
+      stages:$stages
     }'
 }
 
 handoff_spawn_main() {
   local branch="" dirty="auto" plan=0 prompt="" prompt_file="" main sibling label intro graphite=0 copied=0
-  local helper="$HOME/.config/worktrunk/herdr-layout.sh"
+  local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json parent_ws file body info=0 started=0 stash=0 take_pending=0 pending
+  local stage="" worktree="" brief="" resume="" dry=0 mode="" binary=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -295,6 +317,27 @@ handoff_spawn_main() {
       --dirty) dirty=1; shift ;;
       --clean) dirty=0; shift ;;
       --plan) plan=1; shift ;;
+      --stage)
+        [[ $# -ge 2 ]] || handoff_usage
+        stage="$2"
+        shift 2
+        ;;
+      --worktree)
+        [[ $# -ge 2 ]] || handoff_usage
+        worktree="$2"
+        shift 2
+        ;;
+      --brief)
+        [[ $# -ge 2 ]] || handoff_usage
+        brief="$2"
+        shift 2
+        ;;
+      --resume)
+        [[ $# -ge 2 ]] || handoff_usage
+        resume="$2"
+        shift 2
+        ;;
+      --dry-run) dry=1; shift ;;
       --branch)
         [[ $# -ge 2 ]] || handoff_usage
         branch="$2"
@@ -336,6 +379,23 @@ handoff_spawn_main() {
     handoff_stash_prompt
     return 0
   fi
+
+  if [[ -z "$stage" ]]; then
+    stage="cursor"
+  fi
+  mode="$(handoff_stage_field "$stage" mode)" || handoff_die "unknown stage: $stage"
+  case "$mode" in
+    headless|pane) ;;
+    *) handoff_die "stage $stage has unknown mode: $mode" ;;
+  esac
+  if [[ "$mode" == headless ]]; then
+    [[ -z "$branch" ]] || handoff_die "stage $stage does not create a branch; omit --branch"
+    [[ "$take_pending" -eq 0 && -z "$prompt_file" && "$plan" -eq 0 ]]       || handoff_die "stage $stage reads a job brief, not a pane prompt"
+    [[ "$dirty" == auto ]] || handoff_die "stage $stage does not copy a dirty tree"
+    handoff_run_headless "$stage" "$worktree" "$brief" "$resume" "$dry"
+    return 0
+  fi
+  [[ -z "$resume" && "$dry" -eq 0 && -z "$brief" && -z "$worktree" ]]     || handoff_die "stage $stage is a sticky pane; --resume/--dry-run/--brief/--worktree are for headless stages"
 
   [[ -n "$branch" ]] || handoff_usage
   if [[ "$take_pending" -eq 1 ]]; then
@@ -420,14 +480,17 @@ handoff_spawn_main() {
   mkdir -p "$(handoff_state_dir)"
   file="$(handoff_state_dir)/handoff-prompt-${branch}.txt"
   body="$(printf '%s\n\n%s' "$intro" "$prompt")"
-  printf '%s' "$(handoff_prompt_text "$body")" >"$file"
+  printf '%s' "$(handoff_prompt_text "$body" "$stage")" >"$file"
 
-  if ! handoff_has_pstack; then
-    echo "handoff-spawn: pstack not found under ${CURSOR_CONFIG_DIR:-$HOME/.cursor}; install in Cursor with /add-plugin pstack. Child still starts as cursor-agent with /poteto-mode." >&2
+  binary="$(handoff_stage_field "$stage" binary)" || handoff_die "unknown stage: $stage"
+  if handoff_stage_poteto "$stage" && ! handoff_has_pstack; then
+    echo "handoff-spawn: pstack not found under ${CURSOR_CONFIG_DIR:-$HOME/.cursor}; install in Cursor with /add-plugin pstack. Stage $stage still starts as $binary with /poteto-mode." >&2
   fi
 
+  # Pane stages publish the table binary through WT_HERDR_AGENT_CMD.
+  # lifecycle.sh already execs that value; do not hardcode cursor-agent here.
   if WT_HERDR_KEEP_FOCUS="$parent_ws" \
-    WT_HERDR_AGENT_CMD=cursor-agent \
+    WT_HERDR_AGENT_CMD="$binary" \
     WT_HERDR_AGENT_PROMPT_FILE="$file" \
     wt_herdr_handoff_agent "$label" "$sibling"; then
     started=1

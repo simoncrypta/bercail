@@ -2,7 +2,7 @@
 
 **an ADE on [herdr](https://herdr.dev).**
 
-Bercail is an agentic development environment: Herdr-based, cursor-agent focused, built for working in parallel with control and observability. One git worktree, one Herdr workspace. [cursor-agent](https://cursor.com) stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. When it goes `done`, [tuicr](https://github.com/agavra/tuicr) opens the whole branch vs main and watches further edits. `handoff` clones that desk onto a sibling worktree and starts a [pstack](https://github.com/cursor/plugins/tree/main/pstack) child (`/poteto-mode`). You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
+Bercail is an agentic development environment: Herdr-based, cursor-agent focused, built for working in parallel with control and observability. One git worktree, one Herdr workspace. [cursor-agent](https://cursor.com) stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. When it goes `done`, [tuicr](https://github.com/agavra/tuicr) opens the whole branch vs main and watches further edits. `handoff` routes a named stage. The `cursor` stage clones that desk onto a sibling worktree and starts a [pstack](https://github.com/cursor/plugins/tree/main/pstack) child (`/poteto-mode`). The `start` stage is one headless `claude` process and does not open a Herdr pane. You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
@@ -12,7 +12,7 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 - **one worktree, one workspace** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; Herdr follows.
 - **control and observability** — every pane is working, blocked, or idle. Review opens on `done`. You choose what gets a GitHub comment.
 - **review when the agent is done** — `tuicr -r origin/main -w` on a feature branch (working tree vs main, watching). Other people's PRs open with `tuicr pr`. `prefix+2` anytime.
-- **handoff is parallel, not a chat fork** — sibling checkout, optional dirty copy, always cursor-agent + pstack. Install pstack in Cursor: `/add-plugin pstack`.
+- **handoff is parallel, not a chat fork** — the `cursor` stage is a sibling checkout, optional dirty copy, cursor-agent + pstack. `/poteto-mode` only when the stage binary is cursor. Install pstack in Cursor: `/add-plugin pstack`. Shep's `start` stage is headless claude.
 - **keyboard and mouse** — prefix is `Ctrl-Space` (Omarchy tmux). Click the file tree; `j`/`k` in tuicr.
 
 ```
@@ -43,7 +43,7 @@ dev          # attach this directory
 # then prefix+d
 ```
 
-Default sticky agent is **cursor-agent**. There is no picker. Another command in the left pane is `[agent] command` in `~/.config/bercail/config.toml`, then `bercail reconfigure`. Handoff children stay cursor-agent + `/poteto-mode`.
+Default sticky agent is **cursor-agent**. There is no picker. Another command in the left pane is `[agent] command` in `~/.config/bercail/config.toml`, then `bercail reconfigure`. The cursor handoff stage stays cursor-agent + `/poteto-mode`. The start stage does not.
 
 ## commands
 
@@ -78,7 +78,7 @@ Call by name. Cursor reads `~/.agents/skills`.
 
 | Skill | What |
 |-------|------|
-| `handoff` | Spawn a sibling worktree; child is cursor-agent + `/poteto-mode` |
+| `handoff` | Stage router. `cursor`: sibling worktree, cursor-agent + `/poteto-mode`. `start`: headless claude plan |
 | `review` | Wait for **human** tuicr notes; publish to GitHub only if asked |
 
 ```bash
@@ -86,8 +86,14 @@ Call by name. Cursor reads `~/.agents/skills`.
 ~/.agents/skills/handoff/scripts/handoff-spawn --info
 ~/.agents/skills/handoff/scripts/handoff-spawn --stash-prompt
 ~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME \
-  [--dirty|--clean] [--plan] [--workspace ID] \
+  [--stage cursor] [--dirty|--clean] [--plan] [--workspace ID] \
   [--take-pending|--prompt-file PATH]
+
+# intake, then start stage (no Herdr pane; result is .bercail/handoff-result.json)
+~/.agents/skills/handoff/scripts/handoff-brief \
+  --source ask|linear|note --worktree PATH --repo URL --ask-file PATH
+~/.agents/skills/handoff/scripts/handoff-spawn \
+  --stage start --worktree PATH [--resume SESSION] [--dry-run]
 
 # review helpers
 ~/.agents/skills/review/scripts/wait-comments.sh --repo . [--timeout N]

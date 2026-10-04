@@ -7,3 +7,6 @@ public/install.sh
 public/manifest.json
 public/lib/
 **/target/
+
+# Headless handoff runtime (job brief, result, logs). Do not commit a session.
+.bercail/

@@ -17,11 +17,14 @@ run `--info` then spawn — not assemble these steps.
    Never `git add`.
 4. If Graphite config exists (`handoff_graphite_config`), `gt track`.
 5. Wrap intro (worktree only; tuicr opens on agent `done`) around the original
-   prompt, prefix `/poteto-mode`, write a prompt file.
-6. `WT_HERDR_AGENT_CMD=cursor-agent WT_HERDR_AGENT_PROMPT_FILE=… wt_herdr_handoff_agent`.
-   Layout create is not called again. start-agent waits up to 30s for Herdr to
-   tag the Agent pane (or a non-shell FG process). A timeout does **not**
-   discard the worktree.
+   prompt. Prefix `/poteto-mode` only when the stage binary is `cursor` or
+   `cursor-agent` (the `cursor` stage). Write a prompt file.
+6. `WT_HERDR_AGENT_CMD` is the stage table's binary (not a hardcoded
+   cursor-agent) and `WT_HERDR_AGENT_PROMPT_FILE` is the prompt file.
+   `wt_herdr_handoff_agent` forwards both. lifecycle.sh already execs
+   `WT_HERDR_AGENT_CMD`. Layout create is not called again. start-agent waits
+   up to 30s for Herdr to tag the Agent pane (or a non-shell FG process). A
+   timeout does **not** discard the worktree.
 7. Print JSON `{label,path,branch,task,agent_started,dirty_copied,graphite}`
    and append `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling
    exists. `agent_started` is false on a wait timeout.
@@ -32,9 +35,29 @@ Parents outside a Herdr pane (`HERDR_ENV` unset) spawn by running the
 `python -c`, wrapper `.sh` files, `herdr pane run … spawn -- <prompt>`, and
 any argv after `--`. Write `pending_prompt` as plain text, then take-pending.
 
-`start-agent` launches one quoted `bash -li -c '… cat file … exec cursor-agent -- "$p"'`
-line. `herdr pane run a b c` types unquoted words, so a multiline prompt cannot
-be argv.
+`start-agent` launches one quoted `bash -li -c '… cat file … exec "$WT_HERDR_AGENT_CMD" -- "$p"'`
+line. The cursor stage's binary is cursor-agent. `herdr pane run a b c` types
+unquoted words, so a multiline prompt cannot be argv.
+
+## Stage router
+
+`scripts/handoff-stages.sh` is the table: name, binary, `headless` or `pane`,
+model. `handoff-spawn --stage` reads it.
+
+- `cursor` (default for `--branch`): sticky pane. `/poteto-mode` because the
+  binary is cursor-agent. Re-handoff still replaces the pane process.
+- `start`: headless. One `claude --print` in the worktree. No Herdr pane.
+  Model spec `opus-5.5` resolves from the claude catalog (full id, never the
+  pstack `*-max` slug). The process writes
+  `<worktree>/.bercail/handoff-result.json`. Re-handoff is `--resume <session_id>`.
+
+Intake is `scripts/handoff-brief`, not a row. It writes
+`<worktree>/.bercail/job-brief.json` (`ask`, `repo`, `links`) from `--source
+linear`, `ask`, or `note`.
+
+Arena, implement, and the Composer review pane are not rows. Add a row and, for
+a headless stage, `prompts/<stage>.txt`. Do not special-case the binary in
+`handoff-spawn`.
 
 ## Dirty copy
 
