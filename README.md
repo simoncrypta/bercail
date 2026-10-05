@@ -4,7 +4,9 @@
 
 Bercail is an agentic development environment: Herdr-based, built for working in parallel with control and observability. One git worktree, one Herdr workspace. A sticky agent stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. When it goes `done`, [tuicr](https://github.com/agavra/tuicr) opens the whole branch vs main and watches further edits. You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
 
-Claude Code, Codex CLI, and cursor-agent are equal harnesses. Bercail does not prefer one, pick one, or fall back from one to another. A handoff is a [beads](https://beads.gascity.com/) issue: [Shep](#grok-bot) writes it, and the agent's whole prompt is the issue id.
+**Bercail is built to be orchestrated by a Grok bot.** [Shep](#shep-the-grok-bot) is that bot: a public Grok bot that runs bercail for you. The agentic workflow here (beads issues, named stages, result files, review when a desk is done) is optimized for Shep as the orchestrator. Bercail does the local work; Shep decides what happens next.
+
+Claude Code, Codex CLI, and cursor-agent are equal harnesses. Bercail does not prefer one, pick one, or fall back from one to another. A handoff is a [beads](https://beads.gascity.com/) issue: Shep writes it, and the agent's whole prompt is the issue id.
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
@@ -25,11 +27,24 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 └──────────────┴────────────────────────────┴─────────┘
 ```
 
-## grok bot
+## Shep, the Grok bot
 
-[Shep](https://x.ai/bot/pjuM6P_92QUE6jF6H6dpw) is the bercail orchestrator. Add this Grok Bot template; it can help you set up bercail, spin worktrees, run handoffs, and ping you when agents finish or get blocked. Shep owns the workflow: it writes the beads issues, picks which harness works each one, and reads the results.
+**[Shep](https://x.ai/bot/QxTrE1a1ESYzE7nfEKc9n) is the Grok bot that orchestrates bercail.** It orchestrates coding agents on Herdr through bercail: it writes beads issues, hands them to claude, codex, or cursor-agent, and pings you when a desk is ready to review.
+
+Bercail's workflow is designed around Shep. Shep owns the workflow; bercail runs what Shep asks for and reports back in files Shep reads:
+
+1. Shep writes the job as a beads issue (`bd create`): the ask, the repo, links, and any "plan only" note.
+2. Shep picks a stage for that issue and runs `handoff-spawn --stage start|codex|cursor --issue ID` (see [handoff](#handoff)). bercail never picks the stage and never falls back to another one.
+3. bercail checks `bd` and the issue, adds a `bd comment` with the worktree (and, headless, the result file), and starts that one harness with the issue id as its whole prompt.
+4. Shep reads `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`), resumes the session if needed, and tells you when the desk is ready.
+
+Shep runs the same workflow whichever harness works the issue.
+
+Bercail works without Shep, but Shep is the intended orchestrator. To do Shep's part by hand, write the issue with `bd create`, then run the same `handoff-spawn` command.
 
 ## install
+
+Current release: [v0.6.2](https://github.com/simoncrypta/bercail/releases/tag/v0.6.2).
 
 Recommended: [mise](https://mise.jdx.dev) + [packslip](https://github.com/jdx/packslip). Each `v*` release publishes `bercail.tar.gz` and a signed `packslip.sigstore.json`. mise checks that signature against this repository and the archive digest before it unpacks anything, and it runs no downloaded code.
 
@@ -44,6 +59,8 @@ Without mise, the packslip CLI installs the same release and links `bercail` int
 packslip install github.com/simoncrypta/bercail      # packslip 1.5.1+
 bercail install
 ```
+
+mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.6.2`.
 
 The first install trusts the repository's signer, and later installs must match it. `bercail install` runs the release's own `install.sh`. mise or packslip keeps the `bercail` command, so the installer does not copy a second one into `~/.local/bin`. Upgrade with `mise up` (or `packslip install` again), then `bercail update`.
 
@@ -67,7 +84,7 @@ The sticky pane runs `[agent] command` from `~/.config/bercail/config.toml` (cur
 
 ## handoff
 
-The job lives in a beads issue, not in a prompt file or on argv. Shep creates the issue (`bd create`), then runs `handoff-spawn` with the issue id and a stage. `--stage` is required; bercail has no default harness.
+The job lives in a beads issue. [Shep](#shep-the-grok-bot), the Grok bot, creates the issue (`bd create`), then runs `handoff-spawn` with the issue id and a stage. `--stage` and `--issue` are both required; bercail has no default harness and no fallthrough.
 
 | Stage | Binary | Headless argv (the last word is the issue id) |
 |-------|--------|-----------------------------------------------|
@@ -76,7 +93,7 @@ The job lives in a beads issue, not in a prompt file or on argv. Shep creates th
 | `cursor` | cursor-agent | `cursor-agent --print --output-format json --trust --force …` |
 
 ```bash
-bd create "Fix the login timeout" --description "..."     # Shep writes the issue
+bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) writes the issue
 ~/.agents/skills/handoff/scripts/handoff-spawn --info      # facts as JSON, incl. beads
 
 # headless: no Herdr pane; result is <worktree>/.bercail/handoff-result.json
@@ -87,7 +104,7 @@ bd create "Fix the login timeout" --description "..."     # Shep writes the issu
 ~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME --stage cursor --issue ID [--dirty|--clean] [--workspace ID]
 ```
 
-- **Prompt** — the issue id, the same for every harness. There is no per-harness mode.
+- **Prompt** — the issue id, the same for every harness.
 - **Context** — before it starts the agent, bercail adds a `bd comment` to the issue with the worktree and, headless, the result file and session id.
 - **Result** — a headless run leaves `{status: ready|blocked|failed, summary, session_id}`. Read that file, not terminal output. `--resume SESSION` continues the same session (`claude --resume`, `codex exec resume`, `cursor-agent --resume`).
 - **Blocked, not switched** — if the stage's binary, `bd`, or the issue is missing, the result is `blocked` and nothing starts. Bercail never falls through to another harness. `--binary claude|codex|cursor-agent` runs a headless stage on another CLI only when you ask.
@@ -139,7 +156,7 @@ Call by name. Skills install to `~/.agents/skills`; bercail adds a link where th
   [--event comment|approve|request-changes] [--body TEXT] [--dry-run]
 ```
 
-Manual skill install: `npx skills add simoncrypta/agentic-dev-setup --skill handoff -g`
+Manual skill install: `npx skills add simoncrypta/bercail --skill handoff -g`
 
 ### layout plugin
 
@@ -242,6 +259,8 @@ On Omarchy: mise first, `omarchy pkg add`, native `SUPER+CTRL+RETURN` → Herdr,
 ## dependencies
 
 Installed if missing: [herdr](https://herdr.dev) 0.9.3+ (`herdr integration install cursor` only if you use Cursor), git, worktrunk (`wt`), [beads](https://beads.gascity.com/) (`bd`), fzf, jq, lazygit, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0. `bercail doctor` checks each one.
+
+Not installed: a Rust toolchain. Herdr builds the layout plugin with `cargo build` when bercail installs it, so have `cargo` on PATH (for example `mise use -g rust`) before `bercail install`, or that step fails.
 
 worktrunk and beads install the same way: skip if present, else mise, else Homebrew (`brew install worktrunk` / `brew install beads`), else upstream (worktrunk's GitHub release; the [beads installer](https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh), which puts `bd` in `/usr/local/bin` when writable, else `~/.local/bin`).
 
