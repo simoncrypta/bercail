@@ -36,8 +36,12 @@ jobs:
           : >stage/.bercail-package
           (cd stage && find . -mindepth 1 -maxdepth 1 -printf '%P\n' | sort \
             | tar -czf ../dist/bercail.tar.gz -T -)
-          tar -tzf dist/bercail.tar.gz | grep -qx 'bin/bercail'
-          tar -tzf dist/bercail.tar.gz | grep -qx 'install.sh'
+          # List to a file first: grep -q exits on the first match, and under
+          # pipefail the SIGPIPE it leaves tar would fail this step.
+          tar -tzf dist/bercail.tar.gz >dist/contents.txt
+          grep -qx 'bin/bercail' dist/contents.txt
+          grep -qx 'install.sh' dist/contents.txt
+          rm dist/contents.txt
 
       - name: Create the release and upload the archive
         env:
