@@ -97,7 +97,7 @@ read_layout_review() {
 RECONFIGURE=0
 
 export DEV_LAYOUT_PLUGIN_REPO="simoncrypta/agentic-dev-setup/plugins/agentic-layout"
-export DEV_LAYOUT_PLUGIN_REF="v0.6.1"
+export DEV_LAYOUT_PLUGIN_REF="v0.6.2"
 export LEGACY_DEV_LAYOUT_PLUGIN_REPO="simoncrypta/herdr-dev-layout"
 PICKR_PLUGIN_REPO="tomasvarga/herdr-pickr"
 PICKR_PLUGIN_REF="e393ef593e44d2497f43d20aa7b0e4a26ea3d445"
@@ -937,6 +937,11 @@ deploy_configs() {
       continue
     fi
     deploy_install_file "$rel" "$dest"
+    # Executable now, not only in deploy_finalize_permissions: a later step
+    # (the Herdr plugin build) can fail and leave the CLI unusable otherwise.
+    if [[ "$rel" == bin/* ]]; then
+      run chmod +x "$dest"
+    fi
   done
 
   deploy_agentic_dev_config

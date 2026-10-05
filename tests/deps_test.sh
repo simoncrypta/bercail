@@ -473,6 +473,59 @@ EOF
     "top-level doctor continues through integration checks"
 }
 
+# worktrunk's last fallback downloads its GitHub release. Upstream ships
+# .tar.xz archives (musl on Linux) with wt inside worktrunk-<target>/.
+test_worktrunk_release_fallback() {
+  local out="$tmp/wt-fallback" archive url_log
+  mkdir -p "$out/bin" "$out/build/worktrunk-x86_64-unknown-linux-musl"
+  printf '#!/bin/sh\necho wt-stub\n' >"$out/build/worktrunk-x86_64-unknown-linux-musl/wt"
+  chmod +x "$out/build/worktrunk-x86_64-unknown-linux-musl/wt"
+  archive="$out/release.tar.xz"
+  tar -cJf "$archive" -C "$out/build" worktrunk-x86_64-unknown-linux-musl
+  url_log="$out/urls"
+  (
+    LOCAL_BIN="$out/bin" DRY_RUN=0
+    dep_present() { [[ "$1" == curl ]]; }
+    maybe_mise_install() { return 1; }
+    has_brew() { return 1; }
+    detect_os() { printf linux; }
+    detect_arch() { printf x86_64; }
+    ensure_dir() { mkdir -p "$1"; }
+    # Stub for: curl -fsSL URL -o FILE
+    curl() {
+      printf '%s\n' "$2" >>"$url_log"
+      [[ "$3" == -o ]] && cp "$archive" "$4"
+    }
+    install_worktrunk_binary
+  ) 2>/dev/null
+  assert_eq "https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-x86_64-unknown-linux-musl.tar.xz" \
+    "$(head -n1 "$url_log" 2>/dev/null)" "worktrunk fallback asks for the musl .tar.xz asset"
+  assert_eq "wt-stub" "$("$out/bin/wt" 2>/dev/null)" "worktrunk fallback installs wt from worktrunk-<target>/"
+}
+
+
+# tuicr's installer prompts on /dev/tty unless TUICR_INSTALL_YES is set.
+# bercail --yes must answer it so an unattended install does not stall.
+test_tuicr_installer_answers_under_yes() {
+  local out="$tmp/tuicr-yes" mode
+  mkdir -p "$out"
+  for mode in 1 0; do
+    (
+      DRY_RUN=0 YES="$mode"
+      dep_present() { [[ "$1" == curl ]]; }
+      maybe_mise_install() { return 1; }
+      has_brew() { return 1; }
+      ensure_mise_shims() { :; }
+      # Stub: the "installer" records whether the prompt would be skipped.
+      curl() { printf 'printf "%%s" "${TUICR_INSTALL_YES:-prompt}" >"%s/seen-%s"\n' "$out" "$mode"; }
+      install_tuicr_binary
+    ) >/dev/null 2>&1 || true   # tuicr stays "missing": the stub installs nothing
+  done
+  assert_eq "1" "$(cat "$out/seen-1" 2>/dev/null)" "tuicr installer skips its prompt under --yes"
+  assert_eq "prompt" "$(cat "$out/seen-0" 2>/dev/null)" "tuicr installer still asks without --yes"
+}
+
+
 test_installed_herdr_short_circuits_install
 test_old_updater_managed_herdr_handoffs
 test_malformed_version_fails_closed
@@ -493,6 +546,8 @@ test_misleading_update_success_fails
 test_dirty_worktree_does_not_block_handoff
 test_subshell_stdout_stderr_contract
 test_top_level_doctor_fails_for_old_herdr
+test_worktrunk_release_fallback
+test_tuicr_installer_answers_under_yes
 
 printf '%s passed, %s failed\n' "$pass" "$fail"
 ((fail == 0))

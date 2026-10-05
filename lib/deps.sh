@@ -357,16 +357,16 @@ install_worktrunk_binary() {
   arch="$(detect_arch)"
   case "$os-$arch" in
     linux-x86_64|linux-amd64)
-      url="https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-x86_64-unknown-linux-gnu.tar.gz"
+      url="https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-x86_64-unknown-linux-musl.tar.xz"
       ;;
     linux-aarch64|linux-arm64)
-      url="https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-aarch64-unknown-linux-gnu.tar.gz"
+      url="https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-aarch64-unknown-linux-musl.tar.xz"
       ;;
     macos-x86_64|macos-amd64)
-      url="https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-x86_64-apple-darwin.tar.gz"
+      url="https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-x86_64-apple-darwin.tar.xz"
       ;;
     macos-arm64|macos-aarch64)
-      url="https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-aarch64-apple-darwin.tar.gz"
+      url="https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-aarch64-apple-darwin.tar.xz"
       ;;
     *)
       warn "cannot auto-install worktrunk on $os/$arch — install wt manually"
@@ -381,18 +381,22 @@ install_worktrunk_binary() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
-  local tmp
+  local tmp bin
   tmp="$(mktemp -d)"
-  curl -fsSL "$url" | tar -xz -C "$tmp"
-  if [[ -f "$tmp/wt" ]]; then
-    install -m 0755 "$tmp/wt" "$dest"
-  elif [[ -f "$tmp/worktrunk" ]]; then
-    install -m 0755 "$tmp/worktrunk" "$dest"
-  else
+  # Releases are .tar.xz with wt inside worktrunk-<target>/. Save to a file so
+  # GNU tar and bsdtar both detect the compression themselves.
+  if ! curl -fsSL "$url" -o "$tmp/worktrunk.tar.xz" || ! tar -xf "$tmp/worktrunk.tar.xz" -C "$tmp"; then
+    warn "worktrunk download failed ($url) — install wt manually"
+    rm -rf "$tmp"
+    return 1
+  fi
+  bin="$(find "$tmp" -type f -name wt -perm -u+x 2>/dev/null | head -n 1)"
+  if [[ -z "$bin" ]]; then
     warn "worktrunk archive layout unexpected — install wt manually"
     rm -rf "$tmp"
     return 1
   fi
+  install -m 0755 "$bin" "$dest"
   rm -rf "$tmp"
 }
 
@@ -484,7 +488,13 @@ install_tuicr_binary() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
-  curl -fsSL https://tuicr.dev/install.sh | sh
+  # The tuicr installer asks "Continue?" on /dev/tty unless TUICR_INSTALL_YES
+  # is set. Under --yes there may be no tty at all, so answer it here.
+  if [[ "${YES:-0}" -eq 1 ]]; then
+    curl -fsSL https://tuicr.dev/install.sh | TUICR_INSTALL_YES=1 sh
+  else
+    curl -fsSL https://tuicr.dev/install.sh | sh
+  fi
   ensure_mise_shims
   hash -r 2>/dev/null || true
   if dep_present tuicr; then
