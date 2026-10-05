@@ -8,7 +8,9 @@ uninstall_agentic_dev() {
   remove_marker_block "$(shell_rc_for bash)"
   remove_marker_block "$(shell_rc_for zsh)"
 
-  if [[ -e "$LOCAL_BIN/bercail" ]]; then
+  if [[ -L "$LOCAL_BIN/bercail" && "$(readlink "$LOCAL_BIN/bercail")" != "$AGENTIC_DEV_SHARE_DIR"* ]]; then
+    info "keeping $LOCAL_BIN/bercail (link from mise/packslip; remove it with that tool)"
+  elif [[ -e "$LOCAL_BIN/bercail" ]]; then
     info "remove: $LOCAL_BIN/bercail"
     run rm -f "$LOCAL_BIN/bercail"
   fi

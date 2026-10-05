@@ -598,7 +598,7 @@ EOF
   info "saved config to $AGENTIC_DEV_USER_CONFIG"
 }
 
-# No install-time agent picker. Default is cursor-agent + pstack.
+# No install-time agent picker. The sticky pane defaults to cursor-agent.
 # Override [agent] command in config.toml yourself, then bercail reconfigure.
 prompt_user_config() {
   if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
@@ -663,7 +663,7 @@ deploy_lib() {
     deploy_tree "$src/lib" "${AGENTIC_DEV_SHARE_DIR}/lib"
   else
     local libfile
-    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh doctor.sh; do
+    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh doctor.sh harness.sh; do
       deploy_install_file "lib/$libfile" "${AGENTIC_DEV_SHARE_DIR}/lib/$libfile"
     done
   fi
@@ -932,6 +932,10 @@ deploy_configs() {
   for entry in "${files[@]}"; do
     rel="${entry%%|*}"
     dest="${entry#*|}"
+    if [[ "$rel" == bin/bercail && "${BERCAIL_PACKAGED:-0}" == 1 ]]; then
+      info "keeping bercail from mise/packslip on PATH; not copying $dest"
+      continue
+    fi
     deploy_install_file "$rel" "$dest"
   done
 

@@ -396,6 +396,42 @@ install_worktrunk_binary() {
   rm -rf "$tmp"
 }
 
+# beads: the package is beads, the command is bd. Handoff jobs are beads issues.
+# Same cascade as worktrunk: present, mise, brew, then the upstream installer
+# (it puts bd in /usr/local/bin when writable, else ~/.local/bin).
+BEADS_MISE_SPEC="github:gastownhall/beads"
+BEADS_INSTALL_URL="https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh"
+
+install_beads_binary() {
+  if dep_present bd; then
+    info "present: bd"
+    return 0
+  fi
+  if maybe_mise_install bd "$BEADS_MISE_SPEC"; then
+    return 0
+  fi
+  if has_brew; then
+    info "installing via brew: beads"
+    if run brew install beads && dep_present bd; then
+      return 0
+    fi
+    warn "brew install beads failed — trying the beads installer"
+  fi
+  dep_present curl || maybe_omarchy_pkg_install curl curl \
+    || maybe_apt_install curl curl || true
+  info "installing beads: curl -fsSL $BEADS_INSTALL_URL | bash"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if ! curl -fsSL "$BEADS_INSTALL_URL" | bash; then
+    warn "beads installer failed — install bd manually (brew install beads)"
+    return 1
+  fi
+  ensure_mise_shims
+  hash -r 2>/dev/null || true
+  dep_present bd
+}
+
 install_hunk_binary() {
   if dep_present hunk; then
     info "present: hunk"
@@ -525,23 +561,6 @@ ensure_selected_layout_tools() {
   esac
 }
 
-# Cursor pstack plugin (poteto-mode). Not vendored here; install with /add-plugin pstack.
-pstack_plugin_present() {
-  local cursor="${CURSOR_CONFIG_DIR:-$HOME/.cursor}" match
-  shopt -s nullglob
-  for match in \
-    "$cursor/plugins/cache/cursor-public/pstack/"*/skills/poteto-mode/SKILL.md \
-    "$cursor/plugins/local/pstack/skills/poteto-mode/SKILL.md"
-  do
-    if [[ -f "$match" ]]; then
-      shopt -u nullglob
-      return 0
-    fi
-  done
-  shopt -u nullglob
-  return 1
-}
-
 install_grok_binary() {
   if dep_present grok; then
     info "present: grok"
@@ -660,6 +679,7 @@ install_dependencies() {
   }
   install_dep git || true
   install_worktrunk_binary || true
+  install_beads_binary || true
   install_dep fzf || true
   install_dep jq || true
   install_dep lazygit || true
@@ -700,7 +720,7 @@ _doctor_versioned_bin() {
 
 doctor_dependencies() {
   local missing=0 found path output rc
-  for cmd in herdr git wt fzf jq lazygit; do
+  for cmd in herdr git wt bd fzf jq lazygit; do
     if [[ "$cmd" == herdr ]] && dep_present herdr; then
       path="$(command -v herdr)"
       if output="$(herdr_version_output)"; then
@@ -757,6 +777,13 @@ doctor_dependencies() {
     agent_bin="${agent_cmd%% *}"
     case "$agent_bin" in
       agent|"") ;;
+      claude|codex|cursor|cursor-agent)
+        if dep_present "$agent_bin"; then
+          log "  ok  $agent_bin ($(command -v "$agent_bin"))"
+        else
+          log "  optional  $agent_bin (not on PATH; sticky pane and that harness stay unused)"
+        fi
+        ;;
       *)
         if dep_present "$agent_bin"; then
           log "  ok  $agent_bin ($(command -v "$agent_bin"))"

@@ -28,7 +28,7 @@ herdr plugin link ~/path/to/agentic-dev-setup/plugins/agentic-layout
 | `create` | Create layout (agent pane stays a shell; used by worktrunk/handoff) |
 | `apply` | Repair plugin-owned panes and start a clear session of the configured agent (`d` / `prefix+d`) |
 | `start-agent` | Start the configured agent if the pane is a shell (no prompt; does not replace a live agent) |
-| `handoff-agent` | Start or replace the agent with `WT_HERDR_AGENT_PROMPT_FILE` (orchestrator / handoff-spawn) |
+| `handoff-agent` | Start or replace the agent with the one-line `WT_HERDR_AGENT_PROMPT`, a beads issue id (orchestrator / handoff-spawn) |
 | `focus-agent` | Focus the persistent agent pane; start it if the pane is a shell |
 | `select-review` | Open or focus review (`tuicr -r origin/main -w` on a feature branch, `tuicr pr N` for someone else's PR; creates the tab if needed) |
 | `close-review` | Close the Review tab and return to Shell |

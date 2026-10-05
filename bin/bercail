@@ -1,6 +1,29 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Real directory of this script. mise and packslip put a symlink on PATH that
+# points into the unpacked release, so follow links before looking for ../lib.
+bercail_bin_dir() {
+  local src="${BASH_SOURCE[0]}" dir
+  while [[ -L "$src" ]]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    [[ "$src" != /* ]] && src="$dir/$src"
+  done
+  cd -P "$(dirname "$src")" && pwd
+}
+
+# A release archive (mise packslip: backend or packslip install) carries this
+# marker. That package manager owns the bercail command, so the installer must
+# not copy another one into ~/.local/bin.
+bercail_mark_packaged() {
+  local root
+  root="$(cd "$(bercail_bin_dir)/.." && pwd)"
+  if [[ -f "$root/.bercail-package" ]]; then
+    export BERCAIL_PACKAGED=1
+  fi
+}
+
 find_lib_dir() {
   local bin dir
   for dir in "${BERCAIL_LIB:-}" "${AGENTIC_DEV_LIB:-}"; do
@@ -9,7 +32,7 @@ find_lib_dir() {
       return 0
     fi
   done
-  bin="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  bin="$(bercail_bin_dir)"
   if [[ -f "$bin/../lib/common.sh" ]]; then
     printf '%s' "$(cd "$bin/../lib" && pwd)"
     return 0
@@ -49,6 +72,8 @@ load_libs() {
   source "$lib/omarchy.sh"
   # shellcheck source=/dev/null
   source "$lib/doctor.sh"
+  # shellcheck source=/dev/null
+  source "$lib/harness.sh"
 }
 
 cmd_doctor() {
@@ -95,9 +120,21 @@ cmd_doctor() {
   fi
   doctor_plugin || failures=1
   doctor_skill || failures=1
-  doctor_pstack || failures=1
   doctor_omarchy_integration || failures=1
   return "$failures"
+}
+
+# Full install from the tree this command was unpacked from (mise or packslip).
+# The curl installer stays the other way in; it does not need this command.
+cmd_install() {
+  local root
+  root="$(cd "$(bercail_bin_dir)/.." && pwd)"
+  if [[ ! -f "$root/install.sh" || ! -f "$root/lib/common.sh" ]]; then
+    printf 'error: no install.sh beside this bercail (%s)\n' "$root" >&2
+    printf 'install with: curl -fsSL https://setup.simoncrypta.dev/install.sh | bash\n' >&2
+    exit 1
+  fi
+  exec bash "$root/install.sh" "$@"
 }
 
 cmd_update() {
@@ -115,7 +152,7 @@ cmd_reconfigure() {
   ensure_selected_layout_tools
   sync_omarchy_default_agent
   info "sticky agent: $(read_agent_command)  review=$(read_layout_review)  editor=$(read_layout_file_editor)"
-  info "handoff children are always cursor-agent + /poteto-mode (pstack)"
+  info "claude, codex, and cursor-agent are optional; run bercail harness to see what is on PATH"
   info "to use another command in the left pane, set [agent] command in $AGENTIC_DEV_USER_CONFIG, then re-run reconfigure"
   info "restart panes or run 'dev' in a new workspace to apply"
 }
@@ -126,7 +163,9 @@ Usage: bercail <command>
 
 Commands:
   help          Show full help
+  install       Full install from this release (after mise or packslip)
   doctor        Check dependencies and integration
+  harness       JSON: which of claude, codex, cursor-agent are on PATH
   update        Re-sync configs, helper, and skill
   reconfigure   Refresh skills/integrations from config.toml (not a full redeploy)
   dry-run       Show planned install actions
@@ -139,8 +178,12 @@ EOF
 main() {
   local cmd="${1:-help}"
   shift || true
+  bercail_mark_packaged
 
   case "$cmd" in
+    install)
+      cmd_install "$@"
+      ;;
     help|-h|--help)
       load_libs
       show_help
@@ -148,6 +191,10 @@ main() {
     doctor)
       load_libs
       cmd_doctor
+      ;;
+    harness)
+      load_libs
+      cmd_harness
       ;;
     update)
       load_libs

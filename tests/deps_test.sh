@@ -257,7 +257,7 @@ test_doctor_version() {
 printf 'herdr $version\\n'
 EOF
   chmod +x "$case_dir/bin/herdr"
-  for cmd in git wt fzf jq tuicr nvim hunk fresh lazygit; do
+  for cmd in git wt bd fzf jq tuicr nvim hunk fresh lazygit; do
     ln -s /bin/true "$case_dir/bin/$cmd"
   done
 
@@ -413,7 +413,7 @@ test_subshell_stdout_stderr_contract() {
 printf 'herdr 0.7.1\n'
 EOF
   chmod +x "$case_dir/homebrew/bin/herdr"
-  for cmd in git wt fzf jq tuicr nvim hunk fresh lazygit; do
+  for cmd in git wt bd fzf jq tuicr nvim hunk fresh lazygit; do
     ln -s /bin/true "$case_dir/homebrew/bin/$cmd"
   done
 
@@ -456,7 +456,7 @@ fi
 exit 1
 EOF
   chmod +x "$case_dir/bin/herdr"
-  for cmd in git wt fzf jq tuicr nvim hunk fresh lazygit; do
+  for cmd in git wt bd fzf jq tuicr nvim hunk fresh lazygit; do
     ln -s /bin/true "$case_dir/bin/$cmd"
   done
   if output="$(HOME="$case_dir/home" SHELL=/bin/bash \

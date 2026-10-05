@@ -1,0 +1,57 @@
+name: Release
+
+# A v* tag publishes bercail.tar.gz and a signed packslip.sigstore.json, so
+# `mise use -g packslip:github.com/simoncrypta/bercail` and
+# `packslip install github.com/simoncrypta/bercail` can install it.
+# The curl installer does not depend on this; it reads the repo tip.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write      # Create the release and upload the archive and bundle.
+      id-token: write      # Sign with the workflow's identity.
+      attestations: write  # Attest the archive.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the release archive
+        run: |
+          set -euo pipefail
+          mkdir -p dist stage
+          git archive --format=tar HEAD | tar -x -C stage
+          # Tells install.sh and bin/bercail that mise or packslip owns the command.
+          : >stage/.bercail-package
+          (cd stage && find . -mindepth 1 -maxdepth 1 -printf '%P\n' | sort \
+            | tar -czf ../dist/bercail.tar.gz -T -)
+          tar -tzf dist/bercail.tar.gz | grep -qx 'bin/bercail'
+          tar -tzf dist/bercail.tar.gz | grep -qx 'install.sh'
+
+      - name: Create the release and upload the archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/bercail.tar.gz --clobber
+          else
+            gh release create "$TAG" dist/bercail.tar.gz --verify-tag --generate-notes
+          fi
+
+      - uses: jdx/packslip@v1
+        with:
+          artifacts: dist/bercail.tar.gz
+          manifest: packaging/packslip.toml

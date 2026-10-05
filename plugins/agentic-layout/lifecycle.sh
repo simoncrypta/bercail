@@ -137,19 +137,20 @@ _reset_agent_pane_to_shell() {
   done
 }
 
-# herdr pane run types the command + Enter. A multiline prompt would submit
-# early, so handoff writes the prompt to a file and we exec one argv.
+# herdr pane run types the command + Enter. The handoff prompt is one line
+# (a beads issue id); the job detail lives in the issue.
+# A newline would submit early, so refuse it rather than write a file.
 _launch_agent_on_pane() {
-  local pane="$1" agent file cmd
+  local pane="$1" agent prompt cmd
   [[ -n "$pane" ]] || return 1
   agent="${WT_HERDR_AGENT_CMD:-$(_agent_cmd)}"
-  file="${WT_HERDR_AGENT_PROMPT_FILE:-}"
-  if [[ -n "$file" ]]; then
-    [[ -f "$file" ]] || {
-      echo "agentic-layout: prompt file not found: $file" >&2
+  prompt="${WT_HERDR_AGENT_PROMPT:-}"
+  if [[ -n "$prompt" ]]; then
+    if [[ "$prompt" == *$'\n'* || "$prompt" == *$'\r'* ]]; then
+      echo "agentic-layout: handoff prompt must be one line (a beads issue id)" >&2
       return 1
-    }
-    cmd="$(printf 'p=$(cat -- %q) && rm -f %q && exec %q -- "$p"' "$file" "$file" "$agent")"
+    fi
+    cmd="$(printf 'exec %q -- %q' "$agent" "$prompt")"
     _pane_run_login "$pane" "$cmd"
     return
   fi
@@ -192,25 +193,20 @@ _wait_agent_running() {
 # Clear session: configured agent, no prompt. Used by apply / d / dev.
 # Never inherit a handoff prompt from the parent environment.
 _start_default_agent() {
-  unset WT_HERDR_AGENT_PROMPT_FILE
+  unset WT_HERDR_AGENT_PROMPT
   _start_agent
 }
 
-# Orchestrator / handoff-spawn: start or replace the agent with the prompt file.
+# Orchestrator / handoff-spawn: start or replace the agent with the issue prompt.
 _start_handoff_agent() {
-  local file="${WT_HERDR_AGENT_PROMPT_FILE:-}"
-  if [[ -z "$file" ]]; then
-    echo "agentic-layout: handoff-agent requires WT_HERDR_AGENT_PROMPT_FILE" >&2
-    return 1
-  fi
-  if [[ ! -f "$file" ]]; then
-    echo "agentic-layout: prompt file not found: $file" >&2
+  if [[ -z "${WT_HERDR_AGENT_PROMPT:-}" ]]; then
+    echo "agentic-layout: handoff-agent requires WT_HERDR_AGENT_PROMPT (a beads issue id)" >&2
     return 1
   fi
   _start_agent
 }
 
-# start-agent action: replace a live agent only when a prompt file is set
+# start-agent action: replace a live agent only when a handoff prompt is set
 # (re-handoff). Unprompted start is a no-op if the pane is already an agent.
 _start_agent() {
   local state pane
@@ -223,7 +219,7 @@ _start_agent() {
   fi
   [[ -n "$pane" ]] || return 1
   if ! _pane_is_shell "$pane"; then
-    if [[ -n "${WT_HERDR_AGENT_PROMPT_FILE:-}" ]]; then
+    if [[ -n "${WT_HERDR_AGENT_PROMPT:-}" ]]; then
       _reset_agent_pane_to_shell "$pane" || return 1
     else
       return 0

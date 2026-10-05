@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Handoff router: a named stage picks binary, headless vs sticky pane, model, worktree.
+# The job is a beads issue; the agent prompt is only its id.
 # shellcheck shell=bash
 set -euo pipefail
 
@@ -15,36 +16,34 @@ source "$_HANDOFF_SPAWN_DIR/handoff-stages.sh"
 handoff_usage() {
   cat >&2 <<'EOF'
 usage: handoff-spawn --info
-       handoff-spawn --stash-prompt
-       handoff-spawn --stage start --worktree PATH [--brief PATH]
-                     [--resume SESSION] [--dry-run]
-       handoff-spawn --branch <name> [--stage cursor] [--dirty|--clean] [--plan]
-                     [--workspace <id>] [--take-pending|--prompt-file <path>]
+       handoff-spawn --stage start|codex|cursor --issue ID --worktree PATH
+                     [--binary claude|codex|cursor-agent] [--resume SESSION] [--dry-run]
+       handoff-spawn --branch <name> --stage start|codex|cursor --issue ID
+                     [--dirty|--clean] [--workspace <id>]
 
   --info          print JSON facts and exit
-  --stash-prompt  write stdin to the pending prompt file; print its path as JSON
-  --stage NAME    named stage (see handoff-stages.sh). Default for --branch is cursor.
-                  start is headless claude and does not open a Herdr pane.
+  --issue ID      beads issue to work (bd show ID). It holds the detail. The
+                  agent's whole prompt is the id, for every harness.
+  --stage NAME    required; named stage (see handoff-stages.sh). start is claude,
+                  codex is Codex CLI, cursor is cursor-agent. Without --branch the
+                  stage runs headless (same result file). With --branch it opens a
+                  sticky pane running that stage's binary. Bercail has no default.
+  --binary NAME   headless only: claude, codex, or cursor-agent. Overrides the
+                  stage table binary. Bercail never switches it for you.
   --worktree PATH checkout for a headless stage (default: cwd)
-  --brief PATH    job brief (default: <worktree>/.bercail/job-brief.json)
-  --resume ID     re-handoff a headless stage with claude --resume (no kill)
-  --dry-run       print the headless command as JSON; do not exec
-  --branch NAME   feature branch for a pane stage (do not pass the prompt on argv)
+  --resume ID     re-handoff: claude --resume, cursor-agent --resume, or
+                  codex exec resume (no kill)
+  --dry-run       print the headless command as JSON; no run, no issue check, no comment
+  --branch NAME   feature branch for a sticky pane (any stage)
   --dirty         copy uncommitted main changes into the sibling as a working tree
                   (default when main is dirty)
   --clean         HEAD only; leave uncommitted files on main
-  --plan          add "Plan/design only; do not implement yet." (pane stages)
   --workspace ID  parent Herdr workspace to keep focused (required when HERDR_ENV
                   is unset but the Herdr socket works)
-  --take-pending  read and consume the pending prompt file from --info
-  --prompt-file   read the original user prompt from a file (pane stages)
 
-Intake is handoff-brief, not a stage. /poteto-mode is only applied when the
-stage's binary is cursor or cursor-agent.
-
-A positional branch is still accepted. Do not put the user prompt on argv
-(no `-- prompt`). Grok Bot / Auto-review parents: write the pending file, then
-run this script directly with flags and an explicit working directory.
+Shep writes the beads issue first and owns the workflow. There are no prompt
+files and no per-harness modes. Each real handoff adds a bd comment to the
+issue with the worktree (and, headless, the result file).
 EOF
   exit 2
 }
@@ -82,23 +81,6 @@ handoff_graphite_config() {
 
 handoff_is_graphite() {
   handoff_graphite_config "$1" >/dev/null
-}
-
-# Cursor pstack (/poteto-mode). Same glob as lib/deps.sh pstack_plugin_present.
-handoff_has_pstack() {
-  local cursor="${CURSOR_CONFIG_DIR:-$HOME/.cursor}" match
-  shopt -s nullglob
-  for match in \
-    "$cursor/plugins/cache/cursor-public/pstack/"*/skills/poteto-mode/SKILL.md \
-    "$cursor/plugins/local/pstack/skills/poteto-mode/SKILL.md"
-  do
-    if [[ -f "$match" ]]; then
-      shopt -u nullglob
-      return 0
-    fi
-  done
-  shopt -u nullglob
-  return 1
 }
 
 # Copy main's uncommitted tracked+untracked files into sibling as a working
@@ -151,28 +133,8 @@ handoff_sibling_path() {
   printf '%s' "$path"
 }
 
-handoff_one_line() {
-  printf '%s' "$1" | tr '\n' ' ' | sed 's/  */ /g; s/^ //; s/ $//'
-}
-
 handoff_state_dir() {
   printf '%s/agentic-dev' "${XDG_STATE_HOME:-$HOME/.local/state}"
-}
-
-handoff_pending_prompt_path() {
-  printf '%s/pending-prompt.txt' "$(handoff_state_dir)"
-}
-
-handoff_stash_prompt() {
-  local file text
-  command -v jq >/dev/null 2>&1 || handoff_die "jq is required"
-  mkdir -p "$(handoff_state_dir)"
-  file="$(handoff_pending_prompt_path)"
-  text="$(cat)"
-  [[ -n "$text" ]] || handoff_die "empty prompt on stdin"
-  printf '%s' "$text" >"$file"
-  jq -nc --arg path "$file" '{ok:true,pending_prompt:$path}'
-  printf '\n'
 }
 
 handoff_remember() {
@@ -181,19 +143,6 @@ handoff_remember() {
   mkdir -p "$dir"
   file="$dir/handoffs.jsonl"
   printf '%s\n' "$1" >>"$file"
-}
-
-handoff_prompt_text() {
-  local body="$1" stage="${2:-cursor}"
-  if ! handoff_stage_poteto "$stage"; then
-    printf '%s' "$body"
-    return 0
-  fi
-  if [[ "$body" == /poteto-mode* ]]; then
-    printf '%s' "$body"
-    return 0
-  fi
-  printf '/poteto-mode\n\n%s' "$body"
 }
 
 handoff_herdr_bin() {
@@ -219,21 +168,21 @@ handoff_bool_json() {
 }
 
 handoff_result_json() {
-  local label="$1" sibling="$2" branch="$3" prompt="$4" started="$5" copied="$6" graphite="$7"
+  local label="$1" sibling="$2" branch="$3" issue="$4" started="$5" copied="$6" graphite="$7"
   jq -nc \
     --arg label "$label" \
     --arg path "$sibling" \
     --arg branch "$branch" \
-    --arg task "$(handoff_one_line "$prompt")" \
+    --arg issue "$issue" \
     --argjson agent_started "$(handoff_bool_json "$started")" \
     --argjson dirty_copied "$(handoff_bool_json "$copied")" \
     --argjson graphite "$(handoff_bool_json "$graphite")" \
-    '{ok:true,label:$label,path:$path,branch:$branch,task:$task,agent_started:$agent_started,dirty_copied:$dirty_copied,graphite:$graphite}'
+    '{ok:true,label:$label,path:$path,branch:$branch,issue:$issue,agent_started:$agent_started,dirty_copied:$dirty_copied,graphite:$graphite}'
 }
 
 handoff_info_json() {
-  local cwd branch helper default_copy pending
-  local herdr_env=0 socket=0 herdr=0 main_ok=0 dirty=0 graphite=0 pstack=0 helper_present=0 pending_present=0
+  local cwd branch helper default_copy
+  local herdr_env=0 socket=0 herdr=0 main_ok=0 dirty=0 graphite=0 helper_present=0 beads=0
   cwd="$(handoff_realpath "$PWD")"
   [[ "${HERDR_ENV:-}" == 1 ]] && herdr_env=1
   if handoff_herdr_socket_ok; then
@@ -251,9 +200,6 @@ handoff_info_json() {
   if command -v git >/dev/null 2>&1 && handoff_is_graphite "$cwd"; then
     graphite=1
   fi
-  if handoff_has_pstack; then
-    pstack=1
-  fi
   branch="$(git -C "$cwd" branch --show-current 2>/dev/null || true)"
   helper="${HOME}/.config/worktrunk/herdr-layout.sh"
   [[ -f "$helper" ]] && helper_present=1
@@ -262,16 +208,15 @@ handoff_info_json() {
   else
     default_copy="clean"
   fi
-  pending="$(handoff_pending_prompt_path)"
-  pending_present=0
-  [[ -s "$pending" ]] && pending_present=1
+  if handoff_bin_present "$(handoff_bd_bin)"; then
+    beads=1
+  fi
   jq -nc \
     --arg cwd "$cwd" \
     --arg branch "$branch" \
     --arg default_copy "$default_copy" \
     --arg helper "$helper" \
     --arg workspace "${HANDOFF_WORKSPACE:-${HERDR_WORKSPACE_ID:-}}" \
-    --arg pending_prompt "$pending" \
     --argjson stages "$(handoff_stage_names_json)" \
     --argjson herdr "$(handoff_bool_json "$herdr")" \
     --argjson herdr_env "$(handoff_bool_json "$herdr_env")" \
@@ -279,9 +224,8 @@ handoff_info_json() {
     --argjson main_checkout "$(handoff_bool_json "$main_ok")" \
     --argjson dirty "$(handoff_bool_json "$dirty")" \
     --argjson graphite "$(handoff_bool_json "$graphite")" \
-    --argjson pstack "$(handoff_bool_json "$pstack")" \
     --argjson helper_present "$(handoff_bool_json "$helper_present")" \
-    --argjson pending_prompt_present "$(handoff_bool_json "$pending_present")" \
+    --argjson beads "$(handoff_bool_json "$beads")" \
     '{
       herdr:$herdr,
       herdr_env:$herdr_env,
@@ -291,32 +235,32 @@ handoff_info_json() {
       branch:$branch,
       dirty:$dirty,
       graphite:$graphite,
-      pstack:$pstack,
       default_copy:$default_copy,
       helper:$helper,
       helper_present:$helper_present,
       workspace:$workspace,
-      pending_prompt:$pending_prompt,
-      pending_prompt_present:$pending_prompt_present,
+      beads:$beads,
       stages:$stages
     }'
 }
 
 handoff_spawn_main() {
-  local branch="" dirty="auto" plan=0 prompt="" prompt_file="" main sibling label intro graphite=0 copied=0
+  local branch="" dirty="auto" issue="" prompt main sibling label intro graphite=0 copied=0
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
-  local json parent_ws file body info=0 started=0 stash=0 take_pending=0 pending
-  local stage="" worktree="" brief="" resume="" dry=0 mode="" binary=""
+  local json parent_ws info=0 started=0
+  local stage="" worktree="" resume="" dry=0 mode="" binary="" binary_override="" pane_bin=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h|--help) handoff_usage ;;
       --info) info=1; shift ;;
-      --stash-prompt) stash=1; shift ;;
-      --take-pending) take_pending=1; shift ;;
       --dirty) dirty=1; shift ;;
       --clean) dirty=0; shift ;;
-      --plan) plan=1; shift ;;
+      --issue)
+        [[ $# -ge 2 ]] || handoff_usage
+        issue="$2"
+        shift 2
+        ;;
       --stage)
         [[ $# -ge 2 ]] || handoff_usage
         stage="$2"
@@ -327,17 +271,17 @@ handoff_spawn_main() {
         worktree="$2"
         shift 2
         ;;
-      --brief)
-        [[ $# -ge 2 ]] || handoff_usage
-        brief="$2"
-        shift 2
-        ;;
       --resume)
         [[ $# -ge 2 ]] || handoff_usage
         resume="$2"
         shift 2
         ;;
       --dry-run) dry=1; shift ;;
+      --binary)
+        [[ $# -ge 2 ]] || handoff_usage
+        binary_override="$2"
+        shift 2
+        ;;
       --branch)
         [[ $# -ge 2 ]] || handoff_usage
         branch="$2"
@@ -348,22 +292,14 @@ handoff_spawn_main() {
         HANDOFF_WORKSPACE="$2"
         shift 2
         ;;
-      --prompt-file)
-        [[ $# -ge 2 ]] || handoff_usage
-        prompt_file="$2"
-        shift 2
-        ;;
       --)
-        handoff_die "do not pass the prompt after --; write the pending file or use --prompt-file / stdin"
+        handoff_die "there is no prompt argument; write a beads issue and pass --issue ID"
         ;;
       -*) handoff_usage ;;
       *)
-        if [[ -z "$branch" ]]; then
-          branch="$1"
-          shift
-        else
-          break
-        fi
+        [[ -z "$branch" ]] || handoff_die "unexpected argument: $1 (the job is a beads issue: --issue ID)"
+        branch="$1"
+        shift
         ;;
     esac
   done
@@ -375,50 +311,40 @@ handoff_spawn_main() {
     return 0
   fi
 
-  if [[ "$stash" -eq 1 ]]; then
-    handoff_stash_prompt
-    return 0
-  fi
-
-  if [[ -z "$stage" ]]; then
-    stage="cursor"
-  fi
+  [[ -n "$stage" ]] || handoff_die "--stage start|codex|cursor is required; bercail does not pick a harness"
   mode="$(handoff_stage_field "$stage" mode)" || handoff_die "unknown stage: $stage"
   case "$mode" in
     headless|pane) ;;
     *) handoff_die "stage $stage has unknown mode: $mode" ;;
   esac
-  if [[ "$mode" == headless ]]; then
-    [[ -z "$branch" ]] || handoff_die "stage $stage does not create a branch; omit --branch"
-    [[ "$take_pending" -eq 0 && -z "$prompt_file" && "$plan" -eq 0 ]]       || handoff_die "stage $stage reads a job brief, not a pane prompt"
+  [[ -n "$issue" ]] || handoff_die "--issue <beads id> is required; the job lives in that issue"
+  handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id: $issue"
+  binary="$(handoff_stage_field "$stage" binary)" || handoff_die "unknown stage: $stage"
+  if [[ -n "$branch" ]]; then
+    [[ -z "$binary_override" ]] || handoff_die "stage $stage --branch is a sticky pane; --binary is for headless stages"
+    [[ -z "$resume" && "$dry" -eq 0 && -z "$worktree" ]] \
+      || handoff_die "stage $stage --branch is a sticky pane; --resume/--dry-run/--worktree are for headless stages"
+    pane_bin="$(handoff_headless_bin "$binary")"
+    if ! handoff_bin_present "$pane_bin"; then
+      handoff_die "requested harness $binary is not on PATH. Install it, or name another stage yourself (bercail harness lists what is present). Bercail does not switch harnesses."
+    fi
+  elif [[ "$mode" == headless ]]; then
     [[ "$dirty" == auto ]] || handoff_die "stage $stage does not copy a dirty tree"
-    handoff_run_headless "$stage" "$worktree" "$brief" "$resume" "$dry"
+    handoff_run_headless "$stage" "$worktree" "$issue" "$resume" "$dry" "$binary_override"
     return 0
-  fi
-  [[ -z "$resume" && "$dry" -eq 0 && -z "$brief" && -z "$worktree" ]]     || handoff_die "stage $stage is a sticky pane; --resume/--dry-run/--brief/--worktree are for headless stages"
-
-  [[ -n "$branch" ]] || handoff_usage
-  if [[ "$take_pending" -eq 1 ]]; then
-    pending="$(handoff_pending_prompt_path)"
-    [[ -f "$pending" ]] || handoff_die "no pending prompt at $pending (write that file, or --stash-prompt)"
-    prompt="$(cat -- "$pending")"
-    rm -f "$pending"
-  elif [[ -n "$prompt_file" ]]; then
-    [[ -f "$prompt_file" ]] || handoff_die "prompt file not found: $prompt_file"
-    prompt="$(cat -- "$prompt_file")"
-  elif [[ $# -gt 0 ]]; then
-    prompt="$*"
-  elif [[ -t 0 ]]; then
-    handoff_die "empty prompt (Grok Bot: write pending_prompt from --info, then --take-pending; or --stash-prompt on stdin)"
   else
-    prompt="$(cat)"
+    handoff_usage
   fi
-  [[ -n "$prompt" ]] || handoff_die "empty prompt (write pending_prompt, --prompt-file, or stdin)"
 
   command -v git >/dev/null 2>&1 || handoff_die "git is required"
   command -v wt >/dev/null 2>&1 || handoff_die "wt (worktrunk) is required"
   command -v jq >/dev/null 2>&1 || handoff_die "jq is required"
+  handoff_bin_present "$(handoff_bd_bin)" \
+    || handoff_die "bd (beads) is not on PATH; the job is a beads issue (bercail update installs beads)"
   [[ -f "$helper" ]] || handoff_die "missing $helper"
+
+  main="$(handoff_realpath "$PWD")"
+  handoff_issue_exists "$main" "$issue" || handoff_die "beads issue $issue not found (bd show $issue)"
 
   if [[ "${HERDR_ENV:-}" == 1 ]]; then
     parent_ws="$(handoff_parent_workspace || true)"
@@ -429,7 +355,6 @@ handoff_spawn_main() {
     handoff_die "cannot reach Herdr (HERDR_ENV unset and herdr workspace list failed)"
   fi
 
-  main="$(handoff_realpath "$PWD")"
   handoff_is_main_checkout "$main" \
     || handoff_die "cwd is not the main git checkout; refuse to spawn from a linked worktree"
 
@@ -468,37 +393,28 @@ handoff_spawn_main() {
 
   label="$(_wt_generate_session_name "$sibling")"
 
-  intro="$(printf 'You are in linked worktree %s (branch %s). Stay in this checkout. Do not open Review or invoke the review skill; tuicr opens itself when the agent pane goes done. Layout plugin id is agentic-dev.layout — never agentic-dev.dev-layout.' \
-    "$sibling" "$branch")"
-  if [[ "$plan" -eq 1 ]]; then
-    intro="$(printf '%s\nPlan/design only; do not implement yet.' "$intro")"
-  fi
+  # The checkout facts used to be a prompt preamble. They go on the issue now.
+  intro="$(printf 'bercail handoff: stage %s, pane %s, linked worktree %s (branch %s). Stay in this checkout. Do not open Review or invoke the review skill; tuicr opens itself when the agent pane goes done. Layout plugin id is agentic-dev.layout, never agentic-dev.dev-layout.' \
+    "$stage" "$binary" "$sibling" "$branch")"
   if [[ "$graphite" -eq 1 ]]; then
     intro="$(printf '%s\nUse gt, not raw git commit/push, unless asked.' "$intro")"
   fi
+  handoff_issue_comment "$sibling" "$issue" "$intro"
 
-  mkdir -p "$(handoff_state_dir)"
-  file="$(handoff_state_dir)/handoff-prompt-${branch}.txt"
-  body="$(printf '%s\n\n%s' "$intro" "$prompt")"
-  printf '%s' "$(handoff_prompt_text "$body" "$stage")" >"$file"
+  prompt="$(handoff_issue_prompt "$issue")"
 
-  binary="$(handoff_stage_field "$stage" binary)" || handoff_die "unknown stage: $stage"
-  if handoff_stage_poteto "$stage" && ! handoff_has_pstack; then
-    echo "handoff-spawn: pstack not found under ${CURSOR_CONFIG_DIR:-$HOME/.cursor}; install in Cursor with /add-plugin pstack. Stage $stage still starts as $binary with /poteto-mode." >&2
-  fi
-
-  # Pane stages publish the table binary through WT_HERDR_AGENT_CMD.
-  # lifecycle.sh already execs that value; do not hardcode cursor-agent here.
+  # Pane stages publish the table binary through WT_HERDR_AGENT_CMD and the
+  # one-line prompt (the issue id) through WT_HERDR_AGENT_PROMPT. No file.
   if WT_HERDR_KEEP_FOCUS="$parent_ws" \
-    WT_HERDR_AGENT_CMD="$binary" \
-    WT_HERDR_AGENT_PROMPT_FILE="$file" \
+    WT_HERDR_AGENT_CMD="$pane_bin" \
+    WT_HERDR_AGENT_PROMPT="$prompt" \
     wt_herdr_handoff_agent "$label" "$sibling"; then
     started=1
   else
     echo "handoff-spawn: handoff-agent did not confirm a live agent; worktree is still $sibling ($label)" >&2
   fi
 
-  json="$(handoff_result_json "$label" "$sibling" "$branch" "$prompt" "$started" "$copied" "$graphite")"
+  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite")"
   handoff_remember "$json"
   printf '%s\n' "$json"
 }

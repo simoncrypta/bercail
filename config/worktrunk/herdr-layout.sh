@@ -266,7 +266,7 @@ _wt_herdr_invoke_plugin() {
     WT_HERDR_WORKDIR="$workdir" \
     WT_HERDR_NO_ATTACH="${WT_HERDR_NO_ATTACH:-}" \
     WT_HERDR_AGENT_CMD="${WT_HERDR_AGENT_CMD:-}" \
-    WT_HERDR_AGENT_PROMPT_FILE="${WT_HERDR_AGENT_PROMPT_FILE:-}" \
+    WT_HERDR_AGENT_PROMPT="${WT_HERDR_AGENT_PROMPT:-}" \
     HERDR_WORKSPACE_ID="$workspace_id" \
     HERDR_PLUGIN_ROOT="$root" \
     HERDR_BIN_PATH="${HERDR_BIN_PATH:-$HERDR}" \
@@ -300,7 +300,7 @@ wt_herdr_layout_create() {
 }
 
 # Clear session of the configured agent (d / dev / apply). Ignores any
-# inherited handoff prompt file.
+# inherited handoff prompt.
 wt_herdr_start_default_agent() {
   local label="$1"
   local workdir="$2"
@@ -316,7 +316,7 @@ wt_herdr_start_default_agent() {
     _wt_herdr_keep_user_focus "$keep_focus"
     return 1
   }
-  if ! WT_HERDR_NO_ATTACH=1 WT_HERDR_AGENT_PROMPT_FILE= \
+  if ! WT_HERDR_NO_ATTACH=1 WT_HERDR_AGENT_PROMPT= \
     _wt_herdr_invoke_plugin start-agent "$workspace_id" "$label" "$workdir"; then
     echo "Failed to start agent in workspace $workspace_id" >&2
     rc=1
@@ -325,7 +325,8 @@ wt_herdr_start_default_agent() {
   return "$rc"
 }
 
-# Orchestrator / handoff-spawn: start or replace the agent with WT_HERDR_AGENT_PROMPT_FILE.
+# Orchestrator / handoff-spawn: start or replace the agent with WT_HERDR_AGENT_PROMPT
+# (one line: the beads issue id, same for every harness).
 wt_herdr_handoff_agent() {
   local label="$1"
   local workdir="$2"
@@ -335,8 +336,8 @@ wt_herdr_handoff_agent() {
     echo "Herdr server is not running. Start it with: herdr" >&2
     return 1
   }
-  if [[ -z "${WT_HERDR_AGENT_PROMPT_FILE:-}" ]]; then
-    echo "wt_herdr_handoff_agent requires WT_HERDR_AGENT_PROMPT_FILE" >&2
+  if [[ -z "${WT_HERDR_AGENT_PROMPT:-}" ]]; then
+    echo "wt_herdr_handoff_agent requires WT_HERDR_AGENT_PROMPT (the beads issue id)" >&2
     return 1
   fi
 
@@ -353,9 +354,9 @@ wt_herdr_handoff_agent() {
   return "$rc"
 }
 
-# Backward-compatible alias: prompted start when a prompt file is set, else clear.
+# Backward-compatible alias: prompted start when a prompt is set, else clear.
 wt_herdr_start_agent() {
-  if [[ -n "${WT_HERDR_AGENT_PROMPT_FILE:-}" ]]; then
+  if [[ -n "${WT_HERDR_AGENT_PROMPT:-}" ]]; then
     wt_herdr_handoff_agent "$@"
   else
     wt_herdr_start_default_agent "$@"

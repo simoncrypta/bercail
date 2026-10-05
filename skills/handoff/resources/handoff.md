@@ -16,48 +16,71 @@ run `--info` then spawn — not assemble these steps.
    `git diff HEAD` plus untracked files into the sibling as a **working tree**.
    Never `git add`.
 4. If Graphite config exists (`handoff_graphite_config`), `gt track`.
-5. Wrap intro (worktree only; tuicr opens on agent `done`) around the original
-   prompt. Prefix `/poteto-mode` only when the stage binary is `cursor` or
-   `cursor-agent` (the `cursor` stage). Write a prompt file.
+5. Add the intro (worktree; tuicr opens on agent `done`; gt on Graphite) to the
+   beads issue as a `bd comment`. The prompt is the issue id, the same for
+   every binary. No prompt file and no per-harness mode.
 6. `WT_HERDR_AGENT_CMD` is the stage table's binary (not a hardcoded
-   cursor-agent) and `WT_HERDR_AGENT_PROMPT_FILE` is the prompt file.
+   cursor-agent) and `WT_HERDR_AGENT_PROMPT` is that one-line prompt.
    `wt_herdr_handoff_agent` forwards both. lifecycle.sh already execs
    `WT_HERDR_AGENT_CMD`. Layout create is not called again. start-agent waits
    up to 30s for Herdr to tag the Agent pane (or a non-shell FG process). A
    timeout does **not** discard the worktree.
-7. Print JSON `{label,path,branch,task,agent_started,dirty_copied,graphite}`
+7. Print JSON `{label,path,branch,issue,agent_started,dirty_copied,graphite}`
    and append `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling
    exists. `agent_started` is false on a wait timeout.
 
 Parents outside a Herdr pane (`HERDR_ENV` unset) spawn by running the
-**resolved script directly** with `--workspace`, `--branch`, and
-`--take-pending` (working directory = `--info` `cwd`). Auto-review rejects
-`python -c`, wrapper `.sh` files, `herdr pane run … spawn -- <prompt>`, and
-any argv after `--`. Write `pending_prompt` as plain text, then take-pending.
+**resolved script directly** with `--workspace`, `--branch`, and `--issue`
+(working directory = `--info` `cwd`). Auto-review rejects `python -c`, wrapper
+`.sh` files, `herdr pane run … spawn -- <prompt>`, and any argv after `--`. The
+ask is in the beads issue, so nothing but the id reaches argv.
 
-`start-agent` launches one quoted `bash -li -c '… cat file … exec "$WT_HERDR_AGENT_CMD" -- "$p"'`
-line. The cursor stage's binary is cursor-agent. `herdr pane run a b c` types
-unquoted words, so a multiline prompt cannot be argv.
+`start-agent` launches one quoted `bash -li -c 'exec "$WT_HERDR_AGENT_CMD" -- <prompt>'`
+line. The `--branch` pane binary is the stage's binary. `herdr pane run` submits on
+newline, so the plugin refuses a multiline `WT_HERDR_AGENT_PROMPT`.
 
 ## Stage router
 
 `scripts/handoff-stages.sh` is the table: name, binary, `headless` or `pane`,
 model. `handoff-spawn --stage` reads it.
 
-- `cursor` (default for `--branch`): sticky pane. `/poteto-mode` because the
-  binary is cursor-agent. Re-handoff still replaces the pane process.
+- `cursor`: headless. One `cursor-agent --print --output-format json` in the
+  worktree. Resume is `--resume <session_id>` (the flag `cursor-agent --help`
+  lists). `--model` is passed only when the table model is set (not `-`).
+  `--trust --force` are the non-interactive write flags from that help.
+  `--branch` on this stage still opens the sticky pane (not this argv).
 - `start`: headless. One `claude --print` in the worktree. No Herdr pane.
   Model spec `opus-5.5` resolves from the claude catalog (full id, never the
-  pstack `*-max` slug). The process writes
-  `<worktree>/.bercail/handoff-result.json`. Re-handoff is `--resume <session_id>`.
+  `*-max` slug).
+- `codex`: headless. One `codex exec --json` in the worktree. Resume is
+  `codex exec --json --sandbox workspace-write resume [-m MODEL] <session_id>`.
+  `-m` is passed only when the table model is set (not `-` and not the claude
+  `opus-5.5` spec). `--sandbox workspace-write` is required because `codex
+  exec` defaults to read-only; `codex exec resume` has no `--sandbox`, so it
+  stays before the subcommand. `codex exec` has no `--ask-for-approval`.
+`--binary claude|codex|cursor-agent` overrides the table binary on a headless
+stage, so `--stage start --binary cursor-agent` picks cursor-agent without
+renaming the job. Bercail never picks or skips a harness on its own.
+`bercail harness` reports which of claude, codex, and cursor-agent are on PATH,
+with a local model hint. It does not choose one.
+A missing requested harness writes status `blocked` and exits nonzero. It does
+not fall through to another binary.
 
-Intake is `scripts/handoff-brief`, not a row. It writes
-`<worktree>/.bercail/job-brief.json` (`ask`, `repo`, `links`) from `--source
-linear`, `ask`, or `note`.
+All three headless stages get the issue id as their whole prompt and write
+`<worktree>/.bercail/handoff-result.json`. Before the run, bercail checks bd
+and the issue (`bd show <id>`) and adds a `bd comment` with the worktree,
+result path, and session id. claude gets `--tools Read,Edit,Write,Bash
+--allowedTools "Bash(bd *)"`. When bd's `.beads` is outside the worktree, each
+harness gets `--add-dir` for it (codex: before `resume`, which has no
+`--add-dir`). bercail fills `session_id` in the result after the run.
+Re-handoff is `--resume <session_id>`. For Codex that id is the JSONL
+`thread.started` thread id. For cursor-agent it is the print JSON `session_id`.
 
-Arena, implement, and the Composer review pane are not rows. Add a row and, for
-a headless stage, `prompts/<stage>.txt`. Do not special-case the binary in
-`handoff-spawn`.
+Intake is the beads issue Shep writes (a Linear issue, a direct ask, or a
+note all become one issue). It is not a row and not a file bercail writes.
+
+Arena, implement, and the Composer review pane are not rows. Add a row; a
+stage needs no prompt file. Do not special-case the binary in `handoff-spawn`.
 
 ## Dirty copy
 

@@ -5,7 +5,11 @@ show_help() {
   cat <<EOF
 bercail v${AGENTIC_DEV_VERSION}
 
-Install:
+Install (recommended: mise + packslip, signed release):
+  mise use -g packslip:github.com/simoncrypta/bercail && bercail install
+  packslip install github.com/simoncrypta/bercail && bercail install   (no mise)
+
+Install (curl, still supported):
   curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
   curl -fsSL https://setup.simoncrypta.dev/install.sh | bash -s -- --yes
 
@@ -15,7 +19,9 @@ install.sh options:
 
 Post-install CLI (bercail):
   help          This help
+  install       Full install from the release mise or packslip unpacked
   doctor        Check dependencies and integration
+  harness       JSON: claude, codex, and cursor-agent on PATH (missing is not fatal)
   update        Re-sync configs, helper, and skill from the install source
   reconfigure   Refresh skills/integrations from config.toml (not a full redeploy)
   dry-run       Show planned actions without changes
@@ -31,7 +37,7 @@ Shell commands:
 
 Layout:
   Left 5/12: agent pane (sticky) — command from ~/.config/bercail/config.toml
-  Center 5/12: review (`tuicr -r origin/main -w` watching; auto-opens on agent done) or shell tab
+  Center 5/12: review (\`tuicr -r origin/main -w\` watching; auto-opens on agent done) or shell tab
   Right 1/6: files / git pane
 
 Herdr keys (prefix = Ctrl-Space):
@@ -60,7 +66,7 @@ Omarchy / Linux:
   Native Omarchy Herdr is SUPER+CTRL+RETURN; packages via omarchy pkg add
 
 Install order:
-  mise first (install and upgrade herdr, worktrunk, fzf, jq, lazygit, tuicr)
+  mise first (install and upgrade herdr, worktrunk, beads (bd), fzf, jq, lazygit, tuicr)
   PATH: mise shims, then ~/.local/bin, then brew (macOS Homebrew stays reachable)
   then omarchy pkg add on Omarchy, then brew / apt / pacman / upstream
   layout tools: tuicr (review); sticky agent is cursor-agent; editor follows $EDITOR
@@ -79,14 +85,18 @@ Config:
   ~/.agents/skills/review/               tuicr review skill (wait / optional GH publish)
   ~/.config/fcitx5/conf/keyboard.conf    Linux fcitx5 hint trigger override
 
-Agent skills (`handoff`, `review`):
+Agent skills (\`handoff\`, \`review\`):
   Installed to ~/.agents/skills/<id> (https://agentskills.io). cursor-agent
   reads that dir. Extra symlink only if you set another [agent] command.
   Source: skills/handoff/, skills/review/.
   Manual: npx skills add simoncrypta/agentic-dev-setup -s handoff -g
-  Handoff stages: cursor is a sticky cursor-agent pane with /poteto-mode.
-  start is headless claude (brief in, .bercail/handoff-result.json out).
-  Install pstack in Cursor: /add-plugin pstack
+  Handoff stages: start is claude, codex is Codex CLI (codex exec --json),
+  cursor is cursor-agent (--print --output-format json). Each works a beads
+  issue; the prompt is only the issue id. Headless runs write
+  .bercail/handoff-result.json; --branch opens a sticky pane for any stage.
+  claude, codex, and cursor-agent are optional and equal; bercail does not
+  pick one. Shep owns the workflow. bercail harness reports which are on PATH
+  plus a local model hint.
 
 Plugin only (see README — review manifest/scripts before install):
   herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout
@@ -101,7 +111,7 @@ show_summary() {
   log ""
   log "bercail installed (v${AGENTIC_DEV_VERSION})"
   log ""
-  log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (cursor stage: cursor-agent + pstack; start stage: headless claude)"
+  log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff stages: start=claude, codex=Codex CLI, cursor=cursor-agent; equal, no default)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Editor command: $(read_layout_editor 2>/dev/null || echo "\$EDITOR")"
   log "Config: ${AGENTIC_DEV_USER_CONFIG}"

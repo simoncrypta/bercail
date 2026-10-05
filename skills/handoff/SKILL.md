@@ -1,12 +1,15 @@
 ---
 name: handoff
 description: >-
-  Routes a named handoff stage via scripts/handoff-spawn. Intake (handoff-brief)
-  writes one job brief before any harness. Stage start is one headless claude
-  process, not a Herdr pane. Stage cursor is the parallel sibling worktree:
-  sticky layout, cursor-agent with /poteto-mode. Use when the user asks to hand
-  off, plan a job, or spawn parallel features. Call by name: handoff.
-compatibility: Requires herdr, wt (worktrunk), and the sticky-agent Herdr layout helpers.
+  Routes a named handoff stage via scripts/handoff-spawn. The job is a beads
+  issue (bd); the agent prompt is only its id. Stage start is one headless claude
+  process. Stage codex is one headless `codex exec` process. Stage cursor is
+  one headless `cursor-agent --print` process. None of those open a Herdr pane.
+  `--branch` clones a sticky pane running the stage's binary. Shep owns the
+  workflow; bercail adds no per-harness mode.
+  Use when the user asks to hand off, plan a job, or spawn parallel features.
+  Call by name: handoff.
+compatibility: Requires bd (beads), herdr, wt (worktrunk), and the sticky-agent Herdr layout helpers.
 ---
 
 # handoff
@@ -18,90 +21,101 @@ Do not inspect git, Graphite, Herdr, or worktrees yourself. Run `--info`, then s
 ```
 
 That JSON is the only context you need: `herdr`, `herdr_env`, `socket`,
-`main_checkout`, `cwd`, `branch`, `dirty`, `graphite`, `pstack`,
-`default_copy`, `helper`, `workspace`, `pending_prompt`.
+`main_checkout`, `cwd`, `branch`, `dirty`, `graphite`,
+`default_copy`, `helper`, `workspace`, `beads`.
 
 - If `herdr` is false, report that and stop.
+- If `beads` is false, report that bd is missing and stop.
 - If `main_checkout` is false, report that and stop (do not spawn from a linked worktree).
 - `main_checkout` means the primary git worktree, not “on trunk”.
-- If `pstack` is false, tell the user to install it in Cursor (`/add-plugin pstack`). The cursor stage still starts cursor-agent with `/poteto-mode`. Other stages do not.
 
-Never put the original user prompt on the spawn command line. Never `python -c`,
-never a wrapper `.sh`, never `handoff-spawn <branch> -- <prompt>`. Auto-review
-rejects those as unbound executable content.
+Never put the user's ask on the spawn command line; it goes in the beads issue.
+Never `python -c`, never a wrapper `.sh`, never `handoff-spawn <branch> -- <prompt>`.
+Auto-review rejects those as unbound executable content.
 
 
-## Intake (not a stage)
+## The job is a beads issue
 
-A Linear issue, a direct ask, or a note all become one job brief before any
-harness runs. Do not put the ask on argv.
+Shep writes the job as a beads issue first (`bd create`, `bd show <id>`). The
+issue holds the ask, the repo, links, and any plan-only note. There are no
+prompt files, briefs, or pending prompts. The agent's whole prompt is the issue
+id, the same for claude, codex, and cursor-agent. Shep owns the workflow
+(planning, review, which harness); bercail has no cursor-only mode.
+
+Each real handoff adds a `bd comment` to the issue with what the agent needs
+from bercail: the worktree, and for headless stages the result file and
+session id. `--info` reports `beads` (bd on PATH). bercail install and update
+install beads; the command is `bd`.
+
+## Headless stages (claude, Codex, or cursor-agent)
+
+Shep runs these. They do not open a TUI in Herdr. Bercail has no preference
+among claude, codex, and cursor-agent; the caller names the stage or
+`--binary`. `--stage start` is one `claude --print` process. `bercail harness`
+lists claude, codex, and cursor-agent with `present` and a local `model_hint`.
+It does not choose. Missing CLIs are `present: false`, not an error.
+`--stage codex` or `--binary codex` is one
+`codex exec --json` process (`-m` when the table has a model; resume is
+`codex exec resume`). `--stage cursor` or `--binary cursor-agent` is one
+`cursor-agent --print --output-format json` process (`--model` when the table
+has a model; resume is `--resume <session_id>`). claude gets `Bash(bd *)` so
+it can run bd in `--print`. When bd's `.beads` is outside the worktree (a
+linked worktree), every harness gets `--add-dir` for it.
+
+If the requested harness, bd, or the issue is missing, the stage writes
+`<worktree>/.bercail/handoff-result.json` with status `blocked`, starts
+nothing, and exits nonzero. It does not fall through to another harness. The
+agent writes the same result file (`status`, `summary`, and bercail fills
+`session_id`). Read that file. Do not scrape terminal output. For Codex,
+`session_id` is the JSONL `thread.started` thread id. For cursor-agent, it is
+the print JSON `session_id`. When there is no resumable session (blocked before
+codex or cursor-agent ran, or no id in its log), `session_id` is `none`;
+`--resume` refuses it.
 
 ```bash
-"$HOME/.agents/skills/handoff/scripts/handoff-brief" \
-  --source ask|linear|note --worktree <checkout> --repo <url-or-path> \
-  --ask-file <path> [--link <url>]
-```
-
-That writes `<worktree>/.bercail/job-brief.json` (`ask`, `repo`, `links`, `source`).
-
-## Start stage (headless claude)
-
-Shep runs this. It does not open a claude TUI in Herdr. It execs one `claude --print`
-process. The process restates the ask, pushes back when the brief is thin, and
-writes `<worktree>/.bercail/handoff-result.json` (`status`, `summary`, `session_id`).
-Read that file. Do not scrape terminal output.
-
-```bash
+bercail harness
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --stage start --worktree <checkout> [--dry-run]
+  --stage start --issue <id> --worktree <checkout> [--binary claude|codex|cursor-agent] [--dry-run]
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --stage start --worktree <checkout> --resume <session_id>
+  --stage start --issue <id> --worktree <checkout> --resume <session_id>
+"$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
+  --stage codex --issue <id> --worktree <checkout> [--resume <session_id>] [--dry-run]
+"$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
+  --stage cursor --issue <id> --worktree <checkout> [--resume <session_id>] [--dry-run]
 ```
 
 `--resume` continues that session. It does not kill a pane. `--dry-run` prints
-the argv as JSON and does not exec. Arena, implement, and the Composer review
-pane are not stages yet. Add a row to `scripts/handoff-stages.sh` later.
+the argv as JSON for any of the three stages, even when that binary or bd is
+not on PATH (`present`, `bd_present`). It does not run the harness, check the
+issue, or comment; it may ask `bd context` where `.beads` is. Arena,
+implement, and the Composer review pane are not stages yet. Add a row to
+`scripts/handoff-stages.sh` later.
 
-## Spawn (Grok Bot / machine shell / Auto-review)
+## Spawn a `--branch` pane
 
-1. Write the **original user prompt** as plain text to `pending_prompt` from
-   `--info` (a file-write tool, not a new script).
-2. Run the **resolved script directly** (absolute path below). Set the process
-   working directory to `cwd` from `--info`. Flags only.
+Run the **resolved script directly** (absolute path below). Set the process
+working directory to `cwd` from `--info`. Flags only.
 
 ```bash
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --branch <name> --clean --workspace <id> --take-pending
+  --branch <name> --stage start|codex|cursor --issue <id> --clean --workspace <id>
 ```
 
 - `--workspace` is required when `herdr_env` is false (socket-only parent).
   Use `workspace` from `--info` or the parent Herdr id (e.g. `w26`).
 - `--dirty` / `--clean` override `default_copy`.
-- `--plan` — add “Plan/design only; do not implement yet.”
-- Do not `herdr pane run` this spawn. `--info` via pane run is fine; spawn-with-prompt
-  via pane run is what Auto-review binds.
+- Plan-only work is a line in the issue, not a flag.
+- Do not `herdr pane run` this spawn. `--info` via pane run is fine.
 
-`--take-pending` consumes and deletes the pending file.
+## Sticky pane (`--branch`)
 
-## Spawn (already inside a Herdr pane TTY)
+`--branch` clones a sibling worktree with a sticky pane running the named
+stage's binary: claude, codex, or cursor-agent. `--stage` is required; bercail
+has no default harness. A missing binary fails before any worktree is made.
 
-Stdin is allowed when it is not a TTY (heredoc). Still no `-- prompt` on argv.
+## After a `--branch` spawn
 
-```bash
-"$HOME/.agents/skills/handoff/scripts/handoff-spawn" --branch <name> --clean <<'EOF'
-<original user prompt only>
-EOF
-```
-
-## Cursor stage (parallel sibling)
-
-`--branch` defaults to stage `cursor`: sibling worktree, optional dirty copy,
-sticky pane. The stage table sets `WT_HERDR_AGENT_CMD`. `/poteto-mode` is
-prefixed only because that stage's binary is cursor-agent.
-
-## After a cursor-stage spawn
-
-The script prints JSON: `label`, `path`, `branch`, `task`, `agent_started`,
+The script prints JSON: `label`, `path`, `branch`, `issue`, `agent_started`,
 `dirty_copied`, `graphite`. It appends that line to
 `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling exists.
 

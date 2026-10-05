@@ -1,0 +1,8 @@
+# Release manifest for jdx/packslip (.github/workflows/release.yml).
+# bercail is shell scripts, so one portable archive serves every host.
+# The action sets project, version, url_base, notes_url, and [source].
+
+[[artifact]]
+path = "dist/bercail.tar.gz"
+portable = true
+bin = ["bin/bercail"]

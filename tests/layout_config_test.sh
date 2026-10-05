@@ -67,13 +67,8 @@ prompt_user_config
 assert_eq "cursor-agent" "$(read_agent_command)" "prompt_user_config writes cursor-agent with no picker"
 YES=0
 
-cursor_dir="$TMP_DIR/cursor-home"
-export CURSOR_CONFIG_DIR="$cursor_dir"
-pstack_plugin_present && fail "pstack_plugin_present must be false without the plugin"
-mkdir -p "$cursor_dir/plugins/cache/cursor-public/pstack/abc/skills/poteto-mode"
-printf '# poteto-mode\n' >"$cursor_dir/plugins/cache/cursor-public/pstack/abc/skills/poteto-mode/SKILL.md"
-pstack_plugin_present || fail "pstack_plugin_present must be true when poteto-mode exists"
-unset CURSOR_CONFIG_DIR
+declare -F pstack_plugin_present >/dev/null \
+  && fail "pstack detection is gone; Shep owns the workflow, not a cursor plugin"
 assert_contains "$(default_user_config)" 'review = "tuicr"' \
   "default config includes review"
 assert_contains "$(default_user_config)" 'auto_review = true' \
@@ -118,7 +113,7 @@ cat >"$case_dir/bin/herdr" <<'EOF'
 printf 'herdr 0.9.3\n'
 EOF
 chmod +x "$case_dir/bin/herdr"
-for cmd in git wt fzf jq lazygit hunk nano; do
+for cmd in git wt bd fzf jq lazygit hunk nano; do
   ln -s /bin/true "$case_dir/bin/$cmd"
 done
 

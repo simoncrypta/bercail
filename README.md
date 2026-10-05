@@ -2,22 +2,24 @@
 
 **an ADE on [herdr](https://herdr.dev).**
 
-Bercail is an agentic development environment: Herdr-based, cursor-agent focused, built for working in parallel with control and observability. One git worktree, one Herdr workspace. [cursor-agent](https://cursor.com) stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. When it goes `done`, [tuicr](https://github.com/agavra/tuicr) opens the whole branch vs main and watches further edits. `handoff` routes a named stage. The `cursor` stage clones that desk onto a sibling worktree and starts a [pstack](https://github.com/cursor/plugins/tree/main/pstack) child (`/poteto-mode`). The `start` stage is one headless `claude` process and does not open a Herdr pane. You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
+Bercail is an agentic development environment: Herdr-based, built for working in parallel with control and observability. One git worktree, one Herdr workspace. A sticky agent stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. When it goes `done`, [tuicr](https://github.com/agavra/tuicr) opens the whole branch vs main and watches further edits. You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
+
+Claude Code, Codex CLI, and cursor-agent are equal harnesses. Bercail does not prefer one, pick one, or fall back from one to another. A handoff is a [beads](https://beads.gascity.com/) issue: [Shep](#grok-bot) writes it, and the agent's whole prompt is the issue id.
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
 <img width="2138" height="1386" alt="sticky agent, review, files" src="https://github.com/user-attachments/assets/b58e8e78-c78b-4cc3-9f56-8040d561f2d9" />
 
-- **sticky agent** — cursor-agent does not live in a tab. Tabs move around it.
+- **sticky agent** — the configured agent (cursor-agent by default) does not live in a tab. Tabs move around it.
 - **one worktree, one workspace** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; Herdr follows.
 - **control and observability** — every pane is working, blocked, or idle. Review opens on `done`. You choose what gets a GitHub comment.
 - **review when the agent is done** — `tuicr -r origin/main -w` on a feature branch (working tree vs main, watching). Other people's PRs open with `tuicr pr`. `prefix+2` anytime.
-- **handoff is parallel, not a chat fork** — the `cursor` stage is a sibling checkout, optional dirty copy, cursor-agent + pstack. `/poteto-mode` only when the stage binary is cursor. Install pstack in Cursor: `/add-plugin pstack`. Shep's `start` stage is headless claude.
+- **handoff is parallel, not a chat fork** — one beads issue per job, run headless or in a sibling worktree with its own sticky pane. See [handoff](#handoff).
 - **keyboard and mouse** — prefix is `Ctrl-Space` (Omarchy tmux). Click the file tree; `j`/`k` in tuicr.
 
 ```
 ┌──────────────┬────────────────────────────┬─────────┐
-│ cursor-agent │ shell  |  review*  |  edit │ files   │
+│ agent        │ shell  |  review*  |  edit │ files   │
 │ sticky       │ tuicr on agent done / +2   │ git     │
 │ prefix+1     │ prefix+2 / +3 / +4         │ +4 / +g │
 └──────────────┴────────────────────────────┴─────────┘
@@ -25,15 +27,33 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
 ## grok bot
 
-[Shep](https://x.ai/bot/pjuM6P_92QUE6jF6H6dpw) is the bercail orchestrator. Add this Grok Bot template; it can help you set up bercail, spin worktrees, run handoffs, and ping you when agents finish or get blocked.
+[Shep](https://x.ai/bot/pjuM6P_92QUE6jF6H6dpw) is the bercail orchestrator. Add this Grok Bot template; it can help you set up bercail, spin worktrees, run handoffs, and ping you when agents finish or get blocked. Shep owns the workflow: it writes the beads issues, picks which harness works each one, and reads the results.
 
 ## install
+
+Recommended: [mise](https://mise.jdx.dev) + [packslip](https://github.com/jdx/packslip). Each `v*` release publishes `bercail.tar.gz` and a signed `packslip.sigstore.json`. mise checks that signature against this repository and the archive digest before it unpacks anything, and it runs no downloaded code.
+
+```bash
+mise use -g packslip:github.com/simoncrypta/bercail   # mise 2026.9.2+
+bercail install                                       # full install from that release
+```
+
+Without mise, the packslip CLI installs the same release and links `bercail` into `~/.local/bin`:
+
+```bash
+packslip install github.com/simoncrypta/bercail      # packslip 1.5.1+
+bercail install
+```
+
+The first install trusts the repository's signer, and later installs must match it. `bercail install` runs the release's own `install.sh`. mise or packslip keeps the `bercail` command, so the installer does not copy a second one into `~/.local/bin`. Upgrade with `mise up` (or `packslip install` again), then `bercail update`.
+
+curl is still supported. It reads the repository tip and does not need a release:
 
 ```bash
 curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
 ```
 
-`--yes` is non-interactive. From a clone: `./install.sh`.
+`--yes` is non-interactive (`bercail install --yes` too). From a clone: `./install.sh`.
 
 Then, in a repo:
 
@@ -43,7 +63,36 @@ dev          # attach this directory
 # then prefix+d
 ```
 
-Default sticky agent is **cursor-agent**. There is no picker. Another command in the left pane is `[agent] command` in `~/.config/bercail/config.toml`, then `bercail reconfigure`. The cursor handoff stage stays cursor-agent + `/poteto-mode`. The start stage does not.
+The sticky pane runs `[agent] command` from `~/.config/bercail/config.toml` (cursor-agent by default; there is no picker). Change it, then `bercail reconfigure`. Handoff stages do not read it; each stage names its own binary.
+
+## handoff
+
+The job lives in a beads issue, not in a prompt file or on argv. Shep creates the issue (`bd create`), then runs `handoff-spawn` with the issue id and a stage. `--stage` is required; bercail has no default harness.
+
+| Stage | Binary | Headless argv (the last word is the issue id) |
+|-------|--------|-----------------------------------------------|
+| `start` | claude | `claude --print --model claude-opus-5-5 --output-format json …` |
+| `codex` | codex | `codex exec --json --sandbox workspace-write …` |
+| `cursor` | cursor-agent | `cursor-agent --print --output-format json --trust --force …` |
+
+```bash
+bd create "Fix the login timeout" --description "..."     # Shep writes the issue
+~/.agents/skills/handoff/scripts/handoff-spawn --info      # facts as JSON, incl. beads
+
+# headless: no Herdr pane; result is <worktree>/.bercail/handoff-result.json
+~/.agents/skills/handoff/scripts/handoff-spawn --stage codex --issue ID --worktree PATH [--dry-run]
+~/.agents/skills/handoff/scripts/handoff-spawn --stage start --issue ID --worktree PATH --resume SESSION
+
+# sibling worktree with a sticky pane running the stage's binary
+~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME --stage cursor --issue ID [--dirty|--clean] [--workspace ID]
+```
+
+- **Prompt** — the issue id, the same for every harness. There is no per-harness mode.
+- **Context** — before it starts the agent, bercail adds a `bd comment` to the issue with the worktree and, headless, the result file and session id.
+- **Result** — a headless run leaves `{status: ready|blocked|failed, summary, session_id}`. Read that file, not terminal output. `--resume SESSION` continues the same session (`claude --resume`, `codex exec resume`, `cursor-agent --resume`).
+- **Blocked, not switched** — if the stage's binary, `bd`, or the issue is missing, the result is `blocked` and nothing starts. Bercail never falls through to another harness. `--binary claude|codex|cursor-agent` runs a headless stage on another CLI only when you ask.
+- **Dry run** — `--dry-run` prints the exact argv for any stage, even when that binary is not installed.
+- `bercail harness` reports which of claude, codex, and cursor-agent are on PATH, with a local model hint. It does not choose.
 
 ## commands
 
@@ -51,11 +100,13 @@ Default sticky agent is **cursor-agent**. There is no picker. Another command in
 
 | Command | What |
 |---------|------|
+| `bercail install` | Full install from the release mise or packslip unpacked |
 | `./install.sh` | Full install |
 | `./install.sh --yes` | Non-interactive |
 | `./install.sh --help` | Installer help |
 | `bercail help` | This reference |
-| `bercail doctor` | Deps, plugin, skills, pstack, Herdr integration |
+| `bercail doctor` | Deps, plugin, skills, Herdr integration |
+| `bercail harness` | JSON: which of claude, codex, cursor-agent are on PATH (reports, does not choose) |
 | `bercail update` | Re-sync configs, helper, skills (`--force` ok) |
 | `bercail reconfigure` | Re-read `config.toml`, refresh skills/integrations |
 | `bercail dry-run` | Show install actions, write nothing |
@@ -74,34 +125,19 @@ Default sticky agent is **cursor-agent**. There is no picker. Another command in
 
 ### skills (agent pane)
 
-Call by name. Cursor reads `~/.agents/skills`.
+Call by name. Skills install to `~/.agents/skills`; bercail adds a link where the configured agent looks elsewhere (`~/.claude/skills`, `~/.codex/skills`, …).
 
 | Skill | What |
 |-------|------|
-| `handoff` | Stage router. `cursor`: sibling worktree, cursor-agent + `/poteto-mode`. `start`: headless claude plan |
+| `handoff` | Run a beads issue on a stage (`--stage start|codex|cursor --issue ID`), headless or as a `--branch` pane. See [handoff](#handoff) |
 | `review` | Wait for **human** tuicr notes; publish to GitHub only if asked |
 
 ```bash
-# handoff (parent: --info, then spawn — never put the prompt on argv)
-~/.agents/skills/handoff/scripts/handoff-spawn --info
-~/.agents/skills/handoff/scripts/handoff-spawn --stash-prompt
-~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME \
-  [--stage cursor] [--dirty|--clean] [--plan] [--workspace ID] \
-  [--take-pending|--prompt-file PATH]
-
-# intake, then start stage (no Herdr pane; result is .bercail/handoff-result.json)
-~/.agents/skills/handoff/scripts/handoff-brief \
-  --source ask|linear|note --worktree PATH --repo URL --ask-file PATH
-~/.agents/skills/handoff/scripts/handoff-spawn \
-  --stage start --worktree PATH [--resume SESSION] [--dry-run]
-
 # review helpers
 ~/.agents/skills/review/scripts/wait-comments.sh --repo . [--timeout N]
 ~/.agents/skills/review/scripts/publish-github.sh --repo . \
   [--event comment|approve|request-changes] [--body TEXT] [--dry-run]
 ```
-
-`--info` includes `pstack`. If it is false, install pstack in Cursor (`/add-plugin pstack`) and still spawn.
 
 Manual skill install: `npx skills add simoncrypta/agentic-dev-setup --skill handoff -g`
 
@@ -113,7 +149,7 @@ Manual skill install: `npx skills add simoncrypta/agentic-dev-setup --skill hand
 |--------|-----|
 | `apply` / `create` | `prefix+d` (`apply` starts a clear agent session) |
 | `focus-agent` / `start-agent` | `prefix+1` |
-| `handoff-agent` | handoff-spawn (prompted child session) |
+| `handoff-agent` | handoff-spawn (child session; prompt is the beads issue id) |
 | `select-review` | `prefix+2` |
 | `select-shell` | `prefix+3` |
 | `select-files` | `prefix+4` |
@@ -201,11 +237,15 @@ Local: `cargo build --release -p herdr-sidebar` in `plugins/agentic-layout`, the
 
 ## linux
 
-On Omarchy: mise first, `omarchy pkg add`, native `SUPER+CTRL+RETURN` → Herdr, optional `SUPER+ALT+RETURN` remap, fcitx5 `Ctrl+Alt+H/J` hint keys cleared. On Ubuntu: mise then apt (`git fzf jq lazygit curl`); herdr, worktrunk, tuicr from upstream. On macOS: mise first; Homebrew stays on PATH as fallback (`brew shellenv`, then mise shims prepended). Hyprland: same optional `SUPER+ALT+RETURN` binding.
+On Omarchy: mise first, `omarchy pkg add`, native `SUPER+CTRL+RETURN` → Herdr, optional `SUPER+ALT+RETURN` remap, fcitx5 `Ctrl+Alt+H/J` hint keys cleared. On Ubuntu: mise then apt (`git fzf jq lazygit curl`); herdr, worktrunk, beads, tuicr from upstream. On macOS: mise first; Homebrew stays on PATH as fallback (`brew shellenv`, then mise shims prepended). Hyprland: same optional `SUPER+ALT+RETURN` binding.
 
 ## dependencies
 
-Installed if missing: [herdr](https://herdr.dev) 0.9.3+ (`herdr integration install cursor`), worktrunk, fzf, jq, lazygit, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0, cursor-agent. pstack is a Cursor plugin, not a package: `/add-plugin pstack`.
+Installed if missing: [herdr](https://herdr.dev) 0.9.3+ (`herdr integration install cursor` only if you use Cursor), git, worktrunk (`wt`), [beads](https://beads.gascity.com/) (`bd`), fzf, jq, lazygit, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0. `bercail doctor` checks each one.
+
+worktrunk and beads install the same way: skip if present, else mise, else Homebrew (`brew install worktrunk` / `brew install beads`), else upstream (worktrunk's GitHub release; the [beads installer](https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh), which puts `bd` in `/usr/local/bin` when writable, else `~/.local/bin`).
+
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), and cursor-agent are optional. Install the ones you want Shep to use; `bercail harness` reports which are on PATH.
 
 ## development
 

@@ -56,10 +56,9 @@ cat >"$(_state_path w-child)" <<'JSON'
 JSON
 export HERDR_WORKSPACE_ID=w-child
 
-prompt_file="$TMP_DIR/prompt.txt"
-printf '/poteto-mode\n\nintro\n\nfix auth' >"$prompt_file"
+handoff_prompt='bercail-0s1'
 export WT_HERDR_AGENT_CMD=cursor-agent
-export WT_HERDR_AGENT_PROMPT_FILE="$prompt_file"
+export WT_HERDR_AGENT_PROMPT="$handoff_prompt"
 : >"$HERDR_CALL_LOG"
 _launch_agent_on_pane pane-agent || fail "prompted launch should succeed"
 run_line="$(grep '^pane run pane-agent ' "$HERDR_CALL_LOG" | head -1)"
@@ -70,52 +69,63 @@ printf '%s' "$run_line" | grep -q -- '-li -c' \
   || fail "must pass one quoted login-shell -c line; log=$run_line"
 printf '%s' "$run_line" | grep -q 'cursor-agent' \
   || fail "one-liner should exec cursor-agent; log=$run_line"
+printf '%s' "$run_line" | grep -q 'bercail-0s1' \
+  || fail "one-liner should pass the issue id as the prompt; log=$run_line"
 printf '%s' "$run_line" | grep -q 'cat' \
-  || fail "one-liner should cat the prompt file; log=$run_line"
+  && fail "no prompt file to cat; log=$run_line"
 grep -q 'agent prompt' "$HERDR_CALL_LOG" \
   && fail "must not TUI-inject herdr agent prompt; log=$(cat "$HERDR_CALL_LOG")"
-printf 'PASS: start-agent launches cursor-agent from a prompt file\n'
+printf 'PASS: start-agent launches cursor-agent with the issue id as its prompt\n'
 
-unset WT_HERDR_AGENT_PROMPT_FILE
+: >"$HERDR_CALL_LOG"
+export WT_HERDR_AGENT_PROMPT=$'bercail-0s1\nrm -rf ~'
+if _launch_agent_on_pane pane-agent 2>/dev/null; then
+  fail "a multiline handoff prompt must be refused"
+fi
+grep -q 'pane run' "$HERDR_CALL_LOG" \
+  && fail "a multiline prompt must not launch; log=$(cat "$HERDR_CALL_LOG")"
+printf 'PASS: a multiline handoff prompt is refused\n'
+
+unset WT_HERDR_AGENT_PROMPT
 unset WT_HERDR_AGENT_CMD
 : >"$HERDR_CALL_LOG"
 _launch_agent_on_pane pane-agent || true
 grep -qE '^pane run pane-agent cursor-agent$' "$HERDR_CALL_LOG" \
   || fail "unprompted start should run the configured agent; log=$(cat "$HERDR_CALL_LOG")"
-grep -q '/poteto-mode' "$HERDR_CALL_LOG" \
-  && fail "no prompt file means no poteto-mode argv; log=$(cat "$HERDR_CALL_LOG")"
+grep -q 'bercail-0s1' "$HERDR_CALL_LOG" \
+  && fail "no handoff prompt means no issue argv; log=$(cat "$HERDR_CALL_LOG")"
 printf 'PASS: unprompted start-agent runs the configured agent\n'
 
-# Default start ignores an inherited handoff prompt file.
+# Default start ignores an inherited handoff prompt.
 export WT_HERDR_AGENT_CMD=cursor-agent
-export WT_HERDR_AGENT_PROMPT_FILE="$prompt_file"
+export WT_HERDR_AGENT_PROMPT="$handoff_prompt"
 export WT_HERDR_AGENT_READY_TIMEOUT_MS=0
 : >"$HERDR_CALL_LOG"
 _start_default_agent || true
 unset WT_HERDR_AGENT_READY_TIMEOUT_MS
 grep -qE '^pane run pane-agent cursor-agent$' "$HERDR_CALL_LOG" \
   || fail "default start should run a clear agent session; log=$(cat "$HERDR_CALL_LOG")"
-grep -q 'cat' "$HERDR_CALL_LOG" \
-  && fail "default start must not cat a prompt file; log=$(cat "$HERDR_CALL_LOG")"
-printf 'PASS: start-default-agent ignores an inherited prompt file\n'
+grep -q 'bercail-0s1' "$HERDR_CALL_LOG" \
+  && fail "default start must not pass the inherited issue; log=$(cat "$HERDR_CALL_LOG")"
+printf 'PASS: start-default-agent ignores an inherited handoff prompt\n'
 
-# Handoff-agent without a prompt file fails.
-unset WT_HERDR_AGENT_PROMPT_FILE
+# Handoff-agent without a prompt fails.
+unset WT_HERDR_AGENT_PROMPT
 unset WT_HERDR_AGENT_CMD
 : >"$HERDR_CALL_LOG"
 if _start_handoff_agent 2>"$TMP_DIR/handoff-err"; then
-  fail "handoff-agent without a prompt file should fail"
+  fail "handoff-agent without a prompt should fail"
 fi
-grep -q 'WT_HERDR_AGENT_PROMPT_FILE' "$TMP_DIR/handoff-err" \
-  || fail "handoff-agent should require the prompt file; err=$(cat "$TMP_DIR/handoff-err")"
+grep -q 'WT_HERDR_AGENT_PROMPT' "$TMP_DIR/handoff-err" \
+  || fail "handoff-agent should require the prompt; err=$(cat "$TMP_DIR/handoff-err")"
 grep -q 'pane run' "$HERDR_CALL_LOG" \
   && fail "handoff-agent without a prompt must not launch; log=$(cat "$HERDR_CALL_LOG")"
-printf 'PASS: handoff-agent requires WT_HERDR_AGENT_PROMPT_FILE\n'
+printf 'PASS: handoff-agent requires WT_HERDR_AGENT_PROMPT\n'
 
-unset WT_HERDR_AGENT_PROMPT_FILE
+unset WT_HERDR_AGENT_PROMPT
 unset WT_HERDR_AGENT_CMD
 
-# Live agent + no prompt file: no-op (do not replace).
+# Live agent + no handoff prompt: no-op (do not replace).
 cat >"$TMP_DIR/herdr" <<'FAKE_HERDR'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -133,7 +143,7 @@ chmod +x "$TMP_DIR/herdr"
 : >"$HERDR_CALL_LOG"
 _start_agent || true
 grep -q 'pane run' "$HERDR_CALL_LOG" \
-  && fail "must not restart a live agent when there is no prompt file; log=$(cat "$HERDR_CALL_LOG")"
+  && fail "must not restart a live agent when there is no handoff prompt; log=$(cat "$HERDR_CALL_LOG")"
 printf 'PASS: unprompted start-agent does not replace a live agent\n'
 
 # Prompt file + live agent: reset then launch.
@@ -168,7 +178,7 @@ esac
 FAKE_HERDR
 chmod +x "$TMP_DIR/herdr"
 export WT_HERDR_AGENT_CMD=cursor-agent
-export WT_HERDR_AGENT_PROMPT_FILE="$prompt_file"
+export WT_HERDR_AGENT_PROMPT="$handoff_prompt"
 : >"$HERDR_CALL_LOG"
 rm -f "$RESET_FLAG" "$STARTED_FLAG"
 _start_agent || fail "prompted start should replace the live agent"
@@ -182,7 +192,7 @@ printf 'PASS: prompted start-agent replaces a live agent\n'
 
 # create never starts the agent.
 write_herdr_shell
-unset WT_HERDR_AGENT_PROMPT_FILE
+unset WT_HERDR_AGENT_PROMPT
 unset WT_HERDR_AGENT_CMD
 : >"$HERDR_CALL_LOG"
 # _layout_ensure needs more herdr surface; just assert create action does not

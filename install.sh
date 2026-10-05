@@ -9,7 +9,7 @@ bootstrap_remote_libs() {
   local tmp lib
   tmp="$(mktemp -d)"
   mkdir -p "$tmp/lib"
-  for lib in common detect deps config skills shell-rc uninstall help omarchy doctor; do
+  for lib in common detect deps config skills shell-rc uninstall help omarchy doctor harness; do
     curl -fsSL "${base%/}/lib/${lib}.sh" -o "$tmp/lib/${lib}.sh"
   done
   printf '%s' "$tmp"
@@ -30,6 +30,10 @@ ROOT="$(resolve_root)"
 if [[ ! -f "$ROOT/lib/common.sh" ]]; then
   printf 'error: failed to load installer libraries\n' >&2
   exit 1
+fi
+# Unpacked from a release by mise or packslip: that tool owns the bercail command.
+if [[ -f "$ROOT/.bercail-package" ]]; then
+  export BERCAIL_PACKAGED=1
 fi
 
 # shellcheck source=lib/common.sh
@@ -52,6 +56,8 @@ source "$ROOT/lib/help.sh"
 source "$ROOT/lib/omarchy.sh"
 # shellcheck source=lib/doctor.sh
 source "$ROOT/lib/doctor.sh"
+# shellcheck source=lib/harness.sh
+source "$ROOT/lib/harness.sh"
 
 parse_install_args() {
   while [[ $# -gt 0 ]]; do
@@ -79,6 +85,9 @@ main() {
   is_omarchy && info "omarchy detected"
   is_ubuntu && info "ubuntu detected"
   is_debian && ! is_ubuntu && info "debian detected"
+  if [[ "${BERCAIL_PACKAGED:-0}" != 1 ]]; then
+    info "recommended install: mise use -g packslip:github.com/simoncrypta/bercail && bercail install (signed release); this curl/clone install stays supported"
+  fi
 
   install_dependencies
   deploy_configs

@@ -8,7 +8,7 @@ The plugin is three Bash modules:
 
 ## Pane topology
 
-Shell is the only layout tab at create. `apply` / `d` / `dev` start a clear session of the configured agent; `handoff-agent` starts or replaces it with a prompt file. Review is created on demand (`select-review` / `prefix+2`) and closed after the round (`close-review` / `prefix+k` / tuicr quit). Agent and sidebar follow the active center:
+Shell is the only layout tab at create. `apply` / `d` / `dev` start a clear session of the configured agent; `handoff-agent` starts or replaces it with a one-line prompt (a beads issue id). Review is created on demand (`select-review` / `prefix+2`) and closed after the round (`close-review` / `prefix+k` / tuicr quit). Agent and sidebar follow the active center:
 
 ```text
 Shell tab (tab 1):    [ agent | shell                    | sidebar ]
