@@ -2,7 +2,7 @@
 
 **an ADE on [herdr](https://herdr.dev).**
 
-Bercail is an agentic development environment: Herdr-based, built for working in parallel with control and observability. One git worktree, one Herdr workspace. A sticky agent stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. When it goes `done`, [tuicr](https://github.com/agavra/tuicr) opens the whole branch vs main and watches further edits. You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
+Bercail is an agentic development environment: Herdr-based, built for working in parallel with control and observability. One git worktree, one Herdr workspace. A sticky agent stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. Agents stage their changes and leave them uncommitted; when the agent goes `done`, [tuicr](https://github.com/agavra/tuicr) opens those uncommitted changes and watches further edits. You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
 
 **Bercail is built to be orchestrated by a Grok bot.** [Shep](#shep-the-grok-bot) is that bot: a public Grok bot that runs bercail for you. The agentic workflow here (beads issues, named stages, result files, review when a desk is done) is optimized for Shep as the orchestrator. Bercail does the local work; Shep decides what happens next.
 
@@ -15,7 +15,7 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 - **sticky agent** — the configured agent (cursor-agent by default) does not live in a tab. Tabs move around it.
 - **one worktree, one workspace** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; Herdr follows.
 - **control and observability** — every pane is working, blocked, or idle. Review opens on `done`. You choose what gets a GitHub comment.
-- **review when the agent is done** — `tuicr -r origin/main -w` on a feature branch (working tree vs main, watching). Other people's PRs open with `tuicr pr`. `prefix+2` anytime.
+- **review when the agent is done** — `tuicr -w` on the staged, uncommitted work the agent left for you (watching). Other people's PRs open with `tuicr pr`. `prefix+2` anytime.
 - **handoff is parallel, not a chat fork** — one beads issue per job, run headless or in a sibling worktree with its own sticky pane. See [handoff](#handoff).
 - **keyboard and mouse** — prefix is `Ctrl-Space` (Omarchy tmux). Click the file tree; `j`/`k` in tuicr.
 
@@ -44,7 +44,7 @@ Bercail works without Shep, but Shep is the intended orchestrator. To do Shep's 
 
 ## install
 
-Current release: [v0.6.2](https://github.com/simoncrypta/bercail/releases/tag/v0.6.2).
+Current release: [v0.7.0](https://github.com/simoncrypta/bercail/releases/tag/v0.7.0).
 
 Recommended: [mise](https://mise.jdx.dev) + [packslip](https://github.com/jdx/packslip). Each `v*` release publishes `bercail.tar.gz` and a signed `packslip.sigstore.json`. mise checks that signature against this repository and the archive digest before it unpacks anything, and it runs no downloaded code.
 
@@ -60,7 +60,7 @@ packslip install github.com/simoncrypta/bercail      # packslip 1.5.1+
 bercail install
 ```
 
-mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.6.2`.
+mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.7.0`.
 
 The first install trusts the repository's signer, and later installs must match it. `bercail install` runs the release's own `install.sh`. mise or packslip keeps the `bercail` command, so the installer does not copy a second one into `~/.local/bin`. Upgrade with `mise up` (or `packslip install` again), then `bercail update`.
 
@@ -179,7 +179,7 @@ Manual skill install: `npx skills add simoncrypta/bercail --skill handoff -g`
 | `select-tab-1` … `select-tab-9` | `Alt+1`…`9` (Option on macOS) |
 | `select-prev-tab` / `select-next-tab` | `Alt+Left` / `Alt+Right` |
 
-Review launch: feature branch → `tuicr -r origin/main -w` (watches committed + uncommitted); on main → `tuicr -w`; someone else's PR on this checkout → `tuicr pr <n>`. Pickr defaults to `tuicr pr {url}`. `auto_review = false` disables the agent-done hook. A live Review pane is not restarted — tuicr's diff watch keeps it current.
+Review launch: own work → `tuicr -w` (uncommitted only, watching; agents stage and never commit unreviewed work, and a clean tree does not auto-open); someone else's PR on this checkout → `tuicr pr <n>`. Pickr defaults to `tuicr pr {url}`. `auto_review = false` disables the agent-done hook. A live Review pane is not restarted — tuicr's diff watch keeps it current.
 
 ## keys
 
@@ -238,7 +238,7 @@ Also: `~/.config/herdr/config.toml`, worktrunk hooks, `~/.agents/skills/{handoff
 Already on Herdr and only want the layout:
 
 ```bash
-herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.6.2
+herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.7.0
 ```
 
 Needs Herdr 0.9.3+, `jq`, a Rust toolchain, tuicr. Copy keys from [`config/herdr/config.toml`](config/herdr/config.toml). Set `close_tab = ""` and `close_pane = ""`. Full install also adds shell commands, CLI, skills, worktrunk hooks, and desktop fixes.

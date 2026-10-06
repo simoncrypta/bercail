@@ -4,8 +4,8 @@ command = "cursor-agent"
 
 [layout]
 review = "tuicr"
-# Open tuicr when the layout agent pane goes done (branch vs origin/main
-# plus uncommitted, watching). Someone else's PR uses `tuicr pr`.
+# Open tuicr when the layout agent pane goes done (`tuicr -w`: uncommitted
+# changes only, watching; agents stage and do not commit). Someone else's PR uses `tuicr pr`.
 # Set false to disable the hook.
 auto_review = true
 # Omit editor to use $EDITOR / $VISUAL, or nano/vi on macOS.

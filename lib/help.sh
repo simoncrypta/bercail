@@ -37,7 +37,7 @@ Shell commands:
 
 Layout:
   Left 5/12: agent pane (sticky) — command from ~/.config/bercail/config.toml
-  Center 5/12: review (\`tuicr -r origin/main -w\` watching; auto-opens on agent done) or shell tab
+  Center 5/12: review (\`tuicr -w\` uncommitted only, watching; auto-opens on agent done) or shell tab
   Right 1/6: files / git pane
 
 Herdr keys (prefix = Ctrl-Space):
@@ -100,7 +100,7 @@ Agent skills (\`handoff\`, \`review\`):
 
 Plugin only (see README — review manifest/scripts before install):
   herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout
-  herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.6.2
+  herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.7.0
   herdr plugin link /path/to/agentic-dev-setup/plugins/agentic-layout
   herdr plugin config-dir agentic-dev.layout
   herdr plugin action invoke agentic-dev.layout.create

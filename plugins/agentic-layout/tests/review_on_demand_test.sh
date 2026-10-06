@@ -283,7 +283,8 @@ _on_agent_status_changed
 grep -q 'tab create' "$HERDR_CALL_LOG" && fail "clean $base_branch must not open Review"
 printf 'PASS: clean default branch does not auto-open Review\n'
 
-# Feature branch vs main/master: always tuicr -r <base> -w, not working-tree-only.
+# Committed work is already reviewed: a clean feature branch does not open
+# Review. Agents keep changes staged, so only uncommitted work triggers it.
 git -C "$git_dir" checkout -q -b feat
 printf 'feat\n' >"$git_dir/file.txt"
 git -C "$git_dir" add file.txt
@@ -291,22 +292,21 @@ git -C "$git_dir" commit -qm feat
 reset_review_state
 : >"$HERDR_CALL_LOG"
 _on_agent_status_changed
-grep -q 'tab create' "$HERDR_CALL_LOG" || fail "branch-ahead should open Review; log=$(cat "$HERDR_CALL_LOG")"
-grep -Fq -- "-r\\ ${base_branch}\\ -w" "$HERDR_CALL_LOG" \
-  || fail "clean feature should launch tuicr -r ${base_branch} -w; log=$(cat "$HERDR_CALL_LOG")"
-grep -q "${base_branch}...HEAD" "$HERDR_CALL_LOG" \
-  && fail "should not use three-dot range; log=$(cat "$HERDR_CALL_LOG")"
-printf 'PASS: committed feature branch opens tuicr -r %s -w\n' "$base_branch"
+grep -q 'tab create' "$HERDR_CALL_LOG" \
+  && fail "clean feature branch must not open Review; log=$(cat "$HERDR_CALL_LOG")"
+printf 'PASS: clean feature branch does not auto-open Review\n'
 
 printf 'wip\n' >"$git_dir/file.txt"
+git -C "$git_dir" add file.txt
 reset_review_state
 : >"$HERDR_CALL_LOG"
 _on_agent_status_changed
-grep -Fq -- "-r\\ ${base_branch}\\ -w" "$HERDR_CALL_LOG" \
-  || fail "dirty feature should still launch tuicr -r ${base_branch} -w; log=$(cat "$HERDR_CALL_LOG")"
-grep -E 'tuicr(\\ | )-w(\\ | )--no-update-check' "$HERDR_CALL_LOG" \
-  && fail "dirty feature must not drop the PR base; log=$(cat "$HERDR_CALL_LOG")"
-printf 'PASS: dirty feature branch still opens tuicr -r %s -w\n' "$base_branch"
+grep -q 'tab create' "$HERDR_CALL_LOG" || fail "staged work should open Review; log=$(cat "$HERDR_CALL_LOG")"
+grep -E 'tuicr(\\ | )-w(\\ | )--no-update-check' "$HERDR_CALL_LOG" >/dev/null \
+  || fail "staged work should launch tuicr -w; log=$(cat "$HERDR_CALL_LOG")"
+grep -Fq -- "-r\\ ${base_branch}" "$HERDR_CALL_LOG" \
+  && fail "review must not include committed history; log=$(cat "$HERDR_CALL_LOG")"
+printf 'PASS: staged work on a feature branch opens tuicr -w\n'
 
 # auto_review = false skips even a dirty tree.
 git -C "$git_dir" checkout -q -f "$base_branch"

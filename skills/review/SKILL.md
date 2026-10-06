@@ -9,10 +9,15 @@ compatibility: Requires Herdr (HERDR_ENV=1), the agentic-dev.layout plugin, and 
 
 # review
 
-The layout plugin opens tuicr when the agent pane reports `done` if there is a
-PR-shaped diff. Own branch: `tuicr -r origin/main -w` (working tree vs main,
-committed + uncommitted) with tuicr's diff watch so later edits show without
-restarting. On main: `tuicr -w`. Someone else's PR on this checkout:
+Agents keep their changes **staged, not committed**, until the human has
+reviewed them. Run `git add` on what is ready for review; never `git commit`
+unless the user asked. Committed work is treated as already reviewed.
+
+The layout plugin opens tuicr when the agent pane reports `done` if there are
+uncommitted changes: `tuicr -w` (staged + unstaged + untracked, not committed
+history) with tuicr's diff watch so later edits show without restarting.
+tuicr has no staged-only flag; keep scratch edits out of the tree so the
+uncommitted diff is the review. Someone else's PR on this checkout:
 `tuicr pr <n>` (forge review, `:submit`). Pickr uses `tuicr pr {url}` for
 other people's PRs. `prefix+2` opens Review anytime.
 
@@ -96,5 +101,6 @@ Reopen later with step 1. The human can also `prefix+2` / `prefix+k`.
 
 - Run `tuicr` / `tuicr pr` in the agent pane (the TUI is for the user).
 - Open Review on every edit. Watch keeps an open session current.
+- Commit work the human has not reviewed. Stage it and leave it uncommitted.
 - Post agent-authored comments (`tuicr review add --username`) as a GitHub review.
 - Impersonate the user's comments.

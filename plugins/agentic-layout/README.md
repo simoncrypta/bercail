@@ -11,7 +11,7 @@ Install the full stack (Herdr, Worktrunk, agents, keybindings) via [agentic-dev-
 ## Plugin only
 
 ```bash
-herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.6.2 --yes
+herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.7.0 --yes
 ```
 
 Local development:
@@ -30,7 +30,7 @@ herdr plugin link ~/path/to/agentic-dev-setup/plugins/agentic-layout
 | `start-agent` | Start the configured agent if the pane is a shell (no prompt; does not replace a live agent) |
 | `handoff-agent` | Start or replace the agent with the one-line `WT_HERDR_AGENT_PROMPT`, a beads issue id (orchestrator / handoff-spawn) |
 | `focus-agent` | Focus the persistent agent pane; start it if the pane is a shell |
-| `select-review` | Open or focus review (`tuicr -r origin/main -w` on a feature branch, `tuicr pr N` for someone else's PR; creates the tab if needed) |
+| `select-review` | Open or focus review (`tuicr -w`, uncommitted changes only, `tuicr pr N` for someone else's PR; creates the tab if needed) |
 | `close-review` | Close the Review tab and return to Shell |
 | `refresh-review` | Focus review and restart tuicr (`-r <base> -w` or `tuicr pr`) |
 | `select-review-worktree` | Open Review with uncommitted changes (`tuicr -w`) |

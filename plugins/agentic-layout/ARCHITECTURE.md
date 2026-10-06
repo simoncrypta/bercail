@@ -12,11 +12,11 @@ Shell is the only layout tab at create. `apply` / `d` / `dev` start a clear sess
 
 ```text
 Shell tab (tab 1):    [ agent | shell                    | sidebar ]
-Review tab (on demand): [ agent | review (tuicr -r origin/main -w, watching) | sidebar ]
+Review tab (on demand): [ agent | review (tuicr -w, uncommitted only, watching) | sidebar ]
 Editor tab (file):    [ agent | editor ($EDITOR <path>)    | sidebar ]
 ```
 
-Herdr's default `main` tab is adopted as Shell (tab 1), including the recovery case where that tab is still labeled `Review`. A leftover Review tab from an older layout is adopted, not recreated. Default focus is shell. Missing Review is healthy — startup does not respawn tuicr. The agent-done hook opens Review with `tuicr -r origin/main -w` on a feature branch (working tree vs main, watching), `tuicr -w` on main, or `tuicr pr N` when this checkout is someone else's PR (`auto_review = false` disables that). A live tuicr pane is not restarted on later `done` events.
+Herdr's default `main` tab is adopted as Shell (tab 1), including the recovery case where that tab is still labeled `Review`. A leftover Review tab from an older layout is adopted, not recreated. Default focus is shell. Missing Review is healthy — startup does not respawn tuicr. Agents keep their changes staged, not committed, for human review. The agent-done hook opens Review only when the tree has uncommitted changes, with `tuicr -w` (uncommitted only, watching), or `tuicr pr N` when this checkout is someone else's PR (`auto_review = false` disables that). A live tuicr pane is not restarted on later `done` events.
 
 `_activate_tab` is the only switch path. Plugin keys (Alt+Left/Right, Alt+1..9, prefix+2/+3) dock agent+sidebar onto the **hidden** target tab, persist the new pane ids under the layout lock, then focus — so `tab.focused` never races stale ids, and the destination is never painted as a full-width center. `tab.focused` is the backup for native/mouse switches and docks without re-focusing. Agent is moved first at its final 5/12 width, then swapped left, so the PTY is not resized (same trick the sidebar uses: one in-process move, no respawn). `pane split` and `pane move --ratio` are both left-keep. Agent and shell/review share the remaining width equally; sidebar stays 1/6.
 

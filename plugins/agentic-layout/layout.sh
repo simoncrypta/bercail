@@ -141,16 +141,14 @@ _review_merge_base() {
   return 1
 }
 
-# Open Review when there is a PR-shaped diff: untracked/uncommitted files,
-# or the working tree differs from origin/main / main.
+# Open Review only when there is uncommitted work. Agents leave changes staged
+# (never committed) for human review, so committed history is already reviewed.
 _review_should_open() {
-  local workdir="$1" base
+  local workdir="$1"
   if ! git -C "$workdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     return 0
   fi
-  [[ -n "$(git -C "$workdir" status --porcelain 2>/dev/null)" ]] && return 0
-  base="$(_review_merge_base "$workdir")" || return 1
-  ! git -C "$workdir" diff --quiet "$base" -- 2>/dev/null
+  [[ -n "$(git -C "$workdir" status --porcelain 2>/dev/null)" ]]
 }
 
 _review_auto_enabled() {
@@ -204,18 +202,14 @@ _review_hunk_cmd() {
   printf '%s' "hunk diff --watch --agent-notes"
 }
 
-# Own work: `tuicr -r <base> -w` so committed + uncommitted stay in view.
-# Foreign PR checkout: `tuicr pr N`. diff_watch_interval_ms (tuicr config)
-# reloads the local diff; it does not apply to `tuicr pr`.
+# Own work: `tuicr -w`, uncommitted changes only. Agents keep their changes
+# staged, not committed, so this is exactly what awaits human review (tuicr has
+# no staged-only flag). Foreign PR checkout: `tuicr pr N`. diff_watch_interval_ms
+# (tuicr config) reloads the local diff; it does not apply to `tuicr pr`.
 _review_tuicr_cmd() {
-  local workdir="$1" pr base
+  local workdir="$1" pr
   if pr="$(_review_foreign_pr_number "$workdir")"; then
     printf 'tuicr pr %s --no-update-check' "$pr"
-    return 0
-  fi
-  base="$(_review_merge_base "$workdir" || true)"
-  if [[ -n "$base" ]]; then
-    printf 'tuicr -r %s -w --no-update-check' "$base"
     return 0
   fi
   printf 'tuicr -w --no-update-check'
@@ -497,8 +491,8 @@ _on_tab_focused() {
 }
 
 # Open tuicr when the layout agent pane finishes a turn (`done`). Idle is too
-# noisy (includes never-started). Skip empty trees (unless the working tree
-# differs from origin/main / main) and debounce. auto_review=false disables this.
+# noisy (includes never-started). Skip clean trees (nothing uncommitted) and
+# debounce. auto_review=false disables this.
 # A live Review pane is left running; tuicr's diff watch picks up new edits.
 _on_agent_status_changed() {
   local status pane workspace_id state agent workdir now last focused

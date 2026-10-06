@@ -394,7 +394,7 @@ handoff_spawn_main() {
   label="$(_wt_generate_session_name "$sibling")"
 
   # The checkout facts used to be a prompt preamble. They go on the issue now.
-  intro="$(printf 'bercail handoff: stage %s, pane %s, linked worktree %s (branch %s). Stay in this checkout. Do not open Review or invoke the review skill; tuicr opens itself when the agent pane goes done. Layout plugin id is agentic-dev.layout, never agentic-dev.dev-layout.' \
+  intro="$(printf 'bercail handoff: stage %s, pane %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr; never commit unless asked. Do not open Review or invoke the review skill; tuicr opens itself when the agent pane goes done. Layout plugin id is agentic-dev.layout, never agentic-dev.dev-layout.' \
     "$stage" "$binary" "$sibling" "$branch")"
   if [[ "$graphite" -eq 1 ]]; then
     intro="$(printf '%s\nUse gt, not raw git commit/push, unless asked.' "$intro")"
