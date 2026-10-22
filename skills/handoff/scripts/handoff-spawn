@@ -169,6 +169,8 @@ handoff_bool_json() {
 
 handoff_result_json() {
   local label="$1" sibling="$2" branch="$3" issue="$4" started="$5" copied="$6" graphite="$7"
+  local stage="${8:-}" harness="${9:-}"
+  # stage/harness let the layout plugin's notify.sh label desk events.
   jq -nc \
     --arg label "$label" \
     --arg path "$sibling" \
@@ -177,7 +179,11 @@ handoff_result_json() {
     --argjson agent_started "$(handoff_bool_json "$started")" \
     --argjson dirty_copied "$(handoff_bool_json "$copied")" \
     --argjson graphite "$(handoff_bool_json "$graphite")" \
-    '{ok:true,label:$label,path:$path,branch:$branch,issue:$issue,agent_started:$agent_started,dirty_copied:$dirty_copied,graphite:$graphite}'
+    --arg stage "$stage" \
+    --arg harness "$harness" \
+    '{ok:true,label:$label,path:$path,branch:$branch,issue:$issue,agent_started:$agent_started,dirty_copied:$dirty_copied,graphite:$graphite}
+     + (if $stage == "" then {} else {stage:$stage} end)
+     + (if $harness == "" then {} else {harness:$harness} end)'
 }
 
 handoff_info_json() {
@@ -414,7 +420,7 @@ handoff_spawn_main() {
     echo "handoff-spawn: handoff-agent did not confirm a live agent; worktree is still $sibling ($label)" >&2
   fi
 
-  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite")"
+  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" "$binary")"
   handoff_remember "$json"
   printf '%s\n' "$json"
 }

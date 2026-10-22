@@ -164,6 +164,9 @@ test_result_json_records_unconfirmed_agent() {
   printf '%s' "$got" | jq -e '.agent_started == false' >/dev/null || fail "started: $got"
   printf '%s' "$got" | jq -e '.graphite == true' >/dev/null || fail "graphite: $got"
   printf '%s' "$got" | jq -e '.path == "/tmp/wt"' >/dev/null || fail "path: $got"
+  printf '%s' "$got" | jq -e '(has("stage")|not) and (has("harness")|not)' >/dev/null || fail "no stage: $got"
+  got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 1 0 0 start claude)"
+  printf '%s' "$got" | jq -e '.stage == "start" and .harness == "claude"' >/dev/null || fail "stage/harness: $got"
   printf 'PASS: result JSON is emitted when agent start is unconfirmed\n'
 }
 
