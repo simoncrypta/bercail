@@ -44,7 +44,7 @@ Bercail works without Shep, but Shep is the intended orchestrator. To do Shep's 
 
 ## install
 
-Current release: [v0.7.0](https://github.com/simoncrypta/bercail/releases/tag/v0.7.0).
+Current release: [v0.8.0](https://github.com/simoncrypta/bercail/releases/tag/v0.8.0).
 
 Recommended: [mise](https://mise.jdx.dev) + [packslip](https://github.com/jdx/packslip). Each `v*` release publishes `bercail.tar.gz` and a signed `packslip.sigstore.json`. mise checks that signature against this repository and the archive digest before it unpacks anything, and it runs no downloaded code.
 
@@ -60,7 +60,7 @@ packslip install github.com/simoncrypta/bercail      # packslip 1.5.1+
 bercail install
 ```
 
-mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.7.0`.
+mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.8.0`.
 
 The first install trusts the repository's signer, and later installs must match it. `bercail install` runs the release's own `install.sh`. mise or packslip keeps the `bercail` command, so the installer does not copy a second one into `~/.local/bin`. Upgrade with `mise up` (or `packslip install` again), then `bercail update`.
 
@@ -270,7 +270,7 @@ Also: `~/.config/herdr/config.toml`, worktrunk hooks, `~/.agents/skills/{handoff
 Already on Herdr and only want the layout:
 
 ```bash
-herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.7.0
+herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.8.0
 ```
 
 Needs Herdr 0.9.3+, `jq`, a Rust toolchain, tuicr. Copy keys from [`config/herdr/config.toml`](config/herdr/config.toml). Set `close_tab = ""` and `close_pane = ""`. Full install also adds shell commands, CLI, skills, worktrunk hooks, and desktop fixes.
