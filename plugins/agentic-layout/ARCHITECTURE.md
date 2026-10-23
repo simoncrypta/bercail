@@ -1,10 +1,11 @@
 # Architecture
 
-The plugin is three Bash modules:
+The plugin is four Bash modules:
 
 - `state.sh` — reentrant layout lock, probe, load, save, v3→v4 migrate (drops `main_tab_id`). Every state write goes through the lock.
 - `topology.sh` — Shell tab always, Review on demand, four panes, dock-then-focus tab switch
 - `layout.sh` — config, Herdr helpers, actions, events
+- `notify.sh` — agent-status fan-out to `~/.config/bercail/notify.d` webhook sinks (own hook; per-pane prev status under `<state>/notify`, swapped under a lock; delivery runs after the lock is released so a slow sink never delays other panes; `pane.exited`/`workspace.closed` forget saved statuses so reused pane ids start fresh)
 
 ## Pane topology
 

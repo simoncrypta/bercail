@@ -36,7 +36,7 @@ Bercail's workflow is designed around Shep. Shep owns the workflow; bercail runs
 1. Shep writes the job as a beads issue (`bd create`): the ask, the repo, links, and any "plan only" note.
 2. Shep picks a stage for that issue and runs `handoff-spawn --stage start|codex|cursor --issue ID` (see [handoff](#handoff)). bercail never picks the stage and never falls back to another one.
 3. bercail checks `bd` and the issue, adds a `bd comment` with the worktree (and, headless, the result file), and starts that one harness with the issue id as its whole prompt.
-4. Shep reads `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`), resumes the session if needed, and tells you when the desk is ready.
+4. For a `--branch` pane, Shep hears `finished` and `blocked` from its [agent status webhook](#agent-status-webhooks). A headless run has no Herdr pane and sends no webhook: `handoff-spawn` returns when it ends. Either way, Shep reads `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`), resumes the session if needed, and tells you when the desk is ready.
 
 Shep runs the same workflow whichever harness works the issue.
 
@@ -180,6 +180,38 @@ Manual skill install: `npx skills add simoncrypta/bercail --skill handoff -g`
 | `select-prev-tab` / `select-next-tab` | `Alt+Left` / `Alt+Right` |
 
 Review launch: own work → `tuicr -w` (uncommitted only, watching; agents stage and never commit unreviewed work, and a clean tree does not auto-open); someone else's PR on this checkout → `tuicr pr <n>`. Pickr defaults to `tuicr pr {url}`. `auto_review = false` disables the agent-done hook. A live Review pane is not restarted — tuicr's diff watch keeps it current.
+
+### agent status webhooks
+
+The layout plugin's `notify.sh` hook forwards agent status to webhooks, one sink per bot. Herdr's `pane.agent_status_changed` carries no previous status, and it also fires for title-only changes and for `done` → `idle` when you look at a pane. `notify.sh` keeps each pane's last live status (checked with `herdr pane get`) and sends only these:
+
+- `finished`: working or blocked → done or idle
+- `blocked`: once each time the agent blocks
+
+Shell, review, and sidebar panes are skipped.
+
+Sinks are `~/.config/bercail/notify.d/<name>.toml` (`chmod 600`; see [`notify.sink.example`](plugins/agentic-layout/notify.sink.example)). They filter by workspace label glob, repo, and kind. The key is sent through a private header file, never through argv. A 401 or 403 shows a Herdr notification once per outage and logs every time. Without sinks the hook does nothing.
+
+```bash
+plugin=$(herdr plugin list --plugin agentic-dev.layout --json | jq -r '.result.plugins[0].plugin_root')
+bash "$plugin/notify.sh" status       # sinks, filters, last HTTP code; never prints url or key
+bash "$plugin/notify.sh" test work-shep
+```
+
+Each POST body is `bercail.agent_status/v1`:
+
+```json
+{"source":"bercail","schema":"bercail.agent_status/v1","kind":"finished","sink":"work-shep",
+ "at":"2026-10-22T22:42:00Z","event_id":"w6N:p2:finished:1792708920",
+ "pane":{"pane_id":"w6N:p2","workspace_id":"w6N","agent":"claude","role":"agent",
+         "status":"done","previous_status":"working","verified":true},
+ "workspace":{"label":"Render-preview_Leftlane_app","repo":"leftlane_app","checkout_path":"/path/desk","linked":true},
+ "desk":{"branch":"feat/render","issue":"lef2745-2vs","stage":"start","harness":"claude",
+         "result":{"status":"ready","summary":"...","session_id":"..."}},
+ "event":{"event":"pane.agent_status_changed","data":{}},"context":{}}
+```
+
+`desk.issue`, `stage`, and `harness` come from the matching `handoffs.jsonl` record. `desk.result` is the checkout's `.bercail/handoff-result.json` when one exists (usually `null`: headless runs have no pane, so they send no events). `event` and `context` are Herdr's raw hook payloads.
 
 ## keys
 

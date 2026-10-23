@@ -189,3 +189,16 @@ command = ["bash", "layout.sh", "event-tab-focused"]
 [[events]]
 on = "pane.agent_status_changed"
 command = ["bash", "layout.sh", "event-agent-status"]
+
+# Fan-out to webhook sinks in ~/.config/bercail/notify.d (no-op without sinks).
+[[events]]
+on = "pane.agent_status_changed"
+command = ["bash", "notify.sh", "event"]
+
+[[events]]
+on = "pane.exited"
+command = ["bash", "notify.sh", "pane-exited"]
+
+[[events]]
+on = "workspace.closed"
+command = ["bash", "notify.sh", "workspace-closed"]
