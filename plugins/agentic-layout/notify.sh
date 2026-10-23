@@ -8,6 +8,7 @@
 # "blocked" once per episode. Herdr's own payload has no previous status.
 #
 #   notify.sh event        Herdr event hook (reads HERDR_PLUGIN_EVENT_JSON)
+#   notify.sh pane-exited  forget a pane's saved status (also workspace-closed)
 #   notify.sh status       sinks, filters, and last delivery result (no secrets)
 #   notify.sh test NAME    send one kind=test payload to sink NAME
 # shellcheck disable=SC1091
@@ -281,9 +282,12 @@ _notify_sink_state_file() {
 # Record a delivery. 401/403 raise one Herdr toast per failure episode and
 # always go to stderr (the plugin log), so a dead key is never silent.
 notify_record() {
-  local name="$1" code="$2" f prev_auth="false" auth="false" ok="false" now tmp
+  local name="$1" code="$2" f prev='{}' prev_auth auth="false" ok="false" now tmp
   f="$(_notify_sink_state_file "$name")"
-  [[ -r "$f" ]] && prev_auth="$(jq -r '.auth_failed // false' "$f" 2>/dev/null || printf 'false')"
+  # A corrupt or empty state file must not stop recording.
+  [[ -r "$f" ]] && prev="$(jq -c 'objects' "$f" 2>/dev/null | head -n 1)"
+  [[ -n "$prev" ]] || prev='{}'
+  prev_auth="$(jq -r '.auth_failed // false' <<<"$prev")"
   now="$(_notify_now)"
   case "$code" in
     2??) ok="true" ;;
@@ -292,11 +296,11 @@ notify_record() {
   tmp="$f.$$"
   jq -nc --arg name "$name" --arg code "$code" --argjson now "$now" \
     --argjson ok "$ok" --argjson auth "$auth" \
-    --argjson prev "$( [[ -r "$f" ]] && cat "$f" || printf '{}')" '
+    --argjson prev "$prev" '
     $prev + {sink:$name, last_code:$code, last_at:$now, auth_failed:$auth}
     + (if $ok then {last_ok_at:$now, failures:0}
        else {last_error_at:$now, failures:(($prev.failures // 0) + 1)} end)' >"$tmp" \
-    && mv -f "$tmp" "$f"
+    && mv -f "$tmp" "$f" || rm -f "$tmp"
   if [[ "$auth" == "true" ]]; then
     _notify_err "sink '$name' rejected its key (HTTP $code); fix the key in $(notify_sinks_dir)/$name.toml"
     if [[ "$prev_auth" != "true" ]]; then
@@ -383,36 +387,46 @@ notify_deliver_all() {
   done < <(notify_sink_files)
 }
 
-# Herdr event hook. Serialised by a lock so concurrent hooks cannot both see
-# the same previous status (that is how duplicate finishes happened).
+# Herdr event hook. The live read, the previous-status swap, and the
+# classification run under a lock so concurrent hooks cannot both see the same
+# previous status (that is how duplicate finishes happened). Delivery runs
+# after the lock is released: a slow sink must not hold up other panes' hooks,
+# or a queued hook reads a later live status and a short turn is lost.
 notify_event() {
   [[ -n "$(notify_sink_files)" ]] || return 0
   local pane
   pane="$(_notify_event_field pane_id)"
   [[ -n "$pane" ]] || return 0
+  NOTIFY_KIND="none"
   _layout_lock_acquire notify-hook || return 0
-  notify_event_locked "$pane" || true
+  notify_event_classify "$pane" || true
   _layout_lock_release
+  [[ "$NOTIFY_KIND" != "none" ]] || return 0
+  notify_event_deliver "$pane" || true
 }
 
-notify_event_locked() {
-  local pane="$1" event_status live status prev kind verified=true
-  local workspace_id agent role pane_json ws_json desk_json context path
-  event_status="$(_notify_event_field agent_status)"
-  live="$(notify_live_pane "$pane")"
-  status="$(jq -r '.agent_status // empty' <<<"$live")"
-  if [[ -z "$status" ]]; then
+# Sets NOTIFY_KIND, NOTIFY_LIVE, NOTIFY_STATUS, NOTIFY_PREV, NOTIFY_VERIFIED.
+notify_event_classify() {
+  local pane="$1"
+  NOTIFY_VERIFIED=true
+  NOTIFY_LIVE="$(notify_live_pane "$pane")"
+  NOTIFY_STATUS="$(jq -r '.agent_status // empty' <<<"$NOTIFY_LIVE")"
+  if [[ -z "$NOTIFY_STATUS" ]]; then
     # Pane is gone or herdr is unreachable: fall back to the event's status
     # and mark the payload unverified.
-    status="$event_status"
-    verified=false
+    NOTIFY_STATUS="$(_notify_event_field agent_status)"
+    NOTIFY_VERIFIED=false
   fi
-  [[ -n "$status" ]] || return 0
-  prev="$(notify_pane_prev "$pane")"
-  notify_pane_save "$pane" "$status"
-  kind="$(notify_classify "$prev" "$status")"
-  [[ "$kind" != "none" ]] || return 0
+  [[ -n "$NOTIFY_STATUS" ]] || return 0
+  NOTIFY_PREV="$(notify_pane_prev "$pane")"
+  notify_pane_save "$pane" "$NOTIFY_STATUS"
+  NOTIFY_KIND="$(notify_classify "$NOTIFY_PREV" "$NOTIFY_STATUS")"
+}
 
+notify_event_deliver() {
+  local pane="$1" kind="$NOTIFY_KIND" live="$NOTIFY_LIVE" status="$NOTIFY_STATUS"
+  local prev="$NOTIFY_PREV" verified="$NOTIFY_VERIFIED"
+  local workspace_id agent role pane_json ws_json desk_json context path
   workspace_id="$(jq -r '.workspace_id // empty' <<<"$live")"
   [[ -n "$workspace_id" ]] || workspace_id="$(_notify_event_field workspace_id)"
   agent="$(jq -r '.agent // empty' <<<"$live")"
@@ -428,8 +442,29 @@ notify_event_locked() {
   ws_json="$(notify_workspace_info "$workspace_id" "$context")"
   path="$(jq -r '.checkout_path // empty' <<<"$ws_json")"
   desk_json="$(notify_desk_info "$path" "$agent")"
-  # Same id for every sink and retry, so receivers can dedupe.
-  notify_deliver_all "$kind" "$pane_json" "$ws_json" "$desk_json" "$pane:$kind:$(_notify_now)"
+  # Same id for every sink and retry, so receivers can dedupe. The pid keeps
+  # two real transitions of one pane in the same second apart.
+  notify_deliver_all "$kind" "$pane_json" "$ws_json" "$desk_json" "$pane:$kind:$(_notify_now):$$"
+}
+
+# pane.exited / workspace.closed: drop saved statuses so a reused pane id
+# (herdr numbers panes per workspace) never inherits a stale `working`.
+notify_forget() {
+  local what="$1" id dir
+  dir="$(_state_dir)/notify/panes"
+  [[ -d "$dir" ]] || return 0
+  case "$what" in
+    pane)
+      id="$(_notify_event_field pane_id)"
+      [[ -n "$id" ]] && rm -f "$(_notify_pane_file "$id")"
+      ;;
+    workspace)
+      id="$(_notify_event_field workspace_id)"
+      id="${id//[^A-Za-z0-9_.-]/_}"
+      [[ -n "$id" ]] && rm -f "$dir/${id}_"*.json
+      ;;
+  esac
+  return 0
 }
 
 notify_status() {
@@ -476,9 +511,11 @@ notify_test() {
 notify_main() {
   case "${1:-event}" in
     event) notify_event ;;
+    pane-exited) notify_forget pane ;;
+    workspace-closed) notify_forget workspace ;;
     status) notify_status ;;
     test) notify_test "${2:-}" ;;
-    *) _notify_err "unknown command '${1:-}' (event|status|test NAME)"; return 1 ;;
+    *) _notify_err "unknown command '${1:-}' (event|pane-exited|workspace-closed|status|test NAME)"; return 1 ;;
   esac
 }
 

@@ -194,3 +194,11 @@ command = ["bash", "layout.sh", "event-agent-status"]
 [[events]]
 on = "pane.agent_status_changed"
 command = ["bash", "notify.sh", "event"]
+
+[[events]]
+on = "pane.exited"
+command = ["bash", "notify.sh", "pane-exited"]
+
+[[events]]
+on = "workspace.closed"
+command = ["bash", "notify.sh", "workspace-closed"]

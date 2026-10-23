@@ -36,7 +36,7 @@ Bercail's workflow is designed around Shep. Shep owns the workflow; bercail runs
 1. Shep writes the job as a beads issue (`bd create`): the ask, the repo, links, and any "plan only" note.
 2. Shep picks a stage for that issue and runs `handoff-spawn --stage start|codex|cursor --issue ID` (see [handoff](#handoff)). bercail never picks the stage and never falls back to another one.
 3. bercail checks `bd` and the issue, adds a `bd comment` with the worktree (and, headless, the result file), and starts that one harness with the issue id as its whole prompt.
-4. Shep hears `finished` and `blocked` from its [agent status webhook](#agent-status-webhooks), reads `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`), resumes the session if needed, and tells you when the desk is ready.
+4. For a `--branch` pane, Shep hears `finished` and `blocked` from its [agent status webhook](#agent-status-webhooks). A headless run has no Herdr pane and sends no webhook: `handoff-spawn` returns when it ends. Either way, Shep reads `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`), resumes the session if needed, and tells you when the desk is ready.
 
 Shep runs the same workflow whichever harness works the issue.
 
@@ -211,7 +211,7 @@ Each POST body is `bercail.agent_status/v1`:
  "event":{"event":"pane.agent_status_changed","data":{}},"context":{}}
 ```
 
-`desk.issue`, `stage`, and `harness` come from the matching `handoffs.jsonl` record. `desk.result` is `.bercail/handoff-result.json` for headless desks. `event` and `context` are Herdr's raw hook payloads.
+`desk.issue`, `stage`, and `harness` come from the matching `handoffs.jsonl` record. `desk.result` is the checkout's `.bercail/handoff-result.json` when one exists (usually `null`: headless runs have no pane, so they send no events). `event` and `context` are Herdr's raw hook payloads.
 
 ## keys
 

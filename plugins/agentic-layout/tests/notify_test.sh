@@ -57,6 +57,7 @@ done
 cat >"$CURL_DIR/body.$n"
 printf '%s\n' "$url" >"$CURL_DIR/url.$n"
 code="$(cat "$CURL_DIR/code" 2>/dev/null || echo 200)"
+[[ -f "$CURL_DIR/slow.${url##*/}" ]] && sleep "$(cat "$CURL_DIR/slow.${url##*/}")"
 printf '%s' "$code"
 FAKE_CURL
 chmod +x "$TMP_DIR/curl"
@@ -251,6 +252,53 @@ set_pane p2 "done" claude agent; fire p2 "done"
 [[ "$(posts)" == "$before" ]] || fail "world-readable key sink must not post"
 grep -q "work-shep' key file is readable by others" "$TMP_DIR/stderr.log" || fail "insecure warning"
 chmod 600 "$SINKS/work-shep.toml"
+
+# --- a slow sink does not hold the lock for other panes -----------------------
+# Pane p2 (work sink) is mid-delivery for 3s; pane p7 (perso sink) finishes
+# meanwhile. Its hook must classify and post without waiting for p2's POST.
+set_pane p2 working claude agent; fire p2 working
+set_pane p7 working codex agent; fire p7 working "Personal-notes" "notes"
+before="$(posts)"
+echo 3 >"$CURL_DIR/slow.work"
+set_pane p2 "done" claude agent
+fire p2 "done" &
+slow_pid=$!
+for _ in $(seq 50); do [[ -f "$CURL_DIR/count" && "$(posts)" -gt "$before" ]] && break; sleep 0.05; done
+[[ "$(posts)" -gt "$before" ]] || fail "slow delivery never started"
+set_pane p7 "done" codex agent
+start=$SECONDS
+fire p7 "done" "Personal-notes" "notes"
+(( SECONDS - start < 2 )) || fail "hook waited on another pane's slow delivery"
+grep -q 'hook/perso' "$CURL_DIR/url.$(posts)" || fail "perso finish not posted while work was slow"
+wait "$slow_pid"
+rm -f "$CURL_DIR/slow.work"
+[[ "$(( $(posts) - before ))" == 2 ]] || fail "both finishes should post once, got $(( $(posts) - before ))"
+
+# --- pane.exited / workspace.closed forget saved statuses --------------------
+set_pane "w6N:p4" working claude agent; fire "w6N:p4" working
+set_pane "w6N:p5" working claude agent; fire "w6N:p5" working
+set_pane "w6Nx:p1" working claude agent; fire "w6Nx:p1" working
+pane_state="$HERDR_PLUGIN_STATE_DIR/notify/panes"
+[[ -f "$pane_state/w6N_p4.json" ]] || fail "pane state saved"
+HERDR_PLUGIN_EVENT_JSON='{"event":"pane.exited","data":{"pane_id":"w6N:p4"}}' \
+  bash "$PLUGIN_ROOT/notify.sh" pane-exited
+[[ ! -f "$pane_state/w6N_p4.json" && -f "$pane_state/w6N_p5.json" ]] || fail "pane-exited forgets one pane"
+HERDR_PLUGIN_EVENT_JSON='{"event":"workspace.closed","data":{"workspace_id":"w6N"}}' \
+  bash "$PLUGIN_ROOT/notify.sh" workspace-closed
+[[ ! -f "$pane_state/w6N_p5.json" ]] || fail "workspace-closed forgets its panes"
+[[ -f "$pane_state/w6Nx_p1.json" ]] || fail "workspace-closed must not touch w6Nx"
+# a reused id starting idle is a first sighting, not a finish
+before="$(posts)"
+set_pane "w6N:p4" idle claude agent; fire "w6N:p4" idle
+[[ "$(posts)" == "$before" ]] || fail "reused pane id must not inherit a stale working"
+
+# --- a corrupt sink state file is replaced, not stuck ------------------------
+printf 'not json' >"$HERDR_PLUGIN_STATE_DIR/notify/sinks/work-shep.json"
+set_pane p2 working claude agent; fire p2 working
+set_pane p2 "done" claude agent; fire p2 "done"
+jq -e '.last_code == "200" and .failures == 0' "$HERDR_PLUGIN_STATE_DIR/notify/sinks/work-shep.json" >/dev/null \
+  || fail "corrupt sink state not rewritten"
+! ls "$HERDR_PLUGIN_STATE_DIR/notify/sinks/"*.json.* >/dev/null 2>&1 || fail "sink state temp file left behind"
 
 # --- status / test never print secrets ----------------------------------------
 out="$(bash "$PLUGIN_ROOT/notify.sh" status)"
