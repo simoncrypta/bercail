@@ -50,10 +50,10 @@ APP="$HERDR_APP_CONFIG_DIR"
 mkdir -p "$APP"
 printf '{"global":{"ctrl-shift-t":"tab.new"},"layout:bercail":{"x":"y"}}\n' >"$APP/keys.json"
 deploy_herdr_app >/dev/null
-cmp -s "$ROOT/config/herdr-app/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "layout not installed"
-cmp -s "$ROOT/config/herdr-app/mods/bercail-desk/main.js" "$APP/mods/bercail-desk/main.js" || fail "mod not installed"
+cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "layout not installed"
+cmp -s "$ROOT/bercail/mods/bercail-desk/main.js" "$APP/mods/bercail-desk/main.js" || fail "mod not installed"
 jq -e '.global["ctrl-shift-t"] == "tab.new"' "$APP/keys.json" >/dev/null || fail "the person's keys must stay"
-jq -e --slurpfile ours "$ROOT/config/herdr-app/keys.json" '.["layout:bercail"] == $ours[0]["layout:bercail"]' \
+jq -e --slurpfile ours "$ROOT/bercail/keys.json" '.["layout:bercail"] == $ours[0]["layout:bercail"]' \
   "$APP/keys.json" >/dev/null || fail "layout:bercail must be replaced by bercail's"
 printf 'PASS: deploy installs the layout and mod and merges only layout:bercail keys\n'
 
@@ -62,13 +62,13 @@ jq '.background = "chrome"' "$APP/layouts/bercail.json" >"$TMP_DIR/l" && mv "$TM
 printf 'local edit\n' >>"$APP/mods/bercail-desk/main.js"
 deploy_herdr_app >/dev/null
 jq -e '.background == "chrome"' "$APP/layouts/bercail.json" >/dev/null || fail "an unchanged shipped layout must not replace the app's"
-cmp -s "$ROOT/config/herdr-app/mods/bercail-desk/main.js" "$APP/mods/bercail-desk/main.js" || fail "the mod is bercail's: update restores it"
+cmp -s "$ROOT/bercail/mods/bercail-desk/main.js" "$APP/mods/bercail-desk/main.js" || fail "the mod is bercail's: update restores it"
 printf 'PASS: update keeps the app'"'"'s layout edits and restores the mod\n'
 
 # A new shipped layout replaces the app's copy.
-jq '.background = "old"' "$ROOT/config/herdr-app/layouts/bercail.json" >"$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
+jq '.background = "old"' "$ROOT/bercail/layouts/bercail.json" >"$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
 deploy_herdr_app >/dev/null
-cmp -s "$ROOT/config/herdr-app/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "a new shipped layout must be installed"
+cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "a new shipped layout must be installed"
 printf 'PASS: a new shipped layout replaces the installed one\n'
 
 # bercail's layout as the app left it (desk repointed, columns resized) is adopted.
@@ -76,7 +76,7 @@ rm -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
 jq '(.. | objects | select(.id == "agent") | .content) = {terminal: "t9z"}
   | (.. | objects | select(.id == "agent-stack") | .active) = "agent"
   | (.. | objects | select(.id == "desk") | .size.weight) = 4.2' \
-  "$ROOT/config/herdr-app/layouts/bercail.json" >"$APP/layouts/bercail.json"
+  "$ROOT/bercail/layouts/bercail.json" >"$APP/layouts/bercail.json"
 out="$(deploy_herdr_app)"
 printf '%s' "$out" | grep -q 'unchanged: .*bercail.json' || fail "a runtime-only change should count as bercail's: $out"
 jq -e '.. | objects | select(.id == "agent") | .content.terminal == "t9z"' "$APP/layouts/bercail.json" >/dev/null \
@@ -90,7 +90,7 @@ printf '{"id":"mine"}\n' >"$APP/layouts/bercail.json"
 deploy_herdr_app >/dev/null
 jq -e '.id == "mine"' "$APP/layouts/bercail.json" >/dev/null || fail "an unowned bercail layout must be kept"
 FORCE=1 deploy_herdr_app >/dev/null
-cmp -s "$ROOT/config/herdr-app/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "--force replaces it"
+cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "--force replaces it"
 printf 'PASS: an existing unowned layout is kept unless --force\n'
 
 # Doctor.

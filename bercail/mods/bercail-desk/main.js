@@ -109,7 +109,8 @@ async function reviewArgv(review, folder) {
 // The webhook follower (`bercail notify run`): one hidden hc terminal, kept
 // running here so it lives as long as herdr-core, window open or not.
 const NOTIFIER = "bercail-notify";
-const NOTIFIER_RUN = 'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"; exec bercail notify run';
+const NOTIFIER_PATH = 'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"';
+const NOTIFIER_RUN = `${NOTIFIER_PATH}; exec bercail notify run`;
 
 function shellOf(space) {
   const first = space?.tabs?.[0];
@@ -140,7 +141,14 @@ export default class BercailDesk extends View {
     if (this.role !== "header") return;
     // On a timer, not on render: an idle window doesn't render, and the follower
     // must come back after it exits.
-    this.ensureNotifier();
+    // Only with bercail installed: the layout also works on its own.
+    cx.spawn(async () => {
+      try {
+        const r = await exec("bash", ["-lc", `${NOTIFIER_PATH}; command -v bercail`]);
+        this.hasBercail = r.code === 0;
+      } catch { this.hasBercail = false; }
+      this.ensureNotifier();
+    });
     cx.timer.every(60000, () => this.ensureNotifier());
     cx.spawn(async (cx) => {
       try { this.cfg = readConfig(await readTextFile(home() + CONFIG)); } catch { /* defaults */ }
@@ -267,6 +275,7 @@ export default class BercailDesk extends View {
   }
 
   ensureNotifier() {
+    if (!this.hasBercail) return;
     if (terminals().some((t) => t.name === NOTIFIER && t.state === "live")) return;
     exec("hc", ["run", "--bg", "--no-parent", "--no-notify", "--rm", "--name", NOTIFIER,
       "--label", "bercail.role=notify", "bash", "-lc", NOTIFIER_RUN]).catch(() => {});

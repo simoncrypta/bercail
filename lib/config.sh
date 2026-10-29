@@ -58,7 +58,7 @@ read_layout_review() {
 RECONFIGURE=0
 
 # The Herdr app half of bercail: the bercail layout, its desk mod, and its keys.
-# Paths are relative to config/herdr-app in the source and to the app's home.
+# Paths are relative to bercail/ (the shared layout folder) in the source and to the app's home.
 HERDR_APP_LAYOUT="layouts/bercail.json"
 HERDR_APP_MOD_FILES=(mods/bercail-desk/main.js mods/bercail-desk/mod.json)
 HERDR_APP_KEYS_SECTION="layout:bercail"
@@ -84,7 +84,7 @@ deploy_herdr_app_layout() {
   local dest="$HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT" shipped new
   shipped="$(_herdr_app_shipped_layout)"
   new="$(mktemp)"
-  if ! DRY_RUN=0 deploy_install_file "config/herdr-app/$HERDR_APP_LAYOUT" "$new" >/dev/null; then
+  if ! DRY_RUN=0 deploy_install_file "bercail/$HERDR_APP_LAYOUT" "$new" >/dev/null; then
     rm -f "$new"
     warn "could not read the shipped bercail layout"
     return 1
@@ -122,10 +122,10 @@ deploy_herdr_app_keys() {
     base="$(mktemp)"
     printf '{}\n' >"$base"
   fi
-  if ! DRY_RUN=0 deploy_install_file "config/herdr-app/keys.json" "$ours" >/dev/null \
+  if ! DRY_RUN=0 deploy_install_file "bercail/keys.json" "$ours" >/dev/null \
     || ! jq --arg s "$HERDR_APP_KEYS_SECTION" --slurpfile ours "$ours" \
       '.[$s] = $ours[0][$s]' "$base" >"$tmp"; then
-    warn "could not merge the $HERDR_APP_KEYS_SECTION keys into $keys; copy that section from config/herdr-app/keys.json"
+    warn "could not merge the $HERDR_APP_KEYS_SECTION keys into $keys; copy that section from bercail/keys.json"
     rm -f "$ours" "$tmp"
     [[ "$base" == "$keys" ]] || rm -f "$base"
     return 0
@@ -154,7 +154,7 @@ deploy_herdr_app() {
   ensure_dir "$HERDR_APP_CONFIG_DIR"
   deploy_herdr_app_layout || true
   for rel in "${HERDR_APP_MOD_FILES[@]}"; do
-    deploy_install_file "config/herdr-app/$rel" "$HERDR_APP_CONFIG_DIR/$rel"
+    deploy_install_file "bercail/$rel" "$HERDR_APP_CONFIG_DIR/$rel"
   done
   deploy_herdr_app_keys || true
   if [[ "$DRY_RUN" -ne 1 ]] \
