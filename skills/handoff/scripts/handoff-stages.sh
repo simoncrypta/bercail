@@ -1,5 +1,5 @@
 # Handoff stage table and headless runner. Sourced by handoff-spawn.
-# The job lives in a beads issue (bd). An agent's prompt is only the issue id.
+# The job lives in a beads issue (bd). An agent's prompt is one line pointing at it.
 # shellcheck shell=bash
 
 handoff_stage_table() {
@@ -101,10 +101,11 @@ handoff_issue_comment() {
     || printf 'handoff: could not add the handoff comment to %s\n' "$id" >&2
 }
 
-# The whole agent prompt, the same for every harness: the beads issue id.
+# The whole agent prompt, the same for every harness: one line pointing at the
+# beads issue (a bare id makes agents ask what it is instead of reading it).
 # Shep owns the workflow; bercail adds no per-binary mode.
 handoff_issue_prompt() {
-  printf '%s' "$1"
+  printf 'Your job is beads issue %s. Run `bd show %s` (read its comments too) and do the work it describes.' "$1" "$1"
 }
 
 handoff_write_result() {
@@ -385,7 +386,7 @@ handoff_run_headless() {
     handoff_die "stage $stage has no model"
   fi
 
-  [[ -n "$issue" ]] || handoff_die "stage $stage needs --issue <beads id> (the prompt is only the issue id)"
+  [[ -n "$issue" ]] || handoff_die "stage $stage needs --issue <beads id> (the prompt points at that issue)"
   handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id: $issue"
   [[ -n "$worktree" ]] || worktree="$PWD"
   [[ -d "$worktree" ]] || handoff_die "worktree not found: $worktree"

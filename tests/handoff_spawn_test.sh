@@ -72,8 +72,9 @@ test_usage() {
   printf 'PASS: handoff-spawn --help exits 2\n'
 }
 
-test_issue_prompt_is_only_the_id() {
-  [[ "$(handoff_issue_prompt bercail-0s1)" == bercail-0s1 ]] || fail "prompt is the bare id"
+test_issue_prompt_points_at_the_issue() {
+  [[ "$(handoff_issue_prompt bercail-0s1)" == 'Your job is beads issue bercail-0s1. Run `bd show bercail-0s1` (read its comments too) and do the work it describes.' ]] \
+    || fail "prompt points at the issue: $(handoff_issue_prompt bercail-0s1)"
   handoff_issue_id_ok bercail-0s1 || fail "plain beads id"
   handoff_issue_id_ok bercail-0s1.2 || fail "child beads id"
   handoff_issue_id_ok --help && fail "flag is not an id"
@@ -81,7 +82,7 @@ test_issue_prompt_is_only_the_id() {
   handoff_issue_id_ok 'bercail-0s1 rm' && fail "space is not an id"
   [[ ! -d "$ROOT/skills/handoff/prompts" ]] || fail "prompt files must be gone"
   [[ ! -e "$ROOT/skills/handoff/scripts/handoff-brief" ]] || fail "handoff-brief must be gone"
-  printf 'PASS: the agent prompt is only the beads issue id\n'
+  printf 'PASS: the agent prompt is one line pointing at the beads issue\n'
 }
 
 test_graphite_track_uses_resolved_config_path() {
@@ -107,6 +108,26 @@ test_graphite_track_uses_resolved_config_path() {
   printf 'PASS: graphite config path is resolved against the repo root\n'
 }
 
+test_graphite_tracks_new_branch_in_linked_worktree() {
+  local repo="$TMP_DIR/gt-linked" sibling="$TMP_DIR/gt-linked.feat" bin="$TMP_DIR/gt-bin"
+  git_init "$repo"
+  git -C "$repo" worktree add -q -b feat "$sibling"
+  printf '{"trunk":"master"}\n' >"$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/.graphite_repo_config"
+  mkdir -p "$bin"
+  # A fake gt: a new branch has no parent yet.
+  cat >"$bin/gt" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$TMP_DIR/gt.log"
+case "\$*" in *" parent") exit 1 ;; esac
+EOF
+  chmod +x "$bin/gt"
+  : >"$TMP_DIR/gt.log"
+  PATH="$bin:$PATH" handoff_track_graphite "$sibling"
+  grep -qxF -- "--cwd $sibling track --parent master --no-interactive" "$TMP_DIR/gt.log" \
+    || fail "new branch should be tracked on trunk; log=$(cat "$TMP_DIR/gt.log")"
+  printf 'PASS: a new branch in a linked worktree is gt tracked on trunk\n'
+}
+
 test_info_json_reports_graphite_and_dirty() {
   local repo="$TMP_DIR/info-repo" out
   git_init "$repo"
@@ -121,8 +142,8 @@ test_info_json_reports_graphite_and_dirty() {
   fi
   printf '#!/bin/sh\nexit 1\n' >"$TMP_DIR/no-herdr"
   chmod +x "$TMP_DIR/no-herdr"
-  unset HERDR_ENV HERDR_WORKSPACE_ID HANDOFF_WORKSPACE
-  out="$(cd "$repo" && HERDR_BIN_PATH="$TMP_DIR/no-herdr" \
+  unset HC_TERMINAL_ID HANDOFF_SPACE
+  out="$(cd "$repo" && HERDR_APP_BIN="$TMP_DIR/no-herdr" \
     CURSOR_CONFIG_DIR="$TMP_DIR/no-cursor" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
   printf '%s' "$out" | jq -e '.dirty == true' >/dev/null || fail "info dirty: $out"
@@ -139,21 +160,19 @@ test_info_json_reports_graphite_and_dirty() {
 test_info_json_socket_without_herdr_env() {
   local repo="$TMP_DIR/info-socket" out
   git_init "$repo"
-  cat >"$TMP_DIR/fake-herdr" <<'EOF'
+  cat >"$TMP_DIR/fake-herdr-app" <<'EOF'
 #!/bin/sh
-echo '{"result":{"workspaces":[]}}'
+echo '{"space":"sp26"}'
 EOF
-  chmod +x "$TMP_DIR/fake-herdr"
-  unset HERDR_ENV
-  export HERDR_WORKSPACE_ID=w26
-  out="$(cd "$repo" && HERDR_BIN_PATH="$TMP_DIR/fake-herdr" \
+  chmod +x "$TMP_DIR/fake-herdr-app"
+  unset HC_TERMINAL_ID HANDOFF_SPACE
+  out="$(cd "$repo" && HERDR_APP_BIN="$TMP_DIR/fake-herdr-app" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
-  unset HERDR_WORKSPACE_ID
   printf '%s' "$out" | jq -e '.herdr == true' >/dev/null || fail "socket herdr: $out"
   printf '%s' "$out" | jq -e '.herdr_env == false' >/dev/null || fail "socket herdr_env: $out"
   printf '%s' "$out" | jq -e '.socket == true' >/dev/null || fail "socket flag: $out"
-  printf '%s' "$out" | jq -e '.workspace == "w26"' >/dev/null || fail "socket workspace: $out"
-  printf 'PASS: --info treats a live Herdr socket as herdr without HERDR_ENV\n'
+  printf '%s' "$out" | jq -e '.space == "sp26" and .workspace == "sp26"' >/dev/null || fail "socket space: $out"
+  printf 'PASS: --info treats a live Herdr app as herdr outside an hc terminal\n'
 }
 
 test_result_json_records_unconfirmed_agent() {
@@ -171,14 +190,13 @@ test_result_json_records_unconfirmed_agent() {
 }
 
 test_parent_workspace_required_without_herdr_env() {
-  unset HERDR_ENV HERDR_WORKSPACE_ID HANDOFF_WORKSPACE
-  handoff_parent_workspace && fail "parent workspace must be empty"
-  HANDOFF_WORKSPACE=w26
-  [[ "$(handoff_parent_workspace)" == w26 ]] || fail " --workspace should win"
-  unset HANDOFF_WORKSPACE
-  HERDR_WORKSPACE_ID=w9
-  [[ "$(handoff_parent_workspace)" == w9 ]] || fail "HERDR_WORKSPACE_ID fallback"
-  printf 'PASS: parent workspace comes from --workspace or HERDR_WORKSPACE_ID\n'
+  unset HANDOFF_SPACE
+  HERDR_APP_BIN="$TMP_DIR/no-herdr" handoff_shown_space && fail "parent workspace must be empty"
+  HANDOFF_SPACE=sp26
+  [[ "$(HERDR_APP_BIN="$TMP_DIR/no-herdr" handoff_shown_space)" == sp26 ]] || fail "--space should win"
+  unset HANDOFF_SPACE
+  [[ "$(HERDR_APP_BIN="$TMP_DIR/fake-herdr-app" handoff_shown_space)" == sp26 ]] || fail "shown space fallback"
+  printf 'PASS: the space kept shown comes from --space or the shown space\n'
 }
 
 test_issue_is_required_and_prompt_flags_are_gone() {
@@ -202,7 +220,7 @@ test_issue_is_required_and_prompt_flags_are_gone() {
   done
   printf '#!/bin/sh\nexit 1\n' >"$TMP_DIR/no-herdr"
   chmod +x "$TMP_DIR/no-herdr"
-  out="$(HERDR_BIN_PATH="$TMP_DIR/no-herdr" HANDOFF_BD_BIN="$TMP_DIR/no-bd" \
+  out="$(HERDR_APP_BIN="$TMP_DIR/no-herdr" HANDOFF_BD_BIN="$TMP_DIR/no-bd" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
   printf '%s' "$out" | jq -e '(has("pending_prompt")|not) and .beads == false' >/dev/null \
     || fail "--info should report beads and no pending prompt: $out"
@@ -221,8 +239,9 @@ test_rejects_prompt_after_double_dash() {
 test_graphite_rev_parse_is_not_enough
 test_copy_dirty_is_working_tree_not_index
 test_usage
-test_issue_prompt_is_only_the_id
+test_issue_prompt_points_at_the_issue
 test_graphite_track_uses_resolved_config_path
+test_graphite_tracks_new_branch_in_linked_worktree
 test_info_json_reports_graphite_and_dirty
 test_info_json_socket_without_herdr_env
 test_result_json_records_unconfirmed_agent
@@ -231,10 +250,14 @@ test_issue_is_required_and_prompt_flags_are_gone
 test_rejects_prompt_after_double_dash
 
 test_intro_does_not_invoke_review_skill() {
+  grep -q 'when the desk agent finishes, Review opens itself in this space' "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    || fail "handoff intro should say Review opens itself"
+  local res
+  res="$(handoff_result_json L /p b i 1 0 1 start claude sp9 t28)"
+  printf '%s' "$res" | jq -e '.space == "sp9" and .desk == "t28" and .ok and .stage == "start" and .harness == "claude"' >/dev/null \
+    || fail "spawn JSON names the space and desk: $res"
   grep -q 'agentic-dev.layout' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    || fail "handoff intro should name agentic-dev.layout"
-  grep -q 'never agentic-dev.dev-layout' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    || fail "handoff intro should forbid the old plugin id"
+    && fail "handoff intro must not name the old Herdr plugin"
   grep -q 'review/SKILL.md' "$ROOT/skills/handoff/scripts/handoff-spawn" \
     && fail "handoff intro must not tell the child to load the review skill"
   grep -q 'leave them uncommitted for human review' "$ROOT/skills/handoff/scripts/handoff-spawn" \
@@ -260,8 +283,8 @@ test_no_cursor_only_mode() {
   [[ "$(handoff_stage_field codex mode)" == headless ]] || fail "codex mode"
   grep -q 'WT_HERDR_AGENT_CMD=cursor-agent' "$ROOT/skills/handoff/scripts/handoff-spawn" \
     && fail "handoff-spawn must not hardcode WT_HERDR_AGENT_CMD=cursor-agent"
-  grep -q 'WT_HERDR_AGENT_CMD="$pane_bin"' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    || fail "pane stage must publish the table binary via WT_HERDR_AGENT_CMD"
+  grep -q 'WT_HERDR_AGENT_CMD="$desk_bin"' "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    || fail "the desk must get the table binary via WT_HERDR_AGENT_CMD"
   grep -q 'WT_HERDR_AGENT_PROMPT="$prompt"' "$ROOT/skills/handoff/scripts/handoff-spawn" \
     || fail "pane stage must pass the issue prompt inline"
   grep -q 'PROMPT_FILE' "$ROOT/skills/handoff/scripts/handoff-spawn" \
@@ -341,7 +364,7 @@ test_start_stage_dry_run() {
   _start_fixture "$wt"
   printf '#!/bin/sh\necho herdr-called >>"$TMP_DIR/herdr-hit"\nexit 9\n' >"$TMP_DIR/herdr-bomb"
   chmod +x "$TMP_DIR/herdr-bomb"
-  out="$(cd "$wt" && HERDR_BIN_PATH="$TMP_DIR/herdr-bomb" \
+  out="$(cd "$wt" && HERDR_APP_BIN="$TMP_DIR/herdr-bomb" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" --dry-run)"
   printf '%s' "$out" | jq -e '.dry_run == true and .mode == "headless" and .stage == "start"' >/dev/null \
     || fail "dry-run json: $out"
@@ -352,8 +375,8 @@ test_start_stage_dry_run() {
     || fail "first start should pass --session-id and not --resume: $out"
   printf '%s' "$out" | jq -e 'any(.command[]; test("poteto"))|not' >/dev/null \
     || fail "start argv must not mention poteto: $out"
-  printf '%s' "$out" | jq -e --arg id "$ISSUE" '.issue == $id and .command[-1] == $id and .command[-2] == "--"' >/dev/null \
-    || fail "start prompt must be only the issue id: $out"
+  printf '%s' "$out" | jq -e --arg id "$ISSUE" '.issue == $id and (.command[-1] | startswith("Your job is beads issue \($id). Run `bd show \($id)`")) and .command[-2] == "--"' >/dev/null \
+    || fail "start prompt must point at the issue: $out"
   printf '%s' "$out" | jq -e 'any(.command[]; . == "Read,Edit,Write,Bash") and any(.command[]; . == "Bash(bd *)")' >/dev/null \
     || fail "claude must be allowed to run bd: $out"
   [[ ! -s "$BD_COMMENTS" ]] || fail "dry-run must not comment on the issue"
@@ -374,7 +397,7 @@ set -euo pipefail
 printf '%s\n' "$*" >"${HANDOFF_ARGV_LOG:?}"
 [[ "$*" == *--print* ]] || exit 2
 [[ "$*" == *"--model claude-opus-5-5"* ]] || exit 3
-[[ "${*: -1}" == "$BERCAIL_ISSUE" && "${*: -2:1}" == -- ]] || exit 6
+[[ "${*: -1}" == "Your job is beads issue $BERCAIL_ISSUE."* && "${*: -2:1}" == -- ]] || exit 6
 if [[ "${BERCAIL_EXPECT_RESUME:-}" == 1 ]]; then
   [[ "$*" == *"--resume ${BERCAIL_SESSION_ID}"* ]] || exit 4
 else
@@ -455,7 +478,7 @@ test_codex_thread_id_from_jsonl() {
 test_codex_stage_dry_run() {
   local wt="$TMP_DIR/codex-dry" out sid="bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
   _start_fixture "$wt"
-  out="$(cd "$wt" && HERDR_BIN_PATH="$TMP_DIR/herdr-bomb" \
+  out="$(cd "$wt" && HERDR_APP_BIN="$TMP_DIR/herdr-bomb" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --stage codex --issue "$ISSUE" --worktree "$wt" --dry-run)"
   printf '%s' "$out" | jq -e '.dry_run == true and .mode == "headless" and .stage == "codex" and .binary == "codex"' >/dev/null \
     || fail "codex dry-run json: $out"
@@ -541,8 +564,8 @@ test_headless_prompt_is_the_issue_id() {
   _start_fixture "$wt"
   for stage in start codex cursor; do
     out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage "$stage" --issue "$ISSUE" --worktree "$wt" --dry-run)"
-    printf '%s' "$out" | jq -e --arg id "$ISSUE" '.command[-1] == $id and .command[-2] == "--" and .bd_present == true' >/dev/null \
-      || fail "$stage prompt must be only the issue id: $out"
+    printf '%s' "$out" | jq -e --arg id "$ISSUE" '(.command[-1] | startswith("Your job is beads issue \($id).")) and .command[-2] == "--" and .bd_present == true' >/dev/null \
+      || fail "$stage prompt must point at the issue: $out"
     printf '%s' "$out" | jq -e 'any(.command[]; . == "--add-dir")|not' >/dev/null \
       || fail "$stage: .beads inside the worktree needs no --add-dir: $out"
   done
@@ -559,7 +582,7 @@ test_headless_prompt_is_the_issue_id() {
   printf '%s' "$out" | jq -e '(.command | index("--add-dir")) < (.command | index("resume"))' >/dev/null \
     || fail "codex --add-dir must precede the resume subcommand: $out"
   unset BD_BEADS_DIR BERCAIL_CLAUDE_MODEL_CATALOG
-  printf 'PASS: each headless prompt is the issue id; an outside .beads gets --add-dir\n'
+  printf 'PASS: each headless prompt points at the issue; an outside .beads gets --add-dir\n'
 }
 
 test_codex_headless_argv_shape
@@ -601,7 +624,7 @@ test_cursor_session_id_from_json() {
 test_cursor_stage_dry_run() {
   local wt="$TMP_DIR/cursor-dry" out sid="eeeeeeee-ffff-0000-1111-222222222222"
   _start_fixture "$wt"
-  out="$(cd "$wt" && HERDR_BIN_PATH="$TMP_DIR/herdr-bomb" \
+  out="$(cd "$wt" && HERDR_APP_BIN="$TMP_DIR/herdr-bomb" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --stage cursor --issue "$ISSUE" --worktree "$wt" --dry-run)"
   printf '%s' "$out" | jq -e '.dry_run == true and .mode == "headless" and .stage == "cursor" and .binary == "cursor-agent"' >/dev/null \
     || fail "cursor dry-run json: $out"
@@ -704,7 +727,7 @@ test_missing_harness_blocks_without_fallback() {
   unset HANDOFF_CLAUDE_BIN
   export HANDOFF_CURSOR_BIN="$TMP_DIR/no-such-cursor-agent"
   err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    --stage cursor --issue "$ISSUE" --branch feat --clean --workspace w1 2>&1)" || rc=$?
+    --stage cursor --issue "$ISSUE" --branch feat --clean --space w1 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "missing cursor-agent should exit nonzero"
   printf '%s' "$err" | grep -q 'cursor-agent is not on PATH' \
     || fail "pane missing message: $err"

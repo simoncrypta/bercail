@@ -2,49 +2,85 @@
 
 **an ADE on [herdr](https://herdr.dev).**
 
-Bercail is an agentic development environment: Herdr-based, built for working in parallel with control and observability. One git worktree, one Herdr workspace. A sticky agent stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. Agents stage their changes and leave them uncommitted; when the agent goes `done`, [tuicr](https://github.com/agavra/tuicr) opens those uncommitted changes and watches further edits. You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
+Bercail is an agentic development environment on the [Herdr app](https://herdr.dev) and herdr-core (`hc`), built for working in parallel with control and observability. One git worktree, one Herdr space. Each space has a desk: one agent that stays on the left while you switch shell, review, and files. You see when each agent is working, blocked, or done. Agents stage their changes and leave them uncommitted; when the agent goes `done`, [tuicr](https://github.com/agavra/tuicr) opens those uncommitted changes and watches further edits. You review in the terminal; comments stay human vs AI; push to GitHub only when you ask.
 
 **Bercail is built to be orchestrated by a Grok bot.** [Shep](#shep-the-grok-bot) is that bot: a public Grok bot that runs bercail for you. The agentic workflow here (beads issues, named stages, result files, review when a desk is done) is optimized for Shep as the orchestrator. Bercail does the local work; Shep decides what happens next.
 
-Claude Code, Codex CLI, and cursor-agent are equal harnesses. Bercail does not prefer one, pick one, or fall back from one to another. A handoff is a [beads](https://beads.gascity.com/) issue: Shep writes it, and the agent's whole prompt is the issue id.
+Claude Code, Codex CLI, and cursor-agent are equal harnesses. Bercail does not prefer one, pick one, or fall back from one to another. A handoff is a [beads](https://beads.gascity.com/) issue: Shep writes it, and the agent's whole prompt is one line pointing at that issue.
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
-<img width="2138" height="1386" alt="sticky agent, review, files" src="https://github.com/user-attachments/assets/b58e8e78-c78b-4cc3-9f56-8040d561f2d9" />
+<img width="2138" height="1386" alt="desk agent, review, files" src="https://github.com/user-attachments/assets/b58e8e78-c78b-4cc3-9f56-8040d561f2d9" />
 
-- **sticky agent** — the configured agent (cursor-agent by default) does not live in a tab. Tabs move around it.
-- **one worktree, one workspace** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; Herdr follows.
-- **control and observability** — every pane is working, blocked, or idle. Review opens on `done`. You choose what gets a GitHub comment.
-- **review when the agent is done** — `tuicr -w` on the staged, uncommitted work the agent left for you (watching). Other people's PRs open with `tuicr pr`. `prefix+2` anytime.
-- **handoff is parallel, not a chat fork** — one beads issue per job, run headless or in a sibling worktree with its own sticky pane. See [handoff](#handoff).
-- **keyboard and mouse** — prefix is `Ctrl-Space` (Omarchy tmux). Click the file tree; `j`/`k` in tuicr.
+- **the desk** — each space's agent (claude, codex, or grok, picked on the desk) is an hc terminal, not a tab. Tabs move around it, and it keeps running when the window closes.
+- **one worktree, one space** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; a Herdr space follows.
+- **control and observability** — every agent is working, blocked, done, or idle. Review opens on `done`. You choose what gets a GitHub comment.
+- **review when the agent is done** — `tuicr -w` on the staged, uncommitted work the agent left for you (watching). Other people's PRs open with `tuicr pr`. `Ctrl+Shift+R` anytime.
+- **handoff is parallel, not a chat fork** — one beads issue per job, run headless or in a sibling worktree with its own desk. See [handoff](#handoff).
+- **keyboard and mouse** — `Ctrl+Shift` keys like the rest of the Herdr app. Click the file tree; `j`/`k` in tuicr.
 
 ```
 ┌──────────────┬────────────────────────────┬─────────┐
-│ agent        │ shell  |  review*  |  edit │ files   │
-│ sticky       │ tuicr on agent done / +2   │ git     │
-│ prefix+1     │ prefix+2 / +3 / +4         │ +4 / +g │
+│ desk agent   │ Shell  |  Review*  | …     │ files   │
+│ Ctrl+Shift+A │ tuicr on agent done        │ changes │
+│              │ Ctrl+Shift+S / R           │ +F / +G │
 └──────────────┴────────────────────────────┴─────────┘
 ```
 
 ## Shep, the Grok bot
 
-**[Shep](https://x.ai/bot/QxTrE1a1ESYzE7nfEKc9n) is the Grok bot that orchestrates bercail.** It orchestrates coding agents on Herdr through bercail: it writes beads issues, hands them to claude, codex, or cursor-agent, and pings you when a desk is ready to review.
+**[Shep](https://x.ai/bot/QxTrE1a1ESYzE7nfEKc9n) is the Grok bot that orchestrates bercail.** It orchestrates coding agents in the Herdr app through bercail: it writes beads issues, hands them to claude, codex, or cursor-agent, and pings you when a desk is ready to review.
 
 Bercail's workflow is designed around Shep. Shep owns the workflow; bercail runs what Shep asks for and reports back in files Shep reads:
 
 1. Shep writes the job as a beads issue (`bd create`): the ask, the repo, links, and any "plan only" note.
 2. Shep picks a stage for that issue and runs `handoff-spawn --stage start|codex|cursor --issue ID` (see [handoff](#handoff)). bercail never picks the stage and never falls back to another one.
-3. bercail checks `bd` and the issue, adds a `bd comment` with the worktree (and, headless, the result file), and starts that one harness with the issue id as its whole prompt.
-4. For a `--branch` pane, Shep hears `finished` and `blocked` from its [agent status webhook](#agent-status-webhooks). A headless run has no Herdr pane and sends no webhook: `handoff-spawn` returns when it ends. Either way, Shep reads `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`), resumes the session if needed, and tells you when the desk is ready.
+3. bercail checks `bd` and the issue, adds a `bd comment` with the worktree (and, headless, the result file), and starts that one harness with a one-line prompt pointing at the issue.
+4. For a `--branch` desk, Shep hears from the desk through [agent status webhooks](#agent-status-webhooks), or follows it with `hc wait <desk>` (`desk` and `space` are in the spawn JSON). A headless run opens nothing in the app: `handoff-spawn` returns when it ends, and Shep reads `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`), resumes the session if needed, and tells you when the desk is ready.
 
 Shep runs the same workflow whichever harness works the issue.
 
 Bercail works without Shep, but Shep is the intended orchestrator. To do Shep's part by hand, write the issue with `bd create`, then run the same `handoff-spawn` command.
 
+### agent status webhooks
+
+`bercail notify run` follows the desk agents (hc terminals labelled `bercail.role=agent`) with `hc events` and posts their status changes to webhooks, one sink per bot. The desk mod keeps it running as the hidden hc terminal `bercail-notify`. It sends only these:
+
+- `finished`: working or blocked → done or idle
+- `blocked`: once each time the agent blocks
+
+Sinks are `~/.config/bercail/notify.d/<name>.toml` (`chmod 600`; see [`notify.sink.example`](config/agentic-dev/notify.sink.example)). They filter by space name glob, repo, and kind. The key is sent through a private header file, never through argv. A 401 or 403 is recorded once per outage (`bercail doctor` shows it). Without sinks the follower idles.
+
+`bercail notify add NAME` sets up a sink in one step. It prompts for the webhook URL and the sender key (hidden), writes the file with mode 600, and sends a test. The running follower picks the new sink up on its next delivery, without a restart. A 401 or 403 means the key or the auth mode is wrong.
+
+```bash
+bercail notify add work-shep                       # paste the URL, then the key
+bercail notify add work-shep --auth bearer --all-repos --notify finished
+printf '%s\n%s\n' "$URL" "$KEY" | bercail notify add work-shep --yes   # no terminal
+bercail notify status          # sinks, filters, last HTTP code; never prints url or key
+bercail notify test work-shep
+```
+
+`notify add` options: `--auth both|bearer|x-automation-key|none` (default `both`), `--repos LIST` (default: the current checkout's repo, or every repo outside a checkout), `--all-repos`, `--spaces GLOBS`, `--notify finished,blocked` (default both), and `--yes` to replace an existing sink without asking. Without `--yes` it shows the existing sink redacted and asks first. With no terminal it reads the URL, then the key, one per line from stdin; `BERCAIL_NOTIFY_URL` and `BERCAIL_NOTIFY_KEY` skip their prompt. It never takes the key as an argument, so the key stays out of shell history and the process list.
+
+Older sink files may have a `panes = agent` line. `agent_status/v2` has no panes: the key is ignored, and the follower drops the line when it starts.
+
+Each POST body is `bercail.agent_status/v2`:
+
+```json
+{"source":"bercail","schema":"bercail.agent_status/v2","kind":"finished","sink":"work-shep",
+ "at":"2026-10-29T22:42:00Z","event_id":"t9:finished:1793312520:4242",
+ "agent":{"address":"t9","app":"claude-code","status":"done","previous_status":"working","title":"..."},
+ "space":{"id":"sp98de","name":"Render-preview_Leftlane_app","repo":"leftlane_app","checkout_path":"/path/desk","linked":true},
+ "desk":{"branch":"feat/render","issue":"lef2745-2vs","stage":"start","harness":"claude",
+         "result":{"status":"ready","summary":"...","session_id":"..."}}}
+```
+
+`agent.address` is the hc terminal (`hc get`/`hc read` it). `desk.issue`, `stage`, and `harness` come from the matching `handoffs.jsonl` record. `desk.result` is the checkout's `.bercail/handoff-result.json` when one exists (usually `null`: headless runs have no desk terminal, so they send nothing).
+
 ## install
 
-Current release: [v0.8.0](https://github.com/simoncrypta/bercail/releases/tag/v0.8.0).
+Current release: [v0.9.0](https://github.com/simoncrypta/bercail/releases/tag/v0.9.0).
 
 Recommended: [mise](https://mise.jdx.dev) + [packslip](https://github.com/jdx/packslip). Each `v*` release publishes `bercail.tar.gz` and a signed `packslip.sigstore.json`. mise checks that signature against this repository and the archive digest before it unpacks anything, and it runs no downloaded code.
 
@@ -60,7 +96,7 @@ packslip install github.com/simoncrypta/bercail      # packslip 1.5.1+
 bercail install
 ```
 
-mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.8.0`.
+mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.9.0`.
 
 The first install trusts the repository's signer, and later installs must match it. `bercail install` runs the release's own `install.sh`. mise or packslip keeps the `bercail` command, so the installer does not copy a second one into `~/.local/bin`. Upgrade with `mise up` (or `packslip install` again), then `bercail update`.
 
@@ -72,21 +108,24 @@ curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
 
 `--yes` is non-interactive (`bercail install --yes` too). From a clone: `./install.sh`.
 
+Bercail needs the Herdr app; install it from [herdr.dev](https://herdr.dev) first (it brings herdr-core, `hc`, and keeps both updated). The installer copies the bercail layout and its desk mod into `~/.config/herdr-app` and adds its keys to `keys.json`. Switch to it once with `Ctrl+Shift+L` → bercail.
+
+From 0.8 (the Herdr terminal and its layout plugin): install the Herdr app, then `bercail update`. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them. Webhook sinks in `notify.d` keep working, but their payload is now `bercail.agent_status/v2` (see [agent status webhooks](#agent-status-webhooks)).
+
 Then, in a repo:
 
 ```bash
-dev          # attach this directory
-# or: t      # launch herdr
-# then prefix+d
+dev          # this directory's space, with its desk agent
+# or: t      # open the Herdr app
 ```
 
-The sticky pane runs `[agent] command` from `~/.config/bercail/config.toml` (cursor-agent by default; there is no picker). Change it, then `bercail reconfigure`. Handoff stages do not read it; each stage names its own binary.
+An empty desk offers claude, codex, and grok; it remembers the last pick, and `Ctrl+Shift+A` starts that one. Before the first pick, `Ctrl+Shift+A` starts `[agent] command` from `~/.config/bercail/config.toml` (cursor-agent by default). Handoff stages do not read either; each stage names its own binary.
 
 ## handoff
 
 The job lives in a beads issue. [Shep](#shep-the-grok-bot), the Grok bot, creates the issue (`bd create`), then runs `handoff-spawn` with the issue id and a stage. `--stage` and `--issue` are both required; bercail has no default harness and no fallthrough.
 
-| Stage | Binary | Headless argv (the last word is the issue id) |
+| Stage | Binary | Headless argv (the last word is the prompt) |
 |-------|--------|-----------------------------------------------|
 | `start` | claude | `claude --print --model claude-opus-5-5 --output-format json …` |
 | `codex` | codex | `codex exec --json --sandbox workspace-write …` |
@@ -96,15 +135,15 @@ The job lives in a beads issue. [Shep](#shep-the-grok-bot), the Grok bot, create
 bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) writes the issue
 ~/.agents/skills/handoff/scripts/handoff-spawn --info      # facts as JSON, incl. beads
 
-# headless: no Herdr pane; result is <worktree>/.bercail/handoff-result.json
+# headless: nothing opens in the Herdr app; result is <worktree>/.bercail/handoff-result.json
 ~/.agents/skills/handoff/scripts/handoff-spawn --stage codex --issue ID --worktree PATH [--dry-run]
 ~/.agents/skills/handoff/scripts/handoff-spawn --stage start --issue ID --worktree PATH --resume SESSION
 
-# sibling worktree with a sticky pane running the stage's binary
-~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME --stage cursor --issue ID [--dirty|--clean] [--workspace ID]
+# sibling worktree with its own space; the desk runs the stage's binary
+~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME --stage cursor --issue ID [--dirty|--clean] [--space ID]
 ```
 
-- **Prompt** — the issue id, the same for every harness.
+- **Prompt** — one line pointing at the issue (`Your job is beads issue <id>. Run bd show <id> …`), the same for every harness.
 - **Context** — before it starts the agent, bercail adds a `bd comment` to the issue with the worktree and, headless, the result file and session id.
 - **Result** — a headless run leaves `{status: ready|blocked|failed, summary, session_id}`. Read that file, not terminal output. `--resume SESSION` continues the same session (`claude --resume`, `codex exec resume`, `cursor-agent --resume`).
 - **Blocked, not switched** — if the stage's binary, `bd`, or the issue is missing, the result is `blocked` and nothing starts. Bercail never falls through to another harness. `--binary claude|codex|cursor-agent` runs a headless stage on another CLI only when you ask.
@@ -122,31 +161,31 @@ bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) 
 | `./install.sh --yes` | Non-interactive |
 | `./install.sh --help` | Installer help |
 | `bercail help` | This reference |
-| `bercail doctor` | Deps, plugin, skills, Herdr integration |
+| `bercail doctor` | Deps, Herdr layout, mod and keys, skills |
 | `bercail harness` | JSON: which of claude, codex, cursor-agent are on PATH (reports, does not choose) |
-| `bercail update` | Re-sync configs, helper, skills (`--force` ok) |
-| `bercail reconfigure` | Re-read `config.toml`, refresh skills/integrations |
+| `bercail update` | Re-sync configs, Herdr layout and mod, helper, skills (`--force` also replaces a changed layout) |
+| `bercail reconfigure` | Re-read `config.toml`, refresh skills |
 | `bercail dry-run` | Show install actions, write nothing |
 | `bercail uninstall` | Remove managed files and the shell marker |
+| `bercail notify status` / `add NAME` / `test NAME` | [Agent status webhooks](#agent-status-webhooks) |
 
 ### shell
 
 | Command | What |
 |---------|------|
-| `dev` | Attach or switch the Herdr workspace for `$PWD` and start the configured agent |
-| `d` | Apply the sticky-agent layout and start the configured agent (inside Herdr only) |
-| `t` | `herdr` |
-| `wtc [branch]` | Create worktree + Herdr workspace |
+| `dev` (or `d`) | Show the Herdr space for `$PWD` (made if missing) and start its desk agent |
+| `t` | Open the Herdr app |
+| `wtc [branch]` | Create worktree + its space |
 | `wts [branch]` | Switch worktree (fzf if omitted) |
-| `wtd [branch]` | Remove worktree + close Herdr workspace |
+| `wtd [branch]` | Remove worktree + close its space |
 
-### skills (agent pane)
+### skills
 
 Call by name. Skills install to `~/.agents/skills`; bercail adds a link where the configured agent looks elsewhere (`~/.claude/skills`, `~/.codex/skills`, …).
 
 | Skill | What |
 |-------|------|
-| `handoff` | Run a beads issue on a stage (`--stage start|codex|cursor --issue ID`), headless or as a `--branch` pane. See [handoff](#handoff) |
+| `handoff` | Run a beads issue on a stage (`--stage start|codex|cursor --issue ID`), headless or as a `--branch` desk. See [handoff](#handoff) |
 | `review` | Wait for **human** tuicr notes; publish to GitHub only if asked |
 
 ```bash
@@ -158,96 +197,24 @@ Call by name. Skills install to `~/.agents/skills`; bercail adds a link where th
 
 Manual skill install: `npx skills add simoncrypta/bercail --skill handoff -g`
 
-### layout plugin
+### review
 
-`herdr plugin action invoke agentic-dev.layout.<action>`
-
-| Action | Key |
-|--------|-----|
-| `apply` / `create` | `prefix+d` (`apply` starts a clear agent session) |
-| `focus-agent` / `start-agent` | `prefix+1` |
-| `handoff-agent` | handoff-spawn (child session; prompt is the beads issue id) |
-| `select-review` | `prefix+2` |
-| `select-shell` | `prefix+3` |
-| `select-files` | `prefix+4` |
-| `select-source-control` | sidebar git |
-| `refresh-review` | sidebar `v` |
-| `close-review` / `close-tab` | `prefix+k` |
-| `close-pane` | `prefix+x` |
-| `toggle-sidebar` | — |
-| `open-editor` | click a file |
-| `select-tab-1` … `select-tab-9` | `Alt+1`…`9` (Option on macOS) |
-| `select-prev-tab` / `select-next-tab` | `Alt+Left` / `Alt+Right` |
-
-Review launch: own work → `tuicr -w` (uncommitted only, watching; agents stage and never commit unreviewed work, and a clean tree does not auto-open); someone else's PR on this checkout → `tuicr pr <n>`. Pickr defaults to `tuicr pr {url}`. `auto_review = false` disables the agent-done hook. A live Review pane is not restarted — tuicr's diff watch keeps it current.
-
-### agent status webhooks
-
-The layout plugin's `notify.sh` hook forwards agent status to webhooks, one sink per bot. Herdr's `pane.agent_status_changed` carries no previous status, and it also fires for title-only changes and for `done` → `idle` when you look at a pane. `notify.sh` keeps each pane's last live status (checked with `herdr pane get`) and sends only these:
-
-- `finished`: working or blocked → done or idle
-- `blocked`: once each time the agent blocks
-
-Shell, review, and sidebar panes are skipped.
-
-Sinks are `~/.config/bercail/notify.d/<name>.toml` (`chmod 600`; see [`notify.sink.example`](plugins/agentic-layout/notify.sink.example)). They filter by workspace label glob, repo, and kind. The key is sent through a private header file, never through argv. A 401 or 403 shows a Herdr notification once per outage and logs every time. Without sinks the hook does nothing.
-
-```bash
-plugin=$(herdr plugin list --plugin agentic-dev.layout --json | jq -r '.result.plugins[0].plugin_root')
-bash "$plugin/notify.sh" status       # sinks, filters, last HTTP code; never prints url or key
-bash "$plugin/notify.sh" test work-shep
-```
-
-Each POST body is `bercail.agent_status/v1`:
-
-```json
-{"source":"bercail","schema":"bercail.agent_status/v1","kind":"finished","sink":"work-shep",
- "at":"2026-10-22T22:42:00Z","event_id":"w6N:p2:finished:1792708920",
- "pane":{"pane_id":"w6N:p2","workspace_id":"w6N","agent":"claude","role":"agent",
-         "status":"done","previous_status":"working","verified":true},
- "workspace":{"label":"Render-preview_Leftlane_app","repo":"leftlane_app","checkout_path":"/path/desk","linked":true},
- "desk":{"branch":"feat/render","issue":"lef2745-2vs","stage":"start","harness":"claude",
-         "result":{"status":"ready","summary":"...","session_id":"..."}},
- "event":{"event":"pane.agent_status_changed","data":{}},"context":{}}
-```
-
-`desk.issue`, `stage`, and `harness` come from the matching `handoffs.jsonl` record. `desk.result` is the checkout's `.bercail/handoff-result.json` when one exists (usually `null`: headless runs have no pane, so they send no events). `event` and `context` are Herdr's raw hook payloads.
+Review is a tab in the space. Own work → `tuicr -w` (uncommitted only, watching; agents stage and never commit unreviewed work, and a clean tree does not auto-open); someone else's PR on this checkout → `tuicr pr <n>`. It opens when the desk agent finishes, or with `Ctrl+Shift+R`; `auto_review = false` keeps only the key. A live Review tab is not restarted — tuicr's diff watch keeps it current. An agent opens and closes it with `herdr-app do bercail-desk.review:$HC_TERMINAL_ID` and `bercail-desk.close-review:$HC_TERMINAL_ID`.
 
 ## keys
 
-Prefix is **`Ctrl-Space`**. Linux: [`config/herdr/config.toml`](config/herdr/config.toml) (Alt). macOS: [`config/herdr/config.macos.toml`](config/herdr/config.macos.toml) (Option).
-
-Native Herdr owns splits, workspaces, detach. This plugin owns the sticky layout. [herdr-worktrunk](https://github.com/devashish2203/herdr-worktrunk) owns worktree pickers. `prefix+shift+d` is Herdr close-workspace, so remove is `prefix+shift+r`. Close this workspace: `prefix+shift+k`. Child worktrees stay open unless `herdr workspace close --group`.
+In the bercail layout (`~/.config/herdr-app/keys.json`, section `layout:bercail`):
 
 | Key | Action |
 |-----|--------|
-| `prefix+d` | Apply / ensure layout |
-| `prefix+1` | Focus agent (recreate if dead) |
-| `prefix+2` | Review |
-| `prefix+3` | Shell |
-| `prefix+4` | Files |
-| `Alt+1`…`9` | Tab N (Option on macOS) |
-| `prefix+c` | New tab |
-| `prefix+k` | Close file tab or Review |
-| `prefix+shift+t` | Rename tab |
-| `prefix+n` / `p` | Next / previous tab |
-| `Alt+Left` / `Right` | Previous / next tab |
-| `Alt+Up` / `Down` | Previous / next workspace |
-| `prefix+w` | Workspace picker |
-| `prefix+shift+n` | New workspace |
-| `prefix+shift+w` | Rename workspace |
-| `prefix+shift+k` | Close this workspace |
-| `prefix+shift+q` | Detach |
-| `prefix+h` / `v` | Split below / beside |
-| `prefix+x` | Close pane |
-| `prefix+z` | Zoom pane |
-| `Ctrl+Alt+arrows` | Focus pane (Ctrl+Option on macOS) |
-| `prefix+shift+g` | Worktree from default branch |
-| `prefix+shift+c` | Worktree from current branch |
-| `prefix+shift+r` | Remove worktree |
-| `prefix+q` | Reload Herdr config |
+| `Ctrl+Shift+A` | Focus the desk agent, or start it |
+| `Ctrl+Shift+R` | Review |
+| `Ctrl+Shift+S` | Shell tab |
+| `Ctrl+Shift+F` / `G` | Show or hide files / changes |
+| `Ctrl+Alt+arrows` | Move between panes; left from the leftmost pane reaches the desk |
+| `Ctrl+Shift+Q` | Close this space |
 
-`prefix+1`…`4` no-op until `prefix+d` has created a layout. Missing agent pane is recreated on the next tab switch or `prefix+1`.
+The rest are the Herdr app's: `Ctrl+Shift+T`/`W` new/close tab, `Ctrl+Shift+O`/`E` split, `Ctrl+Shift+X` close pane, `Ctrl+Shift+Z` zoom, `Alt+1`…`9` tabs, `Alt+Up`/`Down` spaces, `Ctrl+Shift+B` sidebar, `Ctrl+Shift+L` layout, `Ctrl+Shift+?` all keys.
 
 ## config
 
@@ -260,39 +227,17 @@ command = "cursor-agent"
 [layout]
 review = "tuicr"
 auto_review = true
-# editor = "nvim"   # else $EDITOR / $VISUAL (macOS: nano, then vi)
 ```
 
-Also: `~/.config/herdr/config.toml`, worktrunk hooks, `~/.agents/skills/{handoff,review}`.
-
-## plugin only
-
-Already on Herdr and only want the layout:
-
-```bash
-herdr plugin install simoncrypta/agentic-dev-setup/plugins/agentic-layout --ref v0.8.0
-```
-
-Needs Herdr 0.9.3+, `jq`, a Rust toolchain, tuicr. Copy keys from [`config/herdr/config.toml`](config/herdr/config.toml). Set `close_tab = ""` and `close_pane = ""`. Full install also adds shell commands, CLI, skills, worktrunk hooks, and desktop fixes.
-
-Plugins run as your user. Skim [`plugins/agentic-layout/herdr-plugin.toml`](plugins/agentic-layout/herdr-plugin.toml) and [`layout.sh`](plugins/agentic-layout/layout.sh). Prefer no `--yes` the first time.
-
-```bash
-herdr plugin list
-herdr plugin action invoke agentic-dev.layout.create
-```
-
-Local: `cargo build --release -p herdr-sidebar` in `plugins/agentic-layout`, then `herdr plugin link …`.
+Also: `~/.config/herdr-app/layouts/bercail.json` and `mods/bercail-desk/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), worktrunk hooks, `~/.agents/skills/{handoff,review}`.
 
 ## linux
 
-On Omarchy: mise first, `omarchy pkg add`, native `SUPER+CTRL+RETURN` → Herdr, optional `SUPER+ALT+RETURN` remap, fcitx5 `Ctrl+Alt+H/J` hint keys cleared. On Ubuntu: mise then apt (`git fzf jq lazygit curl`); herdr, worktrunk, beads, tuicr from upstream. On macOS: mise first; Homebrew stays on PATH as fallback (`brew shellenv`, then mise shims prepended). Hyprland: same optional `SUPER+ALT+RETURN` binding.
+On Omarchy: mise first, `omarchy pkg add`, optional `SUPER+ALT+RETURN` → open or focus the Herdr app, fcitx5 `Ctrl+Alt+H/J` hint keys cleared. On Ubuntu: mise then apt (`git fzf jq curl`); worktrunk, beads, tuicr from upstream. On macOS: mise first; Homebrew stays on PATH as fallback (`brew shellenv`, then mise shims prepended). Hyprland: same optional `SUPER+ALT+RETURN` binding.
 
 ## dependencies
 
-Installed if missing: [herdr](https://herdr.dev) 0.9.3+ (`herdr integration install cursor` only if you use Cursor), git, worktrunk (`wt`), [beads](https://beads.gascity.com/) (`bd`), fzf, jq, lazygit, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0. `bercail doctor` checks each one.
-
-Not installed: a Rust toolchain. Herdr builds the layout plugin with `cargo build` when bercail installs it, so have `cargo` on PATH (for example `mise use -g rust`) before `bercail install`, or that step fails.
+Required, not installed by bercail: the [Herdr app](https://herdr.dev) with herdr-core (`herdr-app`, `hc`). Installed if missing: git, worktrunk (`wt`), [beads](https://beads.gascity.com/) (`bd`), fzf, jq, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0. `bercail doctor` checks each one.
 
 worktrunk and beads install the same way: skip if present, else mise, else Homebrew (`brew install worktrunk` / `brew install beads`), else upstream (worktrunk's GitHub release; the [beads installer](https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh), which puts `bd` in `/usr/local/bin` when writable, else `~/.local/bin`).
 
@@ -301,7 +246,8 @@ worktrunk and beads install the same way: skip if present, else mise, else Homeb
 ## development
 
 ```bash
-shellcheck install.sh lib/*.sh bin/bercail config/shell/bercail.inc.sh plugins/agentic-layout/layout.sh
+shellcheck install.sh lib/*.sh bin/bercail config/shell/bercail.inc.sh config/worktrunk/herdr-layout.sh
+herdr-app check config/herdr-app/mods/bercail-desk
 ./install.sh --help
 bercail dry-run
 npm run deploy   # Cloudflare Pages

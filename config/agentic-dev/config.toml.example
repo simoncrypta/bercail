@@ -1,14 +1,12 @@
 [agent]
-# Sticky left-pane agent. Handoff stages do not read this command; each
-# stage names its own binary (claude, codex, or cursor-agent). To put
-# another command in the left pane, set it here, then run: bercail reconfigure
+# The desk agent when none was picked on the desk yet (the desk remembers the
+# last pick). Handoff stages do not read this command; each stage names its
+# own binary (claude, codex, or cursor-agent).
 command = "cursor-agent"
 
 [layout]
 # Bare "tuicr" expands to `tuicr -w` (uncommitted changes only, watching;
 # agents stage and do not commit) or `tuicr pr N` for someone else's PR.
 review = "tuicr"
-# Open tuicr when the layout agent pane goes done. Set false to disable the hook.
+# Open Review when the desk agent finishes. Set false to open it only with Ctrl+Shift+R.
 auto_review = true
-# Omit editor to use $EDITOR / $VISUAL (Linux) or nano/vi (macOS).
-# editor = "nvim"

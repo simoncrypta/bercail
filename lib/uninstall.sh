@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 
 uninstall_agentic_dev() {
-  local managed_plugin_kind="" remove_managed_plugin_files=0
+  local keys tmp
   info "uninstalling bercail..."
 
   remove_marker_block "$(shell_rc_for bash)"
@@ -43,36 +43,16 @@ uninstall_agentic_dev() {
     run rm -f "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh"
   fi
 
-  if command -v herdr >/dev/null 2>&1; then
-    if ! plugin_inspect "$PLUGIN_ID"; then
-      warn "cannot inspect Herdr plugin $PLUGIN_ID; preserving its registration and files"
-    elif plugin_is_exact_local "$HERDR_DEV_LAYOUT_LEGACY_DIR"; then
-      managed_plugin_kind="local"
-      if confirm "Unlink managed Herdr plugin $PLUGIN_ID?"; then
-        if _plugin_remove_registration "$PLUGIN_ID" "$managed_plugin_kind"; then
-          remove_managed_plugin_files=1
-        else
-          warn "failed to unlink $PLUGIN_ID; keeping its source directory"
-        fi
+  if confirm "Remove the bercail Herdr layout, desk mod and keys?"; then
+    run rm -f "$HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT"
+    run rm -rf "$HERDR_APP_CONFIG_DIR/mods/bercail-desk"
+    keys="$HERDR_APP_CONFIG_DIR/keys.json"
+    if [[ -f "$keys" ]] && jq -e --arg s "$HERDR_APP_KEYS_SECTION" 'has($s)' "$keys" >/dev/null 2>&1; then
+      info "remove: $HERDR_APP_KEYS_SECTION from $keys"
+      if [[ "$DRY_RUN" -ne 1 ]]; then
+        tmp="$(mktemp)"
+        jq --arg s "$HERDR_APP_KEYS_SECTION" 'del(.[$s])' "$keys" >"$tmp" && mv "$tmp" "$keys"
       fi
-    elif [[ "$PLUGIN_STATUS" == "present" \
-      && "$PLUGIN_SOURCE_KIND" == "github" \
-      && "$PLUGIN_SOURCE_REPO" == "$DEV_LAYOUT_PLUGIN_REPO" ]]; then
-      managed_plugin_kind="github"
-      if confirm "Uninstall managed Herdr plugin $PLUGIN_ID?"; then
-        _plugin_remove_registration "$PLUGIN_ID" "$managed_plugin_kind" || warn "failed to uninstall $PLUGIN_ID"
-      fi
-    elif [[ "$PLUGIN_STATUS" == "present" ]]; then
-      warn "preserving unowned Herdr plugin $PLUGIN_ID: ${PLUGIN_SOURCE_RAW#- }"
-    fi
-  fi
-
-  if confirm "Also remove managed herdr config and integration files?"; then
-    run rm -f "$HERDR_CONFIG_DIR/config.toml"
-    if [[ "$remove_managed_plugin_files" -eq 1 ]]; then
-      run rm -rf "$HERDR_DEV_LAYOUT_LEGACY_DIR"
-    elif [[ -e "$HERDR_DEV_LAYOUT_LEGACY_DIR" ]]; then
-      info "keeping Herdr plugin files without confirmed managed ownership: $HERDR_DEV_LAYOUT_LEGACY_DIR"
     fi
     run rm -f "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh"
     [[ ! -e "$WORKTRUNK_CONFIG_DIR/config.toml" ]] \

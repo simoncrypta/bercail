@@ -1,7 +1,7 @@
-const GITHUB_REPO = "https://github.com/simoncrypta/agentic-dev-setup";
+const GITHUB_REPO = "https://github.com/simoncrypta/bercail";
 const GITHUB_SHA_API =
-  "https://api.github.com/repos/simoncrypta/agentic-dev-setup/commits/master";
-const UA = "agentic-dev-setup-cdn";
+  "https://api.github.com/repos/simoncrypta/bercail/commits/master";
+const UA = "bercail-cdn";
 
 async function masterSha() {
   const response = await fetch(GITHUB_SHA_API, {
@@ -22,7 +22,7 @@ export default {
 
     const sha = await masterSha();
     const upstream = new URL(
-      `https://raw.githubusercontent.com/simoncrypta/agentic-dev-setup/${sha}${url.pathname}${url.search}`,
+      `https://raw.githubusercontent.com/simoncrypta/bercail/${sha}${url.pathname}${url.search}`,
     );
     const response = await fetch(upstream, {
       headers: { "User-Agent": UA },

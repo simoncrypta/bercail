@@ -1,0 +1,14 @@
+{
+  "layout:bercail": {
+    "ctrl-shift-a": "bercail-desk.agent",
+    "ctrl-shift-r": "bercail-desk.review",
+    "ctrl-shift-s": "bercail-desk.shell",
+    "ctrl-shift-f": "bercail-desk.files",
+    "ctrl-shift-g": "bercail-desk.changes",
+    "ctrl-alt-left": "bercail-desk.go-left",
+    "ctrl-alt-right": "bercail-desk.go-right",
+    "ctrl-alt-up": "bercail-desk.go-up",
+    "ctrl-alt-down": "bercail-desk.go-down",
+    "ctrl-shift-q": "space.close"
+  }
+}

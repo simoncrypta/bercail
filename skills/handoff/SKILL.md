@@ -2,29 +2,32 @@
 name: handoff
 description: >-
   Routes a named handoff stage via scripts/handoff-spawn. The job is a beads
-  issue (bd); the agent prompt is only its id. Stage start is one headless claude
+  issue (bd); the agent prompt is one line pointing at it. Stage start is one headless claude
   process. Stage codex is one headless `codex exec` process. Stage cursor is
-  one headless `cursor-agent --print` process. None of those open a Herdr pane.
-  `--branch` clones a sticky pane running the stage's binary. Shep owns the
-  workflow; bercail adds no per-harness mode.
+  one headless `cursor-agent --print` process. None of those open anything in
+  the Herdr app. `--branch` makes a sibling worktree with its own Herdr app
+  space whose desk agent runs the stage's binary. Shep owns the workflow;
+  bercail adds no per-harness mode.
   Use when the user asks to hand off, plan a job, or spawn parallel features.
   Call by name: handoff.
-compatibility: Requires bd (beads), herdr, wt (worktrunk), and the sticky-agent Herdr layout helpers.
+compatibility: Requires bd (beads), wt (worktrunk), the Herdr app (herdr-app) with herdr-core (hc), and bercail's worktrunk helpers.
 ---
 
 # handoff
 
-Do not inspect git, Graphite, Herdr, or worktrees yourself. Run `--info`, then spawn.
+Do not inspect git, Graphite, the Herdr app, or worktrees yourself. Run `--info`, then spawn.
 
 ```bash
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" --info
 ```
 
-That JSON is the only context you need: `herdr`, `herdr_env`, `socket`,
-`main_checkout`, `cwd`, `branch`, `dirty`, `graphite`,
-`default_copy`, `helper`, `workspace`, `beads`.
+That JSON is the only context you need: `herdr` (the Herdr app answers),
+`herdr_env` (this shell is an hc terminal), `socket`, `main_checkout`, `cwd`,
+`branch`, `dirty`, `graphite`, `default_copy`, `helper`, `space` (the
+app space the user is looking at), `beads`.
 
-- If `herdr` is false, report that and stop.
+- If `herdr` is false and you need `--branch`, report that the Herdr app is not open and stop.
+  Headless stages do not need it.
 - If `beads` is false, report that bd is missing and stop.
 - If `main_checkout` is false, report that and stop (do not spawn from a linked worktree).
 - `main_checkout` means the primary git worktree, not “on trunk”.
@@ -38,8 +41,9 @@ Auto-review rejects those as unbound executable content.
 
 Shep writes the job as a beads issue first (`bd create`, `bd show <id>`). The
 issue holds the ask, the repo, links, and any plan-only note. There are no
-prompt files, briefs, or pending prompts. The agent's whole prompt is the issue
-id, the same for claude, codex, and cursor-agent. Shep owns the workflow
+prompt files, briefs, or pending prompts. The agent's whole prompt is one line
+pointing at the issue (`Your job is beads issue <id>. Run bd show <id> …`), the
+same for claude, codex, and cursor-agent. Shep owns the workflow
 (planning, review, which harness); bercail has no cursor-only mode.
 
 Each real handoff adds a `bd comment` to the issue with what the agent needs
@@ -49,7 +53,7 @@ install beads; the command is `bd`.
 
 ## Headless stages (claude, Codex, or cursor-agent)
 
-Shep runs these. They do not open a TUI in Herdr. Bercail has no preference
+Shep runs these. They do not open anything in the Herdr app. Bercail has no preference
 among claude, codex, and cursor-agent; the caller names the stage or
 `--binary`. `--stage start` is one `claude --print` process. `bercail harness`
 lists claude, codex, and cursor-agent with `present` and a local `model_hint`.
@@ -84,52 +88,59 @@ bercail harness
   --stage cursor --issue <id> --worktree <checkout> [--resume <session_id>] [--dry-run]
 ```
 
-`--resume` continues that session. It does not kill a pane. `--dry-run` prints
+`--resume` continues that session. It does not touch any desk agent. `--dry-run` prints
 the argv as JSON for any of the three stages, even when that binary or bd is
 not on PATH (`present`, `bd_present`). It does not run the harness, check the
 issue, or comment; it may ask `bd context` where `.beads` is. Arena,
 implement, and the Composer review pane are not stages yet. Add a row to
 `scripts/handoff-stages.sh` later.
 
-## Spawn a `--branch` pane
+## Spawn a `--branch` desk
 
 Run the **resolved script directly** (absolute path below). Set the process
 working directory to `cwd` from `--info`. Flags only.
 
 ```bash
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --branch <name> --stage start|codex|cursor --issue <id> --clean --workspace <id>
+  --branch <name> --stage start|codex|cursor --issue <id> --clean --space <id>
 ```
 
-- `--workspace` is required when `herdr_env` is false (socket-only parent).
-  Use `workspace` from `--info` or the parent Herdr id (e.g. `w26`).
+- `--space <id>` is optional (`--workspace` is the same flag): the app space to keep on screen. By
+  default the user stays on whatever space they are looking at.
 - `--dirty` / `--clean` override `default_copy`.
 - Plan-only work is a line in the issue, not a flag.
-- Do not `herdr pane run` this spawn. `--info` via pane run is fine.
+## The desk (`--branch`)
 
-## Sticky pane (`--branch`)
-
-`--branch` clones a sibling worktree with a sticky pane running the named
-stage's binary: claude, codex, or cursor-agent. `--stage` is required; bercail
-has no default harness. A missing binary fails before any worktree is made.
+`--branch` makes a sibling worktree (`wt switch --create`), opens a Herdr app
+space on it (worktrunk's post-start hook), and starts that space's desk agent:
+an hc terminal running the named stage's binary (claude, codex, or
+cursor-agent) with a one-line prompt pointing at the issue as its first message, labelled
+`bercail.role=agent` and `bercail.space=<space id>`. The bercail layout shows
+it in the desk column. `--stage` is required; bercail has no default harness.
+A missing binary fails before any worktree is made. A desk already running in
+that space is replaced. `wt remove <branch>` closes the space and its desk.
 
 ## After a `--branch` spawn
 
-The script prints JSON: `label`, `path`, `branch`, `issue`, `agent_started`,
-`dirty_copied`, `graphite`. It appends that line to
+The script prints JSON: `ok`, `label`, `path`, `branch`, `issue`,
+`agent_started`, `dirty_copied`, `graphite`, `stage`, `harness`, `space` (the
+child's Herdr app space) and `desk` (the desk agent's hc address). It appends that line to
 `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling exists.
 
 Report that tuple and stop. If the script exits nonzero before creating a
-worktree, report the error and stop. Do not `pane run` the child, `agent prompt`,
-paste, send-keys, or focus the child.
+worktree, report the error and stop. Do not `hc send` to the desk agent, type
+into it, or switch the user to its space. To see how it is doing, read
+it: `hc get <desk>`, `hc wait <desk>`, with `desk` from that JSON (or the
+terminal labelled `bercail.space=<space>` in `hc ls`).
 
 ## When not to use
 
 - Ordinary coding in the **current** worktree with no handoff.
-- Herdr unreachable (`herdr` is false).
+- `--branch` while the Herdr app is not open (`herdr` is false).
 - Pure Worktrunk config/hook questions — escalate hook approvals to the user.
 
-## Other Herdr / Worktrunk control
+## Other Worktrunk control
 
-Not the spawn path: `resources/herdr-control.md`, `resources/worktrunk.md`,
-`resources/keys.md`, `resources/babysit.md`.
+Not the spawn path: `resources/worktrunk.md`, `resources/babysit.md`,
+`resources/herdr-control.md` (herdr-app and hc), `resources/keys.md` (keys,
+for user questions only).

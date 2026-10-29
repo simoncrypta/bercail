@@ -1,19 +1,31 @@
 # Keyboard shortcuts (user questions only)
 
-Agents drive Herdr via the CLI; you do not need these for handoffs. Use this only when the user asks about keys.
+Agents drive Herdr with `herdr-app` and `hc`; you do not need these for
+handoffs. Use this only when the user asks about keys.
 
-Prefix is **Ctrl-Space**.
+In the bercail layout:
 
 | Key | Action |
 |-----|--------|
-| `prefix+d` | Apply sticky-agent layout |
-| `prefix+1` | Focus agent pane |
-| `prefix+2` / `3` / `4` | review / shell / files |
-| `Alt+1` / `2` / `3` (Option on macOS) | Same tabs in a dev workspace |
-| `prefix+k` | Close file tab |
-| `prefix+x` | Close pane (file tabs: same as prefix+k) |
-| `prefix+shift+g` / `c` / `r` | Worktree open / open-current / remove (plugin) |
-| `prefix+shift+k` | Close this workspace (not linked worktree children) |
-| `Ctrl+Alt+Left/Right/Up/Down` (Ctrl+Option on macOS) | Focus pane left / right / up / down |
+| `Ctrl+Shift+A` | Focus the desk agent, or start it (the agent last picked on the desk) |
+| `Ctrl+Shift+R` | Open or select Review (`tuicr`) |
+| `Ctrl+Shift+S` | Shell tab |
+| `Ctrl+Shift+F` / `Ctrl+Shift+G` | Show or hide files / changes |
+| `Ctrl+Alt+Left/Right/Up/Down` | Move between panes; left from the leftmost pane reaches the desk |
+| `Ctrl+Shift+Q` | Close this space |
 
-Shell: `wtc` / `wts` / `wtd` / `dev` / `d` / `t`.
+Herdr app keys:
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Shift+T` / `Ctrl+Shift+W` | New tab / close tab |
+| `Ctrl+Shift+O` / `Ctrl+Shift+E` | Split right / down |
+| `Ctrl+Shift+X` / `Ctrl+Shift+Z` | Close pane / zoom pane |
+| `Alt+1..9`, `Alt+Left/Right` | Tab by number, previous/next tab |
+| `Alt+Up/Down` | Previous/next space |
+| `Ctrl+Shift+B` | Toggle the sidebar |
+| `Ctrl+Shift+L` | Switch layout |
+| `F2` / `Shift+F2` | Rename tab / space |
+| `Ctrl+Shift+?` | All keys |
+
+Shell: `wtc` / `wts` / `wtd` / `dev` (or `d`) / `t`.

@@ -1,88 +1,64 @@
-# Herdr control (condensed)
+# Herdr app and herdr-core control (condensed)
 
-Aligned with upstream Herdr agent skill. Installed binary wins: `herdr --help`, group help (`herdr pane`, `herdr agent`, …). Optional: `herdr --skill`.
+Two programs. `herdr-app` is the window: spaces, tabs, layouts. herdr-core
+(`hc`) runs every terminal and agent; they keep running when the window
+closes. The installed binaries win: `herdr-app commands`, `hc --help`,
+`hc <command> --help`.
 
 ## Guard
 
 ```bash
-test "${HERDR_ENV:-}" = 1
+test -n "${HC_TERMINAL_ID:-}"        # this shell is an hc terminal
+herdr-app status >/dev/null 2>&1     # the app is open
 ```
 
-## Primitives
-
-- **Workspace / tab / pane** — topology
-- **Pane commands** — shells, tests, servers, raw IO
-- **Agent commands** — recognized coding agents (`idle` / `working` / `blocked` / `done` / `unknown`)
-
-`agent start` needs an existing available shell pane; it does not create layout.
-
-IDs: `w1`, `w1:t1`, `w1:p1`. Prefer `--current` or explicit IDs/names over another client’s UI focus.
+## Look
 
 ```bash
-printf '%s\n' "$HERDR_WORKSPACE_ID" "$HERDR_TAB_ID" "$HERDR_PANE_ID"
-herdr workspace list
-herdr pane list --workspace "$HERDR_WORKSPACE_ID"
-herdr agent list
+herdr-app status                     # shown space, layout, focus
+herdr-app ls                         # spaces, their folders, tabs, terminals
+hc ls                                # live terminals (JSON when piped)
+hc get <t>                           # one terminal: status, labels, cwd, parent
+hc read <t>                          # its screen and history
 ```
 
-## Sibling pane (same worktree)
+Addresses look like `t7` or `t1b`. Parse them from JSON; do not invent them.
+Agent status is `working`, `blocked`, `done` (finished while nobody looked)
+or `idle`.
 
-Default for same-cwd helpers — not a substitute for main→worktree handoff:
+## Desk agents
+
+A bercail desk is an hc terminal labelled `bercail.role=agent` and
+`bercail.space=<space id>`, started as a sub-agent of the space's first
+terminal. Find one by its labels (`hc get <t>`), then wait on it:
 
 ```bash
-herdr pane split --current --direction right --cwd "$PWD" --no-focus
-herdr pane run <pane-id> "just test"
-herdr pane wait-output <pane-id> --match "test result" --timeout 120000
-herdr pane read <pane-id> --source recent-unwrapped --lines 120
+hc wait <t>                          # until it stops working
 ```
 
-## Agent surface
-
-Main-repo → worktree handoff is `scripts/handoff-spawn` only (`resources/handoff.md`).
-Do not `herdr agent prompt`, paste, send-keys, or `workspace focus` the child.
-
-Never deliver a handoff task with TUI paste or session control:
+Main-repo to worktree handoff is `scripts/handoff-spawn` only
+(`resources/handoff.md`). Never deliver a task by typing into a desk:
 
 ```bash
-# wrong — steals focus / types into the TUI
-herdr workspace focus "$child"
-herdr agent focus "$pane"
-herdr pane send-keys "$pane" ...
-herdr agent prompt "$pane" "$TEXT"
+# wrong: types into the agent's TUI
+hc send <t> "$TEXT"
+hc keys <t> enter
+herdr-app do space.select --id <child>
 ```
 
-Inspect (not a substitute for handoff submit):
+## Helpers in the same checkout
+
+Not a substitute for a handoff:
 
 ```bash
-herdr agent read "$pane" --source recent-unwrapped --lines 120
-herdr agent rename "$pane" reviewer
+hc run --bg --cwd "$PWD" just test   # a sub-agent of this terminal
+hc wait <t> --output "test result"
+hc read <t>
 ```
-
-Prefer `recent-unwrapped` for logs. If alternate-screen output cannot be recovered, ask the agent to write a Markdown file and return only its path.
-
-### Focus
-
-- `herdr worktree create|open` / `herdr workspace create` support `--no-focus` for background subspaces.
-- Sticky layout create runs the plugin script directly with `WT_HERDR_LABEL` / `WT_HERDR_WORKDIR` / `HERDR_WORKSPACE_ID` for the child. Do not `herdr plugin action invoke` for background create: that binds the focused parent workspace and drops `WT_HERDR_*`. Plugin id is `agentic-dev.layout` (never `agentic-dev.dev-layout`).
-- Worktrunk `post-start` opens layout only (`unset WT_HERDR_AGENT_PROMPT`). `d` / `dev` / `apply` start a clear session of the configured agent. The handoff skill is the only path that starts the child with the task (`wt_herdr_handoff_agent`). Socket-attached parents (no `HERDR_ENV`) pass `--workspace`.
-- Create does not `workspace focus` the child. If some Herdr call still moves TUI focus, the helper restores `WT_HERDR_KEEP_FOCUS` (the parent workspace).
-- `herdr worktree open --path` needs `--cwd <main-repo>` (or `--workspace` of that repo). Path-only open uses the focused workspace as the source and fails with `not_git_worktree` when that workspace is not a git checkout.
-- `herdr workspace focus` does not accept `--json`.
-
-## Worktrees (grouped subspaces)
-
-```bash
-herdr worktree list [--cwd PATH | --workspace ID]
-herdr worktree create --cwd <main> --branch NAME [--path PATH] [--label TEXT] --no-focus
-herdr worktree open --path PATH|--branch NAME [--label TEXT] --no-focus
-herdr worktree remove --workspace ID
-```
-
-`worktree create` opens a checkout as a workspace and groups it with the parent repo workspace.
 
 ## Safety
 
-- `--no-focus` for background work unless asked to switch
-- Parse IDs from JSON; do not invent them
-- Do not close what you did not create unless asked
-- Never `herdr server stop` / kill the main process unless the user explicitly intends that
+- Do not switch the user's shown space unless asked (`space.new` selects the
+  new space; bercail's helpers put the user back).
+- Do not close, kill or `hc rm` what you did not start unless asked.
+- Never `hc server stop` unless the user means it: it parks every terminal.

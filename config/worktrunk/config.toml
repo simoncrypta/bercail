@@ -7,15 +7,13 @@ S="{{ branch | capitalize }}_{{ repo | capitalize }}"
 W="{{ worktree_path }}"
 
 source "$HOME/.config/worktrunk/herdr-layout.sh"
-# Layout only — agent pane stays a shell. d/dev start a clear agent session.
+# Space only — no desk agent. d/dev start a clear agent session.
 # Handoff starts the agent with the task via wt_herdr_handoff_agent.
 unset WT_HERDR_AGENT_PROMPT
 wt_herdr_layout_create "$S" "$W"
 
-echo "✓ Herdr worktree group / subspace '$S' ready"
-echo "  Layout: agent pane | review/shell center | files pane"
-echo "  Switch: prefix+1 agent, +2 review, +3 shell, +b/+e files, +g git"
-echo "  Attach with: herdr"
+echo "✓ Herdr space '$S' ready"
+echo "  Desk: Ctrl+Shift+A agent, Ctrl+Shift+R review, Ctrl+Shift+S shell, Ctrl+Shift+F/G files/changes"
 """
 
 [post-remove]

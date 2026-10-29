@@ -128,8 +128,8 @@ test_lua_binding_omarchy() {
   block="$(herdr_hypr_binding_lua)"
   assert_contains "$block" 'hl.unbind("SUPER + ALT + RETURN")' \
     "Omarchy lua unbinds SUPER+ALT+RETURN"
-  assert_contains "$block" '{ omarchy = "terminal-herdr" }' \
-    "Omarchy lua uses native terminal-herdr launcher"
+  assert_contains "$block" '{ launch = "herdr-app", focus = "^herdr-app$" }' \
+    "Omarchy lua launches or focuses the Herdr app"
   rmdir "$HOME/.local/share/omarchy"
 }
 
@@ -139,15 +139,15 @@ test_lua_binding_generic() {
     is_omarchy() { return 1; }
     herdr_hypr_binding_lua
   )"
-  assert_contains "$block" 'xdg-terminal-exec herdr' \
-    "generic Hyprland lua launches herdr via xdg-terminal-exec"
+  assert_contains "$block" 'hl.dsp.exec_cmd("herdr-app")' \
+    "generic Hyprland lua launches the Herdr app"
 }
 
 test_patch_lua_bindings() {
   mkdir -p "$HOME/.local/share/omarchy" "$HOME/.config/hypr"
   printf '%s\n' '-- user overrides' >"$HOME/.config/hypr/bindings.lua"
   patch_hypr_herdr_binding
-  grep -q 'terminal-herdr' "$HOME/.config/hypr/bindings.lua" \
+  grep -q 'launch = "herdr-app"' "$HOME/.config/hypr/bindings.lua" \
     && ok "patch writes Omarchy lua Herdr binding" \
     || not_ok "patch writes Omarchy lua Herdr binding"
   if hypr_has_herdr_binding; then
@@ -163,20 +163,21 @@ test_patch_lua_bindings() {
   rm -rf "$HOME/.local/share/omarchy" "$HOME/.config/hypr"
 }
 
-test_doctor_native_herdr() {
-  mkdir -p "$HOME/.local/share/omarchy" "$HOME/.config/fcitx5/conf"
+test_doctor_herdr_app_binding() {
+  mkdir -p "$HOME/.local/share/omarchy" "$HOME/.config/fcitx5/conf" "$HOME/.config/hypr"
   printf '%s\n' 'Hint Trigger=' >"$HOME/.config/fcitx5/conf/keyboard.conf"
+  printf '%s\n' 'bindd = SUPER ALT, RETURN, Herdr, exec, xdg-terminal-exec herdr' >"$HOME/.config/hypr/bindings.conf"
   local output rc
   if output="$(doctor_omarchy_integration 2>&1)"; then rc=0; else rc=$?; fi
-  if command -v omarchy-launch-terminal-herdr >/dev/null 2>&1; then
-    assert_rc 0 "$rc" "doctor accepts native Omarchy Herdr launcher"
-    assert_contains "$output" "omarchy native Herdr launcher" \
-      "doctor reports native SUPER+CTRL+RETURN Herdr"
-  else
-    assert_contains "$output" "missing  hypr SUPER+ALT+RETURN herdr binding" \
-      "doctor reports missing binding without native launcher"
-  fi
-  rm -rf "$HOME/.local/share/omarchy" "$HOME/.config/fcitx5"
+  assert_rc 1 "$rc" "doctor flags a binding that still opens terminal herdr"
+  assert_contains "$output" "missing  hypr SUPER+ALT+RETURN Herdr app binding" \
+    "doctor names the missing Herdr app binding"
+  YES=1 patch_hypr_herdr_binding
+  assert_eq 'bindd = SUPER ALT, RETURN, Herdr, exec, omarchy-launch-or-focus "^herdr-app$" herdr-app' \
+    "$(<"$HOME/.config/hypr/bindings.conf")" "patch replaces the terminal herdr binding in bindings.conf"
+  if output="$(doctor_omarchy_integration 2>&1)"; then rc=0; else rc=$?; fi
+  assert_rc 0 "$rc" "doctor accepts the Herdr app binding"
+  rm -rf "$HOME/.local/share/omarchy" "$HOME/.config/fcitx5" "$HOME/.config/hypr"
 }
 
 test_sync_omarchy_default_agent() {
@@ -203,7 +204,7 @@ test_hypr_bindings_prefers_lua
 test_lua_binding_omarchy
 test_lua_binding_generic
 test_patch_lua_bindings
-test_doctor_native_herdr
+test_doctor_herdr_app_binding
 test_sync_omarchy_default_agent
 
 printf '%s passed, %s failed\n' "$pass" "$fail"

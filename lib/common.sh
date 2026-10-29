@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 set -euo pipefail
 
-AGENTIC_DEV_VERSION="${AGENTIC_DEV_VERSION:-0.8.0}"
+AGENTIC_DEV_VERSION="${AGENTIC_DEV_VERSION:-0.9.0}"
 AGENTIC_DEV_MARKER_START="# >>> bercail"
 AGENTIC_DEV_MARKER_END="# <<< bercail"
 LEGACY_AGENTIC_DEV_MARKER_START="# >>> agentic-dev-setup"
@@ -12,14 +12,10 @@ AGENTIC_DEV_CONFIG_DIR="${HOME}/.config/bercail"
 AGENTIC_DEV_SHELL_DIR="${AGENTIC_DEV_CONFIG_DIR}/shell"
 AGENTIC_DEV_USER_CONFIG="${AGENTIC_DEV_CONFIG_DIR}/config.toml"
 LEGACY_AGENTIC_DEV_CONFIG_DIR="${HOME}/.config/agentic-dev"
-HERDR_CONFIG_DIR="${HOME}/.config/herdr"
-# Legacy local-link path retained only for migrating pre-v0.2.0 installs.
-HERDR_DEV_LAYOUT_LEGACY_DIR="${HERDR_CONFIG_DIR}/plugins/dev-layout"
+HERDR_APP_CONFIG_DIR="${HERDR_APP_CONFIG_DIR:-${HOME}/.config/herdr-app}"
 WORKTRUNK_CONFIG_DIR="${HOME}/.config/worktrunk"
 FCITX5_CONFIG_DIR="${HOME}/.config/fcitx5"
 LOCAL_BIN="${HOME}/.local/bin"
-PLUGIN_ID="agentic-dev.layout"
-LEGACY_LAYOUT_PLUGIN_ID="agentic-dev.dev-layout"
 # Canonical skill install per Agent Skills (https://agentskills.io): ~/.agents/skills.
 AGENTS_SKILLS_DIR="${HOME}/.agents/skills"
 AGENTIC_DEV_SKILL_IDS=(handoff review)
@@ -118,10 +114,10 @@ install_src_dir() {
   printf '%s' "https://setup.simoncrypta.dev"
 }
 
-# Remote install assets (config/, bin/, plugins/) come from GitHub raw.
+# Remote install assets (config/, bin/, skills/) come from GitHub raw.
 # The CDN only hosts install.sh + lib/ for bootstrap.
 github_raw_base() {
-  printf '%s' "${GITHUB_RAW_BASE:-https://raw.githubusercontent.com/simoncrypta/agentic-dev-setup/master}"
+  printf '%s' "${GITHUB_RAW_BASE:-https://raw.githubusercontent.com/simoncrypta/bercail/master}"
 }
 
 fetch_file() {

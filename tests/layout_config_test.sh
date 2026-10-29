@@ -42,12 +42,6 @@ DRY_RUN=0
 info() { :; }
 warn() { printf '%s\n' "$*" >&2; }
 
-if grep -Eq '^[[:space:]]*default_shell[[:space:]]*=' "$ROOT/config/herdr/config.toml"; then
-  fail "shipped herdr config must not set default_shell (macOS /bin/bash nags to switch to zsh)"
-fi
-grep -Eq '^[[:space:]]*shell_mode[[:space:]]*=[[:space:]]*"auto"' "$ROOT/config/herdr/config.toml" \
-  || fail "shipped herdr config must set shell_mode = auto (login on macOS, non-login on Linux)"
-
 saved_shell="${SHELL:-}"
 SHELL=/bin/zsh
 assert_eq "zsh" "$(detect_shell_name)" "detect_shell_name follows zsh \$SHELL"
@@ -79,25 +73,22 @@ assert_contains "$(default_user_config)" 'auto_review = true' \
 mkdir -p "$AGENTIC_DEV_CONFIG_DIR"
 cp "$ROOT/config/agentic-dev/config-reader.sh" "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh"
 
-export EDITOR=nano
 assert_eq "cursor-agent" "$(read_agent_command)" "agent defaults to cursor-agent"
 assert_eq "tuicr" "$(read_layout_review)" "review defaults to tuicr"
-assert_eq "nano" "$(read_layout_file_editor)" "editor defaults to EDITOR"
 
 write_user_config grok
 assert_eq "grok" "$(read_agent_command)" "write_user_config stores agent"
 assert_eq "tuicr" "$(read_layout_review)" "write_user_config stores review"
 grep -q 'auto_review = true' "$AGENTIC_DEV_USER_CONFIG" \
   || fail "write_user_config should enable auto_review"
-assert_eq "nano" "$(read_layout_file_editor)" "write_user_config leaves editor to EDITOR"
 grep -q 'editor =' "$AGENTIC_DEV_USER_CONFIG" \
-  && fail "write_user_config should omit editor so EDITOR wins"
+  && fail "write_user_config has no editor setting"
 
 write_user_config agent
 migrate_cursor_cli_command
 assert_eq "cursor-agent" "$(read_agent_command)" "migrates agent command to cursor-agent"
 
-case_dir="$TMP_DIR/doctor-hunk-editor"
+case_dir="$TMP_DIR/doctor-hunk"
 mkdir -p "$case_dir/bin" "$case_dir/home/.config/agentic-dev"
 cat >"$case_dir/home/.config/agentic-dev/config.toml" <<'EOF'
 [agent]
@@ -108,12 +99,7 @@ review = "hunk"
 EOF
 cp "$ROOT/config/agentic-dev/config-reader.sh" \
   "$case_dir/home/.config/agentic-dev/config-reader.sh"
-cat >"$case_dir/bin/herdr" <<'EOF'
-#!/usr/bin/env bash
-printf 'herdr 0.9.3\n'
-EOF
-chmod +x "$case_dir/bin/herdr"
-for cmd in git wt bd fzf jq lazygit hunk nano; do
+for cmd in herdr-app hc git wt bd fzf jq hunk; do
   ln -s /bin/true "$case_dir/bin/$cmd"
 done
 
@@ -122,36 +108,16 @@ output="$(
     XDG_CONFIG_HOME="$case_dir/home/.config" \
     AGENTIC_DEV_CONFIG_DIR="$case_dir/home/.config/agentic-dev" \
     AGENTIC_DEV_USER_CONFIG="$case_dir/home/.config/agentic-dev/config.toml" \
-    EDITOR=nano \
     PATH="$case_dir/bin:/usr/bin:/bin" \
     doctor_dependencies 2>&1
 )" || rc=$?
 rc="${rc:-0}"
-assert_eq "0" "$rc" "doctor exits 0 for hunk + EDITOR layout"
+assert_eq "0" "$rc" "doctor exits 0 for hunk review"
 assert_contains "$output" "ok  hunk" "doctor accepts configured hunk"
-assert_contains "$output" "ok  nano" "doctor accepts EDITOR binary"
+assert_contains "$output" "ok  herdr-app" "doctor checks the Herdr app"
+assert_contains "$output" "ok  hc" "doctor checks herdr-core"
 [[ "$output" != *"missing  tuicr"* ]] || fail "doctor should not require tuicr when review is hunk"
-[[ "$output" != *"missing  fresh"* ]] || fail "doctor should not require fresh"
-
-cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
-[layout]
-file_editor = "nvim"
-EOF
-migrate_file_editor_config
-assert_eq "nvim" "$(read_layout_file_editor)" "migrate_file_editor_config keeps a custom editor"
-grep -q 'editor = "nvim"' "$AGENTIC_DEV_USER_CONFIG" \
-  || fail "migrate_file_editor_config writes editor"
-grep -q 'file_editor' "$AGENTIC_DEV_USER_CONFIG" \
-  && fail "migrate_file_editor_config should rename file_editor away"
-
-cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
-[layout]
-editor = "fresh"
-EOF
-migrate_fresh_editor_default
-grep -q 'editor =' "$AGENTIC_DEV_USER_CONFIG" \
-  && fail "migrate_fresh_editor_default should drop editor=fresh"
-assert_eq "nano" "$(read_layout_file_editor)" "after dropping fresh, EDITOR wins"
+[[ "$output" != *"lazygit"* ]] || fail "doctor no longer needs lazygit"
 
 cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
 [layout]
@@ -163,14 +129,6 @@ assert_eq "tuicr" "$(read_layout_review)" "migrate_hunk_review_to_tuicr rewrites
 grep -q 'review = "tuicr"' "$AGENTIC_DEV_USER_CONFIG" \
   || fail "migrate_hunk_review_to_tuicr writes review = tuicr"
 
-cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
-[layout]
-review = "tuicr"
-auto_review = false
-EOF
-ensure_config_reader || fail "ensure_config_reader"
-assert_eq "false" "$(agentic_dev_layout_auto_review)" "auto_review=false is honored"
-
 mkdir -p "$XDG_CONFIG_HOME/tuicr"
 printf 'theme = "dark"\n' >"$XDG_CONFIG_HOME/tuicr/config.toml"
 ensure_tuicr_watch_config
@@ -179,4 +137,4 @@ grep -q 'theme = "dark"' "$XDG_CONFIG_HOME/tuicr/config.toml" \
 grep -q 'diff_watch_interval_ms = 1000' "$XDG_CONFIG_HOME/tuicr/config.toml" \
   || fail "ensure_tuicr_watch_config should add diff watch to an existing config"
 
-printf 'PASS: layout config, write, migration, and doctor follow tuicr and EDITOR\n'
+printf 'PASS: layout config, write, migration, and doctor follow the review command\n'

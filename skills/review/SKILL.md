@@ -1,10 +1,10 @@
 ---
 name: review
 description: >-
-  Wait for human tuicr comments after the agent pane goes done, address them,
+  Wait for human tuicr comments after the desk agent finishes, address them,
   and publish those user comments to the GitHub PR only when asked. Do not
-  open tuicr on every turn; the layout hook already does.
-compatibility: Requires Herdr (HERDR_ENV=1), the agentic-dev.layout plugin, and tuicr.
+  open tuicr on every turn; the bercail desk already does.
+compatibility: Requires the Herdr app showing the bercail layout (bercail-desk mod), herdr-core, and tuicr.
 ---
 
 # review
@@ -13,13 +13,12 @@ Agents keep their changes **staged, not committed**, until the human has
 reviewed them. Run `git add` on what is ready for review; never `git commit`
 unless the user asked. Committed work is treated as already reviewed.
 
-The layout plugin opens tuicr when the agent pane reports `done` if there are
-uncommitted changes: `tuicr -w` (staged + unstaged + untracked, not committed
-history) with tuicr's diff watch so later edits show without restarting.
-tuicr has no staged-only flag; keep scratch edits out of the tree so the
-uncommitted diff is the review. Someone else's PR on this checkout:
-`tuicr pr <n>` (forge review, `:submit`). Pickr uses `tuicr pr {url}` for
-other people's PRs. `prefix+2` opens Review anytime.
+The bercail desk opens a Review tab when the desk agent finishes a turn and
+the tree has uncommitted changes: `tuicr -w` (staged + unstaged + untracked,
+not committed history) with tuicr's diff watch, so later edits show without
+restarting. tuicr has no staged-only flag; keep scratch edits out of the tree
+so the uncommitted diff is the review. Someone else's PR on this checkout:
+`tuicr pr <n>` (forge review, `:submit`). `Ctrl+Shift+R` opens Review anytime.
 
 Human comments are written in the TUI (`c`). Agent comments use
 `tuicr review add --username …`. Never treat agent comments as the user's
@@ -33,18 +32,20 @@ review, and never post them to GitHub as the user.
 ## Guard
 
 ```bash
-test "${HERDR_ENV:-}" = 1
+test -n "${HC_TERMINAL_ID:-}" && herdr-app status | grep -q '"layout": "bercail"'
 ```
 
-If that fails, tell the user to press `prefix+2` (Ctrl-Space then 2) and wait
-for them to say comments are ready. Do not run `tuicr` in this pane.
+If that fails, tell the user to press `Ctrl+Shift+R` in the Herdr app (bercail
+layout) and wait for them to say comments are ready. Do not run `tuicr` in
+this terminal.
 
 ## Recipe
 
-1. Open (or focus) Review only if the user asked and it is not already open:
+1. Open (or focus) Review only if the user asked. It opens in your own space,
+   even when the user is looking at another one; an open Review is left as is:
 
 ```bash
-herdr plugin action invoke agentic-dev.layout.select-review
+herdr-app do "bercail-desk.review:$HC_TERMINAL_ID"
 ```
 
 2. Find the live session (do not copy CLI flags here; `tuicr review --help`
@@ -67,7 +68,7 @@ and a PR session at once — if more than one is active, ask which slug.
 | Exit | Meaning | Next |
 |------|---------|------|
 | 0 | New **user** comments on stdout (JSON) | Address them, then wait again or close |
-| 2 | Live session gone (user quit tuicr) | Review ended; close leftover tab if needed |
+| 2 | Live session gone (user quit tuicr) | Review ended; close the leftover tab |
 | 124 | Timeout | Leave Review open; ask the user |
 
 Treat comment `comment_type` as: `issue` (fix first), `suggestion` (do or
@@ -89,17 +90,18 @@ with nothing to flag.
 be approved; the script falls back to `comment`. Do not invent a PR. Do not
 auto-publish after every wait.
 
-5. After the round, close Review (docks stickies back to Shell):
+5. After the round, close Review:
 
 ```bash
-herdr plugin action invoke agentic-dev.layout.close-review
+herdr-app do "bercail-desk.close-review:$HC_TERMINAL_ID"
 ```
 
-Reopen later with step 1. The human can also `prefix+2` / `prefix+k`.
+Reopen later with step 1. The human can also press `Ctrl+Shift+R`, or close
+the tab (`Ctrl+Shift+W`).
 
 ## Do not
 
-- Run `tuicr` / `tuicr pr` in the agent pane (the TUI is for the user).
+- Run `tuicr` / `tuicr pr` in your own terminal (the TUI is for the user).
 - Open Review on every edit. Watch keeps an open session current.
 - Commit work the human has not reviewed. Stage it and leave it uncommitted.
 - Post agent-authored comments (`tuicr review add --username`) as a GitHub review.

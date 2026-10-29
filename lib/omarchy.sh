@@ -17,31 +17,27 @@ hypr_bindings_file() {
   return 1
 }
 
-omarchy_has_native_herdr() {
-  is_omarchy || return 1
-  command -v omarchy-launch-terminal-herdr >/dev/null 2>&1
-}
-
+# SUPER+ALT+RETURN launches the Herdr app, or focuses its window.
 herdr_hypr_binding_line() {
   if is_omarchy; then
-    printf '%s' 'bindd = SUPER ALT, RETURN, Herdr, exec, uwsm-app -- xdg-terminal-exec --dir="$(omarchy-cmd-terminal-cwd)" herdr'
+    printf '%s' 'bindd = SUPER ALT, RETURN, Herdr, exec, omarchy-launch-or-focus "^herdr-app$" herdr-app'
   else
-    printf '%s' 'bind = SUPER ALT, RETURN, exec, xdg-terminal-exec herdr'
+    printf '%s' 'bind = SUPER ALT, RETURN, exec, herdr-app'
   fi
 }
 
 herdr_hypr_binding_lua() {
   if is_omarchy; then
     cat <<'EOF'
--- SUPER+ALT+RETURN was Tmux; launch Herdr instead.
+-- SUPER+ALT+RETURN was Tmux; launch the Herdr app (or focus its window) instead.
 hl.unbind("SUPER + ALT + RETURN")
-o.bind("SUPER + ALT + RETURN", "Herdr", { omarchy = "terminal-herdr" })
+o.bind("SUPER + ALT + RETURN", "Herdr", { launch = "herdr-app", focus = "^herdr-app$" })
 EOF
   else
     cat <<'EOF'
--- SUPER+ALT+RETURN → Herdr
+-- SUPER+ALT+RETURN → Herdr app
 hl.unbind("SUPER + ALT + RETURN")
-hl.bind("SUPER + ALT + RETURN", hl.dsp.exec_cmd("xdg-terminal-exec herdr"), { description = "Herdr" })
+hl.bind("SUPER + ALT + RETURN", hl.dsp.exec_cmd("herdr-app"), { description = "Herdr" })
 EOF
   fi
 }
@@ -49,7 +45,7 @@ EOF
 hypr_has_herdr_binding() {
   local file
   file="$(hypr_bindings_file)" || return 1
-  grep -qE 'Herdr|herdr' "$file" 2>/dev/null
+  grep -q 'herdr-app' "$file" 2>/dev/null
 }
 
 omarchy_restart_fcitx5() {
@@ -140,7 +136,7 @@ patch_hypr_conf_herdr_binding() {
   tmp="$(mktemp)"
   while IFS= read -r line; do
     if [[ "$line" =~ SUPER[[:space:]]+ALT,[[:space:]]+RETURN ]] \
-      && [[ "$line" =~ tmux|Tmux ]]; then
+      && [[ "$line" =~ tmux|Tmux|herdr ]]; then
       printf '%s\n' "$binding"
       replaced=1
     else
@@ -167,16 +163,16 @@ patch_hypr_herdr_binding() {
   }
 
   if hypr_has_herdr_binding; then
-    info "hypr already has herdr binding — skipping"
+    info "hypr already launches the Herdr app — skipping"
     return 0
   fi
 
-  if ! confirm "Patch ${file/#$HOME/~} to launch herdr on SUPER+ALT+RETURN?"; then
+  if ! confirm "Patch ${file/#$HOME/~} to launch the Herdr app on SUPER+ALT+RETURN?"; then
     info "skipping hypr binding patch"
     return 0
   fi
 
-  info "patching hypr bindings for herdr"
+  info "patching hypr bindings for the Herdr app"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     info "[dry-run] would update $file"
     return 0

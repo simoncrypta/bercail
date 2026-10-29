@@ -18,66 +18,68 @@ doctor_omarchy_integration() {
   fi
   if is_omarchy || has_hyprland; then
     if hypr_has_herdr_binding; then
-      log "  ok  hypr bindings include herdr"
-    elif omarchy_has_native_herdr; then
-      log "  ok  omarchy native Herdr launcher (SUPER+CTRL+RETURN)"
+      log "  ok  hypr SUPER+ALT+RETURN launches the Herdr app"
     else
-      log "  missing  hypr SUPER+ALT+RETURN herdr binding"
+      log "  missing  hypr SUPER+ALT+RETURN Herdr app binding"
       missing=$((missing + 1))
     fi
   fi
   return "$missing"
 }
 
-doctor_adopted_plugin() {
-  local id="$1" repo="$2" ref="$3"
-  if ! plugin_inspect "$id"; then
-    log "  invalid  third-party plugin $id registry/list entry is ambiguous or malformed"
-    return 1
-  fi
-  if plugin_is_exact_github "$repo" "$ref"; then
-    log "  ok  third-party plugin $id [github:$repo@$ref]"
-    return 0
-  fi
-  if [[ "$PLUGIN_STATUS" == "missing" ]]; then
-    log "  missing  third-party plugin $id"
-    return 1
-  fi
-  log "  warning  third-party plugin $id is pre-existing and preserved [${PLUGIN_SOURCE_RAW#- }]"
-  return 0
-}
-
-doctor_plugin() {
-  local missing=0
-  if ! command -v herdr >/dev/null 2>&1; then
-    log "  missing  herdr (cannot check plugin)"
-    return 1
-  fi
-
-  if ! plugin_inspect "$PLUGIN_ID"; then
-    log "  invalid  plugin $PLUGIN_ID registry/list entry is ambiguous or malformed"
+# The bercail layout, its desk mod and its keys in the Herdr app's home.
+doctor_herdr_app() {
+  local missing=0 src rel dest
+  src="$(_recorded_install_source 2>/dev/null || true)"
+  if [[ -f "$HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT" ]]; then
+    log "  ok  Herdr layout bercail"
+  else
+    log "  missing  Herdr layout $HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT"
     missing=$((missing + 1))
-  elif plugin_is_exact_local "$HERDR_DEV_LAYOUT_LEGACY_DIR"; then
-    if [[ -d "$HERDR_DEV_LAYOUT_LEGACY_DIR" ]]; then
-      log "  ok  plugin $PLUGIN_ID [local:$HERDR_DEV_LAYOUT_LEGACY_DIR] (legacy)"
-    else
-      log "  stale  plugin $PLUGIN_ID source directory is missing: $HERDR_DEV_LAYOUT_LEGACY_DIR"
+  fi
+  for rel in "${HERDR_APP_MOD_FILES[@]}"; do
+    dest="$HERDR_APP_CONFIG_DIR/$rel"
+    if [[ ! -f "$dest" ]]; then
+      log "  missing  Herdr mod file $dest"
+      missing=$((missing + 1))
+    elif [[ -n "$src" && -f "$src/config/herdr-app/$rel" ]] && ! cmp -s "$src/config/herdr-app/$rel" "$dest"; then
+      log "  stale  Herdr mod file $dest (run: bercail update)"
       missing=$((missing + 1))
     fi
-  elif plugin_is_exact_github "$DEV_LAYOUT_PLUGIN_REPO" "$DEV_LAYOUT_PLUGIN_REF"; then
-    log "  ok  plugin $PLUGIN_ID [github:$DEV_LAYOUT_PLUGIN_REPO@$DEV_LAYOUT_PLUGIN_REF]"
-  elif [[ "$PLUGIN_STATUS" == "missing" ]]; then
-    log "  missing  plugin $PLUGIN_ID"
-    missing=$((missing + 1))
+  done
+  if [[ "$missing" -eq 0 ]]; then
+    log "  ok  Herdr mod bercail-desk"
+  fi
+  if jq -e --arg s "$HERDR_APP_KEYS_SECTION" '.[$s]["ctrl-shift-a"] == "bercail-desk.agent"' \
+    "$HERDR_APP_CONFIG_DIR/keys.json" >/dev/null 2>&1; then
+    log "  ok  Herdr keys $HERDR_APP_KEYS_SECTION"
   else
-    log "  mismatched  plugin $PLUGIN_ID preserved [${PLUGIN_SOURCE_RAW#- }]"
+    log "  missing  Herdr keys $HERDR_APP_KEYS_SECTION in $HERDR_APP_CONFIG_DIR/keys.json (run: bercail update)"
     missing=$((missing + 1))
   fi
+  [[ "$missing" -eq 0 ]]
+}
 
-  doctor_adopted_plugin pickr "$PICKR_PLUGIN_REPO" "$PICKR_PLUGIN_REF" || missing=$((missing + 1))
-  doctor_adopted_plugin worktrunk "$WORKTRUNK_PLUGIN_REPO" "$WORKTRUNK_PLUGIN_REF" || missing=$((missing + 1))
-  if plugin_inspect "$LEGACY_LAYOUT_PLUGIN_ID" && [[ "$PLUGIN_STATUS" == "present" ]]; then
-    log "  warning  legacy layout plugin $LEGACY_LAYOUT_PLUGIN_ID still installed (run update to migrate)"
+# Webhook sinks: their last delivery, and the follower that sends to them.
+doctor_notify() {
+  local f name st missing=0
+  [[ -n "$(notify_sink_files)" ]] || return 0
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    name="$(notify_sink_name "$f")"
+    st="$(_notify_sink_state_file "$name")"
+    if [[ -r "$st" ]] && jq -e '.auth_failed == true' "$st" >/dev/null 2>&1; then
+      log "  failing  notify sink $name (key rejected; see bercail notify status)"
+      missing=$((missing + 1))
+    else
+      log "  ok  notify sink $name"
+    fi
+  done < <(notify_sink_files)
+  if "$(notify_hc)" get bercail-notify --json 2>/dev/null | jq -e '.state == "live"' >/dev/null 2>&1; then
+    log "  ok  notify follower (hc terminal bercail-notify)"
+  else
+    log "  missing  notify follower (the bercail layout starts it; or: hc run --bg --no-parent --name bercail-notify bercail notify run)"
+    missing=$((missing + 1))
   fi
   [[ "$missing" -eq 0 ]]
 }

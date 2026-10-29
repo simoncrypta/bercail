@@ -5,11 +5,11 @@ set -euo pipefail
 # INSTALL_SRC may still point at the CDN for legacy callers; asset fetches
 # use github_raw_base() in lib/common.sh.
 bootstrap_remote_libs() {
-  local base="${GITHUB_RAW_BASE:-https://raw.githubusercontent.com/simoncrypta/agentic-dev-setup/master}"
+  local base="${GITHUB_RAW_BASE:-https://raw.githubusercontent.com/simoncrypta/bercail/master}"
   local tmp lib
   tmp="$(mktemp -d)"
   mkdir -p "$tmp/lib"
-  for lib in common detect deps config skills shell-rc uninstall help omarchy doctor harness; do
+  for lib in common detect deps config skills shell-rc uninstall help omarchy notify doctor harness; do
     curl -fsSL "${base%/}/lib/${lib}.sh" -o "$tmp/lib/${lib}.sh"
   done
   printf '%s' "$tmp"
@@ -56,6 +56,8 @@ source "$ROOT/lib/help.sh"
 source "$ROOT/lib/omarchy.sh"
 # shellcheck source=lib/doctor.sh
 source "$ROOT/lib/doctor.sh"
+# shellcheck source=lib/notify.sh
+source "$ROOT/lib/notify.sh"
 # shellcheck source=lib/harness.sh
 source "$ROOT/lib/harness.sh"
 
