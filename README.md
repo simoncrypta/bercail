@@ -48,7 +48,7 @@ Bercail works without Shep, but Shep is the intended orchestrator. To do Shep's 
 - `finished`: working or blocked → done or idle
 - `blocked`: once each time the agent blocks
 
-Sinks are `~/.config/bercail/notify.d/<name>.toml` (`chmod 600`; see [`notify.sink.example`](config/agentic-dev/notify.sink.example)). They filter by space name glob, repo, and kind. The key is sent through a private header file, never through argv. A 401 or 403 is recorded once per outage (`bercail doctor` shows it). Without sinks the follower idles.
+Sinks are `~/.config/bercail/notify.d/<name>.toml` (`chmod 600`; see [`notify.sink.example`](config/agentic-dev/notify.sink.example)). They filter by space name glob, repo, and kind. The key is sent through a private header file, never through argv. A 401 or 403 is recorded and logged; `bercail notify status` and `bercail doctor` show it. Without sinks the follower idles.
 
 `bercail notify add NAME` sets up a sink in one step. It prompts for the webhook URL and the sender key (hidden), writes the file with mode 600, and sends a test. The running follower picks the new sink up on its next delivery, without a restart. A 401 or 403 means the key or the auth mode is wrong.
 
@@ -79,7 +79,7 @@ Each POST body is `bercail.agent_status/v2`:
 
 ## install
 
-Current release: [v0.9.0](https://github.com/simoncrypta/bercail/releases/tag/v0.9.0).
+Current release: [v0.9.1](https://github.com/simoncrypta/bercail/releases/tag/v0.9.1).
 
 Recommended: [mise](https://mise.jdx.dev) + [packslip](https://github.com/jdx/packslip). Each `v*` release publishes `bercail.tar.gz` and a signed `packslip.sigstore.json`. mise checks that signature against this repository and the archive digest before it unpacks anything, and it runs no downloaded code.
 
@@ -95,7 +95,7 @@ packslip install github.com/simoncrypta/bercail      # packslip 1.5.1+
 bercail install
 ```
 
-mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.9.0`.
+mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.9.1`.
 
 The first install trusts the repository's signer, and later installs must match it. `bercail install` runs the release's own `install.sh`. mise or packslip keeps the `bercail` command, so the installer does not copy a second one into `~/.local/bin`. Upgrade with `mise up` (or `packslip install` again), then `bercail update`.
 
@@ -109,7 +109,11 @@ curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
 
 Bercail needs the Herdr app; install it from [herdr.dev](https://herdr.dev) first (it brings herdr-core, `hc`, and keeps both updated). The installer copies the bercail layout and its desk mod into `~/.config/herdr-app` and adds its keys to `keys.json`. Switch to it once with `Ctrl+Shift+L` → bercail.
 
+The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/layouts/): [`bercail/`](bercail) holds the layout, the desk mod, its keys, and a [RECIPE.md](bercail/RECIPE.md). Added that way you get the desk and Review, without worktrees, handoff, or webhooks.
+
 From 0.8 (the Herdr terminal and its layout plugin): install the Herdr app, then `bercail update`. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them. Webhook sinks in `notify.d` keep working, but their payload is now `bercail.agent_status/v2` (see [agent status webhooks](#agent-status-webhooks)).
+
+Installed 0.9.0 with curl? 0.9.1 moved the layout files to `bercail/`, so run the curl installer once more instead of `bercail update`.
 
 Then, in a repo:
 
@@ -160,7 +164,7 @@ bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) 
 | `./install.sh --yes` | Non-interactive |
 | `./install.sh --help` | Installer help |
 | `bercail help` | This reference |
-| `bercail doctor` | Deps, Herdr layout, mod and keys, skills |
+| `bercail doctor` | Deps, Herdr layout, mod and keys, skills, webhook sinks and follower |
 | `bercail harness` | JSON: which of claude, codex, cursor-agent are on PATH (reports, does not choose) |
 | `bercail update` | Re-sync configs, Herdr layout and mod, helper, skills (`--force` also replaces a changed layout) |
 | `bercail reconfigure` | Re-read `config.toml`, refresh skills |
@@ -230,7 +234,7 @@ auto_review = true
 
 Also: `~/.config/herdr-app/layouts/bercail.json` and `mods/bercail-desk/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), worktrunk hooks, `~/.agents/skills/{handoff,review}`.
 
-## linux
+## platforms
 
 On Omarchy: mise first, `omarchy pkg add`, optional `SUPER+ALT+RETURN` → open or focus the Herdr app, fcitx5 `Ctrl+Alt+H/J` hint keys cleared. On Ubuntu: mise then apt (`git fzf jq curl`); worktrunk, beads, tuicr from upstream. On macOS: mise first; Homebrew stays on PATH as fallback (`brew shellenv`, then mise shims prepended). Hyprland: same optional `SUPER+ALT+RETURN` binding.
 
@@ -246,10 +250,11 @@ worktrunk and beads install the same way: skip if present, else mise, else Homeb
 
 ```bash
 shellcheck install.sh lib/*.sh bin/bercail config/shell/bercail.inc.sh config/worktrunk/herdr-layout.sh
-herdr-app check config/herdr-app/mods/bercail-desk
+herdr-app check bercail/mods/bercail-desk
+for t in tests/*_test.sh; do bash "$t" || break; done
 ./install.sh --help
 bercail dry-run
-npm run deploy   # Cloudflare Pages
+npm run deploy   # Cloudflare Pages (CI deploys master)
 ```
 
 ## license

@@ -1,0 +1,148 @@
+# bercail
+
+Herdr's layout with a desk: each space gets one sticky agent in its own column
+on the left of the work area, beside the space's tabs (Shell, Review) and a
+files/changes panel on the right. Tabs come and go around the desk; the agent
+stays. When the desk agent finishes with uncommitted changes, a Review tab
+opens on them by itself. It is the app half of
+[bercail](https://github.com/simoncrypta/bercail), and works on its own too.
+
+![bercail](preview.png)
+
+## What you see
+
+Left to right, under no system title bar (`titlebar: "none"`, macOS traffic
+lights at 12,16):
+
+- **Sidebar**, 268px wide (min 44, max 480, not resizable), `chrome`
+  background. Herdr's own brand row (46px), then the spaces list and the
+  agents list sharing the rest equally (min 90px each), then the footer
+  (69px, Settings / Add machine).
+- **Work column**: the tab bar (42px), the work body, and the status bar
+  (28px). The work body has 8px padding and 8px gaps between its three parts:
+  - **The desk**, weight 1 (min 320px): a card with `background` fill, 1px
+    `border`, radius 10, and a 1px `accent` border while the keyboard is in
+    it. A 32px header row on `chrome`: a 7px status dot, the agent's program
+    name (semibold, `foreground`), its terminal title (`dim`, truncated), and
+    the status word in the status color. Below it, the agent's terminal with
+    6px padding. With no desk agent, the column shows "No agent on this
+    desk" and one button per agent (Claude Code, Codex, Grok; the last one
+    picked filled with `solid`, uninstalled ones at 45% opacity), and a hint
+    line.
+  - **The tabs**, weight 1, so desk and tabs split the width evenly: the
+    shown tab's panes as cards (radius 10, 1px `border`, `accent` on focus,
+    8px gaps, a 30px `pane` header always shown, also on a lone pane).
+  - **Files / Changes**, a 240px stack showing Herdr's `files` or `changes`
+    panel.
+- Terminal text padding is 14×12px. Colors come from the user's theme; the
+  layout sets none.
+
+## How it behaves
+
+- **The desk agent** belongs to the shown space. Switching spaces points the
+  desk at that space's agent, or shows the empty desk.
+- **Statuses** show in the header dot and word: working `working`, blocked
+  `blocked`, done `done`, idle `idle` (each its theme color); no status is
+  `dim`.
+- **Review**: when a desk agent arrives at `done` (or goes working → idle)
+  and its checkout has uncommitted changes, the space gets a tab named
+  Review running the review tool (default `tuicr -w`, watching the
+  uncommitted tree; `tuicr pr N` when the checkout's PR is someone else's).
+  A live Review tab is only selected, never restarted; one whose tool quit
+  is replaced. At most one automatic open per space every 15s; a space that
+  isn't shown opens it the next time it is.
+- **Keys** (keys.json section `layout:bercail`):
+  - `ctrl-shift-a` focuses the desk agent, or starts one: the last agent
+    picked on an empty desk, else `[agent] command` from
+    `~/.config/bercail/config.toml` (`cursor-agent` when there is none).
+  - `ctrl-shift-r` Review (opens even on a clean tree); `ctrl-shift-s` the
+    first tab (Shell).
+  - `ctrl-shift-f` / `ctrl-shift-g` show Files / Changes; the same key again
+    hides the panel.
+  - `ctrl-alt-left/right/up/down` move between panes. Left from the leftmost
+    pane enters the desk; right from the desk returns to the pane you came
+    from. Up/down on the desk do nothing.
+  - `ctrl-shift-q` closes the space.
+- **Clicks**: an empty desk's buttons start that agent and remember it.
+  Everything else is Herdr's own (sidebar, tabs, panes, panels).
+- The first tab is renamed Shell when the desk agent starts in it.
+
+## Built from
+
+- `layouts/bercail.json`, cloned from Herdr's `main` (0.1.6). Node tree:
+  `root` row → `sidebar` column (`brand` workspace-chrome, `sidebar-lists`
+  column of `spaces` and `agents`, `sidebar-footer` workspace-chrome with
+  `props: {footer: true}`) and `work` column (`tabs` mod, `work-body` row,
+  `status` workspace-status). `work-body`: `desk` column (`desk-header`
+  block = `bercail-desk` mod; `agent-stack` stack of `agent`, a
+  `{terminal: …}` block, and `empty`, the `bercail-desk` mod with
+  `props: {role: "empty"}`), `main` block `{tab: "active", pane: {...}}`,
+  `panel-body` stack of `files` and `changes`.
+- Shipped mods used: `workspace-chrome`, `spaces`, `agents`, `tabs`, `pane`,
+  `files`, `changes`, `workspace-status`.
+- `mods/bercail-desk` (`place: "none"`), one script, two roles:
+  - `header` (default): draws the header row, takes the key commands
+    (`nextCommand()`), and on every render points the `agent` block at the
+    space's desk with `layout.set` and picks the stack child with
+    `layout.select`.
+  - `empty`: the agent picker; lists choices from `knownAgents()` and keeps
+    the last pick in shared state `bercail.agent`.
+- A desk agent is an hc terminal: `hc run --bg --json --keep
+  --outlive-parent --no-notify --parent <first pane of the first tab> --cwd
+  <its cwd> --label bercail.role=agent --label bercail.space=<space id>
+  <argv>` (codex gets `--no-daemon`). The mod finds it again by those labels
+  in `terminals()`.
+- Commands it runs: `pane.focus`, `pane.go`, `tab.select`, `tab.new` (Review,
+  with `argv`), `tab.close`, `tab.rename`, `layout.set`, `layout.select`,
+  `layout.show`, `layout.hide`. Programs: `hc`, `git status --porcelain`,
+  `gh pr view` / `gh api user` (whose PR it is), the review tool, `bash`.
+- `herdr` functions: `terminals`, `spaces`, `panes`, `focused`, `agents`,
+  `knownAgents`, `layout`, `nextCommand`, `exec`, `run`, `notify`, `shared`,
+  `setShared`, `readTextFile`, `home`, `theme`, `props`.
+- Commands from outside: `herdr-app do bercail-desk.<command>` or
+  `bercail-desk.<command>:<terminal>` (acts on that terminal's space), e.g.
+  an agent opening its own Review with `bercail-desk.review:$HC_TERMINAL_ID`.
+- With [bercail](https://github.com/simoncrypta/bercail) installed, the mod
+  also keeps `bercail notify run` alive as the hidden hc terminal
+  `bercail-notify` (checked every 60s), which posts desk status changes to
+  webhooks.
+
+## Watch out
+
+- An agent block can't take the keyboard from a command, and `agent.focus`
+  moves focus to the parent pane. The desk is a **terminal** block that the
+  mod repoints, not `{agent: "focused"}`.
+- The desk is a layout block, not a pane of the tab: `pane.go` never reaches
+  or leaves it. That is why the arrow keys are the mod's commands.
+- Herdr rewrites `layouts/bercail.json` as it is used (the `agent` block's
+  terminal, the stack's active child, sizes). Don't treat those fields as
+  part of the design.
+- Keys live in `keys.json` under `layout:bercail`; adding the layout folder
+  alone doesn't bind them. Merge that section without touching the others.
+  `ctrl-alt-arrows` there override `global`'s `pane.go` while this layout
+  shows.
+- Start desks with `TERM=xterm-256color`: `hc run` passes on the caller's
+  environment, and a headless caller's `TERM=dumb` leaves the agent without
+  colors or key handling.
+- Review assumes [tuicr](https://github.com/agavra/tuicr) (≥ 0.20); set
+  `[layout] review` in `~/.config/bercail/config.toml` to use another tool,
+  or `auto_review = false` to open Review only by key.
+- Without a Shell terminal in the space's first tab, no desk can start (the
+  desk is its sub-agent); the mod says so.
+- The webhook follower is only started when `bercail` is on PATH.
+
+## Done when
+
+- `herdr-app check mods/bercail-desk` passes and `layout.switch
+  {"name":"bercail"}` shows the sidebar, the desk, the tabs and Files.
+- In a space with no desk agent, the desk shows the picker; clicking Claude
+  Code starts `claude` as an hc terminal labelled `bercail.role=agent` and
+  `bercail.space=<id>`, and the desk shows it with its status.
+- Switching to another space shows that space's desk (or the picker);
+  switching back shows the first agent, still running.
+- `ctrl-shift-a` from a pane puts the keyboard in the desk;
+  `ctrl-alt-right` returns it to that pane.
+- With uncommitted changes in the checkout, the agent finishing a turn opens
+  a Review tab running `tuicr -w`; a second finish selects it again instead
+  of opening another.
+- `ctrl-shift-g` shows Changes, pressing it again hides the panel.

@@ -8,8 +8,8 @@ public/manifest.json
 public/lib/
 
 # Written by `herdr-app check` beside a mod; the app supplies its own.
-config/herdr-app/mods/*/gpui-kit.d.ts
-config/herdr-app/mods/*/jsconfig.json
+bercail/mods/*/gpui-kit.d.ts
+bercail/mods/*/jsconfig.json
 
 # Headless handoff runtime (job brief, result, logs). Do not commit a session.
 .bercail/

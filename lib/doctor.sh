@@ -42,7 +42,7 @@ doctor_herdr_app() {
     if [[ ! -f "$dest" ]]; then
       log "  missing  Herdr mod file $dest"
       missing=$((missing + 1))
-    elif [[ -n "$src" && -f "$src/config/herdr-app/$rel" ]] && ! cmp -s "$src/config/herdr-app/$rel" "$dest"; then
+    elif [[ -n "$src" && -f "$src/bercail/$rel" ]] && ! cmp -s "$src/bercail/$rel" "$dest"; then
       log "  stale  Herdr mod file $dest (run: bercail update)"
       missing=$((missing + 1))
     fi
