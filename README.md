@@ -9,8 +9,7 @@ Bercail is an agentic development environment on the [Herdr app](https://herdr.d
 Claude Code, Codex CLI, and cursor-agent are equal harnesses. Bercail does not prefer one, pick one, or fall back from one to another. A handoff is a [beads](https://beads.gascity.com/) issue: Shep writes it, and the agent's whole prompt is one line pointing at that issue.
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
-
-<img width="2138" height="1386" alt="desk agent, review, files" src="https://github.com/user-attachments/assets/b58e8e78-c78b-4cc3-9f56-8040d561f2d9" />
+<img width="2138" height="1386" alt="desk agent, review, files"  src="https://github.com/user-attachments/assets/d018204b-502f-43c3-ad92-11f5a58ccf00" />
 
 - **the desk** — each space's agent (claude, codex, or grok, picked on the desk) is an hc terminal, not a tab. Tabs move around it, and it keeps running when the window closes.
 - **one worktree, one space** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; a Herdr space follows.
