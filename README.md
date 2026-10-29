@@ -28,7 +28,7 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
 ## Shep, the Grok bot
 
-**[Shep](https://x.ai/bot/QxTrE1a1ESYzE7nfEKc9n) is the Grok bot that orchestrates bercail.** It orchestrates coding agents in the Herdr app through bercail: it writes beads issues, hands them to claude, codex, or cursor-agent, and pings you when a desk is ready to review.
+**[Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF) is the Grok bot that orchestrates bercail.** It orchestrates coding agents in the Herdr app through bercail: it writes beads issues, hands them to claude, codex, or cursor-agent, and pings you when a desk is ready to review.
 
 Bercail's workflow is designed around Shep. Shep owns the workflow; bercail runs what Shep asks for and reports back in files Shep reads:
 
