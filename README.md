@@ -113,8 +113,6 @@ The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/la
 
 From 0.8 (the Herdr terminal and its layout plugin): install the Herdr app, then `bercail update`. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them. Webhook sinks in `notify.d` keep working, but their payload is now `bercail.agent_status/v2` (see [agent status webhooks](#agent-status-webhooks)).
 
-Installed 0.9.0 with curl? 0.9.1 moved the layout files to `bercail/`, so run the curl installer once more instead of `bercail update`.
-
 Then, in a repo:
 
 ```bash
