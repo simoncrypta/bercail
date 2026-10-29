@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-HERDR_MIN_VERSION=0.9.3
 HUNK_MIN_VERSION=0.20.1
 TUICR_MIN_VERSION=0.20.0
 GROK_MISE_SPEC="npm:@xai-official/grok"
@@ -37,7 +36,7 @@ mise_can_install() {
   [[ -n "$spec" ]] || return 1
   [[ "$spec" == *:* ]] && return 0
   case "$spec" in
-    herdr|worktrunk|fzf|jq|neovim|lazygit|pi|hunk) return 0 ;;
+    worktrunk|fzf|jq|pi|hunk) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -143,7 +142,7 @@ install_dep() {
   return 1
 }
 
-herdr_version_at_least() {
+version_at_least() {
   local current="$1" required="$2"
   local current_major current_minor current_patch
   local required_major required_minor required_patch
@@ -161,7 +160,7 @@ herdr_version_at_least() {
   ((10#$current_patch >= 10#$required_patch))
 }
 
-herdr_parse_version() {
+parse_version() {
   local output="$1" token
   local -a tokens
   output="${output//$'\n'/ }"
@@ -176,165 +175,19 @@ herdr_parse_version() {
   return 2
 }
 
-herdr_version_output() {
-  local herdr_path output_file pid rc
-  local elapsed=0 grace_elapsed=0
-  local timeout_seconds="${HERDR_VERSION_TIMEOUT_SECONDS:-5}"
-  local term_grace_tenths="${HERDR_VERSION_TERM_GRACE_TENTHS:-10}"
-
-  herdr_path="$(command -v herdr)" || return 127
-  output_file="$(mktemp)"
-  "$herdr_path" --version >"$output_file" 2>&1 &
-  pid=$!
-  while kill -0 "$pid" 2>/dev/null; do
-    if ((elapsed >= timeout_seconds * 10)); then
-      kill -TERM "$pid" 2>/dev/null || true
-      while kill -0 "$pid" 2>/dev/null && ((grace_elapsed < term_grace_tenths)); do
-        sleep 0.1
-        grace_elapsed=$((grace_elapsed + 1))
-      done
-      if kill -0 "$pid" 2>/dev/null; then
-        kill -KILL "$pid" 2>/dev/null || true
-      fi
-      wait "$pid" 2>/dev/null || true
-      rm -f "$output_file"
-      return 124
+# The Herdr app (herdr-app) and herdr-core (hc) come from herdr.dev; the app
+# keeps both updated. bercail only checks they are here.
+check_herdr_app() {
+  local missing=0 bin
+  for bin in herdr-app hc; do
+    if dep_present "$bin"; then
+      info "present: $bin"
+    else
+      warn "missing $bin: install the Herdr app from https://herdr.dev"
+      missing=1
     fi
-    sleep 0.1
-    elapsed=$((elapsed + 1))
   done
-  if wait "$pid"; then
-    rc=0
-  else
-    rc=$?
-  fi
-  cat "$output_file"
-  rm -f "$output_file"
-  return "$rc"
-}
-
-herdr_installed_version() {
-  local output rc
-  if output="$(herdr_version_output)"; then
-    herdr_parse_version "$output"
-    return $?
-  else
-    rc=$?
-    return "$rc"
-  fi
-}
-
-herdr_install_manager() {
-  local herdr_path link_target updater_dir
-  herdr_path="$(command -v herdr)"
-  link_target="$(readlink "$herdr_path" 2>/dev/null || true)"
-
-  case "$herdr_path $link_target" in
-    *'/nix/store/'*|*'/.nix-profile/'*) printf 'nix\n'; return 0 ;;
-    *'/.local/share/mise/'*|*'/.mise/'*) printf 'mise\n'; return 0 ;;
-    *'/Homebrew/'*|*'/homebrew/'*|*'/linuxbrew/'*|*'/Cellar/'*) printf 'brew\n'; return 0 ;;
-  esac
-
-  updater_dir="${HERDR_INSTALL_DIR:-$HOME/.local/bin}"
-  if [[ "$herdr_path" == "$updater_dir/herdr" ]]; then
-    printf 'updater\n'
-  else
-    printf 'manual\n'
-  fi
-}
-
-herdr_upgrade_command() {
-  case "$1" in
-    brew) printf 'brew upgrade herdr\n' ;;
-    mise) printf 'mise use -g herdr\n' ;;
-    nix) printf 'nix profile upgrade <index-or-name>\n' ;;
-    updater) printf 'herdr update --handoff\n' ;;
-    *) printf 'reinstall Herdr >=%s using the method that owns %s\n' \
-      "$HERDR_MIN_VERSION" "$(command -v herdr)" ;;
-  esac
-}
-
-require_herdr_min_version() {
-  local found manager command
-  if ! found="$(herdr_installed_version)"; then
-    warn "cannot determine Herdr version (required >=$HERDR_MIN_VERSION)"
-    return 1
-  fi
-  if herdr_version_at_least "$found" "$HERDR_MIN_VERSION"; then
-    info "present: herdr $found (required >=$HERDR_MIN_VERSION)"
-    return 0
-  fi
-
-  if mise_can_install herdr; then
-    info "updating Herdr $found to >=$HERDR_MIN_VERSION via mise"
-    if mise_use_global herdr; then
-      if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
-        return 0
-      fi
-      if found="$(herdr_installed_version)" \
-        && herdr_version_at_least "$found" "$HERDR_MIN_VERSION"; then
-        info "updated: herdr $found via mise (required >=$HERDR_MIN_VERSION)"
-        return 0
-      fi
-      warn "mise could not provide Herdr >=$HERDR_MIN_VERSION"
-    fi
-  fi
-
-  manager="$(herdr_install_manager)"
-  command="$(herdr_upgrade_command "$manager")"
-  if [[ "$manager" != updater ]]; then
-    warn "Herdr $found is below required >=$HERDR_MIN_VERSION; run: $command"
-    return 1
-  fi
-
-  info "updating Herdr $found to >=$HERDR_MIN_VERSION with live handoff"
-  if ! run "$(command -v herdr)" update --handoff; then
-    warn "Herdr update failed; run: $command"
-    return 1
-  fi
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    return 0
-  fi
-  if ! found="$(herdr_installed_version)"; then
-    warn "Herdr update reported success but its version is unreadable; run: $command"
-    return 1
-  fi
-  if ! herdr_version_at_least "$found" "$HERDR_MIN_VERSION"; then
-    warn "Herdr update reported success but found $found; required >=$HERDR_MIN_VERSION; run: $command"
-    return 1
-  fi
-  info "updated: herdr $found (required >=$HERDR_MIN_VERSION)"
-}
-
-install_herdr_binary() {
-  if dep_present herdr; then
-    require_herdr_min_version
-    return $?
-  fi
-  if maybe_mise_install herdr herdr; then
-    require_herdr_min_version
-    return $?
-  fi
-  if has_brew; then
-    info "installing via brew: herdr"
-    if run brew install herdr && dep_present herdr; then
-      require_herdr_min_version
-      return $?
-    fi
-    warn "brew install herdr failed — trying herdr.dev installer"
-  fi
-  dep_present curl || maybe_omarchy_pkg_install curl curl \
-    || maybe_apt_install curl curl || maybe_pacman_install curl curl || true
-  info "installing via https://herdr.dev/install.sh"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    return 0
-  fi
-  curl -fsSL https://herdr.dev/install.sh | sh
-  if ! dep_present herdr; then
-    warn "herdr install may have succeeded but herdr is not on PATH"
-    return 1
-  fi
-  require_herdr_min_version
+  return "$missing"
 }
 
 install_worktrunk_binary() {
@@ -590,91 +443,6 @@ ensure_selected_agent() {
     grok) install_grok_binary || true ;;
     pi) maybe_mise_install pi pi || true ;;
   esac
-  ensure_herdr_agent_integration || true
-}
-
-# Map agentic-dev agent command → `herdr integration install` target.
-# See https://herdr.dev/docs/integrations/
-herdr_integration_for_agent() {
-  local cmd="${1%% *}"
-  case "$cmd" in
-    agent|cursor|cursor-agent) printf 'cursor' ;;
-    grok) printf 'grok' ;;
-    pi) printf 'pi' ;;
-    omp) printf 'omp' ;;
-    claude) printf 'claude' ;;
-    codex) printf 'codex' ;;
-    copilot) printf 'copilot' ;;
-    opencode) printf 'opencode' ;;
-    kilo) printf 'kilo' ;;
-    kimi) printf 'kimi' ;;
-    hermes) printf 'hermes' ;;
-    droid) printf 'droid' ;;
-    devin) printf 'devin' ;;
-    qodercli) printf 'qodercli' ;;
-    mastracode) printf 'mastracode' ;;
-    agy|antigravity|antigravity-cli) printf 'antigravity-cli' ;;
-    *) return 1 ;;
-  esac
-}
-
-# Config dirs that must exist before `herdr integration install` (per Herdr docs).
-herdr_integration_config_dir() {
-  local target="$1"
-  case "$target" in
-    cursor) printf '%s' "${CURSOR_CONFIG_DIR:-$HOME/.cursor}" ;;
-    grok) printf '%s' "${GROK_HOME:-$HOME/.grok}" ;;
-    pi) printf '%s' "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" ;;
-    omp)
-      if [[ -n "${PI_CODING_AGENT_DIR:-}" ]]; then
-        printf '%s' "$PI_CODING_AGENT_DIR"
-      elif [[ -n "${PI_CONFIG_DIR:-}" ]]; then
-        printf '%s' "$HOME/$PI_CONFIG_DIR/agent"
-      else
-        printf '%s' "$HOME/.omp/agent"
-      fi
-      ;;
-    claude) printf '%s' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}" ;;
-    codex) printf '%s' "${CODEX_HOME:-$HOME/.codex}" ;;
-    copilot) printf '%s' "${COPILOT_HOME:-$HOME/.copilot}" ;;
-    opencode) printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}/opencode" ;;
-    kilo) printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}/kilo" ;;
-    kimi) printf '%s' "${KIMI_CODE_HOME:-$HOME/.kimi-code}" ;;
-    hermes) printf '%s' "$HOME/.hermes" ;;
-    droid) printf '%s' "$HOME/.factory" ;;
-    devin) printf '%s' "${XDG_CONFIG_HOME:-$HOME/.config}/devin" ;;
-    qodercli) printf '%s' "${QODER_CONFIG_DIR:-$HOME/.qoder}" ;;
-    mastracode) printf '%s' "$HOME/.mastracode" ;;
-    antigravity-cli) printf '%s' "${ANTIGRAVITY_CLI_CONFIG_DIR:-$HOME/.gemini/config}" ;;
-    *) return 1 ;;
-  esac
-}
-
-ensure_herdr_agent_integration() {
-  local cmd target conf
-  dep_present herdr || return 0
-  cmd="$(read_agent_command 2>/dev/null || printf '%s' "cursor-agent")"
-  if ! target="$(herdr_integration_for_agent "$cmd")"; then
-    info "no Herdr integration mapped for agent command '$cmd'"
-    return 0
-  fi
-  if conf="$(herdr_integration_config_dir "$target")"; then
-    if declare -F ensure_dir >/dev/null 2>&1; then
-      ensure_dir "$conf"
-    else
-      mkdir -p "$conf"
-    fi
-  fi
-  info "installing Herdr integration: $target (agent=$cmd)"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would run: herdr integration install $target"
-    return 0
-  fi
-  if run herdr integration install "$target"; then
-    return 0
-  fi
-  warn "herdr integration install $target failed — see https://herdr.dev/docs/integrations/"
-  return 1
 }
 
 install_dependencies() {
@@ -683,16 +451,12 @@ install_dependencies() {
   ensure_brew_on_path || true
   ensure_mise_shims
 
-  install_herdr_binary || {
-    warn "Herdr >=$HERDR_MIN_VERSION is required"
-    return 1
-  }
+  check_herdr_app || true
   install_dep git || true
   install_worktrunk_binary || true
   install_beads_binary || true
   install_dep fzf || true
   install_dep jq || true
-  install_dep lazygit || true
 }
 
 _doctor_configured_bin() {
@@ -717,8 +481,8 @@ _doctor_versioned_bin() {
   fi
   path="$(command -v "$cmd")"
   output="$("$cmd" --version 2>/dev/null || true)"
-  if found="$(herdr_parse_version "$output")" && [[ -n "$found" ]]; then
-    if herdr_version_at_least "$found" "$min"; then
+  if found="$(parse_version "$output")" && [[ -n "$found" ]]; then
+    if version_at_least "$found" "$min"; then
       log "  ok  $cmd ($path; found $found, required >=$min) (configured $role)"
       return 0
     fi
@@ -729,33 +493,9 @@ _doctor_versioned_bin() {
 }
 
 doctor_dependencies() {
-  local missing=0 found path output rc
-  for cmd in herdr git wt bd fzf jq lazygit; do
-    if [[ "$cmd" == herdr ]] && dep_present herdr; then
-      path="$(command -v herdr)"
-      if output="$(herdr_version_output)"; then
-        if found="$(herdr_parse_version "$output")"; then
-          if herdr_version_at_least "$found" "$HERDR_MIN_VERSION"; then
-            log "  ok  herdr ($path; found $found, required >=$HERDR_MIN_VERSION)"
-          else
-            log "  outdated  herdr ($path; found $found, required >=$HERDR_MIN_VERSION)"
-            missing=$((missing + 1))
-          fi
-        else
-          log "  invalid  herdr ($path; found unrecognized output, required >=$HERDR_MIN_VERSION)"
-          missing=$((missing + 1))
-        fi
-      else
-        rc=$?
-        if [[ "$rc" -eq 124 ]]; then
-          found="timeout"
-        else
-          found="unavailable"
-        fi
-        log "  invalid  herdr ($path; found $found, required >=$HERDR_MIN_VERSION)"
-        missing=$((missing + 1))
-      fi
-    elif dep_present "$cmd"; then
+  local missing=0 cmd
+  for cmd in herdr-app hc git wt bd fzf jq; do
+    if dep_present "$cmd"; then
       log "  ok  $cmd ($(command -v "$cmd"))"
     else
       log "  missing  $cmd"
@@ -775,14 +515,8 @@ doctor_dependencies() {
       _doctor_configured_bin "$review_bin" review || missing=$((missing + 1))
       ;;
   esac
-  if declare -F read_layout_file_editor >/dev/null; then
-    local editor_cmd editor_bin
-    editor_cmd="$(read_layout_file_editor 2>/dev/null || true)"
-    editor_bin="${editor_cmd%% *}"
-    _doctor_configured_bin "$editor_bin" editor || missing=$((missing + 1))
-  fi
   if declare -F read_agent_command >/dev/null; then
-    local agent_cmd agent_bin target status_out status_line
+    local agent_cmd agent_bin
     agent_cmd="$(read_agent_command 2>/dev/null || printf '%s' "cursor-agent")"
     agent_bin="${agent_cmd%% *}"
     case "$agent_bin" in
@@ -791,7 +525,7 @@ doctor_dependencies() {
         if dep_present "$agent_bin"; then
           log "  ok  $agent_bin ($(command -v "$agent_bin"))"
         else
-          log "  optional  $agent_bin (not on PATH; sticky pane and that harness stay unused)"
+          log "  optional  $agent_bin (not on PATH; pick another agent on the desk)"
         fi
         ;;
       *)
@@ -803,23 +537,6 @@ doctor_dependencies() {
         fi
         ;;
     esac
-    if target="$(herdr_integration_for_agent "$agent_cmd" 2>/dev/null)"; then
-      if ! dep_present herdr; then
-        :
-      elif ! status_out="$(herdr integration status 2>/dev/null)"; then
-        log "  unverified  herdr integration $target (status unavailable)"
-      else
-        status_line="$(printf '%s\n' "$status_out" | grep -E "^${target}:" | head -1 || true)"
-        if [[ -n "$status_line" && "$status_line" != *": not installed"* ]]; then
-          log "  ok  herdr integration $target"
-        elif [[ -n "$status_line" ]]; then
-          log "  missing  herdr integration $target (run: herdr integration install $target)"
-          missing=$((missing + 1))
-        else
-          log "  unverified  herdr integration $target (not listed by herdr)"
-        fi
-      fi
-    fi
   fi
   return "$missing"
 }

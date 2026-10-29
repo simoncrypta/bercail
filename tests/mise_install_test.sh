@@ -93,7 +93,7 @@ test_mise_allowlist() {
     has_mise() { return 0; }
     mise_can_install herdr
   ) && rc=0 || rc=$?
-  assert_eq "0" "$rc" "mise_can_install allows herdr"
+  assert_eq "1" "$rc" "mise_can_install skips herdr (the Herdr app comes from herdr.dev)"
   (
     has_mise() { return 0; }
     mise_can_install jq
@@ -207,114 +207,6 @@ EOF
     "grok uses Omarchy's npm:@xai-official/grok mise package"
 }
 
-test_maybe_mise_install_herdr_binary_only() {
-  local case_dir="$tmp/mise-herdr" rc
-  mkdir -p "$case_dir/bin" "$case_dir/home/.local/bin"
-  isolated_sys "$case_dir/sys"
-  : >"$case_dir/mise.log"
-  cat >"$case_dir/bin/mise" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >>"$MISE_CALL_LOG"
-if [ "$1" = "use" ] && [ "$2" = "-g" ] && [ "$3" = "herdr" ]; then
-  printf '%s\n' '#!/bin/sh' 'exit 0' >"$HOME/.local/bin/herdr"
-  chmod +x "$HOME/.local/bin/herdr"
-  exit 0
-fi
-exit 1
-EOF
-  chmod +x "$case_dir/bin/mise"
-
-  if with_isolated_path "$case_dir" maybe_mise_install herdr herdr; then rc=0; else rc=$?; fi
-  assert_eq "0" "$rc" "maybe_mise_install herdr uses mise use -g"
-  assert_contains "$(<"$case_dir/mise.log")" "use -g herdr" \
-    "maybe_mise_install calls mise use -g herdr"
-}
-
-test_herdr_integration_mapping() {
-  assert_eq "cursor" "$(herdr_integration_for_agent agent)" "agent maps to cursor integration"
-  assert_eq "cursor" "$(herdr_integration_for_agent cursor-agent)" "cursor-agent maps to cursor"
-  assert_eq "grok" "$(herdr_integration_for_agent grok)" "grok maps to grok integration"
-  assert_eq "pi" "$(herdr_integration_for_agent pi)" "pi maps to pi integration"
-  if herdr_integration_for_agent custom-bot >/dev/null; then
-    not_ok "unknown agent should not map to an integration"
-  else
-    ok "unknown agent does not map to an integration"
-  fi
-}
-
-test_ensure_herdr_agent_integration_installs_cursor() {
-  local case_dir="$tmp/herdr-integration" rc
-  mkdir -p "$case_dir/bin" "$case_dir/home"
-  : >"$case_dir/herdr.log"
-  cat >"$case_dir/bin/herdr" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >>"$HERDR_CALL_LOG"
-exit 0
-EOF
-  chmod +x "$case_dir/bin/herdr"
-  read_agent_command() { printf 'agent'; }
-
-  if HOME="$case_dir/home" PATH="$case_dir/bin:/usr/bin:/bin" \
-    HERDR_CALL_LOG="$case_dir/herdr.log" ensure_herdr_agent_integration; then
-    rc=0
-  else
-    rc=$?
-  fi
-  unset -f read_agent_command
-  assert_eq "0" "$rc" "ensure_herdr_agent_integration installs for agent"
-  assert_contains "$(<"$case_dir/herdr.log")" "integration install cursor" \
-    "ensure_herdr_agent_integration installs cursor for agent command"
-  [[ -d "$case_dir/home/.cursor" ]] \
-    || { not_ok "ensure_herdr_agent_integration creates ~/.cursor"; return; }
-  ok "ensure_herdr_agent_integration creates ~/.cursor"
-}
-
-test_outdated_brew_herdr_upgrades_via_mise() {
-  local case_dir="$tmp/brew-to-mise" rc
-  mkdir -p "$case_dir/homebrew/bin" "$case_dir/bin" \
-    "$case_dir/home/.local/share/mise/shims" "$case_dir/home/.local/bin"
-  isolated_sys "$case_dir/sys"
-  : >"$case_dir/mise.log"
-  cat >"$case_dir/homebrew/bin/herdr" <<'EOF'
-#!/usr/bin/env bash
-printf 'herdr 0.7.1\n'
-EOF
-  cat >"$case_dir/bin/mise" <<'EOF'
-#!/bin/sh
-printf '%s\n' "$*" >>"$MISE_CALL_LOG"
-if [ "$1" = "use" ] && [ "$2" = "-g" ] && [ "$3" = "herdr" ]; then
-  printf '%s\n' '#!/bin/sh' 'printf "herdr 0.9.3\n"' \
-    >"$HOME/.local/share/mise/shims/herdr"
-  chmod +x "$HOME/.local/share/mise/shims/herdr"
-  exit 0
-fi
-exit 1
-EOF
-  chmod +x "$case_dir/homebrew/bin/herdr" "$case_dir/bin/mise"
-
-  if (
-    unset BASH_ENV
-    export HOME="$case_dir/home"
-    export PATH="$case_dir/homebrew/bin:$case_dir/bin:$case_dir/sys"
-    export MISE_CALL_LOG="$case_dir/mise.log"
-    case "$(command -v mise)" in
-      "$case_dir"/bin/mise) ;;
-      *)
-        printf 'refusing to run: mise resolved to %s\n' "$(command -v mise)" >&2
-        exit 90
-        ;;
-    esac
-    install_herdr_binary
-  ); then
-    rc=0
-  else
-    rc=$?
-  fi
-  assert_eq "0" "$rc" "outdated brew Herdr is upgraded via mise"
-  assert_contains "$(<"$case_dir/mise.log")" "use -g herdr" \
-    "outdated brew Herdr calls mise use -g herdr"
-}
-
 test_ensure_mise_shims_beats_brew() {
   local case_dir="$tmp/shim-order" got
   mkdir -p "$case_dir/home/.local/share/mise/shims" \
@@ -388,10 +280,6 @@ test_mise_allowlist
 test_maybe_mise_install_jq
 test_omarchy_pkg_add_when_mise_cannot
 test_install_grok_via_mise
-test_maybe_mise_install_herdr_binary_only
-test_herdr_integration_mapping
-test_ensure_herdr_agent_integration_installs_cursor
-test_outdated_brew_herdr_upgrades_via_mise
 test_ensure_mise_shims_beats_brew
 test_maybe_mise_install_dry_run_without_binary
 test_marker_block_prefers_mise_path

@@ -1,23 +1,12 @@
-# Herdr dev layout helpers for worktrunk and shell integration.
+# Herdr app helpers for worktrunk and shell integration.
 # Safe to source repeatedly — worktrunk hooks and shell reload pick up updates.
+#
+# One checkout is one Herdr app space. Its desk agent is an hc terminal started
+# as a sub-agent of the space's first terminal, labelled bercail.role=agent and
+# bercail.space=<space id>; the bercail layout's desk column shows it.
 
-# A server that predates an in-place Herdr upgrade reports its replaced binary
-# ("/usr/bin/herdr (deleted)") until restart; use PATH instead of a dead path.
-if [[ -n "${HERDR_BIN_PATH:-}" && ! -x "$HERDR_BIN_PATH" ]]; then
-  unset HERDR_BIN_PATH
-fi
-HERDR="${HERDR_BIN_PATH:-herdr}"
-PLUGIN_ID="agentic-dev.layout"
-
-_wt_herdr_server_running() {
-  "$HERDR" status server 2>/dev/null | grep -q '^status: running'
-}
-
-_wt_herdr_ensure_server() {
-  _wt_herdr_server_running && return 0
-  "$HERDR" status >/dev/null 2>&1 || true
-  _wt_herdr_server_running
-}
+HERDR_APP="${HERDR_APP_BIN:-herdr-app}"
+HC="${HC_BIN:-hc}"
 
 _wt_realpath() {
   local path="$1"
@@ -30,32 +19,8 @@ _wt_git_main_worktree() {
     | awk '/^worktree / { print substr($0, 10); exit }'
 }
 
-_wt_herdr_workspace_id_by_label() {
-  local label="$1"
-  "$HERDR" workspace list 2>/dev/null \
-    | jq -r --arg label "$label" '.result.workspaces[] | select(.label == $label) | .workspace_id' \
-    | head -1
-}
-
-_wt_herdr_workspace_id_by_cwd() {
-  local cwd="$1"
-  local want ws_id pane_cwd
-  want="$(_wt_realpath "$cwd")"
-  while IFS= read -r ws_id; do
-    [[ -n "$ws_id" ]] || continue
-    pane_cwd="$("$HERDR" pane list --workspace "$ws_id" 2>/dev/null \
-      | jq -r '.result.panes[0].cwd // empty' | head -1)"
-    [[ -n "$pane_cwd" ]] || continue
-    if [[ "$(_wt_realpath "$pane_cwd")" == "$want" ]]; then
-      printf '%s' "$ws_id"
-      return 0
-    fi
-  done < <("$HERDR" workspace list 2>/dev/null | jq -r '.result.workspaces[].workspace_id')
-  return 1
-}
-
-_wt_in_herdr() {
-  [[ -n "${HERDR_ENV:-}" || -n "${HERDR_PANE_ID:-}" ]]
+_wt_herdr_app_running() {
+  "$HERDR_APP" status >/dev/null 2>&1
 }
 
 _wt_generate_session_name() {
@@ -75,283 +40,146 @@ _wt_generate_session_name() {
   echo "${branch}_${repo_name}"
 }
 
-_wt_herdr_focused_workspace_id() {
-  "$HERDR" workspace list 2>/dev/null \
-    | jq -r '.result.workspaces[] | select(.focused == true) | .workspace_id' \
-    | head -1
+_wt_herdr_focused_space() {
+  "$HERDR_APP" status 2>/dev/null | jq -r '.space // empty'
 }
 
-# Keep whatever workspace the user is viewing. Never focus the child, and never
-# restore to this helper's own pane (HERDR_WORKSPACE_ID) if the user is elsewhere.
+# Keep whatever space the user is viewing: space.new selects the new one.
 _wt_herdr_keep_user_focus() {
   local want="$1"
-  local now
   [[ -n "$want" ]] || return 0
-  now="$(_wt_herdr_focused_workspace_id)"
-  [[ "$now" != "$want" ]] || return 0
-  "$HERDR" workspace focus "$want" >/dev/null 2>&1 || true
+  [[ "$(_wt_herdr_focused_space)" != "$want" ]] || return 0
+  "$HERDR_APP" do space.select --id "$want" >/dev/null 2>&1 || true
 }
 
-_wt_herdr_focus_workspace() {
-  local label="$1"
-  local workdir="${2:-}"
-  local workspace_id
-
-  _wt_herdr_ensure_server || return 1
-  workspace_id="$(_wt_herdr_workspace_id_by_label "$label")"
-  if [[ -z "$workspace_id" && -n "$workdir" ]]; then
-    workspace_id="$(_wt_herdr_workspace_id_by_cwd "$workdir" 2>/dev/null || true)"
-  fi
-  if [[ -n "$workspace_id" ]]; then
-    "$HERDR" workspace focus "$workspace_id" >/dev/null
-    return 0
-  fi
-  return 1
-}
-
-_wt_is_linked_worktree() {
-  local workdir="$1" main_path
-  [[ -d "$workdir" ]] || return 1
-  main_path="$(_wt_git_main_worktree "$workdir")"
-  [[ -n "$main_path" ]] || return 1
-  [[ "$(_wt_realpath "$workdir")" != "$(_wt_realpath "$main_path")" ]]
-}
-
-_wt_herdr_workspace_id_from_worktree_path() {
-  local workdir="$1"
+_wt_herdr_space_by_folder() {
   local want
-  want="$(_wt_realpath "$workdir")"
-  "$HERDR" worktree list --cwd "$workdir" 2>/dev/null \
-    | jq -r --arg want "$want" '
-        .result.worktrees[]?
-        | select((.path // "") != "")
-        | select(.path == $want or (.path | sub("/$"; "")) == $want)
-        | .open_workspace_id // empty
-      ' \
+  want="$(_wt_realpath "$1")"
+  "$HERDR_APP" ls 2>/dev/null \
+    | jq -r --arg want "$want" '.spaces[] | select(.folder == $want) | .id' \
     | head -1
 }
 
-# Linked checkouts: worktree open/create only — never flat workspace create.
-# `worktree open --path` still uses the focused workspace as the source unless
-# --cwd/--workspace is set; a non-git focused workspace returns not_git_worktree.
-_wt_herdr_json_workspace_id() {
-  printf '%s' "$1" | jq -r '.result.workspace.workspace_id // empty' 2>/dev/null || true
+_wt_herdr_space_by_name() {
+  "$HERDR_APP" ls 2>/dev/null \
+    | jq -r --arg name "$1" '.spaces[] | select(.name == $name) | .id' \
+    | head -1
 }
 
-_wt_herdr_json_error() {
-  printf '%s' "$1" | jq -r '.error.message // empty' 2>/dev/null || true
+# The space's first terminal: the desk agent's parent.
+_wt_herdr_space_shell() {
+  "$HERDR_APP" ls 2>/dev/null \
+    | jq -r --arg id "$1" '.spaces[] | select(.id == $id) | .tabs[0].terminals[0].terminal // empty'
 }
 
-_wt_herdr_resolve_linked_workspace() {
-  local label="$1"
-  local workdir="$2"
-  local main_root branch workspace_id out err
-
-  workspace_id="$(_wt_herdr_workspace_id_from_worktree_path "$workdir")"
-  if [[ -n "$workspace_id" ]]; then
-    printf '%s' "$workspace_id"
-    return 0
-  fi
-
-  main_root="$(_wt_git_main_worktree "$workdir")"
-  branch="$(git -C "$workdir" branch --show-current 2>/dev/null || true)"
-  if [[ -z "$main_root" ]]; then
-    echo "Cannot resolve main repo for linked worktree: $workdir" >&2
-    return 1
-  fi
-
-  out="$("$HERDR" worktree open --cwd "$main_root" --path "$workdir" --label "$label" --no-focus)" || true
-  workspace_id="$(_wt_herdr_json_workspace_id "$out")"
-  if [[ -n "$workspace_id" ]]; then
-    printf '%s' "$workspace_id"
-    return 0
-  fi
-  err="$(_wt_herdr_json_error "$out")"
-  [[ -z "$err" ]] || echo "herdr worktree open: $err" >&2
-
-  if [[ -z "$branch" ]]; then
-    echo "Cannot resolve branch for linked worktree: $workdir" >&2
-    return 1
-  fi
-
-  out="$("$HERDR" worktree create \
-    --cwd "$main_root" \
-    --branch "$branch" \
-    --path "$workdir" \
-    --label "$label" \
-    --no-focus)" || true
-  workspace_id="$(_wt_herdr_json_workspace_id "$out")"
-  if [[ -n "$workspace_id" ]]; then
-    printf '%s' "$workspace_id"
-    return 0
-  fi
-  err="$(_wt_herdr_json_error "$out")"
-  [[ -z "$err" ]] || echo "herdr worktree create: $err" >&2
-
-  echo "Failed to open/create Herdr worktree subspace for: $workdir" >&2
-  return 1
+_wt_herdr_space_desk() {
+  "$HC" ls --json 2>/dev/null \
+    | jq -r '.terminals[] | select(.state == "live") | .address' \
+    | while IFS= read -r address; do
+        if "$HC" get "$address" --json 2>/dev/null \
+          | jq -e --arg id "$1" '.labels["bercail.role"] == "agent" and .labels["bercail.space"] == $id' >/dev/null; then
+          printf '%s' "$address"
+          break
+        fi
+      done
 }
 
-_wt_herdr_resolve_workspace() {
-  local label="$1"
-  local workdir="$2"
-  local workspace_id
-
-  workspace_id="$(_wt_herdr_workspace_id_by_label "$label")"
-  if [[ -z "$workspace_id" ]]; then
-    workspace_id="$(_wt_herdr_workspace_id_by_cwd "$workdir" 2>/dev/null || true)"
+# Space for this checkout: the one open on its folder, else a new one named label.
+# Prints the space id; does not change the space the user is viewing.
+_wt_herdr_resolve_space() {
+  local label="$1" workdir="$2" space keep out
+  workdir="$(_wt_realpath "$workdir")"
+  space="$(_wt_herdr_space_by_folder "$workdir")"
+  if [[ -z "$space" ]]; then
+    keep="${WT_HERDR_KEEP_FOCUS:-$(_wt_herdr_focused_space)}"
+    out="$("$HERDR_APP" do space.new --name "$label" --folder "$workdir" --tab Shell 2>&1)" || {
+      echo "herdr-app space.new: $out" >&2
+      return 1
+    }
+    space="$(printf '%s' "$out" | jq -r '.space // empty')"
+    _wt_herdr_keep_user_focus "$keep"
   fi
-
-  if [[ -z "$workspace_id" ]]; then
-    if _wt_is_linked_worktree "$workdir"; then
-      workspace_id="$(_wt_herdr_resolve_linked_workspace "$label" "$workdir")" || return 1
-    else
-      workspace_id="$("$HERDR" workspace create --cwd "$workdir" --label "$label" --no-focus \
-        | jq -r '.result.workspace.workspace_id // empty')"
-    fi
-  fi
-
-  [[ -n "$workspace_id" ]] || {
-    echo "Failed to resolve Herdr workspace '$label' for $workdir" >&2
+  [[ -n "$space" ]] || {
+    echo "Failed to resolve a Herdr space '$label' for $workdir" >&2
     return 1
   }
-
-  "$HERDR" workspace rename "$workspace_id" "$label" >/dev/null 2>&1 || true
-  printf '%s' "$workspace_id"
+  printf '%s' "$space"
 }
 
-# `herdr plugin action invoke` replaces the plugin env with the focused workspace.
-# Run the plugin script directly so the child id/label/path and prompt survive.
-_wt_herdr_plugin_root() {
-  local registry root id
-  if [[ -n "${WT_HERDR_PLUGIN_ROOT:-}" ]]; then
-    if [[ -f "${WT_HERDR_PLUGIN_ROOT}/layout.sh" ]]; then
-      printf '%s' "$WT_HERDR_PLUGIN_ROOT"
-      return 0
-    fi
-  fi
-  registry="${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins.json"
-  [[ -f "$registry" ]] || return 1
-  id="$PLUGIN_ID"
-  root="$(jq -r --arg id "$id" \
-    '.[] | select(.plugin_id == $id) | .plugin_root // .source.managed_path // empty' \
-    "$registry" | head -1)"
-  if [[ -n "$root" && -f "$root/layout.sh" ]]; then
-    printf '%s' "$root"
+# The agent command: WT_HERDR_AGENT_CMD (handoff), else bercail's [agent] command.
+_wt_herdr_agent_cmd() {
+  if [[ -n "${WT_HERDR_AGENT_CMD:-}" ]]; then
+    printf '%s' "$WT_HERDR_AGENT_CMD"
     return 0
   fi
-  # Leftover agentic-dev.dev-layout registrations that actually point at this
-  # plugin (a tree with layout.sh) still count.
-  root="$(jq -r \
-    '.[] | select(.plugin_id == "agentic-dev.dev-layout") | .plugin_root // .source.managed_path // empty' \
-    "$registry" | head -1)"
-  if [[ -n "$root" && -f "$root/layout.sh" ]]; then
-    printf '%s' "$root"
+  if declare -F agentic_dev_agent_command >/dev/null 2>&1; then
+    agentic_dev_agent_command
     return 0
   fi
-  return 1
+  local config="${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml"
+  awk -F= '/^\[agent\]/{a=1;next} /^\[/{a=0} a && $1 ~ /^[[:space:]]*command[[:space:]]*$/ {
+      v=$2; sub(/^[[:space:]]*"?/, "", v); sub(/"?[[:space:]]*$/, "", v); print v; exit }' \
+    "$config" 2>/dev/null | grep . || printf 'cursor-agent'
 }
 
-_wt_herdr_invoke_plugin() {
-  local action="$1"
-  local workspace_id="$2"
-  local label="$3"
-  local workdir="$4"
-  local root
-  root="$(_wt_herdr_plugin_root)" || {
-    echo "Cannot find $PLUGIN_ID plugin root; cannot $action layout for workspace ${workspace_id:-unknown}" >&2
+# Start the space's desk agent, replacing a live one. $3: its first message (optional).
+_wt_herdr_start_desk() {
+  local space="$1" workdir="$2" prompt="${3:-}" shell old cmd
+  local -a argv
+  shell="$(_wt_herdr_space_shell "$space")"
+  [[ -n "$shell" ]] || {
+    echo "Space $space has no terminal to start the desk agent from" >&2
     return 1
   }
-  WT_HERDR_LABEL="$label" \
-    WT_HERDR_WORKDIR="$workdir" \
-    WT_HERDR_NO_ATTACH="${WT_HERDR_NO_ATTACH:-}" \
-    WT_HERDR_AGENT_CMD="${WT_HERDR_AGENT_CMD:-}" \
-    WT_HERDR_AGENT_PROMPT="${WT_HERDR_AGENT_PROMPT:-}" \
-    HERDR_WORKSPACE_ID="$workspace_id" \
-    HERDR_PLUGIN_ROOT="$root" \
-    HERDR_BIN_PATH="${HERDR_BIN_PATH:-$HERDR}" \
-    bash "$root/layout.sh" "$action"
+  old="$(_wt_herdr_space_desk "$space")"
+  if [[ -n "$old" ]]; then
+    "$HC" kill "$old" >/dev/null 2>&1 || true
+    "$HC" rm "$old" >/dev/null 2>&1 || true
+  fi
+  cmd="$(_wt_herdr_agent_cmd)"
+  read -r -a argv <<<"$cmd"
+  # hc runs codex without its app-server daemon.
+  if [[ "$(basename "${argv[0]}")" == codex && " ${argv[*]} " != *" --no-daemon "* ]]; then
+    argv+=(--no-daemon)
+  fi
+  [[ -z "$prompt" ]] || argv+=("$prompt")
+  # hc passes on the caller's environment; a headless caller (Shep) has
+  # TERM=dumb, which leaves the desk without colors or key handling.
+  TERM=xterm-256color COLORTERM=truecolor "$HC" run --bg --keep --outlive-parent --no-notify \
+    --parent "$shell" --cwd "$(_wt_realpath "$workdir")" \
+    --label bercail.role=agent --label "bercail.space=$space" \
+    "${argv[@]}" >/dev/null
 }
 
 wt_herdr_layout_create() {
-  local label="$1"
-  local workdir="$2"
-  local workspace_id keep_focus rc=0
-
-  _wt_herdr_ensure_server || {
-    echo "Herdr server is not running. Start it with: herdr" >&2
-    return 1
+  local label="$1" workdir="$2"
+  _wt_herdr_app_running || {
+    echo "Herdr app is not running; open it and run: wt switch $(basename "$workdir")" >&2
+    return 0
   }
-
-  # Prefer the caller's workspace (handoff-spawn sets WT_HERDR_KEEP_FOCUS to
-  # the parent pane's HERDR_WORKSPACE_ID). "currently focused" is already the
-  # child if wt/post-start stole focus.
-  keep_focus="${WT_HERDR_KEEP_FOCUS:-$(_wt_herdr_focused_workspace_id)}"
-  workspace_id="$(_wt_herdr_resolve_workspace "$label" "$workdir")" || {
-    _wt_herdr_keep_user_focus "$keep_focus"
-    return 1
-  }
-  if ! WT_HERDR_NO_ATTACH=1 _wt_herdr_invoke_plugin create "$workspace_id" "$label" "$workdir"; then
-    echo "Failed to create $PLUGIN_ID layout for workspace $workspace_id" >&2
-    rc=1
-  fi
-  _wt_herdr_keep_user_focus "$keep_focus"
-  return "$rc"
+  _wt_herdr_resolve_space "$label" "$workdir" >/dev/null
 }
 
 # Clear session of the configured agent (d / dev / apply). Ignores any
 # inherited handoff prompt.
 wt_herdr_start_default_agent() {
-  local label="$1"
-  local workdir="$2"
-  local workspace_id keep_focus rc=0
-
-  _wt_herdr_ensure_server || {
-    echo "Herdr server is not running. Start it with: herdr" >&2
-    return 1
-  }
-
-  keep_focus="${WT_HERDR_KEEP_FOCUS:-$(_wt_herdr_focused_workspace_id)}"
-  workspace_id="$(_wt_herdr_resolve_workspace "$label" "$workdir")" || {
-    _wt_herdr_keep_user_focus "$keep_focus"
-    return 1
-  }
-  if ! WT_HERDR_NO_ATTACH=1 WT_HERDR_AGENT_PROMPT= \
-    _wt_herdr_invoke_plugin start-agent "$workspace_id" "$label" "$workdir"; then
-    echo "Failed to start agent in workspace $workspace_id" >&2
-    rc=1
-  fi
-  _wt_herdr_keep_user_focus "$keep_focus"
-  return "$rc"
+  local label="$1" workdir="$2" space
+  _wt_herdr_app_running || { echo "Herdr app is not running" >&2; return 1; }
+  space="$(_wt_herdr_resolve_space "$label" "$workdir")" || return 1
+  WT_HERDR_AGENT_CMD= _wt_herdr_start_desk "$space" "$workdir"
 }
 
-# Orchestrator / handoff-spawn: start or replace the agent with WT_HERDR_AGENT_PROMPT
-# (one line: the beads issue id, same for every harness).
+# Orchestrator / handoff-spawn: start or replace the desk agent with
+# WT_HERDR_AGENT_CMD and WT_HERDR_AGENT_PROMPT (one line pointing at the beads issue).
 wt_herdr_handoff_agent() {
-  local label="$1"
-  local workdir="$2"
-  local workspace_id keep_focus rc=0
-
-  _wt_herdr_ensure_server || {
-    echo "Herdr server is not running. Start it with: herdr" >&2
-    return 1
-  }
+  local label="$1" workdir="$2" space
+  _wt_herdr_app_running || { echo "Herdr app is not running" >&2; return 1; }
   if [[ -z "${WT_HERDR_AGENT_PROMPT:-}" ]]; then
-    echo "wt_herdr_handoff_agent requires WT_HERDR_AGENT_PROMPT (the beads issue id)" >&2
+    echo "wt_herdr_handoff_agent requires WT_HERDR_AGENT_PROMPT (one line pointing at the beads issue)" >&2
     return 1
   fi
-
-  keep_focus="${WT_HERDR_KEEP_FOCUS:-$(_wt_herdr_focused_workspace_id)}"
-  workspace_id="$(_wt_herdr_resolve_workspace "$label" "$workdir")" || {
-    _wt_herdr_keep_user_focus "$keep_focus"
-    return 1
-  }
-  if ! WT_HERDR_NO_ATTACH=1 _wt_herdr_invoke_plugin handoff-agent "$workspace_id" "$label" "$workdir"; then
-    echo "Failed to hand off agent in workspace $workspace_id" >&2
-    rc=1
-  fi
-  _wt_herdr_keep_user_focus "$keep_focus"
-  return "$rc"
+  space="$(_wt_herdr_resolve_space "$label" "$workdir")" || return 1
+  _wt_herdr_start_desk "$space" "$workdir" "$WT_HERDR_AGENT_PROMPT"
 }
 
 # Backward-compatible alias: prompted start when a prompt is set, else clear.
@@ -363,60 +191,27 @@ wt_herdr_start_agent() {
   fi
 }
 
-wt_herdr_layout_apply() {
-  local workdir="${1:-$PWD}"
-  local label="${2:-}"
-  local workspace_id
-
-  _wt_herdr_ensure_server || return 1
-
-  if _wt_in_herdr && [[ -n "${HERDR_WORKSPACE_ID:-}" ]]; then
-    workspace_id="$HERDR_WORKSPACE_ID"
-    label="$("$HERDR" workspace get "$workspace_id" 2>/dev/null \
-      | jq -r '.result.workspace.label // empty')"
-  fi
-
-  if [[ -z "$label" ]]; then
-    label="$(_wt_generate_session_name "$workdir" 2>/dev/null || basename "$workdir")"
-  fi
-
-  workspace_id="${workspace_id:-$(_wt_herdr_workspace_id_by_label "$label")}"
-  [[ -n "$workspace_id" ]] || workspace_id="$(_wt_herdr_workspace_id_by_cwd "$workdir" 2>/dev/null || true)"
-
-  if ! _wt_herdr_invoke_plugin apply "${workspace_id:-}" "$label" "$workdir"; then
-    echo "Failed to apply $PLUGIN_ID layout for workspace ${workspace_id:-unknown}" >&2
-    return 1
-  fi
-}
-
 wt_herdr_layout_close() {
-  local label="$1"
-  local workspace_id
-
-  _wt_herdr_ensure_server || return 0
-  workspace_id="$(_wt_herdr_workspace_id_by_label "$label")"
-  [[ -n "$workspace_id" ]] || return 0
-
-  # Close this worktree workspace only. Herdr 0.9 refuses to close a primary
-  # while linked children are open unless `--group` is passed; wtd/remove
-  # always target the child, so a bare close is correct.
-  "$HERDR" workspace close "$workspace_id" >/dev/null 2>&1 || true
+  local label="$1" space
+  _wt_herdr_app_running || return 0
+  space="$(_wt_herdr_space_by_name "$label")"
+  [[ -n "$space" ]] || return 0
+  "$HERDR_APP" do space.close --id "$space" --confirmed true >/dev/null 2>&1 || true
 }
 
 wt_herdr_attach() {
-  local worktree_path="$1"
-  local session_name
-
+  local worktree_path="$1" session_name space
   session_name="$(_wt_generate_session_name "$worktree_path")"
-  wt_herdr_layout_create "$session_name" "$worktree_path"
-  wt_herdr_start_default_agent "$session_name" "$worktree_path" || true
-  _wt_herdr_focus_workspace "$session_name" "$worktree_path" || true
-
-  if [[ -n "${HERDR_ENV:-}" || -n "${HERDR_PANE_ID:-}" ]]; then
-    return 0
+  if ! _wt_herdr_app_running; then
+    (nohup "$HERDR_APP" >/dev/null 2>&1 &)
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      _wt_herdr_app_running && break
+      sleep 0.5
+    done
   fi
-
-  if [[ -z "${WT_HERDR_NO_ATTACH:-}" ]]; then
-    "$HERDR"
-  fi
+  space="$(_wt_herdr_resolve_space "$session_name" "$worktree_path")" || return 1
+  [[ -n "$(_wt_herdr_space_desk "$space")" ]] \
+    || wt_herdr_start_default_agent "$session_name" "$worktree_path" || true
+  "$HERDR_APP" do space.select --id "$space" >/dev/null 2>&1 || true
 }

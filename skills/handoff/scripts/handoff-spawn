@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Handoff router: a named stage picks binary, headless vs sticky pane, model, worktree.
-# The job is a beads issue; the agent prompt is only its id.
+# Handoff router: a named stage picks binary, headless vs desk agent, model, worktree.
+# The job is a beads issue; the agent prompt is one line pointing at it.
 # shellcheck shell=bash
 set -euo pipefail
 
@@ -19,7 +19,7 @@ usage: handoff-spawn --info
        handoff-spawn --stage start|codex|cursor --issue ID --worktree PATH
                      [--binary claude|codex|cursor-agent] [--resume SESSION] [--dry-run]
        handoff-spawn --branch <name> --stage start|codex|cursor --issue ID
-                     [--dirty|--clean] [--workspace <id>]
+                     [--dirty|--clean] [--space <id>]
 
   --info          print JSON facts and exit
   --issue ID      beads issue to work (bd show ID). It holds the detail. The
@@ -27,19 +27,19 @@ usage: handoff-spawn --info
   --stage NAME    required; named stage (see handoff-stages.sh). start is claude,
                   codex is Codex CLI, cursor is cursor-agent. Without --branch the
                   stage runs headless (same result file). With --branch it opens a
-                  sticky pane running that stage's binary. Bercail has no default.
+                  space whose desk agent runs that stage's binary. Bercail has no default.
   --binary NAME   headless only: claude, codex, or cursor-agent. Overrides the
                   stage table binary. Bercail never switches it for you.
   --worktree PATH checkout for a headless stage (default: cwd)
   --resume ID     re-handoff: claude --resume, cursor-agent --resume, or
                   codex exec resume (no kill)
   --dry-run       print the headless command as JSON; no run, no issue check, no comment
-  --branch NAME   feature branch for a sticky pane (any stage)
+  --branch NAME   feature branch for a new space with a desk agent (any stage)
   --dirty         copy uncommitted main changes into the sibling as a working tree
                   (default when main is dirty)
   --clean         HEAD only; leave uncommitted files on main
-  --workspace ID  parent Herdr workspace to keep focused (required when HERDR_ENV
-                  is unset but the Herdr socket works)
+  --space ID      Herdr app space to keep shown (default: the one shown now;
+                  --workspace is the same flag)
 
 Shep writes the beads issue first and owns the workflow. There are no prompt
 files and no per-harness modes. Each real handoff adds a bd comment to the
@@ -70,11 +70,13 @@ handoff_main_is_dirty() {
   [[ -n "$(git -C "$1" status --porcelain --untracked-files=all 2>/dev/null)" ]]
 }
 
+# Graphite keeps its config in the shared git dir; --git-path would name a
+# linked worktree's own dir, where it never is.
 handoff_graphite_config() {
   local root="$1" cfg
-  cfg="$(git -C "$root" rev-parse --git-path .graphite_repo_config 2>/dev/null)" || return 1
+  cfg="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
   [[ -n "$cfg" ]] || return 1
-  [[ "$cfg" == /* ]] || cfg="$root/$cfg"
+  cfg="$cfg/.graphite_repo_config"
   [[ -f "$cfg" ]] || return 1
   printf '%s' "$cfg"
 }
@@ -145,16 +147,19 @@ handoff_remember() {
   printf '%s\n' "$1" >>"$file"
 }
 
-handoff_herdr_bin() {
-  printf '%s' "${HERDR_BIN_PATH:-herdr}"
+handoff_herdr_app_bin() {
+  printf '%s' "${HERDR_APP_BIN:-herdr-app}"
 }
 
+# The Herdr app answers (its window is open).
 handoff_herdr_socket_ok() {
-  "$(handoff_herdr_bin)" workspace list >/dev/null 2>&1
+  "$(handoff_herdr_app_bin)" status >/dev/null 2>&1
 }
 
-handoff_parent_workspace() {
-  local ws="${HANDOFF_WORKSPACE:-${HERDR_WORKSPACE_ID:-}}"
+# The space to keep shown: --space, else the one the user is looking at.
+handoff_shown_space() {
+  local ws="${HANDOFF_SPACE:-}"
+  [[ -n "$ws" ]] || ws="$("$(handoff_herdr_app_bin)" status 2>/dev/null | jq -r '.space // empty')"
   [[ -n "$ws" ]] || return 1
   printf '%s' "$ws"
 }
@@ -169,8 +174,8 @@ handoff_bool_json() {
 
 handoff_result_json() {
   local label="$1" sibling="$2" branch="$3" issue="$4" started="$5" copied="$6" graphite="$7"
-  local stage="${8:-}" harness="${9:-}"
-  # stage/harness let the layout plugin's notify.sh label desk events.
+  local stage="${8:-}" harness="${9:-}" space="${10:-}" desk="${11:-}"
+  # stage/harness: what the desk agent runs; space/desk: where it runs (hc address).
   jq -nc \
     --arg label "$label" \
     --arg path "$sibling" \
@@ -181,20 +186,24 @@ handoff_result_json() {
     --argjson graphite "$(handoff_bool_json "$graphite")" \
     --arg stage "$stage" \
     --arg harness "$harness" \
+    --arg space "$space" \
+    --arg desk "$desk" \
     '{ok:true,label:$label,path:$path,branch:$branch,issue:$issue,agent_started:$agent_started,dirty_copied:$dirty_copied,graphite:$graphite}
      + (if $stage == "" then {} else {stage:$stage} end)
-     + (if $harness == "" then {} else {harness:$harness} end)'
+     + (if $harness == "" then {} else {harness:$harness} end)
+     + (if $space == "" then {} else {space:$space} end)
+     + (if $desk == "" then {} else {desk:$desk} end)'
 }
 
 handoff_info_json() {
   local cwd branch helper default_copy
   local herdr_env=0 socket=0 herdr=0 main_ok=0 dirty=0 graphite=0 helper_present=0 beads=0
   cwd="$(handoff_realpath "$PWD")"
-  [[ "${HERDR_ENV:-}" == 1 ]] && herdr_env=1
+  [[ -n "${HC_TERMINAL_ID:-}" ]] && herdr_env=1
   if handoff_herdr_socket_ok; then
     socket=1
   fi
-  if [[ "$herdr_env" -eq 1 || "$socket" -eq 1 ]]; then
+  if [[ "$socket" -eq 1 ]]; then
     herdr=1
   fi
   if command -v git >/dev/null 2>&1 && handoff_is_main_checkout "$cwd"; then
@@ -222,7 +231,7 @@ handoff_info_json() {
     --arg branch "$branch" \
     --arg default_copy "$default_copy" \
     --arg helper "$helper" \
-    --arg workspace "${HANDOFF_WORKSPACE:-${HERDR_WORKSPACE_ID:-}}" \
+    --arg space "$(handoff_shown_space 2>/dev/null || true)" \
     --argjson stages "$(handoff_stage_names_json)" \
     --argjson herdr "$(handoff_bool_json "$herdr")" \
     --argjson herdr_env "$(handoff_bool_json "$herdr_env")" \
@@ -244,7 +253,8 @@ handoff_info_json() {
       default_copy:$default_copy,
       helper:$helper,
       helper_present:$helper_present,
-      workspace:$workspace,
+      space:$space,
+      workspace:$space,
       beads:$beads,
       stages:$stages
     }'
@@ -253,8 +263,8 @@ handoff_info_json() {
 handoff_spawn_main() {
   local branch="" dirty="auto" issue="" prompt main sibling label intro graphite=0 copied=0
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
-  local json parent_ws info=0 started=0
-  local stage="" worktree="" resume="" dry=0 mode="" binary="" binary_override="" pane_bin=""
+  local json keep_space info=0 started=0 space="" desk=""
+  local stage="" worktree="" resume="" dry=0 mode="" binary="" binary_override="" desk_bin=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -293,9 +303,9 @@ handoff_spawn_main() {
         branch="$2"
         shift 2
         ;;
-      --workspace)
+      --space|--workspace)
         [[ $# -ge 2 ]] || handoff_usage
-        HANDOFF_WORKSPACE="$2"
+        HANDOFF_SPACE="$2"
         shift 2
         ;;
       --)
@@ -320,18 +330,18 @@ handoff_spawn_main() {
   [[ -n "$stage" ]] || handoff_die "--stage start|codex|cursor is required; bercail does not pick a harness"
   mode="$(handoff_stage_field "$stage" mode)" || handoff_die "unknown stage: $stage"
   case "$mode" in
-    headless|pane) ;;
+    headless) ;;
     *) handoff_die "stage $stage has unknown mode: $mode" ;;
   esac
   [[ -n "$issue" ]] || handoff_die "--issue <beads id> is required; the job lives in that issue"
   handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id: $issue"
   binary="$(handoff_stage_field "$stage" binary)" || handoff_die "unknown stage: $stage"
   if [[ -n "$branch" ]]; then
-    [[ -z "$binary_override" ]] || handoff_die "stage $stage --branch is a sticky pane; --binary is for headless stages"
+    [[ -z "$binary_override" ]] || handoff_die "stage $stage --branch starts a desk agent; --binary is for headless stages"
     [[ -z "$resume" && "$dry" -eq 0 && -z "$worktree" ]] \
-      || handoff_die "stage $stage --branch is a sticky pane; --resume/--dry-run/--worktree are for headless stages"
-    pane_bin="$(handoff_headless_bin "$binary")"
-    if ! handoff_bin_present "$pane_bin"; then
+      || handoff_die "stage $stage --branch starts a desk agent; --resume/--dry-run/--worktree are for headless stages"
+    desk_bin="$(handoff_headless_bin "$binary")"
+    if ! handoff_bin_present "$desk_bin"; then
       handoff_die "requested harness $binary is not on PATH. Install it, or name another stage yourself (bercail harness lists what is present). Bercail does not switch harnesses."
     fi
   elif [[ "$mode" == headless ]]; then
@@ -352,14 +362,9 @@ handoff_spawn_main() {
   main="$(handoff_realpath "$PWD")"
   handoff_issue_exists "$main" "$issue" || handoff_die "beads issue $issue not found (bd show $issue)"
 
-  if [[ "${HERDR_ENV:-}" == 1 ]]; then
-    parent_ws="$(handoff_parent_workspace || true)"
-  elif handoff_herdr_socket_ok; then
-    parent_ws="$(handoff_parent_workspace)" \
-      || handoff_die "not inside a Herdr pane; pass --workspace <id> (HERDR_ENV is unset)"
-  else
-    handoff_die "cannot reach Herdr (HERDR_ENV unset and herdr workspace list failed)"
-  fi
+  handoff_herdr_socket_ok \
+    || handoff_die "cannot reach the Herdr app (herdr-app status failed); open it first"
+  keep_space="$(handoff_shown_space || true)"
 
   handoff_is_main_checkout "$main" \
     || handoff_die "cwd is not the main git checkout; refuse to spawn from a linked worktree"
@@ -375,12 +380,12 @@ handoff_spawn_main() {
   # shellcheck disable=SC1090
   source "$helper"
 
-  if [[ -n "$parent_ws" ]]; then
-    export WT_HERDR_KEEP_FOCUS="$parent_ws"
+  if [[ -n "$keep_space" ]]; then
+    export WT_HERDR_KEEP_FOCUS="$keep_space"
   fi
   wt switch --create "$branch" --no-cd \
     || handoff_die "wt switch --create $branch failed"
-  _wt_herdr_keep_user_focus "$parent_ws"
+  _wt_herdr_keep_user_focus "$keep_space"
   sibling="$(handoff_sibling_path "$main" "$branch")" \
     || handoff_die "could not resolve sibling worktree for $branch"
   sibling="$(handoff_realpath "$sibling")"
@@ -400,7 +405,7 @@ handoff_spawn_main() {
   label="$(_wt_generate_session_name "$sibling")"
 
   # The checkout facts used to be a prompt preamble. They go on the issue now.
-  intro="$(printf 'bercail handoff: stage %s, pane %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr; never commit unless asked. Do not open Review or invoke the review skill; tuicr opens itself when the agent pane goes done. Layout plugin id is agentic-dev.layout, never agentic-dev.dev-layout.' \
+  intro="$(printf 'bercail handoff: stage %s, desk agent %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr; never commit unless asked. Do not open Review or invoke the review skill; when the desk agent finishes, Review opens itself in this space once the user looks at it.' \
     "$stage" "$binary" "$sibling" "$branch")"
   if [[ "$graphite" -eq 1 ]]; then
     intro="$(printf '%s\nUse gt, not raw git commit/push, unless asked.' "$intro")"
@@ -409,18 +414,20 @@ handoff_spawn_main() {
 
   prompt="$(handoff_issue_prompt "$issue")"
 
-  # Pane stages publish the table binary through WT_HERDR_AGENT_CMD and the
-  # one-line prompt (the issue id) through WT_HERDR_AGENT_PROMPT. No file.
-  if WT_HERDR_KEEP_FOCUS="$parent_ws" \
-    WT_HERDR_AGENT_CMD="$pane_bin" \
+  # The desk gets the table binary through WT_HERDR_AGENT_CMD and the one-line
+  # prompt (pointing at the issue) through WT_HERDR_AGENT_PROMPT. No file.
+  if WT_HERDR_KEEP_FOCUS="$keep_space" \
+    WT_HERDR_AGENT_CMD="$desk_bin" \
     WT_HERDR_AGENT_PROMPT="$prompt" \
     wt_herdr_handoff_agent "$label" "$sibling"; then
     started=1
   else
-    echo "handoff-spawn: handoff-agent did not confirm a live agent; worktree is still $sibling ($label)" >&2
+    echo "handoff-spawn: the desk agent did not start; worktree is still $sibling ($label)" >&2
   fi
 
-  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" "$binary")"
+  space="$(_wt_herdr_space_by_folder "$sibling" 2>/dev/null || true)"
+  [[ -z "$space" ]] || desk="$(_wt_herdr_space_desk "$space" 2>/dev/null || true)"
+  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" "$binary" "$space" "$desk")"
   handoff_remember "$json"
   printf '%s\n' "$json"
 }

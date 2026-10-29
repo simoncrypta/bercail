@@ -3,26 +3,22 @@
 
 source "${HOME}/.config/worktrunk/herdr-layout.sh"
 
+# The Herdr app space for $PWD (made if missing) with its desk agent, shown.
 worktree-dev() {
   # shellcheck source=/dev/null
   source "${HOME}/.config/worktrunk/herdr-layout.sh"
   wt_herdr_attach "${PWD}"
 }
 
-unalias d 2>/dev/null || true
-d() {
-  # shellcheck source=/dev/null
-  source "${HOME}/.config/worktrunk/herdr-layout.sh"
-  if _wt_in_herdr; then
-    wt_herdr_layout_apply "${PWD}"
-    return 0
-  fi
-  echo "You must be in herdr to use d."
-  return 1
+# Open the Herdr app (it keeps running apart from this shell).
+unalias t 2>/dev/null || true
+t() {
+  (nohup herdr-app >/dev/null 2>&1 &)
 }
 
+unalias d 2>/dev/null || true
 alias dev='worktree-dev'
-alias t='herdr'
+alias d='worktree-dev'
 
 # `wt list --format=json` returns a plain array before worktrunk 0.80 and
 # {schema, items: [...]} (path under .worktree.path) from 0.80 on.

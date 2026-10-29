@@ -45,7 +45,10 @@ upsert_marker_block() {
     awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" \
         -v lstart="$LEGACY_AGENTIC_DEV_MARKER_START" -v lend="$LEGACY_AGENTIC_DEV_MARKER_END" '
       $0 ~ start || $0 ~ lstart { skip=1 }
-      !skip { print }
+      # Hold blank lines until more text follows, so the blank line written
+      # before the block is not kept again on every amend.
+      !skip && $0 == "" { blank++ }
+      !skip && $0 != "" { for (; blank > 0; blank--) print ""; print }
       $0 ~ end || $0 ~ lend { skip=0 }
     ' "$rc" >"$tmp"
     printf '\n%s\n' "$content" >>"$tmp"

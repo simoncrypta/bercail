@@ -14,32 +14,7 @@ permissions:
   contents: read
 
 jobs:
-  rust-plugin:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - name: Rust fmt, clippy, test, release build
-        working-directory: plugins/agentic-layout
-        run: |
-          cargo fmt --check
-          cargo clippy -- -D warnings
-          cargo test
-          cargo build --release -p herdr-sidebar
-          bash tests/state_test.sh
-          bash tests/lifecycle_test.sh
-          bash tests/topology_test.sh
-          bash tests/open_editor_test.sh
-          bash tests/handoff_agent_test.sh
-          bash tests/review_on_demand_test.sh
-          bash tests/herdr_bin_fallback_test.sh
-          bash tests/notify_test.sh
-
   test:
-    needs: rust-plugin
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

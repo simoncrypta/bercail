@@ -8,9 +8,9 @@ command = "cursor-agent"
 
 [layout]
 review = "tuicr"
-# Open tuicr when the layout agent pane goes done (`tuicr -w`: uncommitted
-# changes only, watching; agents stage and do not commit). Someone else's PR uses `tuicr pr`.
-# Set false to disable the hook.
+# Open Review when the desk agent finishes (`tuicr -w`: uncommitted changes
+# only, watching; agents stage and do not commit). Someone else's PR uses `tuicr pr`.
+# Set false to open Review only with Ctrl+Shift+R.
 auto_review = true
 EOF
 }
@@ -46,45 +46,6 @@ read_agent_command() {
   fi
 }
 
-agentic_dev_default_file_editor() {
-  local cmd bin
-  for cmd in "${EDITOR:-}" "${VISUAL:-}"; do
-    [[ -n "$cmd" ]] || continue
-    printf '%s' "$cmd"
-    return 0
-  done
-  case "$(uname -s)" in
-    Darwin)
-      command -v nano >/dev/null 2>&1 && { printf 'nano'; return 0; }
-      printf 'vi'
-      ;;
-    *)
-      for bin in nvim vim nano vi; do
-        if command -v "$bin" >/dev/null 2>&1; then
-          printf '%s' "$bin"
-          return 0
-        fi
-      done
-      printf 'vi'
-      ;;
-  esac
-}
-
-read_layout_file_editor() {
-  ensure_config_reader || true
-  if declare -F agentic_dev_layout_file_editor >/dev/null 2>&1; then
-    agentic_dev_layout_file_editor
-  elif declare -F agentic_dev_layout_editor >/dev/null 2>&1; then
-    agentic_dev_layout_editor
-  else
-    agentic_dev_default_file_editor
-  fi
-}
-
-read_layout_editor() {
-  read_layout_file_editor
-}
-
 read_layout_review() {
   ensure_config_reader || true
   if declare -F agentic_dev_layout_review >/dev/null 2>&1; then
@@ -96,466 +57,111 @@ read_layout_review() {
 
 RECONFIGURE=0
 
-export DEV_LAYOUT_PLUGIN_REPO="simoncrypta/agentic-dev-setup/plugins/agentic-layout"
-export DEV_LAYOUT_PLUGIN_REF="v0.8.0"
-export LEGACY_DEV_LAYOUT_PLUGIN_REPO="simoncrypta/herdr-dev-layout"
-PICKR_PLUGIN_REPO="tomasvarga/herdr-pickr"
-PICKR_PLUGIN_REF="e393ef593e44d2497f43d20aa7b0e4a26ea3d445"
-WORKTRUNK_PLUGIN_REPO="devashish2203/herdr-worktrunk"
-WORKTRUNK_PLUGIN_REF="a3107ca566bafcd463bc138007a0c01051970784"
+# The Herdr app half of bercail: the bercail layout, its desk mod, and its keys.
+# Paths are relative to config/herdr-app in the source and to the app's home.
+HERDR_APP_LAYOUT="layouts/bercail.json"
+HERDR_APP_MOD_FILES=(mods/bercail-desk/main.js mods/bercail-desk/mod.json)
+HERDR_APP_KEYS_SECTION="layout:bercail"
 
-PLUGIN_STATUS=""
-PLUGIN_SOURCE_KIND=""
-PLUGIN_SOURCE_REPO=""
-PLUGIN_SOURCE_REF=""
-PLUGIN_SOURCE_PATH=""
-PLUGIN_SOURCE_RAW=""
+# The app rewrites its layout file (the desk mod points the agent block with
+# layout.set), so the layout is copied only when missing or when bercail ships
+# a new one. The last shipped copy is kept to tell the two apart.
+_herdr_app_shipped_layout() {
+  printf '%s/herdr-app/%s' "$AGENTIC_DEV_SHARE_DIR" "$HERDR_APP_LAYOUT"
+}
 
-plugin_inspect() {
-  local id="$1" output line descriptor payload matches=0 mentions=0
+# The layout without what the app changes at run time: the desk's terminal,
+# which stack child shows, and column weights.
+_herdr_app_layout_shape() {
+  jq -S 'walk(if type == "object" then
+      del(.active)
+      | if .id == "agent" then del(.content) else . end
+      | if (.size | type) == "object" then del(.size.weight) else . end
+    else . end)' "$1" 2>/dev/null
+}
 
-  PLUGIN_STATUS="unknown"
-  PLUGIN_SOURCE_KIND=""
-  PLUGIN_SOURCE_REPO=""
-  PLUGIN_SOURCE_REF=""
-  PLUGIN_SOURCE_PATH=""
-  PLUGIN_SOURCE_RAW=""
-
-  if ! output="$(herdr plugin list 2>/dev/null)"; then
+deploy_herdr_app_layout() {
+  local dest="$HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT" shipped new
+  shipped="$(_herdr_app_shipped_layout)"
+  new="$(mktemp)"
+  if ! DRY_RUN=0 deploy_install_file "config/herdr-app/$HERDR_APP_LAYOUT" "$new" >/dev/null; then
+    rm -f "$new"
+    warn "could not read the shipped bercail layout"
     return 1
   fi
-
-  while IFS= read -r line; do
-    [[ "$line" != *"$id"* ]] || mentions=$((mentions + 1))
-    [[ "$line" == "- $id "* ]] || continue
-    matches=$((matches + 1))
-    PLUGIN_SOURCE_RAW="$line"
-  done <<<"$output"
-
-  if [[ "$matches" -eq 0 ]]; then
-    [[ "$mentions" -eq 0 ]] || return 1
-    PLUGIN_STATUS="missing"
-    return 0
-  fi
-  [[ "$matches" -eq 1 ]] || return 1
-
-  descriptor="${PLUGIN_SOURCE_RAW##*[}"
-  [[ "$descriptor" != "$PLUGIN_SOURCE_RAW" && "$descriptor" == *']'* ]] || return 1
-  descriptor="${descriptor%%]*}"
-  case "$descriptor" in
-    local:*)
-      PLUGIN_STATUS="present"
-      PLUGIN_SOURCE_KIND="local"
-      PLUGIN_SOURCE_PATH="${descriptor#local:}"
-      [[ -n "$PLUGIN_SOURCE_PATH" ]] || {
-        PLUGIN_STATUS="unknown"
-        return 1
-      }
-      ;;
-    github:*@*)
-      payload="${descriptor#github:}"
-      PLUGIN_SOURCE_REPO="${payload%@*}"
-      PLUGIN_SOURCE_REF="${payload##*@}"
-      [[ "$PLUGIN_SOURCE_REPO" == */* && -n "$PLUGIN_SOURCE_REF" ]] || return 1
-      PLUGIN_STATUS="present"
-      PLUGIN_SOURCE_KIND="github"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-plugin_is_exact_github() {
-  local repo="$1" ref="$2"
-  [[ "$PLUGIN_STATUS" == "present" \
-    && "$PLUGIN_SOURCE_KIND" == "github" \
-    && "$PLUGIN_SOURCE_REPO" == "$repo" \
-    && "$PLUGIN_SOURCE_REF" == "$ref" ]]
-}
-
-plugin_is_exact_local() {
-  local path="$1"
-  [[ "$PLUGIN_STATUS" == "present" \
-    && "$PLUGIN_SOURCE_KIND" == "local" \
-    && "$PLUGIN_SOURCE_PATH" == "$path" ]]
-}
-
-_plugin_install_github() {
-  local repo="$1" ref="$2"
-  info "installing Herdr plugin: $repo@$ref"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] herdr plugin install $repo --ref $ref --yes"
-    return 0
-  fi
-  herdr plugin install "$repo" --ref "$ref" --yes
-}
-
-_plugin_remove_registration() {
-  local id="$1" kind="$2"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] herdr plugin $([[ "$kind" == "local" ]] && printf unlink || printf uninstall) $id"
-    return 0
-  fi
-  if [[ "$kind" == "local" ]]; then
-    herdr plugin unlink "$id"
-  else
-    herdr plugin uninstall "$id"
-  fi
-}
-
-_herdr_plugin_registry_path() {
-  printf '%s/herdr/plugins.json' "${XDG_CONFIG_HOME:-${HOME}/.config}"
-}
-
-_plugin_registry_source_path() {
-  local registry="$1" id="$2"
-  jq -er --arg id "$id" '
-    [.[] | select(.plugin_id == $id)] |
-    if length == 1 then (.[0].plugin_root // .[0].source.managed_path // "")
-    else error("expected one plugin entry") end
-  ' "$registry"
-}
-
-ensure_adopted_github_plugin() {
-  local id="$1" repo="$2" ref="$3"
-
-  if ! plugin_inspect "$id"; then
-    warn "cannot safely inspect Herdr plugin $id; preserving it unchanged"
-    return 0
-  fi
-  if plugin_is_exact_github "$repo" "$ref"; then
-    info "unchanged: Herdr plugin $id ($repo@$ref)"
-    return 0
-  fi
-  if [[ "$PLUGIN_STATUS" == "present" ]]; then
-    warn "preserving pre-existing Herdr plugin $id: ${PLUGIN_SOURCE_RAW#- }"
-    return 0
-  fi
-
-  _plugin_install_github "$repo" "$ref" || {
-    warn "failed to install Herdr plugin $id from $repo@$ref"
-    return 1
-  }
-  [[ "$DRY_RUN" -eq 1 ]] && return 0
-  if plugin_inspect "$id" && plugin_is_exact_github "$repo" "$ref"; then
-    return 0
-  fi
-
-  warn "Herdr reported success but $id is not registered at $repo@$ref"
-  if [[ "$PLUGIN_STATUS" == "present" ]]; then
-    _plugin_remove_registration "$id" "$PLUGIN_SOURCE_KIND" || true
-  fi
-  return 1
-}
-
-_managed_plugin_transaction() (
-  local id="$1" repo="$2" ref="$3" previous_kind="$4"
-  local previous_repo="$5" previous_ref="$6" previous_path="$7"
-  local registry snapshot restore_tmp write_tmp source_path source_backup current_path
-  local rollback_started=0 rollback_ok=0
-
-  registry="$(_herdr_plugin_registry_path)"
-  snapshot="${registry}.agentic-dev-backup.$$"
-  restore_tmp="${registry}.agentic-dev-restore.$$"
-  write_tmp="${registry}.agentic-dev-write.$$"
-  source_path=""
-  source_backup=""
-
-  rollback() {
-    [[ "$rollback_started" -eq 1 ]] || return 0
-    trap '' HUP INT TERM
-    # Optional hook after HUP/INT/TERM are masked. Tests use this to inject a
-    # second TERM during rollback; production leaves it unset.
-    ${AGENTIC_DEV_ON_ROLLBACK_ARMED:-:} || true
-    rollback_ok=0
-    # In-progress marker for the whole rollback. Keep it distinct from the
-    # atomic write temp so fixtures can observe rollback before cleanup.
-    : >"$restore_tmp" || rollback_ok=1
-
-    current_path=""
-    if [[ -f "$registry" ]]; then
-      current_path="$(_plugin_registry_source_path "$registry" "$id" 2>/dev/null || true)"
+  if [[ "$FORCE" -ne 1 && -f "$dest" ]]; then
+    if [[ -f "$shipped" ]] && cmp -s "$new" "$shipped"; then
+      info "unchanged: $dest (layout changes made in the app stay)"
+      rm -f "$new"
+      return 0
     fi
-    if [[ -n "$current_path" && "$current_path" != "$source_path" ]]; then
-      warn "preserving failed-install artifact for $id: $current_path"
-    fi
-
-    if [[ "$previous_kind" == "local" ]]; then
-      if [[ -d "$source_backup" ]]; then
-        rm -rf "$previous_path" || rollback_ok=1
-        mv "$source_backup" "$previous_path" || rollback_ok=1
-      elif [[ ! -d "$previous_path" ]]; then
-        rollback_ok=1
+    if [[ ! -f "$shipped" ]] && ! cmp -s "$new" "$dest"; then
+      if [[ "$(_herdr_app_layout_shape "$new")" == "$(_herdr_app_layout_shape "$dest")" ]]; then
+        # bercail's layout as the app left it: adopt it, keep the app's values.
+        info "unchanged: $dest (layout changes made in the app stay)"
+        [[ "$DRY_RUN" -eq 1 ]] || DRY_RUN=0 copy_file "$new" "$shipped" >/dev/null
+      else
+        info "keeping existing $dest (bercail update --force replaces it)"
       fi
-    else
-      if [[ -d "$source_backup" ]]; then
-        rm -rf "$source_path" || rollback_ok=1
-        mv "$source_backup" "$source_path" || rollback_ok=1
-      elif [[ ! -d "$source_path" ]]; then
-        rollback_ok=1
-      fi
+      rm -f "$new"
+      return 0
     fi
-
-    if [[ -f "$snapshot" ]]; then
-      cp -p "$snapshot" "$write_tmp" && mv "$write_tmp" "$registry" || rollback_ok=1
-    else
-      rollback_ok=1
-    fi
-
-    if [[ "$rollback_ok" -eq 0 ]]; then
-      warn "rolled back Herdr plugin $id to its previous $previous_kind source"
-    else
-      warn "rollback for Herdr plugin $id was incomplete; previous source: ${previous_path:-$previous_repo@$previous_ref}"
-    fi
-    rm -f "$restore_tmp" "$write_tmp" "$snapshot"
-    rollback_started=0
-    return "$rollback_ok"
-  }
-
-  # shellcheck disable=SC2329
-  interrupted() {
-    local status="$1"
-    if [[ "$rollback_started" -eq 1 ]]; then
-      rollback || true
-    else
-      trap '' HUP INT TERM
-      rm -rf "$source_backup"
-      rm -f "$restore_tmp" "$write_tmp" "$snapshot"
-    fi
-    exit "$status"
-  }
-  trap 'interrupted 129' HUP
-  trap 'interrupted 130' INT
-  trap 'interrupted 143' TERM
-
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] snapshot complete Herdr registry and previous plugin source"
-    info "[dry-run] transaction for $id: remove $previous_kind registration"
-    if [[ "$previous_kind" == "local" ]]; then
-      info "[dry-run] back up $previous_path before migration"
-    fi
-    _plugin_remove_registration "$id" "$previous_kind"
-    _plugin_install_github "$repo" "$ref"
-    info "[dry-run] verify $id is exactly $repo@$ref; restore registry/source snapshot on failure or interruption"
-    return 0
   fi
-
-  if [[ ! -f "$registry" ]] || ! jq -e 'type == "array"' "$registry" >/dev/null 2>&1; then
-    warn "cannot transactionally update $id because the Herdr registry is missing or malformed: $registry"
-    return 1
-  fi
-  source_path="$(_plugin_registry_source_path "$registry" "$id" 2>/dev/null)" || {
-    warn "cannot transactionally update $id because its registry entry is ambiguous"
-    return 1
-  }
-  [[ -n "$source_path" ]] || source_path="$previous_path"
-  [[ -d "$source_path" ]] || {
-    warn "legacy Herdr plugin source is stale or missing: $source_path"
-    return 1
-  }
-  source_backup="${source_path}.agentic-dev-backup.$$"
-  [[ ! -e "$snapshot" && ! -e "$restore_tmp" && ! -e "$write_tmp" && ! -e "$source_backup" ]] || {
-    warn "refusing migration because a transaction backup path already exists"
-    return 1
-  }
-  cp -p "$registry" "$snapshot" || return 1
-  if [[ "$previous_kind" == "github" ]]; then
-    cp -a "$source_path" "$source_backup" || {
-      rm -f "$snapshot"
-      return 1
-    }
-  fi
-
-  rollback_started=1
-  if ! _plugin_remove_registration "$id" "$previous_kind"; then
-    rollback || true
-    return 1
-  fi
-  if [[ "$previous_kind" == "local" ]] && ! mv "$source_path" "$source_backup"; then
-    rollback || true
-    return 1
-  fi
-
-  if ! _plugin_install_github "$repo" "$ref" \
-    || ! plugin_inspect "$id" \
-    || ! plugin_is_exact_github "$repo" "$ref"; then
-    warn "transactional install failed for Herdr plugin $id; restoring previous registration"
-    rollback || true
-    return 1
-  fi
-
-  trap - HUP INT TERM
-  rollback_started=0
-  rm -rf "$source_backup"
-  rm -f "$snapshot" "$restore_tmp" "$write_tmp"
-)
-
-ensure_managed_github_plugin() {
-  local id="$1" repo="$2" ref="$3" legacy_path="$4"
-  local previous_kind previous_repo previous_ref previous_path
-
-  if ! plugin_inspect "$id"; then
-    warn "cannot safely inspect managed Herdr plugin $id; preserving it unchanged"
-    return 1
-  fi
-  if plugin_is_exact_github "$repo" "$ref"; then
-    info "unchanged: managed Herdr plugin $id ($repo@$ref)"
-    return 0
-  fi
-  if [[ "$PLUGIN_STATUS" == "missing" ]]; then
-    ensure_adopted_github_plugin "$id" "$repo" "$ref"
-    return
-  fi
-
-  previous_kind="$PLUGIN_SOURCE_KIND"
-  previous_repo="$PLUGIN_SOURCE_REPO"
-  previous_ref="$PLUGIN_SOURCE_REF"
-  previous_path="$PLUGIN_SOURCE_PATH"
-  if [[ "$previous_kind" == "local" && "$previous_path" != "$legacy_path" ]]; then
-    warn "preserving Herdr plugin $id from unowned local source: $previous_path"
-    return 0
-  fi
-  if [[ "$previous_kind" == "github" && "$previous_repo" != "$repo" ]]; then
-    warn "preserving Herdr plugin $id from unowned GitHub source: $previous_repo@$previous_ref"
-    return 0
-  fi
-
-  _managed_plugin_transaction "$id" "$repo" "$ref" \
-    "$previous_kind" "$previous_repo" "$previous_ref" "$previous_path"
+  copy_file "$new" "$dest"
+  [[ "$DRY_RUN" -eq 1 ]] || copy_file "$new" "$shipped" >/dev/null
+  rm -f "$new"
 }
 
-ensure_managed_local_plugin() {
-  local id="$1" path="$2"
-  if ! plugin_inspect "$id"; then
-    warn "cannot safely inspect Herdr plugin $id; preserving its registration"
-    return 0
-  fi
-  if plugin_is_exact_local "$path"; then
-    info "unchanged: Herdr plugin $id linked at $path"
-    return 0
-  fi
-  if [[ "$PLUGIN_STATUS" == "present" ]]; then
-    warn "preserving pre-existing Herdr plugin $id: ${PLUGIN_SOURCE_RAW#- }"
-    return 0
-  fi
-  info "linking Herdr plugin: $id"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] herdr plugin link $path"
-  else
-    # plugin link needs a running server (ENOENT otherwise).
-    if ! herdr status server 2>/dev/null | grep -q '^status: running'; then
-      herdr server >/dev/null 2>&1 &
-      local _i
-      for _i in 1 2 3 4 5 6 7 8 9 10; do
-        herdr status server 2>/dev/null | grep -q '^status: running' && break
-        sleep 0.2
-      done
-    fi
-    herdr plugin link "$path" 2>/dev/null || herdr plugin link "$path" \
-      || warn "herdr plugin link failed — run manually: herdr plugin link $path"
-  fi
-}
-
-deploy_third_party_plugins() {
-  ensure_adopted_github_plugin pickr "$PICKR_PLUGIN_REPO" "$PICKR_PLUGIN_REF"
-  ensure_adopted_github_plugin worktrunk "$WORKTRUNK_PLUGIN_REPO" "$WORKTRUNK_PLUGIN_REF"
-}
-
-pickr_template_for_platform() {
-  case "$(detect_os)" in
-    linux) printf '%s' "config/pickr/config.linux.toml" ;;
-    macos) printf '%s' "config/pickr/config.macos.toml" ;;
-    *) return 1 ;;
-  esac
-}
-
-herdr_template_for_platform() {
-  case "$(detect_os)" in
-    macos) printf '%s' "config/herdr/config.macos.toml" ;;
-    *) printf '%s' "config/herdr/config.toml" ;;
-  esac
-}
-
-deploy_pickr_config() {
-  local config_dir dest template_rel
-  if ! config_dir="$(herdr plugin config-dir pickr 2>/dev/null)" || [[ "$config_dir" != /* ]]; then
-    warn "cannot resolve the pickr plugin config dir; keeping any existing pickr config"
-    return 0
-  fi
-  dest="$config_dir/config.toml"
-  if [[ -e "$dest" || -L "$dest" ]]; then
-    info "keeping existing pickr config: $dest"
-    return 0
-  fi
-  if ! template_rel="$(pickr_template_for_platform)"; then
-    warn "no portable pickr defaults for platform $(detect_os); skipping"
-    return 0
-  fi
-  deploy_install_file "$template_rel" "$dest"
-}
-
-nvim_config_dir() {
-  printf '%s/nvim' "${XDG_CONFIG_HOME:-$HOME/.config}"
-}
-
-fresh_config_path() {
-  printf '%s/fresh/config.json' "${XDG_CONFIG_HOME:-$HOME/.config}"
-}
-
-nvim_is_lazyvim() {
-  local dir
-  dir="$(nvim_config_dir)"
-  [[ -f "$dir/lazyvim.json" ]] && return 0
-  [[ -f "$dir/lua/config/lazy.lua" ]] || return 1
-  grep -q 'LazyVim/LazyVim' "$dir/lua/config/lazy.lua"
-}
-
-deploy_nvim_explorer_defaults() {
-  local dir dest plugins
-  dir="$(nvim_config_dir)"
-  plugins="$dir/lua/plugins"
-  dest="$plugins/agentic-dev-explorer.lua"
-  nvim_is_lazyvim || return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would write $dest (file tree on the right)"
-    return 0
-  fi
-  ensure_dir "$plugins"
-  deploy_install_file "config/nvim/lua/plugins/agentic-dev-explorer.lua" "$dest"
-  info "nvim file tree: neo-tree/snacks on the right (LazyVim)"
-}
-
-deploy_fresh_explorer_defaults() {
-  local dest dir tmp
-  dest="$(fresh_config_path)"
-  dir="$(dirname "$dest")"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would set file_explorer.side=right in $dest"
-    return 0
-  fi
-  ensure_dir "$dir"
-  if [[ ! -f "$dest" ]]; then
-    printf '%s\n' '{ "file_explorer": { "side": "right" } }' >"$dest"
-    info "set Fresh file explorer side to right"
-    return 0
-  fi
-  command -v jq >/dev/null 2>&1 || {
-    warn "jq not available; skip Fresh file explorer side default"
-    return 0
-  }
-  if jq -e '.file_explorer.side != null' "$dest" >/dev/null 2>&1; then
-    info "keeping existing Fresh file explorer side"
-    return 0
-  fi
+# keys.json is the person's: only the layout:bercail section is bercail's.
+deploy_herdr_app_keys() {
+  local keys="$HERDR_APP_CONFIG_DIR/keys.json" ours tmp base
+  ours="$(mktemp)"
   tmp="$(mktemp)"
-  if ! jq '.file_explorer.side = "right"' "$dest" >"$tmp"; then
-    rm -f "$tmp"
-    warn "could not parse $dest; skip Fresh file explorer side default"
+  base="$keys"
+  if [[ ! -f "$keys" ]]; then
+    base="$(mktemp)"
+    printf '{}\n' >"$base"
+  fi
+  if ! DRY_RUN=0 deploy_install_file "config/herdr-app/keys.json" "$ours" >/dev/null \
+    || ! jq --arg s "$HERDR_APP_KEYS_SECTION" --slurpfile ours "$ours" \
+      '.[$s] = $ours[0][$s]' "$base" >"$tmp"; then
+    warn "could not merge the $HERDR_APP_KEYS_SECTION keys into $keys; copy that section from config/herdr-app/keys.json"
+    rm -f "$ours" "$tmp"
+    [[ "$base" == "$keys" ]] || rm -f "$base"
     return 0
   fi
-  mv "$tmp" "$dest"
-  info "set Fresh file explorer side to right"
+  rm -f "$ours"
+  [[ "$base" == "$keys" ]] || rm -f "$base"
+  if [[ -f "$keys" ]] && jq -e --slurpfile new "$tmp" '. == $new[0]' "$keys" >/dev/null 2>&1; then
+    info "unchanged: $keys ($HERDR_APP_KEYS_SECTION)"
+    rm -f "$tmp"
+    return 0
+  fi
+  info "install: $keys ($HERDR_APP_KEYS_SECTION section)"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    rm -f "$tmp"
+    return 0
+  fi
+  mv "$tmp" "$keys"
+}
+
+deploy_herdr_app() {
+  local rel
+  if ! command -v herdr-app >/dev/null 2>&1; then
+    warn "Herdr app not found: install it from https://herdr.dev, then run: bercail update"
+    return 0
+  fi
+  ensure_dir "$HERDR_APP_CONFIG_DIR"
+  deploy_herdr_app_layout || true
+  for rel in "${HERDR_APP_MOD_FILES[@]}"; do
+    deploy_install_file "config/herdr-app/$rel" "$HERDR_APP_CONFIG_DIR/$rel"
+  done
+  deploy_herdr_app_keys || true
+  if [[ "$DRY_RUN" -ne 1 ]] \
+    && ! herdr-app check "$HERDR_APP_CONFIG_DIR/mods/bercail-desk" >/dev/null 2>&1; then
+    warn "herdr-app check failed for the bercail-desk mod; run: herdr-app check $HERDR_APP_CONFIG_DIR/mods/bercail-desk"
+  fi
+  info "Herdr app: switch to the bercail layout with Ctrl+Shift+L"
 }
 
 # Move ~/.config/agentic-dev and ~/.local/share/agentic-dev to bercail names.
@@ -598,12 +204,13 @@ EOF
   info "saved config to $AGENTIC_DEV_USER_CONFIG"
 }
 
-# No install-time agent picker. The sticky pane defaults to cursor-agent.
+# No install-time agent picker. The desk agent defaults to cursor-agent until
+# one is picked on the desk.
 # Override [agent] command in config.toml yourself, then bercail reconfigure.
 prompt_user_config() {
   if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
     info "using existing agent command: $(read_agent_command)"
-    info "review: $(read_layout_review)  editor: $(read_layout_file_editor)"
+    info "review: $(read_layout_review)"
     return 0
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -663,7 +270,7 @@ deploy_lib() {
     deploy_tree "$src/lib" "${AGENTIC_DEV_SHARE_DIR}/lib"
   else
     local libfile
-    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh doctor.sh harness.sh; do
+    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh harness.sh; do
       deploy_install_file "lib/$libfile" "${AGENTIC_DEV_SHARE_DIR}/lib/$libfile"
     done
   fi
@@ -709,31 +316,6 @@ record_install_source() {
   info "recorded install source: $src"
 }
 
-migrate_file_editor_config() {
-  local dest="$AGENTIC_DEV_USER_CONFIG" tmp
-  [[ -f "$dest" ]] || return 0
-  grep -qE '^[[:space:]]*editor[[:space:]]*=' "$dest" && return 0
-  grep -qE '^[[:space:]]*file_editor[[:space:]]*=' "$dest" || return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would migrate layout file_editor → editor in $dest"
-    return 0
-  fi
-  tmp="$(mktemp)"
-  awk '
-    BEGIN { in_layout = 0 }
-    /^\[layout\]/ { in_layout = 1 }
-    /^\[/ && $0 != "[layout]" { in_layout = 0 }
-    in_layout && /^[[:space:]]*file_editor[[:space:]]*=/ {
-      sub(/file_editor/, "editor")
-    }
-    { print }
-  ' "$dest" >"$tmp"
-  mv "$tmp" "$dest"
-  info "migrated layout file_editor → editor in $dest"
-}
-
-# Drop the previous fresh default so EDITOR/VISUAL (or a stock terminal
-# editor) wins. An explicit non-fresh editor= in config is kept.
 # Default review tool is tuicr. Leave a custom hunk command (extra flags) alone.
 migrate_hunk_review_to_tuicr() {
   local dest="$AGENTIC_DEV_USER_CONFIG" tmp
@@ -755,69 +337,6 @@ migrate_hunk_review_to_tuicr() {
   ' "$dest" >"$tmp"
   mv "$tmp" "$dest"
   info "migrated layout review to tuicr in $dest"
-}
-
-migrate_fresh_editor_default() {
-  local dest="$AGENTIC_DEV_USER_CONFIG" tmp
-  [[ -f "$dest" ]] || return 0
-  grep -qE '^[[:space:]]*(file_)?editor[[:space:]]*=[[:space:]]*"fresh"[[:space:]]*$' "$dest" || return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would drop default editor=fresh in $dest"
-    return 0
-  fi
-  tmp="$(mktemp)"
-  awk '
-    BEGIN { in_layout = 0 }
-    /^\[layout\]/ { in_layout = 1 }
-    /^\[/ && $0 != "[layout]" { in_layout = 0 }
-    in_layout && /^[[:space:]]*(file_)?editor[[:space:]]*=[[:space:]]*"fresh"[[:space:]]*$/ { next }
-    { print }
-  ' "$dest" >"$tmp"
-  mv "$tmp" "$dest"
-  info "dropped default editor=fresh in $dest (using EDITOR or a stock terminal editor)"
-}
-
-migrate_legacy_layout_plugin() {
-  local old_id="$LEGACY_LAYOUT_PLUGIN_ID"
-  local status kind repo ref path
-  if ! plugin_inspect "$old_id"; then
-    return 0
-  fi
-  status="$PLUGIN_STATUS"
-  kind="$PLUGIN_SOURCE_KIND"
-  repo="$PLUGIN_SOURCE_REPO"
-  ref="$PLUGIN_SOURCE_REF"
-  path="$PLUGIN_SOURCE_PATH"
-  if [[ "$status" == "missing" ]]; then
-    return 0
-  fi
-  if [[ "$kind" == "github" && "$repo" == "$LEGACY_DEV_LAYOUT_PLUGIN_REPO" ]]; then
-    info "removing legacy layout plugin $old_id ($repo@$ref)"
-    _plugin_remove_registration "$old_id" github || warn "failed to remove $old_id"
-    return 0
-  fi
-  if [[ "$kind" == "local" && "$path" == "$HERDR_DEV_LAYOUT_LEGACY_DIR" ]]; then
-    info "unlinking legacy layout plugin $old_id at $path"
-    _plugin_remove_registration "$old_id" local || warn "failed to unlink $old_id"
-    return 0
-  fi
-  warn "preserving unowned legacy layout plugin $old_id (${PLUGIN_SOURCE_RAW#- })"
-}
-
-deploy_plugin() {
-  if command -v herdr >/dev/null 2>&1; then
-    require_herdr_min_version || return 1
-    migrate_legacy_layout_plugin
-    ensure_managed_github_plugin \
-      "$PLUGIN_ID" \
-      "$DEV_LAYOUT_PLUGIN_REPO" \
-      "$DEV_LAYOUT_PLUGIN_REF" \
-      "$HERDR_DEV_LAYOUT_LEGACY_DIR"
-    deploy_third_party_plugins
-    deploy_pickr_config
-  else
-    warn "herdr not on PATH — skipping managed plugin install ($DEV_LAYOUT_PLUGIN_REPO@$DEV_LAYOUT_PLUGIN_REF)"
-  fi
 }
 
 # Helpers and the shipped template use Branch_Repo. Existing configs from before
@@ -867,29 +386,30 @@ migrate_worktrunk_clear_handoff_prompt() {
   info "migrated worktrunk post-start to unset WT_HERDR_AGENT_PROMPT in $dest"
 }
 
-# Existing installs kept the old 3-tab (review/explorer/terminal) echo copy.
+# Existing installs echo the terminal herdr's layout and prefix keys after
+# post-start. Replace those echo lines with the Herdr app's.
 migrate_worktrunk_layout_echo() {
   local dest="$WORKTRUNK_CONFIG_DIR/config.toml" tmp
   [[ -f "$dest" ]] || return 0
-  grep -Fq 'tabs: review, explorer, terminal' "$dest" || return 0
+  grep -Eq 'echo "(✓ Herdr worktree group|  Layout:|  Switch|  Attach with: herdr)' "$dest" || return 0
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would migrate worktrunk post-start layout echo in $dest"
+    info "[dry-run] would migrate worktrunk post-start echo in $dest"
     return 0
   fi
   tmp="$(mktemp)"
   awk '
-    /tabs: review, explorer, terminal/ {
-      sub(/Layout: agent pane \(left, sticky\) \| tabs: review, explorer, terminal/,
-          "Layout: agent pane | review/shell center | files pane")
-    }
-    /review\/explorer\/terminal/ {
-      sub(/Switch tabs: Alt\+1\.\.3 \(review\/explorer\/terminal\), prefix\+1 focuses agent, prefix\+2\.\.4 same tabs/,
-          "Switch: prefix+1 agent, +2 review, +3 shell, +b/+e files, +g git")
+    /^echo "(✓ Herdr worktree group|  Layout:|  Switch|  Attach with: herdr)/ {
+      if (!done) {
+        print "echo \"✓ Herdr space '"'"'$S'"'"' ready\""
+        print "echo \"  Desk: Ctrl+Shift+A agent, Ctrl+Shift+R review, Ctrl+Shift+S shell, Ctrl+Shift+F/G files/changes\""
+        done = 1
+      }
+      next
     }
     { print }
   ' "$dest" >"$tmp"
   mv "$tmp" "$dest"
-  info "migrated worktrunk post-start layout echo in $dest"
+  info "migrated worktrunk post-start echo in $dest"
 }
 
 deploy_finalize_permissions() {
@@ -903,13 +423,10 @@ deploy_finalize_permissions() {
 }
 
 deploy_configs() {
-  local herdr_rel
-  herdr_rel="$(herdr_template_for_platform)"
   local -a files=(
     "config/shell/bercail.inc.sh|${AGENTIC_DEV_SHELL_DIR}/bercail.inc.sh"
     "config/bash/bercail.sh|${AGENTIC_DEV_SHELL_DIR}/bercail.sh"
     "config/zsh/bercail.zsh|${AGENTIC_DEV_SHELL_DIR}/bercail.zsh"
-    "${herdr_rel}|${HERDR_CONFIG_DIR}/config.toml"
     "config/worktrunk/herdr-layout.sh|${WORKTRUNK_CONFIG_DIR}/herdr-layout.sh"
     "bin/bercail|${LOCAL_BIN}/bercail"
     "bin/agentic-dev|${LOCAL_BIN}/agentic-dev"
@@ -919,13 +436,10 @@ deploy_configs() {
   migrate_agentic_dev_to_bercail
   prompt_user_config
   migrate_cursor_cli_command
-  migrate_file_editor_config
-  migrate_fresh_editor_default
   migrate_hunk_review_to_tuicr
 
   ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
   ensure_dir "$AGENTIC_DEV_SHELL_DIR"
-  ensure_dir "$HERDR_CONFIG_DIR"
   ensure_dir "$WORKTRUNK_CONFIG_DIR"
   ensure_dir "$AGENTIC_DEV_SHARE_DIR"
 
@@ -938,7 +452,7 @@ deploy_configs() {
     fi
     deploy_install_file "$rel" "$dest"
     # Executable now, not only in deploy_finalize_permissions: a later step
-    # (the Herdr plugin build) can fail and leave the CLI unusable otherwise.
+    # can fail and leave the CLI unusable otherwise.
     if [[ "$rel" == bin/* ]]; then
       run chmod +x "$dest"
     fi
@@ -947,7 +461,7 @@ deploy_configs() {
   deploy_agentic_dev_config
   deploy_lib
   if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/config.sh" ]]; then
-    # deploy_lib may have pulled a newer lib/; reload the plugin pin before install.
+    # deploy_lib may have pulled a newer lib/; reload it before the steps below.
     # shellcheck source=/dev/null
     source "${AGENTIC_DEV_SHARE_DIR}/lib/config.sh"
   fi
@@ -956,7 +470,7 @@ deploy_configs() {
   if declare -F migrate_hunk_review_to_tuicr >/dev/null; then
     migrate_hunk_review_to_tuicr
   fi
-  deploy_plugin
+  deploy_herdr_app
   deploy_skills
 
   if [[ ! -f "$WORKTRUNK_CONFIG_DIR/config.toml" ]] || [[ "$FORCE" -eq 1 ]]; then

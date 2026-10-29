@@ -1,13 +1,13 @@
 # Worktrunk (condensed, Herdr-adapted)
 
-Worktrunk (`wt`) manages git worktrees. In this layout, Herdr owns the terminal subspaces; prefer Herdr handoffs over tmux/Zellij recipes from upstream Worktrunk docs.
+Worktrunk (`wt`) manages git worktrees. Here each checkout is a Herdr app space; prefer bercail handoffs over tmux/Zellij recipes from upstream Worktrunk docs.
 
 ## Two configs
 
 - **User** `~/.config/worktrunk/config.toml` — personal preferences; propose changes, get consent.
 - **Project** `<repo>/.config/wt.toml` — team hooks; edit with care; warn on destructive commands.
 
-This layout also uses `~/.config/worktrunk/herdr-layout.sh` and user hooks so `post-start` / `post-remove` open or close Herdr worktree-group children for sibling checkouts.
+This layout also uses `~/.config/worktrunk/herdr-layout.sh` and user hooks so `post-start` / `post-remove` open or close the Herdr app space of a sibling checkout.
 
 ## Useful commands
 
@@ -28,8 +28,8 @@ Worktrunk will not run project hooks/aliases until the user approves them. In no
 
 ## Handoffs
 
-Inside Herdr, run `scripts/handoff-spawn --info` then `handoff-spawn` (see
-`resources/handoff.md`). Do not assemble `wt switch` / layout create / start-agent
+Run `scripts/handoff-spawn --info` then `handoff-spawn` (see
+`resources/handoff.md`). Do not assemble `wt switch` / space create / desk start
 yourself.
 
 ## Do not
