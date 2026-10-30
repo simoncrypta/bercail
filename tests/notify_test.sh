@@ -119,6 +119,44 @@ kinds="$(jq -sc '[.[] | select(. != null) | .kind]' "$TMP_DIR/bodies.jsonl" 2>/d
 [[ "$kinds" == '["finished"]' ]] || fail "params snapshot: $kinds"
 printf 'PASS: a snapshot under params is read like a top-level one\n'
 
+# What hc actually sends: one snapshot, then an `event` per changed fact.
+# (The 10:43 miss: the follower read the snapshot and nothing after it.)
+status_event() {
+  jq -nc --arg t "${2:-t9}" --arg s "$1" '{jsonrpc:"2.0", method:"event", params:{seq:9, terminal:$t,
+    type:"status", data:{records:{}, reported:true,
+      status:(if $s == "" then null else {app:"claude-code", state:$s, msg:"Reading"} end)}}}'
+}
+: >"$TMP_DIR/bodies.jsonl"
+{ event working; heartbeat 4054
+  printf '{"jsonrpc":"2.0","method":"event","params":{"seq":4055,"terminal":"t9","type":"size","data":{"cols":200,"rows":120}}}\n'
+  status_event working; status_event working; status_event done; status_event idle
+  status_event working; status_event blocked; status_event working; status_event done; } | notify_follow
+kinds="$(jq -sc '[.[] | select(. != null) | .kind]' "$TMP_DIR/bodies.jsonl" 2>/dev/null)"
+[[ "$kinds" == '["finished","blocked","finished"]' ]] || fail "event deltas: $kinds"
+jq -se --arg p "$desk" '.[0] | .agent.address == "t9" and .agent.status == "done"
+  and .agent.previous_status == "working" and .space.id == "sp1" and .space.repo == "myapp"
+  and .space.checkout_path == $p and .desk.issue == "myapp-1"' "$TMP_DIR/bodies.jsonl" >/dev/null \
+  || fail "event delta payload: $(head -n 1 "$TMP_DIR/bodies.jsonl")"
+jq -e '.last_transition.address == "t9" and .last_transition.kind == "finished" and .last_transition_at > 0' \
+  "$(notify_follower_file)" >/dev/null || fail "follower record: $(cat "$(notify_follower_file)")"
+printf 'PASS: status events after the snapshot post finished and blocked, and the follower records them\n'
+
+# A desk started after the snapshot: the follower asks hc where it is.
+cat >"$TMP_DIR/bin/hc-get" <<EOF
+#!/usr/bin/env bash
+[[ "\$1 \$2" == "get t12" ]] || exit 1
+jq -nc --arg cwd "$desk" '{address:"t12", state:"live", cwd:\$cwd, title:"New desk",
+  labels:{"bercail.role":"agent","bercail.space":"sp2"}, status:{app:"codex", state:"idle"}}'
+EOF
+chmod +x "$TMP_DIR/bin/hc-get"
+: >"$TMP_DIR/bodies.jsonl"
+{ event working; status_event working t12; status_event done t12;
+  printf '{"jsonrpc":"2.0","method":"event","params":{"seq":5,"terminal":"t9","type":"finished","data":{}}}\n'
+  status_event done; } | HC_BIN="$TMP_DIR/bin/hc-get" notify_follow
+jq -se 'length == 1 and .[0].agent.address == "t12" and .[0].space.id == "sp2" and .[0].agent.title == "New desk"' \
+  "$TMP_DIR/bodies.jsonl" >/dev/null || fail "new desk / finished desk: $(cat "$TMP_DIR/bodies.jsonl")"
+printf 'PASS: a desk started later is looked up; a finished terminal is forgotten\n'
+
 # Filters: another repo is not sent.
 sed -i 's/^repos = myapp/repos = other/' "$sink"
 : >"$TMP_DIR/bodies.jsonl"
@@ -167,6 +205,44 @@ rm -f "$st"
 out="$(HC_BIN="$TMP_DIR/bin/hc" doctor_notify)" || fail "doctor_notify without state: $out"
 printf '%s' "$out" | grep -q 'last post never' || fail "doctor never: $out"
 printf 'PASS: doctor notes the last post next to a live follower\n'
+
+# A live follower that didn't see a desk finish is flagged; one that saw it is fine.
+now="$(date +%s)"
+cat >"$TMP_DIR/bin/hc-desk" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  ls) printf '{"terminals":[{"address":"t3s","state":"live"}]}\n' ;;
+  get) [[ "\$2" == t3s ]] && printf '{"address":"t3s","state":"live","status":{"state":"done"},"status_ms":%s}\n' "$(( (now - 30) * 1000 ))" \
+    || printf '{"state":"live"}\n' ;;
+esac
+EOF
+chmod +x "$TMP_DIR/bin/hc-desk"
+printf '{"pid":1,"started_at":%s}\n' "$((now - 600))" >"$(notify_follower_file)"
+out="$(HC_BIN="$TMP_DIR/bin/hc-desk" doctor_notify)" && fail "a deaf follower passed doctor: $out"
+printf '%s' "$out" | grep -q 'deaf  notify follower is live but missed desk t3s' || fail "deaf: $out"
+printf '{"pid":1,"started_at":%s,"last_transition_at":%s}\n' "$((now - 600))" "$((now - 29))" >"$(notify_follower_file)"
+out="$(HC_BIN="$TMP_DIR/bin/hc-desk" doctor_notify)" || fail "a follower that saw it: $out"
+printf '{"pid":1,"started_at":%s}\n' "$((now - 10))" >"$(notify_follower_file)"
+out="$(HC_BIN="$TMP_DIR/bin/hc-desk" doctor_notify)" || fail "a finish before the follower started: $out"
+rm -f "$(notify_follower_file)"
+out="$(HC_BIN="$TMP_DIR/bin/hc-desk" doctor_notify)" && fail "an old follower passed doctor"
+printf '%s' "$out" | grep -q 'runs an older bercail' || fail "old follower: $out"
+printf 'PASS: doctor flags a live follower that missed a desk finishing, or runs older code\n'
+
+# bercail update restarts a live follower so it runs the new code.
+# Like hc: killing a --rm terminal removes it, and kill then answers not_found (exit 3).
+cat >"$TMP_DIR/bin/hc-kill" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  kill) printf '%s\n' "\$2" >>"$TMP_DIR/killed"; exit 3 ;;
+  get) [[ -s "$TMP_DIR/killed" ]] && exit 3; printf '{"state":"live"}\n' ;;
+esac
+EOF
+chmod +x "$TMP_DIR/bin/hc-kill"
+out="$(HC_BIN="$TMP_DIR/bin/hc-kill" notify_restart_follower 2>&1)"
+[[ "$(cat "$TMP_DIR/killed")" == bercail-notify ]] || fail "update did not restart the follower"
+[[ "$out" == "restarted the notify follower (hc terminal bercail-notify)" ]] || fail "restart output: $out"
+printf 'PASS: update restarts the live follower\n'
 
 # notify add: url and key from stdin, written 0600, then tested; the key is never printed.
 rm -f "$XDG_CONFIG_HOME/bercail/notify.d/"*.toml
