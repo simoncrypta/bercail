@@ -63,45 +63,21 @@ HERDR_APP_LAYOUT="layouts/bercail.json"
 HERDR_APP_MOD_FILES=(mods/bercail-desk/main.js mods/bercail-desk/mod.json)
 HERDR_APP_KEYS_SECTION="layout:bercail"
 
-# The app rewrites its layout file (the desk mod points the agent block with
+# The app rewrites its layout file (the desk mod adds a block per desk with
 # layout.set), so the layout is copied only when missing or when bercail ships
 # a new one. The last shipped copy is kept to tell the two apart.
 _herdr_app_shipped_layout() {
   printf '%s/herdr-app/%s' "$AGENTIC_DEV_SHARE_DIR" "$HERDR_APP_LAYOUT"
 }
 
-# The layout without what the app changes at run time: the desk's terminal,
-# which stack child shows, and column weights.
+# The layout without what the app changes at run time: the desks' blocks (and the
+# shared agent block of older layouts), which stack child shows, and column weights.
 _herdr_app_layout_shape() {
   jq -S 'walk(if type == "object" then
       del(.active)
-      | if .id == "agent" then del(.content) else . end
+      | if .id == "agent-stack" then .children |= map(select(.id != "agent" and (.id | startswith("desk-") | not))) else . end
       | if (.size | type) == "object" then del(.size.weight) else . end
     else . end)' "$1" 2>/dev/null
-}
-
-# The app drops the agent block when the terminal it shows ends (its space closed).
-# True when the layout has the agent column but no agent block in it.
-_herdr_app_layout_lost_agent() {
-  [[ -f "$1" ]] && jq -e 'any(.. | objects | select(.id == "agent-stack");
-      ([.children[]?.id] | index("agent")) == null)' "$1" >/dev/null 2>&1
-}
-
-# Put the shipped agent block back first in the agent column of $2, in place.
-_herdr_app_layout_restore_agent() {
-  local new="$1" dest="$2" tmp
-  info "repair: $dest (agent block restored)"
-  [[ "$DRY_RUN" -eq 1 ]] && return 0
-  tmp="$(mktemp)"
-  if jq --slurpfile new "$new" '
-      ([$new[0] | .. | objects | select(.id == "agent")][0]) as $agent
-      | (.. | objects | select(.id == "agent-stack")) |= (.children = [$agent] + (.children // []))' \
-      "$dest" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
-    mv "$tmp" "$dest"
-  else
-    rm -f "$tmp"
-    warn "could not restore the agent block in $dest; bercail update --force replaces the layout"
-  fi
 }
 
 deploy_herdr_app_layout() {
@@ -114,9 +90,6 @@ deploy_herdr_app_layout() {
     return 1
   fi
   if [[ "$FORCE" -ne 1 && -f "$dest" ]]; then
-    if _herdr_app_layout_lost_agent "$dest" && ! _herdr_app_layout_lost_agent "$new"; then
-      _herdr_app_layout_restore_agent "$new" "$dest"
-    fi
     if [[ -f "$shipped" ]] && cmp -s "$new" "$shipped"; then
       info "unchanged: $dest (layout changes made in the app stay)"
       rm -f "$new"

@@ -74,17 +74,17 @@ lights at 12,16):
   column of `spaces` and `agents`, `sidebar-footer` workspace-chrome with
   `props: {footer: true}`) and `work` column (`tabs` mod, `work-body` row,
   `status` workspace-status). `work-body`: `desk` column (`desk-header`
-  block = `bercail-desk` mod; `agent-stack` stack of `agent`, a
-  `{terminal: …}` block, and `empty`, the `bercail-desk` mod with
-  `props: {role: "empty"}`), `main` block `{tab: "active", pane: {...}}`,
+  block = `bercail-desk` mod; `agent-stack` stack of `empty`, the
+  `bercail-desk` mod with `props: {role: "empty"}`, plus one
+  `{terminal: …}` block per desk, `desk-<address>`, that the mod adds), `main` block `{tab: "active", pane: {...}}`,
   `panel-body` stack of `files` and `changes`.
 - Shipped mods used: `workspace-chrome`, `spaces`, `agents`, `tabs`, `pane`,
   `files`, `changes`, `workspace-status`.
 - `mods/bercail-desk` (`place: "none"`), one script, two roles:
   - `header` (default): draws the header row, takes the key commands
-    (`nextCommand()`), and on every render points the `agent` block at the
-    space's desk with `layout.set` and picks the stack child with
-    `layout.select`.
+    (`nextCommand()`), and on every render shows the space's desk: the first
+    time, it adds the desk's block with `layout.set` (already selected);
+    after that, it only picks the stack child with `layout.select`.
   - `empty`: the agent picker; lists choices from `knownAgents()` and keeps
     the last pick in shared state `bercail.agent`.
 - A desk agent is an hc terminal: `hc run --bg --json --keep
@@ -110,8 +110,10 @@ lights at 12,16):
 ## Watch out
 
 - An agent block can't take the keyboard from a command, and `agent.focus`
-  moves focus to the parent pane. The desk is a **terminal** block that the
-  mod repoints, not `{agent: "focused"}`.
+  moves focus to the parent pane. The desk is a **terminal** block, not
+  `{agent: "focused"}`: one per desk, never repointed. A single block
+  repointed per space could show a desk blank (cursor top-left) until its
+  agent redrew.
 - The desk is a layout block, not a pane of the tab: `pane.go` never reaches
   or leaves it. That is why the arrow keys are the mod's commands.
 - Herdr rewrites `layouts/bercail.json` as it is used (the `agent` block's

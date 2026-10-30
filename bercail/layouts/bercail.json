@@ -109,17 +109,6 @@
                   "type": "stack",
                   "children": [
                     {
-                      "id": "agent",
-                      "type": "block",
-                      "content": {
-                        "terminal": "t1"
-                      },
-                      "padding": [
-                        6,
-                        6
-                      ]
-                    },
-                    {
                       "id": "empty",
                       "type": "block",
                       "content": {
