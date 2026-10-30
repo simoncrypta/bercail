@@ -83,6 +83,11 @@ test_version_comparison_matrix() {
 test_check_herdr_app() {
   local case_dir="$tmp/herdr-app" rc output
   mkdir -p "$case_dir/bin"
+  ln -s /bin/true "$case_dir/bin/herdr"
+  output="$(PATH="$case_dir/bin:/usr/bin:/bin" check_herdr_app 2>&1)" || true
+  assert_contains "$output" "found herdr, the Herdr terminal: bercail needs the Herdr app" \
+    "check_herdr_app tells the herdr terminal from the app"
+  rm "$case_dir/bin/herdr"
   ln -s /bin/true "$case_dir/bin/herdr-app"
   if output="$(PATH="$case_dir/bin:/usr/bin:/bin" check_herdr_app 2>&1)"; then rc=0; else rc=$?; fi
   assert_eq "1" "$rc" "check_herdr_app fails without hc"
@@ -132,7 +137,7 @@ test_install_herdr_app() {
 test_top_level_doctor_reports_missing_app() {
   local case_dir="$tmp/top-level-doctor" rc output cmd
   mkdir -p "$case_dir/bin" "$case_dir/home"
-  for cmd in git wt bd fzf jq tuicr; do
+  for cmd in herdr git wt bd fzf jq tuicr; do
     ln -s /bin/true "$case_dir/bin/$cmd"
   done
   if output="$(HOME="$case_dir/home" SHELL=/bin/bash \
@@ -145,6 +150,8 @@ test_top_level_doctor_reports_missing_app() {
   assert_eq "1" "$rc" "top-level doctor fails without the Herdr app"
   assert_contains "$output" "missing  herdr-app" "top-level doctor names herdr-app"
   assert_contains "$output" "missing  hc" "top-level doctor names hc"
+  assert_contains "$output" "wrong  herdr is the Herdr terminal" \
+    "top-level doctor tells the herdr terminal from the app"
   assert_contains "$output" "Integration:" \
     "top-level doctor continues through integration checks"
   assert_contains "$output" "missing  Herdr layout" "top-level doctor checks the bercail layout"
