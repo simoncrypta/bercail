@@ -56,7 +56,7 @@ Omarchy / Linux:
   Optionally patches Hyprland SUPER+ALT+RETURN to open (or focus) the Herdr app
 
 Install order:
-  The Herdr app (herdr-app, with herdr-core hc) comes from https://herdr.dev
+  The Herdr app (herdr-app, with herdr-core hc): herdr.dev's installer if missing
   mise first (install and upgrade worktrunk, beads (bd), fzf, jq, tuicr)
   PATH: mise shims, then ~/.local/bin, then brew (macOS Homebrew stays reachable)
   then omarchy pkg add on Omarchy, then brew / apt / pacman / upstream

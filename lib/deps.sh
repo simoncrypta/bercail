@@ -176,7 +176,7 @@ parse_version() {
 }
 
 # The Herdr app (herdr-app) and herdr-core (hc) come from herdr.dev; the app
-# keeps both updated. bercail only checks they are here.
+# keeps both updated. This only reports; install_herdr_app installs.
 check_herdr_app() {
   local missing=0 bin
   for bin in herdr-app hc; do
@@ -188,6 +188,48 @@ check_herdr_app() {
     fi
   done
   return "$missing"
+}
+
+# The Herdr app and herdr-core from herdr.dev's own installers (no sudo; both
+# go under ~/.local). The app's installer adds herdr-core when there is none;
+# the core's is run on its own when only hc is missing. The app updates both
+# afterwards, so a present one is left alone.
+install_herdr_app() {
+  local releases="${HERDR_RELEASES_URL:-https://releases.herdr.dev}" bin="$HOME/.local/bin" what
+  if dep_present herdr-app && dep_present hc; then
+    check_herdr_app
+    return
+  fi
+  case ":$PATH:" in
+    *":$bin:"*) ;;
+    *) export PATH="$bin:$PATH" ;;
+  esac
+  if dep_present herdr-app && dep_present hc; then
+    check_herdr_app
+    return
+  fi
+  dep_present curl || maybe_omarchy_pkg_install curl curl \
+    || maybe_apt_install curl curl || true
+  if dep_present herdr-app; then
+    what="herdr-core: curl -fsSL $releases/core/install.sh | sh"
+  else
+    what="the Herdr app: curl -fsSL $releases/app/install.sh | sh"
+  fi
+  info "installing $what"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if ! dep_present herdr-app; then
+    curl -fsSL "$releases/app/install.sh" | HERDR_RELEASES_URL="$releases" sh \
+      || warn "the Herdr app installer failed"
+    hash -r 2>/dev/null || true
+  fi
+  if dep_present herdr-app && ! dep_present hc; then
+    curl -fsSL "$releases/core/install.sh" | HC_INSTALL_DIR="$bin" HERDR_RELEASES_URL="$releases" sh \
+      || warn "the herdr-core installer failed"
+    hash -r 2>/dev/null || true
+  fi
+  check_herdr_app
 }
 
 install_worktrunk_binary() {
@@ -451,7 +493,7 @@ install_dependencies() {
   ensure_brew_on_path || true
   ensure_mise_shims
 
-  check_herdr_app || true
+  install_herdr_app || true
   install_dep git || true
   install_worktrunk_binary || true
   install_beads_binary || true

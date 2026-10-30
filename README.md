@@ -79,7 +79,7 @@ Each POST body is `bercail.agent_status/v2`:
 
 ## install
 
-Current release: [v0.9.1](https://github.com/simoncrypta/bercail/releases/tag/v0.9.1).
+Current release: [v0.9.2](https://github.com/simoncrypta/bercail/releases/tag/v0.9.2).
 
 Recommended: [mise](https://mise.jdx.dev) + [packslip](https://github.com/jdx/packslip). Each `v*` release publishes `bercail.tar.gz` and a signed `packslip.sigstore.json`. mise checks that signature against this repository and the archive digest before it unpacks anything, and it runs no downloaded code.
 
@@ -95,7 +95,7 @@ packslip install github.com/simoncrypta/bercail      # packslip 1.5.1+
 bercail install
 ```
 
-mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.9.1`.
+mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.9.2`.
 
 The first install trusts the repository's signer, and later installs must match it. `bercail install` runs the release's own `install.sh`. mise or packslip keeps the `bercail` command, so the installer does not copy a second one into `~/.local/bin`. Upgrade with `mise up` (or `packslip install` again), then `bercail update`.
 
@@ -107,11 +107,11 @@ curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
 
 `--yes` is non-interactive (`bercail install --yes` too). From a clone: `./install.sh`.
 
-Bercail needs the Herdr app; install it from [herdr.dev](https://herdr.dev) first (it brings herdr-core, `hc`, and keeps both updated). The installer copies the bercail layout and its desk mod into `~/.config/herdr-app` and adds its keys to `keys.json`. Switch to it once with `Ctrl+Shift+L` → bercail.
+Bercail runs on the Herdr app. When it is missing, the installer runs [herdr.dev](https://herdr.dev)'s own installer (`~/.local`, no sudo), which brings herdr-core (`hc`); the app keeps both updated after that. The installer copies the bercail layout and its desk mod into `~/.config/herdr-app` and adds its keys to `keys.json`. Switch to it once with `Ctrl+Shift+L` → bercail.
 
 The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/layouts/): [`bercail/`](bercail) holds the layout, the desk mod, its keys, and a [RECIPE.md](bercail/RECIPE.md). Added that way you get the desk and Review, without worktrees, handoff, or webhooks.
 
-From 0.8 (the Herdr terminal and its layout plugin): install the Herdr app, then `bercail update`. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them. Webhook sinks in `notify.d` keep working, but their payload is now `bercail.agent_status/v2` (see [agent status webhooks](#agent-status-webhooks)).
+From 0.8 (the Herdr terminal and its layout plugin): run the full install once (`bercail install`, or the curl line) so it adds the Herdr app; `bercail update` alone doesn't install dependencies. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them. Webhook sinks in `notify.d` keep working, but their payload is now `bercail.agent_status/v2` (see [agent status webhooks](#agent-status-webhooks)).
 
 Then, in a repo:
 
@@ -238,7 +238,7 @@ On Omarchy: mise first, `omarchy pkg add`, optional `SUPER+ALT+RETURN` → open 
 
 ## dependencies
 
-Required, not installed by bercail: the [Herdr app](https://herdr.dev) with herdr-core (`herdr-app`, `hc`). Installed if missing: git, worktrunk (`wt`), [beads](https://beads.gascity.com/) (`bd`), fzf, jq, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0. `bercail doctor` checks each one.
+Installed if missing: the [Herdr app](https://herdr.dev) with herdr-core (`herdr-app`, `hc`, from herdr.dev's installer), git, worktrunk (`wt`), [beads](https://beads.gascity.com/) (`bd`), fzf, jq, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0. `bercail doctor` checks each one.
 
 worktrunk and beads install the same way: skip if present, else mise, else Homebrew (`brew install worktrunk` / `brew install beads`), else upstream (worktrunk's GitHub release; the [beads installer](https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh), which puts `bd` in `/usr/local/bin` when writable, else `~/.local/bin`).
 
