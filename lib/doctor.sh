@@ -67,7 +67,7 @@ doctor_herdr_app() {
 
 # Webhook sinks: their last delivery, and the follower that sends to them.
 doctor_notify() {
-  local f name st missing=0
+  local f name st at last=0 missing=0
   [[ -n "$(notify_sink_files)" ]] || return 0
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
@@ -79,9 +79,19 @@ doctor_notify() {
     else
       log "  ok  notify sink $name"
     fi
+    at="$(jq -r '.last_ok_at // 0 | floor' "$st" 2>/dev/null || true)"
+    if [[ "$at" =~ ^[0-9]+$ ]] && (( at > last )); then
+      last="$at"
+    fi
   done < <(notify_sink_files)
+  # A live follower can still be silent; the last post time makes that visible.
+  if [[ "$last" -gt 0 ]]; then
+    at="$(date -d "@$last" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$last" '+%Y-%m-%d %H:%M')"
+  else
+    at="never"
+  fi
   if "$(notify_hc)" get bercail-notify --json 2>/dev/null | jq -e '.state == "live"' >/dev/null 2>&1; then
-    log "  ok  notify follower (hc terminal bercail-notify)"
+    log "  ok  notify follower (hc terminal bercail-notify; last post $at)"
   else
     log "  missing  notify follower (the bercail layout starts it; or: hc run --bg --no-parent --name bercail-notify bercail notify run)"
     missing=$((missing + 1))

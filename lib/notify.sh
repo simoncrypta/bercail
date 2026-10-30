@@ -322,13 +322,20 @@ notify_desk_changed() {
   notify_deliver_all "$kind" "$agent_json" "$space_json" "$desk_json" "$address:$kind:$(_notify_now):$$"
 }
 
-# Read `hc events` snapshots on stdin; deliver each desk's status changes.
+# Read `hc events` lines on stdin; deliver each desk's status changes.
 # Statuses live in memory: a desk seen for the first time has no previous
 # status, so a turn already running when this starts is not reported.
+# Only lines carrying a terminals array are snapshots (top level, or under
+# params for a JSON-RPC notification). Heartbeats and anything else leave the
+# statuses alone: treating them as empty snapshots forgot every desk.
 notify_follow() {
-  local line address status app space cwd title
+  local line snap address status app space cwd title
   local -A prev=() seen=()
   while IFS= read -r line; do
+    snap="$(jq -c 'if (.terminals | type) == "array" then .
+        elif (.params.terminals? | type) == "array" then .params
+        else empty end' <<<"$line" 2>/dev/null)" || snap=""
+    [[ -n "$snap" ]] || continue
     seen=()
     # \x1f, not tab: read merges runs of whitespace separators, so an empty
     # field would shift the ones after it.
@@ -343,7 +350,7 @@ notify_follow() {
         | select(.labels["bercail.role"] == "agent" and .state == "live")
         | [.address, (.status.state // ""), (.status.app // .foreground.name // ""),
            (.labels["bercail.space"] // ""), (.cwd // ""), (.title // "")]
-        | map(tostring | gsub("[\t\n\u001f]"; " ")) | join("\u001f")' <<<"$line" 2>/dev/null)
+        | map(tostring | gsub("[\t\n\u001f]"; " ")) | join("\u001f")' <<<"$snap" 2>/dev/null)
     # Forget desks that are gone, so a reused address starts fresh.
     for address in "${!prev[@]}"; do
       [[ -n "${seen[$address]+x}" ]] || unset "prev[$address]"
