@@ -9,6 +9,26 @@ opens on them by itself. It is the app half of
 
 ![bercail](preview.png)
 
+## Needs
+
+- Easiest: install [bercail](https://github.com/simoncrypta/bercail)
+  (`bercail install`). It installs the Herdr app and herdr-core if they
+  are missing, adds this layout, its mod and its keys, and gives you
+  worktrees, handoff and webhooks too. The rest of this section is for
+  adding the layout on its own.
+- **The Herdr app** (`herdr-app`, home `~/.config/herdr-app`) with
+  herdr-core (`hc`). Its installer brings both and the app keeps them
+  updated: `curl -fsSL https://releases.herdr.dev/app/install.sh | sh`
+  (see [herdr.dev](https://herdr.dev)). Built and checked with herdr-app
+  0.1.9 and hc 0.1.14; no older version has been tried.
+- Not the `herdr` terminal (`~/.config/herdr`, `herdr plugin install`,
+  `herdr-plugin.toml`): it has no layouts or mods, and this layout does not
+  run in it.
+- To add it by hand: copy `layouts/bercail.json` and `mods/bercail-desk/`
+  into `~/.config/herdr-app/`, merge the `layout:bercail` section of
+  `keys.json` into `~/.config/herdr-app/keys.json`, run `herdr-app check
+  ~/.config/herdr-app/mods/bercail-desk`, then switch with `ctrl-shift-l`.
+
 ## What you see
 
 Left to right, under no system title bar (`titlebar: "none"`, macOS traffic

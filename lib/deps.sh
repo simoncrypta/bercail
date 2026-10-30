@@ -187,6 +187,9 @@ check_herdr_app() {
       missing=1
     fi
   done
+  if ! dep_present herdr-app && dep_present herdr; then
+    warn "found herdr, the Herdr terminal: bercail needs the Herdr app (herdr-app), not herdr or its plugins"
+  fi
   return "$missing"
 }
 
@@ -544,6 +547,9 @@ doctor_dependencies() {
       missing=$((missing + 1))
     fi
   done
+  if ! dep_present herdr-app && dep_present herdr; then
+    log "  wrong  herdr is the Herdr terminal; bercail needs the Herdr app (herdr-app) from https://herdr.dev"
+  fi
   local review_bin
   review_bin="$(_layout_review_bin)"
   case "$review_bin" in

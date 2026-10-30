@@ -110,7 +110,7 @@ curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
 
 Bercail runs on the Herdr app. When it is missing, the installer runs [herdr.dev](https://herdr.dev)'s own installer (`~/.local`, no sudo), which brings herdr-core (`hc`); the app keeps both updated after that. The installer copies the bercail layout and its desk mod into `~/.config/herdr-app` and adds its keys to `keys.json`. Switch to it once with `Ctrl+Shift+L` → bercail.
 
-The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/layouts/): [`bercail/`](bercail) holds the layout, the desk mod, its keys, and a [RECIPE.md](bercail/RECIPE.md). Added that way you get the desk and Review, without worktrees, handoff, or webhooks.
+The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/layouts/): [`bercail/`](bercail) holds the layout, the desk mod, its keys, and a [RECIPE.md](bercail/RECIPE.md). Added that way you get the desk and Review, without worktrees, handoff, or webhooks. It needs the Herdr app (`herdr-app`, `~/.config/herdr-app`), not the `herdr` terminal and its `herdr plugin` system.
 
 From 0.8 (the Herdr terminal and its layout plugin): run the full install once (`bercail install`, or the curl line) so it adds the Herdr app; `bercail update` alone doesn't install dependencies. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them. Webhook sinks in `notify.d` keep working, but their payload is now `bercail.agent_status/v2` (see [agent status webhooks](#agent-status-webhooks)).
 
