@@ -112,9 +112,51 @@ deploy_herdr_app_layout() {
   rm -f "$new"
 }
 
-# keys.json is the person's: only the layout:bercail section is bercail's.
+# keys.json is the person's: only the layout:bercail section is bercail's, and in it
+# only the keys still as bercail last shipped them. The last shipped section is kept
+# to tell the two apart; before bercail kept one, it was always this (0.9.0, 0.9.1),
+# in a section that has ctrl-shift-a. A section without it is the person's own.
+HERDR_APP_KEYS_LEGACY='{"ctrl-shift-a":"bercail-desk.agent","ctrl-shift-r":"bercail-desk.review","ctrl-shift-s":"bercail-desk.shell","ctrl-shift-f":"bercail-desk.files","ctrl-shift-g":"bercail-desk.changes","ctrl-alt-left":"bercail-desk.go-left","ctrl-alt-right":"bercail-desk.go-right","ctrl-alt-up":"bercail-desk.go-up","ctrl-alt-down":"bercail-desk.go-down","ctrl-shift-q":"space.close"}'
+
+_herdr_app_shipped_keys() {
+  printf '%s/herdr-app/keys.json' "$AGENTIC_DEV_SHARE_DIR"
+}
+
+# The section bercail ships now and the one it shipped last, compact, one per line.
+# $2: the person's keys.json.
+_herdr_app_keys_sections() {
+  local ours="$1" keys="$2" shipped
+  shipped="$(_herdr_app_shipped_keys)"
+  jq -c --arg s "$HERDR_APP_KEYS_SECTION" '.[$s]' "$ours" || return 1
+  if [[ -f "$shipped" ]]; then
+    jq -c --arg s "$HERDR_APP_KEYS_SECTION" '.[$s] // {}' "$shipped" || return 1
+  elif jq -e --arg s "$HERDR_APP_KEYS_SECTION" '.[$s]["ctrl-shift-a"] == "bercail-desk.agent"' "$keys" >/dev/null 2>&1; then
+    printf '%s\n' "$HERDR_APP_KEYS_LEGACY"
+  else
+    printf '{}\n'
+  fi
+}
+
+# Merge bercail's section into keys.json (stdin), per key:
+# - still as bercail last shipped it: bercail's now (or gone, when bercail dropped it);
+# - changed or added by the person: theirs;
+# - removed by the person: stays removed, unless bercail binds it to something new.
+_herdr_app_keys_merge() {
+  jq --arg s "$HERDR_APP_KEYS_SECTION" --argjson new "$1" --argjson old "$2" '
+    .[$s] as $mine
+    | if $mine == null then .[$s] = $new else
+        .[$s] = reduce (($new + $old + $mine) | keys_unsorted[]) as $k ({};
+          if ($mine | has($k)) then
+            if ($old | has($k)) and $mine[$k] == $old[$k] then
+              if ($new | has($k)) then .[$k] = $new[$k] else . end
+            else .[$k] = $mine[$k] end
+          elif ($new | has($k)) and (($old | has($k) | not) or $old[$k] != $new[$k]) then .[$k] = $new[$k]
+          else . end)
+      end'
+}
+
 deploy_herdr_app_keys() {
-  local keys="$HERDR_APP_CONFIG_DIR/keys.json" ours tmp base
+  local keys="$HERDR_APP_CONFIG_DIR/keys.json" ours tmp base new old
   ours="$(mktemp)"
   tmp="$(mktemp)"
   base="$keys"
@@ -123,26 +165,38 @@ deploy_herdr_app_keys() {
     printf '{}\n' >"$base"
   fi
   if ! DRY_RUN=0 deploy_install_file "bercail/keys.json" "$ours" >/dev/null \
-    || ! jq --arg s "$HERDR_APP_KEYS_SECTION" --slurpfile ours "$ours" \
-      '.[$s] = $ours[0][$s]' "$base" >"$tmp"; then
+    || ! { read -r new && read -r old; } < <(_herdr_app_keys_sections "$ours" "$base") \
+    || ! _herdr_app_keys_merge "$new" "$old" <"$base" >"$tmp"; then
     warn "could not merge the $HERDR_APP_KEYS_SECTION keys into $keys; copy that section from bercail/keys.json"
     rm -f "$ours" "$tmp"
     [[ "$base" == "$keys" ]] || rm -f "$base"
     return 0
   fi
-  rm -f "$ours"
   [[ "$base" == "$keys" ]] || rm -f "$base"
   if [[ -f "$keys" ]] && jq -e --slurpfile new "$tmp" '. == $new[0]' "$keys" >/dev/null 2>&1; then
     info "unchanged: $keys ($HERDR_APP_KEYS_SECTION)"
-    rm -f "$tmp"
-    return 0
+  else
+    info "install: $keys ($HERDR_APP_KEYS_SECTION section)"
+    [[ "$DRY_RUN" -eq 1 ]] || cp "$tmp" "$keys"
   fi
-  info "install: $keys ($HERDR_APP_KEYS_SECTION section)"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    rm -f "$tmp"
-    return 0
-  fi
-  mv "$tmp" "$keys"
+  [[ "$DRY_RUN" -eq 1 ]] || DRY_RUN=0 copy_file "$ours" "$(_herdr_app_shipped_keys)" >/dev/null
+  [[ "$DRY_RUN" -eq 1 ]] || _herdr_app_keys_conflicts "$keys" "$ours" | while IFS= read -r line; do warn "$line"; done
+  rm -f "$ours" "$tmp"
+}
+
+# What keeps a bercail key from doing bercail's thing in the bercail layout, one per
+# line: the person's own value in the section, a key missing from it, or a `terminal`
+# key (that section wins whenever a terminal has the keyboard). $2: bercail's keys.json.
+_herdr_app_keys_conflicts() {
+  local keys="$1" ours="$2"
+  [[ -f "$keys" && -f "$ours" ]] || return 0
+  jq -r --arg s "$HERDR_APP_KEYS_SECTION" --slurpfile ours "$ours" '
+    ($ours[0][$s] // {}) as $new | (.[$s] // {}) as $mine | (.terminal // {}) as $term
+    | $new | to_entries[] | .key as $k | .value as $v
+    | if ($term | has($k)) then "key \($k): the terminal section binds it to \($term[$k]) (bercail: \($v))"
+      elif ($mine | has($k) | not) then "key \($k): not in \($s) (bercail: \($v))"
+      elif $mine[$k] != $v then "key \($k): yours is \($mine[$k]) (bercail: \($v))"
+      else empty end' "$keys" 2>/dev/null
 }
 
 deploy_herdr_app() {

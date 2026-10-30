@@ -212,10 +212,15 @@ In the bercail layout (`~/.config/herdr-app/keys.json`, section `layout:bercail`
 | `Ctrl+Shift+R` | Review |
 | `Ctrl+Shift+S` | Shell tab |
 | `Ctrl+Shift+F` / `G` | Show or hide files / changes |
-| `Ctrl+Alt+arrows` | Move between panes; left from the leftmost pane reaches the desk |
+| `Ctrl+Alt+Left` / `Right` | Move between panes; left from the leftmost pane reaches the desk |
+| `Alt+Up` / `Down` | Previous/next space: repos and other spaces, skipping worktree spaces |
+| `Ctrl+Alt+Up` / `Down` | Previous/next space of this repo: its main checkout and worktrees, as the sidebar nests them |
+| `Alt+Shift+Up` / `Down` | Previous/next agent, desks included, in sidebar order |
 | `Ctrl+Shift+Q` | Close this space |
 
-The rest are the Herdr app's: `Ctrl+Shift+T`/`W` new/close tab, `Ctrl+Shift+O`/`E` split, `Ctrl+Shift+X` close pane, `Ctrl+Shift+Z` zoom, `Alt+1`…`9` tabs, `Alt+Up`/`Down` spaces, `Ctrl+Shift+B` sidebar, `Ctrl+Shift+L` layout, `Ctrl+Shift+?` all keys.
+`bercail update` keeps the keys you changed in that section (and warns about them); `bercail doctor` lists them, and any `terminal` key that takes one of bercail's.
+
+The rest are the Herdr app's: `Ctrl+Shift+T`/`W` new/close tab, `Ctrl+Shift+O`/`E` split, `Ctrl+Shift+X` close pane, `Ctrl+Shift+Z` zoom, `Alt+1`…`9` tabs, `Alt+H`/`J`/`K`/`L` panes, `Ctrl+Shift+B` sidebar, `Ctrl+Shift+L` layout, `Ctrl+Shift+?` all keys.
 
 ## config
 
