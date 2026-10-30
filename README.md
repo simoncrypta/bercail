@@ -80,7 +80,7 @@ Each POST body is `bercail.agent_status/v2`:
 
 ## install
 
-Current release: [v0.9.3](https://github.com/simoncrypta/bercail/releases/tag/v0.9.3).
+Current release: [v0.9.4](https://github.com/simoncrypta/bercail/releases/tag/v0.9.4).
 
 Recommended: [mise](https://mise.jdx.dev) + [packslip](https://github.com/jdx/packslip). Each `v*` release publishes `bercail.tar.gz` and a signed `packslip.sigstore.json`. mise checks that signature against this repository and the archive digest before it unpacks anything, and it runs no downloaded code.
 
@@ -96,7 +96,7 @@ packslip install github.com/simoncrypta/bercail      # packslip 1.5.1+
 bercail install
 ```
 
-mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.9.3`.
+mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.9.4`.
 
 The first install trusts the repository's signer, and later installs must match it. `bercail install` runs the release's own `install.sh`. mise or packslip keeps the `bercail` command, so the installer does not copy a second one into `~/.local/bin`. Upgrade with `mise up` (or `packslip install` again), then `bercail update`.
 
