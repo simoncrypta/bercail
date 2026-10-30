@@ -79,7 +79,7 @@ test_version_comparison_matrix() {
   assert_eq "2" "$rc" "comparator: malformed input is rejected"
 }
 
-# The Herdr app and hc come from herdr.dev: bercail checks, never installs.
+# check_herdr_app reports; install_herdr_app (below) installs.
 test_check_herdr_app() {
   local case_dir="$tmp/herdr-app" rc output
   mkdir -p "$case_dir/bin"
@@ -91,6 +91,42 @@ test_check_herdr_app() {
   ln -s /bin/true "$case_dir/bin/hc"
   if PATH="$case_dir/bin:/usr/bin:/bin" check_herdr_app >/dev/null 2>&1; then rc=0; else rc=$?; fi
   assert_eq "0" "$rc" "check_herdr_app passes with herdr-app and hc"
+}
+
+# install_herdr_app runs herdr.dev's installers only for what is missing.
+test_install_herdr_app() {
+  local case_dir="$tmp/install-herdr-app" mode out
+  for mode in none app both; do
+    out="$case_dir/$mode"
+    mkdir -p "$out/home/.local/bin" "$out/sys"
+    ln -s "$(command -v bash)" "$out/sys/bash"
+    for cmd in sh mkdir touch chmod cat; do ln -sf "$(command -v "$cmd")" "$out/sys/$cmd"; done
+    [[ "$mode" == none ]] || ln -s /bin/true "$out/home/.local/bin/herdr-app"
+    [[ "$mode" != both ]] || ln -s /bin/true "$out/home/.local/bin/hc"
+    (
+      export HOME="$out/home" PATH="$out/sys" DRY_RUN=0
+      dep_present() { command -v "$1" >/dev/null 2>&1 || [[ "$1" == curl ]]; }
+      # Stub: log the URL and print an "installer" that makes what it would.
+      curl() {
+        local url="${*: -1}"
+        printf '%s\n' "$url" >>"$out/curl.log"
+        case "$url" in
+          */app/install.sh) printf 'touch "$HOME/.local/bin/herdr-app" "$HOME/.local/bin/hc"; chmod +x "$HOME/.local/bin/"*\n' ;;
+          */core/install.sh) printf 'touch "$HC_INSTALL_DIR/hc"; chmod +x "$HC_INSTALL_DIR/hc"\n' ;;
+        esac
+      }
+      install_herdr_app
+    ) >"$out/output" 2>&1 && echo 0 >"$out/rc" || echo 1 >"$out/rc"
+  done
+  assert_eq "0" "$(cat "$case_dir/none/rc")" "install_herdr_app installs the app when nothing is there"
+  assert_contains "$(cat "$case_dir/none/curl.log")" "https://releases.herdr.dev/app/install.sh" \
+    "a missing app runs the app installer"
+  assert_eq "1" "$(wc -l <"$case_dir/none/curl.log" | tr -d ' ')" "the app installer brings hc; no second installer"
+  assert_eq "0" "$(cat "$case_dir/app/rc")" "install_herdr_app adds hc next to an installed app"
+  assert_eq "https://releases.herdr.dev/core/install.sh" "$(cat "$case_dir/app/curl.log")" \
+    "an app without hc runs only the core installer"
+  assert_eq "0" "$(cat "$case_dir/both/rc")" "install_herdr_app passes when both are there"
+  assert_eq "" "$(cat "$case_dir/both/curl.log" 2>/dev/null)" "a present app and hc download nothing"
 }
 
 test_top_level_doctor_reports_missing_app() {
@@ -180,6 +216,7 @@ test_tuicr_installer_answers_under_yes() {
 test_version_parser_does_not_expand_globs
 test_version_comparison_matrix
 test_check_herdr_app
+test_install_herdr_app
 test_top_level_doctor_reports_missing_app
 test_worktrunk_release_fallback
 test_tuicr_installer_answers_under_yes
