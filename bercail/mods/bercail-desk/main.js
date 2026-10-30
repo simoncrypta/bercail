@@ -291,17 +291,28 @@ export default class BercailDesk extends View {
     this.deskFocused = Boolean(desk && !f?.pane && f?.terminal === desk.address);
 
     // Point the agent block at this space's desk, and show it (or the placeholder).
+    // The app drops the block when the terminal it shows ends (its space closed):
+    // put it back for the next desk. Only children that exist are selected, since a
+    // failed layout.select is a toast, not a throw, and this runs on every render.
     try {
       const tree = layout();
-      const block = findNode(tree, "agent");
-      if (desk && block && block.content?.terminal !== desk.address && this.pointed !== desk.address) {
+      const stack = findNode(tree, "agent-stack");
+      let block = findNode(tree, "agent");
+      if (desk && stack && !block && this.restored !== desk.address) {
+        this.restored = desk.address;
+        this.pointed = desk.address;
+        block = { id: "agent", type: "block", content: { terminal: desk.address }, padding: [6, 6] };
+        stack.children = [block, ...(stack.children ?? [])];
+        stack.active = "agent";
+        run("layout.set", { layout: tree });
+      } else if (desk && block && block.content?.terminal !== desk.address && this.pointed !== desk.address) {
         this.pointed = desk.address;
         block.content = { terminal: desk.address };
         run("layout.set", { layout: tree });
       }
-      const stack = findNode(tree, "agent-stack");
-      const want = desk ? "agent" : "empty";
-      if (stack && stack.active !== want) run("layout.select", { stack: "agent-stack", child: want });
+      const want = desk && block ? "agent" : "empty";
+      const has = stack?.children?.some((c) => c.id === want);
+      if (has && stack.active !== want) run("layout.select", { stack: "agent-stack", child: want });
     } catch { /* a layout without the agent column: show nothing extra */ }
 
     // Review when a desk finishes with uncommitted changes. A short turn can

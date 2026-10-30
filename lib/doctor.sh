@@ -31,7 +31,10 @@ doctor_omarchy_integration() {
 doctor_herdr_app() {
   local missing=0 src rel dest
   src="$(_recorded_install_source 2>/dev/null || true)"
-  if [[ -f "$HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT" ]]; then
+  if _herdr_app_layout_lost_agent "$HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT"; then
+    log "  broken  Herdr layout bercail: no agent block in the agent column (run: bercail update)"
+    missing=$((missing + 1))
+  elif [[ -f "$HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT" ]]; then
     log "  ok  Herdr layout bercail"
   else
     log "  missing  Herdr layout $HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT"
