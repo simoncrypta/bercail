@@ -12,40 +12,49 @@ SCRIPT="$ROOT/skills/review/scripts/wait-comments.sh"
 export WAIT_COMMENTS_POLL_SECONDS=0
 export TUICR_BIN="$TMP_DIR/tuicr"
 
-write_tuicr() {
-  cat >"$TUICR_BIN" <<FAKE
+# The fake tuicr answers its first call of each kind from <kind>.before and
+# every later call from <kind>.after (falling back to .before). The script
+# takes its baseline on the first call, so each scenario changes state right
+# after the baseline without racing a background writer.
+cat >"$TUICR_BIN" <<FAKE
 #!/usr/bin/env bash
 set -euo pipefail
-list_file="$TMP_DIR/tuicr-list"
-comments_file="$TMP_DIR/tuicr-comments"
+serve() {
+  local kind="\$1" count_file="$TMP_DIR/\$1.count" n=0
+  [[ -f "\$count_file" ]] && n="\$(cat "\$count_file")"
+  n=\$((n + 1))
+  printf '%s' "\$n" >"\$count_file"
+  if (( n > 1 )) && [[ -f "$TMP_DIR/\$kind.after" ]]; then
+    cat "$TMP_DIR/\$kind.after"
+  elif [[ -f "$TMP_DIR/\$kind.before" ]]; then
+    cat "$TMP_DIR/\$kind.before"
+  else
+    return 1
+  fi
+}
 case "\$1 \$2" in
-  "review list")
-    if [[ ! -f "\$list_file" ]]; then
-      printf '%s\n' '[]'
-      exit 0
-    fi
-    cat "\$list_file"
-    ;;
-  "review comments")
-    if [[ ! -f "\$comments_file" ]]; then
-      echo "no session" >&2
-      exit 1
-    fi
-    cat "\$comments_file"
-    ;;
-  *)
-    echo "unexpected: \$*" >&2
-    exit 1
-    ;;
+  "review list") serve list || printf '%s\n' '[]' ;;
+  "review comments") serve comments || { echo "no session" >&2; exit 1; } ;;
+  *) echo "unexpected: \$*" >&2; exit 1 ;;
 esac
 FAKE
-  chmod +x "$TUICR_BIN"
+chmod +x "$TUICR_BIN"
+
+SESSION='[{"slug":"local/worktree","kind":"local","active":true}]'
+
+# scenario <list.before> <list.after|-> <comments.before|-> <comments.after|->
+scenario() {
+  rm -f "$TMP_DIR"/list.* "$TMP_DIR"/comments.*
+  printf '%s\n' "$1" >"$TMP_DIR/list.before"
+  [[ "$2" == "-" ]] || printf '%s\n' "$2" >"$TMP_DIR/list.after"
+  [[ "$3" == "-" ]] || printf '%s\n' "$3" >"$TMP_DIR/comments.before"
+  [[ "$4" == "-" ]] || printf '%s\n' "$4" >"$TMP_DIR/comments.after"
 }
 
-write_tuicr
+OLD='[{"id":"user:1","author":"user","content":"old"}]'
 
 # No session → 2
-printf '%s\n' '[]' >"$TMP_DIR/tuicr-list"
+scenario '[]' - - -
 set +e
 "$SCRIPT" --repo . --timeout 1 >/dev/null
 rc=$?
@@ -54,13 +63,8 @@ set -e
 printf 'PASS: wait-comments exits 2 when no session exists\n'
 
 # Baseline then new comment → 0
-printf '%s\n' '[{"slug":"local/worktree","kind":"local","active":true}]' >"$TMP_DIR/tuicr-list"
-printf '%s\n' '[{"id":"user:1","author":"user","content":"old"}]' >"$TMP_DIR/tuicr-comments"
-(
-  sleep 0.05
-  printf '%s\n' '[{"id":"user:1","author":"user","content":"old"},{"id":"user:2","author":"user","content":"new note"}]' \
-    >"$TMP_DIR/tuicr-comments"
-) &
+scenario "$SESSION" - "$OLD" \
+  '[{"id":"user:1","author":"user","content":"old"},{"id":"user:2","author":"user","content":"new note"}]'
 set +e
 out="$("$SCRIPT" --repo . --timeout 5)"
 rc=$?
@@ -73,12 +77,8 @@ printf '%s' "$out" | jq -e '.comments[0].id == "user:2"' >/dev/null \
 printf 'PASS: wait-comments prints new user comments and exits 0\n'
 
 # Agent comments must not count as human notes
-printf '%s\n' '[{"id":"user:1","author":"user","content":"old"}]' >"$TMP_DIR/tuicr-comments"
-(
-  sleep 0.05
-  printf '%s\n' '[{"id":"user:1","author":"user","content":"old"},{"id":"agent:1","author":"cursor-agent","content":"ai note"}]' \
-    >"$TMP_DIR/tuicr-comments"
-) &
+scenario "$SESSION" - "$OLD" \
+  '[{"id":"user:1","author":"user","content":"old"},{"id":"agent:1","author":"cursor-agent","content":"ai note"}]'
 set +e
 "$SCRIPT" --repo . --timeout 1 >/dev/null
 rc=$?
@@ -87,11 +87,7 @@ set -e
 printf 'PASS: wait-comments ignores agent-authored comments\n'
 
 # Session disappears after baseline → 2
-printf '%s\n' '[{"id":"user:1","author":"user","content":"old"}]' >"$TMP_DIR/tuicr-comments"
-(
-  sleep 0.05
-  printf '%s\n' '[]' >"$TMP_DIR/tuicr-list"
-) &
+scenario "$SESSION" '[]' "$OLD" -
 set +e
 "$SCRIPT" --repo . --timeout 5 >/dev/null
 rc=$?
@@ -100,8 +96,7 @@ set -e
 printf 'PASS: wait-comments exits 2 when the session disappears\n'
 
 # Timeout with no new comments → 124
-printf '%s\n' '[{"slug":"local/worktree","kind":"local","active":true}]' >"$TMP_DIR/tuicr-list"
-printf '%s\n' '[]' >"$TMP_DIR/tuicr-comments"
+scenario "$SESSION" - '[]' -
 set +e
 "$SCRIPT" --repo . --timeout 1 >/dev/null
 rc=$?
