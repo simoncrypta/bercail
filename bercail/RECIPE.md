@@ -59,9 +59,18 @@ lights at 12,16):
     first tab (Shell).
   - `ctrl-shift-f` / `ctrl-shift-g` show Files / Changes; the same key again
     hides the panel.
-  - `ctrl-alt-left/right/up/down` move between panes. Left from the leftmost
+  - `ctrl-alt-left/right` move between panes. Left from the leftmost
     pane enters the desk; right from the desk returns to the pane you came
-    from. Up/down on the desk do nothing.
+    from. (`alt-h/j/k/l`, Herdr's `pane.go`, still move up and down.)
+  - Spaces go by the sidebar's order: a space's repo is git's common dir
+    where its first terminal is, and a linked worktree's space sits under
+    the first space on its repo's main checkout. `alt-up/down` step through
+    the spaces not nested that way (from a worktree, its repo's neighbors);
+    `ctrl-alt-up/down` step through the current repo's spaces, main checkout
+    and worktrees, wrapping. Outside a repo they do nothing.
+  - `alt-shift-up/down` step through the agents: spaces in sidebar order,
+    each space's desk first, then its pane agents. A desk is focused in its
+    space's desk column.
   - `ctrl-shift-q` closes the space.
 - **Clicks**: an empty desk's buttons start that agent and remember it.
   Everything else is Herdr's own (sidebar, tabs, panes, panels).
@@ -121,8 +130,12 @@ lights at 12,16):
   part of the design.
 - Keys live in `keys.json` under `layout:bercail`; adding the layout folder
   alone doesn't bind them. Merge that section without touching the others.
-  `ctrl-alt-arrows` there override `global`'s `pane.go` while this layout
-  shows.
+  `ctrl-alt-arrows` and `alt-up/down` there override `global`'s `pane.go`
+  and `space.prev/next` while this layout shows; a `terminal` key wins over
+  both.
+- Herdr's `agent.next/prev` don't reach desks the way the desk wants (a desk
+  is a sub-agent, and `agent.focus` lands on its parent pane): the agent keys
+  are the mod's.
 - Start desks with `TERM=xterm-256color`: `hc run` passes on the caller's
   environment, and a headless caller's `TERM=dumb` leaves the agent without
   colors or key handling.
@@ -148,3 +161,6 @@ lights at 12,16):
   a Review tab running `tuicr -w`; a second finish selects it again instead
   of opening another.
 - `ctrl-shift-g` shows Changes, pressing it again hides the panel.
+- With a repo space and two of its worktree spaces, `alt-down` skips the
+  worktrees, `ctrl-alt-down` cycles the three, and `alt-shift-down` from a
+  pane reaches the next desk with the keyboard in it.

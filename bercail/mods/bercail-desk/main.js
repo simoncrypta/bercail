@@ -8,6 +8,11 @@
 //
 // props.role: "header" (default) runs the logic and takes key commands;
 // "empty" is the placeholder shown in the agent column when the space has no desk.
+//
+// Space keys go by the sidebar's order (Herdr's spaces mod): spaces in order, this
+// computer's first and then each machine's, a linked worktree's space nested under the
+// first space of its repo's main checkout. space-next/prev walk the spaces that aren't
+// nested; subspace-next/prev walk the current repo's (main checkout and worktrees).
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import {
@@ -106,6 +111,66 @@ async function reviewArgv(review, folder) {
   return argv;
 }
 
+// Where a space is now: its first terminal's live folder, else where it was made.
+function placeOf(space, ps) {
+  const tabs = new Set((space.tabs ?? []).map((t) => t.id));
+  return ps.find((p) => tabs.has(p.tab) && p.cwd)?.cwd || space.folder;
+}
+
+// rows: { id, machine, git: { repo, linked } | null } in spaces() order. Returns them in
+// the sidebar's order, each with `parent`: the space it is nested under, or null.
+export function sidebarOrder(rows) {
+  const machines = [...new Set(rows.map((r) => r.machine ?? null))]
+    .sort((a, b) => (a === null ? -1 : b === null ? 1 : a.localeCompare(b)));
+  const out = [];
+  for (const m of machines) {
+    const list = rows.filter((r) => (r.machine ?? null) === m);
+    const main = new Map(); // repo -> the first space of its main checkout
+    for (const r of list) if (r.git && !r.git.linked && !main.has(r.git.repo)) main.set(r.git.repo, r.id);
+    for (const r of list) {
+      if (r.git?.linked && main.has(r.git.repo)) continue;
+      out.push({ ...r, parent: null });
+      if (!r.git || main.get(r.git.repo) !== r.id) continue;
+      for (const k of list) if (k.git?.linked && k.git.repo === r.git.repo) out.push({ ...k, parent: r.id });
+    }
+  }
+  return out;
+}
+
+const wrap = (list, i) => list[(i + list.length) % list.length];
+
+// The top-level space dir (1 or -1) away from current's (its parent's, when nested).
+export function stepSpace(order, current, dir) {
+  const tops = order.filter((r) => !r.parent);
+  if (!tops.length) return null;
+  const at = order.find((r) => r.id === current);
+  const i = tops.findIndex((r) => r.id === (at?.parent ?? current));
+  return (i < 0 ? tops[dir > 0 ? 0 : tops.length - 1] : wrap(tops, i + dir)).id;
+}
+
+// The space dir away from current among its repo's spaces, in sidebar order; null outside a repo.
+export function stepSubspace(order, current, dir) {
+  const at = order.find((r) => r.id === current);
+  if (!at?.git) return null;
+  const same = order.filter((r) => (r.machine ?? null) === (at.machine ?? null) && r.git?.repo === at.git.repo);
+  return same.length > 1 ? wrap(same, same.indexOf(at) + dir).id : null;
+}
+
+// list: { address, space } in each space's own order. The agent dir away from current,
+// spaces in sidebar order; from a terminal that isn't one, the first (dir 1) or last
+// (dir -1) agent of the shown space or, if it has none, the next one that way.
+export function stepAgent(order, list, current, space, dir) {
+  const rank = new Map(order.map((r, i) => [r.id, i]));
+  const all = list.filter((a) => rank.has(a.space)).sort((a, b) => rank.get(a.space) - rank.get(b.space));
+  if (!all.length) return null;
+  const i = all.findIndex((a) => a.address === current);
+  if (i >= 0) return wrap(all, i + dir);
+  const here = rank.get(space) ?? -1;
+  return dir > 0
+    ? all.find((a) => rank.get(a.space) >= here) ?? all[0]
+    : [...all].reverse().find((a) => rank.get(a.space) <= here) ?? all[all.length - 1];
+}
+
 // The webhook follower (`bercail notify run`): one hidden hc terminal, kept
 // running here so it lives as long as herdr-core, window open or not.
 const NOTIFIER = "bercail-notify";
@@ -127,6 +192,7 @@ export default class BercailDesk extends View {
     this.starting = {};      // space id -> true while hc run is in flight
     this.lastAuto = {};      // space id -> when Review last opened on its own (ms)
     this.lastPane = null;    // the pane the keyboard was last in, to come back from the desk
+    this.git = {};           // [machine, folder] -> { at, git: { repo, linked } | null }
     this.choices = CHOICES.map((c) => ({ ...c, installed: true }));
     cx.spawn(async (cx) => {
       try {
@@ -196,6 +262,22 @@ export default class BercailDesk extends View {
       case "go-down":
         this.go(c.slice(3), desk);
         break;
+      case "space-next":
+      case "space-prev":
+      case "subspace-next":
+      case "subspace-prev": {
+        const step = c.startsWith("sub") ? stepSubspace : stepSpace;
+        const id = step(await this.spaceOrder(), space.id, c.endsWith("next") ? 1 : -1);
+        if (id && id !== space.id) run("space.select", { id });
+        break;
+      }
+      case "agent-next":
+      case "agent-prev": {
+        const a = stepAgent(await this.spaceOrder(), this.agentList(), focused()?.terminal, space.id,
+          c.endsWith("next") ? 1 : -1);
+        if (a) this.focusAgent(a);
+        break;
+      }
       case "files":
       case "changes": {
         // Toggle: the same key again hides the panel.
@@ -224,6 +306,51 @@ export default class BercailDesk extends View {
     const before = f?.pane;
     run("pane.go", { direction });
     if (direction === "left" && desk && focused()?.pane === before) run("pane.focus", { terminal: desk.address });
+  }
+
+  // The spaces in sidebar order (see sidebarOrder), git asked again after 10s.
+  async spaceOrder() {
+    const ps = panes();
+    const now = Date.now();
+    const rows = await Promise.all(spaces().map(async (s) => {
+      const on = s.machine ?? null;
+      const cwd = placeOf(s, ps);
+      const key = JSON.stringify([on, cwd]);
+      if (!(now - (this.git[key]?.at ?? 0) < 10000)) {
+        let git = null;
+        try {
+          const r = await exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], { cwd, on });
+          const [top, repo] = r.stdout.trim().split("\n");
+          if (r.code === 0 && top && repo) git = { repo, linked: repo !== `${top}/.git` };
+        } catch { /* no folder, or its machine is away: not a repo for now */ }
+        this.git[key] = { at: now, git };
+      }
+      return { id: s.id, machine: on, git: this.git[key].git };
+    }));
+    return sidebarOrder(rows);
+  }
+
+  // Every space's desk first, then the agents list's agents (Herdr's order: tab, pane).
+  agentList() {
+    const out = [];
+    for (const s of spaces()) {
+      const desk = deskFor(s.id);
+      if (desk) out.push({ address: desk.address, space: s.id, desk: true });
+    }
+    for (const a of agents()) if (!out.some((o) => o.address === a.address)) out.push({ address: a.address, space: a.space });
+    return out;
+  }
+
+  // agent.focus would put the keyboard on a desk's parent pane (the Shell): a desk is
+  // shown in its space's agent block and focused there.
+  focusAgent(a) {
+    if (!a.desk) { run("agent.focus", { terminal: a.address }); return; }
+    if (focused()?.space !== a.space) {
+      run("space.select", { id: a.space });
+      // Add or select the desk's block in the agent column before focusing it.
+      this.sync(spaces().find((s) => s.id === a.space));
+    }
+    run("pane.focus", { terminal: a.address });
   }
 
   // argv: the agent to start; default the last one picked, else bercail's [agent] command.
@@ -282,8 +409,7 @@ export default class BercailDesk extends View {
   }
 
   // Runs on every render: Herdr re-renders on any live change.
-  sync() {
-    const space = this.space();
+  sync(space = this.space()) {
     if (!space) return null;
     const desk = deskFor(space.id);
     const f = focused();

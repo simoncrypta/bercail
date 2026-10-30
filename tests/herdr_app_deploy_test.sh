@@ -53,9 +53,52 @@ deploy_herdr_app >/dev/null
 cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "layout not installed"
 cmp -s "$ROOT/bercail/mods/bercail-desk/main.js" "$APP/mods/bercail-desk/main.js" || fail "mod not installed"
 jq -e '.global["ctrl-shift-t"] == "tab.new"' "$APP/keys.json" >/dev/null || fail "the person's keys must stay"
-jq -e --slurpfile ours "$ROOT/bercail/keys.json" '.["layout:bercail"] == $ours[0]["layout:bercail"]' \
-  "$APP/keys.json" >/dev/null || fail "layout:bercail must be replaced by bercail's"
+jq -e --slurpfile ours "$ROOT/bercail/keys.json" '.["layout:bercail"] == ($ours[0]["layout:bercail"] + {"x":"y"})' \
+  "$APP/keys.json" >/dev/null || fail "layout:bercail must get bercail's keys and keep the person's: $(cat "$APP/keys.json")"
 printf 'PASS: deploy installs the layout and mod and merges only layout:bercail keys\n'
+
+# Keys: an install from before bercail recorded its keys (0.9.x) moves to the new
+# ones, and keeps what the person changed in the section since.
+section() { jq -c '.["layout:bercail"]' "$APP/keys.json"; }
+rm -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/keys.json"
+jq --argjson legacy "$HERDR_APP_KEYS_LEGACY" '.["layout:bercail"] = ($legacy
+    + {"ctrl-alt-down": "pane.go:down", "ctrl-shift-x": "mine.cmd"} | del(.["ctrl-shift-s"]))' \
+  "$APP/keys.json" >"$TMP_DIR/k" && mv "$TMP_DIR/k" "$APP/keys.json"
+out="$(deploy_herdr_app 2>&1)"
+jq -e '.["layout:bercail"] | .["alt-up"] == "bercail-desk.space-prev" and .["alt-shift-down"] == "bercail-desk.agent-next"
+    and .["ctrl-alt-up"] == "bercail-desk.subspace-prev"' "$APP/keys.json" >/dev/null || fail "new keys not added: $(section)"
+jq -e '.["layout:bercail"] | .["ctrl-alt-down"] == "pane.go:down" and .["ctrl-shift-x"] == "mine.cmd"
+    and (has("ctrl-shift-s") | not)' "$APP/keys.json" >/dev/null || fail "the person's key changes must stay: $(section)"
+jq -e '[.["layout:bercail"][] | select(. == "bercail-desk.go-up" or . == "bercail-desk.go-down")] == []' "$APP/keys.json" >/dev/null \
+  || fail "keys bercail dropped must go: $(section)"
+printf '%s' "$out" | grep -q 'key ctrl-alt-down: yours is pane.go:down' || fail "update should warn about the kept key: $out"
+cmp -s "$ROOT/bercail/keys.json" "$AGENTIC_DEV_SHARE_DIR/herdr-app/keys.json" || fail "update records the shipped keys"
+printf 'PASS: update moves 0.9.x keys to the new ones and keeps the person'"'"'s changes\n'
+
+# With the shipped keys recorded: a value bercail changes follows it unless the person changed it.
+jq '.["layout:bercail"]["ctrl-shift-r"] = "old.review" | .["layout:bercail"]["ctrl-shift-f"] = "old.files"' \
+  "$ROOT/bercail/keys.json" >"$AGENTIC_DEV_SHARE_DIR/herdr-app/keys.json"
+jq '.["layout:bercail"]["ctrl-shift-r"] = "old.review" | .["layout:bercail"]["ctrl-shift-f"] = "my.files"' \
+  "$APP/keys.json" >"$TMP_DIR/k" && mv "$TMP_DIR/k" "$APP/keys.json"
+deploy_herdr_app >/dev/null 2>&1
+jq -e '.["layout:bercail"] | .["ctrl-shift-r"] == "bercail-desk.review" and .["ctrl-shift-f"] == "my.files"' \
+  "$APP/keys.json" >/dev/null || fail "recorded keys merge: $(section)"
+before="$(cat "$APP/keys.json")"
+deploy_herdr_app >/dev/null 2>&1
+[[ "$(cat "$APP/keys.json")" == "$before" ]] || fail "a second update must not change keys.json"
+printf 'PASS: update follows bercail'"'"'s key changes only where the person kept bercail'"'"'s\n'
+
+# Doctor reports keys that don't do bercail's thing: the person's own, and terminal ones.
+jq '.terminal = {"alt-shift-up": "send:x"}' "$APP/keys.json" >"$TMP_DIR/k" && mv "$TMP_DIR/k" "$APP/keys.json"
+out="$(doctor_herdr_app 2>&1)"
+printf '%s' "$out" | grep -q 'conflict  Herdr key ctrl-shift-f: yours is my.files' || fail "doctor: own key: $out"
+printf '%s' "$out" | grep -q 'conflict  Herdr key alt-shift-up: the terminal section binds it' || fail "doctor: terminal key: $out"
+printf '%s' "$out" | grep -q 'conflict  Herdr key ctrl-shift-s: not in layout:bercail' || fail "doctor: missing key: $out"
+jq 'del(.terminal) | .["layout:bercail"] = $ours[0]["layout:bercail"]' --slurpfile ours "$ROOT/bercail/keys.json" \
+  "$APP/keys.json" >"$TMP_DIR/k" && mv "$TMP_DIR/k" "$APP/keys.json"
+out="$(doctor_herdr_app 2>&1)"
+printf '%s' "$out" | grep -q conflict && fail "doctor: no conflicts expected: $out"
+printf 'PASS: doctor reports key conflicts\n'
 
 # The app rewrites its layout (the desk mod adds desk blocks): keep that.
 jq '.background = "chrome"' "$APP/layouts/bercail.json" >"$TMP_DIR/l" && mv "$TMP_DIR/l" "$APP/layouts/bercail.json"

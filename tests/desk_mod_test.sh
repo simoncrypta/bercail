@@ -28,15 +28,15 @@ export const run = (name, args) => {
 export const spaces = () => h().spaces;
 export const focused = () => h().focused;
 export const terminals = () => h().terminals;
-export const panes = () => [];
-export const agents = () => [];
+export const panes = () => h().panes ?? [];
+export const agents = () => h().agents ?? [];
 export const notify = () => {};
 export const theme = () => ({});
 export const props = () => ({});
 export const shared = () => null;
 export const setShared = () => {};
 export const home = () => "/nonexistent";
-export const exec = async () => ({ code: 1, stdout: "", stderr: "" });
+export const exec = async (cmd, args, opts) => h().exec?.(cmd, args, opts) ?? { code: 1, stdout: "", stderr: "" };
 export const knownAgents = async () => [];
 export const nextCommand = () => new Promise(() => {});
 export const readTextFile = async () => "";
@@ -49,7 +49,7 @@ cp "$ROOT/bercail/layouts/bercail.json" "$TMP_DIR/layout.json"
 
 cat >"$TMP_DIR/test.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
-import Desk from "./main.mjs";
+import Desk, { sidebarOrder, stepSpace, stepSubspace, stepAgent } from "./main.mjs";
 
 const shipped = JSON.parse(readFileSync(new URL("./layout.json", import.meta.url)));
 const find = (n, id) => n?.id === id ? n : (n?.children ?? []).map((c) => find(c, id)).find(Boolean) ?? null;
@@ -148,6 +148,113 @@ if (ids().includes("desk-t7")) fail("a finished desk's block was kept");
 if (stack().active !== "empty" || !ids().includes("desk-t8")) fail(`after t7 ended: ${stack().active} ${ids()}`);
 check("finished");
 console.log("PASS: a finished desk's block goes and its space shows the placeholder");
+
+// Space grouping, as the sidebar nests it.
+const main = (repo) => ({ repo, linked: false });
+const linked = (repo) => ({ repo, linked: true });
+const rows = [
+  { id: "ll-wt1", machine: null, git: linked("/w/ll/.git") }, // before its main: still nested under it
+  { id: "ll", machine: null, git: main("/w/ll/.git") },
+  { id: "home", machine: null, git: null },
+  { id: "b", machine: null, git: main("/w/b/.git") },
+  { id: "far", machine: "box", git: main("/w/ll/.git") }, // same path on another machine: its own repo
+  { id: "ll-wt2", machine: null, git: linked("/w/ll/.git") },
+  { id: "b-wt", machine: null, git: linked("/w/b/.git") },
+  { id: "orphan-wt", machine: null, git: linked("/w/o/.git") }, // no main checkout space: top level
+  { id: "ll-2", machine: null, git: main("/w/ll/.git") }, // a second space on the main checkout
+];
+const order = sidebarOrder(rows);
+const expect = (got, want, what) => { if (got !== want) fail(`${what}: ${got}, want ${want}`); };
+expect(order.map((r) => (r.parent ? `${r.parent}>${r.id}` : r.id)).join(" "),
+  "ll ll>ll-wt1 ll>ll-wt2 home b b>b-wt orphan-wt ll-2 far", "sidebar order");
+console.log("PASS: spaces are ordered and nested like the sidebar");
+
+const steps = (fn, from, dir) => {
+  const seen = [];
+  let at = from;
+  for (let i = 0; i < 6; i++) { at = fn(order, at, dir); seen.push(at); }
+  return seen.join(" ");
+};
+expect(steps(stepSpace, "ll", 1), "home b orphan-wt ll-2 far ll", "space next");
+expect(steps(stepSpace, "ll", -1), "far ll-2 orphan-wt b home ll", "space prev");
+expect(stepSpace(order, "ll-wt2", 1), "home", "space next from a worktree goes past its repo");
+expect(stepSpace(order, "b-wt", -1), "home", "space prev from a worktree");
+expect(stepSpace(order, "gone", 1), "ll", "space next from an unknown space");
+console.log("PASS: space next/prev walk top-level spaces only, wrapping");
+
+expect(steps(stepSubspace, "ll", 1), "ll-wt1 ll-wt2 ll-2 ll ll-wt1 ll-wt2", "subspace next");
+expect(steps(stepSubspace, "ll-wt1", -1), "ll ll-2 ll-wt2 ll-wt1 ll ll-2", "subspace prev");
+expect(stepSubspace(order, "b-wt", 1), "b", "subspace wraps within its repo");
+expect(String(stepSubspace(order, "home", 1)), "null", "no subspace outside a repo");
+expect(String(stepSubspace(order, "orphan-wt", 1)), "null", "a lone worktree has no subspace");
+expect(String(stepSubspace(order, "far", 1)), "null", "another machine's checkout is another repo");
+console.log("PASS: subspace next/prev walk the current repo's checkouts, wrapping");
+
+const ags = [
+  { address: "a-far", space: "far" },
+  { address: "d-b", space: "b" }, { address: "a-b", space: "b" },
+  { address: "d-ll", space: "ll" },
+  { address: "a-wt2", space: "ll-wt2" },
+];
+const agentWalk = (from, dir) => {
+  const seen = [];
+  let at = from;
+  for (let i = 0; i < 6; i++) { at = stepAgent(order, ags, at, null, dir).address; seen.push(at); }
+  return seen.join(" ");
+};
+expect(agentWalk("d-ll", 1), "a-wt2 d-b a-b a-far d-ll a-wt2", "agent next");
+expect(agentWalk("d-ll", -1), "a-far a-b d-b a-wt2 d-ll a-far", "agent prev");
+expect(stepAgent(order, ags, "t-shell", "b", 1).address, "d-b", "agent next from a shell: its space's first");
+expect(stepAgent(order, ags, "t-shell", "b", -1).address, "a-b", "agent prev from a shell: its space's last");
+expect(stepAgent(order, ags, "t-shell", "home", 1).address, "d-b", "agent next from a space without agents");
+expect(stepAgent(order, ags, "t-shell", "home", -1).address, "a-wt2", "agent prev from a space without agents");
+console.log("PASS: agent next/prev walk agents in sidebar space order, wrapping");
+
+// The commands: git decides the grouping; a desk is focused in its space's agent block.
+{
+  const repoOf = { "/w/ll": ["/w/ll", "/w/ll/.git"], "/w/ll.wt": ["/w/ll.wt", "/w/ll/.git"], "/w/b": ["/w/b", "/w/b/.git"] };
+  let gitCalls = 0;
+  globalThis.herdr = {
+    layout: structuredClone(shipped),
+    calls: [],
+    focused: { space: "s-ll", pane: "p1", terminal: "t-shell" },
+    spaces: [
+      { id: "s-ll", tabs: [{ id: "tab1" }], folder: "/w/ll" },
+      { id: "s-b", tabs: [], folder: "/w/b" },
+      { id: "s-wt", tabs: [], folder: "/w/ll.wt" },
+    ],
+    panes: [{ pane: "p1", tab: "tab1", terminal: "t-shell", cwd: "/w/ll" }],
+    terminals: [{ address: "t-desk-b", state: "live", labels: { "bercail.role": "agent", "bercail.space": "s-b" } }],
+    agents: [{ address: "t-agent-wt", space: "s-wt" }],
+    exec: (cmd, _args, { cwd }) => {
+      if (cmd !== "git") return { code: 1, stdout: "", stderr: "" };
+      gitCalls++;
+      const r = repoOf[cwd];
+      return r ? { code: 0, stdout: `${r.join("\n")}\n`, stderr: "" } : { code: 128, stdout: "", stderr: "not a git repository" };
+    },
+  };
+  const d = new Desk();
+  Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {}, starting: {}, git: {} });
+  const ran = async (cmd) => {
+    globalThis.herdr.calls = [];
+    await d.command(cmd);
+    // Selecting a space shows it: what space.select would do in the app.
+    for (const [n, a] of globalThis.herdr.calls) if (n === "space.select") globalThis.herdr.focused = { space: a.id };
+    return JSON.stringify(globalThis.herdr.calls.filter(([n]) => !n.startsWith("layout.")));
+  };
+  expect(await ran("space-next"), '[["space.select",{"id":"s-b"}]]', "space-next command (the worktree is nested)");
+  globalThis.herdr.focused = { space: "s-ll", pane: "p1", terminal: "t-shell" };
+  expect(await ran("subspace-next"), '[["space.select",{"id":"s-wt"}]]', "subspace-next command");
+  expect(await ran("subspace-next"), '[["space.select",{"id":"s-ll"}]]', "subspace-next command wraps");
+  if (gitCalls !== 3) fail(`git asked ${gitCalls} times, want once per folder within 10s`);
+  // From the shell in s-ll (no agents): the sidebar puts s-wt next, then s-b's desk.
+  globalThis.herdr.focused = { space: "s-ll", pane: "p1", terminal: "t-shell" };
+  expect(await ran("agent-next"), '[["agent.focus",{"terminal":"t-agent-wt"}]]', "agent-next to a pane agent");
+  globalThis.herdr.focused = { space: "s-wt", pane: "p9", terminal: "t-agent-wt" };
+  expect(await ran("agent-next"), '[["space.select",{"id":"s-b"}],["pane.focus",{"terminal":"t-desk-b"}]]', "agent-next to a desk");
+  if (find(globalThis.herdr.layout, "agent-stack").active !== "desk-t-desk-b") fail("the agent column must show the desk it focuses");
+  console.log("PASS: the space, subspace and agent commands select and focus as the keys expect");
+}
 EOF
 
 node "$TMP_DIR/test.mjs"

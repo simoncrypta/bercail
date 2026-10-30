@@ -7,8 +7,12 @@
     "ctrl-shift-g": "bercail-desk.changes",
     "ctrl-alt-left": "bercail-desk.go-left",
     "ctrl-alt-right": "bercail-desk.go-right",
-    "ctrl-alt-up": "bercail-desk.go-up",
-    "ctrl-alt-down": "bercail-desk.go-down",
+    "alt-up": "bercail-desk.space-prev",
+    "alt-down": "bercail-desk.space-next",
+    "ctrl-alt-up": "bercail-desk.subspace-prev",
+    "ctrl-alt-down": "bercail-desk.subspace-next",
+    "alt-shift-up": "bercail-desk.agent-prev",
+    "alt-shift-down": "bercail-desk.agent-next",
     "ctrl-shift-q": "space.close"
   }
 }

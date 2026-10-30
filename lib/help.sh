@@ -42,14 +42,17 @@ Herdr app layout "bercail" (switch with Ctrl+Shift+L):
   Right: files / changes
 
 Keys in the bercail layout:
-  Ctrl+Shift+A       Focus the desk agent (start it if there is none)
-  Ctrl+Shift+R       Review
-  Ctrl+Shift+S       Shell tab
-  Ctrl+Shift+F / G   Show or hide files / changes
-  Ctrl+Alt+Arrows    Move between panes (left from the leftmost reaches the desk)
-  Ctrl+Shift+Q       Close this space
+  Ctrl+Shift+A         Focus the desk agent (start it if there is none)
+  Ctrl+Shift+R         Review
+  Ctrl+Shift+S         Shell tab
+  Ctrl+Shift+F / G     Show or hide files / changes
+  Ctrl+Alt+Left/Right  Move between panes (left from the leftmost reaches the desk)
+  Alt+Up/Down          Previous/next space (repos and other spaces, not worktrees)
+  Ctrl+Alt+Up/Down     Previous/next worktree space of this repo (main checkout too)
+  Alt+Shift+Up/Down    Previous/next agent (desks too)
+  Ctrl+Shift+Q         Close this space
   Herdr's own keys: Ctrl+Shift+T/W tab, Ctrl+Shift+O/E split, Ctrl+Shift+X close
-  pane, Alt+1-9 tabs, Alt+Up/Down spaces, Ctrl+Shift+? all keys
+  pane, Alt+1-9 tabs, Alt+H/J/K/L panes, Ctrl+Shift+? all keys
 
 Omarchy / Linux:
   Clears fcitx5 Ctrl+Alt+H/J spell-hint hotkeys when fcitx5 is present
@@ -69,7 +72,7 @@ Config:
   ~/.config/bercail/config.toml               desk agent default, review
   ~/.config/herdr-app/layouts/bercail.json    the layout
   ~/.config/herdr-app/mods/bercail-desk/      the desk mod
-  ~/.config/herdr-app/keys.json               its "layout:bercail" keys
+  ~/.config/herdr-app/keys.json               its "layout:bercail" keys (update keeps yours)
   ~/.config/worktrunk/herdr-layout.sh
   ~/.config/worktrunk/config.toml             worktrunk hooks
   ~/.agents/skills/handoff/                   handoff skill (canonical)

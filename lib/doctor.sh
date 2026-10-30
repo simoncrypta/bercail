@@ -29,7 +29,7 @@ doctor_omarchy_integration() {
 
 # The bercail layout, its desk mod and its keys in the Herdr app's home.
 doctor_herdr_app() {
-  local missing=0 src rel dest
+  local missing=0 src rel dest ours
   src="$(_recorded_install_source 2>/dev/null || true)"
   if [[ -f "$HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT" ]]; then
     log "  ok  Herdr layout bercail"
@@ -53,6 +53,11 @@ doctor_herdr_app() {
   if jq -e --arg s "$HERDR_APP_KEYS_SECTION" '.[$s]["ctrl-shift-a"] == "bercail-desk.agent"' \
     "$HERDR_APP_CONFIG_DIR/keys.json" >/dev/null 2>&1; then
     log "  ok  Herdr keys $HERDR_APP_KEYS_SECTION"
+    # The person's choices: reported, not a failure.
+    ours="$(_herdr_app_shipped_keys)"
+    [[ -z "$src" || ! -f "$src/bercail/keys.json" ]] || ours="$src/bercail/keys.json"
+    _herdr_app_keys_conflicts "$HERDR_APP_CONFIG_DIR/keys.json" "$ours" \
+      | while IFS= read -r line; do log "  conflict  Herdr $line"; done
   else
     log "  missing  Herdr keys $HERDR_APP_KEYS_SECTION in $HERDR_APP_CONFIG_DIR/keys.json (run: bercail update)"
     missing=$((missing + 1))
