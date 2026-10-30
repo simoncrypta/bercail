@@ -57,7 +57,7 @@ jq -e --slurpfile ours "$ROOT/bercail/keys.json" '.["layout:bercail"] == $ours[0
   "$APP/keys.json" >/dev/null || fail "layout:bercail must be replaced by bercail's"
 printf 'PASS: deploy installs the layout and mod and merges only layout:bercail keys\n'
 
-# The app rewrites its layout (the desk mod repoints the agent block): keep that.
+# The app rewrites its layout (the desk mod adds desk blocks): keep that.
 jq '.background = "chrome"' "$APP/layouts/bercail.json" >"$TMP_DIR/l" && mv "$TMP_DIR/l" "$APP/layouts/bercail.json"
 printf 'local edit\n' >>"$APP/mods/bercail-desk/main.js"
 deploy_herdr_app >/dev/null
@@ -71,40 +71,17 @@ deploy_herdr_app >/dev/null
 cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "a new shipped layout must be installed"
 printf 'PASS: a new shipped layout replaces the installed one\n'
 
-# bercail's layout as the app left it (desk repointed, columns resized) is adopted.
+# bercail's layout as the app left it (desk blocks added, columns resized) is adopted.
 rm -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
-jq '(.. | objects | select(.id == "agent") | .content) = {terminal: "t9z"}
-  | (.. | objects | select(.id == "agent-stack") | .active) = "agent"
+jq '(.. | objects | select(.id == "agent-stack")) |= (.children += [{id: "desk-t9z", type: "block", content: {terminal: "t9z"}}] | .active = "desk-t9z")
   | (.. | objects | select(.id == "desk") | .size.weight) = 4.2' \
   "$ROOT/bercail/layouts/bercail.json" >"$APP/layouts/bercail.json"
 out="$(deploy_herdr_app)"
 printf '%s' "$out" | grep -q 'unchanged: .*bercail.json' || fail "a runtime-only change should count as bercail's: $out"
-jq -e '.. | objects | select(.id == "agent") | .content.terminal == "t9z"' "$APP/layouts/bercail.json" >/dev/null \
+jq -e '.. | objects | select(.id == "desk-t9z") | .content.terminal == "t9z"' "$APP/layouts/bercail.json" >/dev/null \
   || fail "adopting must keep the app's values"
 [[ -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json" ]] || fail "adopting records the shipped layout"
 printf 'PASS: bercail'"'"'s layout with only runtime changes is adopted\n'
-
-# The app dropped the agent block (its space was closed): doctor flags it, update puts it back.
-lose_agent() {
-  jq '(.. | objects | select(.id == "agent-stack")) |= (.children |= map(select(.id != "agent")) | .active = "agent")
-    | .background = "chrome"' "$ROOT/bercail/layouts/bercail.json" >"$APP/layouts/bercail.json"
-}
-lose_agent
-record_install_source >/dev/null
-out="$(doctor_herdr_app)" && fail "doctor should flag a layout without the agent block: $out"
-printf '%s' "$out" | grep -q 'broken  Herdr layout bercail' || fail "lost agent block message: $out"
-for shipped_state in recorded unrecorded; do
-  lose_agent
-  [[ "$shipped_state" == recorded ]] || rm -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
-  out="$(deploy_herdr_app)"
-  printf '%s' "$out" | grep -q 'repair: .*agent block restored' || fail "update should restore the agent block ($shipped_state): $out"
-  jq -e '.. | objects | select(.id == "agent-stack") | .children[0].id == "agent" and .children[0].type == "block"' \
-    "$APP/layouts/bercail.json" >/dev/null || fail "agent block not first in agent-stack ($shipped_state)"
-  jq -e '.background == "chrome"' "$APP/layouts/bercail.json" >/dev/null \
-    || fail "restoring must keep the app's other layout changes ($shipped_state)"
-done
-out="$(doctor_herdr_app)" || fail "doctor should pass after the repair: $out"
-printf 'PASS: a layout that lost its agent block is flagged by doctor and repaired by update\n'
 
 # A bercail.json from before bercail shipped one is kept unless --force.
 rm -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"

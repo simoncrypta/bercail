@@ -2,9 +2,9 @@
 //
 // The desk agent is an hc terminal started as a sub-agent of the space's Shell
 // terminal, so it belongs to the space without a pane in any tab. It carries
-// labels bercail.role=agent and bercail.space=<space id>. The layout's `agent`
-// block is a terminal block pointed at the shown space's desk (an agent block
-// can't take the keyboard from a command, and agent.focus moves it to the parent pane).
+// labels bercail.role=agent and bercail.space=<space id>. Each desk shows in a
+// terminal block of its own in the layout's `agent-stack`, `desk-<address>` (an agent
+// block can't take the keyboard from a command, and agent.focus moves it to the parent pane).
 //
 // props.role: "header" (default) runs the logic and takes key commands;
 // "empty" is the placeholder shown in the agent column when the space has no desk.
@@ -290,29 +290,35 @@ export default class BercailDesk extends View {
     if (f?.pane) this.lastPane = f.pane;
     this.deskFocused = Boolean(desk && !f?.pane && f?.terminal === desk.address);
 
-    // Point the agent block at this space's desk, and show it (or the placeholder).
-    // The app drops the block when the terminal it shows ends (its space closed):
-    // put it back for the next desk. Only children that exist are selected, since a
-    // failed layout.select is a toast, not a throw, and this runs on every render.
+    // Each desk has its own block in the agent column, `desk-<address>`, added the
+    // first time its space is shown and kept: switching spaces only selects it, like
+    // a tab. (One shared block repointed per space could show a desk blank until its
+    // agent redrew.) The app drops a block when its terminal ends. A block it drops
+    // for a live desk is not added again, so this can't loop: the placeholder shows.
+    // Only children that exist are selected, since a failed layout.select is a toast,
+    // not a throw, and this runs on every render.
     try {
       const tree = layout();
       const stack = findNode(tree, "agent-stack");
-      let block = findNode(tree, "agent");
-      if (desk && stack && !block && this.restored !== desk.address) {
-        this.restored = desk.address;
-        this.pointed = desk.address;
-        block = { id: "agent", type: "block", content: { terminal: desk.address }, padding: [6, 6] };
-        stack.children = [block, ...(stack.children ?? [])];
-        stack.active = "agent";
-        run("layout.set", { layout: tree });
-      } else if (desk && block && block.content?.terminal !== desk.address && this.pointed !== desk.address) {
-        this.pointed = desk.address;
-        block.content = { terminal: desk.address };
-        run("layout.set", { layout: tree });
+      if (stack) {
+        this.added ??= new Set(); // desk block ids this copy added
+        const id = desk ? `desk-${desk.address}` : null;
+        const kids = stack.children ?? [];
+        // The shared block of older layouts, and blocks whose desk has finished.
+        const ended = (c) => c.id === "agent" || (c.id.startsWith("desk-")
+          && terminals().some((t) => t.address === c.content?.terminal && t.state !== "live"));
+        const add = Boolean(id) && !kids.some((c) => c.id === id) && !this.added.has(id);
+        const want = id && (add || kids.some((c) => c.id === id)) ? id : "empty";
+        if (add || kids.some(ended)) {
+          if (add) this.added.add(id);
+          stack.children = kids.filter((c) => !ended(c));
+          if (add) stack.children.push({ id, type: "block", content: { terminal: desk.address }, padding: [6, 6] });
+          stack.active = want; // set with the tree: a separate select can lose to the file
+          run("layout.set", { layout: tree });
+        } else if (stack.active !== want && kids.some((c) => c.id === want)) {
+          run("layout.select", { stack: "agent-stack", child: want });
+        }
       }
-      const want = desk && block ? "agent" : "empty";
-      const has = stack?.children?.some((c) => c.id === want);
-      if (has && stack.active !== want) run("layout.select", { stack: "agent-stack", child: want });
     } catch { /* a layout without the agent column: show nothing extra */ }
 
     // Review when a desk finishes with uncommitted changes. A short turn can

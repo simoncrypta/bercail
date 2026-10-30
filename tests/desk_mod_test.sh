@@ -19,6 +19,11 @@ export const layout = () => structuredClone(h().layout);
 export const run = (name, args) => {
   h().calls.push([name, args]);
   if (name === "layout.set") h().layout = structuredClone(args.layout);
+  if (name === "layout.select") {
+    const find = (n) => n?.id === args.stack ? n : (n?.children ?? []).map(find).find(Boolean);
+    const stack = find(h().layout);
+    if (stack?.children?.some((c) => c.id === args.child)) stack.active = args.child;
+  }
 };
 export const spaces = () => h().spaces;
 export const focused = () => h().focused;
@@ -50,71 +55,99 @@ const shipped = JSON.parse(readFileSync(new URL("./layout.json", import.meta.url
 const find = (n, id) => n?.id === id ? n : (n?.children ?? []).map((c) => find(c, id)).find(Boolean) ?? null;
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exit(1); };
 
-function setup({ desk, lostAgent }) {
+const D = (address, space, state = "live") => ({ address, state, labels: { "bercail.role": "agent", "bercail.space": space } });
+const stack = () => find(globalThis.herdr.layout, "agent-stack");
+const ids = () => stack().children.map((c) => c.id);
+const calls = (name) => globalThis.herdr.calls.filter(([n]) => n === name);
+
+function setup({ terminals, legacy = false }) {
   const tree = structuredClone(shipped);
-  const stack = find(tree, "agent-stack");
-  if (lostAgent) {
-    // What the app leaves after the space showing the desk is closed.
-    stack.children = stack.children.filter((c) => c.id !== "agent");
-    stack.active = "agent";
-  }
+  // Layouts from before per-desk blocks: one shared block, repointed per space.
+  if (legacy) find(tree, "agent-stack").children.unshift({ id: "agent", type: "block", content: { terminal: "t1" } });
   globalThis.herdr = {
     layout: tree,
     calls: [],
     focused: { space: "s1", pane: "p1" },
-    spaces: [{ id: "s1", tabs: [], folder: "/w" }],
-    terminals: desk ? [{ address: "t7", state: "live", labels: { "bercail.role": "agent", "bercail.space": "s1" } }] : [],
+    spaces: ["s1", "s2", "s3"].map((id) => ({ id, tabs: [], folder: "/w" })),
+    terminals,
   };
   const d = new Desk();
   Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {} });
   return d;
 }
+function show(d, space, renders = 3) {
+  globalThis.herdr.focused = { space, pane: "p1" };
+  for (let i = 0; i < renders; i++) d.sync();
+}
 // A layout.select the app can't honor: the toast this test guards against.
 function badSelects() {
-  return globalThis.herdr.calls.filter(([n, a]) => n === "layout.select"
-    && !find(globalThis.herdr.layout, a.stack)?.children?.some((c) => c.id === a.child));
+  return calls("layout.select").filter(([, a]) => !find(globalThis.herdr.layout, a.stack)?.children?.some((c) => c.id === a.child));
+}
+function check(label) {
+  if (badSelects().length) fail(`${label}: selected a missing child: ${JSON.stringify(badSelects())}`);
 }
 
-// Lost agent block, desk running: put back, pointed at the desk, shown, once.
-let d = setup({ desk: true, lostAgent: true });
-for (let i = 0; i < 3; i++) d.sync();
-let block = find(globalThis.herdr.layout, "agent");
-if (!block) fail("the agent block was not restored");
-if (block.content?.terminal !== "t7") fail(`restored block points at ${JSON.stringify(block.content)}`);
-if (JSON.stringify(block.padding) !== "[6,6]") fail(`restored block padding ${JSON.stringify(block.padding)}`);
-if (find(globalThis.herdr.layout, "agent-stack").active !== "agent") fail("restored block is not shown");
-if (badSelects().length) fail(`selected a missing child: ${JSON.stringify(badSelects())}`);
-const sets = globalThis.herdr.calls.filter(([n]) => n === "layout.set").length;
-if (sets !== 1) fail(`expected one layout.set, got ${sets}`);
-console.log("PASS: a lost agent block is restored for the desk on the next render");
+if (find(shipped, "agent")) fail("the shipped layout still has a shared agent block");
 
-// The app drops it again for the same desk: no layout.set loop, no bad select.
-d = setup({ desk: true, lostAgent: true });
-d.sync();
-const again = find(globalThis.herdr.layout, "agent-stack");
-again.children = again.children.filter((c) => c.id !== "agent");
+// Spaces with live desks: each gets its own block once; switching back only selects.
+let d = setup({ terminals: [D("t7", "s1"), D("t8", "s2")] });
+show(d, "s1");
+if (stack().active !== "desk-t7") fail(`s1 shows ${stack().active}`);
+if (find(globalThis.herdr.layout, "desk-t7")?.content?.terminal !== "t7") fail("desk-t7 block missing");
+if (calls("layout.set").length !== 1) fail(`first visit: expected one layout.set, got ${calls("layout.set").length}`);
+show(d, "s2");
+if (stack().active !== "desk-t8") fail(`s2 shows ${stack().active}`);
+show(d, "s3"); // no desk
+if (stack().active !== "empty") fail(`s3 shows ${stack().active}`);
 globalThis.herdr.calls = [];
-d.sync(); d.sync();
-if (globalThis.herdr.calls.some(([n]) => n === "layout.set")) fail("re-set the layout in a loop for the same desk");
-if (badSelects().length) fail(`selected a missing child: ${JSON.stringify(badSelects())}`);
+const before = JSON.stringify(stack().children);
+show(d, "s1");
+if (stack().active !== "desk-t7") fail(`back on s1 shows ${stack().active}`);
+show(d, "s2");
+if (stack().active !== "desk-t8") fail(`back on s2 shows ${stack().active}`);
+if (calls("layout.set").length) fail("switching to a space whose desk has a block must not set the layout");
+if (JSON.stringify(stack().children) !== before) fail("a desk block was repointed or replaced");
+check("switching");
+console.log("PASS: each desk keeps its own block; switching spaces only selects it");
+
+// A layout.set carries the shown child, so the file never says empty beside a live desk.
+d = setup({ terminals: [D("t7", "s1")] });
+show(d, "s3");
+globalThis.herdr.calls = [];
+show(d, "s1", 1);
+const [[, set]] = calls("layout.set");
+if (find(set.layout, "agent-stack").active !== "desk-t7") fail("layout.set sent with a stale active child");
+check("first show");
+console.log("PASS: a new desk block is set already shown");
+
+// An older layout's shared block goes; the desk gets its own.
+d = setup({ terminals: [D("t7", "s1")], legacy: true });
+show(d, "s1");
+if (ids().includes("agent")) fail("the shared agent block was kept");
+if (stack().active !== "desk-t7") fail(`legacy layout shows ${stack().active}`);
+check("legacy");
+console.log("PASS: an older layout's shared agent block is replaced by per-desk blocks");
+
+// The app drops a live desk's block: not re-added every render, the placeholder shows.
+d = setup({ terminals: [D("t7", "s1")] });
+show(d, "s1");
+stack().children = stack().children.filter((c) => c.id !== "desk-t7");
+globalThis.herdr.calls = [];
+show(d, "s1");
+if (calls("layout.set").length) fail("re-set the layout in a loop for the same desk");
+if (stack().active !== "empty") fail("placeholder not shown for a dropped block");
+check("dropped");
 console.log("PASS: a block the app keeps dropping is not re-set every render");
 
-// Lost agent block, no desk: show the placeholder, never select "agent".
-d = setup({ desk: false, lostAgent: true });
-for (let i = 0; i < 3; i++) d.sync();
-if (badSelects().length) fail(`selected a missing child: ${JSON.stringify(badSelects())}`);
-if (find(globalThis.herdr.layout, "agent-stack").active === "agent"
-  && !globalThis.herdr.calls.some(([n, a]) => n === "layout.select" && a.child === "empty")) fail("placeholder not selected");
-console.log("PASS: without a desk a lost agent block only selects the placeholder");
-
-// Intact layout: the block is repointed and selected as before.
-d = setup({ desk: true, lostAgent: false });
-d.sync();
-block = find(globalThis.herdr.layout, "agent");
-if (block.content?.terminal !== "t7") fail("intact block not repointed");
-if (!globalThis.herdr.calls.some(([n, a]) => n === "layout.select" && a.child === "agent")) fail("intact block not selected");
-if (badSelects().length) fail(`selected a missing child: ${JSON.stringify(badSelects())}`);
-console.log("PASS: an intact agent block is repointed and shown");
+// A finished desk's block is removed; a desk-less space selects only the placeholder.
+d = setup({ terminals: [D("t7", "s1"), D("t8", "s2")] });
+show(d, "s1"); show(d, "s2");
+globalThis.herdr.terminals = [D("t7", "s1", "finished"), D("t8", "s2")];
+show(d, "s1");
+if (ids().includes("desk-t7")) fail("a finished desk's block was kept");
+if (stack().active !== "empty" || !ids().includes("desk-t8")) fail(`after t7 ended: ${stack().active} ${ids()}`);
+check("finished");
+console.log("PASS: a finished desk's block goes and its space shows the placeholder");
 EOF
 
 node "$TMP_DIR/test.mjs"
