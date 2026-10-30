@@ -95,6 +95,30 @@ jq -e --arg p "$desk" '.agent.app == null and .space.id == "sp1" and .space.chec
   "$TMP_DIR/bodies.jsonl" >/dev/null || fail "empty app shifted fields: $(cat "$TMP_DIR/bodies.jsonl")"
 printf 'PASS: an empty field keeps the others in place\n'
 
+# hc sends heartbeats between snapshots; they carry no terminals and must not
+# make the follower forget the desk's previous status.
+heartbeat() {
+  printf '{"jsonrpc":"2.0","method":"heartbeat","params":{"seq":%s}}\n' "$1"
+}
+: >"$TMP_DIR/bodies.jsonl"
+{ event working; heartbeat 3706; event done; } | notify_follow
+kinds="$(jq -sc '[.[] | select(. != null) | .kind]' "$TMP_DIR/bodies.jsonl" 2>/dev/null)"
+[[ "$kinds" == '["finished"]' ]] || fail "heartbeat between working and done: $kinds"
+jq -e '.sink == "work-shep" and .space.repo == "myapp" and .space.linked == true' \
+  "$TMP_DIR/bodies.jsonl" >/dev/null || fail "heartbeat finished payload: $(cat "$TMP_DIR/bodies.jsonl")"
+: >"$TMP_DIR/bodies.jsonl"
+{ event working; heartbeat 1; printf 'not json\n'; heartbeat 2; event blocked; } | notify_follow
+kinds="$(jq -sc '[.[] | select(. != null) | .kind]' "$TMP_DIR/bodies.jsonl" 2>/dev/null)"
+[[ "$kinds" == '["blocked"]' ]] || fail "heartbeat between working and blocked: $kinds"
+printf 'PASS: heartbeats and other non-snapshot lines keep desk statuses; finished and blocked post\n'
+
+# A snapshot sent as a JSON-RPC notification (terminals under params) counts.
+: >"$TMP_DIR/bodies.jsonl"
+{ event working; event done | jq -c '{jsonrpc:"2.0", method:"snapshot", params:.}'; } | notify_follow
+kinds="$(jq -sc '[.[] | select(. != null) | .kind]' "$TMP_DIR/bodies.jsonl" 2>/dev/null)"
+[[ "$kinds" == '["finished"]' ]] || fail "params snapshot: $kinds"
+printf 'PASS: a snapshot under params is read like a top-level one\n'
+
 # Filters: another repo is not sent.
 sed -i 's/^repos = myapp/repos = other/' "$sink"
 : >"$TMP_DIR/bodies.jsonl"
@@ -123,6 +147,26 @@ out="$(notify_test work-shep)" || fail "test send: $out"
 [[ "$out" == "work-shep HTTP 200" ]] || fail "test output: $out"
 jq -e 'select(.kind == "test")' "$TMP_DIR/bodies.jsonl" >/dev/null || fail "test payload"
 printf 'PASS: notify test sends a kind=test payload\n'
+
+# doctor shows when the live follower last posted, without the url or key.
+# shellcheck source=lib/doctor.sh
+source "$ROOT/lib/doctor.sh"
+log() { printf '%s\n' "$*"; }
+cat >"$TMP_DIR/bin/hc" <<'EOF'
+#!/usr/bin/env bash
+printf '{"state":"live"}\n'
+EOF
+chmod +x "$TMP_DIR/bin/hc"
+st="$(_notify_sink_state_file work-shep)"
+jq -c '.last_ok_at = 1793314928 | .auth_failed = false' "$st" >"$st.new" && mv "$st.new" "$st"
+out="$(HC_BIN="$TMP_DIR/bin/hc" doctor_notify)" || fail "doctor_notify: $out"
+want="last post $(date -d @1793314928 '+%Y-%m-%d %H:%M' 2>/dev/null || date -r 1793314928 '+%Y-%m-%d %H:%M')"
+printf '%s' "$out" | grep -q "ok  notify follower (hc terminal bercail-notify; $want)" || fail "doctor: $out"
+printf '%s' "$out" | grep -q 'secret-key\|example.invalid' && fail "doctor leaks: $out"
+rm -f "$st"
+out="$(HC_BIN="$TMP_DIR/bin/hc" doctor_notify)" || fail "doctor_notify without state: $out"
+printf '%s' "$out" | grep -q 'last post never' || fail "doctor never: $out"
+printf 'PASS: doctor notes the last post next to a live follower\n'
 
 # notify add: url and key from stdin, written 0600, then tested; the key is never printed.
 rm -f "$XDG_CONFIG_HOME/bercail/notify.d/"*.toml
