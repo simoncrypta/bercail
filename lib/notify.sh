@@ -322,39 +322,122 @@ notify_desk_changed() {
   notify_deliver_all "$kind" "$agent_json" "$space_json" "$desk_json" "$address:$kind:$(_notify_now):$$"
 }
 
+# The follower's own record, for `bercail doctor`: when it started and the
+# last desk finish or block it saw (posted or filtered out).
+notify_follower_file() {
+  printf '%s/follower.json' "$(notify_state_dir)"
+}
+
+_notify_follower_write() {
+  local f tmp
+  f="$(notify_follower_file)"
+  tmp="$f.$$"
+  jq -nc "$@" >"$tmp" && mv -f "$tmp" "$f" || rm -f "$tmp"
+}
+
+# One `hc events` line as records joined by \x1f (\x1f, not tab: read merges
+# runs of whitespace separators, so an empty field would shift the ones after it):
+#   S                                        a snapshot starts (top level, or under
+#                                            params for `missed` and other notifications)
+#   T address status app space cwd title     a live desk in that snapshot
+#   E type address status app title          an `event` notification: one fact changed
+# Heartbeats and anything else give nothing.
+_NOTIFY_FOLLOW_JQ='
+  def f: tostring | gsub("[\t\n\u001f]"; " ");
+  def row: map(f) | join("\u001f");
+  def snap: "S", (.terminals[]
+    | select(.labels["bercail.role"] == "agent" and .state == "live")
+    | ["T", .address, (.status.state // ""), (.status.app // .foreground.name // ""),
+       (.labels["bercail.space"] // ""), (.cwd // ""), (.title // "")] | row);
+  if (.terminals | type) == "array" then snap
+  elif (.params.terminals? | type) == "array" then .params | snap
+  elif .method? == "event" and (.params.terminal? | type) == "string" then
+    .params as $p | ($p.data | if type == "object" then . else {} end) as $d
+    | ($d.status | if type == "object" then . else {} end) as $s
+    | ["E", ($p.type // ""), $p.terminal, ($s.state // ""), ($s.app // ""),
+       ($d.title // (if $p.type == "title" and ($p.data | type) == "string" then $p.data else "" end))] | row
+  else empty end'
+
+# A desk went from $2 to $3: record a finish or block for doctor, and deliver it.
+# Called by notify_follow; reads its per-desk maps (bash scoping is dynamic).
+_notify_follow_changed() {
+  local address="$1" before="$2" now="$3" kind f
+  kind="$(notify_classify "$before" "$now")"
+  [[ "$kind" != "none" ]] || return 0
+  f="$(notify_follower_file)"
+  [[ -r "$f" ]] || printf '{}' >"$f"
+  _notify_follower_write --argjson at "$(_notify_now)" --arg a "$address" --arg k "$kind" \
+    --slurpfile old "$f" '($old[0] // {}) + {last_transition_at:$at, last_transition:{address:$a, kind:$k}}'
+  notify_desk_changed "$address" "$before" "$now" "${appof[$address]:-}" "${spaceof[$address]:-}" \
+    "${cwdof[$address]:-}" "${titleof[$address]:-}" || true
+}
+
 # Read `hc events` lines on stdin; deliver each desk's status changes.
-# Statuses live in memory: a desk seen for the first time has no previous
-# status, so a turn already running when this starts is not reported.
-# Only lines carrying a terminals array are snapshots (top level, or under
-# params for a JSON-RPC notification). Heartbeats and anything else leave the
-# statuses alone: treating them as empty snapshots forgot every desk.
+# hc sends one snapshot, then an `event` per changed fact (status, title,
+# finished, ...), heartbeats, and a fresh snapshot after `missed`. Reading
+# only snapshots saw no change after the first line. Statuses live in memory:
+# a desk seen for the first time has no previous status, so a turn already
+# running when this starts is not reported.
 notify_follow() {
-  local line snap address status app space cwd title
-  local -A prev=() seen=()
+  local line kind a b c d e g snapped address info
+  local -A prev=() spaceof=() cwdof=() titleof=() appof=() seen=()
+  _notify_follower_write --argjson at "$(_notify_now)" --argjson pid "$$" '{pid:$pid, started_at:$at}'
   while IFS= read -r line; do
-    snap="$(jq -c 'if (.terminals | type) == "array" then .
-        elif (.params.terminals? | type) == "array" then .params
-        else empty end' <<<"$line" 2>/dev/null)" || snap=""
-    [[ -n "$snap" ]] || continue
+    snapped=0
     seen=()
-    # \x1f, not tab: read merges runs of whitespace separators, so an empty
-    # field would shift the ones after it.
-    while IFS=$'\x1f' read -r address status app space cwd title; do
-      [[ -n "$address" ]] || continue
-      seen[$address]=1
-      if [[ -n "${prev[$address]+x}" && "${prev[$address]}" != "$status" ]]; then
-        notify_desk_changed "$address" "${prev[$address]}" "$status" "$app" "$space" "$cwd" "$title" || true
-      fi
-      prev[$address]="$status"
-    done < <(jq -r '.terminals[]?
-        | select(.labels["bercail.role"] == "agent" and .state == "live")
-        | [.address, (.status.state // ""), (.status.app // .foreground.name // ""),
-           (.labels["bercail.space"] // ""), (.cwd // ""), (.title // "")]
-        | map(tostring | gsub("[\t\n\u001f]"; " ")) | join("\u001f")' <<<"$snap" 2>/dev/null)
-    # Forget desks that are gone, so a reused address starts fresh.
-    for address in "${!prev[@]}"; do
-      [[ -n "${seen[$address]+x}" ]] || unset "prev[$address]"
-    done
+    while IFS=$'\x1f' read -r kind a b c d e g; do
+      case "$kind" in
+        S) snapped=1 ;;
+        T) # address status app space cwd title
+          [[ -n "$a" ]] || continue
+          seen[$a]=1
+          appof[$a]="$c"; spaceof[$a]="$d"; cwdof[$a]="$e"; titleof[$a]="$g"
+          if [[ -n "${prev[$a]+x}" && "${prev[$a]}" != "$b" ]]; then
+            _notify_follow_changed "$a" "${prev[$a]}" "$b"
+          fi
+          prev[$a]="$b"
+          ;;
+        E) # type address status app title
+          address="$b"
+          [[ -n "$address" ]] || continue
+          case "$a" in
+            finished|removed|lost)
+              # Forget it, so a reused address starts fresh.
+              unset "prev[$address]" "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]"
+              continue
+              ;;
+            restarted) unset "prev[$address]" ;;
+          esac
+          # A desk this follower hasn't met (started after the snapshot), or
+          # whose labels changed: ask hc where it is.
+          if [[ -z "${spaceof[$address]+x}" || "$a" == labels || "$a" == restarted ]]; then
+            info="$("$(notify_hc)" get "$address" --json 2>/dev/null </dev/null | jq -r '
+              select(.labels["bercail.role"] == "agent" and .state == "live")
+              | [(.labels["bercail.space"] // ""), (.cwd // ""), (.title // ""),
+                 (.status.app // .foreground.name // "")]
+              | map(tostring | gsub("[\t\n\u001f]"; " ")) | join("\u001f")' 2>/dev/null)" || info=""
+            if [[ -z "$info" ]]; then
+              unset "prev[$address]" "spaceof[$address]"
+              continue
+            fi
+            IFS=$'\x1f' read -r "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]" <<<"$info"
+          fi
+          [[ -n "$e" ]] && titleof[$address]="$e"
+          [[ "$a" == status ]] || continue
+          [[ -n "$d" ]] && appof[$address]="$d"
+          if [[ -n "${prev[$address]+x}" && "${prev[$address]}" != "$c" ]]; then
+            _notify_follow_changed "$address" "${prev[$address]}" "$c"
+          fi
+          prev[$address]="$c"
+          ;;
+      esac
+    done < <(jq -r "$_NOTIFY_FOLLOW_JQ" <<<"$line" 2>/dev/null)
+    # A snapshot is whole: forget desks it no longer has.
+    if [[ "$snapped" -eq 1 ]]; then
+      for address in "${!prev[@]}"; do
+        [[ -n "${seen[$address]+x}" ]] || unset "prev[$address]"
+      done
+    fi
   done
 }
 
@@ -382,6 +465,24 @@ notify_run() {
     notify_drop_stale_keys "$f"
   done < <(notify_sink_files)
   "$(notify_hc)" events --json --label bercail.role=agent | notify_follow
+}
+
+_notify_follower_live() {
+  "$(notify_hc)" get bercail-notify --json 2>/dev/null </dev/null | jq -e '.state == "live"' >/dev/null 2>&1
+}
+
+# A live follower keeps running the bercail it started with. After an update,
+# end it; the desk mod starts the new one within a minute. The follower is
+# --rm, so `hc kill` exits not_found once it's gone: check, don't trust the code.
+notify_restart_follower() {
+  _notify_follower_live || return 0
+  "$(notify_hc)" kill bercail-notify >/dev/null 2>&1 </dev/null || true
+  if _notify_follower_live; then
+    printf 'could not restart the notify follower; run: hc kill bercail-notify\n' >&2
+  else
+    printf 'restarted the notify follower (hc terminal bercail-notify)\n'
+  fi
+  return 0
 }
 
 notify_status() {

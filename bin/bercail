@@ -126,6 +126,7 @@ cmd_update() {
   deploy_configs
   deploy_omarchy_integration
   install_shell_integration || true
+  notify_restart_follower
   show_summary
 }
 

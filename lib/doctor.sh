@@ -65,9 +65,38 @@ doctor_herdr_app() {
   [[ "$missing" -eq 0 ]]
 }
 
+# Did the live follower miss a desk finishing or blocking? Prints what it
+# missed and fails. A desk now done or blocked since after the follower
+# started, later than the last transition the follower recorded, is one it
+# didn't see. A follower without a record runs a bercail older than this check.
+doctor_notify_missed() {
+  local f started last address ms
+  f="$(notify_follower_file)"
+  started="$(jq -r '.started_at // empty' "$f" 2>/dev/null)"
+  if [[ ! "$started" =~ ^[0-9]+$ ]]; then
+    printf 'runs an older bercail'
+    return 1
+  fi
+  last="$(jq -r '.last_transition_at // 0' "$f" 2>/dev/null)"
+  [[ "$last" =~ ^[0-9]+$ ]] || last=0
+  while IFS= read -r address; do
+    [[ -n "$address" ]] || continue
+    ms="$("$(notify_hc)" get "$address" --json 2>/dev/null </dev/null \
+      | jq -r 'select(.status.state == "done" or .status.state == "blocked") | .status_ms // empty' 2>/dev/null)"
+    [[ "$ms" =~ ^[0-9]+$ ]] || continue
+    # Slack: the follower records a transition a moment after hc stamps it.
+    if (( ms / 1000 > started + 5 && ms / 1000 > last + 60 )); then
+      printf 'missed desk %s finishing or blocking' "$address"
+      return 1
+    fi
+  done < <("$(notify_hc)" ls --json --label bercail.role=agent 2>/dev/null </dev/null \
+    | jq -r '.terminals[]? | select(.state == "live") | .address' 2>/dev/null)
+  return 0
+}
+
 # Webhook sinks: their last delivery, and the follower that sends to them.
 doctor_notify() {
-  local f name st at last=0 missing=0
+  local f name st at last=0 missing=0 missed
   [[ -n "$(notify_sink_files)" ]] || return 0
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
@@ -91,7 +120,12 @@ doctor_notify() {
     at="never"
   fi
   if "$(notify_hc)" get bercail-notify --json 2>/dev/null | jq -e '.state == "live"' >/dev/null 2>&1; then
-    log "  ok  notify follower (hc terminal bercail-notify; last post $at)"
+    if missed="$(doctor_notify_missed)"; then
+      log "  ok  notify follower (hc terminal bercail-notify; last post $at)"
+    else
+      log "  deaf  notify follower is live but $missed (restart it: hc kill bercail-notify; the bercail layout starts it again)"
+      missing=$((missing + 1))
+    fi
   else
     log "  missing  notify follower (the bercail layout starts it; or: hc run --bg --no-parent --name bercail-notify bercail notify run)"
     missing=$((missing + 1))
