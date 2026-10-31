@@ -130,14 +130,18 @@ handoff_issue_prompt() {
   printf 'Your job is beads issue %s. Run `bd show %s` (read its comments too) and do the work it describes.' "$1" "$1"
 }
 
+# reason is optional. Empty omits the field; Shep reads it, and unknown fields
+# do not fail handoff_result_ok. The only value the runner writes is usage-limit.
 handoff_write_result() {
-  local dest="$1" status="$2" summary="$3" session="$4"
+  local dest="$1" status="$2" summary="$3" session="$4" reason="${5:-}"
   mkdir -p "$(dirname "$dest")"
   jq -nc \
     --arg status "$status" \
     --arg summary "$summary" \
     --arg session_id "$session" \
-    '{status:$status, summary:$summary, session_id:$session_id}' >"$dest"
+    --arg reason "$reason" \
+    '{status:$status, summary:$summary, session_id:$session_id}
+     + if $reason == "" then {} else {reason:$reason} end' >"$dest"
 }
 
 handoff_result_ok() {
@@ -292,6 +296,42 @@ handoff_opencode_session_id() {
   id="$(jq -r '.sessionID // empty' "$log" 2>/dev/null | awk 'NF { print; exit }')"
   [[ -n "$id" ]] || return 1
   printf '%s' "$id"
+}
+
+# usage-limit when LOG is a plan limit, else nothing. Prints the reason; does not
+# rerun. ChatGPT is the session error type provider.chatgpt-limit, or the code
+# subscription_sharing_usage_limit_exceeded in that error's body. Claude is a
+# sentence Claude Code 2.1.316 composes ("You've hit your 5-hour limit", the
+# weekly, Opus, Sonnet, and Fable lines, "You're out of usage credits") or the
+# recorded extra-usage billing sentence. That sentence is read from the error
+# event, or from stderr when the process exits before one. Other JSON is not a
+# limit. A provider.rate-limit, including a bare HTTP 429, is not one: xAI's
+# weekly-limit body is unverified.
+handoff_usage_limit_reason() {
+  local log="$1" events
+  local phrase="You've hit your (5-hour|weekly|Opus|Sonnet|Fable) limit|You've hit your usage limit|You've hit your limit|You've reached your Fable limit|You're out of usage credits|Third-party apps now draw from your extra usage, not your plan limits"
+  [[ -f "$log" ]] || return 0
+  events="$(jq -c -R 'fromjson? | select(type == "object" and .type == "error" and (.error | type == "object")) | .error' "$log" 2>/dev/null || true)"
+  # A JSON error event decides. Stderr counts only when the process exits first.
+  if [[ -n "$events" ]]; then
+    if jq -e -s --arg phrase "$phrase" '
+      def hit: test($phrase);
+      any(.[];
+        .type == "provider.chatgpt-limit"
+        or ((.response.body // "") | if type == "string" then contains("subscription_sharing_usage_limit_exceeded") else false end)
+        or ((.message // "") | hit)
+        or ((.response.body // "") | if type == "string" then hit else false end)
+      )
+    ' <<<"$events" >/dev/null 2>&1; then
+      printf 'usage-limit'
+    fi
+    return 0
+  fi
+  # grep reads to the end (no -q): with pipefail, an early exit would SIGPIPE jq
+  # on a long log and hide the match.
+  if jq -R -r 'select(try (fromjson | type == "object") catch false | not)' "$log" | grep -E "$phrase" >/dev/null; then
+    printf 'usage-limit'
+  fi
 }
 
 handoff_is_opencode_session() {
@@ -483,7 +523,7 @@ handoff_headless_comment_text() {
 handoff_run_headless() {
   local stage="$1" worktree="$2" issue="$3" resume="$4" dry="$5" binary_override="${6:-}"
   local mode binary native model_spec model session="" resumed=0 prompt bd beads_dir=""
-  local result log bin cmd_json out rc=0 tid present=false bd_present=false
+  local result log bin cmd_json out rc=0 tid present=false bd_present=false reason=""
 
   command -v jq >/dev/null 2>&1 || handoff_die "jq is required"
   mode="$(handoff_stage_field "$stage" mode)" || handoff_die "unknown stage: $stage"
@@ -622,12 +662,17 @@ handoff_run_headless() {
     session="$tid"
     out="$(jq --arg session_id "$session" '.session_id = $session_id' <<<"$out")"
   fi
+  # The exhausted plan cannot be trusted to name its own limit. Classify the CLI
+  # log and stamp reason; do not start another command.
+  if [[ "$rc" -ne 0 ]]; then
+    reason="$(handoff_usage_limit_reason "$log")"
+  fi
   # bercail knows the session id; the agent only has to write status and summary.
   # Keep the agent's own uuid if the CLI log had none. Never invent one: a
   # made-up id would look resumable. Say so in the summary instead.
   if [[ -f "$result" ]] && jq -e 'type == "object"' "$result" >/dev/null 2>&1; then
     local filled
-    filled="$(jq --arg session_id "$session" --arg none "$HANDOFF_NO_SESSION" '
+    filled="$(jq --arg session_id "$session" --arg none "$HANDOFF_NO_SESSION" --arg reason "$reason" '
       (.session_id | type == "string" and test("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")) as $own
       | .status = (if (.status == "ready" or .status == "blocked" or .status == "failed") then .status else "failed" end)
       | .summary = (if (.summary | type == "string" and length > 0) then .summary else "headless stage finished without a usable summary" end)
@@ -635,13 +680,14 @@ handoff_run_headless() {
         elif $own then .
         else .session_id = $none | .summary += " (bercail found no session id in the CLI log, so this run cannot be resumed.)"
         end
+      | if $reason != "" then .reason = $reason else del(.reason) end
     ' "$result")"
     printf '%s\n' "$filled" >"$result"
   fi
   if [[ ! -f "$result" ]] || ! handoff_result_ok "$result"; then
     [[ "$rc" -eq 0 ]] && rc=1
     [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
-    handoff_write_result "$result" failed "headless stage exited ${rc} without a result file" "$session"
+    handoff_write_result "$result" failed "headless stage exited ${rc} without a result file" "$session" "$reason"
   fi
   if [[ "$rc" -ne 0 ]]; then
     printf 'handoff: %s exited %s; result is %s\n' "$bin" "$rc" "$result" >&2

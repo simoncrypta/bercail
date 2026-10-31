@@ -19,7 +19,7 @@ spec. The agent's prompt is one line that points at it.
   review it in that space's tuicr.
 - **No branch:** a headless `opencode run --agent bstack`. It writes
   `.bercail/handoff-result.json` (`status` ready, blocked, or failed, a summary,
-  the session id) and nothing opens.
+  the session id; `reason` is `usage-limit` when a plan is exhausted) and nothing opens.
   It edits and stages but can't commit, push, or merge: a headless run rejects
   anything that would ask. Stage `autopilot` is the exception (see
   [Ship with autopilot](./06-autopilot.md)).

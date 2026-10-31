@@ -182,7 +182,7 @@ bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) 
 
 - **Prompt** — one line pointing at the issue (`Your job is beads issue <id>. Run bd show <id> …`), the same for every harness.
 - **Context** — before it starts the agent, bercail adds a `bd comment` to the issue with the worktree and, headless, the result file and session id.
-- **Result** — a headless run leaves `{status: ready|blocked|failed, summary, session_id}`. Read that file, not terminal output. `--resume SESSION` continues the same session (`claude --resume`, `codex exec resume`, `cursor-agent --resume`, `opencode run --session`).
+- **Result** — a headless run leaves `{status: ready|blocked|failed, summary, session_id}`. A plan usage limit also sets `reason` to `usage-limit`, so Shep can propose another plan. Bercail does not switch or rerun. Read that file, not terminal output. `--resume SESSION` continues the same session (`claude --resume`, `codex exec resume`, `cursor-agent --resume`, `opencode run --session`).
 - **Blocked, not switched** — if the stage's binary, `bd`, or the issue is missing, the result is `blocked` and nothing starts. Bercail never falls through to another harness. `--binary claude|codex|cursor-agent|opencode` runs a headless stage on another CLI only when you ask (with `opencode`, `start` stays on Claude and `codex` on GPT, through your opencode plans).
 - **Dry run** — `--dry-run` prints the exact argv for any stage, even when that binary is not installed.
 - `bercail harness` reports which of claude, codex, cursor-agent, and opencode are on PATH, with a local model hint. It does not choose.
