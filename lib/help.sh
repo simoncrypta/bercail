@@ -29,7 +29,7 @@ Post-install CLI (bercail):
   reconfigure   Refresh skills from config.toml (not a full redeploy)
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
-  notify        Agent status webhooks: status | add NAME | test NAME | run
+  notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
 
 Shell commands:
   dev, d        Show the Herdr app space for $PWD and start its desk agent
