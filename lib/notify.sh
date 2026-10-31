@@ -9,6 +9,8 @@
 #   bercail notify status      sinks, filters, and last delivery (no secrets)
 #   bercail notify test NAME   send one kind=test payload to sink NAME
 #   bercail notify add NAME    write sink NAME from a pasted url and key, then test it
+#   bercail notify repo add|remove NAME [REPO]   add a repo to sink NAME, or take it out
+#   bercail notify check [PATH]                  warn if no enabled sink covers PATH's repo
 #
 # The desk mod keeps one `run` alive as the hidden hc terminal bercail-notify.
 
@@ -548,13 +550,173 @@ _notify_redact_url() {
   fi
 }
 
-# Repo name for --repos' default: the main worktree's folder, as the payload's
-# space.repo names it. Empty outside a checkout.
-_notify_current_repo() {
+# Repo name of the checkout at PATH: its main worktree's folder, as the
+# payload's space.repo names it. Empty outside a checkout.
+notify_repo_of() {
   local main
-  main="$(git worktree list --porcelain 2>/dev/null | awk '/^worktree / { print substr($0, 10); exit }')"
+  main="$(git -C "$1" worktree list --porcelain 2>/dev/null | awk '/^worktree / { print substr($0, 10); exit }')"
   [[ -n "$main" ]] && basename "$main"
   return 0
+}
+
+_notify_current_repo() {
+  notify_repo_of "$PWD"
+}
+
+# Does sink FILE post desks of REPO? It must be enabled, and unfiltered or
+# match REPO in repos. A sink filtered by space name alone matches no repo.
+notify_sink_covers() {
+  local file="$1" repo="$2" repos spaces
+  notify_bool "$(notify_sink_value "$file" enabled true)" || return 1
+  repos="$(notify_sink_value "$file" repos "")"
+  spaces="$(notify_sink_value "$file" spaces "$(notify_sink_value "$file" workspaces "")")"
+  [[ -z "$repos" && -z "$spaces" ]] && return 0
+  [[ -n "$repos" ]] && notify_glob_match "$repos" "$repo"
+}
+
+# Sinks exist, but none covers REPO: its desks would post nowhere. With no
+# sinks at all, notify isn't set up and nothing is missing.
+notify_repo_silent() {
+  local repo="$1" f any=0
+  while IFS= read -r f; do
+    [[ -n "$f" ]] || continue
+    any=1
+    notify_sink_covers "$f" "$repo" && return 1
+  done < <(notify_sink_files)
+  [[ "$any" -eq 1 ]]
+}
+
+# The command that adds REPO to a sink, naming the sink when there is one.
+_notify_fix_cmd() {
+  local repo="$1" f names=()
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && names+=("$(notify_sink_name "$f")")
+  done < <(notify_sink_files)
+  if [[ "${#names[@]}" -eq 1 ]]; then
+    printf 'bercail notify repo add %s %s' "${names[0]}" "$repo"
+  else
+    printf 'bercail notify repo add NAME %s (sinks: %s)' "$repo" "$(IFS=,; printf '%s' "${names[*]}" | sed 's/,/, /g')"
+  fi
+}
+
+# Warn once on stderr when the checkout at PATH (default: here) is in a repo
+# no enabled sink covers. Fails then, so callers can tell.
+notify_check() {
+  local repo
+  repo="$(notify_repo_of "${1:-$PWD}")"
+  [[ -n "$repo" ]] || return 0
+  notify_repo_silent "$repo" || return 0
+  _notify_err "no enabled sink covers repo '$repo'; its desks will not post. Add it: $(_notify_fix_cmd "$repo")"
+  return 1
+}
+
+# Repos with a live desk that no enabled sink covers, one per line.
+notify_uncovered_desk_repos() {
+  local cwd repo
+  local -A seen=()
+  while IFS= read -r cwd; do
+    [[ -n "$cwd" && -d "$cwd" ]] || continue
+    repo="$(notify_repo_of "$cwd")"
+    [[ -n "$repo" && -z "${seen[$repo]+x}" ]] || continue
+    seen[$repo]=1
+    if notify_repo_silent "$repo"; then
+      printf '%s\n' "$repo"
+    fi
+  done < <("$(notify_hc)" ls --json --label bercail.role=agent 2>/dev/null </dev/null \
+    | jq -r '.terminals[]? | select(.state == "live") | .cwd // empty' 2>/dev/null)
+  return 0
+}
+
+# Write sink FILE's first repos line as REPOS (appended when it has none),
+# keeping every other line and the file's mode. Renamed into place.
+_notify_set_repos() {
+  local file="$1" repos="$2" tmp mode line hit=0
+  mode="$(_notify_mode "$file")"
+  tmp="$(umask 077 && mktemp "$(dirname "$file")/.$(basename "$file").XXXXXX")" || return 1
+  if {
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      if [[ "$hit" -eq 0 && "$line" =~ ^[[:space:]]*repos[[:space:]]*= ]]; then
+        printf 'repos = "%s"\n' "$repos"
+        hit=1
+      else
+        printf '%s\n' "$line"
+      fi
+    done <"$file"
+    [[ "$hit" -eq 1 ]] || printf 'repos = "%s"\n' "$repos"
+  } >"$tmp" && chmod "$mode" "$tmp" && mv -f "$tmp" "$file"; then
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
+_notify_repo_usage() {
+  cat >&2 <<'EOF'
+usage: bercail notify repo add NAME [REPO]     REPO defaults to this checkout's repo
+       bercail notify repo remove NAME REPO
+A sink with no repos and no spaces (--all-repos) covers every repo; both are no-ops on it.
+EOF
+}
+
+# Add REPO to sink NAME's repos list, or take it out.
+notify_repo() {
+  local action="${1:-}" name="${2:-}" repo="${3:-}" f repos spaces item items=() kept="" found=0 note=""
+  case "$action" in
+    add|remove) ;;
+    -h|--help) _notify_repo_usage; return 0 ;;
+    "") _notify_repo_usage; return 1 ;;
+    *) _notify_err "unknown repo command '$action'"; _notify_repo_usage; return 1 ;;
+  esac
+  [[ -n "$name" && $# -le 3 ]] || { _notify_repo_usage; return 1; }
+  f="$(notify_sinks_dir)/$name.toml"
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && -f "$f" ]] \
+    || { _notify_err "no sink '$name' (bercail notify status lists them)"; return 1; }
+  if [[ -z "$repo" ]]; then
+    [[ "$action" == add ]] || { _notify_repo_usage; return 1; }
+    repo="$(_notify_current_repo)"
+    [[ -n "$repo" ]] || { _notify_err "not in a git checkout; name it: bercail notify repo add $name REPO"; return 1; }
+  fi
+  [[ "$repo" != *[\"#,[:space:]]* ]] || { _notify_err "repo '$repo' cannot hold a quote, #, comma, or blank"; return 1; }
+  repos="$(notify_sink_value "$f" repos "")"
+  spaces="$(notify_sink_value "$f" spaces "$(notify_sink_value "$f" workspaces "")")"
+  if [[ -z "$repos" && -z "$spaces" ]]; then
+    printf 'sink %s covers every repo (--all-repos); nothing to %s\n' "$name" "$action"
+    return 0
+  fi
+  notify_bool "$(notify_sink_value "$f" enabled true)" || note=" (the sink is disabled: enabled = false)"
+
+  if [[ "$action" == add ]]; then
+    if [[ -n "$repos" ]] && notify_glob_match "$repos" "$repo"; then
+      printf 'sink %s already covers %s (repos = "%s")%s\n' "$name" "$repo" "$repos" "$note"
+      return 0
+    fi
+    _notify_set_repos "$f" "${repos:+$repos, }$repo" || { _notify_err "could not write $f"; return 1; }
+    printf 'sink %s repos = "%s"%s\n' "$name" "$(notify_sink_value "$f" repos "")" "$note"
+    return 0
+  fi
+
+  IFS=',' read -r -a items <<<"$repos"
+  for item in "${items[@]}"; do
+    item="${item#"${item%%[![:space:]]*}"}"
+    item="${item%"${item##*[![:space:]]}"}"
+    [[ -n "$item" ]] || continue
+    if [[ "${item,,}" == "${repo,,}" ]]; then
+      found=1
+    else
+      kept="${kept:+$kept, }$item"
+    fi
+  done
+  if [[ "$found" -eq 0 ]]; then
+    printf 'sink %s does not list %s (repos = "%s")\n' "$name" "$repo" "$repos"
+    return 0
+  fi
+  # An empty list means every repo: taking out the last one must not widen the sink.
+  if [[ -z "$kept" && -z "$spaces" ]]; then
+    _notify_err "$repo is sink $name's only repo, and no repos means every repo; set enabled = false in $f or delete it instead"
+    return 1
+  fi
+  _notify_set_repos "$f" "$kept" || { _notify_err "could not write $f"; return 1; }
+  printf 'sink %s repos = "%s"%s\n' "$name" "$kept" "$note"
 }
 
 # Read one value for `notify add`: from stdin, with PROMPT on a terminal.
@@ -701,6 +863,8 @@ cmd_notify() {
     status) notify_status ;;
     test) notify_test "${2:-}" ;;
     add) shift; notify_add "$@" ;;
-    *) _notify_err "unknown command '${1:-}' (run|status|test NAME|add NAME)"; return 1 ;;
+    repo) shift; notify_repo "$@" ;;
+    check) notify_check "${2:-}" ;;
+    *) _notify_err "unknown command '${1:-}' (run|status|test NAME|add NAME|repo add|remove NAME [REPO]|check [PATH])"; return 1 ;;
   esac
 }

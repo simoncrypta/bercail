@@ -117,6 +117,10 @@ doctor_notify() {
       last="$at"
     fi
   done < <(notify_sink_files)
+  # Not a failure: a repo can be left out on purpose.
+  while IFS= read -r name; do
+    log "  uncovered  repo $name has a live desk but no enabled notify sink covers it (add it: $(_notify_fix_cmd "$name"))"
+  done < <(notify_uncovered_desk_repos)
   # A live follower can still be silent; the last post time makes that visible.
   if [[ "$last" -gt 0 ]]; then
     at="$(date -d "@$last" '+%Y-%m-%d %H:%M' 2>/dev/null || date -r "$last" '+%Y-%m-%d %H:%M')"

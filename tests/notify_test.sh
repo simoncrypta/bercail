@@ -323,3 +323,106 @@ notify_drop_stale_keys "$added"
 grep -q panes "$added" && fail "panes kept"
 [[ "$(_notify_mode "$added")" == 600 ]] || fail "migration changed the mode"
 printf 'PASS: the stale panes key is migrated away\n'
+
+# Repo coverage. team covers myapp; a checkout of `other` is in no sink.
+rm -f "$XDG_CONFIG_HOME/bercail/notify.d/"*.toml
+git init -q "$TMP_DIR/other"
+git -C "$TMP_DIR/other" commit -q --allow-empty -m init
+notify_check "$TMP_DIR/other" 2>"$TMP_DIR/err" || fail "no sinks at all must not warn"
+[[ ! -s "$TMP_DIR/err" ]] || fail "no sinks warned: $(cat "$TMP_DIR/err")"
+team="$XDG_CONFIG_HOME/bercail/notify.d/team.toml"
+printf 'url = "https://example.invalid/team"\nkey = "team-key"\nauth = both\nrepos = myapp\nnotify = finished, blocked\n' >"$team"
+chmod 600 "$team"
+notify_check "$desk" 2>"$TMP_DIR/err" || fail "a covered repo warned: $(cat "$TMP_DIR/err")"
+[[ ! -s "$TMP_DIR/err" ]] || fail "a covered repo printed: $(cat "$TMP_DIR/err")"
+notify_check "$TMP_DIR/other" 2>"$TMP_DIR/err" && fail "an uncovered repo passed"
+[[ "$(wc -l <"$TMP_DIR/err")" -eq 1 ]] || fail "want one warning line: $(cat "$TMP_DIR/err")"
+grep -q "no enabled sink covers repo 'other'.*bercail notify repo add team other" "$TMP_DIR/err" \
+  || fail "warning: $(cat "$TMP_DIR/err")"
+sed -i 's/^repos = myapp/repos = myapp\nenabled = false/' "$team"
+notify_check "$desk" 2>/dev/null && fail "a disabled sink must not count"
+sed -i '/^enabled = false/d' "$team"
+printf 'PASS: notify check warns once for a repo no enabled sink covers, and not without sinks\n'
+
+# handoff-spawn --branch runs that check on the new desk's checkout: the
+# warning reaches stderr, stdout stays the spawn JSON, and the spawn succeeds.
+# shellcheck source=skills/handoff/scripts/handoff-spawn
+source "$ROOT/skills/handoff/scripts/handoff-spawn"
+grep -q 'handoff_notify_check "$sibling"' "$ROOT/skills/handoff/scripts/handoff-spawn" \
+  || fail "handoff-spawn --branch does not run the check"
+out="$(BERCAIL_BIN="$ROOT/bin/bercail" handoff_notify_check "$TMP_DIR/other" 2>"$TMP_DIR/err")" \
+  || fail "the check must not fail the spawn"
+[[ -z "$out" ]] || fail "the check wrote to stdout: $out"
+[[ "$(wc -l <"$TMP_DIR/err")" -eq 1 ]] || fail "handoff want one line: $(cat "$TMP_DIR/err")"
+grep -q 'bercail notify repo add team other' "$TMP_DIR/err" || fail "handoff warning: $(cat "$TMP_DIR/err")"
+grep -q team-key "$TMP_DIR/err" && fail "handoff warning leaked the key"
+BERCAIL_BIN="$ROOT/bin/bercail" handoff_notify_check "$desk" 2>"$TMP_DIR/err" || fail "covered handoff"
+[[ ! -s "$TMP_DIR/err" ]] || fail "covered handoff warned: $(cat "$TMP_DIR/err")"
+BERCAIL_BIN="$TMP_DIR/no-bercail" handoff_notify_check "$TMP_DIR/other" 2>"$TMP_DIR/err" || fail "no bercail"
+[[ ! -s "$TMP_DIR/err" ]] || fail "no bercail warned: $(cat "$TMP_DIR/err")"
+printf 'PASS: handoff-spawn warns on stderr for an uncovered repo and still succeeds\n'
+
+# doctor lists repos with a live desk that no enabled sink covers.
+cat >"$TMP_DIR/bin/hc-cover" <<EOF
+#!/usr/bin/env bash
+case "\$1" in
+  ls) jq -nc --arg a "$desk" --arg b "$TMP_DIR/other" '{terminals:[
+        {address:"t1", state:"live", cwd:\$a}, {address:"t2", state:"live", cwd:\$b},
+        {address:"t3", state:"live", cwd:\$b}, {address:"t4", state:"finished", cwd:"/"}]}' ;;
+  get) printf '{"state":"live"}\n' ;;
+esac
+EOF
+chmod +x "$TMP_DIR/bin/hc-cover"
+printf '{"pid":1,"started_at":%s}\n' "$(date +%s)" >"$(notify_follower_file)"
+out="$(HC_BIN="$TMP_DIR/bin/hc-cover" doctor_notify)" || fail "an uncovered repo must not fail doctor: $out"
+[[ "$(grep -c uncovered <<<"$out")" -eq 1 ]] || fail "doctor uncovered lines: $out"
+grep -q 'uncovered  repo other has a live desk but no enabled notify sink covers it (add it: bercail notify repo add team other)' \
+  <<<"$out" || fail "doctor uncovered: $out"
+grep -q 'repo myapp' <<<"$out" && fail "doctor listed a covered repo: $out"
+grep -q 'team-key\|example.invalid' <<<"$out" && fail "doctor leaks: $out"
+printf 'PASS: doctor lists a repo whose live desk no sink covers\n'
+
+# notify repo add / remove edit the repos list in place.
+before_mode="$(_notify_mode "$team")"
+out="$(cd "$TMP_DIR/other" && notify_repo add team 2>&1)" || fail "repo add: $out"
+[[ "$(notify_sink_value "$team" repos)" == "myapp, other" ]] || fail "repo add: $(cat "$team")"
+[[ "$(_notify_mode "$team")" == "$before_mode" ]] || fail "repo add changed the mode"
+[[ "$(notify_sink_value "$team" key)" == team-key && "$(notify_sink_value "$team" notify)" == "finished, blocked" ]] \
+  || fail "repo add lost lines: $(cat "$team")"
+grep -q team-key <<<"$out" && fail "repo add printed the key: $out"
+ls -A "$XDG_CONFIG_HOME/bercail/notify.d" | grep -q '^\.' && fail "repo add left a temp file"
+notify_check "$TMP_DIR/other" 2>/dev/null || fail "an added repo still warns"
+out="$(notify_repo add team other)" || fail "repo add again: $out"
+grep -q 'already covers other' <<<"$out" || fail "repo add again: $out"
+[[ "$(grep -c '^repos' "$team")" -eq 1 ]] || fail "repos line duplicated: $(cat "$team")"
+out="$("$ROOT/bin/bercail" notify repo remove team OTHER)" || fail "repo remove via the CLI: $out"
+[[ "$(notify_sink_value "$team" repos)" == myapp ]] || fail "repo remove: $(cat "$team")"
+out="$(notify_repo remove team nope)" || fail "remove absent: $out"
+grep -q 'does not list nope' <<<"$out" || fail "remove absent: $out"
+cp "$team" "$TMP_DIR/team.before"
+notify_repo remove team myapp 2>"$TMP_DIR/err" && fail "removing the only repo must not widen the sink"
+grep -q 'only repo' "$TMP_DIR/err" || fail "only repo: $(cat "$TMP_DIR/err")"
+cmp -s "$team" "$TMP_DIR/team.before" || fail "a refused remove changed the file"
+notify_repo remove team 2>/dev/null && fail "remove needs a repo"
+notify_repo add nosuch myapp 2>/dev/null && fail "repo add to a missing sink"
+notify_repo add team 'a b' 2>/dev/null && fail "a repo with a blank"
+(cd "$TMP_DIR" && notify_repo add team 2>/dev/null) && fail "repo add outside a checkout needs a name"
+printf 'PASS: notify repo add and remove edit the list, keep the rest, and refuse to widen a sink\n'
+
+# An --all-repos sink covers everything: both are no-ops and say so.
+everyone="$XDG_CONFIG_HOME/bercail/notify.d/everyone.toml"
+printf 'url = "https://example.invalid/all"\nrepos = ""\nspaces = ""\n' >"$everyone"
+cp "$everyone" "$TMP_DIR/everyone.before"
+for action in add remove; do
+  out="$(notify_repo "$action" everyone other)" || fail "all-repos $action: $out"
+  grep -q 'covers every repo' <<<"$out" || fail "all-repos $action: $out"
+done
+cmp -s "$everyone" "$TMP_DIR/everyone.before" || fail "an all-repos sink was edited"
+rm -f "$everyone"
+# An old sink filtered only by space (`workspaces`, no repos line) still loads, and gets one.
+old="$XDG_CONFIG_HOME/bercail/notify.d/old.toml"
+printf 'url = "https://example.invalid/old"\nworkspaces = "*_Other"\n' >"$old"
+notify_repo add old other >/dev/null || fail "repo add to an old sink"
+[[ "$(notify_sink_value "$old" repos)" == other && "$(notify_sink_value "$old" workspaces)" == "*_Other" ]] \
+  || fail "old sink: $(cat "$old")"
+printf 'PASS: repo add and remove are no-ops on an --all-repos sink; an old sink gains a repos line\n'
