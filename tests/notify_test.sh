@@ -244,6 +244,44 @@ out="$(HC_BIN="$TMP_DIR/bin/hc-kill" notify_restart_follower 2>&1)"
 [[ "$out" == "restarted the notify follower (hc terminal bercail-notify)" ]] || fail "restart output: $out"
 printf 'PASS: update restarts the live follower\n'
 
+# Right after that, before the desk mod starts the new follower, doctor says
+# restarting and passes; once the window is over, a follower still gone is missing.
+[[ "$(cat "$(notify_restart_file)")" =~ ^[0-9]+$ ]] || fail "restart not recorded"
+out="$(HC_BIN="$TMP_DIR/bin/hc-kill" doctor_notify)" || fail "doctor failed during the restart: $out"
+printf '%s' "$out" | grep -q 'restarting  notify follower' || fail "restarting: $out"
+printf '%s' "$out" | grep -q 'missing  notify follower' && fail "missing during the restart: $out"
+printf '%s\n' "$(( $(date +%s) - DOCTOR_NOTIFY_RESTART_WINDOW - 1 ))" >"$(notify_restart_file)"
+out="$(HC_BIN="$TMP_DIR/bin/hc-kill" doctor_notify)" && fail "a gone follower passed doctor: $out"
+printf '%s' "$out" | grep -q 'missing  notify follower' || fail "missing after the window: $out"
+printf 'PASS: doctor reports restarting right after update, missing once the window passes\n'
+
+# Neither bad state nor an update with no live follower grants a new window.
+for stamp in invalid "$(( $(date +%s) + 600 ))"; do
+  printf '%s\n' "$stamp" >"$(notify_restart_file)"
+  out="$(HC_BIN="$TMP_DIR/bin/hc-kill" doctor_notify)" && fail "bad restart stamp passed doctor: $stamp"
+  [[ "$out" == *'missing  notify follower'* ]] || fail "bad stamp: $out"
+done
+rm -f "$(notify_restart_file)"
+HC_BIN="$TMP_DIR/bin/hc-kill" notify_restart_follower
+[[ ! -e "$(notify_restart_file)" ]] || fail "missing follower got a restart window"
+out="$(HC_BIN="$TMP_DIR/bin/hc-kill" doctor_notify)" && fail "missing follower passed without a stamp"
+[[ "$out" == *'missing  notify follower'* ]] || fail "no stamp: $out"
+printf 'PASS: invalid, future, and absent restart stamps do not hide a missing follower\n'
+
+# A failed kill leaves no grace period; a new run clears a successful restart.
+out="$(HC_BIN="$TMP_DIR/bin/hc" notify_restart_follower 2>&1)"
+[[ "$out" == *'could not restart'* ]] || fail "failed kill: $out"
+[[ ! -e "$(notify_restart_file)" ]] || fail "failed kill left a restart stamp"
+rm -f "$TMP_DIR/killed"
+HC_BIN="$TMP_DIR/bin/hc-kill" notify_restart_follower >/dev/null
+HC_BIN="$TMP_DIR/bin/hc-kill" notify_run
+[[ ! -e "$(notify_restart_file)" ]] || fail "new run left a restart stamp"
+out="$(HC_BIN="$TMP_DIR/bin/hc" doctor_notify)" || fail "new follower failed doctor: $out"
+[[ "$out" == *'ok  notify follower'* ]] || fail "new follower: $out"
+out="$(HC_BIN="$TMP_DIR/bin/hc-kill" doctor_notify)" && fail "new follower's death hidden by restart stamp"
+[[ "$out" == *'missing  notify follower'* ]] || fail "new follower's death: $out"
+printf 'PASS: failed kills and completed restarts leave no grace period\n'
+
 # notify add: url and key from stdin, written 0600, then tested; the key is never printed.
 rm -f "$XDG_CONFIG_HOME/bercail/notify.d/"*.toml
 : >"$TMP_DIR/headers.txt"

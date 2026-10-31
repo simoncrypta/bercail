@@ -94,9 +94,13 @@ doctor_notify_missed() {
   return 0
 }
 
+# How long after `bercail update` kills the follower doctor calls it restarting
+# rather than missing: the desk mod checks every 60s, plus slack to start.
+DOCTOR_NOTIFY_RESTART_WINDOW=90
+
 # Webhook sinks: their last delivery, and the follower that sends to them.
 doctor_notify() {
-  local f name st at last=0 missing=0 missed
+  local f name st at last=0 missing=0 missed restarted now
   [[ -n "$(notify_sink_files)" ]] || return 0
   while IFS= read -r f; do
     [[ -n "$f" ]] || continue
@@ -119,6 +123,9 @@ doctor_notify() {
   else
     at="never"
   fi
+  restarted="$(cat "$(notify_restart_file)" 2>/dev/null || true)"
+  [[ "$restarted" =~ ^[0-9]+$ ]] || restarted=0
+  now="$(_notify_now)"
   if "$(notify_hc)" get bercail-notify --json 2>/dev/null | jq -e '.state == "live"' >/dev/null 2>&1; then
     if missed="$(doctor_notify_missed)"; then
       log "  ok  notify follower (hc terminal bercail-notify; last post $at)"
@@ -126,6 +133,9 @@ doctor_notify() {
       log "  deaf  notify follower is live but $missed (restart it: hc kill bercail-notify; the bercail layout starts it again)"
       missing=$((missing + 1))
     fi
+  elif (( restarted > 0 && now >= restarted && now - restarted <= DOCTOR_NOTIFY_RESTART_WINDOW )); then
+    # bercail update killed it; the desk mod's 60s check starts the new one.
+    log "  restarting  notify follower (bercail update restarted it $((now - restarted))s ago; the desk mod starts it within a minute)"
   else
     log "  missing  notify follower (the bercail layout starts it; or: hc run --bg --no-parent --name bercail-notify bercail notify run)"
     missing=$((missing + 1))
@@ -198,4 +208,3 @@ doctor_skill() {
   fi
   [[ "$missing" -eq 0 ]]
 }
-
