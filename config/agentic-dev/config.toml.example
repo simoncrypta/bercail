@@ -12,7 +12,7 @@ review = "tuicr"
 auto_review = true
 
 [bstack]
-# opencode with your own Claude, ChatGPT, and SuperGrok plans. New installs turn
+# opencode with your own Claude, ChatGPT, and X subscriptions. New installs turn
 # it on; `bercail bstack setup` connects plans.
 enabled = true
 # A model per provider. Empty: auto, the newest model of each connected plan

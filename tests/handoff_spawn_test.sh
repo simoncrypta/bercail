@@ -252,6 +252,8 @@ test_rejects_prompt_after_double_dash
 test_intro_does_not_invoke_review_skill() {
   grep -q 'when the desk agent finishes, Review opens itself in this space' "$ROOT/skills/handoff/scripts/handoff-spawn" \
     || fail "handoff intro should say Review opens itself"
+  grep -q 'post your final report on this issue with bd comment' "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    || fail "a desk reports on the issue, where headless runs and Shep read it"
   local res
   res="$(handoff_result_json L /p b i 1 0 1 start claude sp9 t28)"
   printf '%s' "$res" | jq -e '.space == "sp9" and .desk == "t28" and .ok and .stage == "start" and .harness == "claude"' >/dev/null \

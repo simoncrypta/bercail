@@ -9,6 +9,8 @@ BSTACK_MARKER="managed by bercail (bstack)"
 # The models deploy resolved, family=model per line. handoff-spawn reads it for
 # the families config.toml leaves on auto.
 BSTACK_RESOLVED="${AGENTIC_DEV_SHARE_DIR}/bstack-models"
+# The last variant list opencode's server gave, for when it doesn't answer.
+BSTACK_VARIANTS_CACHE="${AGENTIC_DEV_SHARE_DIR}/bstack-variants"
 BSTACK_FAMILIES=(claude gpt grok)
 BSTACK_ROLES=(lead build judge)
 # Agents and commands bstack renders into the opencode config dir.
@@ -114,7 +116,7 @@ bstack_model_source() {
 
 # A role that names a family whose plan is not connected takes the next family
 # that has a model, so build = "grok" works on Claude alone and moves to Grok
-# once SuperGrok is connected. A full model id is used as is.
+# once the X subscription is connected. A full model id is used as is.
 bstack_role_model() {
   local role="$1" spec family model
   spec="$(_bstack_toml_get bstack "$role")"
@@ -146,7 +148,7 @@ _bstack_family_label() {
   case "$1" in
     claude) printf 'Claude plan (Claude Agent)' ;;
     gpt) printf 'ChatGPT plan (OpenAI)' ;;
-    grok) printf 'SuperGrok (xAI)' ;;
+    grok) printf 'X subscription (xAI)' ;;
   esac
 }
 
@@ -170,6 +172,12 @@ bstack_load_state() {
     # "provider/model low,medium,high" per line; empty when the server can't say.
     BSTACK_VARIANTS="$(opencode api get /api/model 2>/dev/null \
       | jq -r '.data[]? | "\(.providerID)/\(.id) \([.variants[]?.id] | join(","))"' 2>/dev/null || true)"
+    if [[ -n "$BSTACK_VARIANTS" ]]; then
+      { mkdir -p "$(dirname "$BSTACK_VARIANTS_CACHE")" \
+        && printf '%s\n' "$BSTACK_VARIANTS" >"$BSTACK_VARIANTS_CACHE"; } 2>/dev/null || true
+    elif [[ -f "$BSTACK_VARIANTS_CACHE" ]]; then
+      BSTACK_VARIANTS="$(<"$BSTACK_VARIANTS_CACHE")"
+    fi
   fi
   BSTACK_STATE_LOADED=1
 }
@@ -365,6 +373,7 @@ remove_bstack() {
     run rm -rf "$OPENCODE_CONFIG_DIR/bstack"
   fi
   [[ ! -f "$BSTACK_RESOLVED" ]] || run rm -f "$BSTACK_RESOLVED"
+  [[ ! -f "$BSTACK_VARIANTS_CACHE" ]] || run rm -f "$BSTACK_VARIANTS_CACHE"
 }
 
 # --- bercail bstack -----------------------------------------------------------
@@ -511,7 +520,7 @@ doctor_bstack() {
     missing=1
   fi
   if [[ -z "$connected" ]] || ! grep -qxE 'claude-agent|openai|xai' <<<"$connected"; then
-    log "  missing  bstack subscription: none of Claude, ChatGPT, SuperGrok is connected (bercail bstack setup)"
+    log "  missing  bstack subscription: none of Claude, ChatGPT, X is connected (bercail bstack setup)"
     missing=1
   else
     log "  ok  bstack subscriptions: $(grep -xE 'claude-agent|openai|xai' <<<"$connected" | paste -sd, -)"

@@ -381,6 +381,28 @@ migrate_cursor_cli_command() {
   info "migrated agent command to cursor-agent"
 }
 
+# Say what this install or update deploys from. A clone off master (or off a
+# release tag) is a dev build: warn, since its version number still reads as the release.
+describe_install_source() {
+  local src branch sha tag
+  src="$(install_src_dir)"
+  if [[ ! -d "$src" ]]; then
+    info "source: $src (GitHub $(github_raw_base | awk -F/ '{ print $NF }'))"
+    return 0
+  fi
+  if ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
+    info "source: $src (v${AGENTIC_DEV_VERSION})"
+    return 0
+  fi
+  branch="$(git -C "$src" symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'detached')"
+  sha="$(git -C "$src" rev-parse --short HEAD 2>/dev/null)"
+  tag="$(git -C "$src" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  info "source: $src ($branch @ $sha${tag:+, $tag})"
+  if [[ -z "$tag" && "$branch" != master && "$branch" != main ]]; then
+    warn "installing from branch '$branch', not master or a release tag: this is a dev build of v${AGENTIC_DEV_VERSION} (git -C $src switch master to go back)"
+  fi
+}
+
 record_install_source() {
   local src
   src="$(install_src_dir)"
@@ -511,6 +533,7 @@ deploy_configs() {
   )
   local entry rel dest
 
+  describe_install_source
   migrate_agentic_dev_to_bercail
   prompt_user_config
   migrate_cursor_cli_command

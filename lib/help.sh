@@ -115,7 +115,7 @@ show_summary() {
   log "bercail installed (v${AGENTIC_DEV_VERSION})"
   log ""
   if declare -F bstack_enabled >/dev/null && bstack_enabled; then
-    log "bstack: on (opencode). Connect your Claude/ChatGPT/SuperGrok plans: bercail bstack setup"
+    log "bstack: on (opencode). Connect your Claude, ChatGPT, or X subscription: bercail bstack setup"
   fi
   log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff stages: start=claude, codex=Codex CLI, cursor=cursor-agent, bstack=opencode, autopilot=opencode bstack-autopilot; equal, no default)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"

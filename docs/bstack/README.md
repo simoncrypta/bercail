@@ -1,7 +1,7 @@
 # The bstack guide
 
-bstack is bercail's opencode: one harness, your own Claude, ChatGPT, and SuperGrok
-plans behind it, and bercail's loop on top. The agent writes the code, stages it,
+bstack is bercail's opencode: one harness, your own Claude, ChatGPT, and X
+subscriptions behind it, and bercail's loop on top. The agent writes the code, stages it,
 and stops. You review it in tuicr. When the PR is open, autopilot gets it green.
 
 The habit this guide teaches: say what you want and how you'll know it's done.

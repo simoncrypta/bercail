@@ -53,6 +53,7 @@ that is strongest at it. These rules apply to every bstack agent and subagent.
   only when asked. Asking for `autopilot` is asking to commit and push to that
   PR's branch, never to force-push or merge.
 - End with a short report: what changed, what you ran to prove it, what is left.
-  No inventory of every file.
+  No inventory of every file. When a beads issue names the job, also post that
+  report on it (`bd comment <id>`), so it outlives the desk's screen.
 - In a headless handoff, write the result file the issue comment names
   (`status` ready|blocked|failed, `summary`). `blocked` with a reason beats a guess.

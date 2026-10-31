@@ -12,7 +12,7 @@ run in a terminal (logins are interactive, so do not run them yourself):
 
 - Claude plan: `claude auth login`, then `opencode auth login claude-agent`
 - ChatGPT plan: `opencode auth login openai` (choose Sign in with ChatGPT)
-- SuperGrok: `opencode auth login xai --method device`
+- X subscription: `opencode auth login xai --method device`
 
 Then tell me to run `bercail bstack setup`, which picks the newest model of each
 connected plan by itself and rewrites the bstack agents. To pin a model instead,

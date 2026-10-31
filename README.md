@@ -6,7 +6,7 @@ Bercail is an agentic development environment on the [Herdr app](https://herdr.d
 
 **Bercail is built to be orchestrated by a Grok bot.** [Shep](#shep-the-grok-bot) is that bot: a public Grok bot that runs bercail for you. The agentic workflow here (beads issues, named stages, result files, review when a desk is done) is optimized for Shep as the orchestrator. Bercail does the local work; Shep decides what happens next.
 
-**New installs run [bstack](#bstack): one harness, [opencode](https://github.com/anomalyco/opencode), on your own Claude, ChatGPT, and SuperGrok plans.** Claude Code, Codex CLI, and cursor-agent stay equal harnesses beside it. Bercail does not prefer one for a handoff, pick one, or fall back from one to another. A handoff is a [beads](https://beads.gascity.com/) issue: Shep writes it, and the agent's whole prompt is one line pointing at that issue.
+**New installs run [bstack](#bstack): one harness, [opencode](https://github.com/anomalyco/opencode), on your own Claude, ChatGPT, and X subscriptions.** Claude Code, Codex CLI, and cursor-agent stay equal harnesses beside it. Bercail does not prefer one for a handoff, pick one, or fall back from one to another. A handoff is a [beads](https://beads.gascity.com/) issue: Shep writes it, and the agent's whole prompt is one line pointing at that issue.
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
@@ -29,7 +29,7 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
 ## bstack
 
-**bstack is bercail's opinionated opencode.** opencode v2 signs in with a Claude plan (Claude Agent), a ChatGPT plan, and SuperGrok, so one harness runs all three, on subscriptions you already pay for. bstack sets opencode up the way bercail works: the job is a beads issue, agents stage and leave changes uncommitted for tuicr, and each kind of work goes to the model that is best at it. Ideas from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (rigor, playbooks, roles by model strength, `how`/`why`/`unslop`), [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit) (babysit-pr and CI loops, which became autopilot), [tstack](https://github.com/t3dotgg/tstack) (a council of providers), and [gstack](https://github.com/garrytan/gstack), on top of Shep's handoff workflow.
+**bstack is bercail's opinionated opencode.** opencode v2 signs in with a Claude plan (Claude Agent), a ChatGPT plan, and an X subscription, so one harness runs all three, on subscriptions you already pay for. bstack sets opencode up the way bercail works: the job is a beads issue, agents stage and leave changes uncommitted for tuicr, and each kind of work goes to the model that is best at it. Ideas from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (rigor, playbooks, roles by model strength, `how`/`why`/`unslop`), [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit) (babysit-pr and CI loops, which became autopilot), [tstack](https://github.com/t3dotgg/tstack) (a council of providers), and [gstack](https://github.com/garrytan/gstack), on top of Shep's handoff workflow.
 
 ```bash
 bercail bstack setup     # installs opencode, connects your plans; models are picked for you

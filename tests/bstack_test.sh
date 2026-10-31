@@ -50,6 +50,7 @@ case "$1 $2" in
     printf '%s\n' claude-agent/opus claude-agent/sonnet openai/gpt-6.1-sol openai/gpt-6 openai/gpt-6.1-mini \
       xai/grok-5 xai/grok-5-mini xai/grok-4.7 xai/grok-4.20-multi-agent-0309 ;;
   "api get")
+    [[ -z "${FAKE_API_DOWN:-}" ]] || exit 1
     printf '%s\n' '{"data":[
       {"providerID":"claude-agent","id":"opus","variants":[{"id":"low"},{"id":"high"},{"id":"max"}]},
       {"providerID":"xai","id":"grok-5","variants":[{"id":"low"},{"id":"high"},{"id":"xhigh"}]},
@@ -246,6 +247,9 @@ EOF
   [[ ! -e "$OPENCODE_CONFIG_DIR/agents/bstack-council-gpt.md" ]] || fail "no gpt seat"
   grep -qx 'grok=xai/grok-5#high' "$BSTACK_RESOLVED" || fail "resolved file for handoff: $(cat "$BSTACK_RESOLVED")"
   grep -q 'xai/grok-5#high (auto)' "$TMP_DIR/setup.log" || fail "status says auto: $(cat "$TMP_DIR/setup.log")"
+  FAKE_API_DOWN=1 FAKE_CONNECTED="claude-agent xai" bstack_load_state reload
+  assert_eq "xai/grok-5#high" "$(FAKE_CONNECTED="claude-agent xai" bstack_resolve_model grok)" \
+    "a server that doesn't answer keeps the last variants"
 
   # Connecting ChatGPT later: an update picks it up, and doctor says when it's due.
   doctor_bstack >/dev/null 2>&1 || true
@@ -328,7 +332,7 @@ EOF
   FAKE_CONNECTED="" deploy_bstack >/dev/null 2>&1
   local out
   out="$(FAKE_CONNECTED="" doctor_bstack)" && fail "doctor must fail with no subscription: $out"
-  grep -q 'none of Claude, ChatGPT, SuperGrok' <<<"$out" || fail "doctor says what is missing: $out"
+  grep -q 'none of Claude, ChatGPT, X' <<<"$out" || fail "doctor says what is missing: $out"
   out="$(FAKE_CONNECTED="claude-agent exa" doctor_bstack)" || fail "doctor ok: $out"
   grep -q 'subscriptions: claude-agent$' <<<"$out" || fail "doctor lists only plans: $out"
   printf 'PASS: doctor reports bstack off, missing subscriptions, and a working setup\n'

@@ -79,19 +79,6 @@ maybe_omarchy_pkg_install() {
   run omarchy pkg add "$pkg"
 }
 
-maybe_brew_install() {
-  local pkg="$1"
-  if dep_present "$pkg"; then
-    info "present: $pkg"
-    return 0
-  fi
-  if ! has_brew; then
-    return 1
-  fi
-  info "installing via brew: $pkg"
-  run brew install "$pkg"
-}
-
 maybe_pacman_install() {
   local pkg="$1"
   local bin="${2:-$1}"

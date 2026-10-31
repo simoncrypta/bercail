@@ -15,7 +15,7 @@ It installs opencode when it is missing, then offers each sign-in:
 |------|--------------|
 | Claude (Pro or Max) | `claude auth login`, then `opencode auth login claude-agent` |
 | ChatGPT (Plus or Pro) | `opencode auth login openai`, choose Sign in with ChatGPT |
-| SuperGrok | `opencode auth login xai --method device` |
+| X subscription | `opencode auth login xai --method device` |
 
 Connect the ones you pay for. One is enough to start. bstack spreads the work
 out as you add more.

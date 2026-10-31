@@ -20,10 +20,6 @@ if ! declare -F handoff_die >/dev/null 2>&1; then
   }
 fi
 
-_handoff_lib_dir() {
-  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
-}
-
 handoff_stage_field() {
   local name="$1" field="$2" line n binary mode model
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -456,7 +452,7 @@ handoff_headless_comment_text() {
   if [[ "$resumed" -eq 1 ]]; then
     session_line="Re-handoff of the same session. ${session_line}"
   fi
-  printf 'bercail handoff: stage %s, headless %s, worktree %s.\nWork only in that checkout. Do not open a terminal UI or start another agent.\nWhen you stop, write %s as JSON: status ready|blocked|failed, summary, session_id. %s If this issue is too thin to act on, write status blocked and say what is missing.' \
+  printf 'bercail handoff: stage %s, headless %s, worktree %s.\nWork only in that checkout. Do not open a terminal UI or start another agent.\nWhen you stop, write %s as JSON: status ready|blocked|failed, summary, session_id, and post the same summary on this issue as a bd comment. %s If this issue is too thin to act on, write status blocked and say what is missing.' \
     "$stage" "$binary" "$worktree" "$result" "$session_line"
 }
 
