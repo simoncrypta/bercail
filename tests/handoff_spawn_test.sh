@@ -133,13 +133,11 @@ test_info_json_reports_graphite_and_dirty() {
   git_init "$repo"
   printf 'dirty\n' >>"$repo/file.txt"
   printf 'loose\n' >"$repo/untracked.txt"
-  mkdir -p "$(dirname "$(git -C "$repo" rev-parse --git-path .graphite_repo_config)")"
+  # git -C prints the path relative to $repo, not to the cwd.
   printed="$(git -C "$repo" rev-parse --git-path .graphite_repo_config)"
-  if [[ "$printed" == /* ]]; then
-    printf '{}\n' >"$printed"
-  else
-    printf '{}\n' >"$repo/$printed"
-  fi
+  [[ "$printed" == /* ]] || printed="$repo/$printed"
+  mkdir -p "$(dirname "$printed")"
+  printf '{}\n' >"$printed"
   printf '#!/bin/sh\nexit 1\n' >"$TMP_DIR/no-herdr"
   chmod +x "$TMP_DIR/no-herdr"
   unset HC_TERMINAL_ID HANDOFF_SPACE

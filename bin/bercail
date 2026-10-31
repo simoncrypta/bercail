@@ -156,7 +156,7 @@ Commands:
   doctor        Check dependencies and integration
   harness       JSON: which of claude, codex, cursor-agent, opencode are on PATH
   bstack        opencode with your Claude/GPT/Grok subscriptions: status | setup | on | off
-  notify        Agent status webhooks: status | add NAME | test NAME | run
+  notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills/integrations from config.toml (not a full redeploy)
   dry-run       Show planned install actions

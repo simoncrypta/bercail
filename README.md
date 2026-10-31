@@ -88,7 +88,11 @@ bercail notify add work-shep --auth bearer --all-repos --notify finished
 printf '%s\n%s\n' "$URL" "$KEY" | bercail notify add work-shep --yes   # no terminal
 bercail notify status          # sinks, filters, last HTTP code; never prints url or key
 bercail notify test work-shep
+bercail notify repo add work-shep              # add this checkout's repo to the sink
+bercail notify repo remove work-shep myapp
 ```
+
+A desk in a repo that no enabled sink covers posts nowhere, so bercail says so. `handoff-spawn --branch` prints one warning on stderr with the `bercail notify repo add` command that fixes it (the spawn still goes ahead), and `bercail doctor` lists each repo with a live desk that no sink covers. `bercail notify check [PATH]` runs the same check by hand. With no sinks at all there is nothing to warn about. `notify repo add` and `remove` change only the sink's `repos` line. On an `--all-repos` sink they do nothing and say so. `remove` refuses to take out a sink's last repo, because an empty list means every repo.
 
 `notify add` options: `--auth both|bearer|x-automation-key|none` (default `both`), `--repos LIST` (default: the current checkout's repo, or every repo outside a checkout), `--all-repos`, `--spaces GLOBS`, `--notify finished,blocked` (default both), and `--yes` to replace an existing sink without asking. Without `--yes` it shows the existing sink redacted and asks first. With no terminal it reads the URL, then the key, one per line from stdin; `BERCAIL_NOTIFY_URL` and `BERCAIL_NOTIFY_KEY` skip their prompt. It never takes the key as an argument, so the key stays out of shell history and the process list.
 
@@ -202,7 +206,7 @@ bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) 
 | `bercail reconfigure` | Re-read `config.toml`, refresh skills |
 | `bercail dry-run` | Show install actions, write nothing |
 | `bercail uninstall` | Remove managed files and the shell marker |
-| `bercail notify status` / `add NAME` / `test NAME` | [Agent status webhooks](#agent-status-webhooks) |
+| `bercail notify status` / `add NAME` / `repo add NAME` / `repo remove NAME REPO` / `check [PATH]` / `test NAME` | [Agent status webhooks](#agent-status-webhooks) |
 
 ### shell
 
