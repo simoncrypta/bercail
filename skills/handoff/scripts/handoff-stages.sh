@@ -83,14 +83,38 @@ handoff_issue_exists() {
   (cd "$dir" && "$(handoff_bd_bin)" show "$id" --json >/dev/null 2>&1)
 }
 
-# The .beads dir bd resolves from DIR. A linked worktree resolves the main
-# checkout's .beads, which is outside the worktree a sandboxed harness may write.
+# The .beads dir bd resolves from DIR. A linked worktree with no local database
+# resolves the main checkout's .beads, outside the worktree a sandboxed harness
+# may write. A copied local database resolves inside the worktree.
 handoff_beads_dir() {
   local dir="$1" out
   out="$(cd "$dir" && "$(handoff_bd_bin)" context --json 2>/dev/null)" || return 1
   out="$(jq -r '.beads_dir // empty' <<<"$out" 2>/dev/null)" || return 1
   [[ -n "$out" ]] || return 1
   printf '%s' "$out"
+}
+
+# wt step copy-ignored copies the gitignored Dolt store into a new worktree,
+# and bd then writes there instead of the main checkout. A redirect points bd
+# back. The copy stays; existing worktree databases are not removed.
+handoff_share_main_beads() {
+  local worktree="$1" main target current
+  main="$(handoff_git_main "$worktree" 2>/dev/null || true)"
+  [[ -n "$main" && -d "$main" ]] || return 0
+  main="$(handoff_abspath "$main")"
+  worktree="$(handoff_abspath "$worktree")"
+  [[ "$worktree" != "$main" ]] || return 0
+  [[ -d "$main/.beads" ]] || return 0
+  target="$(handoff_abspath "$main/.beads")"
+  current="$(handoff_beads_dir "$worktree" 2>/dev/null || true)"
+  if [[ -n "$current" && -d "$current" ]]; then
+    current="$(handoff_abspath "$current")"
+    [[ "$current" == "$target" ]] && return 0
+  fi
+  mkdir -p "$worktree/.beads"
+  # Absolute: bd follows it, and a relative path is resolved from the worktree
+  # root, which is easy to get one directory wrong.
+  printf '%s\n' "$target" >"$worktree/.beads/redirect"
 }
 
 handoff_issue_comment() {
@@ -510,6 +534,11 @@ handoff_run_headless() {
   bd="$(handoff_bd_bin)"
   if handoff_bin_present "$bd"; then
     bd_present=true
+    # Before the issue check and --add-dir: a copied store would hide the issue
+    # and keep the harness inside the worktree.
+    if [[ "$dry" -ne 1 ]]; then
+      handoff_share_main_beads "$worktree"
+    fi
     beads_dir="$(handoff_beads_dir "$worktree" || true)"
     if [[ -n "$beads_dir" && "$beads_dir/" == "$worktree/"* ]]; then
       beads_dir=""
