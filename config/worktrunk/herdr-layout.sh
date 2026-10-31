@@ -142,7 +142,12 @@ _wt_herdr_start_desk() {
   if [[ "$(basename "${argv[0]}")" == codex && " ${argv[*]} " != *" --no-daemon "* ]]; then
     argv+=(--no-daemon)
   fi
-  [[ -z "$prompt" ]] || argv+=("$prompt")
+  # opencode's TUI reads a positional argument as a directory; its first message is --prompt.
+  if [[ -n "$prompt" && "$(basename "${argv[0]}")" == opencode ]]; then
+    argv+=(--prompt "$prompt")
+  elif [[ -n "$prompt" ]]; then
+    argv+=("$prompt")
+  fi
   # hc passes on the caller's environment; a headless caller (Shep) has
   # TERM=dumb, which leaves the desk without colors or key handling.
   TERM=xterm-256color COLORTERM=truecolor "$HC" run --bg --keep --outlive-parent --no-notify \

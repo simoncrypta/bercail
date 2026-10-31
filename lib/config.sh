@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
+# A new install runs bstack (opencode) on the desk; --no-bstack keeps cursor-agent.
 default_user_config() {
+  local agent=cursor-agent
+  [[ "${BSTACK_NEW_INSTALL:-1}" -eq 1 ]] && agent=opencode
+  printf '[agent]\ncommand = "%s"\n' "$agent"
   cat <<'EOF'
-[agent]
-command = "cursor-agent"
 
 [layout]
 review = "tuicr"
@@ -12,6 +14,26 @@ review = "tuicr"
 # only, watching; agents stage and do not commit). Someone else's PR uses `tuicr pr`.
 # Set false to open Review only with Ctrl+Shift+R.
 auto_review = true
+EOF
+  [[ "${BSTACK_NEW_INSTALL:-1}" -eq 1 ]] || return 0
+  cat <<'EOF'
+
+[bstack]
+# opencode with your own subscriptions. `bercail bstack setup` connects them;
+# `bercail bstack off` turns bstack off.
+enabled = true
+# A model per provider. Empty: auto, the newest model of each connected plan
+# (re-picked on bercail update). Set an opencode id (#variant allowed) to pin one.
+claude = ""
+gpt = ""
+grok = ""
+# Reasoning effort of auto models: low, medium, high, xhigh, max, or none (the
+# provider's default). A model without that level gets the next one down.
+effort = "high"
+# Which provider each role uses: claude, gpt, grok, or a full model id.
+lead = "claude"
+build = "grok"
+judge = "claude"
 EOF
 }
 
@@ -258,8 +280,8 @@ EOF
   info "saved config to $AGENTIC_DEV_USER_CONFIG"
 }
 
-# No install-time agent picker. The desk agent defaults to cursor-agent until
-# one is picked on the desk.
+# No install-time agent picker. The desk agent defaults to opencode as bstack
+# (cursor-agent with --no-bstack) until one is picked on the desk.
 # Override [agent] command in config.toml yourself, then bercail reconfigure.
 prompt_user_config() {
   if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
@@ -267,13 +289,15 @@ prompt_user_config() {
     info "review: $(read_layout_review)"
     return 0
   fi
+  local agent=cursor-agent
+  [[ "${BSTACK_NEW_INSTALL:-1}" -eq 1 ]] && agent="opencode (bstack)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would write default $AGENTIC_DEV_USER_CONFIG (agent=cursor-agent)"
+    info "[dry-run] would write default $AGENTIC_DEV_USER_CONFIG (agent=$agent)"
     return 0
   fi
   ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
   default_user_config >"$AGENTIC_DEV_USER_CONFIG"
-  info "saved default config to $AGENTIC_DEV_USER_CONFIG (agent=cursor-agent)"
+  info "saved default config to $AGENTIC_DEV_USER_CONFIG (agent=$agent)"
 }
 
 prompt_agent_command() {
@@ -324,7 +348,7 @@ deploy_lib() {
     deploy_tree "$src/lib" "${AGENTIC_DEV_SHARE_DIR}/lib"
   else
     local libfile
-    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh harness.sh; do
+    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh harness.sh bstack.sh; do
       deploy_install_file "lib/$libfile" "${AGENTIC_DEV_SHARE_DIR}/lib/$libfile"
     done
   fi
@@ -355,6 +379,28 @@ migrate_cursor_cli_command() {
   ' "$dest" >"$tmp"
   mv "$tmp" "$dest"
   info "migrated agent command to cursor-agent"
+}
+
+# Say what this install or update deploys from. A clone off master (or off a
+# release tag) is a dev build: warn, since its version number still reads as the release.
+describe_install_source() {
+  local src branch sha tag
+  src="$(install_src_dir)"
+  if [[ ! -d "$src" ]]; then
+    info "source: $src (GitHub $(github_raw_base | awk -F/ '{ print $NF }'))"
+    return 0
+  fi
+  if ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
+    info "source: $src (v${AGENTIC_DEV_VERSION})"
+    return 0
+  fi
+  branch="$(git -C "$src" symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'detached')"
+  sha="$(git -C "$src" rev-parse --short HEAD 2>/dev/null)"
+  tag="$(git -C "$src" describe --tags --exact-match HEAD 2>/dev/null || true)"
+  info "source: $src ($branch @ $sha${tag:+, $tag})"
+  if [[ -z "$tag" && "$branch" != master && "$branch" != main ]]; then
+    warn "installing from branch '$branch', not master or a release tag: this is a dev build of v${AGENTIC_DEV_VERSION} (git -C $src switch master to go back)"
+  fi
 }
 
 record_install_source() {
@@ -487,6 +533,7 @@ deploy_configs() {
   )
   local entry rel dest
 
+  describe_install_source
   migrate_agentic_dev_to_bercail
   prompt_user_config
   migrate_cursor_cli_command
@@ -519,6 +566,10 @@ deploy_configs() {
     # shellcheck source=/dev/null
     source "${AGENTIC_DEV_SHARE_DIR}/lib/config.sh"
   fi
+  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/bstack.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${AGENTIC_DEV_SHARE_DIR}/lib/bstack.sh"
+  fi
   # First update from an older bercail still runs the previous deploy_configs,
   # so re-run after the new lib is on disk.
   if declare -F migrate_hunk_review_to_tuicr >/dev/null; then
@@ -526,6 +577,9 @@ deploy_configs() {
   fi
   deploy_herdr_app
   deploy_skills
+  if declare -F deploy_bstack >/dev/null; then
+    deploy_bstack || true
+  fi
 
   if [[ ! -f "$WORKTRUNK_CONFIG_DIR/config.toml" ]] || [[ "$FORCE" -eq 1 ]]; then
     deploy_install_file "config/worktrunk/config.toml" "$WORKTRUNK_CONFIG_DIR/config.toml"

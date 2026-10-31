@@ -22,7 +22,9 @@ import {
 
 const CONFIG = "/.config/bercail/config.toml";
 // The desk agents to choose from, by Herdr program key; argv is used when Herdr doesn't know one.
+// own: keep this name over Herdr's (bstack is bercail's opencode setup).
 const CHOICES = [
+  { key: "opencode", name: "bstack", argv: ["opencode"], own: true },
   { key: "claude", name: "Claude Code", argv: ["claude"] },
   { key: "codex", name: "Codex", argv: ["codex"] },
   { key: "grok", name: "Grok", argv: ["grok"] },
@@ -199,7 +201,7 @@ export default class BercailDesk extends View {
         const known = await knownAgents();
         this.choices = CHOICES.map((c) => {
           const k = known.find((a) => a.key === c.key);
-          return k ? { ...c, name: k.name, argv: k.run, installed: k.installed } : c;
+          return k ? { ...c, name: c.own ? c.name : k.name, argv: k.run, installed: k.installed } : c;
         });
       } catch { /* keep the defaults */ }
       cx.notify();

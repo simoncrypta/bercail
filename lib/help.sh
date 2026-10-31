@@ -15,13 +15,16 @@ Install (curl, still supported):
 
 install.sh options:
   -h, --help   Show this help
-  -y, --yes    Non-interactive (existing/default config; desk default is cursor-agent)
+  -y, --yes    Non-interactive (existing/default config)
+  --no-bstack  New install without bstack: the desk default stays cursor-agent
+  --bstack     New install with bstack (the default): opencode on the desk
 
 Post-install CLI (bercail):
   help          This help
   install       Full install from the release mise or packslip unpacked
   doctor        Check dependencies and integration
-  harness       JSON: claude, codex, and cursor-agent on PATH (missing is not fatal)
+  harness       JSON: claude, codex, cursor-agent, opencode on PATH (missing is not fatal)
+  bstack        opencode with your own subscriptions: status | setup | on | off
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills from config.toml (not a full redeploy)
   dry-run       Show planned actions without changes
@@ -36,7 +39,7 @@ Shell commands:
   t             Open the Herdr app
 
 Herdr app layout "bercail" (switch with Ctrl+Shift+L):
-  Left: the desk, one agent per space (claude, codex or grok, picked on the desk)
+  Left: the desk, one agent per space (bstack, claude, codex or grok, picked on the desk)
   Center: the space's tabs (Shell; Review runs \`tuicr -w\`, uncommitted only,
           watching, and opens itself when the desk agent finishes)
   Right: files / changes
@@ -68,8 +71,16 @@ Ubuntu / Debian:
   Uses apt for git, fzf, jq, curl when mise is unavailable
   Downloads worktrunk, beads and tuicr from upstream when needed
 
+bstack (opencode, bring your own Claude / GPT / Grok subscription):
+  bercail bstack setup   install opencode, connect plans (models are picked for you)
+  bercail bstack status  what is connected, each model (auto or pinned), each role
+  Roles: lead (the bstack agent), build (bstack-builder), judge (bstack-judge);
+  council: one read-only reviewer per connected provider. In opencode: /council,
+  /ready, /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
+  pushes, never merges). Settings: [bstack] in config.toml.
+
 Config:
-  ~/.config/bercail/config.toml               desk agent default, review
+  ~/.config/bercail/config.toml               desk agent default, review, [bstack]
   ~/.config/herdr-app/layouts/bercail.json    the layout
   ~/.config/herdr-app/mods/bercail-desk/      the desk mod
   ~/.config/herdr-app/keys.json               its "layout:bercail" keys (update keeps yours)
@@ -77,9 +88,12 @@ Config:
   ~/.config/worktrunk/config.toml             worktrunk hooks
   ~/.agents/skills/handoff/                   handoff skill (canonical)
   ~/.agents/skills/review/                    tuicr review skill (wait / optional GH publish)
+  ~/.agents/skills/bstack/, council/          bstack playbooks, cross-provider review
+  ~/.agents/skills/{how,why,unslop,autopilot}/  explain, history, cleanup, PR to green
+  ~/.config/opencode/opencode.jsonc           bstack's opencode config (agents/, commands/ beside it)
   ~/.config/fcitx5/conf/keyboard.conf         Linux fcitx5 hint trigger override
 
-Agent skills (\`handoff\`, \`review\`):
+Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`):
   Installed to ~/.agents/skills/<id> (https://agentskills.io). cursor-agent
   reads that dir. Extra symlink only if you set another [agent] command.
   Source: skills/handoff/, skills/review/.
@@ -88,7 +102,9 @@ Agent skills (\`handoff\`, \`review\`):
   cursor is cursor-agent (--print --output-format json). Each works a beads
   issue; the prompt is one line pointing at it. Headless runs write
   .bercail/handoff-result.json; --branch starts a desk agent for any stage.
-  claude, codex, and cursor-agent are optional and equal; bercail does not
+  bstack is opencode (opencode run --agent bstack); --binary opencode runs
+  start (Claude) or codex (GPT) through your opencode subscriptions.
+  claude, codex, cursor-agent, and opencode are optional and equal; bercail does not
   pick one. Shep owns the workflow. bercail harness reports which are on PATH
   plus a local model hint.
 EOF
@@ -98,10 +114,13 @@ show_summary() {
   log ""
   log "bercail installed (v${AGENTIC_DEV_VERSION})"
   log ""
-  log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff stages: start=claude, codex=Codex CLI, cursor=cursor-agent; equal, no default)"
+  if declare -F bstack_enabled >/dev/null && bstack_enabled; then
+    log "bstack: on (opencode). Connect your Claude, ChatGPT, or X subscription: bercail bstack setup"
+  fi
+  log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff stages: start=claude, codex=Codex CLI, cursor=cursor-agent, bstack=opencode, autopilot=opencode bstack-autopilot; equal, no default)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Config: ${AGENTIC_DEV_USER_CONFIG}"
-  log "Skills: ${AGENTS_SKILLS_DIR}/handoff, ${AGENTS_SKILLS_DIR}/review"
+  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop}"
   log ""
   log "Try: dev"
   log "Help: bercail help"

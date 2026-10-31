@@ -8,6 +8,8 @@ handoff_stage_table() {
 start	claude	headless	opus-5.5
 codex	codex	headless	-
 cursor	cursor-agent	headless	-
+bstack	opencode	headless	lead
+autopilot	opencode	headless	lead
 TABLE
 }
 
@@ -17,10 +19,6 @@ if ! declare -F handoff_die >/dev/null 2>&1; then
     exit 1
   }
 fi
-
-_handoff_lib_dir() {
-  cd "$(dirname "${BASH_SOURCE[0]}")" && pwd
-}
 
 handoff_stage_field() {
   local name="$1" field="$2" line n binary mode model
@@ -203,6 +201,7 @@ handoff_headless_bin() {
     claude) printf '%s' "${HANDOFF_CLAUDE_BIN:-$binary}" ;;
     codex) printf '%s' "${HANDOFF_CODEX_BIN:-$binary}" ;;
     cursor-agent) printf '%s' "${HANDOFF_CURSOR_BIN:-$binary}" ;;
+    opencode) printf '%s' "${HANDOFF_OPENCODE_BIN:-$binary}" ;;
     *) handoff_die "unsupported headless binary: $binary" ;;
   esac
 }
@@ -262,6 +261,84 @@ handoff_cursor_model() {
   printf '%s' "$spec"
 }
 
+# opencode run --format json: one JSON object per line, each with sessionID.
+handoff_opencode_session_id() {
+  local log="$1" id
+  [[ -f "$log" ]] || return 1
+  id="$(jq -r '.sessionID // empty' "$log" 2>/dev/null | awk 'NF { print; exit }')"
+  [[ -n "$id" ]] || return 1
+  printf '%s' "$id"
+}
+
+handoff_is_opencode_session() {
+  [[ "$1" =~ ^ses_[A-Za-z0-9]+$ ]]
+}
+
+# [bstack] KEY in bercail's config.toml, unquoted (a quoted value keeps its #variant).
+_handoff_bstack_get() {
+  local key="$1" config="${BERCAIL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml}"
+  [[ -f "$config" ]] || return 0
+  awk -v key="$key" '
+    /^[[:space:]]*\[/ { sec = $0; gsub(/[[:space:]]/, "", sec); next }
+    sec != "[bstack]" || $0 !~ "^[[:space:]]*" key "[[:space:]]*=" { next }
+    {
+      line = $0
+      sub("^[[:space:]]*" key "[[:space:]]*=[[:space:]]*", "", line)
+      if (line ~ /^"/) { sub(/^"/, "", line); sub(/".*$/, "", line) }
+      else sub(/[[:space:]]*#.*$/, "", line)
+      print line
+      exit
+    }' "$config"
+}
+
+# A family's model when config.toml leaves it on auto: what bercail's last deploy
+# picked (~/.local/share/bercail/bstack-models, family=model).
+_handoff_bstack_resolved() {
+  local file="${BERCAIL_BSTACK_MODELS:-$HOME/.local/share/bercail/bstack-models}"
+  [[ -f "$file" ]] || return 0
+  awk -F= -v key="$1" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$file"
+}
+
+# A bstack role (lead, build, judge) or family (claude, gpt, grok) -> the opencode
+# model bercail's config.toml gives it, as `bercail bstack status` shows it: a
+# role on a family with no model takes the next one that has one. A family named
+# directly (--binary opencode on start or codex) does not. Nothing: opencode uses
+# the bstack agent's model.
+handoff_bstack_model() {
+  local spec="$1" family model
+  local -a order=()
+  case "$spec" in
+    lead|judge|build)
+      order=(claude gpt grok)
+      [[ "$1" == build ]] && order=(grok gpt claude)
+      spec="$(_handoff_bstack_get "$1")"
+      [[ -n "$spec" ]] || spec="${order[0]}"
+      ;;
+  esac
+  case "$spec" in
+    claude|gpt|grok) ;;
+    -|"") return 0 ;;
+    *) printf '%s' "$spec"; return 0 ;;
+  esac
+  for family in "$spec" "${order[@]}"; do
+    model="$(_handoff_bstack_get "$family")"
+    [[ -n "$model" ]] || model="$(_handoff_bstack_resolved "$family")"
+    if [[ -n "$model" ]]; then
+      printf '%s' "$model"
+      return 0
+    fi
+  done
+}
+
+# --binary opencode on another stage keeps that stage's provider, through opencode.
+handoff_opencode_spec_for_stage() {
+  case "$1" in
+    start) printf 'claude' ;;
+    codex) printf 'gpt' ;;
+    *) printf 'lead' ;;
+  esac
+}
+
 handoff_resolve_headless_model() {
   local binary="$1" spec="$2"
   case "$binary" in
@@ -273,6 +350,9 @@ handoff_resolve_headless_model() {
       ;;
     cursor-agent)
       handoff_cursor_model "$spec"
+      ;;
+    opencode)
+      handoff_bstack_model "$spec"
       ;;
     *)
       handoff_die "unsupported headless binary: $binary"
@@ -286,6 +366,7 @@ handoff_resolve_headless_model() {
 # worktree), so the agent can run bd show/comment/close there.
 handoff_build_headless_argv() {
   local binary="$1" bin="$2" model="$3" session="$4" resumed="$5" prompt="$6" beads_dir="${7:-}"
+  local agent="${8:-bstack}"
   case "$binary" in
     claude)
       [[ -n "$model" ]] || handoff_die "claude headless run needs a model"
@@ -337,6 +418,21 @@ handoff_build_headless_argv() {
       fi
       HANDOFF_START_ARGV+=(-- "$prompt")
       ;;
+    opencode)
+      # opencode run --help: --format json, --agent, --model provider/model#variant,
+      # --session (continue that session). No --auto: a headless run rejects every
+      # "ask" (commit, push, merge) and the model goes on without it. Only
+      # bstack-autopilot allows commit and push. A beads dir outside the worktree
+      # is allowed by opencode's default external_directory rule (no --add-dir).
+      HANDOFF_START_ARGV=("$bin" run --format json --agent "$agent")
+      if [[ -n "$model" ]]; then
+        HANDOFF_START_ARGV+=(--model "$model")
+      fi
+      if [[ "$resumed" -eq 1 ]]; then
+        HANDOFF_START_ARGV+=(--session "$session")
+      fi
+      HANDOFF_START_ARGV+=("$prompt")
+      ;;
     *)
       handoff_die "unsupported headless binary: $binary"
       ;;
@@ -356,7 +452,7 @@ handoff_headless_comment_text() {
   if [[ "$resumed" -eq 1 ]]; then
     session_line="Re-handoff of the same session. ${session_line}"
   fi
-  printf 'bercail handoff: stage %s, headless %s, worktree %s.\nWork only in that checkout. Do not open a terminal UI or start another agent.\nWhen you stop, write %s as JSON: status ready|blocked|failed, summary, session_id. %s If this issue is too thin to act on, write status blocked and say what is missing.' \
+  printf 'bercail handoff: stage %s, headless %s, worktree %s.\nWork only in that checkout. Do not open a terminal UI or start another agent.\nWhen you stop, write %s as JSON: status ready|blocked|failed, summary, session_id, and post the same summary on this issue as a bd comment. %s If this issue is too thin to act on, write status blocked and say what is missing.' \
     "$stage" "$binary" "$worktree" "$result" "$session_line"
 }
 
@@ -370,13 +466,18 @@ handoff_run_headless() {
   [[ "$mode" == headless ]] || handoff_die "stage $stage is not headless"
   binary="$(handoff_stage_field "$stage" binary)" || handoff_die "unknown stage: $stage"
   native="$binary"
+  if [[ "$stage" == autopilot && -n "$binary_override" && "$binary_override" != opencode ]]; then
+    handoff_die "stage autopilot runs opencode's bstack-autopilot agent; --binary does not apply"
+  fi
   if [[ -n "$binary_override" ]]; then
     case "$binary_override" in
-      claude|codex|cursor-agent) binary="$binary_override" ;;
-      *) handoff_die "headless --binary must be claude, codex, or cursor-agent: $binary_override" ;;
+      claude|codex|cursor-agent|opencode) binary="$binary_override" ;;
+      *) handoff_die "headless --binary must be claude, codex, cursor-agent, or opencode: $binary_override" ;;
     esac
   fi
-  if [[ -n "$binary_override" && "$binary" != "$native" ]]; then
+  if [[ -n "$binary_override" && "$binary" != "$native" && "$binary" == opencode ]]; then
+    model_spec="$(handoff_opencode_spec_for_stage "$stage")"
+  elif [[ -n "$binary_override" && "$binary" != "$native" ]]; then
     model_spec="$(handoff_stage_model_for_binary "$binary")"
   else
     model_spec="$(handoff_stage_field "$stage" model)" || handoff_die "unknown stage: $stage"
@@ -393,7 +494,11 @@ handoff_run_headless() {
   worktree="$(handoff_abspath "$worktree")"
   result="$(handoff_result_path "$worktree")"
 
-  if [[ -n "$resume" ]]; then
+  if [[ -n "$resume" && "$binary" == opencode ]]; then
+    handoff_is_opencode_session "$resume" || handoff_die "resume session_id must be an opencode session (ses_...): $resume"
+    session="$resume"
+    resumed=1
+  elif [[ -n "$resume" ]]; then
     handoff_is_uuid "$resume" || handoff_die "resume session_id must be a uuid: $resume"
     session="$resume"
     resumed=1
@@ -434,7 +539,9 @@ handoff_run_headless() {
   fi
 
   prompt="$(handoff_issue_prompt "$issue")"
-  handoff_build_headless_argv "$binary" "$bin" "$model" "$session" "$resumed" "$prompt" "$beads_dir"
+  local agent=bstack
+  [[ "$stage" == autopilot ]] && agent=bstack-autopilot
+  handoff_build_headless_argv "$binary" "$bin" "$model" "$session" "$resumed" "$prompt" "$beads_dir" "$agent"
 
   cmd_json="$(printf '%s\0' "${HANDOFF_START_ARGV[@]}" | jq -Rs 'split("\u0000") | .[:-1]')"
   if handoff_bin_present "$bin"; then
@@ -480,6 +587,7 @@ handoff_run_headless() {
   case "$binary" in
     codex) tid="$(handoff_codex_thread_id "$log" || true)" ;;
     cursor-agent) tid="$(handoff_cursor_session_id "$log" || true)" ;;
+    opencode) tid="$(handoff_opencode_session_id "$log" || true)" ;;
   esac
   if [[ -n "$tid" ]]; then
     session="$tid"

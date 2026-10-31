@@ -1,0 +1,31 @@
+// managed by bercail (bstack). `bercail update` rewrites this file; delete this line to keep your own.
+// Models and roles: [bstack] in ~/.config/bercail/config.toml, then `bercail bstack setup` or `bercail update`.
+// Your own settings: put them in ~/.config/opencode/opencode.json, which opencode merges under this file.
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "bstack",
+  "model": "@lead_base@",
+  "instructions": ["@instructions@"],
+  "permissions": [
+    // Agents stage and leave changes uncommitted for review in tuicr.
+    { "action": "shell", "resource": "git commit *", "effect": "ask" },
+    { "action": "shell", "resource": "git push *", "effect": "ask" },
+    { "action": "shell", "resource": "gh pr merge *", "effect": "ask" },
+  ],
+  // Hard denies: no agent rule, saved approval, or headless --auto lifts them.
+  "policies": [
+    { "action": "tool.use", "resource": "shell:git push *--force*", "effect": "deny" },
+    { "action": "tool.use", "resource": "shell:git push -f*", "effect": "deny" },
+    { "action": "tool.use", "resource": "shell:git push * -f*", "effect": "deny" },
+    { "action": "tool.use", "resource": "shell:git push *+*", "effect": "deny" },
+    { "action": "tool.use", "resource": "shell:git *--no-verify*", "effect": "deny" },
+  ],
+  // Exa and TinyFish work without a key; random fails over when one is rate limited.
+  "websearch": { "provider": "random" },
+  "experimental": {
+    // The playbooks copy their steps into a todo list.
+    "todo": true,
+    // Long runs (autopilot, handoffs) don't pause while a summary is written.
+    "background_compaction": true,
+  },
+}

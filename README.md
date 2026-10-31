@@ -6,13 +6,13 @@ Bercail is an agentic development environment on the [Herdr app](https://herdr.d
 
 **Bercail is built to be orchestrated by a Grok bot.** [Shep](#shep-the-grok-bot) is that bot: a public Grok bot that runs bercail for you. The agentic workflow here (beads issues, named stages, result files, review when a desk is done) is optimized for Shep as the orchestrator. Bercail does the local work; Shep decides what happens next.
 
-Claude Code, Codex CLI, and cursor-agent are equal harnesses. Bercail does not prefer one, pick one, or fall back from one to another. A handoff is a [beads](https://beads.gascity.com/) issue: Shep writes it, and the agent's whole prompt is one line pointing at that issue.
+**New installs run [bstack](#bstack): one harness, [opencode](https://github.com/anomalyco/opencode), on your own Claude, ChatGPT, and X subscriptions.** Claude Code, Codex CLI, and cursor-agent stay equal harnesses beside it. Bercail does not prefer one for a handoff, pick one, or fall back from one to another. A handoff is a [beads](https://beads.gascity.com/) issue: Shep writes it, and the agent's whole prompt is one line pointing at that issue.
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
 <img width="2133" height="1386"  alt="desk agent, review, files"  src="https://github.com/user-attachments/assets/ec959b30-ba4a-4013-bd9f-00972d82d3cd" />
 
-- **the desk** — each space's agent (claude, codex, or grok, picked on the desk) is an hc terminal, not a tab. Tabs move around it, and it keeps running when the window closes.
+- **the desk** — each space's agent (bstack, claude, codex, or grok, picked on the desk) is an hc terminal, not a tab. Tabs move around it, and it keeps running when the window closes.
 - **one worktree, one space** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; a Herdr space follows.
 - **control and observability** — every agent is working, blocked, done, or idle. Review opens on `done`. You choose what gets a GitHub comment.
 - **review when the agent is done** — `tuicr -w` on the staged, uncommitted work the agent left for you (watching). Other people's PRs open with `tuicr pr`. `Ctrl+Shift+R` anytime.
@@ -26,6 +26,35 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 │              │ Ctrl+Shift+S / R           │ +F / +G │
 └──────────────┴────────────────────────────┴─────────┘
 ```
+
+## bstack
+
+**bstack is bercail's opinionated opencode.** opencode v2 signs in with a Claude plan (Claude Agent), a ChatGPT plan, and an X subscription, so one harness runs all three, on subscriptions you already pay for. bstack sets opencode up the way bercail works: the job is a beads issue, agents stage and leave changes uncommitted for tuicr, and each kind of work goes to the model that is best at it. Ideas from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (rigor, playbooks, roles by model strength, `how`/`why`/`unslop`), [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit) (babysit-pr and CI loops, which became autopilot), [tstack](https://github.com/t3dotgg/tstack) (a council of providers), and [gstack](https://github.com/garrytan/gstack), on top of Shep's handoff workflow.
+
+```bash
+bercail bstack setup     # installs opencode, connects your plans; models are picked for you
+bercail bstack status    # what is connected, which model each role uses
+dev                      # the desk starts opencode as the bstack agent
+```
+
+`setup` asks before each sign-in (`opencode auth login claude-agent`, `openai`, `xai --method device`) and does not ask about models: each connected plan gets its newest model (Claude's `opus` alias, the newest GPT Sol, the newest plain Grok release) at `effort` (default `high`, or the next level down when a model stops short). `bercail update` picks again, so a new release reaches bstack without you doing anything, and `bercail doctor` says when a plan or model changed since the last update. To pin a model, set `claude`, `gpt`, or `grok` under `[bstack]` in `config.toml`; `bercail bstack status` shows each one as `auto` or `pinned`. `--yes` connects nothing. In opencode, `/bstack-setup` shows the same state and says what to run.
+
+| Role | opencode agent | Default provider | For |
+|------|----------------|------------------|-----|
+| lead | `bstack` (primary, the default agent) | claude | Plans, routes, proves, reports |
+| build | `bstack-builder` | grok | Code from a precise brief |
+| judge | `bstack-judge` | claude | The hardest calls, design, prose |
+| council | `bstack-council-<provider>` | every connected plan | Read-only review, one per provider |
+
+A role names a provider (`claude`, `gpt`, `grok`) or a full opencode model id. When its provider isn't connected, it takes the next one that is (build: grok, then gpt, then claude), so bstack works on one plan and spreads out as you connect more. With none connected, agents use the session's model.
+
+- **Commands** — `/how` and `/why` (how code works, and why it is that way, from git, PRs, and beads), `/council` (each provider reviews the change; only findings that hold up are kept), `/unslop` (clean machine-writing tells out of text or the diff), `/ready` (prove it, run the council, unslop, stage it, report), `/autopilot` (watch a PR's CI and review threads, fix and push until green), `/handoff` (write the beads issue and spawn it), `/bstack-setup`.
+- **Skills** — `bstack` (playbooks: investigation, bug fix, feature, refactor, review, ship, handoff, takeover), `how`, `why`, `unslop`, `council`, and `autopilot`, in `~/.agents/skills`, which opencode reads directly. They work in other harnesses too, without the subagents.
+- **Autopilot** — the one agent that commits and pushes without asking (`bstack-autopilot`), and only to the PR's branch: no force-push, no `--no-verify`, no merge. It stops when checks pass and no review thread waits on you, and leaves product calls to a person.
+- **Guide** — [docs/bstack](docs/bstack/README.md) walks through setup, the playbooks, review, shipping, and handoff, with prompts to copy.
+- **Handoff** — stage `bstack` runs `opencode run --agent bstack` headless on the lead's model; it can't commit, push, or merge. Stage `autopilot` runs `bstack-autopilot` on a PR's checkout and pushes its fixes. `--binary opencode` runs `start` (Claude) or `codex` (GPT) through your opencode plans instead. See [handoff](#handoff).
+- **Files** — `~/.config/opencode/opencode.jsonc` (default agent, bstack's instructions, ask before commit and push, policies that hard-deny force-push and `--no-verify` even in headless runs, keyless web search, the todo tool, background compaction), `agents/bstack*.md`, `commands/`, and `bstack/instructions.md`. Each carries a `managed by bercail (bstack)` line; delete that line and bercail leaves the file alone. Your own settings go in `opencode.json`, which opencode loads under the `.jsonc`. bstack never touches a file without the line.
+- **On and off** — new installs turn it on (`./install.sh --no-bstack` to skip). An existing install keeps its config until `bercail bstack on`, which also moves the desk default from cursor-agent to opencode. `bercail bstack off` removes only bstack's files.
 
 ## Shep, the Grok bot
 
@@ -121,7 +150,7 @@ dev          # this directory's space, with its desk agent
 # or: t      # open the Herdr app
 ```
 
-An empty desk offers claude, codex, and grok; it remembers the last pick, and `Ctrl+Shift+A` starts that one. Before the first pick, `Ctrl+Shift+A` starts `[agent] command` from `~/.config/bercail/config.toml` (cursor-agent by default). Handoff stages do not read either; each stage names its own binary.
+An empty desk offers bstack (opencode), claude, codex, and grok; it remembers the last pick, and `Ctrl+Shift+A` starts that one. Before the first pick, `Ctrl+Shift+A` starts `[agent] command` from `~/.config/bercail/config.toml` (opencode on a new install, cursor-agent on older ones). Handoff stages do not read either; each stage names its own binary.
 
 ## handoff
 
@@ -132,6 +161,8 @@ The job lives in a beads issue. [Shep](#shep-the-grok-bot), the Grok bot, create
 | `start` | claude | `claude --print --model claude-opus-5-5 --output-format json …` |
 | `codex` | codex | `codex exec --json --sandbox workspace-write …` |
 | `cursor` | cursor-agent | `cursor-agent --print --output-format json --trust --force …` |
+| `bstack` | opencode | `opencode run --format json --agent bstack --model <lead> …` (asks are rejected: no commit, push, or merge) |
+| `autopilot` | opencode | `opencode run --format json --agent bstack-autopilot --model <lead> …` (commits and pushes a PR's fixes; headless only) |
 
 ```bash
 bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) writes the issue
@@ -147,10 +178,10 @@ bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) 
 
 - **Prompt** — one line pointing at the issue (`Your job is beads issue <id>. Run bd show <id> …`), the same for every harness.
 - **Context** — before it starts the agent, bercail adds a `bd comment` to the issue with the worktree and, headless, the result file and session id.
-- **Result** — a headless run leaves `{status: ready|blocked|failed, summary, session_id}`. Read that file, not terminal output. `--resume SESSION` continues the same session (`claude --resume`, `codex exec resume`, `cursor-agent --resume`).
-- **Blocked, not switched** — if the stage's binary, `bd`, or the issue is missing, the result is `blocked` and nothing starts. Bercail never falls through to another harness. `--binary claude|codex|cursor-agent` runs a headless stage on another CLI only when you ask.
+- **Result** — a headless run leaves `{status: ready|blocked|failed, summary, session_id}`. Read that file, not terminal output. `--resume SESSION` continues the same session (`claude --resume`, `codex exec resume`, `cursor-agent --resume`, `opencode run --session`).
+- **Blocked, not switched** — if the stage's binary, `bd`, or the issue is missing, the result is `blocked` and nothing starts. Bercail never falls through to another harness. `--binary claude|codex|cursor-agent|opencode` runs a headless stage on another CLI only when you ask (with `opencode`, `start` stays on Claude and `codex` on GPT, through your opencode plans).
 - **Dry run** — `--dry-run` prints the exact argv for any stage, even when that binary is not installed.
-- `bercail harness` reports which of claude, codex, and cursor-agent are on PATH, with a local model hint. It does not choose.
+- `bercail harness` reports which of claude, codex, cursor-agent, and opencode are on PATH, with a local model hint. It does not choose.
 
 ## commands
 
@@ -161,10 +192,12 @@ bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) 
 | `bercail install` | Full install from the release mise or packslip unpacked |
 | `./install.sh` | Full install |
 | `./install.sh --yes` | Non-interactive |
+| `./install.sh --no-bstack` | New install without bstack (desk default stays cursor-agent) |
 | `./install.sh --help` | Installer help |
 | `bercail help` | This reference |
 | `bercail doctor` | Deps, Herdr layout, mod and keys, skills, webhook sinks and follower |
-| `bercail harness` | JSON: which of claude, codex, cursor-agent are on PATH (reports, does not choose) |
+| `bercail harness` | JSON: which of claude, codex, cursor-agent, opencode are on PATH (reports, does not choose) |
+| `bercail bstack setup` / `status` / `on` / `off` | [bstack](#bstack): opencode on your own plans |
 | `bercail update` | Re-sync configs, Herdr layout and mod, helper, skills (`--force` also replaces a changed layout) |
 | `bercail reconfigure` | Re-read `config.toml`, refresh skills |
 | `bercail dry-run` | Show install actions, write nothing |
@@ -187,10 +220,18 @@ Call by name. Skills install to `~/.agents/skills`; bercail adds a link where th
 
 | Skill | What |
 |-------|------|
-| `handoff` | Run a beads issue on a stage (`--stage start|codex|cursor --issue ID`), headless or as a `--branch` desk. See [handoff](#handoff) |
+| `handoff` | Run a beads issue on a stage (`--stage start|codex|cursor|bstack|autopilot --issue ID`), headless or as a `--branch` desk. See [handoff](#handoff) |
 | `review` | Wait for **human** tuicr notes; publish to GitHub only if asked |
+| `bstack` | Playbooks for rigorous work, routed by role. See [bstack](#bstack) |
+| `council` | One reviewer per connected provider; keep only findings that hold up |
+| `how` / `why` | How code works now; why it is that way, from git, PRs, and beads. Read-only |
+| `unslop` | Clean machine-writing tells out of prose and a diff |
+| `autopilot` | Drive an open PR to green: CI, review threads, conflicts. Pushes; never merges |
 
 ```bash
+# autopilot: one JSON snapshot of a PR (checks, open threads, next step); --wait polls
+~/.agents/skills/autopilot/scripts/pr-state.sh [--pr N] [--wait SECONDS]
+
 # review helpers
 ~/.agents/skills/review/scripts/wait-comments.sh --repo . [--timeout N]
 ~/.agents/skills/review/scripts/publish-github.sh --repo . \
@@ -229,14 +270,23 @@ The rest are the Herdr app's: `Ctrl+Shift+T`/`W` new/close tab, `Ctrl+Shift+O`/`
 
 ```toml
 [agent]
-command = "cursor-agent"
+command = "opencode"
 
 [layout]
 review = "tuicr"
 auto_review = true
+
+[bstack]
+enabled = true
+claude = ""                          # empty: auto; an opencode id pins one
+gpt = ""
+grok = ""
+lead = "claude"                      # a provider or a full opencode model id
+build = "grok"
+judge = "claude"
 ```
 
-Also: `~/.config/herdr-app/layouts/bercail.json` and `mods/bercail-desk/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), worktrunk hooks, `~/.agents/skills/{handoff,review}`.
+Also: `~/.config/herdr-app/layouts/bercail.json` and `mods/bercail-desk/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), worktrunk hooks, `~/.agents/skills/{handoff,review,bstack,council,autopilot,how,why,unslop}`, and bstack's files in `~/.config/opencode`.
 
 ## platforms
 
@@ -247,6 +297,8 @@ On Omarchy: mise first, `omarchy pkg add`, optional `SUPER+ALT+RETURN` → open 
 Installed if missing: the [Herdr app](https://herdr.dev) with herdr-core (`herdr-app`, `hc`, from herdr.dev's installer), git, worktrunk (`wt`), [beads](https://beads.gascity.com/) (`bd`), fzf, jq, [tuicr](https://github.com/agavra/tuicr) ≥ 0.20.0. `bercail doctor` checks each one.
 
 worktrunk and beads install the same way: skip if present, else mise, else Homebrew (`brew install worktrunk` / `brew install beads`), else upstream (worktrunk's GitHub release; the [beads installer](https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh), which puts `bd` in `/usr/local/bin` when writable, else `~/.local/bin`).
+
+With bstack on: [opencode](https://github.com/anomalyco/opencode) v2 (mise, else `brew install anomalyco/tap/opencode-v2`). Its Claude Agent sign-in runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code), so a Claude plan needs `claude` too.
 
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), and cursor-agent are optional. Install the ones you want Shep to use; `bercail harness` reports which are on PATH.
 
