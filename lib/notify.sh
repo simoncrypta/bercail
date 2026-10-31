@@ -328,6 +328,10 @@ notify_follower_file() {
   printf '%s/follower.json' "$(notify_state_dir)"
 }
 
+notify_restart_file() {
+  printf '%s/restarted_at' "$(notify_state_dir)"
+}
+
 _notify_follower_write() {
   local f tmp
   f="$(notify_follower_file)"
@@ -458,6 +462,7 @@ notify_drop_stale_keys() {
 # Follow desks while there are sinks. With none, wait for one to appear.
 notify_run() {
   local f
+  rm -f "$(notify_restart_file)"
   while [[ -z "$(notify_sink_files)" ]]; do
     sleep "${NOTIFY_IDLE_SLEEP:-60}"
   done
@@ -474,10 +479,15 @@ _notify_follower_live() {
 # A live follower keeps running the bercail it started with. After an update,
 # end it; the desk mod starts the new one within a minute. The follower is
 # --rm, so `hc kill` exits not_found once it's gone: check, don't trust the code.
+# Stamp the restart before killing it; the new run clears the stamp on startup.
 notify_restart_follower() {
+  local f
   _notify_follower_live || return 0
+  f="$(notify_restart_file)"
+  _notify_now >"$f"
   "$(notify_hc)" kill bercail-notify >/dev/null 2>&1 </dev/null || true
   if _notify_follower_live; then
+    rm -f "$f"
     printf 'could not restart the notify follower; run: hc kill bercail-notify\n' >&2
   else
     printf 'restarted the notify follower (hc terminal bercail-notify)\n'
