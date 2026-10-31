@@ -80,7 +80,9 @@ If the requested harness, bd, or the issue is missing, the stage writes
 `<worktree>/.bercail/handoff-result.json` with status `blocked`, starts
 nothing, and exits nonzero. It does not fall through to another harness. The
 agent writes the same result file (`status`, `summary`, and bercail fills
-`session_id`). Read that file. Do not scrape terminal output. For Codex,
+`session_id`). When the run stops on a plan usage limit, bercail adds `reason`:
+`usage-limit`. It does not rerun or switch plans. Read that file. Do not scrape
+terminal output. For Codex,
 `session_id` is the JSONL `thread.started` thread id. For cursor-agent, it is
 the print JSON `session_id`. When there is no resumable session (blocked before
 codex or cursor-agent ran, or no id in its log), `session_id` is `none`;
