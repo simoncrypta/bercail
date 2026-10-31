@@ -1,8 +1,8 @@
 [agent]
 # The desk agent when none was picked on the desk yet (the desk remembers the
 # last pick). Handoff stages do not read this command; each stage names its
-# own binary (claude, codex, or cursor-agent).
-command = "cursor-agent"
+# own binary (claude, codex, cursor-agent, or opencode).
+command = "opencode"
 
 [layout]
 # Bare "tuicr" expands to `tuicr -w` (uncommitted changes only, watching;
@@ -10,3 +10,21 @@ command = "cursor-agent"
 review = "tuicr"
 # Open Review when the desk agent finishes. Set false to open it only with Ctrl+Shift+R.
 auto_review = true
+
+[bstack]
+# opencode with your own Claude, ChatGPT, and SuperGrok plans. New installs turn
+# it on; `bercail bstack setup` connects plans.
+enabled = true
+# A model per provider. Empty: auto, the newest model of each connected plan
+# (re-picked on bercail update). Set an opencode id (#variant allowed) to pin one.
+claude = ""
+gpt = ""
+grok = ""
+# Reasoning effort of auto models: low, medium, high, xhigh, max, or none (the
+# provider's default). A model without that level gets the next one down.
+effort = "high"
+# Which provider each role uses: claude, gpt, grok, or a full model id. A role on
+# an unconnected provider takes the next connected one.
+lead = "claude"
+build = "grok"
+judge = "claude"

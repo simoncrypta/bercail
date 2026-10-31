@@ -51,14 +51,16 @@ assert_eq "bash" "$(detect_shell_name)" "detect_shell_name follows bash \$SHELL"
 assert_eq "${HOME}/.bashrc" "$(shell_rc_for bash)" "bash rc is ~/.bashrc"
 SHELL="$saved_shell"
 
-assert_contains "$(default_user_config)" 'command = "cursor-agent"' \
-  "default config uses cursor-agent"
+assert_contains "$(default_user_config)" 'command = "opencode"' \
+  "a new install's desk runs bstack (opencode)"
+assert_contains "$(BSTACK_NEW_INSTALL=0 default_user_config)" 'command = "cursor-agent"' \
+  "--no-bstack keeps cursor-agent"
 grep -q 'Choice \[1-7\]' "$ROOT/lib/config.sh" \
   && fail "install must not prompt for an agent picker"
 
 YES=1
 prompt_user_config
-assert_eq "cursor-agent" "$(read_agent_command)" "prompt_user_config writes cursor-agent with no picker"
+assert_eq "opencode" "$(read_agent_command)" "prompt_user_config writes opencode (bstack) with no picker"
 YES=0
 
 declare -F pstack_plugin_present >/dev/null \
@@ -73,7 +75,7 @@ assert_contains "$(default_user_config)" 'auto_review = true' \
 mkdir -p "$AGENTIC_DEV_CONFIG_DIR"
 cp "$ROOT/config/agentic-dev/config-reader.sh" "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh"
 
-assert_eq "cursor-agent" "$(read_agent_command)" "agent defaults to cursor-agent"
+assert_eq "opencode" "$(read_agent_command)" "the config reader returns the new-install default"
 assert_eq "tuicr" "$(read_layout_review)" "review defaults to tuicr"
 
 write_user_config grok

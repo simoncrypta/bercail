@@ -4,7 +4,9 @@ description: >-
   Routes a named handoff stage via scripts/handoff-spawn. The job is a beads
   issue (bd); the agent prompt is one line pointing at it. Stage start is one headless claude
   process. Stage codex is one headless `codex exec` process. Stage cursor is
-  one headless `cursor-agent --print` process. None of those open anything in
+  one headless `cursor-agent --print` process. Stage bstack is one headless
+  `opencode run --agent bstack` process; stage autopilot is the same with
+  `--agent bstack-autopilot`, which may commit and push a PR's fixes. None of those open anything in
   the Herdr app. `--branch` makes a sibling worktree with its own Herdr app
   space whose desk agent runs the stage's binary. Shep owns the workflow;
   bercail adds no per-harness mode.
@@ -51,7 +53,7 @@ from bercail: the worktree, and for headless stages the result file and
 session id. `--info` reports `beads` (bd on PATH). bercail install and update
 install beads; the command is `bd`.
 
-## Headless stages (claude, Codex, or cursor-agent)
+## Headless stages (claude, Codex, cursor-agent, or opencode)
 
 Shep runs these. They do not open anything in the Herdr app. Bercail has no preference
 among claude, codex, and cursor-agent; the caller names the stage or
@@ -62,7 +64,15 @@ It does not choose. Missing CLIs are `present: false`, not an error.
 `codex exec --json` process (`-m` when the table has a model; resume is
 `codex exec resume`). `--stage cursor` or `--binary cursor-agent` is one
 `cursor-agent --print --output-format json` process (`--model` when the table
-has a model; resume is `--resume <session_id>`). claude gets `Bash(bd *)` so
+has a model; resume is `--resume <session_id>`). `--stage bstack` or
+`--binary opencode` is one `opencode run --format json --agent bstack`
+process on your own subscriptions. It has no `--auto`, so every "ask" (commit,
+push, merge) is rejected and the agent goes on without it. `--stage autopilot`
+runs `--agent bstack-autopilot` instead: that agent allows commit and push, and
+denies merge; point `--worktree` at the PR's checkout (headless only); `--model` comes from `[bstack]` in
+bercail's config.toml (bstack: the lead's model; with `--binary opencode`,
+start uses claude and codex uses gpt). Resume is `--session <ses_...>`, and
+`session_id` is the `sessionID` in its JSON lines. claude gets `Bash(bd *)` so
 it can run bd in `--print`. When bd's `.beads` is outside the worktree (a
 linked worktree), every harness gets `--add-dir` for it.
 
@@ -79,13 +89,17 @@ codex or cursor-agent ran, or no id in its log), `session_id` is `none`;
 ```bash
 bercail harness
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --stage start --issue <id> --worktree <checkout> [--binary claude|codex|cursor-agent] [--dry-run]
+  --stage start --issue <id> --worktree <checkout> [--binary claude|codex|cursor-agent|opencode] [--dry-run]
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
   --stage start --issue <id> --worktree <checkout> --resume <session_id>
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
   --stage codex --issue <id> --worktree <checkout> [--resume <session_id>] [--dry-run]
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
   --stage cursor --issue <id> --worktree <checkout> [--resume <session_id>] [--dry-run]
+"$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
+  --stage bstack --issue <id> --worktree <checkout> [--resume <ses_id>] [--dry-run]
+"$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
+  --stage autopilot --issue <id> --worktree <the PR's checkout> [--resume <ses_id>]
 ```
 
 `--resume` continues that session. It does not touch any desk agent. `--dry-run` prints
@@ -102,7 +116,7 @@ working directory to `cwd` from `--info`. Flags only.
 
 ```bash
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --branch <name> --stage start|codex|cursor --issue <id> --clean --space <id>
+  --branch <name> --stage start|codex|cursor|bstack --issue <id> --clean --space <id>
 ```
 
 - `--space <id>` is optional (`--workspace` is the same flag): the app space to keep on screen. By
@@ -113,8 +127,8 @@ working directory to `cwd` from `--info`. Flags only.
 
 `--branch` makes a sibling worktree (`wt switch --create`), opens a Herdr app
 space on it (worktrunk's post-start hook), and starts that space's desk agent:
-an hc terminal running the named stage's binary (claude, codex, or
-cursor-agent) with a one-line prompt pointing at the issue as its first message, labelled
+an hc terminal running the named stage's binary (claude, codex,
+cursor-agent, or opencode) with a one-line prompt pointing at the issue as its first message, labelled
 `bercail.role=agent` and `bercail.space=<space id>`. The bercail layout shows
 it in the desk column. `--stage` is required; bercail has no default harness.
 A missing binary fails before any worktree is made. A desk already running in

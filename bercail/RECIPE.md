@@ -46,9 +46,9 @@ lights at 12,16):
     name (semibold, `foreground`), its terminal title (`dim`, truncated), and
     the status word in the status color. Below it, the agent's terminal with
     6px padding. With no desk agent, the column shows "No agent on this
-    desk" and one button per agent (Claude Code, Codex, Grok; the last one
-    picked filled with `solid`, uninstalled ones at 45% opacity), and a hint
-    line.
+    desk" and one button per agent (bstack, which runs opencode, then Claude
+    Code, Codex, Grok; the last one picked filled with `solid`, uninstalled
+    ones at 45% opacity), and a hint line.
   - **The tabs**, weight 1, so desk and tabs split the width evenly: the
     shown tab's panes as cards (radius 10, 1px `border`, `accent` on focus,
     8px gaps, a 30px `pane` header always shown, also on a lone pane).

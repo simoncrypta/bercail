@@ -513,7 +513,7 @@ test_codex_stage_dry_run() {
   err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" \
     --stage start --issue "$ISSUE" --binary cursor --worktree "$wt" --dry-run 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "bad --binary should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q 'claude, codex, or cursor-agent' || fail "bad --binary message: $err"
+  printf '%s' "$err" | grep -q 'claude, codex, cursor-agent, or opencode' || fail "bad --binary message: $err"
   unset BERCAIL_CLAUDE_MODEL_CATALOG
   printf 'PASS: codex dry-run is exec --json; resume is exec resume; --binary selects it\n'
 }

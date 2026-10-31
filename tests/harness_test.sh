@@ -28,7 +28,7 @@ test_discover_reports_missing_not_fatal() {
     harness_discover_json)"
   printf '%s' "$out" | jq -e '.ok == true' >/dev/null || fail "ok: $out"
   printf '%s' "$out" | jq -e 'has("default_start") | not' >/dev/null || fail "harness must not pick a default: $out"
-  printf '%s' "$out" | jq -e '[.harnesses[].id] == ["claude","codex","cursor-agent"]' >/dev/null \
+  printf '%s' "$out" | jq -e '[.harnesses[].id] == ["claude","codex","cursor-agent","opencode"]' >/dev/null \
     || fail "ids: $out"
   printf '%s' "$out" | jq -e 'all(.harnesses[]; .present == false and .path == null and .model_hint == null)' >/dev/null \
     || fail "all missing: $out"
@@ -85,7 +85,7 @@ test_bercail_harness_command() {
   out="$(PATH="$TMP_DIR/empty:/usr/bin:/bin" HOME="$TMP_DIR/empty-home" \
     AGENTIC_DEV_LIB="$ROOT/lib" BERCAIL_LIB="$ROOT/lib" \
     "$ROOT/bin/bercail" harness)"
-  printf '%s' "$out" | jq -e '.ok == true and (.harnesses|length)==3' >/dev/null \
+  printf '%s' "$out" | jq -e '.ok == true and (.harnesses|length)==4' >/dev/null \
     || fail "bercail harness: $out"
   printf 'PASS: bercail harness prints discovery JSON\n'
 }

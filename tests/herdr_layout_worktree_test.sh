@@ -103,6 +103,13 @@ grep -qF "hc run --bg --keep --outlive-parent --no-notify --parent t9 --cwd $FEA
 grep -qx 'TERM=xterm-256color' "$CALL_LOG" || fail "a headless caller's TERM=dumb must not reach the desk; log=$(cat "$CALL_LOG")"
 printf 'PASS: handoff starts the desk agent with its prompt (codex without its daemon, real TERM)\n'
 
+: >"$CALL_LOG"
+WT_HERDR_AGENT_CMD=opencode WT_HERDR_AGENT_PROMPT=bercail-0s1 \
+  wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
+grep -qF -- "--label bercail.space=sp-child opencode --prompt bercail-0s1" "$CALL_LOG" \
+  || fail "opencode takes its first message with --prompt (a positional is a directory); log=$(cat "$CALL_LOG")"
+printf 'PASS: an opencode desk gets its prompt through --prompt\n'
+
 touch "$FAKE_STATE/desk"
 : >"$CALL_LOG"
 WT_HERDR_AGENT_CMD=claude WT_HERDR_AGENT_PROMPT=bercail-0s2 \

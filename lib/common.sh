@@ -18,7 +18,7 @@ FCITX5_CONFIG_DIR="${HOME}/.config/fcitx5"
 LOCAL_BIN="${HOME}/.local/bin"
 # Canonical skill install per Agent Skills (https://agentskills.io): ~/.agents/skills.
 AGENTS_SKILLS_DIR="${HOME}/.agents/skills"
-AGENTIC_DEV_SKILL_IDS=(handoff review)
+AGENTIC_DEV_SKILL_IDS=(handoff review bstack council autopilot how why unslop)
 # First skill kept as a convenience alias (tests, summary, uninstall prompt).
 AGENTIC_DEV_SKILL_ID="${AGENTIC_DEV_SKILL_IDS[0]}"
 AGENTIC_DEV_SKILL_DIR="${AGENTS_SKILLS_DIR}/${AGENTIC_DEV_SKILL_ID}"
@@ -34,6 +34,8 @@ DRY_RUN=0
 YES=0
 FORCE=0
 RECONFIGURE=0
+# A new install (no config.toml yet) turns bstack on unless --no-bstack.
+BSTACK_NEW_INSTALL="${BSTACK_NEW_INSTALL:-1}"
 
 log() { printf '%s\n' "$*"; }
 info() { printf '→ %s\n' "$*"; }
@@ -52,11 +54,11 @@ run() {
 # installer is fed via `curl ... | bash` (stdin is the pipe, not the TTY).
 read_tty() {
   local __var="$1"
-  if [[ -r /dev/tty ]]; then
-    read -r "$__var" </dev/tty
-  else
-    read -r "$__var"
+  # /dev/tty can exist without a terminal behind it (no controlling tty).
+  if [[ -r /dev/tty ]] && { read -r "$__var" </dev/tty; } 2>/dev/null; then
+    return 0
   fi
+  read -r "$__var"
 }
 
 confirm() {
@@ -110,6 +112,15 @@ install_src_dir() {
   if [[ -f "$dir/install.sh" && -d "$dir/config" ]]; then
     printf '%s' "$dir"
     return 0
+  fi
+  # The installed CLI (~/.local/share/bercail/lib) is not a tree: use the clone or
+  # release it was installed from, so files it added are found before they reach master.
+  if [[ -f "$AGENTIC_DEV_SOURCE_PATH_FILE" ]]; then
+    dir="$(<"$AGENTIC_DEV_SOURCE_PATH_FILE")"
+    if [[ -n "$dir" && -f "$dir/install.sh" && -d "$dir/config" ]]; then
+      printf '%s' "$dir"
+      return 0
+    fi
   fi
   printf '%s' "https://setup.simoncrypta.dev"
 }

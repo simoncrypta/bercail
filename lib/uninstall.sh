@@ -59,7 +59,12 @@ uninstall_agentic_dev() {
       || info "keeping third-party worktrunk config: $WORKTRUNK_CONFIG_DIR/config.toml"
   fi
 
-  if confirm "Remove managed skills (~/.agents/skills/handoff, review)?"; then
+  if declare -F remove_bstack >/dev/null \
+    && confirm "Remove bstack's opencode agents, commands, and opencode.jsonc (only files bstack manages)?"; then
+    remove_bstack
+  fi
+
+  if confirm "Remove managed skills (~/.agents/skills/handoff, review, bstack, council, autopilot, how, why, unslop)?"; then
     remove_managed_skills
   fi
 

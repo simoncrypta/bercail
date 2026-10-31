@@ -76,6 +76,8 @@ load_libs() {
   source "$lib/doctor.sh"
   # shellcheck source=/dev/null
   source "$lib/harness.sh"
+  # shellcheck source=/dev/null
+  source "$lib/bstack.sh"
 }
 
 cmd_doctor() {
@@ -106,6 +108,7 @@ cmd_doctor() {
   doctor_skill || failures=1
   doctor_omarchy_integration || failures=1
   doctor_notify || failures=1
+  doctor_bstack || failures=1
   return "$failures"
 }
 
@@ -136,9 +139,10 @@ cmd_reconfigure() {
   deploy_skills
   ensure_selected_agent
   ensure_selected_layout_tools
+  deploy_bstack
   sync_omarchy_default_agent
   info "desk agent: $(read_agent_command)  review=$(read_layout_review)"
-  info "claude, codex, and cursor-agent are optional; run bercail harness to see what is on PATH"
+  info "claude, codex, cursor-agent, and opencode are optional; run bercail harness to see what is on PATH"
   info "the desk starts the agent last picked on it, else [agent] command in $AGENTIC_DEV_USER_CONFIG"
 }
 
@@ -150,7 +154,8 @@ Commands:
   help          Show full help
   install       Full install from this release (after mise or packslip)
   doctor        Check dependencies and integration
-  harness       JSON: which of claude, codex, cursor-agent are on PATH
+  harness       JSON: which of claude, codex, cursor-agent, opencode are on PATH
+  bstack        opencode with your Claude/GPT/Grok subscriptions: status | setup | on | off
   notify        Agent status webhooks: status | add NAME | test NAME | run
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills/integrations from config.toml (not a full redeploy)
@@ -181,6 +186,10 @@ main() {
     harness)
       load_libs
       cmd_harness
+      ;;
+    bstack)
+      load_libs
+      cmd_bstack "$@"
       ;;
     notify)
       load_libs

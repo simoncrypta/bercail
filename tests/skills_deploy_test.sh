@@ -75,16 +75,30 @@ test_reconfigure_scrubs_orphan_extra_link() {
 }
 
 test_preserve_foreign_skill_path() {
-  write_agent_config opencode
-  mkdir -p "$HOME/.config/opencode/skills/handoff"
-  printf 'foreign\n' >"$HOME/.config/opencode/skills/handoff/SKILL.md"
+  write_agent_config claude
+  mkdir -p "$HOME/.claude/skills/handoff"
+  printf 'foreign\n' >"$HOME/.claude/skills/handoff/SKILL.md"
   local output
   output="$(deploy_skills 2>&1)"
   printf '%s\n' "$output" | grep -q 'preserving pre-existing skill path' \
     || fail "expected preserve warning for foreign skill dir"
-  grep -qx 'foreign' "$HOME/.config/opencode/skills/handoff/SKILL.md" \
+  grep -qx 'foreign' "$HOME/.claude/skills/handoff/SKILL.md" \
     || fail "foreign skill contents changed"
   printf 'PASS: deploy_skills preserves foreign agent skill paths\n'
+}
+
+test_opencode_reads_agents_skills() {
+  rm -rf "$HOME/.agents" "$HOME/.config/opencode" "$HOME/.claude"
+  write_agent_config cursor-agent
+  deploy_skills >/dev/null
+  mkdir -p "$HOME/.config/opencode/skills"
+  ln -s "$AGENTIC_DEV_SKILL_DIR" "$HOME/.config/opencode/skills/handoff"
+  write_agent_config opencode
+  deploy_skills >/dev/null
+  [[ ! -e "$HOME/.config/opencode/skills/handoff" ]] || fail "opencode v2 reads ~/.agents/skills; the old link must go"
+  [[ -f "$AGENTS_SKILLS_DIR/bstack/SKILL.md" && -f "$AGENTS_SKILLS_DIR/council/SKILL.md" ]] \
+    || fail "bstack and council skills missing"
+  printf 'PASS: opencode uses ~/.agents/skills (old link scrubbed) with bstack and council\n'
 }
 
 test_custom_agent_canonical_only() {
@@ -161,6 +175,7 @@ test_handoff_spawn_is_the_recipe() {
 test_deploy_agents_path_for_cursor
 test_reconfigure_scrubs_orphan_extra_link
 test_preserve_foreign_skill_path
+test_opencode_reads_agents_skills
 test_custom_agent_canonical_only
 test_grok_gets_extra_skill_link
 test_pi_gets_extra_skill_link

@@ -13,14 +13,14 @@ skill_extra_global_dirs_all() {
 
 # Extra link only when the agent does not discover ~/.agents/skills.
 # Grok scans ~/.grok/skills (and ~/.claude/skills), not ~/.agents/skills.
+# opencode v2 reads ~/.agents/skills itself; old links in its dir are scrubbed.
 skill_agent_extra_global_dirs() {
   local cmd="${1:-}"
   case "$cmd" in
-    agent|cursor|cursor-agent) return 1 ;;
+    agent|cursor|cursor-agent|opencode) return 1 ;;
     grok) printf '%s' "${HOME}/.grok/skills" ;;
     pi) printf '%s' "${HOME}/.pi/agent/skills" ;;
     codex) printf '%s' "${HOME}/.codex/skills" ;;
-    opencode) printf '%s' "${HOME}/.config/opencode/skills" ;;
     claude|claude-code) printf '%s' "${HOME}/.claude/skills" ;;
     *) return 1 ;;
   esac

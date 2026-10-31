@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # Optional harness discovery. Missing CLIs are reported, not fatal.
-# No preference among claude, codex, and cursor-agent.
+# No preference among claude, codex, cursor-agent, and opencode.
 # Do not call claude/codex/cursor-agent in a way that hits the network.
 
 harness_ids() {
-  printf '%s\n' claude codex cursor-agent
+  printf '%s\n' claude codex cursor-agent opencode
 }
 
 harness_path() {
@@ -70,6 +70,20 @@ harness_codex_models_json() {
   jq -nc '[]'
 }
 
+# opencode: the bstack lead's model from bercail's config.toml, when bstack is loaded.
+# `opencode models` asks the running service. Do not run it.
+harness_opencode_models_json() {
+  local id=""
+  if declare -F bstack_role_model >/dev/null 2>&1; then
+    id="$(bstack_role_model lead 2>/dev/null || true)"
+  fi
+  if [[ -n "$id" ]]; then
+    jq -nc --arg id "$id" '[$id]'
+  else
+    jq -nc '[]'
+  fi
+}
+
 # cursor-agent --list-models hits the network. Do not run it.
 harness_cursor_models_json() {
   jq -nc '[]'
@@ -100,6 +114,13 @@ harness_one_json() {
       ;;
     cursor-agent)
       models="$(harness_cursor_models_json)"
+      ;;
+    opencode)
+      if [[ "$present" == true ]]; then
+        models="$(harness_opencode_models_json)"
+      else
+        models='[]'
+      fi
       ;;
     *)
       models='[]'
