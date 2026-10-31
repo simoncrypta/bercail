@@ -410,6 +410,9 @@ handoff_spawn_main() {
 
   label="$(_wt_generate_session_name "$sibling")"
 
+  # Before the handoff comment and the desk agent, so both write to the main store.
+  handoff_share_main_beads "$sibling"
+
   # The checkout facts used to be a prompt preamble. They go on the issue now.
   intro="$(printf 'bercail handoff: stage %s, desk agent %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr; never commit unless asked. Do not open Review or invoke the review skill; when the desk agent finishes, Review opens itself in this space once the user looks at it. When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
     "$stage" "$binary" "$sibling" "$branch" "$issue")"
