@@ -10,7 +10,8 @@ Bercail is an agentic development environment on the [Herdr app](https://herdr.d
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
-<img width="2133" height="1386" alt="desk agent, review" src="https://github.com/user-attachments/assets/a2c467e7-9f9c-40b4-a5bc-ad026405d3a0" />
+<img width="2133" height="1386" alt="bercail" src="https://github.com/user-attachments/assets/9760e643-b0da-45c1-88bc-d69f0d9c04c2" />
+
 
 - **the desk** — each space's agent (bstack when it is on, else your `[agent] command`) is pinned beside the tabs and listed in Herdr's agents list. It is an hc terminal, so it keeps running when the window closes.
 - **one worktree, one space** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; a Herdr space follows.
