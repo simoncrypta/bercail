@@ -282,11 +282,12 @@ export default class BercailDesk extends View {
       }
       case "files":
       case "changes": {
-        // Toggle: the same key again hides the panel.
-        const panel = findNode(layout(), "panel-body");
-        if (panel && !panel.hidden && panel.active === c) { run("layout.hide", { id: "panel-body" }); break; }
+        // Toggle, as the tab bar's Files/Changes buttons do: the same key again hides the panel.
+        const tree = layout();
+        const panel = findNode(tree, "panel"), body = findNode(tree, "panel-body");
+        if (panel && !panel.hidden && body?.active === c) { run("layout.hide", { id: "panel" }); break; }
         run("layout.select", { stack: "panel-body", child: c });
-        run("layout.show", { id: "panel-body" });
+        run("layout.show", { id: "panel" });
         break;
       }
     }

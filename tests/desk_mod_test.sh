@@ -19,6 +19,12 @@ export const layout = () => structuredClone(h().layout);
 export const run = (name, args) => {
   h().calls.push([name, args]);
   if (name === "layout.set") h().layout = structuredClone(args.layout);
+  if (name === "layout.show" || name === "layout.hide") {
+    const find = (n) => n?.id === args.id ? n : (n?.children ?? []).map(find).find(Boolean);
+    const node = find(h().layout);
+    if (!node) (h().toasts ??= []).push(`${name} failed: no node "${args.id}"`);
+    else node.hidden = name === "layout.hide";
+  }
   if (name === "layout.select") {
     const find = (n) => n?.id === args.stack ? n : (n?.children ?? []).map(find).find(Boolean);
     const stack = find(h().layout);
@@ -50,6 +56,7 @@ cp "$ROOT/bercail/layouts/bercail.json" "$TMP_DIR/layout.json"
 cat >"$TMP_DIR/test.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
 import Desk, { sidebarOrder, stepSpace, stepSubspace, stepAgent } from "./main.mjs";
+import { run } from "./herdr.mjs";
 
 const shipped = JSON.parse(readFileSync(new URL("./layout.json", import.meta.url)));
 const find = (n, id) => n?.id === id ? n : (n?.children ?? []).map((c) => find(c, id)).find(Boolean) ?? null;
@@ -254,6 +261,53 @@ console.log("PASS: agent next/prev walk agents in sidebar space order, wrapping"
   expect(await ran("agent-next"), '[["space.select",{"id":"s-b"}],["pane.focus",{"terminal":"t-desk-b"}]]', "agent-next to a desk");
   if (find(globalThis.herdr.layout, "agent-stack").active !== "desk-t-desk-b") fail("the agent column must show the desk it focuses");
   console.log("PASS: the space, subspace and agent commands select and focus as the keys expect");
+}
+
+// The panel: Herdr's tab bar finds a "panel" node holding the "panel-body" stack.
+{
+  const panel = find(shipped, "panel");
+  if (panel?.type !== "column") fail("the shipped layout has no panel column");
+  if (find(panel, "panel-body")?.type !== "stack") fail("panel-body is not inside the panel column");
+  if (JSON.stringify(find(panel, "panel-body").children.map((c) => c.id)) !== '["files","changes"]') fail("panel-body must hold files and changes");
+  if (find(shipped, "work-body").children.at(-1).id !== "panel") fail("the panel must be work-body's last child");
+  if (!(panel.size?.px >= panel.min)) fail(`panel width ${panel.size?.px} is under its min ${panel.min}`);
+  console.log("PASS: the shipped layout has a panel column holding panel-body");
+}
+
+// Ctrl+Shift+F/G and the tab bar's Files/Changes buttons share one panel state.
+{
+  globalThis.herdr = {
+    layout: structuredClone(shipped), calls: [], toasts: [],
+    focused: { space: "s1", pane: "p1" }, spaces: [{ id: "s1", tabs: [], folder: "/w" }], terminals: [],
+  };
+  const d = new Desk();
+  Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {} });
+  const state = () => {
+    const panel = find(globalThis.herdr.layout, "panel");
+    return panel.hidden ? "hidden" : find(panel, "panel-body").active;
+  };
+  // What a click on Files/Changes runs (Herdr's tabs mod).
+  const click = (id) => {
+    const root = globalThis.herdr.layout;
+    const panel = find(root, "panel"), body = find(root, "panel-body");
+    const on = panel && !panel.hidden && body?.active === id;
+    if (on) run("layout.hide", { id: "panel" });
+    else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
+  };
+  const steps = [
+    ["key", "files", "files"], ["key", "files", "hidden"], ["key", "changes", "changes"],
+    ["key", "files", "files"], ["click", "files", "hidden"], ["click", "changes", "changes"],
+    ["key", "changes", "hidden"], ["click", "files", "files"], ["key", "changes", "changes"],
+    ["click", "changes", "hidden"], ["key", "changes", "changes"], ["click", "files", "files"],
+  ];
+  for (const [how, id, want] of steps) {
+    if (how === "key") await d.command(id); else click(id);
+    if (state() !== want) fail(`${how} ${id}: panel is ${state()}, want ${want}`);
+  }
+  if (globalThis.herdr.toasts.length) fail(`toasts: ${globalThis.herdr.toasts}`);
+  check("panel");
+  if (calls("layout.show").concat(calls("layout.hide")).some(([, a]) => a.id !== "panel")) fail("keys must show and hide the panel column");
+  console.log("PASS: the panel keys and the tab bar's buttons open, switch and close one panel");
 }
 EOF
 

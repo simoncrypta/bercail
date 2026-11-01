@@ -114,6 +114,28 @@ deploy_herdr_app >/dev/null
 cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "a new shipped layout must be installed"
 printf 'PASS: a new shipped layout replaces the installed one\n'
 
+# ...and keeps the live desks' blocks, the shown one still shown: a running desk mod
+# doesn't add a block it added before. The 0.9.x layout had no panel column.
+jq 'walk(if type == "object" and .id == "panel" then .children[0] + {size: {px: 240}} else . end)' \
+  "$ROOT/bercail/layouts/bercail.json" >"$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
+jq '(.. | objects | select(.id == "agent-stack")) |= (.children += [
+      {id: "desk-t2x", type: "block", content: {terminal: "t2x"}, padding: [6, 6]},
+      {id: "desk-t5p", type: "block", content: {terminal: "t5p"}, padding: [6, 6]}] | .active = "desk-t5p")' \
+  "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json" >"$APP/layouts/bercail.json"
+deploy_herdr_app >/dev/null
+jq -e '[.. | objects | select(.id == "agent-stack")][0] | [.children[].id] == ["empty", "desk-t2x", "desk-t5p"]
+    and .active == "desk-t5p" and .children[2].content.terminal == "t5p"' "$APP/layouts/bercail.json" >/dev/null \
+  || fail "the desk blocks must come back: $(jq -c '.. | objects | select(.id == "agent-stack")' "$APP/layouts/bercail.json")"
+jq -e '.. | objects | select(.id == "panel") | any(.children[]; .id == "panel-body")' "$APP/layouts/bercail.json" >/dev/null \
+  || fail "the new layout's panel column must be installed"
+[[ "$(_herdr_app_layout_shape "$APP/layouts/bercail.json")" == "$(_herdr_app_layout_shape "$ROOT/bercail/layouts/bercail.json")" ]] \
+  || fail "only the desk blocks may differ from the shipped layout"
+cmp -s "$ROOT/bercail/layouts/bercail.json" "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json" \
+  || fail "the record is the shipped layout, without the desks"
+deploy_herdr_app >/dev/null
+jq -e '.. | objects | select(.id == "desk-t5p")' "$APP/layouts/bercail.json" >/dev/null || fail "a second update must keep the desks"
+printf 'PASS: a new shipped layout keeps the live desk blocks\n'
+
 # bercail's layout as the app left it (desk blocks added, columns resized) is adopted.
 rm -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
 jq '(.. | objects | select(.id == "agent-stack")) |= (.children += [{id: "desk-t9z", type: "block", content: {terminal: "t9z"}}] | .active = "desk-t9z")
