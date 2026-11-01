@@ -72,7 +72,7 @@ test_install_command_needs_install_sh() {
   cp "$STAGE/bin/bercail" "$bare/bin/bercail"
   err="$(HOME="$home" PATH="/usr/bin:/bin" "$bare/bin/bercail" install 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "install without install.sh should exit 1, got $rc"
-  printf '%s' "$err" | grep -q 'setup.simoncrypta.dev/install.sh' \
+  printf '%s' "$err" | grep -q 'https://bercail.dev/install.sh' \
     || fail "install without install.sh should point at curl: $err"
   printf 'PASS: bercail install without a release tree points at the curl installer\n'
 }

@@ -47,7 +47,7 @@ jobs:
         run: |
           if [[ -z "${CLOUDFLARE_API_TOKEN}" ]]; then
             echo '::notice::CLOUDFLARE_API_TOKEN is not set; skipping Cloudflare deploy.'
-            echo 'setup.simoncrypta.dev already tracks master via the Worker GitHub proxy.'
+            echo 'bercail.dev already tracks master via the Worker GitHub proxy.'
             exit 0
           fi
           export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-0911918246a46bfced4610f39e6b7eb5}"

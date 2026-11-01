@@ -381,7 +381,7 @@ test_installed_cli_reads_its_source() {
   assert_eq "$clone" "$(script_dir() { printf '%s' "$TMP_DIR/nowhere/lib"; }; INSTALL_SRC='' install_src_dir)" \
     "the installed CLI uses the recorded clone, not master"
   rm -f "$AGENTIC_DEV_SOURCE_PATH_FILE"
-  assert_eq "https://setup.simoncrypta.dev" "$(script_dir() { printf '%s' "$TMP_DIR/nowhere/lib"; }; INSTALL_SRC='' install_src_dir)" \
+  assert_eq "https://bercail.dev" "$(script_dir() { printf '%s' "$TMP_DIR/nowhere/lib"; }; INSTALL_SRC='' install_src_dir)" \
     "no recorded source: remote"
   printf 'PASS: the installed CLI reads files from the tree it was installed from\n'
 }

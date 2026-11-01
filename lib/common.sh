@@ -129,7 +129,7 @@ install_src_dir() {
       return 0
     fi
   fi
-  printf '%s' "https://setup.simoncrypta.dev"
+  printf '%s' "https://bercail.dev"
 }
 
 # Remote install assets (config/, bin/, skills/) come from GitHub raw.
