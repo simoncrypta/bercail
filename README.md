@@ -294,7 +294,7 @@ Also: `~/.config/herdr-app/layouts/bercail.json` and `mods/bercail-desk/` (the a
 
 ## platforms
 
-On Omarchy: mise first, `omarchy pkg add`, optional `SUPER+ALT+RETURN` → open or focus the Herdr app, fcitx5 `Ctrl+Alt+H/J` hint keys cleared. On Ubuntu: mise then apt (`git fzf jq curl`); worktrunk, beads, tuicr from upstream. On macOS: mise first; Homebrew stays on PATH as fallback (`brew shellenv`, then mise shims prepended). Hyprland: same optional `SUPER+ALT+RETURN` binding.
+On Omarchy: mise first, `omarchy pkg add`, optional `SUPER+ALT+RETURN` → open or focus the Herdr app, fcitx5 `Ctrl+Alt+H/J` hint keys cleared, and a post-update hook (`~/.config/omarchy/hooks/post-update.d/bercail.hook`): after `omarchy-update`, it fast-forwards the clone bercail was installed from and runs `bercail update` without prompting (each question takes its default, no). It skips with one line when offline, dirty, off master/main, or diverged. Herdr updates itself; `bercail doctor` says when a downloaded Herdr waits on a window restart. On Ubuntu: mise then apt (`git fzf jq curl`); worktrunk, beads, tuicr from upstream. On macOS: mise first; Homebrew stays on PATH as fallback (`brew shellenv`, then mise shims prepended). Hyprland: same optional `SUPER+ALT+RETURN` binding.
 
 ## dependencies
 

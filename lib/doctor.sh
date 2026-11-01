@@ -65,6 +65,23 @@ doctor_herdr_app() {
   [[ "$missing" -eq 0 ]]
 }
 
+# Herdr updates itself; bercail only says when an update waits on a restart.
+# Newest: the top release in the changelog Herdr caches. Running: the older of
+# herdr-app --version and the version Herdr last ran. A hint, never a failure.
+doctor_herdr_app_update() {
+  local newest running last
+  newest="$(sed -n 's/^## \[\([0-9][0-9.]*\)\].*/\1/p' "$HERDR_APP_CONFIG_DIR/update-notes-cache.md" 2>/dev/null \
+    | sort -V | tail -n 1 || true)"
+  [[ -n "$newest" ]] || return 0
+  running="$(herdr-app --version 2>/dev/null </dev/null \
+    | grep -oE '[0-9]+(\.[0-9]+)+' | sed -n 1p || true)"
+  last="$(jq -r '.last_run // empty' "$HERDR_APP_CONFIG_DIR/update-notes.json" 2>/dev/null || true)"
+  running="$(printf '%s\n%s\n' "$running" "$last" | sed '/^$/d' | sort -V | sed -n 1p)"
+  [[ -n "$running" && "$running" != "$newest" ]] || return 0
+  [[ "$(printf '%s\n%s\n' "$running" "$newest" | sort -V | tail -n 1)" == "$newest" ]] || return 0
+  log "  hint  Herdr $newest is downloaded (running $running); restart the Herdr window to apply it"
+}
+
 # Did the live follower miss a desk finishing or blocking? Prints what it
 # missed and fails. A desk now done or blocked since after the follower
 # started, later than the last transition the follower recorded, is one it

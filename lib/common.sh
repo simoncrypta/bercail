@@ -15,6 +15,7 @@ LEGACY_AGENTIC_DEV_CONFIG_DIR="${HOME}/.config/agentic-dev"
 HERDR_APP_CONFIG_DIR="${HERDR_APP_CONFIG_DIR:-${HOME}/.config/herdr-app}"
 WORKTRUNK_CONFIG_DIR="${HOME}/.config/worktrunk"
 FCITX5_CONFIG_DIR="${HOME}/.config/fcitx5"
+OMARCHY_POST_UPDATE_HOOK="${HOME}/.config/omarchy/hooks/post-update.d/bercail.hook"
 LOCAL_BIN="${HOME}/.local/bin"
 # Canonical skill install per Agent Skills (https://agentskills.io): ~/.agents/skills.
 AGENTS_SKILLS_DIR="${HOME}/.agents/skills"
@@ -65,6 +66,12 @@ confirm() {
   local prompt="$1"
   if [[ "$YES" -eq 1 ]]; then
     return 0
+  fi
+  # Set by the Omarchy post-update hook: nobody is there to answer, so take
+  # the default (no) instead of waiting on the update terminal.
+  if [[ "${BERCAIL_NO_PROMPT:-0}" == 1 ]]; then
+    info "not asking, answering no: $prompt"
+    return 1
   fi
   printf '%s [y/N] ' "$prompt"
   local reply

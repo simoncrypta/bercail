@@ -1,0 +1,32 @@
+#!/bin/bash
+# Installed by bercail (bercail update keeps it current). Runs after
+# omarchy-update: fast-forwards the bercail clone it was installed from, then
+# redeploys with that clone's bercail update. It must never fail an Omarchy
+# update, so every reason to skip prints one line and exits 0.
+
+skip() {
+  printf 'bercail: skipping update (%s)\n' "$*"
+  exit 0
+}
+
+src="$(cat "$HOME/.local/share/bercail/source-path" 2>/dev/null)"
+[[ -n "$src" && -x "$src/bin/bercail" ]] || skip "no bercail clone recorded"
+git -C "$src" rev-parse --git-dir >/dev/null 2>&1 || skip "$src is not a git clone"
+
+branch="$(git -C "$src" symbolic-ref --quiet --short HEAD 2>/dev/null)"
+[[ "$branch" == master || "$branch" == main ]] \
+  || skip "$src is on ${branch:-a detached HEAD}, not master or main"
+[[ -z "$(git -C "$src" status --porcelain --untracked-files=no 2>/dev/null)" ]] \
+  || skip "$src has uncommitted changes"
+
+export GIT_TERMINAL_PROMPT=0
+timeout 60 git -C "$src" fetch --quiet </dev/null >/dev/null 2>&1 \
+  || skip "cannot fetch $src (offline?)"
+git -C "$src" merge --ff-only --quiet '@{upstream}' </dev/null >/dev/null 2>&1 \
+  || skip "$src cannot fast-forward $branch"
+
+printf 'bercail: updating from %s (%s @ %s)\n' "$src" "$branch" "$(git -C "$src" rev-parse --short HEAD)"
+# Nobody answers prompts here: each one takes its default (no) and says so.
+BERCAIL_NO_PROMPT=1 "$src/bin/bercail" update </dev/null \
+  || printf 'bercail: bercail update failed\n'
+exit 0
