@@ -1,8 +1,10 @@
 # install
 
-The current release and its version pin are at the top of the [README](../README.md#quick-start). Below, `<version>` stands for that release.
+The easiest path is to let [Shep](shep.md#let-shep-set-it-up) install and set up bercail for you. To do it yourself, use one of the paths below.
 
-## mise + packslip (recommended)
+The current release and its version pin are in the [README](../README.md#or-install-it-yourself). Below, `<version>` stands for that release.
+
+## mise + packslip (recommended for a manual install)
 
 [mise](https://mise.jdx.dev) + [packslip](https://github.com/jdx/packslip). Each `v*` release publishes `bercail.tar.gz` and a signed `packslip.sigstore.json`. mise checks that signature against this repository and the archive digest before it unpacks anything, and it runs no downloaded code.
 

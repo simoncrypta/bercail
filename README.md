@@ -25,6 +25,14 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
 ## Quick start
 
+The easy way: get [Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF), connect this computer to it, and ask it to set up bercail. Shep asks before it runs anything. In that first conversation it:
+
+1. Installs bercail, runs `bercail doctor` and `bercail bstack status`, and gives you the login command for any plan that isn't ok.
+2. Checks each repo you'll work in: beads, `AGENTS.md`, a verify skill, and `gh`.
+3. Connects the desk status webhooks with `bercail notify add`, so it hears when a desk is done.
+
+### Or install it yourself
+
 Current release: [v0.10.0](https://github.com/simoncrypta/bercail/releases/tag/v0.10.0).
 
 ```bash
