@@ -231,7 +231,7 @@ export default class BercailDesk extends View {
     const desk = deskFor(space.id);
     switch (c) {
       case "agent":
-        if (desk) run("pane.focus", { terminal: desk.address });
+        if (desk) this.focusAgent({ address: desk.address, space: space.id, desk: true });
         else await this.start(space);
         break;
       case "review": await this.review(space, desk?.cwd ?? space.folder, true); break;

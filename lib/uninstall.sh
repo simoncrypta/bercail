@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 
 uninstall_agentic_dev() {
-  local keys tmp bin
+  local keys tmp bin mod
   info "uninstalling bercail..."
 
   remove_marker_block "$(shell_rc_for bash)"
@@ -49,9 +49,9 @@ uninstall_agentic_dev() {
     run rm -f "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh"
   fi
 
-  if confirm "Remove the bercail Herdr layout, desk mod and keys?"; then
+  if confirm "Remove the bercail Herdr layout, mods and keys?"; then
     run rm -f "$HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT"
-    run rm -rf "$HERDR_APP_CONFIG_DIR/mods/bercail-desk"
+    for mod in "${HERDR_APP_MODS[@]}"; do run rm -rf "$HERDR_APP_CONFIG_DIR/mods/$mod"; done
     keys="$HERDR_APP_CONFIG_DIR/keys.json"
     if [[ -f "$keys" ]] && jq -e --arg s "$HERDR_APP_KEYS_SECTION" 'has($s)' "$keys" >/dev/null 2>&1; then
       info "remove: $HERDR_APP_KEYS_SECTION from $keys"

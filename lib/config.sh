@@ -79,10 +79,13 @@ read_layout_review() {
 
 RECONFIGURE=0
 
-# The Herdr app half of bercail: the bercail layout, its desk mod, and its keys.
+# The Herdr app half of bercail: the bercail layout, its mods (the desk, and the
+# agents list, which also lists each desk), and its keys.
 # Paths are relative to bercail/ (the shared layout folder) in the source and to the app's home.
 HERDR_APP_LAYOUT="layouts/bercail.json"
-HERDR_APP_MOD_FILES=(mods/bercail-desk/main.js mods/bercail-desk/mod.json)
+HERDR_APP_MODS=(bercail-desk bercail-agents)
+HERDR_APP_MOD_FILES=(mods/bercail-desk/main.js mods/bercail-desk/mod.json
+  mods/bercail-agents/main.js mods/bercail-agents/mod.json)
 HERDR_APP_KEYS_SECTION="layout:bercail"
 
 # The app rewrites its layout file (the desk mod adds a block per desk with
@@ -251,10 +254,11 @@ deploy_herdr_app() {
     deploy_install_file "bercail/$rel" "$HERDR_APP_CONFIG_DIR/$rel"
   done
   deploy_herdr_app_keys || true
-  if [[ "$DRY_RUN" -ne 1 ]] \
-    && ! herdr-app check "$HERDR_APP_CONFIG_DIR/mods/bercail-desk" >/dev/null 2>&1; then
-    warn "herdr-app check failed for the bercail-desk mod; run: herdr-app check $HERDR_APP_CONFIG_DIR/mods/bercail-desk"
-  fi
+  for rel in "${HERDR_APP_MODS[@]}"; do
+    if [[ "$DRY_RUN" -ne 1 ]] && ! herdr-app check "$HERDR_APP_CONFIG_DIR/mods/$rel" >/dev/null 2>&1; then
+      warn "herdr-app check failed for the $rel mod; run: herdr-app check $HERDR_APP_CONFIG_DIR/mods/$rel"
+    fi
+  done
   info "Herdr app: switch to the bercail layout with Ctrl+Shift+L"
 }
 

@@ -24,10 +24,12 @@ opens on them by itself. It is the app half of
 - Not the `herdr` terminal (`~/.config/herdr`, `herdr plugin install`,
   `herdr-plugin.toml`): it has no layouts or mods, and this layout does not
   run in it.
-- To add it by hand: copy `layouts/bercail.json` and `mods/bercail-desk/`
-  into `~/.config/herdr-app/`, merge the `layout:bercail` section of
-  `keys.json` into `~/.config/herdr-app/keys.json`, run `herdr-app check
-  ~/.config/herdr-app/mods/bercail-desk`, then switch with `ctrl-shift-l`.
+- To add it by hand: copy `layouts/bercail.json`, `mods/bercail-desk/` and
+  `mods/bercail-agents/` into `~/.config/herdr-app/`, merge the
+  `layout:bercail` section of `keys.json` into
+  `~/.config/herdr-app/keys.json`, run `herdr-app check` on both mods
+  (`~/.config/herdr-app/mods/bercail-desk`, `.../bercail-agents`), then
+  switch with `ctrl-shift-l`.
 
 ## What you see
 
@@ -107,8 +109,16 @@ lights at 12,16):
   `{terminal: …}` block per desk, `desk-<address>`, that the mod adds), `main` block `{tab: "active", pane: {...}}`,
   `panel` column holding the `panel-body` stack of `files` and `changes`
   (the ids Herdr's `tabs` mod shows and hides).
-- Shipped mods used: `workspace-chrome`, `spaces`, `agents`, `tabs`, `pane`,
+- Shipped mods used: `workspace-chrome`, `spaces`, `tabs`, `pane`,
   `files`, `changes`, `workspace-status`.
+- `mods/bercail-agents`: Herdr's `agents` mod (0.1.11) copied with
+  `mod.clone {"name":"agents","as":"bercail-agents"}`, in the `agents`
+  block. Changed only so it lists desks: a live terminal labelled
+  `bercail.role=agent` that is not in `agents()` and whose parent is not
+  either (a desk under a bash Shell) gets a top-level row in its space,
+  before that space's agents, with its `terminals()` status (done reads
+  idle, error blocked, as for sub-agents). A click runs
+  `bercail-desk.agent:<desk>`, which selects the desk's space and desk.
 - `mods/bercail-desk` (`place: "none"`), one script, two roles:
   - `header` (default): draws the header row, takes the key commands
     (`nextCommand()`), and on every render shows the space's desk: the first
@@ -121,7 +131,7 @@ lights at 12,16):
   bercail.space=<space id> ~/.local/bin/bercail-desk-agent`. As a sub-agent
   of the Shell it has no pane or tab of its own: the desk column is the one
   place it shows. (Herdr's agents list shows sub-agents only under a parent
-  that is an agent, so a desk under a bash Shell is not listed there.) With
+  that is an agent; `bercail-agents` lists the desk itself.) With
   no Shell terminal, the mod warns and starts nothing.
   The wrapper runs bstack
   (opencode, system theme) when it is on, else `[agent] command` (codex gets
@@ -175,12 +185,13 @@ lights at 12,16):
 
 ## Done when
 
-- `herdr-app check mods/bercail-desk` passes and `layout.switch
+- `herdr-app check mods/bercail-desk` and `herdr-app check
+  mods/bercail-agents` pass, and `layout.switch
   {"name":"bercail"}` shows the sidebar, the desk, the tabs and Files.
 - In a space with no desk agent, clicking "Start the agent" starts
   `bercail-desk-agent` as an hc sub-agent of the space's Shell, labelled
   `bercail.role=agent` and `bercail.space=<id>`; the desk shows it with its
-  status, and the space gets no tab for it.
+  status, the agents list has a row for it, and the space gets no tab for it.
 - Switching to another space shows that space's desk (or the empty desk);
   switching back shows the first agent, still running.
 - `ctrl-shift-a` from a pane puts the keyboard in the desk;

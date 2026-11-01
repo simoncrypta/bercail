@@ -291,7 +291,7 @@ build = "grok"
 judge = "claude"
 ```
 
-Also: `~/.config/herdr-app/layouts/bercail.json` and `mods/bercail-desk/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), worktrunk hooks, `~/.agents/skills/{handoff,review,bstack,council,autopilot,how,why,unslop}`, and bstack's files in `~/.config/opencode`.
+Also: `~/.config/herdr-app/layouts/bercail.json`, `mods/bercail-desk/` and `mods/bercail-agents/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), worktrunk hooks, `~/.agents/skills/{handoff,review,bstack,council,autopilot,how,why,unslop}`, and bstack's files in `~/.config/opencode`.
 
 ## platforms
 
@@ -312,6 +312,7 @@ With bstack on: [opencode](https://github.com/anomalyco/opencode) v2 (mise, else
 ```bash
 shellcheck install.sh lib/*.sh bin/bercail config/shell/bercail.inc.sh config/worktrunk/herdr-layout.sh
 herdr-app check bercail/mods/bercail-desk
+herdr-app check bercail/mods/bercail-agents
 for t in tests/*_test.sh; do bash "$t" || break; done
 ./install.sh --help
 bercail dry-run
