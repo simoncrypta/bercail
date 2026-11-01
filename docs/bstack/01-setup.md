@@ -1,7 +1,9 @@
 # Set up bstack
 
-New bercail installs turn bstack on. On an existing install, run
-`bercail bstack on` first.
+New bercail installs turn bstack on (`./install.sh --no-bstack` to skip). On an
+existing install, `bercail bstack setup` turns it on too; `bercail bstack on`
+does it without the sign-ins. Either one moves the desk default from
+cursor-agent to opencode.
 
 ## Connect your plans
 
@@ -9,21 +11,24 @@ New bercail installs turn bstack on. On an existing install, run
 bercail bstack setup
 ```
 
-It installs opencode when it is missing, then offers each sign-in:
+It installs opencode when it is missing (bstack needs 2.2.3 or newer), then
+offers each sign-in:
 
 | Plan | What it runs |
 |------|--------------|
-| Claude (Pro or Max) | `claude auth login`, then `opencode auth login claude-agent` |
+| Claude (Pro or Max) | `opencode auth login claude-agent`. Claude Agent runs Claude Code, so install it and sign in with `claude auth login` first; setup skips Claude without it |
 | ChatGPT (Plus or Pro) | `opencode auth login openai`, choose Sign in with ChatGPT |
 | X subscription | `opencode auth login xai --method device` |
 
 Connect the ones you pay for. One is enough to start. bstack spreads the work
-out as you add more.
+out as you add more. `--yes` connects nothing: it turns bstack on and uses the
+plans already connected.
 
 Setup does not ask about models. Each connected plan gets its newest model:
-Claude's `opus`, the newest GPT Sol, the newest plain Grok release, each at
-high reasoning effort. `bercail update` picks again, so a new release reaches
-bstack without you doing anything.
+Claude's `opus` alias, the newest GPT Sol, the newest plain Grok release, each
+at `effort` (default `high`). `bercail update` picks again, so a new release
+reaches bstack without you doing anything. To pin a model or change the effort,
+see [Make it yours](./08-make-it-yours.md).
 
 ## Check it
 
@@ -53,8 +58,8 @@ add a --json flag to this command. the text output stays byte-identical. prove b
 Watch the todo list. Its first items are the feature playbook's steps. When the
 agent skips one, it says why.
 
-When the agent finishes, its desk goes `done` and tuicr opens on the staged
-change. That is your review.
+When the agent finishes, its desk goes `done` and tuicr opens on the
+uncommitted change. That is your [review](../review.md).
 
 ## Keep the cost in check
 

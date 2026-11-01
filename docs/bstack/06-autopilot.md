@@ -14,7 +14,7 @@ It takes the PR for the current branch, or a number (`/autopilot 42`).
 It runs a loop on one snapshot of the PR:
 
 ```bash
-~/.agents/skills/autopilot/scripts/pr-state.sh [--pr N] [--wait SECONDS]
+~/.agents/skills/autopilot/scripts/pr-state.sh [--repo PATH] [--pr N] [--wait SECONDS]
 ```
 
 The JSON carries the checks, the failing ones with their run ids, the open
@@ -27,6 +27,7 @@ review threads where the last word isn't yours, the merge state, and `next`:
 | `answer-threads` | checks each claim; fixes the right ones, answers the wrong ones with evidence |
 | `wait-ci` | waits until a check finishes, a thread arrives, or the head moves |
 | `green` | stops and says "ready to merge" |
+| `merged`, `closed` | stops and says so |
 
 A failure counts as a flake only when the log shows it and the same check passed
 recently. It gets one rerun. A second failure is real.
@@ -64,7 +65,7 @@ Autopilot can take hours. Hand it off and keep your desk:
 ```
 
 That writes a beads issue naming the PR and runs it headless on the `autopilot`
-stage, as `bstack-autopilot`, in the PR's checkout. Other headless stages reject
+[stage](../handoff.md), as `bstack-autopilot`, in the PR's checkout. Other headless stages reject
 every commit, push, and merge, so this is the only one that can push.
 
 Next: [Run jobs in parallel](./07-handoff.md).
