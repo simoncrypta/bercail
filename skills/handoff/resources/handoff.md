@@ -25,9 +25,10 @@ run `--info` then spawn — not assemble these steps.
    per-harness mode.
 6. `WT_HERDR_AGENT_CMD` is the stage table's binary and `WT_HERDR_AGENT_PROMPT`
    that one-line prompt. `wt_herdr_handoff_agent` starts the space's desk:
-   `hc run --bg --keep --no-parent` of `bercail-desk-agent --prompt <prompt> <binary>`
-   with labels `herdr.space`, `bercail.role=agent` and `bercail.space=<space id>`
-   (a tab of its own), replacing a live desk in that space. A failed start does **not** discard the worktree.
+   `hc run --bg --keep --outlive-parent --parent <space's first terminal>` of
+   `bercail-desk-agent --prompt <prompt> <binary>` with labels
+   `bercail.role=agent` and `bercail.space=<space id>`, replacing a live desk
+   in that space. A failed start does **not** discard the worktree.
 7. Print JSON `{ok,label,path,branch,issue,agent_started,dirty_copied,graphite,stage,harness,space,desk}`
    and append `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling
    exists.

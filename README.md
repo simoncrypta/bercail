@@ -12,7 +12,7 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
 <img width="2133" height="1386"  alt="desk agent, review, files"  src="https://github.com/user-attachments/assets/ec959b30-ba4a-4013-bd9f-00972d82d3cd" />
 
-- **the desk** — each space's agent (bstack when it is on, else your `[agent] command`) is pinned beside the tabs and listed in Herdr's agents list. It is an hc terminal, so it keeps running when the window closes.
+- **the desk** — each space's agent (bstack when it is on, else your `[agent] command`) is pinned beside the tabs. It is an hc terminal, so it keeps running when the window closes.
 - **one worktree, one space** — [worktrunk](https://github.com/max-sixty/worktrunk) creates the tree; a Herdr space follows.
 - **control and observability** — every agent is working, blocked, done, or idle. Review opens on `done`. You choose what gets a GitHub comment.
 - **review when the agent is done** — `tuicr -w` on the staged, uncommitted work the agent left for you (watching). Other people's PRs open with `tuicr pr`. `Ctrl+Shift+R` anytime.
@@ -154,7 +154,7 @@ dev          # this directory's space, with its desk agent
 # or: t      # open the Herdr app
 ```
 
-With bstack on, every space starts its desk as bstack (opencode with your terminal's colors), in a tab of its own named Agent that the desk column also shows. Quit it and it stays quit; `Ctrl+Shift+A` starts it again. With bstack off, `Ctrl+Shift+A` starts `[agent] command` from `~/.config/bercail/config.toml`. Handoff stages do not read either; each stage names its own binary.
+With bstack on, every space starts its desk as bstack (opencode with your terminal's colors), shown in the desk column. Quit it and it stays quit; `Ctrl+Shift+A` starts it again. With bstack off, `Ctrl+Shift+A` starts `[agent] command` from `~/.config/bercail/config.toml`. Handoff stages do not read either; each stage names its own binary.
 
 ## handoff
 

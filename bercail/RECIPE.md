@@ -115,11 +115,15 @@ lights at 12,16):
     time, it adds the desk's block with `layout.set` (already selected);
     after that, it only picks the stack child with `layout.select`.
   - `empty`: the empty desk, with one button that starts the agent.
-- A desk agent is an hc terminal: `hc run --bg --json --keep --no-parent
-  --no-notify --cwd <the space's folder> --label herdr.space=<space id>
-  --label bercail.role=agent --label bercail.space=<space id>
-  ~/.local/bin/bercail-desk-agent`. `herdr.space` gives it a tab of its own
-  (renamed Agent), so Herdr's agents list shows it. The wrapper runs bstack
+- A desk agent is an hc terminal: `hc run --bg --json --keep
+  --outlive-parent --no-notify --parent <first pane of the first tab> --cwd
+  <the space's folder> --label bercail.role=agent --label
+  bercail.space=<space id> ~/.local/bin/bercail-desk-agent`. As a sub-agent
+  of the Shell it has no pane or tab of its own: the desk column is the one
+  place it shows. (Herdr's agents list shows sub-agents only under a parent
+  that is an agent, so a desk under a bash Shell is not listed there.) With
+  no Shell terminal, the mod warns and starts nothing.
+  The wrapper runs bstack
   (opencode, system theme) when it is on, else `[agent] command` (codex gets
   `--no-daemon`). The mod finds the desk again by its labels in `terminals()`.
   With bstack on, a space shown without a desk gets one, once per app
@@ -174,9 +178,9 @@ lights at 12,16):
 - `herdr-app check mods/bercail-desk` passes and `layout.switch
   {"name":"bercail"}` shows the sidebar, the desk, the tabs and Files.
 - In a space with no desk agent, clicking "Start the agent" starts
-  `bercail-desk-agent` as an hc terminal labelled `herdr.space=<id>`,
+  `bercail-desk-agent` as an hc sub-agent of the space's Shell, labelled
   `bercail.role=agent` and `bercail.space=<id>`; the desk shows it with its
-  status, and Herdr's agents list lists it.
+  status, and the space gets no tab for it.
 - Switching to another space shows that space's desk (or the empty desk);
   switching back shows the first agent, still running.
 - `ctrl-shift-a` from a pane puts the keyboard in the desk;

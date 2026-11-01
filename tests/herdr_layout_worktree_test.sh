@@ -25,8 +25,9 @@ MAIN="$(cd "$TMP_DIR/main" && pwd -P)"
 FEATURE="$(cd "$TMP_DIR/main.feature" && pwd -P)"
 export FEATURE
 DESK="$HOME/.local/bin/bercail-desk-agent"
-# How every desk starts: a tab of its own in sp-child, found again by the bercail labels.
-RUN="hc run --bg --keep --no-parent --no-notify --cwd $FEATURE --label herdr.space=sp-child --label bercail.role=agent --label bercail.space=sp-child $DESK"
+# How every desk starts: a sub-agent of sp-child's Shell (t9), no tab of its own
+# (no herdr.space), found again by the bercail labels.
+RUN="hc run --bg --keep --outlive-parent --no-notify --parent t9 --cwd $FEATURE --label bercail.role=agent --label bercail.space=sp-child $DESK"
 
 # A fake Herdr app: spaces live in $FAKE_STATE/spaces.json, the shown one in $FAKE_STATE/shown.
 cat >"$FAKE_BIN/herdr-app" <<'EOF'
@@ -118,9 +119,9 @@ printf 'PASS: with bstack on, post-start starts a desk in a space without one, u
 TERM=dumb WT_HERDR_AGENT_CMD=codex WT_HERDR_AGENT_PROMPT=bercail-0s1 \
   wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
 grep -qx "$RUN --prompt bercail-0s1 codex" "$CALL_LOG" \
-  || fail "handoff should start the desk in its own tab with the stage's binary; log=$(cat "$CALL_LOG")"
+  || fail "handoff should start the desk under the space's Shell with the stage's binary; log=$(cat "$CALL_LOG")"
 grep -qx 'TERM=xterm-256color' "$CALL_LOG" || fail "a headless caller's TERM=dumb must not reach the desk; log=$(cat "$CALL_LOG")"
-printf 'PASS: handoff starts the desk agent in its own tab with its prompt (real TERM)\n'
+printf 'PASS: handoff starts the desk agent under the Shell, no tab of its own, with its prompt (real TERM)\n'
 
 touch "$FAKE_STATE/desk"
 : >"$CALL_LOG"
@@ -141,6 +142,16 @@ WT_HERDR_AGENT_PROMPT=ignored wt_herdr_start_default_agent "Main_Feature" "$TMP_
 grep -qx "$RUN" "$CALL_LOG" \
   || fail "default agent is bercail-desk-agent's pick, without a prompt; log=$(cat "$CALL_LOG")"
 printf 'PASS: default agent is bercail-desk-agent with no prompt\n'
+
+cp "$FAKE_STATE/spaces.json" "$FAKE_STATE/spaces.bak"
+jq 'map(if .id == "sp-child" then .tabs = [] else . end)' "$FAKE_STATE/spaces.bak" >"$FAKE_STATE/spaces.json"
+: >"$CALL_LOG"
+if wt_herdr_start_default_agent "Main_Feature" "$TMP_DIR/main.feature" 2>/dev/null; then
+  fail "a space with no Shell terminal must not get a desk"
+fi
+grep -q '^hc run' "$CALL_LOG" && fail "no Shell, no hc run; log=$(cat "$CALL_LOG")"
+mv "$FAKE_STATE/spaces.bak" "$FAKE_STATE/spaces.json"
+printf 'PASS: a space with no Shell terminal gets no desk\n'
 
 : >"$CALL_LOG"
 wt_herdr_layout_close "Main_Feature"
