@@ -19,6 +19,10 @@ uninstall_agentic_dev() {
     run rm -f "$LOCAL_BIN/agentic-dev"
   fi
 
+  if [[ -e "$OMARCHY_POST_UPDATE_HOOK" ]]; then
+    info "remove: $OMARCHY_POST_UPDATE_HOOK"
+    run rm -f "$OMARCHY_POST_UPDATE_HOOK"
+  fi
   if [[ -d "$AGENTIC_DEV_SHARE_DIR" ]]; then
     info "remove: $AGENTIC_DEV_SHARE_DIR"
     run rm -rf "$AGENTIC_DEV_SHARE_DIR"

@@ -105,6 +105,7 @@ cmd_doctor() {
   fi
   doctor_helper || failures=1
   doctor_herdr_app || failures=1
+  doctor_herdr_app_update
   doctor_skill || failures=1
   doctor_omarchy_integration || failures=1
   doctor_notify || failures=1
