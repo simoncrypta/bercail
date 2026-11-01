@@ -1,6 +1,6 @@
 # bercail
 
-Built for the Shep Grok bot: One worktree per space, a desk agent beside your tabs, review when it's done.
+Built for the Shep Grok bot: hand off the jobs, let agents work side by side in their own worktrees, and review each one as it lands.
 
 ![bercail](preview.png)
 
