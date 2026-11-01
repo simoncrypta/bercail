@@ -1,11 +1,6 @@
 # bercail
 
-Herdr's layout with a desk: each space gets one sticky agent in its own column
-on the left of the work area, under the tab bar (Shell, Review), beside the
-shown tab's panes and a files/changes panel on the right. Tabs come and go around the desk; the agent
-stays. When the desk agent finishes with uncommitted changes, a Review tab
-opens on them by itself. It is the app half of
-[bercail](https://github.com/simoncrypta/bercail), and works on its own too.
+Built for the Shep Grok bot: One worktree per space, a desk agent beside your tabs, review when it's done.
 
 ![bercail](preview.png)
 
