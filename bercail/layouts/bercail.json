@@ -40,7 +40,7 @@
               "id": "agents",
               "type": "block",
               "content": {
-                "mod": "agents"
+                "mod": "bercail-agents"
               },
               "size": {
                 "weight": 1
