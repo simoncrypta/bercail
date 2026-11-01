@@ -7,7 +7,7 @@ In the bercail layout:
 
 | Key | Action |
 |-----|--------|
-| `Ctrl+Shift+A` | Focus the desk agent, or start it (the agent last picked on the desk) |
+| `Ctrl+Shift+A` | Focus the desk agent, or start it (bstack when it is on, else `[agent] command`) |
 | `Ctrl+Shift+R` | Open or select Review (`tuicr`) |
 | `Ctrl+Shift+S` | Shell tab |
 | `Ctrl+Shift+F` / `Ctrl+Shift+G` | Show or hide files / changes |

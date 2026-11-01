@@ -299,7 +299,7 @@ EOF
 }
 
 # No install-time agent picker. The desk agent defaults to opencode as bstack
-# (cursor-agent with --no-bstack) until one is picked on the desk.
+# (cursor-agent with --no-bstack).
 # Override [agent] command in config.toml yourself, then bercail reconfigure.
 prompt_user_config() {
   if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
@@ -531,7 +531,7 @@ migrate_worktrunk_layout_echo() {
 }
 
 deploy_finalize_permissions() {
-  run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/agentic-dev" \
+  run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/agentic-dev" "$LOCAL_BIN/bercail-desk-agent" \
     "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.zsh" \
@@ -548,6 +548,7 @@ deploy_configs() {
     "config/worktrunk/herdr-layout.sh|${WORKTRUNK_CONFIG_DIR}/herdr-layout.sh"
     "bin/bercail|${LOCAL_BIN}/bercail"
     "bin/agentic-dev|${LOCAL_BIN}/agentic-dev"
+    "bin/bercail-desk-agent|${LOCAL_BIN}/bercail-desk-agent"
   )
   local entry rel dest
 

@@ -413,13 +413,14 @@ handoff_spawn_main() {
   if [[ -n "$keep_space" ]]; then
     export WT_HERDR_KEEP_FOCUS="$keep_space"
   fi
+  # The post-start hook makes the space only: this starts the desk below.
   if [[ -n "$base" ]]; then
     git -C "$main" rev-parse --verify --quiet "$base^{commit}" >/dev/null \
       || handoff_die "--base $base is not a branch or commit in this repo"
-    wt switch --create "$branch" --base "$base" --no-cd \
+    WT_HERDR_NO_DESK=1 wt switch --create "$branch" --base "$base" --no-cd \
       || handoff_die "wt switch --create $branch --base $base failed"
   else
-    wt switch --create "$branch" --no-cd \
+    WT_HERDR_NO_DESK=1 wt switch --create "$branch" --no-cd \
       || handoff_die "wt switch --create $branch failed"
   fi
   _wt_herdr_keep_user_focus "$keep_space"

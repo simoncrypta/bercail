@@ -46,9 +46,7 @@ lights at 12,16):
     name (semibold, `foreground`), its terminal title (`dim`, truncated), and
     the status word in the status color. Below it, the agent's terminal with
     6px padding. With no desk agent, the column shows "No agent on this
-    desk" and one button per agent (bstack, which runs opencode, then Claude
-    Code, Codex, Grok; the last one picked filled with `solid`, uninstalled
-    ones at 45% opacity), and a hint line.
+    desk", a "Start the agent" button filled with `solid`, and a hint line.
   - **The tabs**, weight 1, so desk and tabs split the width evenly: the
     shown tab's panes as cards (radius 10, 1px `border`, `accent` on focus,
     8px gaps, a 30px `pane` header always shown, also on a lone pane).
@@ -72,9 +70,9 @@ lights at 12,16):
   is replaced. At most one automatic open per space every 15s; a space that
   isn't shown opens it the next time it is.
 - **Keys** (keys.json section `layout:bercail`):
-  - `ctrl-shift-a` focuses the desk agent, or starts one: the last agent
-    picked on an empty desk, else `[agent] command` from
-    `~/.config/bercail/config.toml` (`cursor-agent` when there is none).
+  - `ctrl-shift-a` focuses the desk agent, or starts one: bstack when
+    `[bstack] enabled = true` in `~/.config/bercail/config.toml`, else
+    `[agent] command` (`cursor-agent` when there is none).
   - `ctrl-shift-r` Review (opens even on a clean tree); `ctrl-shift-s` the
     first tab (Shell).
   - `ctrl-shift-f` / `ctrl-shift-g` show Files / Changes; the same key again
@@ -116,13 +114,16 @@ lights at 12,16):
     (`nextCommand()`), and on every render shows the space's desk: the first
     time, it adds the desk's block with `layout.set` (already selected);
     after that, it only picks the stack child with `layout.select`.
-  - `empty`: the agent picker; lists choices from `knownAgents()` and keeps
-    the last pick in shared state `bercail.agent`.
-- A desk agent is an hc terminal: `hc run --bg --json --keep
-  --outlive-parent --no-notify --parent <first pane of the first tab> --cwd
-  <its cwd> --label bercail.role=agent --label bercail.space=<space id>
-  <argv>` (codex gets `--no-daemon`). The mod finds it again by those labels
-  in `terminals()`.
+  - `empty`: the empty desk, with one button that starts the agent.
+- A desk agent is an hc terminal: `hc run --bg --json --keep --no-parent
+  --no-notify --cwd <the space's folder> --label herdr.space=<space id>
+  --label bercail.role=agent --label bercail.space=<space id>
+  ~/.local/bin/bercail-desk-agent`. `herdr.space` gives it a tab of its own
+  (renamed Agent), so Herdr's agents list shows it. The wrapper runs bstack
+  (opencode, system theme) when it is on, else `[agent] command` (codex gets
+  `--no-daemon`). The mod finds the desk again by its labels in `terminals()`.
+  With bstack on, a space shown without a desk gets one, once per app
+  session (one the person quit stays quit).
 - Commands it runs: `pane.focus`, `pane.go`, `tab.select`, `tab.new` (Review,
   with `argv`), `tab.close`, `tab.rename`, `layout.set`, `layout.select`,
   `layout.show`, `layout.hide`. Programs: `hc`, `git status --porcelain`,
@@ -172,10 +173,11 @@ lights at 12,16):
 
 - `herdr-app check mods/bercail-desk` passes and `layout.switch
   {"name":"bercail"}` shows the sidebar, the desk, the tabs and Files.
-- In a space with no desk agent, the desk shows the picker; clicking Claude
-  Code starts `claude` as an hc terminal labelled `bercail.role=agent` and
-  `bercail.space=<id>`, and the desk shows it with its status.
-- Switching to another space shows that space's desk (or the picker);
+- In a space with no desk agent, clicking "Start the agent" starts
+  `bercail-desk-agent` as an hc terminal labelled `herdr.space=<id>`,
+  `bercail.role=agent` and `bercail.space=<id>`; the desk shows it with its
+  status, and Herdr's agents list lists it.
+- Switching to another space shows that space's desk (or the empty desk);
   switching back shows the first agent, still running.
 - `ctrl-shift-a` from a pane puts the keyboard in the desk;
   `ctrl-alt-right` returns it to that pane.
