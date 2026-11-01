@@ -1,6 +1,10 @@
 # install
 
-The easiest path is to let [Shep](shep.md#let-shep-set-it-up) install and set up bercail for you. To do it yourself, use one of the paths below.
+## With Shep (recommended)
+
+[Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF) is a Grok Bot template that knows how to install and set up bercail. Add it, connect this computer to it, and ask it to set up bercail. It asks before it runs anything.
+
+## Install it yourself
 
 The current release and its version pin are in the [README](../README.md#or-install-it-yourself). Below, `<version>` stands for that release.
 

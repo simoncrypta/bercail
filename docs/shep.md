@@ -1,15 +1,10 @@
-# Shep, the Grok bot
+# Shep, the Grok Bot
 
-**[Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF) is the Grok bot that orchestrates bercail.** It orchestrates coding agents in the Herdr app through bercail: it writes beads issues, hands them to a desk, and pings you when the desk is ready to review. By default it hands a job to bstack (opencode). It runs `start` (Claude Code), `codex`, or `cursor` when you name one.
+**[Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF) is the Grok Bot template that orchestrates bercail.** It orchestrates coding agents in the Herdr app through bercail: it writes beads issues, hands them to a desk, and pings you when the desk is ready to review. By default it hands a job to bstack (opencode). It runs `start` (Claude Code), `codex`, or `cursor` when you name one.
 
 ## Let Shep set it up
 
-Get Shep, connect this computer to it, and ask it to set up bercail. In that first conversation Shep:
-
-1. Installs bercail (see [install](install.md)), and asks before it runs anything.
-2. Runs `bercail doctor` and `bercail bstack status`, and gives you the login command for any plan that isn't ok.
-3. Checks each repo you'll work in: beads, `AGENTS.md`, a verify skill, and `gh`.
-4. Connects the desk status webhooks with `bercail notify add` (see [add a sink](#add-a-sink)), so it hears when a desk is done.
+Shep is a Grok Bot template. Add it, connect this computer to it, and ask it to set up bercail. It installs bercail, checks your plans and repos, and connects the desk webhooks, asking before it runs anything.
 
 ## How Shep runs a job
 
