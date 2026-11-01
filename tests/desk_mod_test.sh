@@ -36,7 +36,7 @@ export const focused = () => h().focused;
 export const terminals = () => h().terminals;
 export const panes = () => h().panes ?? [];
 export const agents = () => h().agents ?? [];
-export const notify = () => {};
+export const notify = (n) => (h().notes ??= []).push(n);
 export const theme = () => ({});
 export const props = () => ({});
 export const shared = () => null;
@@ -310,7 +310,7 @@ console.log("PASS: agent next/prev walk agents in sidebar space order, wrapping"
   console.log("PASS: the panel keys and the tab bar's buttons open, switch and close one panel");
 }
 
-// bstack on: a space shown without a desk starts one, in a tab of its own, once.
+// bstack on: a space shown without a desk starts one, under its Shell, once.
 {
   const ran = [];
   globalThis.herdr = {
@@ -333,19 +333,18 @@ console.log("PASS: agent next/prev walk agents in sidebar space order, wrapping"
   globalThis.herdr.terminals = [{ address: "t-sh", state: "live", labels: {} }];
   show(d, "s1");
   await settle();
-  expect(JSON.stringify(starts()), JSON.stringify([["hc", "run", "--bg", "--json", "--keep", "--no-parent", "--no-notify",
-    "--cwd", "/w/sub", "--label", "herdr.space=s1", "--label", "bercail.role=agent", "--label", "bercail.space=s1",
+  expect(JSON.stringify(starts()), JSON.stringify([["hc", "run", "--bg", "--json", "--keep", "--outlive-parent", "--no-notify",
+    "--parent", "t-sh", "--cwd", "/w/sub", "--label", "bercail.role=agent", "--label", "bercail.space=s1",
     "/nonexistent/.local/bin/bercail-desk-agent"]]), "auto-start in the shown space");
   show(d, "s1");
   await settle();
   if (starts().length !== 1) fail("auto-start ran again before the desk showed up");
-  // The desk comes up in its own tab, which gets a name; then the person quits it.
-  globalThis.herdr.spaces[0].tabs.push({ id: "tab9" });
-  globalThis.herdr.panes.push({ pane: "p9", tab: "tab9", terminal: "t-desk", cwd: "/w/sub" });
-  globalThis.herdr.terminals.push(D("t-desk", "s1"));
+  // The desk comes up as the Shell's sub-agent, with no pane or tab; then the person quits it.
+  globalThis.herdr.terminals.push({ ...D("t-desk", "s1"), parent: "t-sh" });
   globalThis.herdr.calls = [];
   show(d, "s1", 1);
-  expect(JSON.stringify(calls("tab.rename")), '[["tab.rename",{"id":"tab9","name":"Agent"}]]', "the desk's tab is named");
+  if (calls("tab.rename").length) fail(`no tab is renamed for the desk: ${JSON.stringify(calls("tab.rename"))}`);
+  expect(stack().active, "desk-t-desk", "the desk shows in its block");
   globalThis.herdr.terminals = [{ address: "t-sh", state: "live", labels: {} }, D("t-desk", "s1", "finished")];
   show(d, "s1");
   await settle();
@@ -361,7 +360,14 @@ console.log("PASS: agent next/prev walk agents in sidebar space order, wrapping"
   show(d, "s1");
   await settle();
   if (starts().length !== 2) fail("bstack off must not auto-start");
-  console.log("PASS: with bstack on, a shown space gets its desk once, in a named tab of its own; a quit desk stays quit");
+  // Ctrl+Shift+A in a space with no Shell: a warning, no desk.
+  globalThis.herdr.spaces.push({ id: "s3", tabs: [], folder: "/w3" });
+  globalThis.herdr.focused = { space: "s3", pane: null };
+  globalThis.herdr.notes = [];
+  await d.command("agent");
+  if (starts().length !== 2) fail("a space with no Shell must not start a desk");
+  if (globalThis.herdr.notes[0]?.level !== "warning") fail("no Shell: the person is told why");
+  console.log("PASS: with bstack on, a shown space gets its desk once, under its Shell (no tab of its own); a quit desk stays quit");
 }
 EOF
 

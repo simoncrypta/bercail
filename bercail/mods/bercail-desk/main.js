@@ -1,11 +1,12 @@
 // bercail desk: one sticky agent per space, shown in the layout's agent column.
 //
-// The desk agent is an hc terminal with a tab of its own in the space (label
-// herdr.space), so Herdr's agents list shows it with its status. It carries
+// The desk agent is an hc terminal started as a sub-agent of the space's Shell
+// terminal, so it belongs to the space without a pane in any tab. It carries
 // labels bercail.role=agent and bercail.space=<space id>, and runs
 // bercail-desk-agent: bstack when it is on, else bercail's [agent] command. Each
-// desk also shows in a terminal block of its own in the layout's `agent-stack`,
-// `desk-<address>` (an agent block can't take the keyboard from a command).
+// desk shows in a terminal block of its own in the layout's `agent-stack`,
+// `desk-<address>` (an agent block can't take the keyboard from a command, and
+// agent.focus moves it to the parent pane).
 //
 // With bstack on, a space shown without a desk gets one, once per app session:
 // an agent the person quit stays quit until Ctrl+Shift+A.
@@ -326,7 +327,8 @@ export default class BercailDesk extends View {
     return out;
   }
 
-  // A desk is focused in its space's agent block, not in its own tab (agent.focus).
+  // agent.focus would put the keyboard on a desk's parent pane (the Shell): a desk is
+  // shown in its space's agent block and focused there.
   focusAgent(a) {
     if (!a.desk) { run("agent.focus", { terminal: a.address }); return; }
     if (focused()?.space !== a.space) {
@@ -337,17 +339,22 @@ export default class BercailDesk extends View {
     run("pane.focus", { terminal: a.address });
   }
 
-  // The desk agent, in a tab of its own (herdr.space). bercail-desk-agent picks what
+  // The desk agent, a sub-agent of the space's Shell. bercail-desk-agent picks what
   // it runs; without bercail (the layout on its own), [agent] command.
   async start(space) {
     if (this.starting[space.id]) return;
+    const shell = shellOf(space);
+    if (!shell) {
+      notify({ title: "bercail", body: "This space has no Shell terminal to start the agent from.", level: "warning" });
+      return;
+    }
     this.starting[space.id] = true;
     this.hadDesk.add(space.id);
     try {
       const wrapper = home() + DESK_AGENT;
       const argv = (await exec("test", ["-x", wrapper])).code === 0 ? [wrapper] : this.cfg.agent;
-      const r = await exec("hc", ["run", "--bg", "--json", "--keep", "--no-parent", "--no-notify",
-        "--cwd", placeOf(space, panes()), "--label", `herdr.space=${space.id}`,
+      const r = await exec("hc", ["run", "--bg", "--json", "--keep", "--outlive-parent", "--no-notify",
+        "--parent", shell, "--cwd", placeOf(space, panes()),
         "--label", "bercail.role=agent", "--label", `bercail.space=${space.id}`,
         ...argv]);
       if (r.code !== 0) throw new Error(r.stderr || r.stdout);
@@ -398,9 +405,6 @@ export default class BercailDesk extends View {
     if (f?.pane) this.lastPane = f.pane;
     if (desk) {
       this.hadDesk.add(space.id);
-      // Its own tab says what it is.
-      const tab = space.tabs.find((t) => t.id === panes().find((p) => p.terminal === desk.address)?.tab);
-      if (tab && !tab.named) run("tab.rename", { id: tab.id, name: "Agent" });
     } else if (this.cfg.bstack && !this.hadDesk.has(space.id) && !space.machine
       && terminals().some((t) => t.address === shellOf(space) && t.state === "live")) {
       // bstack starts on its own in a space shown without a desk. Only once the
@@ -487,7 +491,7 @@ export default class BercailDesk extends View {
       .border_b_2().border_color(this.deskFocused ? t.accent : t.chrome)
       .child(div().size(7).rounded(4).bg(color))
       .child(div().text_color(t.foreground).font_semibold().child(info?.program?.name ?? desk?.program?.name ?? (desk ? "agent" : "desk")))
-      .child(div().flex_1().truncate().text_color(t.dim).child(desk ? (info?.title ?? "") : "Ctrl+Shift+A starts the agent"))
+      .child(div().flex_1().truncate().text_color(t.dim).child(desk ? (info?.title ?? desk.title ?? "") : "Ctrl+Shift+A starts the agent"))
       .when(Boolean(status), (el) => el.child(div().text_color(color).child(status)));
   }
 }

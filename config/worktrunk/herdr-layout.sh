@@ -1,10 +1,10 @@
 # Herdr app helpers for worktrunk and shell integration.
 # Safe to source repeatedly — worktrunk hooks and shell reload pick up updates.
 #
-# One checkout is one Herdr app space. Its desk agent is an hc terminal in a tab
-# of its own (herdr.space=<space id>), so Herdr's agents list shows it, labelled
-# bercail.role=agent and bercail.space=<space id>; the bercail layout's desk
-# column shows it too. bercail-desk-agent picks what it runs.
+# One checkout is one Herdr app space. Its desk agent is an hc terminal started
+# as a sub-agent of the space's first terminal, labelled bercail.role=agent and
+# bercail.space=<space id>; the bercail layout's desk column shows it.
+# bercail-desk-agent picks what it runs.
 
 HERDR_APP="${HERDR_APP_BIN:-herdr-app}"
 HC="${HC_BIN:-hc}"
@@ -68,6 +68,12 @@ _wt_herdr_space_by_name() {
     | head -1
 }
 
+# The space's first terminal: the desk agent's parent.
+_wt_herdr_space_shell() {
+  "$HERDR_APP" ls 2>/dev/null \
+    | jq -r --arg id "$1" '.spaces[] | select(.id == $id) | .tabs[0].terminals[0].terminal // empty'
+}
+
 _wt_herdr_space_desk() {
   "$HC" ls --json 2>/dev/null \
     | jq -r '.terminals[] | select(.state == "live") | .address' \
@@ -113,8 +119,13 @@ _wt_bstack_on() {
 # (optional). WT_HERDR_AGENT_CMD (handoff) picks the agent; without it,
 # bercail-desk-agent runs bstack or bercail's [agent] command.
 _wt_herdr_start_desk() {
-  local space="$1" workdir="$2" prompt="${3:-}" old
+  local space="$1" workdir="$2" prompt="${3:-}" shell old
   local -a argv=("$DESK_AGENT")
+  shell="$(_wt_herdr_space_shell "$space")"
+  [[ -n "$shell" ]] || {
+    echo "Space $space has no terminal to start the desk agent from" >&2
+    return 1
+  }
   old="$(_wt_herdr_space_desk "$space")"
   if [[ -n "$old" ]]; then
     "$HC" kill "$old" >/dev/null 2>&1 || true
@@ -128,9 +139,8 @@ _wt_herdr_start_desk() {
   fi
   # hc passes on the caller's environment; a headless caller (Shep) has
   # TERM=dumb, which leaves the desk without colors or key handling.
-  # herdr.space gives the desk a tab of its own in the space; the shown tab stays.
-  TERM=xterm-256color COLORTERM=truecolor "$HC" run --bg --keep --no-parent --no-notify \
-    --cwd "$(_wt_realpath "$workdir")" --label "herdr.space=$space" \
+  TERM=xterm-256color COLORTERM=truecolor "$HC" run --bg --keep --outlive-parent --no-notify \
+    --parent "$shell" --cwd "$(_wt_realpath "$workdir")" \
     --label bercail.role=agent --label "bercail.space=$space" \
     "${argv[@]}" >/dev/null
 }

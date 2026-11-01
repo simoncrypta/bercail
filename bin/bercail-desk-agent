@@ -5,7 +5,7 @@
 # else bercail's [agent] command. opencode with bstack on gets the terminal's
 # palette (the system theme) and runs bstack, its default agent. The full TUI,
 # not `opencode mini`: only the full TUI reports its status (OSC 7501), which
-# puts the desk in Herdr's agents list.
+# the desk column's header and Review's auto-open read.
 set -euo pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml"
