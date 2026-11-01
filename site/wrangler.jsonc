@@ -1,0 +1,17 @@
+{
+  // bercail.dev: the Astro site (dist/), plus /install.sh from the repo's master.
+  "name": "bercail-site",
+  "main": "worker.js",
+  "compatibility_date": "2026-07-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/install.sh"]
+  },
+  "routes": [
+    {
+      "pattern": "bercail.dev",
+      "custom_domain": true
+    }
+  ]
+}

@@ -9,10 +9,13 @@ herdr-app check bercail/mods/bercail-agents
 for t in tests/*_test.sh; do bash "$t" || break; done
 ./install.sh --help
 bin/bercail dry-run   # this checkout's CLI; a bare `bercail` runs the installed copy
-npm ci && npm run deploy   # sync public/, deploy Pages + the setup.simoncrypta.dev Worker
+npm ci && npm run deploy   # sync public/, deploy Pages, the setup.simoncrypta.dev Worker and the site
+npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the bercail.dev site locally
 ```
 
 CI runs every `tests/*.sh` on each push and PR, and deploys from master when `CLOUDFLARE_API_TOKEN` is set.
+
+`site/` is bercail.dev: an Astro site served by the `bercail-site` Worker, which also serves `/install.sh` from master. `workers/setup-domain` keeps the legacy setup.simoncrypta.dev host alive for older installs. Both share `workers/setup-domain/src/github.js`.
 
 ## dependencies
 
