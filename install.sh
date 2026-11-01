@@ -22,7 +22,7 @@ resolve_root() {
     return 0
   fi
   # Mark remote install so install_src_dir() is not treated as a local tree.
-  INSTALL_SRC="${INSTALL_SRC:-https://setup.simoncrypta.dev}"
+  INSTALL_SRC="${INSTALL_SRC:-https://bercail.dev}"
   bootstrap_remote_libs
 }
 

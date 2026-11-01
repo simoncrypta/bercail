@@ -33,7 +33,7 @@ The first install trusts the repository's signer, and later installs must match 
 curl is still supported. It reads the repository tip and does not need a release:
 
 ```bash
-curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
+curl -fsSL https://bercail.dev/install.sh | bash
 ```
 
 `--yes` is non-interactive (`bercail install --yes` too; through curl, `| bash -s -- --yes`). From a clone: `./install.sh`. The installer's flags are in [cli](cli.md#install--cli).

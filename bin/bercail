@@ -120,7 +120,7 @@ cmd_install() {
   root="$(cd "$(bercail_bin_dir)/.." && pwd)"
   if [[ ! -f "$root/install.sh" || ! -f "$root/lib/common.sh" ]]; then
     printf 'error: no install.sh beside this bercail (%s)\n' "$root" >&2
-    printf 'install with: curl -fsSL https://setup.simoncrypta.dev/install.sh | bash\n' >&2
+    printf 'install with: curl -fsSL https://bercail.dev/install.sh | bash\n' >&2
     exit 1
   fi
   exec bash "$root/install.sh" "$@"

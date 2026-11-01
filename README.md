@@ -39,7 +39,7 @@ bercail install
 mise waits 24 hours before it takes a new release. Can't wait? Pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.10.0`. No mise? `packslip install github.com/simoncrypta/bercail` does the same job, or use curl:
 
 ```bash
-curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
+curl -fsSL https://bercail.dev/install.sh | bash
 ```
 
 Found bercail on [herdr.dev](https://herdr.dev/layouts/)? Its recipe walks your agent through these same commands. Switch the Herdr app to the bercail layout once (`Ctrl+Shift+L` → bercail). Then, in a repo:

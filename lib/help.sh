@@ -10,8 +10,8 @@ Install (recommended: mise + packslip, signed release):
   packslip install github.com/simoncrypta/bercail && bercail install   (no mise)
 
 Install (curl, still supported):
-  curl -fsSL https://setup.simoncrypta.dev/install.sh | bash
-  curl -fsSL https://setup.simoncrypta.dev/install.sh | bash -s -- --yes
+  curl -fsSL https://bercail.dev/install.sh | bash
+  curl -fsSL https://bercail.dev/install.sh | bash -s -- --yes
 
 install.sh options:
   -h, --help   Show this help

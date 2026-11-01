@@ -22,7 +22,7 @@ these files.
    ```bash
    mise use -g packslip:github.com/simoncrypta/bercail && bercail install   # mise 2026.9.2+, signed release
    packslip install github.com/simoncrypta/bercail && bercail install       # packslip 1.5.1+, no mise
-   curl -fsSL https://setup.simoncrypta.dev/install.sh | bash                # the repo tip, no release
+   curl -fsSL https://bercail.dev/install.sh | bash                         # the repo tip, no release
    ```
 
    It asks questions on the terminal. When nobody can answer them, add

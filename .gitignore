@@ -20,3 +20,5 @@ bercail/mods/*/jsconfig.json
 .beads-credential-key
 .beads/proxieddb/
 *.gate.lock*
+site/dist/
+site/.astro/

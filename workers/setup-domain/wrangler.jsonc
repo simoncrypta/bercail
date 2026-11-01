@@ -1,8 +1,12 @@
 {
+  // Legacy host only: bercail.dev is served by site/. The name stays so a
+  // deploy updates this Worker instead of creating a second one.
   "name": "setup-simoncrypta-dev",
   "main": "src/index.js",
   "compatibility_date": "2024-01-01",
   "routes": [
+    // Older installs have setup.simoncrypta.dev baked in for `bercail update`
+    // and the install one-liner, so keep serving it.
     {
       "pattern": "setup.simoncrypta.dev",
       "custom_domain": true
