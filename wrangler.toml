@@ -1,6 +1,0 @@
-# Cloudflare Pages — static hosting for install.sh and configs
-# Deploy: npm run deploy  (or: npx wrangler pages deploy)
-
-name = "agentic-dev-setup"
-compatibility_date = "2024-01-01"
-pages_build_output_dir = "./public"

@@ -2,9 +2,7 @@
   "name": "agentic-dev-setup",
   "private": true,
   "scripts": {
-    "predeploy": "bash scripts/sync-public.sh",
-    "deploy": "wrangler pages deploy public --project-name=agentic-dev-setup && wrangler deploy --config workers/setup-domain/wrangler.jsonc && npm run deploy:site",
-    "deploy:pages": "npm run predeploy && wrangler pages deploy public --project-name=agentic-dev-setup",
+    "deploy": "npm run deploy:domain && npm run deploy:site",
     "deploy:domain": "wrangler deploy --config workers/setup-domain/wrangler.jsonc",
     "build:site": "astro build --root site",
     "deploy:site": "npm run build:site && wrangler deploy --config site/wrangler.jsonc"
