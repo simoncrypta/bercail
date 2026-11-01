@@ -9,7 +9,7 @@ herdr-app check bercail/mods/bercail-agents
 for t in tests/*_test.sh; do bash "$t" || break; done
 ./install.sh --help
 bin/bercail dry-run   # this checkout's CLI; a bare `bercail` runs the installed copy
-npm ci && npm run deploy   # sync public/, deploy Pages, the setup.simoncrypta.dev Worker and the site
+npm ci && npm run deploy   # deploy the setup.simoncrypta.dev Worker and the site
 npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the bercail.dev site locally
 ```
 

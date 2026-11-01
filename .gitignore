@@ -3,9 +3,6 @@
 *~
 node_modules/
 .wrangler/
-public/install.sh
-public/manifest.json
-public/lib/
 
 # Written by `herdr-app check` beside a mod; the app supplies its own.
 bercail/mods/*/gpui-kit.d.ts
