@@ -19,7 +19,7 @@ usage: handoff-spawn --info
        handoff-spawn --stage start|codex|cursor|bstack|autopilot --issue ID --worktree PATH
                      [--binary claude|codex|cursor-agent|opencode] [--resume SESSION] [--dry-run]
        handoff-spawn --branch <name> --stage start|codex|cursor|bstack --issue ID
-                     [--dirty|--clean] [--space <id>]
+                     [--dirty|--clean] [--space <id>] [--base <branch>]
 
   --info          print JSON facts and exit
   --issue ID      beads issue to work (bd show ID). It holds the detail. The
@@ -44,6 +44,9 @@ usage: handoff-spawn --info
   --clean         HEAD only; leave uncommitted files on main
   --space ID      Herdr app space to keep shown (default: the one shown now;
                   --workspace is the same flag)
+  --base BRANCH   --branch only: cut the new branch from BRANCH instead of the
+                  default branch (wt switch --create --base), so a dependent
+                  issue stacks on its parent's branch. Graphite tracks it on BRANCH.
 
 Shep writes the beads issue first and owns the workflow. There are no prompt
 files and no per-harness modes. Each real handoff adds a bd comment to the
@@ -110,15 +113,20 @@ handoff_copy_dirty() {
   done < <(git -C "$main" ls-files --others --exclude-standard)
 }
 
+# parent: the branch the new one was cut from (--base); default is trunk.
 handoff_track_graphite() {
-  local sibling="$1" cfg trunk
+  local sibling="$1" parent="${2:-}" cfg trunk
   cfg="$(handoff_graphite_config "$sibling")" || return 0
   command -v gt >/dev/null 2>&1 || return 0
   if gt --cwd "$sibling" parent >/dev/null 2>&1; then
     return 0
   fi
-  trunk="$(jq -r '.trunk // "main"' "$cfg" 2>/dev/null || true)"
-  trunk="${trunk:-main}"
+  if [[ -n "$parent" ]]; then
+    trunk="$parent"
+  else
+    trunk="$(jq -r '.trunk // "main"' "$cfg" 2>/dev/null || true)"
+    trunk="${trunk:-main}"
+  fi
   gt --cwd "$sibling" track --parent "$trunk" --no-interactive \
     || gt --cwd "$sibling" track --force --no-interactive \
     || handoff_die "gt track failed for $sibling"
@@ -277,6 +285,7 @@ handoff_spawn_main() {
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0 mode="" binary="" binary_override="" desk_bin=""
+  local base=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -315,6 +324,11 @@ handoff_spawn_main() {
         branch="$2"
         shift 2
         ;;
+      --base)
+        [[ $# -ge 2 ]] || handoff_usage
+        base="$2"
+        shift 2
+        ;;
       --space|--workspace)
         [[ $# -ge 2 ]] || handoff_usage
         HANDOFF_SPACE="$2"
@@ -348,6 +362,8 @@ handoff_spawn_main() {
   [[ -n "$issue" ]] || handoff_die "--issue <beads id> is required; the job lives in that issue"
   handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id: $issue"
   binary="$(handoff_stage_field "$stage" binary)" || handoff_die "unknown stage: $stage"
+  [[ -z "$base" || -n "$branch" ]] \
+    || handoff_die "--base needs --branch: it picks what the new desk branch is cut from; headless stages run in an existing --worktree"
   if [[ -n "$branch" ]]; then
     [[ "$stage" != autopilot ]] \
       || handoff_die "stage autopilot is headless: pass --worktree <the PR's checkout> instead of --branch"
@@ -397,8 +413,15 @@ handoff_spawn_main() {
   if [[ -n "$keep_space" ]]; then
     export WT_HERDR_KEEP_FOCUS="$keep_space"
   fi
-  wt switch --create "$branch" --no-cd \
-    || handoff_die "wt switch --create $branch failed"
+  if [[ -n "$base" ]]; then
+    git -C "$main" rev-parse --verify --quiet "$base^{commit}" >/dev/null \
+      || handoff_die "--base $base is not a branch or commit in this repo"
+    wt switch --create "$branch" --base "$base" --no-cd \
+      || handoff_die "wt switch --create $branch --base $base failed"
+  else
+    wt switch --create "$branch" --no-cd \
+      || handoff_die "wt switch --create $branch failed"
+  fi
   _wt_herdr_keep_user_focus "$keep_space"
   sibling="$(handoff_sibling_path "$main" "$branch")" \
     || handoff_die "could not resolve sibling worktree for $branch"
@@ -413,7 +436,7 @@ handoff_spawn_main() {
 
   if handoff_is_graphite "$sibling"; then
     graphite=1
-    handoff_track_graphite "$sibling"
+    handoff_track_graphite "$sibling" "$base"
   fi
 
   label="$(_wt_generate_session_name "$sibling")"
@@ -445,6 +468,7 @@ handoff_spawn_main() {
   space="$(_wt_herdr_space_by_folder "$sibling" 2>/dev/null || true)"
   [[ -z "$space" ]] || desk="$(_wt_herdr_space_desk "$space" 2>/dev/null || true)"
   json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" "$binary" "$space" "$desk")"
+  [[ -z "$base" ]] || json="$(jq -c --arg base "$base" '. + {base:$base}' <<<"$json")"
   handoff_notify_check "$sibling"
   handoff_remember "$json"
   printf '%s\n' "$json"

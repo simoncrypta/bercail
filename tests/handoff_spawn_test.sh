@@ -234,12 +234,44 @@ test_rejects_prompt_after_double_dash() {
   printf 'PASS: argv after -- is rejected so Auto-review does not bind a payload\n'
 }
 
+test_graphite_tracks_base_as_parent() {
+  local repo="$TMP_DIR/gt-base" sibling="$TMP_DIR/gt-base.feat" bin="$TMP_DIR/gt-base-bin"
+  git_init "$repo"
+  git -C "$repo" branch parent-branch
+  git -C "$repo" worktree add -q -b feat "$sibling" parent-branch
+  printf '{"trunk":"master"}\n' >"$(git -C "$repo" rev-parse --path-format=absolute --git-common-dir)/.graphite_repo_config"
+  mkdir -p "$bin"
+  cat >"$bin/gt" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$TMP_DIR/gt-base.log"
+case "\$*" in *" parent") exit 1 ;; esac
+EOF
+  chmod +x "$bin/gt"
+  : >"$TMP_DIR/gt-base.log"
+  PATH="$bin:$PATH" handoff_track_graphite "$sibling" parent-branch
+  grep -qxF -- "--cwd $sibling track --parent parent-branch --no-interactive" "$TMP_DIR/gt-base.log" \
+    || fail "--base branch should be the gt parent; log=$(cat "$TMP_DIR/gt-base.log")"
+  printf 'PASS: with --base, gt tracks the new branch on that base\n'
+}
+
+test_base_needs_branch() {
+  local rc=0 err
+  err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue bercail-0s1 --base foo --dry-run 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "--base without --branch should exit 1, got $rc ($err)"
+  printf '%s' "$err" | grep -q -- '--base needs --branch' || fail "--base message: $err"
+  err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --help 2>&1)" || true
+  printf '%s' "$err" | grep -q -- '--base BRANCH' || fail "--help should document --base"
+  printf 'PASS: --base needs --branch and is in --help\n'
+}
+
 test_graphite_rev_parse_is_not_enough
 test_copy_dirty_is_working_tree_not_index
 test_usage
 test_issue_prompt_points_at_the_issue
 test_graphite_track_uses_resolved_config_path
 test_graphite_tracks_new_branch_in_linked_worktree
+test_graphite_tracks_base_as_parent
+test_base_needs_branch
 test_info_json_reports_graphite_and_dirty
 test_info_json_socket_without_herdr_env
 test_result_json_records_unconfirmed_agent
