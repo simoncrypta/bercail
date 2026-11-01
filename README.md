@@ -25,6 +25,10 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
 ## Quick start
 
+The easy way: add [Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF), our Grok Bot template, connect this computer to it, and ask it to set up bercail. It installs and configures everything, and asks before it runs anything.
+
+### Or install it yourself
+
 Current release: [v0.10.0](https://github.com/simoncrypta/bercail/releases/tag/v0.10.0).
 
 ```bash

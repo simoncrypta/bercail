@@ -1,8 +1,14 @@
 # install
 
-The current release and its version pin are at the top of the [README](../README.md#quick-start). Below, `<version>` stands for that release.
+## With Shep (recommended)
 
-## mise + packslip (recommended)
+[Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF) is a Grok Bot template that knows how to install and set up bercail. Add it, connect this computer to it, and ask it to set up bercail. It asks before it runs anything.
+
+## Install it yourself
+
+The current release and its version pin are in the [README](../README.md#or-install-it-yourself). Below, `<version>` stands for that release.
+
+## mise + packslip (recommended for a manual install)
 
 [mise](https://mise.jdx.dev) + [packslip](https://github.com/jdx/packslip). Each `v*` release publishes `bercail.tar.gz` and a signed `packslip.sigstore.json`. mise checks that signature against this repository and the archive digest before it unpacks anything, and it runs no downloaded code.
 
