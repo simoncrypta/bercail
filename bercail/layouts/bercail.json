@@ -172,28 +172,36 @@
               }
             },
             {
-              "id": "panel-body",
-              "type": "stack",
+              "id": "panel",
+              "type": "column",
               "children": [
                 {
-                  "id": "files",
-                  "type": "block",
-                  "content": {
-                    "mod": "files"
-                  }
-                },
-                {
-                  "id": "changes",
-                  "type": "block",
-                  "content": {
-                    "mod": "changes"
-                  }
+                  "id": "panel-body",
+                  "type": "stack",
+                  "children": [
+                    {
+                      "id": "files",
+                      "type": "block",
+                      "content": {
+                        "mod": "files"
+                      }
+                    },
+                    {
+                      "id": "changes",
+                      "type": "block",
+                      "content": {
+                        "mod": "changes"
+                      }
+                    }
+                  ],
+                  "active": "changes"
                 }
               ],
-              "active": "changes",
               "size": {
-                "px": 240
-              }
+                "px": 280
+              },
+              "min": 280,
+              "max": 900
             }
           ],
           "padding": 8,

@@ -52,8 +52,8 @@ lights at 12,16):
   - **The tabs**, weight 1, so desk and tabs split the width evenly: the
     shown tab's panes as cards (radius 10, 1px `border`, `accent` on focus,
     8px gaps, a 30px `pane` header always shown, also on a lone pane).
-  - **Files / Changes**, a 240px stack showing Herdr's `files` or `changes`
-    panel.
+  - **Files / Changes**, a 280px `panel` column (280–900px, Herdr's limits)
+    showing Herdr's `files` or `changes` panel.
 - Terminal text padding is 14×12px. Colors come from the user's theme; the
   layout sets none.
 
@@ -78,7 +78,8 @@ lights at 12,16):
   - `ctrl-shift-r` Review (opens even on a clean tree); `ctrl-shift-s` the
     first tab (Shell).
   - `ctrl-shift-f` / `ctrl-shift-g` show Files / Changes; the same key again
-    hides the panel.
+    hides the panel. They do what the tab bar's Files / Changes buttons do,
+    on the same panel.
   - `ctrl-alt-left/right` move between panes. Left from the leftmost
     pane enters the desk; right from the desk returns to the pane you came
     from. (`alt-h/j/k/l`, Herdr's `pane.go`, still move up and down.)
@@ -106,7 +107,8 @@ lights at 12,16):
   block = `bercail-desk` mod; `agent-stack` stack of `empty`, the
   `bercail-desk` mod with `props: {role: "empty"}`, plus one
   `{terminal: …}` block per desk, `desk-<address>`, that the mod adds), `main` block `{tab: "active", pane: {...}}`,
-  `panel-body` stack of `files` and `changes`.
+  `panel` column holding the `panel-body` stack of `files` and `changes`
+  (the ids Herdr's `tabs` mod shows and hides).
 - Shipped mods used: `workspace-chrome`, `spaces`, `agents`, `tabs`, `pane`,
   `files`, `changes`, `workspace-status`.
 - `mods/bercail-desk` (`place: "none"`), one script, two roles:

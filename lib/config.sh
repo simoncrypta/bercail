@@ -102,6 +102,19 @@ _herdr_app_layout_shape() {
     else . end)' "$1" 2>/dev/null
 }
 
+# The shipped layout ($1) with the desk blocks of the app's copy ($2) in its agent
+# stack, and the desk it showed: a running desk mod doesn't add a block it added before.
+_herdr_app_layout_with_desks() {
+  jq --slurpfile live "$2" '
+    [$live[0] | .. | objects | select(.id == "agent-stack")][0] as $old
+    | [$old.children[]? | select(.id // "" | startswith("desk-"))] as $desks
+    | $old.active as $shown
+    | walk(if type == "object" and .id == "agent-stack" then
+        .children += $desks
+        | if any(.children[]; .id == $shown) then .active = $shown else . end
+      else . end)' "$1" 2>/dev/null
+}
+
 deploy_herdr_app_layout() {
   local dest="$HERDR_APP_CONFIG_DIR/$HERDR_APP_LAYOUT" shipped new
   shipped="$(_herdr_app_shipped_layout)"
@@ -129,9 +142,14 @@ deploy_herdr_app_layout() {
       return 0
     fi
   fi
-  copy_file "$new" "$dest"
+  local out="$new" merged
+  merged="$(mktemp)"
+  if [[ -f "$dest" ]] && _herdr_app_layout_with_desks "$new" "$dest" >"$merged"; then
+    out="$merged"
+  fi
+  copy_file "$out" "$dest"
   [[ "$DRY_RUN" -eq 1 ]] || copy_file "$new" "$shipped" >/dev/null
-  rm -f "$new"
+  rm -f "$new" "$merged"
 }
 
 # keys.json is the person's: only the layout:bercail section is bercail's, and in it
