@@ -16,8 +16,9 @@ Every `bstack-council-<plan>` seat gets the same brief, in parallel, without
 seeing what the others said. The lead then reads the code at each `file:line`,
 runs the repro when the finding is about behavior, and keeps only what holds up.
 Two providers finding the same bug raises confidence, not severity. When seats
-disagree, `bstack-judge` settles it. It loops until no blocker is left, three
-rounds at most.
+disagree, `bstack-judge` settles it. When the job is getting the change ready
+(as in `/ready`), it fixes what it kept and runs again until no blocker or major
+finding is left, three rounds at most.
 
 With one plan connected, the council is one seat, and the report says so.
 
@@ -38,15 +39,15 @@ The finish line for any build playbook:
 
 ## tuicr: your review
 
-When the desk goes `done`, tuicr opens on the staged change (`Ctrl+Shift+R`
-opens it any time). Leave comments on lines. The agent waits for them with the
-`review` skill, fixes them, and stages again.
+When the desk goes `done`, tuicr opens on the uncommitted change (how and when:
+[review](../review.md)). Leave comments on lines, then ask the agent to wait for
+them (the `review` skill); it fixes them and stages again.
 
 You commit and open the PR. That is the line bstack does not cross without
 being asked. After it, autopilot takes over.
 
 **Pitfall:** accepting every finding. Reviewers, human or model, mix real
-catches with noise. The council drops what it can't show, and says what it
-dropped.
+catches with noise. The council drops what is wrong or already handled, and
+marks what it couldn't settle `unverified`.
 
 Next: [Ship with autopilot](./06-autopilot.md).

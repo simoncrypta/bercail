@@ -22,15 +22,21 @@ judge = "claude"
 ```
 
 Then `bercail bstack setup` or `bercail update`. `bercail bstack status` shows
-each model as `auto` or `pinned`. A pin stays until you clear it; auto picks
-again on every update.
+each model as `auto` or `pinned`. A pin stays until you clear it, gets a council
+seat even when its plan isn't connected, and skips every new release; auto
+picks again on every update.
 
-A role whose plan isn't connected takes the next one that is, so you can set
-roles once and connect plans later. Higher effort reasons longer and spends more
-of each plan; a model without the level you ask for gets the next one down.
+Roles fall back to the next connected plan, so you can set them once and
+connect plans later ([the order](./02-the-bstack-agent.md#the-roles)). Higher
+effort reasons longer and spends more of each plan; a model without the level
+you ask for gets the next one down.
 
 ## What bstack turns on in opencode
 
+- **`bstack` as the default agent**, on the lead's model, with bercail's
+  instructions.
+- **Asks before** `git commit`, `git push`, and `gh pr merge`, so agents stage
+  and stop.
 - **Policies** that block force-push and `--no-verify` for every agent, headless
   runs included. A permission or an "Allow always" can't lift them.
 - **Web search** on `random`: Exa and TinyFish work without a key, and a rate
@@ -45,19 +51,21 @@ repo's `opencode.jsonc`.
 
 ## Your own files
 
-Every file bstack writes carries a `managed by bercail (bstack)` line:
-`opencode.jsonc`, `agents/bstack*.md`, `commands/*.md`, and
-`bstack/instructions.md` under `~/.config/opencode`. Delete that line and
-bercail never touches the file again. It warns on update instead.
+`opencode.jsonc`, `agents/bstack*.md`, and bstack's eight `commands/*.md`
+under `~/.config/opencode` each carry a `managed by bercail (bstack)` line.
+Delete that line and bercail never touches the file again; `bercail doctor`
+lists it as yours. `bstack/instructions.md` has no line: it belongs to bercail,
+and every update rewrites it.
 
 Your own opencode settings go in `~/.config/opencode/opencode.json`. opencode
 loads it under bstack's `.jsonc`, so yours survive every update.
 
 ## Skills
 
-bstack's skills are in `~/.agents/skills`: `bstack`, `how`, `why`, `unslop`,
-`council`, `autopilot`. opencode reads them directly, and so do Claude Code,
-Codex, and cursor-agent. Outside opencode there are no `bstack-*` subagents, so
+bstack's skills are in `~/.agents/skills` ([the list](../cli.md#skills)).
+opencode and cursor-agent read them directly. When Claude Code or Codex is your
+`[agent] command`, bercail links them into `~/.claude/skills` or
+`~/.codex/skills`. Outside opencode there are no `bstack-*` subagents, so
 the skill does the role's work in the session and says so.
 
 Add your own skill next to them. Write one when you have corrected the same
@@ -70,7 +78,10 @@ catch the mistake, add that, so nothing depends on an agent reading a rule.
 bercail bstack off
 ```
 
-It removes bstack's files (only the ones that still carry the marker) and leaves
-opencode, your plans, and your own config alone.
+It removes bstack's files (the marked ones, the `bstack/` folder, and its
+model cache in `~/.local/share/bercail`) and leaves opencode, your plans, and
+your own config alone. `[agent] command` stays as it is, so after `bstack on`
+moved it to opencode, the desk now runs plain opencode; set it back in
+[config](../config.md) if you want another agent.
 
 Next: [Recipes and pitfalls](./09-recipes-and-pitfalls.md).

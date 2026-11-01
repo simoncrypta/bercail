@@ -29,11 +29,16 @@ Read it once. It is short.
 | lead | `bstack` | your ask; plans, routes, checks, reports |
 | build | `bstack-builder` | code from a precise brief |
 | judge | `bstack-judge` | hard design calls, prose, and disagreements |
-| council | `bstack-council-<plan>` | read-only review, one per connected plan |
+| council | `bstack-council-<plan>` | read-only review, one per plan with a model (connected, or pinned) |
 | autopilot | `bstack-autopilot` | an open PR to get green |
 
 By default the lead and judge run on Claude and the builder on Grok. A role
-whose plan isn't connected takes the next one that is.
+names a plan (`claude`, `gpt`, `grok`) or a full opencode model id. When its
+plan isn't connected, it takes the next one that is (build: grok, then gpt,
+then claude; lead and judge: claude, then gpt, then grok), so bstack works on
+one plan and spreads out as you connect more. A pinned model is used whether
+or not its plan is connected. With none connected, agents use the session's
+model.
 
 A subagent knows nothing you didn't put in its brief. The lead writes the
 brief, then checks the result itself before passing it on.

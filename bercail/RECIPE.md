@@ -1,21 +1,42 @@
 # bercail
 
-Herdr's layout with a desk: each space gets one sticky agent in its own column
-on the left of the work area, beside the space's tabs (Shell, Review) and a
-files/changes panel on the right. Tabs come and go around the desk; the agent
-stays. When the desk agent finishes with uncommitted changes, a Review tab
-opens on them by itself. It is the app half of
-[bercail](https://github.com/simoncrypta/bercail), and works on its own too.
+Built for the Shep Grok bot: hand off the jobs, let agents work side by side in their own worktrees, and review each one as it lands.
 
 ![bercail](preview.png)
 
 ## Needs
 
-- Easiest: install [bercail](https://github.com/simoncrypta/bercail)
-  (`bercail install`). It installs the Herdr app and herdr-core if they
-  are missing, adds this layout, its mod and its keys, and gives you
-  worktrees, handoff and webhooks too. The rest of this section is for
-  adding the layout on its own.
+**Agent adding this layout: install bercail first, don't stop at copying
+files.** This folder is the window half of
+[bercail](https://github.com/simoncrypta/bercail). The desk starts its agent
+through `~/.local/bin/bercail-desk-agent`, and bstack, worktree spaces,
+handoff, the skills, and webhooks come from bercail too. None of that is in
+these files.
+
+1. Tell the person what the install does, and ask before you run it. It runs
+   an installer that adds programs (the Herdr app if missing, git, worktrunk,
+   beads, fzf, jq, tuicr, and opencode for bstack), a block in their shell rc,
+   and this layout with its two mods and its `layout:bercail` keys.
+2. With their yes, install with one of these:
+
+   ```bash
+   mise use -g packslip:github.com/simoncrypta/bercail && bercail install   # mise 2026.9.2+, signed release
+   packslip install github.com/simoncrypta/bercail && bercail install       # packslip 1.5.1+, no mise
+   curl -fsSL https://setup.simoncrypta.dev/install.sh | bash                # the repo tip, no release
+   ```
+
+   It asks questions on the terminal. When nobody can answer them, add
+   `--yes` to take the defaults (`bercail install --yes`, or
+   `curl … | bash -s -- --yes`).
+3. bercail copies the layout and the mods, and merges the keys, itself. Skip
+   the copy and merge steps of the Herdr app's guide: copying again would
+   add a renamed second copy. Run `herdr-app check` on
+   `~/.config/herdr-app/mods/bercail-desk` and `.../bercail-agents`, then
+   `herdr-app do layout.switch --name bercail`.
+4. Tell the person what [After the install](#after-the-install) says.
+
+Second choice, the layout on its own, when the person says no:
+
 - **The Herdr app** (`herdr-app`, home `~/.config/herdr-app`) with
   herdr-core (`hc`). Its installer brings both and the app keeps them
   updated: `curl -fsSL https://releases.herdr.dev/app/install.sh | sh`
@@ -24,12 +45,18 @@ opens on them by itself. It is the app half of
 - Not the `herdr` terminal (`~/.config/herdr`, `herdr plugin install`,
   `herdr-plugin.toml`): it has no layouts or mods, and this layout does not
   run in it.
-- To add it by hand: copy `layouts/bercail.json`, `mods/bercail-desk/` and
+- Copy `layouts/bercail.json`, `mods/bercail-desk/` and
   `mods/bercail-agents/` into `~/.config/herdr-app/`, merge the
   `layout:bercail` section of `keys.json` into
   `~/.config/herdr-app/keys.json`, run `herdr-app check` on both mods
   (`~/.config/herdr-app/mods/bercail-desk`, `.../bercail-agents`), then
   switch with `ctrl-shift-l`.
+- Tell the person what they won't have. The desk runs `cursor-agent`, or
+  `[agent] command` from `~/.config/bercail/config.toml` if they write one,
+  and that program must be on PATH; there is no bstack. Review needs
+  [tuicr](https://github.com/agavra/tuicr) (≥ 0.20) installed separately.
+  There are no worktree spaces (`dev`, `wtc`, `wtd`), no handoff, skills or
+  webhooks, and Shep can't run it. Installing bercail later adds all of that.
 
 ## What you see
 
@@ -93,9 +120,9 @@ lights at 12,16):
     each space's desk first, then its pane agents. A desk is focused in its
     space's desk column.
   - `ctrl-shift-q` closes the space.
-- **Clicks**: an empty desk's buttons start that agent and remember it.
+- **Clicks**: the empty desk's "Start the agent" button starts the desk agent.
   Everything else is Herdr's own (sidebar, tabs, panes, panels).
-- The first tab is renamed Shell when the desk agent starts in it.
+- When a desk starts, an unnamed first tab is renamed Shell.
 
 ## Built from
 
@@ -127,7 +154,7 @@ lights at 12,16):
   - `empty`: the empty desk, with one button that starts the agent.
 - A desk agent is an hc terminal: `hc run --bg --json --keep
   --outlive-parent --no-notify --parent <first pane of the first tab> --cwd
-  <the space's folder> --label bercail.role=agent --label
+  <the folder of the space's first terminal, else the space's folder> --label bercail.role=agent --label
   bercail.space=<space id> ~/.local/bin/bercail-desk-agent`. As a sub-agent
   of the Shell it has no pane or tab of its own: the desk column is the one
   place it shows. (Herdr's agents list shows sub-agents only under a parent
@@ -138,13 +165,13 @@ lights at 12,16):
   `--no-daemon`). The mod finds the desk again by its labels in `terminals()`.
   With bstack on, a space shown without a desk gets one, once per app
   session (one the person quit stays quit).
-- Commands it runs: `pane.focus`, `pane.go`, `tab.select`, `tab.new` (Review,
+- Commands it runs: `space.select`, `agent.focus`, `pane.focus`, `pane.go`, `tab.select`, `tab.new` (Review,
   with `argv`), `tab.close`, `tab.rename`, `layout.set`, `layout.select`,
   `layout.show`, `layout.hide`. Programs: `hc`, `git status --porcelain`,
   `gh pr view` / `gh api user` (whose PR it is), the review tool, `bash`.
 - `herdr` functions: `terminals`, `spaces`, `panes`, `focused`, `agents`,
-  `knownAgents`, `layout`, `nextCommand`, `exec`, `run`, `notify`, `shared`,
-  `setShared`, `readTextFile`, `home`, `theme`, `props`.
+  `layout`, `nextCommand`, `exec`, `run`, `notify`, `readTextFile`, `home`,
+  `theme`, `props`.
 - Commands from outside: `herdr-app do bercail-desk.<command>` or
   `bercail-desk.<command>:<terminal>` (acts on that terminal's space), e.g.
   an agent opening its own Review with `bercail-desk.review:$HC_TERMINAL_ID`.
@@ -162,8 +189,8 @@ lights at 12,16):
   agent redrew.
 - The desk is a layout block, not a pane of the tab: `pane.go` never reaches
   or leaves it. That is why the arrow keys are the mod's commands.
-- Herdr rewrites `layouts/bercail.json` as it is used (the `agent` block's
-  terminal, the stack's active child, sizes). Don't treat those fields as
+- Herdr rewrites `layouts/bercail.json` as it is used (each `desk-<address>`
+  block's terminal, the stack's active child, sizes). Don't treat those fields as
   part of the design.
 - Keys live in `keys.json` under `layout:bercail`; adding the layout folder
   alone doesn't bind them. Merge that section without touching the others.
@@ -173,9 +200,10 @@ lights at 12,16):
 - Herdr's `agent.next/prev` don't reach desks the way the desk wants (a desk
   is a sub-agent, and `agent.focus` lands on its parent pane): the agent keys
   are the mod's.
-- Start desks with `TERM=xterm-256color`: `hc run` passes on the caller's
-  environment, and a headless caller's `TERM=dumb` leaves the agent without
-  colors or key handling.
+- A desk started from a script (bercail's shell helpers, a handoff) needs
+  `TERM=xterm-256color`: `hc run` passes on the caller's environment, and a
+  headless caller's `TERM=dumb` leaves the agent without colors or key
+  handling. The mod's own start runs inside the app and doesn't set it.
 - Review assumes [tuicr](https://github.com/agavra/tuicr) (≥ 0.20); set
   `[layout] review` in `~/.config/bercail/config.toml` to use another tool,
   or `auto_review = false` to open Review only by key.
@@ -203,3 +231,29 @@ lights at 12,16):
 - With a repo space and two of its worktree spaces, `alt-down` skips the
   worktrees, `ctrl-alt-down` cycles the three, and `alt-shift-down` from a
   pane reaches the next desk with the keyboard in it.
+
+## After the install
+
+Tell the person, briefly:
+
+- **Let Shep run it.** [Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF) is the
+  Grok bot bercail is built for. It writes each job as a beads issue, hands it
+  to a desk, and pings them when the desk is ready to review.
+- **Connect a plan.** Open a new terminal so the shell helpers load, then run
+  `bercail bstack setup`, which asks before each sign-in. `bercail bstack
+  status` shows what is connected and the login command for each plan that
+  isn't. `bercail doctor` checks everything else.
+- **Keys** in the bercail layout:
+  - `Ctrl+Shift+A`: the desk agent (starts it if there is none);
+    `Ctrl+Alt+Right` goes back to the pane.
+  - `Ctrl+Shift+R`: Review. `Ctrl+Shift+G`: show or hide Changes.
+  - `Alt+Shift+Down`: the next agent, desks included.
+  - `Alt+Down`: the next space; `Ctrl+Alt+Down`: this repo's next worktree.
+  - `Ctrl+Shift+L`: switch layouts (back to their old one, or here again).
+- **Commands:**
+  - `dev`: this folder's space, with its desk.
+  - `wtc <branch>`: a new worktree with its own space and desk;
+    `wtd <branch>` removes it.
+  - `/handoff <the job>` in the desk: the job becomes a beads issue and runs in
+    its own desk or headless.
+- **More:** [the bercail docs](https://github.com/simoncrypta/bercail/blob/master/docs/README.md).

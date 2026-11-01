@@ -12,7 +12,7 @@ is a plain shell, which never reports a status and so is never in `agents()`,
 the sub-agent gets no row at all. It runs, it reports working, idle or
 blocked, and the list never shows it.
 
-bercail hits this with every desk: the desk agent is an hc sub-agent of the
+With Herdr's own agents mod, every bercail desk hits this: the desk agent is an hc sub-agent of the
 space's bash Shell (`hc run --parent <shell> --outlive-parent`). Live example:
 `herdr-app ls` showed `RedwoodGQL / Shell: t13 sub_agents ["t2x"]` with t2x
 (codex) idle, and the agents list had no row for it. bercail works around
@@ -117,7 +117,8 @@ and t15) each got a row, and the pane agents kept theirs.
 
 - Should these rows count toward `setAgentOrder` and `agent.next`/`agent.prev`?
   Today `setAgentOrder` ignores addresses missing from the model, so they are
-  skipped.
+  skipped. (bercail's clone passes its desk rows to `setAgentOrder` and steps
+  through agents with its own `Alt+Shift+Up`/`Down` keys.)
 - What should a click show? bercail found that `agent.focus` on a desk puts the
   keyboard on its parent's pane (the Shell), so its clone asks its own desk mod
   to show the desk. A layout that shows sub-agents in a block of its own may
