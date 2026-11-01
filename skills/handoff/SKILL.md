@@ -124,6 +124,7 @@ working directory to `cwd` from `--info`. Flags only.
 - `--space <id>` is optional (`--workspace` is the same flag): the app space to keep on screen. By
   default the user stays on whatever space they are looking at.
 - `--dirty` / `--clean` override `default_copy`.
+- `--base <branch>` is optional: dependent issues stack on the parent's branch via `--base` (`wt switch --create --base`; Graphite tracks that branch as parent). Without it the branch is cut from the default branch.
 - Plan-only work is a line in the issue, not a flag.
 ## The desk (`--branch`)
 
