@@ -144,7 +144,7 @@ cmd_reconfigure() {
   sync_omarchy_default_agent
   info "desk agent: $(read_agent_command)  review=$(read_layout_review)"
   info "claude, codex, cursor-agent, and opencode are optional; run bercail harness to see what is on PATH"
-  info "the desk starts the agent last picked on it, else [agent] command in $AGENTIC_DEV_USER_CONFIG"
+  info "the desk runs bstack when it is on (it starts on its own in each space), else [agent] command in $AGENTIC_DEV_USER_CONFIG"
 }
 
 usage() {

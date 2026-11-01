@@ -55,7 +55,7 @@ cp "$ROOT/bercail/layouts/bercail.json" "$TMP_DIR/layout.json"
 
 cat >"$TMP_DIR/test.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
-import Desk, { sidebarOrder, stepSpace, stepSubspace, stepAgent } from "./main.mjs";
+import Desk, { readConfig, sidebarOrder, stepSpace, stepSubspace, stepAgent } from "./main.mjs";
 import { run } from "./herdr.mjs";
 
 const shipped = JSON.parse(readFileSync(new URL("./layout.json", import.meta.url)));
@@ -79,7 +79,7 @@ function setup({ terminals, legacy = false }) {
     terminals,
   };
   const d = new Desk();
-  Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {} });
+  Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {}, hadDesk: new Set() });
   return d;
 }
 function show(d, space, renders = 3) {
@@ -241,7 +241,7 @@ console.log("PASS: agent next/prev walk agents in sidebar space order, wrapping"
     },
   };
   const d = new Desk();
-  Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {}, starting: {}, git: {} });
+  Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {}, starting: {}, git: {}, hadDesk: new Set() });
   const ran = async (cmd) => {
     globalThis.herdr.calls = [];
     await d.command(cmd);
@@ -281,7 +281,7 @@ console.log("PASS: agent next/prev walk agents in sidebar space order, wrapping"
     focused: { space: "s1", pane: "p1" }, spaces: [{ id: "s1", tabs: [], folder: "/w" }], terminals: [],
   };
   const d = new Desk();
-  Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {} });
+  Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {}, hadDesk: new Set() });
   const state = () => {
     const panel = find(globalThis.herdr.layout, "panel");
     return panel.hidden ? "hidden" : find(panel, "panel-body").active;
@@ -308,6 +308,60 @@ console.log("PASS: agent next/prev walk agents in sidebar space order, wrapping"
   check("panel");
   if (calls("layout.show").concat(calls("layout.hide")).some(([, a]) => a.id !== "panel")) fail("keys must show and hide the panel column");
   console.log("PASS: the panel keys and the tab bar's buttons open, switch and close one panel");
+}
+
+// bstack on: a space shown without a desk starts one, in a tab of its own, once.
+{
+  const ran = [];
+  globalThis.herdr = {
+    layout: structuredClone(shipped), calls: [],
+    focused: { space: "s1", pane: "p1" },
+    spaces: [{ id: "s1", tabs: [{ id: "tab1", named: true }], folder: "/w" }, { id: "s2", tabs: [{ id: "tab2" }], folder: "/w2" }],
+    panes: [{ pane: "p1", tab: "tab1", terminal: "t-sh", cwd: "/w/sub" }],
+    terminals: [],
+    exec: (cmd, args) => { ran.push([cmd, ...args]); return { code: 0, stdout: "{}", stderr: "" }; },
+  };
+  const d = new Desk();
+  Object.assign(d, { cfg: { ...readConfig('[bstack]\nenabled = true # on\n'), autoReview: false },
+    prev: {}, pendingReview: {}, lastAuto: {}, starting: {}, hadDesk: new Set() });
+  if (!d.cfg.bstack || readConfig("[bstack]\nenabled = false\n").bstack) fail("readConfig reads [bstack] enabled");
+  const starts = () => ran.filter(([c]) => c === "hc");
+  const settle = () => new Promise((r) => setImmediate(r));
+  show(d, "s1");
+  await settle();
+  if (starts().length) fail("started a desk before the core listed the space's Shell");
+  globalThis.herdr.terminals = [{ address: "t-sh", state: "live", labels: {} }];
+  show(d, "s1");
+  await settle();
+  expect(JSON.stringify(starts()), JSON.stringify([["hc", "run", "--bg", "--json", "--keep", "--no-parent", "--no-notify",
+    "--cwd", "/w/sub", "--label", "herdr.space=s1", "--label", "bercail.role=agent", "--label", "bercail.space=s1",
+    "/nonexistent/.local/bin/bercail-desk-agent"]]), "auto-start in the shown space");
+  show(d, "s1");
+  await settle();
+  if (starts().length !== 1) fail("auto-start ran again before the desk showed up");
+  // The desk comes up in its own tab, which gets a name; then the person quits it.
+  globalThis.herdr.spaces[0].tabs.push({ id: "tab9" });
+  globalThis.herdr.panes.push({ pane: "p9", tab: "tab9", terminal: "t-desk", cwd: "/w/sub" });
+  globalThis.herdr.terminals.push(D("t-desk", "s1"));
+  globalThis.herdr.calls = [];
+  show(d, "s1", 1);
+  expect(JSON.stringify(calls("tab.rename")), '[["tab.rename",{"id":"tab9","name":"Agent"}]]', "the desk's tab is named");
+  globalThis.herdr.terminals = [{ address: "t-sh", state: "live", labels: {} }, D("t-desk", "s1", "finished")];
+  show(d, "s1");
+  await settle();
+  if (starts().length !== 1) fail("a desk the person quit must not come back on its own");
+  await d.command("agent");
+  if (starts().length !== 2) fail("Ctrl+Shift+A starts the desk again");
+  // A space whose core terminals aren't known (s2, no live Shell): nothing yet. bstack off: never.
+  show(d, "s2");
+  await settle();
+  if (starts().length !== 2) fail("s2 has no live Shell yet");
+  d.cfg.bstack = false;
+  d.hadDesk.clear();
+  show(d, "s1");
+  await settle();
+  if (starts().length !== 2) fail("bstack off must not auto-start");
+  console.log("PASS: with bstack on, a shown space gets its desk once, in a named tab of its own; a quit desk stays quit");
 }
 EOF
 

@@ -29,8 +29,7 @@ or `idle`.
 ## Desk agents
 
 A bercail desk is an hc terminal labelled `bercail.role=agent` and
-`bercail.space=<space id>`, started as a sub-agent of the space's first
-terminal. Find one by its labels (`hc get <t>`), then wait on it:
+`bercail.space=<space id>`, in a tab of its own in that space (`herdr.space`). Find one by its labels (`hc get <t>`), then wait on it:
 
 ```bash
 hc wait <t>                          # until it stops working

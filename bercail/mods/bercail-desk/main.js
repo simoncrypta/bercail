@@ -1,10 +1,14 @@
 // bercail desk: one sticky agent per space, shown in the layout's agent column.
 //
-// The desk agent is an hc terminal started as a sub-agent of the space's Shell
-// terminal, so it belongs to the space without a pane in any tab. It carries
-// labels bercail.role=agent and bercail.space=<space id>. Each desk shows in a
-// terminal block of its own in the layout's `agent-stack`, `desk-<address>` (an agent
-// block can't take the keyboard from a command, and agent.focus moves it to the parent pane).
+// The desk agent is an hc terminal with a tab of its own in the space (label
+// herdr.space), so Herdr's agents list shows it with its status. It carries
+// labels bercail.role=agent and bercail.space=<space id>, and runs
+// bercail-desk-agent: bstack when it is on, else bercail's [agent] command. Each
+// desk also shows in a terminal block of its own in the layout's `agent-stack`,
+// `desk-<address>` (an agent block can't take the keyboard from a command).
+//
+// With bstack on, a space shown without a desk gets one, once per app session:
+// an agent the person quit stays quit until Ctrl+Shift+A.
 //
 // props.role: "header" (default) runs the logic and takes key commands;
 // "empty" is the placeholder shown in the agent column when the space has no desk.
@@ -16,26 +20,12 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import {
-  agents, exec, focused, home, knownAgents, layout, nextCommand, notify, panes, props,
-  readTextFile, run, setShared, shared, spaces, terminals, theme,
+  agents, exec, focused, home, layout, nextCommand, notify, panes, props,
+  readTextFile, run, spaces, terminals, theme,
 } from "herdr";
 
 const CONFIG = "/.config/bercail/config.toml";
-// The desk agents to choose from, by Herdr program key; argv is used when Herdr doesn't know one.
-// own: keep this name over Herdr's (bstack is bercail's opencode setup).
-const CHOICES = [
-  { key: "opencode", name: "bstack", argv: ["opencode"], own: true },
-  { key: "claude", name: "Claude Code", argv: ["claude"] },
-  { key: "codex", name: "Codex", argv: ["codex"] },
-  { key: "grok", name: "Grok", argv: ["grok"] },
-];
-const PICKED = "bercail.agent"; // shared: argv of the last agent picked, for Ctrl+Shift+A
-
-// hc runs codex without its app-server daemon.
-function deskArgv(argv) {
-  const codex = argv[0]?.split("/").pop() === "codex";
-  return codex && !argv.includes("--no-daemon") ? [...argv, "--no-daemon"] : argv;
-}
+const DESK_AGENT = "/.local/bin/bercail-desk-agent";
 
 function findNode(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -47,9 +37,10 @@ function findNode(node, id) {
   return null;
 }
 
-// Tiny TOML reader for the keys bercail needs: [agent] command, [layout] review and auto_review.
-function readConfig(text) {
-  const cfg = { agent: ["cursor-agent"], review: "tuicr", autoReview: true };
+// Tiny TOML reader for the keys bercail needs: [agent] command, [layout] review and
+// auto_review, [bstack] enabled.
+export function readConfig(text) {
+  const cfg = { agent: ["cursor-agent"], review: "tuicr", autoReview: true, bstack: false };
   let section = "";
   for (const raw of text.split("\n")) {
     const line = raw.replace(/#.*$/, "").trim();
@@ -61,6 +52,7 @@ function readConfig(text) {
     if (section === "agent" && kv[1] === "command" && value) cfg.agent = value.split(/\s+/);
     if (section === "layout" && kv[1] === "review" && value) cfg.review = value === "hunk" ? "hunk diff" : value;
     if (section === "layout" && kv[1] === "auto_review") cfg.autoReview = value !== "false";
+    if (section === "bstack" && kv[1] === "enabled") cfg.bstack = value === "true";
   }
   return cfg;
 }
@@ -195,15 +187,9 @@ export default class BercailDesk extends View {
     this.lastAuto = {};      // space id -> when Review last opened on its own (ms)
     this.lastPane = null;    // the pane the keyboard was last in, to come back from the desk
     this.git = {};           // [machine, folder] -> { at, git: { repo, linked } | null }
-    this.choices = CHOICES.map((c) => ({ ...c, installed: true }));
+    this.hadDesk = new Set(); // space ids that had a desk or got one started: no auto-start again
     cx.spawn(async (cx) => {
-      try {
-        const known = await knownAgents();
-        this.choices = CHOICES.map((c) => {
-          const k = known.find((a) => a.key === c.key);
-          return k ? { ...c, name: c.own ? c.name : k.name, argv: k.run, installed: k.installed } : c;
-        });
-      } catch { /* keep the defaults */ }
+      try { this.cfg = readConfig(await readTextFile(home() + CONFIG)); } catch { /* defaults */ }
       cx.notify();
     });
     if (this.role !== "header") return;
@@ -218,10 +204,6 @@ export default class BercailDesk extends View {
       this.ensureNotifier();
     });
     cx.timer.every(60000, () => this.ensureNotifier());
-    cx.spawn(async (cx) => {
-      try { this.cfg = readConfig(await readTextFile(home() + CONFIG)); } catch { /* defaults */ }
-      cx.notify();
-    });
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
@@ -344,8 +326,7 @@ export default class BercailDesk extends View {
     return out;
   }
 
-  // agent.focus would put the keyboard on a desk's parent pane (the Shell): a desk is
-  // shown in its space's agent block and focused there.
+  // A desk is focused in its space's agent block, not in its own tab (agent.focus).
   focusAgent(a) {
     if (!a.desk) { run("agent.focus", { terminal: a.address }); return; }
     if (focused()?.space !== a.space) {
@@ -356,21 +337,19 @@ export default class BercailDesk extends View {
     run("pane.focus", { terminal: a.address });
   }
 
-  // argv: the agent to start; default the last one picked, else bercail's [agent] command.
-  async start(space, argv = shared(PICKED) ?? this.cfg.agent) {
+  // The desk agent, in a tab of its own (herdr.space). bercail-desk-agent picks what
+  // it runs; without bercail (the layout on its own), [agent] command.
+  async start(space) {
     if (this.starting[space.id]) return;
-    const shell = shellOf(space);
-    if (!shell) {
-      notify({ title: "bercail", body: "This space has no Shell terminal to start the agent from.", level: "warning" });
-      return;
-    }
     this.starting[space.id] = true;
+    this.hadDesk.add(space.id);
     try {
-      const cwd = panes().find((p) => p.terminal === shell)?.cwd || space.folder;
-      const r = await exec("hc", ["run", "--bg", "--json", "--keep", "--outlive-parent", "--no-notify",
-        "--parent", shell, "--cwd", cwd,
+      const wrapper = home() + DESK_AGENT;
+      const argv = (await exec("test", ["-x", wrapper])).code === 0 ? [wrapper] : this.cfg.agent;
+      const r = await exec("hc", ["run", "--bg", "--json", "--keep", "--no-parent", "--no-notify",
+        "--cwd", placeOf(space, panes()), "--label", `herdr.space=${space.id}`,
         "--label", "bercail.role=agent", "--label", `bercail.space=${space.id}`,
-        ...deskArgv(argv)]);
+        ...argv]);
       if (r.code !== 0) throw new Error(r.stderr || r.stdout);
       const first = space.tabs[0];
       if (first && !first.named) run("tab.rename", { id: first.id, name: "Shell" });
@@ -417,6 +396,18 @@ export default class BercailDesk extends View {
     const desk = deskFor(space.id);
     const f = focused();
     if (f?.pane) this.lastPane = f.pane;
+    if (desk) {
+      this.hadDesk.add(space.id);
+      // Its own tab says what it is.
+      const tab = space.tabs.find((t) => t.id === panes().find((p) => p.terminal === desk.address)?.tab);
+      if (tab && !tab.named) run("tab.rename", { id: tab.id, name: "Agent" });
+    } else if (this.cfg.bstack && !this.hadDesk.has(space.id) && !space.machine
+      && terminals().some((t) => t.address === shellOf(space) && t.state === "live")) {
+      // bstack starts on its own in a space shown without a desk. Only once the
+      // core lists the space's Shell: before that, terminals() can't tell
+      // whether the space already has a desk.
+      this.start(space);
+    }
     this.deskFocused = Boolean(desk && !f?.pane && f?.terminal === desk.address);
 
     // Each desk has its own block in the agent column, `desk-<address>`, added the
@@ -476,30 +467,17 @@ export default class BercailDesk extends View {
   render(cx) {
     const t = theme();
     if (this.role === "empty") {
-      const picked = JSON.stringify(shared(PICKED) ?? null);
-      const buttons = h_flex().gap(8);
-      for (const c of this.choices) {
-        const argv = deskArgv(c.argv);
-        const last = JSON.stringify(argv) === picked;
-        buttons.child(div().id(`start-${c.key}`).px(14).py(6).rounded(6)
-          .bg(last ? t.solid : t.chrome).text_color(last ? t.solid_foreground : t.foreground)
-          .border_1().border_color(t.border)
-          .when(!c.installed, (el) => el.opacity(0.45))
+      return v_flex().size_full().items_center().justify_center().gap(12).bg(t.background).text_color(t.muted).text_size(13)
+        .child("No agent on this desk")
+        .child(div().id("start-agent").px(14).py(6).rounded(6).bg(t.solid).text_color(t.solid_foreground)
           .hover((s) => s.opacity(0.85))
           .on_click((_e, cx) => cx.spawn(async (cx) => {
             const sp = this.space();
-            if (!sp) return;
-            setShared(PICKED, argv);
-            await this.start(sp, argv);
+            if (sp) await this.start(sp);
             cx.notify();
           }))
-          .child(c.installed ? c.name : `${c.name} (not installed)`));
-      }
-      return v_flex().size_full().items_center().justify_center().gap(12).bg(t.background).text_color(t.muted).text_size(13)
-        .child("No agent on this desk")
-        .child(buttons)
-        .child(div().text_color(t.dim).text_size(12)
-          .child(picked !== "null" ? "Ctrl+Shift+A starts the highlighted one" : "Pick the agent for this desk"));
+          .child("Start the agent"))
+        .child(div().text_color(t.dim).text_size(12).child("Ctrl+Shift+A"));
     }
     const desk = this.sync();
     const info = desk ? agents().find((a) => a.address === desk.address) : null;

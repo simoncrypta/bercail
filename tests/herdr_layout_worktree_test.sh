@@ -11,7 +11,7 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 FAKE_BIN="$TMP_DIR/bin"
 CALL_LOG="$TMP_DIR/calls.log"
 mkdir -p "$FAKE_BIN" "$TMP_DIR/main" "$TMP_DIR/main.feature"
-unset HC_TERMINAL_ID WT_HERDR_AGENT_CMD WT_HERDR_AGENT_PROMPT WT_HERDR_KEEP_FOCUS
+unset HC_TERMINAL_ID WT_HERDR_AGENT_CMD WT_HERDR_AGENT_PROMPT WT_HERDR_KEEP_FOCUS WT_HERDR_NO_DESK BERCAIL_DESK_AGENT
 export HERDR_APP_BIN="$FAKE_BIN/herdr-app"
 export HC_BIN="$FAKE_BIN/hc"
 export HOME="$TMP_DIR/home"
@@ -24,6 +24,9 @@ printf '[agent]\ncommand = "claude"\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
 MAIN="$(cd "$TMP_DIR/main" && pwd -P)"
 FEATURE="$(cd "$TMP_DIR/main.feature" && pwd -P)"
 export FEATURE
+DESK="$HOME/.local/bin/bercail-desk-agent"
+# How every desk starts: a tab of its own in sp-child, found again by the bercail labels.
+RUN="hc run --bg --keep --no-parent --no-notify --cwd $FEATURE --label herdr.space=sp-child --label bercail.role=agent --label bercail.space=sp-child $DESK"
 
 # A fake Herdr app: spaces live in $FAKE_STATE/spaces.json, the shown one in $FAKE_STATE/shown.
 cat >"$FAKE_BIN/herdr-app" <<'EOF'
@@ -87,7 +90,7 @@ wt_herdr_layout_create "Main_Feature" "$TMP_DIR/main.feature"
 grep -qF "herdr-app do space.new --name Main_Feature --folder $FEATURE --tab Shell" "$CALL_LOG" \
   || fail "expected space.new on the checkout; log=$(cat "$CALL_LOG")"
 [[ "$(cat "$FAKE_STATE/shown")" == sp-parent ]] || fail "create must keep the user's space shown"
-grep -q '^hc run' "$CALL_LOG" && fail "post-start create must not start an agent"
+grep -q '^hc run' "$CALL_LOG" && fail "post-start create must not start an agent with bstack off"
 printf 'PASS: layout create opens a space for the checkout and keeps the shown space\n'
 
 : >"$CALL_LOG"
@@ -95,27 +98,36 @@ wt_herdr_layout_create "Main_Feature" "$TMP_DIR/main.feature"
 grep -q 'space.new' "$CALL_LOG" && fail "an open space must be reused; log=$(cat "$CALL_LOG")"
 printf 'PASS: layout create reuses the space open on that folder\n'
 
+printf '[agent]\ncommand = "claude"\n[bstack]\nenabled = true\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+: >"$CALL_LOG"
+wt_herdr_layout_create "Main_Feature" "$TMP_DIR/main.feature"
+grep -qx "$RUN" "$CALL_LOG" || fail "with bstack on, post-start starts the desk; log=$(cat "$CALL_LOG")"
+[[ "$(cat "$FAKE_STATE/shown")" == sp-parent ]] || fail "the auto-started desk must keep the user's space shown"
+touch "$FAKE_STATE/desk"
+: >"$CALL_LOG"
+wt_herdr_layout_create "Main_Feature" "$TMP_DIR/main.feature"
+grep -q '^hc \(run\|kill\)' "$CALL_LOG" && fail "post-start must leave a live desk alone; log=$(cat "$CALL_LOG")"
+rm -f "$FAKE_STATE/desk"
+: >"$CALL_LOG"
+WT_HERDR_NO_DESK=1 wt_herdr_layout_create "Main_Feature" "$TMP_DIR/main.feature"
+grep -q '^hc run' "$CALL_LOG" && fail "WT_HERDR_NO_DESK (handoff) must skip the desk; log=$(cat "$CALL_LOG")"
+printf '[agent]\ncommand = "claude"\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+printf 'PASS: with bstack on, post-start starts a desk in a space without one, unless handoff asks not to\n'
+
 : >"$CALL_LOG"
 TERM=dumb WT_HERDR_AGENT_CMD=codex WT_HERDR_AGENT_PROMPT=bercail-0s1 \
   wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
-grep -qF "hc run --bg --keep --outlive-parent --no-notify --parent t9 --cwd $FEATURE --label bercail.role=agent --label bercail.space=sp-child codex --no-daemon bercail-0s1" "$CALL_LOG" \
-  || fail "handoff should start the desk under the space's terminal; log=$(cat "$CALL_LOG")"
+grep -qx "$RUN --prompt bercail-0s1 codex" "$CALL_LOG" \
+  || fail "handoff should start the desk in its own tab with the stage's binary; log=$(cat "$CALL_LOG")"
 grep -qx 'TERM=xterm-256color' "$CALL_LOG" || fail "a headless caller's TERM=dumb must not reach the desk; log=$(cat "$CALL_LOG")"
-printf 'PASS: handoff starts the desk agent with its prompt (codex without its daemon, real TERM)\n'
-
-: >"$CALL_LOG"
-WT_HERDR_AGENT_CMD=opencode WT_HERDR_AGENT_PROMPT=bercail-0s1 \
-  wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
-grep -qF -- "--label bercail.space=sp-child opencode --prompt bercail-0s1" "$CALL_LOG" \
-  || fail "opencode takes its first message with --prompt (a positional is a directory); log=$(cat "$CALL_LOG")"
-printf 'PASS: an opencode desk gets its prompt through --prompt\n'
+printf 'PASS: handoff starts the desk agent in its own tab with its prompt (real TERM)\n'
 
 touch "$FAKE_STATE/desk"
 : >"$CALL_LOG"
 WT_HERDR_AGENT_CMD=claude WT_HERDR_AGENT_PROMPT=bercail-0s2 \
   wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
 grep -q '^hc kill t5' "$CALL_LOG" || fail "handoff should replace the live desk; log=$(cat "$CALL_LOG")"
-grep -q '^hc run .* claude bercail-0s2$' "$CALL_LOG" || fail "replacement desk; log=$(cat "$CALL_LOG")"
+grep -qx "$RUN --prompt bercail-0s2 claude" "$CALL_LOG" || fail "replacement desk; log=$(cat "$CALL_LOG")"
 printf 'PASS: handoff replaces a live desk agent\n'
 
 rm -f "$FAKE_STATE/desk"
@@ -126,9 +138,9 @@ printf 'PASS: handoff requires a prompt\n'
 
 : >"$CALL_LOG"
 WT_HERDR_AGENT_PROMPT=ignored wt_herdr_start_default_agent "Main_Feature" "$TMP_DIR/main.feature"
-grep -q '^hc run .* bercail.space=sp-child claude$' "$CALL_LOG" \
-  || fail "default agent comes from bercail config, without a prompt; log=$(cat "$CALL_LOG")"
-printf 'PASS: default agent is bercail [agent] command with no prompt\n'
+grep -qx "$RUN" "$CALL_LOG" \
+  || fail "default agent is bercail-desk-agent's pick, without a prompt; log=$(cat "$CALL_LOG")"
+printf 'PASS: default agent is bercail-desk-agent with no prompt\n'
 
 : >"$CALL_LOG"
 wt_herdr_layout_close "Main_Feature"

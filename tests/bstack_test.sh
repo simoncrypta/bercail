@@ -312,11 +312,6 @@ EOF
   printf 'PASS: handoff stage bstack runs opencode with the configured model and resumes by session\n'
 }
 
-test_desk_prompt_flag() {
-  grep -q 'key: "opencode", name: "bstack"' "$ROOT/bercail/mods/bercail-desk/main.js" || fail "desk offers bstack"
-  printf 'PASS: the desk picker offers bstack first\n'
-}
-
 test_doctor() {
   reset_home
   write_config <<'EOF'
@@ -403,5 +398,4 @@ test_off_removes_only_ours
 test_on_switches_stock_desk_agent
 test_setup_auto_models
 test_handoff_bstack_stage
-test_desk_prompt_flag
 test_doctor

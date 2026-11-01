@@ -7,7 +7,7 @@ S="{{ branch | capitalize }}_{{ repo | capitalize }}"
 W="{{ worktree_path }}"
 
 source "$HOME/.config/worktrunk/herdr-layout.sh"
-# Space only — no desk agent. d/dev start a clear agent session.
+# The space, and with bstack on its desk agent. d/dev start a clear agent session.
 # Handoff starts the agent with the task via wt_herdr_handoff_agent.
 unset WT_HERDR_AGENT_PROMPT
 wt_herdr_layout_create "$S" "$W"

@@ -1,12 +1,14 @@
 # Herdr app helpers for worktrunk and shell integration.
 # Safe to source repeatedly — worktrunk hooks and shell reload pick up updates.
 #
-# One checkout is one Herdr app space. Its desk agent is an hc terminal started
-# as a sub-agent of the space's first terminal, labelled bercail.role=agent and
-# bercail.space=<space id>; the bercail layout's desk column shows it.
+# One checkout is one Herdr app space. Its desk agent is an hc terminal in a tab
+# of its own (herdr.space=<space id>), so Herdr's agents list shows it, labelled
+# bercail.role=agent and bercail.space=<space id>; the bercail layout's desk
+# column shows it too. bercail-desk-agent picks what it runs.
 
 HERDR_APP="${HERDR_APP_BIN:-herdr-app}"
 HC="${HC_BIN:-hc}"
+DESK_AGENT="${BERCAIL_DESK_AGENT:-$HOME/.local/bin/bercail-desk-agent}"
 
 _wt_realpath() {
   local path="$1"
@@ -66,12 +68,6 @@ _wt_herdr_space_by_name() {
     | head -1
 }
 
-# The space's first terminal: the desk agent's parent.
-_wt_herdr_space_shell() {
-  "$HERDR_APP" ls 2>/dev/null \
-    | jq -r --arg id "$1" '.spaces[] | select(.id == $id) | .tabs[0].terminals[0].terminal // empty'
-}
-
 _wt_herdr_space_desk() {
   "$HC" ls --json 2>/dev/null \
     | jq -r '.terminals[] | select(.state == "live") | .address' \
@@ -106,63 +102,50 @@ _wt_herdr_resolve_space() {
   printf '%s' "$space"
 }
 
-# The agent command: WT_HERDR_AGENT_CMD (handoff), else bercail's [agent] command.
-_wt_herdr_agent_cmd() {
-  if [[ -n "${WT_HERDR_AGENT_CMD:-}" ]]; then
-    printf '%s' "$WT_HERDR_AGENT_CMD"
-    return 0
-  fi
-  if declare -F agentic_dev_agent_command >/dev/null 2>&1; then
-    agentic_dev_agent_command
-    return 0
-  fi
+_wt_bstack_on() {
   local config="${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml"
-  awk -F= '/^\[agent\]/{a=1;next} /^\[/{a=0} a && $1 ~ /^[[:space:]]*command[[:space:]]*$/ {
-      v=$2; sub(/^[[:space:]]*"?/, "", v); sub(/"?[[:space:]]*$/, "", v); print v; exit }' \
-    "$config" 2>/dev/null | grep . || printf 'cursor-agent'
+  [[ "$(awk '/^[[:space:]]*\[/ { s = $0; gsub(/[[:space:]]/, "", s); next }
+      s == "[bstack]" && /^[[:space:]]*enabled[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]*#.*$/, ""); print; exit }' \
+    "$config" 2>/dev/null)" == true ]]
 }
 
-# Start the space's desk agent, replacing a live one. $3: its first message (optional).
+# Start the space's desk agent, replacing a live one. $3: its first message
+# (optional). WT_HERDR_AGENT_CMD (handoff) picks the agent; without it,
+# bercail-desk-agent runs bstack or bercail's [agent] command.
 _wt_herdr_start_desk() {
-  local space="$1" workdir="$2" prompt="${3:-}" shell old cmd
-  local -a argv
-  shell="$(_wt_herdr_space_shell "$space")"
-  [[ -n "$shell" ]] || {
-    echo "Space $space has no terminal to start the desk agent from" >&2
-    return 1
-  }
+  local space="$1" workdir="$2" prompt="${3:-}" old
+  local -a argv=("$DESK_AGENT")
   old="$(_wt_herdr_space_desk "$space")"
   if [[ -n "$old" ]]; then
     "$HC" kill "$old" >/dev/null 2>&1 || true
     "$HC" rm "$old" >/dev/null 2>&1 || true
   fi
-  cmd="$(_wt_herdr_agent_cmd)"
-  read -r -a argv <<<"$cmd"
-  # hc runs codex without its app-server daemon.
-  if [[ "$(basename "${argv[0]}")" == codex && " ${argv[*]} " != *" --no-daemon "* ]]; then
-    argv+=(--no-daemon)
-  fi
-  # opencode's TUI reads a positional argument as a directory; its first message is --prompt.
-  if [[ -n "$prompt" && "$(basename "${argv[0]}")" == opencode ]]; then
-    argv+=(--prompt "$prompt")
-  elif [[ -n "$prompt" ]]; then
-    argv+=("$prompt")
+  [[ -z "$prompt" ]] || argv+=(--prompt "$prompt")
+  if [[ -n "${WT_HERDR_AGENT_CMD:-}" ]]; then
+    local -a cmd
+    read -r -a cmd <<<"$WT_HERDR_AGENT_CMD"
+    argv+=("${cmd[@]}")
   fi
   # hc passes on the caller's environment; a headless caller (Shep) has
   # TERM=dumb, which leaves the desk without colors or key handling.
-  TERM=xterm-256color COLORTERM=truecolor "$HC" run --bg --keep --outlive-parent --no-notify \
-    --parent "$shell" --cwd "$(_wt_realpath "$workdir")" \
+  # herdr.space gives the desk a tab of its own in the space; the shown tab stays.
+  TERM=xterm-256color COLORTERM=truecolor "$HC" run --bg --keep --no-parent --no-notify \
+    --cwd "$(_wt_realpath "$workdir")" --label "herdr.space=$space" \
     --label bercail.role=agent --label "bercail.space=$space" \
     "${argv[@]}" >/dev/null
 }
 
+# The checkout's space, and with bstack on its desk agent unless it has one.
+# WT_HERDR_NO_DESK=1 (handoff-spawn, which starts its own desk): the space only.
 wt_herdr_layout_create() {
-  local label="$1" workdir="$2"
+  local label="$1" workdir="$2" space
   _wt_herdr_app_running || {
     echo "Herdr app is not running; open it and run: wt switch $(basename "$workdir")" >&2
     return 0
   }
-  _wt_herdr_resolve_space "$label" "$workdir" >/dev/null
+  space="$(_wt_herdr_resolve_space "$label" "$workdir")" || return 1
+  [[ "${WT_HERDR_NO_DESK:-}" != 1 ]] && _wt_bstack_on || return 0
+  [[ -n "$(_wt_herdr_space_desk "$space")" ]] || _wt_herdr_start_desk "$space" "$workdir" || true
 }
 
 # Clear session of the configured agent (d / dev / apply). Ignores any

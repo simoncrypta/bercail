@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 
 uninstall_agentic_dev() {
-  local keys tmp
+  local keys tmp bin
   info "uninstalling bercail..."
 
   remove_marker_block "$(shell_rc_for bash)"
@@ -14,10 +14,12 @@ uninstall_agentic_dev() {
     info "remove: $LOCAL_BIN/bercail"
     run rm -f "$LOCAL_BIN/bercail"
   fi
-  if [[ -e "$LOCAL_BIN/agentic-dev" ]]; then
-    info "remove: $LOCAL_BIN/agentic-dev"
-    run rm -f "$LOCAL_BIN/agentic-dev"
-  fi
+  for bin in agentic-dev bercail-desk-agent; do
+    if [[ -e "$LOCAL_BIN/$bin" ]]; then
+      info "remove: $LOCAL_BIN/$bin"
+      run rm -f "$LOCAL_BIN/$bin"
+    fi
+  done
 
   if [[ -e "$OMARCHY_POST_UPDATE_HOOK" ]]; then
     info "remove: $OMARCHY_POST_UPDATE_HOOK"

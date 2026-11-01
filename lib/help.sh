@@ -39,7 +39,7 @@ Shell commands:
   t             Open the Herdr app
 
 Herdr app layout "bercail" (switch with Ctrl+Shift+L):
-  Left: the desk, one agent per space (bstack, claude, codex or grok, picked on the desk)
+  Left: the desk, one agent per space (bstack when it is on, else [agent] command)
   Center: the space's tabs (Shell; Review runs \`tuicr -w\`, uncommitted only,
           watching, and opens itself when the desk agent finishes)
   Right: files / changes

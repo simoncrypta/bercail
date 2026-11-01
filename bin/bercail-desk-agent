@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# The desk agent. Usage: bercail-desk-agent [--prompt TEXT] [COMMAND [ARGS...]]
+#
+# COMMAND defaults to opencode when bstack is on ([bstack] enabled = true),
+# else bercail's [agent] command. opencode with bstack on gets the terminal's
+# palette (the system theme) and runs bstack, its default agent. The full TUI,
+# not `opencode mini`: only the full TUI reports its status (OSC 7501), which
+# puts the desk in Herdr's agents list.
+set -euo pipefail
+
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml"
+# Tabs off: the TUI then reports only its own session, not the other sessions
+# open in this folder.
+CLI_CONFIG='{"theme":{"name":"system","mode":"system"},"highlights":false,"tabs":{"mode":"off"}}'
+
+# Value of KEY in [SECTION] of config.toml, unquoted.
+toml_get() {
+  [[ -r "$CONFIG" ]] || return 0
+  awk -v want="[$1]" -v key="$2" '
+    /^[[:space:]]*\[/ { sec = $0; gsub(/[[:space:]]/, "", sec); next }
+    sec != want { next }
+    $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+      sub("^[^=]*=[[:space:]]*", ""); sub(/[[:space:]]*#.*$/, ""); gsub(/^"|"$/, ""); print; exit
+    }' "$CONFIG"
+}
+
+prompt=""
+if [[ "${1:-}" == --prompt ]]; then
+  prompt="${2:-}"
+  shift 2 || shift $#
+fi
+
+bstack=0
+[[ "$(toml_get bstack enabled)" == true ]] && bstack=1
+
+argv=("$@")
+if [[ ${#argv[@]} -eq 0 ]]; then
+  if [[ "$bstack" -eq 1 ]]; then
+    argv=(opencode)
+  else
+    read -r -a argv <<<"$(toml_get agent command)"
+    [[ ${#argv[@]} -gt 0 ]] || argv=(cursor-agent)
+  fi
+fi
+
+case "$(basename "${argv[0]}")" in
+  codex)
+    # hc runs codex without its app-server daemon.
+    [[ " ${argv[*]} " == *" --no-daemon "* ]] || argv+=(--no-daemon)
+    ;;
+  opencode)
+    [[ "$bstack" -eq 0 ]] || export OPENCODE_CLI_CONFIG_CONTENT="$CLI_CONFIG"
+    # opencode's TUI reads a positional argument as a directory.
+    [[ -z "$prompt" ]] || argv+=(--prompt "$prompt")
+    prompt=""
+    ;;
+esac
+[[ -z "$prompt" ]] || argv+=("$prompt")
+
+exec "${argv[@]}"
