@@ -21,7 +21,7 @@ const CI_ORDER = ["fail", "pending", "cancel", "pass", "skipping"];
 // per job; the tab reads it and removes it. Not the run dir, which only bercail writes.
 const JOBS = "/.cache/bercail/review-jobs";
 // $0 log, $1 status file, then the command. The log keeps the whole output, as before.
-const INNER = 'log=$0; status=$1; shift; out=$("$@" 2>&1 </dev/null); rc=$?; printf "%s\\n" "$out" >>"$log"; '
+const INNER = 'log=$0; status=$1; shift; rc=0; out=$("$@" 2>&1 </dev/null) || rc=$?; printf "%s\\n" "$out" >>"$log"; '
   + 'mkdir -p "${status%/*}" && { echo "$rc"; printf "%s\\n" "$out" | tail -n 40; } >"$status.tmp" && mv "$status.tmp" "$status"';
 const OUTER = 'inner=$1; shift; if command -v setsid >/dev/null 2>&1; '
   + 'then setsid -f sh -c "$inner" "$@" >/dev/null 2>&1 </dev/null; '
@@ -111,9 +111,17 @@ export default class Review extends View {
     this.sel = null;
     this.jobs = [];
     // Only while a detached command runs: its status file is outside the watched run dir.
+    this.loaded = 0;
     cx.timer.every(1000, (cx) => {
       if (this.jobs.length && !this.checking) cx.spawn(async (cx) => this.ended(cx));
+      // A pass killed outside its traps leaves its lock and changes no file: look again now and then.
+      if (this.prs().some((p) => p.pass === "running") && Date.now() - this.loaded > 15000) {
+        this.loaded = Date.now();
+        cx.spawn(async (cx) => this.reload(cx));
+      }
     });
+    // Status files of jobs a reload of this mod forgot.
+    exec("find", [`${home()}${JOBS}`, "-type", "f", "-mmin", "+1440", "-delete"]).catch(() => {});
     cx.spawn(async (cx) => {
       await this.reload(cx);
       this.h.focus();
@@ -131,6 +139,7 @@ export default class Review extends View {
       if (r.code !== 0) throw new Error(r.stderr.trim() || `review-pr state exited ${r.code}`);
       const was = this.state?.current;
       this.state = JSON.parse(r.stdout);
+      this.loaded = Date.now();
       // The worktree moved (enter, or a gather back to the root): the card follows it.
       if (this.state.current !== was) this.sel = null;
       this.error = "";
@@ -147,7 +156,9 @@ export default class Review extends View {
   current() {
     const prs = this.prs();
     if (this.sel == null && this.state) this.sel = Math.max(0, prs.findIndex((p) => p.number === this.state.current));
-    return prs[Math.min(this.sel, prs.length - 1)];
+    // A gather can drop PRs: keep the selection in the stack, so j/k move from what shows.
+    if (this.sel != null) this.sel = Math.max(0, Math.min(this.sel, prs.length - 1));
+    return prs[this.sel ?? 0];
   }
 
   say(text, cx) {
@@ -158,11 +169,14 @@ export default class Review extends View {
   // Off the tab's exec (30 s limit): a pass, a gather or tuicr's wait takes longer.
   async detach(what, argv, log, cwd) {
     const status = `${home()}${JOBS}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${++seq}`;
-    this.jobs.push({ what, status });
-    const r = await exec("sh", ["-c", OUTER, "sh", INNER, log, status, ...argv], cwd ? { cwd } : {});
-    if (r.code !== 0) {
+    this.jobs.push({ what, status, at: Date.now() });
+    try {
+      const r = await exec("sh", ["-c", OUTER, "sh", INNER, log, status, ...argv], cwd ? { cwd } : {});
+      if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
+    } catch (e) {
+      // It never started (exec rejects on a missing folder): no status file will come.
       this.jobs = this.jobs.filter((j) => j.status !== status);
-      throw new Error(r.stderr.trim() || `exit ${r.code}`);
+      throw e;
     }
   }
 
@@ -205,7 +219,10 @@ export default class Review extends View {
     if (!s || !pr) return;
     const self = props().bercail || "bercail";
     const n = String(pr.number);
-    const fail = (what) => (e) => notify({ title: `bercail: ${what}`, body: String(e?.message ?? e), level: "error" });
+    const fail = (what) => (e) => {
+      this.say(`${what} failed: ${e?.message ?? e}`, cx);
+      notify({ title: `bercail: ${what}`, body: String(e?.message ?? e), level: "error" });
+    };
     switch (name) {
       case "open":
         cx.open_url(pr.url);
@@ -218,8 +235,12 @@ export default class Review extends View {
         if (this.prs().length < 2 || pr.number === s.current) return;
         this.say(`moving the review worktree to #${n}…`, cx);
         cx.spawn(async (cx) => {
-          const r = await exec(self, ["review-pr", "select", n, "--stack", s.stack]);
-          this.say(r.code === 0 ? `the review worktree is at #${n}` : r.stderr.trim(), cx);
+          try {
+            const r = await exec(self, ["review-pr", "select", n, "--stack", s.stack]);
+            this.say(r.code === 0 ? `the review worktree is at #${n}` : r.stderr.trim(), cx);
+          } catch (e) {
+            fail("select")(e);
+          }
           await this.reload(cx);
         });
         return;
@@ -237,7 +258,10 @@ export default class Review extends View {
       case "refresh": {
         // review-pr refuses to gather while a pass runs, and only its log would say so.
         if (this.prs().some((p) => p.pass === "running")) return this.say("a pass is running; refresh when it ends", cx);
-        if (this.jobs.some((j) => j.what === "refresh")) return this.say("already gathering the stack again", cx);
+        // A gather takes seconds; one with no status file after 5 minutes is not one to wait for.
+        if (this.jobs.some((j) => j.what === "refresh" && Date.now() - j.at < 300000)) {
+          return this.say("already gathering the stack again", cx);
+        }
         const root = this.prs().find((p) => p.number === s.root) ?? pr;
         this.say("gathering the stack again; log: refresh.log", cx);
         cx.spawn(async () => this.detach("refresh", [self, "review-pr", root.url], `${s.stack}/refresh.log`, s.source)

@@ -105,6 +105,7 @@ export const exec = async (cmd, args, opts) => {
   h().execs.push([cmd, ...(args ?? [])]);
   if (args?.[0] === "review-pr" && args[1] === "state") return { code: 0, stdout: h().state, stderr: "" };
   // The detach wrapper and its cleanup run for real; /bin/bercail is the fake bercail.
+  if (h().reject) throw new Error(h().reject);
   if (cmd === "sh" || cmd === "rm") {
     const r = spawnSync(cmd, args.map((a) => (a === "/bin/bercail" ? process.env.FAKE_BERCAIL : a)), { cwd: opts?.cwd, encoding: "utf8" });
     return { code: r.status, stdout: r.stdout, stderr: r.stderr };
@@ -251,6 +252,16 @@ const want = [
 if (JSON.stringify(said) !== JSON.stringify(want)) fail(`how the detached commands ended:\n${said.join("\n")}`);
 for (let i = 0; i < 5; i++) { herdr.timer(cx); await tick(); }
 if (herdr.notes.length !== want.length) fail("a job's end is reported once");
+// exec rejects (a missing folder): the job goes with the toast, and r works again.
+herdr.reject = "no such folder: /gone";
+key("r");
+await tick();
+delete herdr.reject;
+if (v.jobs.length || herdr.notes.at(-1)?.body !== "no such folder: /gone") fail(`a refresh that never started: ${JSON.stringify(v.jobs)}`);
+key("r");
+if (v.message === "already gathering the stack again") fail("r is stuck after a refresh that never started");
+for (let i = 0; i < 100 && v.jobs.length; i++) { herdr.timer(cx); await tick(); }
+herdr.notes.length = want.length;
 if (readdirSync(`${process.env.FAKE_HOME}/.cache/bercail/review-jobs`).length) fail("status files are removed");
 if (!readFileSync(`${S.stack}/refresh.log`, "utf8").includes("busy gathering")) fail("the log keeps the output");
 writeFileSync(outFile, shots.join("\n") + "\n");
