@@ -46,9 +46,9 @@ test_packaged_dry_run_keeps_the_managed_command() {
   ln -s "$STAGE/bin/bercail" "$home/.local/bin/bercail"
   # dry-run may exit nonzero on host-only warnings (Hyprland); read its plan.
   out="$(run_bercail "$home" dry-run 2>&1 || true)"
-  printf '%s' "$out" | grep -q 'keeping bercail from mise/packslip' \
+  grep -q 'keeping bercail from mise/packslip' <<<"$out" \
     || fail "packaged dry-run should keep the managed command: $out"
-  printf '%s' "$out" | grep -qF "cp $STAGE/bin/bercail -> " \
+  grep -qF "cp $STAGE/bin/bercail -> " <<<"$out" \
     && fail "packaged dry-run must not copy bin/bercail: $out"
   [[ -L "$home/.local/bin/bercail" ]] || fail "dry-run replaced the link"
   printf 'PASS: packaged install does not copy bercail over the mise/packslip link\n'
@@ -60,7 +60,7 @@ test_unpackaged_tree_still_copies_bercail() {
   rm -f "$STAGE/.bercail-package"
   out="$(HOME="$home" PATH="/usr/bin:/bin" BERCAIL_LIB="" AGENTIC_DEV_LIB="" BERCAIL_PACKAGED="" \
     "$STAGE/bin/bercail" dry-run 2>&1 || true)"
-  printf '%s' "$out" | grep -qF "cp $STAGE/bin/bercail -> $home/.local/bin/bercail" \
+  grep -qF "cp $STAGE/bin/bercail -> $home/.local/bin/bercail" <<<"$out" \
     || fail "a clone or curl install should still copy bercail: $out"
   printf 'PASS: clone and curl installs still copy bercail into ~/.local/bin\n'
 }
@@ -72,7 +72,7 @@ test_install_command_needs_install_sh() {
   cp "$STAGE/bin/bercail" "$bare/bin/bercail"
   err="$(HOME="$home" PATH="/usr/bin:/bin" "$bare/bin/bercail" install 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "install without install.sh should exit 1, got $rc"
-  printf '%s' "$err" | grep -q 'https://bercail.dev/install.sh' \
+  grep -q 'https://bercail.dev/install.sh' <<<"$err" \
     || fail "install without install.sh should point at curl: $err"
   printf 'PASS: bercail install without a release tree points at the curl installer\n'
 }

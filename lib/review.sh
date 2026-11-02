@@ -1,17 +1,31 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# bercail review-pr: review someone else's PR by its intent and its decisions.
+# bercail review-pr: review someone else's PR stack by intent and decisions.
 #
-# One stack (slice 1: a stack of one PR) is one run dir, one detached worktree,
-# and one Herdr space. The run dir is
+# One stack is one run dir, one detached sibling worktree of the source
+# checkout, and one Herdr space named by the root (bottom) PR. The run dir is
 #   ${XDG_STATE_HOME:-~/.local/state}/bercail/reviews/<host>/<owner>/<repo>/stack-<root>/
-# with stack.json, worktree/ (the repo at the PR head), and per PR and head sha
-#   pr-<n>/<sha>/ pr.json intent.md diff.patch ci.json review.json run.json seeded.json
-# Gather is plain gh and git. The decisions pass is one bstack-pr-review
-# opencode run per PR, read-only. Agents never post to GitHub.
+# with stack.json, stack.md, and per PR and head sha
+#   pr-<n>/<sha>/ pr.json intent.md diff.patch ci.json source/ review.json run.json
+# The worktree is <main>.review-<root> (for example ~/Work/leftlane_app.review-123),
+# registered to the source git dir. It is not under the state dir.
+#
+# No local checkout: a normal clone goes to $HOME/Work/<repo>, or
+# $HOME/Work/<owner>-<repo> when that first path exists and is a different
+# repo. Never overwrite. The review worktree is the sibling of that clone.
+# A clone made here is not Graphite-initialized.
+#
+# Gather is plain gh and git. Diffs are git diff <parent>...<head>, not trunk.
+# The decisions pass is one bstack-pr-review opencode run per non-thin PR,
+# in parallel, read-only, with no --model. Each pass reads pr-<n>/<sha>/source/,
+# a snapshot of the changed text files at that sha, and cannot see the worktree.
+# Agents never post to GitHub.
 
 REVIEW_SCHEMA="bercail.review/v1"
-REVIEW_PR_FIELDS="number,title,body,url,author,isDraft,baseRefName,headRefName,headRefOid,closingIssuesReferences,files,statusCheckRollup"
+REVIEW_PR_FIELDS="number,title,body,url,author,isDraft,baseRefName,headRefName,headRefOid,baseRefOid,isCrossRepository,closingIssuesReferences,files,statusCheckRollup"
+
+# shellcheck source=lib/stack.sh
+source "$(dirname "${BASH_SOURCE[0]}")/stack.sh"
 
 _review_root() {
   printf '%s/bercail/reviews' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -66,6 +80,15 @@ _review_lock() {
   return "$rc"
 }
 
+_review_lock_wait() {
+  local path="$1" secs="${2:-10}" i
+  for ((i = 0; i < secs * 10; i++)); do
+    _review_lock "$path" && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 _review_unlock() {
   [[ "$(readlink "$1.lock" 2>/dev/null)" != "${BASHPID:-$$}" ]] || rm -f "$1.lock"
 }
@@ -74,6 +97,17 @@ _review_locked() {
   local pid
   pid="$(readlink "$1.lock" 2>/dev/null)" || return 1
   [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null
+}
+
+_review_passes_live() {
+  local lock
+  for lock in "$1"/pr-*/*/pass.lock "$1"/pr-*/*/pass.lock.reap; do
+    # pass.lock is a symlink to a pid, so -e (follows the link) is false.
+    [[ -L "$lock" || -d "$lock" ]] || continue
+    [[ "$lock" == *.reap ]] && return 0
+    _review_locked "${lock%.lock}" && return 0
+  done
+  return 1
 }
 
 # bercail's Herdr helpers (the worktrunk hooks use the same file). True when
@@ -88,72 +122,226 @@ _review_herdr() {
   _wt_herdr_app_running
 }
 
-# --- gather -------------------------------------------------------------------
+# --- source checkout ----------------------------------------------------------
 
-# DIR's common git dir when its origin is OWNER/REPO (any host alias or scheme).
-_review_git_dir_for() {
+_review_origin_matches() {
   local url
   url="$(git -C "$1" remote get-url origin 2>/dev/null)" || return 1
   url="${url%/}"
   url="${url%.git}"
-  [[ "${url,,}" == *[/:]"${2,,}/${3,,}" ]] || return 1
-  git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null
+  [[ "${url,,}" == *[/:]"${2,,}/${3,,}" ]]
 }
 
-# Reviews use a private bare clone, so symlink checkout policy never changes
-# the source repo's config. Prefer a local clone of a matching checkout.
-_review_repo() (
-  local host="$1" owner="$2" repo="$3" n="$4" sha="$5" wt="$6" gd source="" dir origin
-  gd="$(_review_root)/$host/$owner/$repo/clone.git"
-  _review_lock "${gd%/*}/repository" || { printf 'review repository is busy; retry after the other gather\n' >&2; return 1; }
-  trap '_review_unlock "${gd%/*}/repository"' EXIT
-  if [[ -e "$wt/.git" ]]; then
-    [[ "$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)" == "$gd" ]] || {
-      printf 'recreate review worktree %s: it predates the private review clone\n' "$wt" >&2
+# Written only into a checkout this command created, never into the user's repo.
+_review_marker_matches() {
+  local f
+  f="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/bercail-review-repo" || return 1
+  [[ -f "$f" && "$(<"$f")" == "$2/$3/$4" ]]
+}
+
+_review_is_repo() {
+  _review_origin_matches "$1" "$3" "$4" || _review_marker_matches "$1" "$2" "$3" "$4"
+}
+
+_review_main_of() {
+  local main
+  main="$(git -C "$1" worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
+  # Old review spaces can point to worktrees of a state-directory bare clone.
+  [[ -n "$main" && "$(git -C "$main" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || return 1
+  printf '%s\n' "$main"
+}
+
+# The source repo's main worktree, if one is already on disk. Empty otherwise.
+_review_find_source() {
+  local host="$1" owner="$2" repo="$3" dir
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+    && _review_is_repo "$PWD" "$host" "$owner" "$repo"; then
+    _review_main_of "$PWD" && return 0
+  fi
+  if _review_herdr; then
+    while IFS= read -r dir; do
+      [[ -d "$dir" ]] || continue
+      if _review_is_repo "$dir" "$host" "$owner" "$repo"; then
+        _review_main_of "$dir" && return 0
+      fi
+    done < <("$HERDR_APP" ls 2>/dev/null | jq -r '.spaces[]?.folder // empty' | sort -u)
+  fi
+  for dir in "$HOME/Work/$repo" "$HOME/Work/$owner-$repo"; do
+    if [[ -e "$dir" ]] && _review_is_repo "$dir" "$host" "$owner" "$repo"; then
+      _review_main_of "$dir" && return 0
+    fi
+  done
+  return 1
+}
+
+# No local checkout: clone a normal repo outside the state dir. Do not overwrite
+# an existing path that is not this repo.
+_review_fallback_checkout() {
+  local host="$1" owner="$2" repo="$3" slug
+  slug="$host/$owner/$repo"
+  local primary="$HOME/Work/$repo" alt="$HOME/Work/$owner-$repo" dest=""
+  if _review_is_repo "$primary" "$host" "$owner" "$repo" 2>/dev/null; then
+    dest="$primary"
+  elif [[ ! -e "$primary" ]]; then
+    dest="$primary"
+  elif _review_is_repo "$alt" "$host" "$owner" "$repo" 2>/dev/null; then
+    dest="$alt"
+  elif [[ ! -e "$alt" ]]; then
+    dest="$alt"
+  else
+    die "refusing to overwrite $primary or $alt; neither is a checkout of $slug"
+  fi
+  if [[ ! -e "$dest/.git" ]]; then
+    mkdir -p "$(dirname "$dest")"
+    gh repo clone "$slug" "$dest" -- --quiet >&2 \
+      || die "could not clone $slug to $dest"
+    printf '%s\n' "$slug" > "$(git -C "$dest" rev-parse --path-format=absolute --git-common-dir)/bercail-review-repo"
+  fi
+  _review_main_of "$dest"
+}
+
+# Sibling of the source main checkout. Herdr's layout helper names the space
+# Review-<root>_<Repo> from this basename.
+_review_sibling_path() {
+  local main="$1" root="$2"
+  main="$(cd "$main" && pwd -P)"
+  printf '%s.review-%s' "$main" "$root"
+}
+
+# Pull refs and the root base commit into the source object DB. No branch ref
+# is a destination, and FETCH_HEAD is left alone (other worktrees share it).
+_review_fetch_objects() {
+  local main="$1" trunk="$2" base="$3"
+  shift 3
+  local n sha
+  local -a specs=() missing=()
+  while [[ $# -ge 2 ]]; do
+    n="$1"
+    sha="$2"
+    shift 2
+    if ! git -C "$main" cat-file -e "$sha^{commit}" 2>/dev/null; then
+      specs+=("refs/pull/$n/head")
+      missing+=("$n" "$sha")
+    fi
+  done
+  if ! git -C "$main" cat-file -e "$base^{commit}" 2>/dev/null; then
+    specs+=("refs/heads/${trunk}")
+  fi
+  if [[ ${#specs[@]} -gt 0 ]]; then
+    GIT_TERMINAL_PROMPT=0 git -C "$main" fetch --quiet --no-write-fetch-head --no-tags --refmap= \
+      --no-recurse-submodules origin "${specs[@]}" >&2 \
+      || { printf 'git fetch of pull refs failed in %s\n' "$main" >&2; return 1; }
+  fi
+  if ! git -C "$main" cat-file -e "$base^{commit}" 2>/dev/null; then
+    GIT_TERMINAL_PROMPT=0 git -C "$main" fetch --quiet --no-write-fetch-head --no-tags --refmap= \
+      --no-recurse-submodules origin "$base" >&2 \
+      || { printf 'could not fetch base %s into %s\n' "$base" "$main" >&2; return 1; }
+  fi
+  git -C "$main" cat-file -e "$base^{commit}" 2>/dev/null \
+    || { printf 'base %s is not in the source object database\n' "$base" >&2; return 1; }
+  local i
+  for ((i = 0; i < ${#missing[@]}; i += 2)); do
+    n="${missing[$i]}"
+    sha="${missing[$((i + 1))]}"
+    git -C "$main" cat-file -e "$sha^{commit}" 2>/dev/null || {
+      printf 'head %s is not on pull/%s/head (pushed since?); run review-pr again\n' "$sha" "$n" >&2
       return 1
     }
-  fi
-  if [[ ! -d "$gd" ]]; then
-    source="$(_review_git_dir_for "$PWD" "$owner" "$repo")" || source=""
-    if [[ -z "$source" ]] && _review_herdr; then
-      while IFS= read -r dir; do
-        [[ -d "$dir" ]] || continue
-        source="$(_review_git_dir_for "$dir" "$owner" "$repo")" && break
-        source=""
-      done < <("$HERDR_APP" ls 2>/dev/null | jq -r '.spaces[]?.folder // empty' | sort -u)
-    fi
-    if [[ -n "$source" ]]; then
-      origin="$(git --git-dir="$source" remote get-url origin)" || return 1
-      git clone --bare --quiet "$source" "$gd" >&2 || return 1
-      git --git-dir="$gd" remote set-url origin "$origin" || return 1
-    else
-      gh repo clone "$host/$owner/$repo" "$gd" -- --bare --filter=blob:none --quiet >&2 \
-        || { printf 'could not clone %s/%s/%s\n' "$host" "$owner" "$repo" >&2; return 1; }
-    fi
-  fi
-  if [[ "$(git --git-dir="$gd" config --get core.symlinks || true)" != false ]]; then
-    git --git-dir="$gd" config core.symlinks false || return 1
-  fi
-  if ! git --git-dir="$gd" cat-file -e "$sha^{commit}" 2>/dev/null; then
-    git --git-dir="$gd" fetch --quiet origin "refs/pull/$n/head" >&2 \
-      || { printf 'git fetch origin pull/%s/head failed in %s\n' "$n" "$gd" >&2; return 1; }
-    git --git-dir="$gd" cat-file -e "$sha^{commit}" 2>/dev/null \
-      || { printf 'head %s is not on pull/%s/head (pushed since?); run review-pr again\n' "$sha" "$n" >&2; return 1; }
-  fi
-  printf '%s' "$gd"
-)
+  done
+}
 
-# The stack's one worktree, detached at SHA. Nobody edits in a review space, so
-# moving it is a plain switch.
-_review_worktree() {
-  local gd="$1" wt="$2" sha="$3"
-  if [[ -e "$wt/.git" ]]; then
-    [[ "$(git -C "$wt" rev-parse HEAD 2>/dev/null)" == "$sha" ]] || git -c core.symlinks=false -C "$wt" switch --quiet --detach "$sha"
+_review_ensure_worktree() {
+  local main="$1" sibling="$2" sha="$3" a b
+  if [[ -e "$sibling" ]]; then
+    [[ -e "$sibling/.git" ]] || die "refusing to overwrite $sibling"
+    a="$(git -C "$main" rev-parse --path-format=absolute --git-common-dir)"
+    b="$(git -C "$sibling" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" \
+      || die "refusing to overwrite $sibling"
+    [[ "$a" == "$b" ]] || die "refusing to overwrite $sibling: not a worktree of $main"
+    _review_check_worktree "$sibling"
+    git -C "$sibling" switch --quiet --detach "$sha"
   else
-    git --git-dir="$gd" worktree prune
-    git -c core.symlinks=false --git-dir="$gd" worktree add --quiet --detach "$wt" "$sha"
+    git -C "$main" worktree add --quiet --detach "$sibling" "$sha"
   fi
 }
+
+_review_check_worktree() {
+  local wt="$1" gd
+  gd="$(git -C "$wt" rev-parse --absolute-git-dir)" || return 1
+  [[ ! -L "$wt" && -f "$gd/bercail-review-stack" && "$(<"$gd/bercail-review-stack")" == "$R_STACK" ]] \
+    || die "refusing to switch $wt: not this stack's review worktree"
+  if git -C "$wt" symbolic-ref -q HEAD >/dev/null; then
+    die "refusing to switch $wt: it is no longer detached"
+  fi
+  [[ -z "$(git -C "$wt" status --porcelain)" ]] \
+    || die "refusing to switch $wt: it has local changes"
+}
+
+# Outside the checkout, in the per-worktree git dir, so card/dir find the stack
+# from the sibling cwd. Not git config, and not a file in the worktree.
+_review_write_marker() {
+  local gd
+  gd="$(git -C "$1" rev-parse --absolute-git-dir)"
+  printf '%s\n' "$2" >"$gd/bercail-review-stack"
+}
+
+_review_read_marker() {
+  local gd stack
+  gd="$(git rev-parse --absolute-git-dir 2>/dev/null)" || return 1
+  [[ -f "$gd/bercail-review-stack" ]] || return 1
+  stack="$(<"$gd/bercail-review-stack")"
+  [[ -f "$stack/stack.json" ]] || return 1
+  printf '%s' "$stack"
+}
+
+# --- snapshot -----------------------------------------------------------------
+
+_review_lockish() {
+  local p="$1"
+  [[ "$p" =~ (^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|mix\.lock|Podfile\.lock|flake\.lock)$ ]] && return 0
+  [[ "$p" =~ (^|/)(dist|vendor|node_modules)/ ]] && return 0
+  [[ "$p" =~ \.(min\.js|map|snap)$ ]] && return 0
+  [[ "$p" =~ [._-]generated[._-] ]] && return 0
+  return 1
+}
+
+_review_safe_path() {
+  local p="$1" part
+  [[ -n "$p" && "$p" != /* && "$p" != -* && "$p" != *:* && "$p" != *$'\n'* ]] || return 1
+  local -a parts=()
+  IFS=/ read -r -a parts <<<"$p"
+  for part in "${parts[@]}"; do
+    [[ -n "$part" && "$part" != "." && "$part" != ".." && "$part" != ".git" ]] || return 1
+  done
+}
+
+# Changed text files at SHA, as regular files. A symlink blob is its target
+# text, never a link. Lock and generated paths are omitted. Nothing is written
+# outside DEST, and nothing is copied to the pass's cwd.
+_review_snapshot() {
+  local main="$1" sha="$2" base="$3" dest="$4" mb path blob entry
+  rm -rf "$dest"
+  mkdir -p "$dest"
+  mb="$(git -C "$main" merge-base "$base" "$sha")" || return 1
+  while IFS= read -r -d '' path; do
+    _review_safe_path "$path" || { printf 'skipping unsafe path %s\n' "$path" >&2; continue; }
+    _review_lockish "$path" && continue
+    entry="$(git --literal-pathspecs -C "$main" ls-tree "$sha" -- "$path")" || return 1
+    # A gitlink points into another repository, not a text file at this head.
+    [[ "$entry" == "160000 "* ]] && continue
+    blob="$(mktemp)"
+    git -C "$main" --no-pager show "$sha:$path" >"$blob" || { rm -f "$blob"; return 1; }
+    # grep treats NUL as end of pattern, so compare sizes instead.
+    if [[ "$(head -c 8192 "$blob" | wc -c)" != "$(head -c 8192 "$blob" | tr -d '\0' | wc -c)" ]]; then
+      rm -f "$blob"
+      continue
+    fi
+    mkdir -p "$dest/$(dirname "$path")"
+    mv "$blob" "$dest/$path"
+  done < <(git -C "$main" diff-tree -r --no-commit-id --name-only --diff-filter=ACMRT -M -z "$mb" "$sha")
+}
+
+# --- gather helpers -----------------------------------------------------------
 
 # gh pr checks exits non-zero while checks are pending or failing (and when
 # there are none) but still prints the JSON. Without JSON, the rollup from gh
@@ -241,11 +429,32 @@ _review_intent_md() {
   ' "$pr"
 }
 
+_review_summary() {
+  jq -r '((.body // "") | gsub("<!--[\\s\\S]*?-->"; "") | split("\n")
+    | map(select(test("^\\s*#|^\\s*(Loom|Video|Demo)\\s*:|^\\s*https?://"; "i") | not)
+      | gsub("^[>*\\s-]+"; "") | select(test("\\S"))) | .[0] // "")[0:240]' "$1"
+}
+
+_review_stack_md() {
+  local stack="$1" trunk="$2" via="$3"
+  jq -r --arg trunk "$trunk" --arg via "$via" '
+    "# Stack #\(.root) \(.owner)/\(.repo)",
+    "",
+    "via \($via), trunk \($trunk)",
+    "",
+    (.prs | to_entries[] | "\(.key + 1). #\(.value.number) \(.value.title) — base \(.value.base) @ \(.value.base_sha[0:7]) — head \(.value.head) @ \(.value.head_sha[0:7])"),
+    "",
+    "## Intent",
+    "",
+    (.prs[] | "- #\(.number): \(if .intent == "" then .title else .intent end)")
+  ' "$stack"
+}
+
 # --- the stack ----------------------------------------------------------------
 
 # Sets R_STACK, R_N (the PR, default the stack's current), R_SHA (--head, else
 # the PR's head in stack.json), R_DIR, R_WT from --stack DIR,
-# $BERCAIL_REVIEW_STACK, or the review worktree or stack dir around $PWD.
+# $BERCAIL_REVIEW_STACK, the stack dir, or the sibling worktree's gitdir marker.
 _review_load() {
   local top head=""
   R_STACK="${BERCAIL_REVIEW_STACK:-}"
@@ -261,15 +470,15 @@ _review_load() {
   if [[ -z "$R_STACK" ]]; then
     if [[ -f "$PWD/stack.json" ]]; then
       R_STACK="$PWD"
-    elif top="$(git rev-parse --show-toplevel 2>/dev/null)" && [[ -f "$(dirname "$top")/stack.json" ]]; then
-      R_STACK="$(dirname "$top")"
+    elif top="$(_review_read_marker)"; then
+      R_STACK="$top"
     fi
   fi
   [[ -n "$R_STACK" && -f "$R_STACK/stack.json" ]] \
     || die "no review stack here; pass --stack DIR (bercail review-pr <url> prints it)"
   [[ -n "$R_N" ]] || R_N="$(jq -r '.current' "$R_STACK/stack.json")"
   R_SHA="$(jq -r --argjson n "$R_N" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
-  [[ -n "$R_SHA" ]] || die "PR #$R_N is not in the stack at $R_STACK"
+  [[ -n "$R_SHA" && "$R_SHA" != null ]] || die "PR #$R_N is not in the stack at $R_STACK"
   R_SHA="${head:-$R_SHA}"
   R_DIR="$R_STACK/pr-$R_N/$R_SHA"
   [[ -d "$R_DIR" ]] || die "no run dir for PR #$R_N at $R_SHA"
@@ -317,10 +526,19 @@ _review_spawn() {
   fi
 }
 
+_review_wait_all() {
+  local pid rc=0
+  for pid in "$@"; do
+    wait "$pid" || rc=1
+  done
+  return "$rc"
+}
+
 # The space, its desk, and its Stack tab. Prints the space id.
+# The name comes from the sibling path (Review-<root>_<Repo>), not a hand-built label.
 _review_space() {
-  local n="$1" repo="${2,,}" label space keep argv cmd
-  label="Review-${n}_${repo^}"
+  local label space keep argv cmd
+  label="$(_wt_generate_session_name "$R_WT")"
   wt_herdr_layout_create "$label" "$R_WT" >&2 || return 1
   space="$(_wt_herdr_space_by_folder "$R_WT")"
   [[ -n "$space" ]] || return 1
@@ -336,101 +554,265 @@ _review_space() {
   printf '%s' "$space"
 }
 
-# --- bercail review-pr <url> ----------------------------------------------------
+# --- bercail review-pr <url-or-branch> ------------------------------------------
+
+_review_parse_url() {
+  local url="$1"
+  [[ "$url" =~ ^https?://([^/]+)/([^/]+)/([^/]+)/pull/([0-9]+) ]] \
+    || die "not a pull request URL: ${url:-(none)} (https://github.com/OWNER/REPO/pull/N)"
+  R_HOST="${BASH_REMATCH[1]}"
+  R_OWNER="${BASH_REMATCH[2]}"
+  R_REPO="${BASH_REMATCH[3]}"
+  R_WANT="${BASH_REMATCH[4]}"
+}
 
 review_start() {
-  local url="" run=1 arg host owner repo n slug t0 tmp sha dir gd linear thin space="" pass gather
+  local url="" branch="" run=1 arg host owner repo n slug t0 tmp order via trunk
+  local source="" root sha base main sibling space="" gather dir linear thin
+  local -a numbers=() jobs=() fetch_args=() to_spawn=()
+  declare -A spawned=()
   for arg in "$@"; do
     case "$arg" in
       --no-run) run=0 ;;
       http://*|https://*) url="$arg" ;;
-      *) die "usage: bercail review-pr <https://github.com/OWNER/REPO/pull/N> [--no-run]" ;;
+      -*) die "usage: bercail review-pr <PR url or branch> [--no-run]" ;;
+      *) branch="$arg" ;;
     esac
   done
-  [[ "$url" =~ ^https?://([^/]+)/([^/]+)/([^/]+)/pull/([0-9]+) ]] \
-    || die "not a pull request URL: ${url:-(none)} (https://github.com/OWNER/REPO/pull/N)"
-  host="${BASH_REMATCH[1]}" owner="${BASH_REMATCH[2]}" repo="${BASH_REMATCH[3]}" n="${BASH_REMATCH[4]}"
-  slug="$host/$owner/$repo"
+  [[ -n "$url" || -n "$branch" ]] || die "usage: bercail review-pr <PR url or branch> [--no-run]"
   _review_need gh jq git
   t0="$(_review_now)"
   tmp="$(mktemp -d)"
   # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
+  trap "rm -rf $(printf '%q' "$tmp")" EXIT
 
-  gh pr view "$n" -R "$slug" --json "$REVIEW_PR_FIELDS" >"$tmp/pr.json" 2>"$tmp/view.err" \
+  if [[ -n "$branch" ]]; then
+    git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+      || die "pass a PR url, or run review-pr from a checkout of the repo"
+    local listed count
+    listed="$(gh pr list --head "$branch" --state open --limit 20 --json number,url)" \
+      || die "gh pr list --head $branch failed"
+    count="$(jq 'length' <<<"$listed")"
+    if [[ "$count" -gt 1 ]]; then
+      die "ambiguous: $count open PRs have head $branch; pass the PR url"
+    fi
+    [[ "$count" -eq 1 ]] || die "no open PR for branch $branch"
+    url="$(jq -r '.[0].url' <<<"$listed")"
+  fi
+  _review_parse_url "$url"
+  host="$R_HOST" owner="$R_OWNER" repo="$R_REPO" n="$R_WANT"
+  slug="$host/$owner/$repo"
+
+  gh pr view "$n" -R "$slug" --json "$REVIEW_PR_FIELDS" >"$tmp/pr-$n.json" 2>"$tmp/view.err" \
     || die "gh pr view $n -R $slug: $(<"$tmp/view.err")"
-  sha="$(jq -r '.headRefOid' "$tmp/pr.json")"
-  R_STACK="$(_review_root)/$host/$owner/$repo/stack-$n"
-  R_N="$n" R_SHA="$sha" R_DIR="$R_STACK/pr-$n/$sha" R_WT="$R_STACK/worktree"
-  dir="$R_DIR"
-  mkdir -p "$dir"
-  _review_lock "$R_STACK/context" || die "the review stack is busy gathering or running a pass; try again when it ends"
+  source="$(_review_find_source "$host" "$owner" "$repo" || true)"
+  local sync
+  sync="$(_review_root)/$host/$owner/$repo/gt-sync"
+  if [[ -n "$source" ]] && _stack_is_graphite "$source"; then
+    local repo_dir
+    repo_dir="$(_review_root)/$host/$owner/$repo"
+    mkdir -p "$repo_dir"
+    _review_lock "$repo_dir/gt" || die "graphite sync is busy; try again when it ends"
+    if ! stack_discover "$slug" "$tmp/pr-$n.json" "$source" "$sync" >"$tmp/order.json"; then
+      _review_unlock "$repo_dir/gt"
+      die "could not discover the Graphite stack for PR #$n"
+    fi
+    _review_unlock "$repo_dir/gt"
+  else
+    stack_discover "$slug" "$tmp/pr-$n.json" "$source" "$sync" >"$tmp/order.json" \
+      || die "could not discover the stack for PR #$n"
+  fi
+  order="$(<"$tmp/order.json")"
+  jq -e --argjson n "$n" '.numbers | index($n) != null' <<<"$order" >/dev/null \
+    || die "stack discovery did not include PR #$n"
+  via="$(jq -r '.via' <<<"$order")"
+  trunk="$(jq -r '.trunk' <<<"$order")"
+  while IFS= read -r arg; do
+    [[ -n "$arg" ]] && numbers+=("$arg")
+  done < <(jq -r '.numbers[]' <<<"$order")
+  root="${numbers[0]}"
+  R_STACK="$(_review_root)/$host/$owner/$repo/stack-$root"
+
+  if [[ -z "$source" ]]; then
+    source="$(_review_fallback_checkout "$host" "$owner" "$repo")" || die "no checkout for $slug"
+  fi
+  main="$(cd "$source" && pwd -P)"
+  sibling="$(_review_sibling_path "$main" "$root")"
+
+  mkdir -p "$R_STACK"
+  _review_lock "$R_STACK/context" || die "the review stack is busy gathering; try again when it ends"
   # shellcheck disable=SC2064
   trap '_review_unlock "$R_STACK/context"; rm -rf '"$(printf '%q' "$tmp")" EXIT
-  _review_write "$dir/pr.json" <"$tmp/pr.json"
+  if _review_passes_live "$R_STACK"; then
+    die "the review stack is busy gathering or running a pass; try again when it ends"
+  fi
 
-  # Everything else at once: diff, checks, linked issues, the PR head.
-  gh pr diff "$n" -R "$slug" >"$tmp/diff.patch" 2>"$tmp/diff.err" &
-  local diff_job=$!
-  _review_ci "$n" "$slug" "$dir" &
-  _review_issues "$dir/pr.json" >"$tmp/issues.jsonl" &
-  _review_repo "$host" "$owner" "$repo" "$n" "$sha" "$R_WT" >"$tmp/gitdir" 2>"$tmp/repo.err" &
-  local repo_job=$!
-  wait "$diff_job" || die "gh pr diff $n -R $slug: $(<"$tmp/diff.err")"
-  _review_write "$dir/diff.patch" <"$tmp/diff.patch"
-  wait "$repo_job" || die "$(<"$tmp/repo.err")"
-  wait
-  gd="$(<"$tmp/gitdir")"
+  local num
+  for num in "${numbers[@]}"; do
+    if [[ ! -s "$tmp/pr-$num.json" ]]; then
+      gh pr view "$num" -R "$slug" --json "$REVIEW_PR_FIELDS" >"$tmp/pr-$num.json" 2>"$tmp/view-$num.err" &
+      jobs+=("$!")
+    fi
+  done
+  if [[ ${#jobs[@]} -gt 0 ]]; then
+    _review_wait_all "${jobs[@]}" || die "gh pr view failed for a PR in the stack"
+    jobs=()
+  fi
 
-  linear="$(_review_linear_ids "$dir/pr.json")"
-  thin="$(_review_thin "$dir/pr.json" "$linear")"
-  _review_intent_md "$dir/pr.json" "$tmp/issues.jsonl" "$linear" "$thin" | _review_write "$dir/intent.md"
-  _review_worktree "$gd" "$R_WT" "$sha" >&2 || die "could not put the review worktree $R_WT at $sha"
+  local prev="" base_sha head_sha prdir
+  for num in "${numbers[@]}"; do
+    head_sha="$(jq -r '.headRefOid' "$tmp/pr-$num.json")"
+    if [[ -z "$prev" ]]; then
+      base_sha="$(jq -r '.baseRefOid // empty' "$tmp/pr-$num.json")"
+      if [[ -z "$base_sha" ]]; then
+        base_sha="$(git -C "$main" rev-parse --verify "$trunk" 2>/dev/null || true)"
+      fi
+      [[ -n "$base_sha" ]] || die "PR #$num has no base sha (baseRefOid or trunk $trunk)"
+    else
+      base_sha="$prev"
+    fi
+    prev="$head_sha"
+    prdir="$R_STACK/pr-$num/$head_sha"
+    mkdir -p "$prdir"
+    _review_write "$prdir/pr.json" <"$tmp/pr-$num.json"
+    printf '%s\n' "$base_sha" >"$tmp/base-$num"
+    fetch_args+=("$num" "$head_sha")
+    _review_ci "$num" "$slug" "$prdir" &
+    jobs+=("$!")
+    _review_issues "$prdir/pr.json" >"$tmp/issues-$num.jsonl" &
+    jobs+=("$!")
+  done
+  _review_fetch_objects "$main" "$trunk" "$(<"$tmp/base-$root")" "${fetch_args[@]}" &
+  jobs+=("$!")
+  _review_wait_all "${jobs[@]}" || die "gather failed while fetching checks, issues, or heads"
+  jobs=()
 
-  jq -n --slurpfile pr "$dir/pr.json" --argjson thin "$thin" --argjson linear "$linear" \
-    --arg host "$host" --arg owner "$owner" --arg repo "$repo" --arg wt "$R_WT" --arg gd "$gd" \
-    --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
-    $pr[0] as $p | {
-      schema: "bercail.stack/v1", host: $host, owner: $owner, repo: $repo,
-      root: $p.number, current: $p.number, worktree: $wt, git_dir: $gd, space: null, gathered_at: $at,
-      prs: [{number: $p.number, title: $p.title, author: $p.author.login, url: $p.url, draft: $p.isDraft,
-             base: $p.baseRefName, head: $p.headRefName, head_sha: $p.headRefOid,
-             linked: [$p.closingIssuesReferences[]?.number], linear: $linear, thin: $thin}]
-    }' | _review_write "$R_STACK/stack.json"
-  gather="$(_review_since "$t0")"
+  for num in "${numbers[@]}"; do
+    head_sha="$(jq -r '.headRefOid' "$tmp/pr-$num.json")"
+    base_sha="$(<"$tmp/base-$num")"
+    prdir="$R_STACK/pr-$num/$head_sha"
+    (
+      git -C "$main" --no-pager diff --no-ext-diff "$base_sha...$head_sha" >"$tmp/diff-$num" \
+        && _review_snapshot "$main" "$head_sha" "$base_sha" "$prdir/source"
+    ) &
+    jobs+=("$!")
+  done
+  _review_wait_all "${jobs[@]}" || die "could not diff or snapshot a PR in the stack"
+
+  local -a pr_rows=()
+  for num in "${numbers[@]}"; do
+    head_sha="$(jq -r '.headRefOid' "$tmp/pr-$num.json")"
+    base_sha="$(<"$tmp/base-$num")"
+    prdir="$R_STACK/pr-$num/$head_sha"
+    _review_write "$prdir/diff.patch" <"$tmp/diff-$num"
+    [[ -f "$tmp/issues-$num.jsonl" ]] || : >"$tmp/issues-$num.jsonl"
+    linear="$(_review_linear_ids "$prdir/pr.json")"
+    thin="$(_review_thin "$prdir/pr.json" "$linear")"
+    _review_intent_md "$prdir/pr.json" "$tmp/issues-$num.jsonl" "$linear" "$thin" | _review_write "$prdir/intent.md"
+    jq -nc --slurpfile pr "$prdir/pr.json" --argjson thin "$thin" --argjson linear "$linear" --arg base "$base_sha" \
+      --arg intent "$(_review_summary "$prdir/pr.json")" \
+      '$pr[0] as $p | {number: $p.number, title: $p.title, author: $p.author.login, url: $p.url, draft: $p.isDraft,
+        base: $p.baseRefName, head: $p.headRefName, head_sha: $p.headRefOid, base_sha: $base,
+        linked: [$p.closingIssuesReferences[]?.number], linear: $linear, thin: $thin, intent: $intent}' >"$tmp/row-$num.json"
+    pr_rows+=("$tmp/row-$num.json")
+  done
+
+  jq -n --arg host "$host" --arg owner "$owner" --arg repo "$repo" --arg via "$via" --arg trunk "$trunk" \
+    --arg wt "$sibling" --arg main "$main" --argjson root "$root" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --slurpfile prs <(cat "${pr_rows[@]}") \
+    '{schema: "bercail.stack/v1", host: $host, owner: $owner, repo: $repo, via: $via, trunk: $trunk,
+      root: $root, current: $root, worktree: $wt, source: $main, space: null, gathered_at: $at,
+      prs: $prs}' >"$tmp/stack.json"
+  _review_stack_md "$tmp/stack.json" "$trunk" "$via" >"$tmp/stack.md"
+
+  sha="$(jq -r --argjson n "$root" '.prs[] | select(.number == $n) | .head_sha' "$tmp/stack.json")"
+  _review_ensure_worktree "$main" "$sibling" "$sha" >&2 \
+    || die "could not put the review worktree $sibling at $sha"
+  _review_write_marker "$sibling" "$R_STACK"
+  _review_write "$R_STACK/stack.json" <"$tmp/stack.json"
+  _review_write "$R_STACK/stack.md" <"$tmp/stack.md"
+  R_WT="$sibling"
 
   if _review_herdr; then
-    space="$(_review_space "$n" "$repo")" || { warn "the Herdr space for $R_WT did not open"; space=""; }
+    space="$(_review_space)" || { warn "the Herdr space for $sibling did not open"; space=""; }
     if [[ -n "$space" ]]; then
       jq --arg s "$space" '.space = $s' "$R_STACK/stack.json" | _review_write "$R_STACK/stack.json"
     fi
   fi
 
-  if _review_locked "$dir/pass"; then
-    pass=running
-  elif [[ -f "$dir/run.json" && "$(jq -r '.status' "$dir/run.json")" == ready ]]; then
-    pass="done"
-  elif [[ "$thin" != "[]" || "$run" -eq 0 ]]; then
-    pass=waiting
-  else
+  for num in "${numbers[@]}"; do
+    thin="$(jq -c --argjson n "$num" '.prs[] | select(.number == $n) | .thin' "$R_STACK/stack.json")"
+    head_sha="$(jq -r --argjson n "$num" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
+    dir="$R_STACK/pr-$num/$head_sha"
+    if [[ "$run" -eq 0 || "$thin" != "[]" ]]; then
+      continue
+    fi
+    if _review_locked "$dir/pass"; then
+      continue
+    fi
+    if [[ -f "$dir/run.json" && "$(jq -r '.status' "$dir/run.json")" == ready ]]; then
+      continue
+    fi
+    to_spawn+=("$num")
+  done
+
+  gather="$(_review_since "$t0")"
+  jq --argjson g "$gather" '.gather_s = $g' "$R_STACK/stack.json" | _review_write "$R_STACK/stack.json"
+  _review_unlock "$R_STACK/context"
+
+  local spawn_n spawn_sha
+  for spawn_n in "${to_spawn[@]}"; do
+    spawn_sha="$(jq -r --argjson n "$spawn_n" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
+    dir="$R_STACK/pr-$spawn_n/$spawn_sha"
     _review_need opencode
-    _review_unlock "$R_STACK/context"
-    _review_spawn "$dir/pass.log" "$(_review_self)" review-pr run "$n" --head "$sha" --stack "$R_STACK"
-    pass=started
+    _review_spawn "$dir/pass.log" "$(_review_self)" review-pr run "$spawn_n" --head "$spawn_sha" --stack "$R_STACK"
+    spawned["$spawn_n"]=1
+  done
+
+  local rows="[]" row_n row_sha row_dir row_pass row_sum row_ci
+  for num in "${numbers[@]}"; do
+    row_n="$num"
+    row_sha="$(jq -r --argjson n "$num" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
+    row_dir="$R_STACK/pr-$num/$row_sha"
+    if [[ -n "${spawned[$num]:-}" ]]; then
+      row_pass=started
+    elif _review_locked "$row_dir/pass"; then
+      row_pass=running
+    elif [[ -f "$row_dir/run.json" && "$(jq -r '.status' "$row_dir/run.json")" == ready ]]; then
+      row_pass="done"
+    else
+      row_pass=waiting
+    fi
+    row_sum="$(_review_summary "$row_dir/pr.json")"
+    row_ci="$(_review_ci_counts "$row_dir/ci.json")"
+    rows="$(jq -nc --argjson rows "$rows" --argjson n "$row_n" --arg pass "$row_pass" --arg dir "$row_dir" \
+      --arg summary "$row_sum" --argjson ci "$row_ci" \
+      '$rows + [{number: $n, pass: $pass, dir: $dir, summary: $summary, ci: $ci}]')"
+  done
+  local agg_pass next=""
+  if jq -ne --argjson rows "$rows" 'any($rows[]; .pass == "started")' >/dev/null; then
+    agg_pass=started
+  elif jq -ne --argjson rows "$rows" 'any($rows[]; .pass == "running")' >/dev/null; then
+    agg_pass=running
+  elif jq -ne --argjson rows "$rows" 'any($rows[]; .pass == "waiting")' >/dev/null; then
+    agg_pass=waiting
+    next="bercail review-pr run --stack $R_STACK"
+  else
+    agg_pass="done"
   fi
 
-  jq -n --slurpfile stack "$R_STACK/stack.json" --argjson ci "$(_review_ci_counts "$dir/ci.json")" \
-    --arg dir "$dir" --arg pass "$pass" --arg url "$url" --argjson gather "$gather" \
-    --arg summary "$(jq -r '((.body // "") | gsub("<!--[\\s\\S]*?-->"; "") | split("\n")
-        | map(gsub("^[#>*\\s-]+"; "") | select(test("\\S"))) | .[0] // "")[0:160]' "$dir/pr.json")" '
+  jq -n --slurpfile stack "$R_STACK/stack.json" --argjson rows "$rows" --arg pass "$agg_pass" \
+    --arg url "$url" --arg stackdir "$R_STACK" --argjson gather "$gather" --arg next "$next" '
     $stack[0] as $s | {
       schema: "bercail.review-pr/v1", url: $url, repo: "\($s.owner)/\($s.repo)",
-      stack: ($dir | sub("/pr-[0-9]+/[^/]+$"; "")), worktree: $s.worktree, space: $s.space,
-      prs: [$s.prs[] | {number, title, author, url, head_sha, dir: $dir, summary: $summary,
-                        linked, linear, ci: $ci, thin}],
+      stack: $stackdir, worktree: $s.worktree, space: $s.space,
+      prs: [$s.prs[] as $p | ($rows[] | select(.number == $p.number)) as $r | {
+        number: $p.number, title: $p.title, author: $p.author, url: $p.url, head_sha: $p.head_sha,
+        dir: $r.dir, summary: $r.summary, linked: $p.linked, linear: $p.linear, ci: $r.ci,
+        thin: $p.thin, pass: $r.pass}],
       thin: ([$s.prs[].thin[]] | length > 0),
       pass: $pass,
-      next: (if $pass == "waiting" then "bercail review-pr run --stack \($dir | sub("/pr-[0-9]+/[^/]+$"; ""))" else null end),
+      next: (if $next == "" then null else $next end),
       gather_s: $gather
     }'
 }
@@ -504,36 +886,35 @@ _review_valid_reply() {
   ' >/dev/null 2>&1
 }
 
-review_run() {
+# One pass. Holds the stack lock only long enough to register this PR's pass lock.
+review_run_one() {
   _review_load "$@"
   _review_need opencode jq
-  local t0 rc=0 session text block status reason="" summary="" prompt err id=""
-  local -a model=()
-  _review_lock "$R_DIR/pass" || die "a decisions pass for PR #$R_N is already running"
+  local t0 rc=0 session text block status reason="" summary="" prompt err gathered
+  _review_lock_wait "$R_STACK/context" 15 || die "the review stack is busy gathering; try again"
+  if ! _review_lock "$R_DIR/pass"; then
+    _review_unlock "$R_STACK/context"
+    die "a decisions pass for PR #$R_N is already running"
+  fi
+  _review_unlock "$R_STACK/context"
   trap '_review_run_finish' EXIT
   trap 'exit 143' TERM
   trap 'exit 130' INT
-  _review_lock "$R_STACK/context" || die "the review stack is busy gathering or running a pass"
   rm -f "$R_DIR/run.json" "$R_DIR/review.json"
-  if [[ "$(git -C "$R_WT" rev-parse HEAD 2>/dev/null)" != "$R_SHA" ]]; then
-    jq -n --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sha "$R_SHA" \
+  gathered="$(jq -r --argjson n "$R_N" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
+  if [[ "$R_SHA" != "$gathered" ]]; then
+    jq -n --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sha "$R_SHA" --arg cur "$gathered" \
       '{status: "failed", summary: "", session_id: null, finished_at: $at,
-        reason: "the worktree is no longer at \($sha[0:7]); run review-pr <url> again"}' | _review_write "$R_DIR/run.json"
+        reason: "queued head \($sha[0:7]) is not the gathered head \($cur[0:7]) in stack.json; run review-pr again"}' \
+      | _review_write "$R_DIR/run.json"
     cat "$R_DIR/run.json"
     return 1
   fi
-  # Older review worktrees may predate core.symlinks=false. Don't let a read
-  # through an author's symlink escape the agent's external-directory deny.
-  [[ -z "$(find "$R_WT" -type l -print -quit)" ]] || die "the review worktree contains symlinks; recreate it before running the pass"
   t0="$(_review_now)"
-  # The pass runs in the stack dir, not the worktree, so the reviewed repo's
-  # opencode config and plugins stay out. --model is the lead from [bstack],
-  # resolved in that dir: `opencode models` reads cwd config, and the running
-  # server can still have the previous agent model. No lead model: omit --model.
-  prompt="Review the PR in pr-$R_N/$R_SHA/ (a bercail review-pr run dir). The repo at that head is ./worktree/, here in the current dir, not under pr-$R_N/. Follow your instructions and end with the one JSON block."
-  id="$(cd "$R_STACK" && bstack_load_state reload >/dev/null && bstack_role_model lead || true)"
-  [[ -n "$id" ]] && model=(--model "$id")
-  (cd "$R_STACK" && exec opencode run --format json --agent bstack-pr-review "${model[@]}" "$prompt") \
+  # Cwd is the stack dir, not the worktree and not the reviewed repo, so the
+  # author's opencode config is not loaded. No --model: bercail/opencode picks.
+  prompt="Review the PR in pr-$R_N/$R_SHA/ (a bercail review-pr run dir). Files at that head that this PR changes are in pr-$R_N/$R_SHA/source/ (text only; a symlink is the link target as text, not a link). Follow your instructions and end with the one JSON block."
+  (cd "$R_STACK" && exec opencode run --format json --agent bstack-pr-review "$prompt") \
     >"$R_DIR/pass.jsonl" 2>"$R_DIR/pass.err" &
   R_CHILD=$!
   wait "$R_CHILD" || rc=$?
@@ -574,6 +955,68 @@ review_run() {
 
   cat "$R_DIR/run.json"
   [[ "$status" != failed ]]
+}
+
+# No N: one PR runs even if thin (slice 1). A longer stack starts every non-thin
+# PR that is not already ready or running.
+review_run_waiting() {
+  local pr n sha thin dir out rc=0
+  local -a pids=()
+  local tmp
+  tmp="$(mktemp -d)"
+  local i=0
+  while IFS= read -r pr; do
+    n="$(jq -r '.number' <<<"$pr")"
+    sha="$(jq -r '.head_sha' <<<"$pr")"
+    thin="$(jq -c '.thin // []' <<<"$pr")"
+    dir="$R_STACK/pr-$n/$sha"
+    [[ "$thin" == "[]" ]] || continue
+    _review_locked "$dir/pass" && continue
+    if [[ -f "$dir/run.json" && "$(jq -r '.status' "$dir/run.json")" == ready ]]; then
+      continue
+    fi
+    "$(_review_self)" review-pr run "$n" --head "$sha" --stack "$R_STACK" >"$tmp/$i.json" 2>"$tmp/$i.err" &
+    pids+=("$!")
+    i=$((i + 1))
+  done < <(jq -c '.prs[]' "$R_STACK/stack.json")
+  local pid
+  for pid in "${pids[@]+"${pids[@]}"}"; do
+    wait "$pid" || rc=1
+  done
+  if [[ "$i" -eq 0 ]]; then
+    printf '%s\n' '{"prs":[]}'
+  else
+    jq -s '.' "$tmp"/*.json
+  fi
+  rm -rf "$tmp"
+  return "$rc"
+}
+
+review_run() {
+  local stack="" head="" n=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --stack) stack="${2:-}"; shift 2 ;;
+      --head) head="${2:-}"; shift 2 ;;
+      [0-9]*) n="$1"; shift ;;
+      *) die "unknown argument: $1" ;;
+    esac
+  done
+  local -a load=()
+  [[ -z "$stack" ]] || load+=(--stack "$stack")
+  if [[ -n "$n" ]]; then
+    [[ -z "$head" ]] || load+=(--head "$head")
+    review_run_one "$n" "${load[@]}"
+    return
+  fi
+  _review_load "${load[@]}"
+  local count
+  count="$(jq '.prs | length' "$R_STACK/stack.json")"
+  if [[ "$count" -eq 1 ]]; then
+    review_run_one "$R_N" "${load[@]}"
+    return
+  fi
+  review_run_waiting
 }
 
 # --- card, rows, ui -------------------------------------------------------------
@@ -638,7 +1081,8 @@ review_card() {
 
 review_rows() {
   _review_load "$@"
-  local pr n sha thin dir ci
+  local pr n sha thin dir ci status count
+  count="$(jq '.prs | length' "$R_STACK/stack.json")"
   jq -c '.prs[]' "$R_STACK/stack.json" | while IFS= read -r pr; do
     n="$(jq -r '.number' <<<"$pr")"
     sha="$(jq -r '.head_sha' <<<"$pr")"
@@ -646,28 +1090,64 @@ review_rows() {
     dir="$R_STACK/pr-$n/$sha"
     ci="$(jq -r 'if length == 0 then "no checks" else ([to_entries[] | "\(.value) \(.key)"] | join(", ")) end' \
       <<<"$(_review_ci_counts "$dir/ci.json")")"
-    printf '%s\t#%s  %s  ·  %s  ·  CI %s\n' "$n" "$n" "$(jq -r '.title' <<<"$pr")" \
-      "$(_review_status "$dir" "$thin")" "$ci"
+    status="$(_review_status "$dir" "$thin")"
+    if [[ "$count" -gt 1 ]]; then
+      printf '%s\t#%s [%s] %s  ·  CI %s\n' "$n" "$n" "${status%%:*}" "$(jq -r '.title' <<<"$pr")" "$ci"
+    else
+      printf '%s\t#%s  %s  ·  %s  ·  CI %s\n' "$n" "$n" "$(jq -r '.title' <<<"$pr")" "$status" "$ci"
+    fi
   done
 }
 
-# The Stack tab: one row per PR, the card in the preview. `review-pr run` reloads
-# it through --listen when run.json lands.
 review_ui() {
   _review_load "$@"
   _review_need fzf
-  local sock="$R_STACK/ui.sock" slug
+  local sock="$R_STACK/ui.sock" slug header count preview_window="down,85%,wrap,border-top"
   slug="$(_review_stack_get '"\(.host)/\(.owner)/\(.repo)"')"
+  count="$(jq '.prs | length' "$R_STACK/stack.json")"
   rm -f "$sock"
+  local -a extra=()
+  if [[ "$count" -gt 1 ]]; then
+    preview_window="right,65%,wrap,border-left"
+    header="$(cat "$R_STACK/stack.md")
+enter: this PR · d: diff vs parent · t: tuicr · o: browser · ctrl-c: quit"
+    extra+=(--bind="enter:execute($(_review_cmd select) {1})")
+    extra+=(--bind="d:execute($(_review_cmd diff) {1})")
+  else
+    header="t: tuicr with the questions · o: open in the browser · ctrl-c: quit"
+    extra+=(--bind="enter:ignore")
+  fi
   (review_rows --stack "$R_STACK") | FZF_DEFAULT_OPTS="" fzf \
     --listen="$sock" --disabled --no-sort --layout=reverse --delimiter=$'\t' --with-nth=2 \
-    --header="t: tuicr with the questions · o: open in the browser · ctrl-c: quit" \
-    --preview="$(_review_cmd card) {1}" --preview-window="down,85%,wrap,border-top" \
-    --bind="load:refresh-preview" --bind="enter:ignore,esc:ignore" \
+    --header="$header" \
+    --preview="$(_review_cmd card) {1}" --preview-window="$preview_window" \
+    --bind="load:refresh-preview" --bind="esc:ignore" \
+    "${extra[@]}" \
     --bind="t:execute-silent($(_review_cmd open) {1} >>$(printf '%q' "$R_STACK/open.log") 2>&1 &)" \
     --bind="o:execute-silent(gh pr view {1} -R $(printf '%q' "$slug") --web >/dev/null 2>&1 &)" \
     || true
   rm -f "$sock"
+}
+
+# Move the review worktree only. The source checkout is not switched.
+review_select() {
+  _review_load "$@"
+  _review_lock_wait "$R_STACK/context" 30 || die "the review stack is busy gathering; try again"
+  trap '_review_unlock "$R_STACK/context"' EXIT
+  local sha
+  sha="$(jq -r --argjson n "$R_N" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
+  _review_check_worktree "$R_WT"
+  git -C "$R_WT" switch --quiet --detach "$sha" || die "could not detach $R_WT at $sha"
+  jq --argjson n "$R_N" '.current = $n' "$R_STACK/stack.json" | _review_write "$R_STACK/stack.json"
+}
+
+# git diff <parent>...<head>. A tty gets the pager; a pipe does not.
+review_diff() {
+  _review_load "$@"
+  local base head
+  base="$(jq -r --argjson n "$R_N" '.prs[] | select(.number == $n) | .base_sha' "$R_STACK/stack.json")"
+  head="$(jq -r --argjson n "$R_N" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
+  git -C "$R_WT" diff "$base...$head"
 }
 
 # --- open: tuicr, seeded with the questions --------------------------------------
@@ -730,24 +1210,27 @@ review_open() {
   cat "$R_DIR/seeded.json"
 }
 
-# --- bercail review-pr ------------------------------------------------------------
-
 review_usage() {
   cat <<'EOF'
 Usage: bercail review-pr <command>
 
-  <PR url> [--no-run]   gather the PR into its run dir, put a detached worktree
-                        and a Herdr space (Review-<n>_<Repo>) on it, and print
-                        JSON for Shep: thin flags per PR, CI, the run dir. With
-                        no thin flag the decisions pass starts on its own.
-  run [N]               the decisions pass (bstack-pr-review): review.json, run.json
+  <PR url or branch> [--no-run]
+                        gather the whole stack into the root PR's run dir, one
+                        detached sibling worktree, and a Herdr space. Thin PRs
+                        wait; the rest start. JSON lists thin flags and pass
+                        per PR. A single thin PR still waits for: review-pr run
+  run [N]               N reviews that PR, even if thin. No N starts every
+                        non-thin waiting pass in parallel (a stack of one runs
+                        even if thin).
   card [N]              print the PR's card
-  ui                    the Stack tab: fzf, the card in the preview (t, o)
+  ui                    the Stack tab: fzf, the card in the preview
+  select [N]            git switch --detach to that PR in the review worktree
+  diff [N]              git diff <parent>...<head> in a pager
   open [N]              the Review tab with tuicr pr N, seeded with the questions
   dir [N]               print the PR's run dir
 
-run, card, ui, open, and dir take --stack DIR, or find the stack from the review
-worktree they run in. N defaults to the stack's current PR.
+run, card, ui, select, diff, open, and dir take --stack DIR, or find the stack
+from the review worktree they run in. N defaults to the stack's current PR.
 EOF
 }
 
@@ -759,6 +1242,8 @@ cmd_review_pr() {
     card) shift; review_card "$@" ;;
     rows) shift; review_rows "$@" ;;
     ui) shift; review_ui "$@" ;;
+    select) shift; review_select "$@" ;;
+    diff) shift; review_diff "$@" ;;
     open) shift; review_open "$@" ;;
     dir) shift; _review_load "$@"; printf '%s\n' "$R_DIR" ;;
     *) review_start "$@" ;;

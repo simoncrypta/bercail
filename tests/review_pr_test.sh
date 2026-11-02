@@ -56,6 +56,7 @@ SHA8="$(git -C "$TMP_DIR/seed" rev-parse docs)"
 export REMOTE
 git clone -q "$REMOTE" "$TMP_DIR/work/widgets"
 WORK="$TMP_DIR/work/widgets"
+export WORK
 printf '%s\n' '{"disabled_providers":["xai","openai"]}' >"$WORK/opencode.json"
 
 # --- fixtures -------------------------------------------------------------------
@@ -106,9 +107,30 @@ case "$1 $2" in
   "pr diff") cat "$FIX/pr-$3.diff" ;;
   # Pending and failing checks: gh prints the JSON and exits 8.
   "pr checks") [[ -n "${FAKE_NO_CHECKS:-}" ]] && { echo "no checks reported" >&2; exit 1; }
+    if [[ -n "${FAKE_GH_HOLD:-}" ]]; then
+      touch "$LOG/gh.held"
+      while [[ ! -f "$LOG/gh.release" ]]; do sleep 0.05; done
+    fi
     cat "$FIX/checks.json"; exit 8 ;;
   "issue view") cat "$FIX/issue-12.json" ;;
-  "repo clone") git clone -q --bare "$REMOTE" "$4" ;;
+  "repo clone")
+    if [[ " $* " == *" --bare "* ]]; then git clone -q --bare "$REMOTE" "$4"
+    else git clone -q "$REMOTE" "$4"; fi ;;
+  "repo view") echo '{"defaultBranchRef":{"name":"main"}}' ;;
+  "pr list")
+    base="" head=""
+    shift 2
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --base) base="$2"; shift 2 ;;
+        --head) head="$2"; shift 2 ;;
+        --json|--state|--limit|-R) shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    if [[ -n "$head" && -f "$FIX/list-head-$head.json" ]]; then cat "$FIX/list-head-$head.json"
+    elif [[ -n "$base" && -f "$FIX/list-base-$base.json" ]]; then cat "$FIX/list-base-$base.json"
+    else echo '[]'; fi ;;
   *) echo "fake gh: $*" >&2; exit 2 ;;
 esac
 SH
@@ -212,6 +234,32 @@ cat >"$FAKE_BIN/fzf" <<'SH'
 printf '%s\n' "$@" >"$LOG/fzf.argv"
 cat >"$LOG/fzf.stdin"
 SH
+cat >"$FAKE_BIN/gt" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$LOG/gt"
+cwd="" branch="" prev=""
+for a in "$@"; do
+  [[ "$prev" == --cwd ]] && cwd="$a"
+  [[ "$prev" == --branch ]] && branch="$a"
+  prev="$a"
+done
+[[ "$1" == get ]] && branch="$2"
+if [[ -n "$WORK" && ( "$cwd" == "$WORK" || "$cwd" == "$WORK/"* ) ]]; then
+  echo "gt must not run against the source checkout" >&2
+  exit 3
+fi
+case "$1" in
+  get) git -C "$cwd" branch -f "$branch" HEAD ;;
+  log)
+    cur="$(git -C "$cwd" branch --show-current 2>/dev/null || true)"
+    if [[ -n "$cur" && -f "$FIX/gt-log-$cur" ]]; then cat "$FIX/gt-log-$cur"
+    else cat "$FIX/gt-log"; fi ;;
+  branch)
+    [[ -f "$FIX/gt-info-$branch" ]] || { echo "no gt info for $branch" >&2; exit 2; }
+    cat "$FIX/gt-info-$branch" ;;
+  *) echo "fake gt: $*" >&2; exit 2 ;;
+esac
+SH
 chmod +x "$FAKE_BIN"/*
 export PATH="$FAKE_BIN:$PATH"
 export HERDR_APP_BIN="$FAKE_BIN/herdr-app" HC_BIN="$FAKE_BIN/hc"
@@ -266,11 +314,13 @@ test_thin_pr_stops() {
   assert_eq "$dir" "$(jq -r '.prs[0].dir' <<<"$out")" "run dir in the JSON"
   for f in intent.md diff.patch ci.json pr.json; do [[ -s "$dir/$f" ]] || fail "missing $dir/$f"; done
   [[ -s "$REVIEWS/stack-8/stack.json" ]] || fail "missing stack.json"
-  assert_eq 'stack-8 8 8' "$(jq -r '"\(.worktree | split("/")[-2]) \(.root) \(.current)"' "$REVIEWS/stack-8/stack.json")" "stack.json"
-  assert_eq "$SHA8" "$(git -C "$REVIEWS/stack-8/worktree" rev-parse HEAD)" "worktree at the PR head"
-  git -C "$REVIEWS/stack-8/worktree" symbolic-ref -q HEAD >/dev/null && fail "the review worktree must be detached"
-  [[ "$(git --git-dir="$REVIEWS/clone.git" worktree list --porcelain)" == *"$REVIEWS/stack-8/worktree"* ]] || fail "worktree of the private clone"
-  [[ "$(git -C "$WORK" worktree list --porcelain)" != *"$REVIEWS/stack-8/worktree"* ]] || fail "source repo should not acquire review worktrees"
+  local sib="$TMP_DIR/work/widgets.review-8"
+  assert_eq "widgets.review-8 8 8" "$(jq -r '"\(.worktree | split("/")[-1]) \(.root) \(.current)"' "$REVIEWS/stack-8/stack.json")" "stack.json"
+  assert_eq "$sib" "$(jq -r .worktree "$REVIEWS/stack-8/stack.json")" "sibling of the source checkout"
+  assert_eq "$SHA8" "$(git -C "$sib" rev-parse HEAD)" "worktree at the PR head"
+  git -C "$sib" symbolic-ref -q HEAD >/dev/null && fail "the review worktree must be detached"
+  [[ "$(git -C "$WORK" worktree list --porcelain)" == *"$sib"* ]] || fail "worktree registered to the source git"
+  [[ ! -d "$REVIEWS/stack-8/worktree" && ! -d "$REVIEWS/clone.git" ]] || fail "no state-dir review worktree"
   # gh pr checks exited 8 (pending, failing): its JSON is kept.
   assert_eq 3 "$(jq length "$dir/ci.json")" "ci.json from gh pr checks"
   assert_eq '{"pass":1,"pending":1,"fail":1}' "$(jq -c '.prs[0].ci' <<<"$out")" "CI counts"
@@ -289,24 +339,29 @@ test_pass() {
   assert_has "$(<"$dir/intent.md")" "### #12 Uploads fail on flaky networks" "linked issue in intent.md"
   wait_for "$dir/run.json"
   argv="$(<"$LOG/opencode.argv")"
-  assert_eq $'run\n--format\njson\n--agent\nbstack-pr-review\n--model\nxai/grok-4.7' "$(head -7 <<<"$argv")" "opencode argv"
-  assert_has "$argv" "pr-7/$SHA7/" "the prompt names the run dir"
+  assert_eq $'run\n--format\njson\n--agent\nbstack-pr-review' "$(head -5 <<<"$argv")" "opencode argv"
+  grep -q -- '--model' <<<"$argv" && fail "must not pass --model"
+  assert_has "$argv" "pr-7/$SHA7/source/" "the prompt names the snapshot"
   assert_eq "$REVIEWS/stack-7" "$(<"$LOG/opencode.pwd")" "the pass runs in the stack dir, not the reviewed repo"
+  [[ ! -e "$REVIEWS/stack-7/opencode.json" ]] || fail "the author's opencode config must not be copied to the launch cwd"
   assert_eq 'ready ses_fake' "$(jq -r '"\(.status) \(.session_id)"' "$dir/run.json")" "run.json"
   assert_eq '3 decisions, 2 undocumented, 1 unmet, 3 questions' "$(jq -r .summary "$dir/run.json")" "run.json summary"
   assert_eq "bercail.review/v1 7 $SHA7 ses_fake 3" \
     "$(jq -r '"\(.schema) \(.pr) \(.head_sha) \(.session_id) \(.decisions | length)"' "$dir/review.json")" "review.json"
-  [[ ! -L "$REVIEWS/stack-7/worktree/lib/host-link" ]] || fail "the author's symlink must be plain text"
-  assert_eq /etc/hostname "$(cat "$REVIEWS/stack-7/worktree/lib/host-link")" "symlink target, not its contents"
-  assert_eq '' "$(git -C "$REVIEWS/stack-7/worktree" status --porcelain)" "materialized symlinks are clean"
-  assert_eq false "$(git --git-dir="$REVIEWS/clone.git" config core.symlinks)" "symlink policy belongs to the private clone"
+  local sib7="$TMP_DIR/work/widgets.review-7"
+  [[ -L "$sib7/lib/host-link" ]] || fail "the review worktree keeps a normal symlink"
+  [[ ! -L "$dir/source/lib/host-link" ]] || fail "the snapshot must not be a symlink"
+  assert_eq /etc/hostname "$(cat "$dir/source/lib/host-link")" "symlink target, not its contents"
+  [[ -s "$dir/source/lib/retry.sh" ]] || fail "changed text is snapshotted"
+  [[ ! -e "$dir/source/package-lock.json" ]] || fail "lock files are not snapshotted"
+  assert_eq '' "$(git -C "$sib7" status --porcelain)" "the review worktree stays clean"
   [[ "$(git -C "$WORK" config --get core.symlinks || true)" != false ]] || fail "source repo's symlink policy changed"
-  printf 'PASS: a PR with intent: the pass runs bstack-pr-review on the lead model and writes review.json and run.json\n'
+  printf 'PASS: a PR with intent: the pass runs bstack-pr-review with no --model and writes review.json and run.json\n'
 }
 
 test_card() {
   local card
-  card="$(cd "$REVIEWS/stack-7/worktree" && "$BERCAIL" review-pr card)"
+  card="$(cd "$TMP_DIR/work/widgets.review-7" && "$BERCAIL" review-pr card)"
   assert_has "$card" "PR #7  Retry flaky uploads" "card title"
   assert_has "$card" "by dana · main ← retry · ${SHA7:0:7}" "card author, base, head"
   assert_has "$card" "  Uploads fail on flaky networks; the issue asks for retries.  [issue #12]" "why"
@@ -322,7 +377,7 @@ test_card() {
   assert_has "$card" "  fail     lint (CI)  https://ci/lint" "failing check with its link"
   assert_has "$("$BERCAIL" review-pr rows --stack "$REVIEWS/stack-7")" \
     $'7\t#7  Retry flaky uploads  ·  ready: 3 decisions' "rows"
-  assert_eq "$REVIEWS/stack-7/pr-7/$SHA7" "$(cd "$REVIEWS/stack-7/worktree" && "$BERCAIL" review-pr dir)" "dir"
+  assert_eq "$REVIEWS/stack-7/pr-7/$SHA7" "$(cd "$TMP_DIR/work/widgets.review-7" && "$BERCAIL" review-pr dir)" "dir"
   printf 'PASS: card: why, decisions (kind, file:line, stated or undocumented, fits intent), unmet intent, questions, CI\n'
 }
 
@@ -434,6 +489,7 @@ test_ui() {
   assert_has "$argv" "--preview=$ROOT/bin/bercail review-pr card --stack $REVIEWS/stack-7 {1}" "preview is the card"
   assert_has "$argv" "t:execute-silent($ROOT/bin/bercail review-pr open --stack $REVIEWS/stack-7 {1}" "t opens tuicr"
   assert_has "$argv" "o:execute-silent(gh pr view {1} -R github.com/acme/widgets --web" "o opens the browser"
+  grep -q 'review-pr select' <<<"$argv" && fail "a stack of one has no enter bind"
   assert_has "$(<"$LOG/fzf.stdin")" $'7\t#7  Retry flaky uploads' "fzf rows"
   printf 'PASS: ui: fzf with --listen, the card as preview, t and o\n'
 }
@@ -444,15 +500,15 @@ test_space() {
   export FAKE_HERDR_UP=1
   # The checkout is found through a Herdr space on it, not the caller's cwd.
   jq -n --arg f "$WORK" '{spaces: [{id: "s0", name: "Main_Widgets", folder: $f, tabs: []}]}' >"$HERDR_STATE"
+  git -C "$WORK" worktree remove -f "$TMP_DIR/work/widgets.review-7" 2>/dev/null || true
   rm -rf "$REVIEWS/stack-7"
-  git --git-dir="$REVIEWS/clone.git" worktree prune
   : >"$LOG/hc"
   out="$(cd / && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run)"
   assert_eq 's1 waiting' "$(jq -r '"\(.space) \(.pass)"' <<<"$out")" "space id, --no-run"
   assert_eq s1 "$(jq -r .space "$REVIEWS/stack-7/stack.json")" "space in stack.json"
-  assert_eq "Review-7_Widgets $(cd "$REVIEWS/stack-7/worktree" && pwd -P)" \
+  assert_eq "Review-7_Widgets $(cd "$TMP_DIR/work/widgets.review-7" && pwd -P)" \
     "$(jq -r '.spaces[] | select(.id == "s1") | "\(.name) \(.folder)"' "$HERDR_STATE")" "space name and folder"
-  [[ "$(git --git-dir="$REVIEWS/clone.git" worktree list --porcelain)" == *"$REVIEWS/stack-7/worktree"* ]] || fail "worktree of the private clone"
+  [[ "$(git -C "$WORK" worktree list --porcelain)" == *"widgets.review-7"* ]] || fail "sibling worktree of the source"
   argv="$(<"$LOG/stack.argv")"
   assert_eq bash "$(jq -r '.[0]' <<<"$argv")" "Stack tab runs bash -lc"
   assert_has "$(jq -r '.[2]' <<<"$argv")" "exec $ROOT/bin/bercail review-pr ui --stack $REVIEWS/stack-7" "Stack tab runs review-pr ui"
@@ -471,7 +527,7 @@ test_open() {
   local out dir="$REVIEWS/stack-7/pr-7/$SHA7"
   FAKE_OPENCODE=ok "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null
   : >"$LOG/herdr"
-  (cd "$REVIEWS/stack-7/worktree" && FAKE_TUICR_HOLD=1 HC_TERMINAL_ID=t-elsewhere BERCAIL_REVIEW_OPEN_WAIT=5 "$BERCAIL" review-pr open) >"$LOG/open-result" &
+  (cd "$TMP_DIR/work/widgets.review-7" && FAKE_TUICR_HOLD=1 HC_TERMINAL_ID=t-elsewhere BERCAIL_REVIEW_OPEN_WAIT=5 "$BERCAIL" review-pr open) >"$LOG/open-result" &
   local opener=$!
   wait_for "$LOG/tuicr.held"
   assert_has "$("$BERCAIL" review-pr open --stack "$REVIEWS/stack-7" 2>&1 || true)" "already being opened" "a second open cannot duplicate drafts"
@@ -489,7 +545,7 @@ test_open() {
     "$(sed -n 2p "$LOG/tuicr.add")" "a line tuicr can't anchor becomes a review comment"
   assert_eq '{"content":"[AI Agent] The issue asks to log each retry; is that in another PR?","type":"note","username":"bstack"}' \
     "$(sed -n 3p "$LOG/tuicr.add")" "a whole-PR question has no file"
-  (cd "$REVIEWS/stack-7/worktree" && HC_TERMINAL_ID=t-stack BERCAIL_REVIEW_OPEN_WAIT=5 "$BERCAIL" review-pr open) >/dev/null 2>&1
+  (cd "$TMP_DIR/work/widgets.review-7" && HC_TERMINAL_ID=t-stack BERCAIL_REVIEW_OPEN_WAIT=5 "$BERCAIL" review-pr open) >/dev/null 2>&1
   assert_eq 3 "$(wc -l <"$LOG/tuicr.add" | tr -d ' ')" "opening again does not seed twice"
   printf 'PASS: open: bercail-desk.review-pr-N, waits for tuicr, seeds [AI Agent] notes as bstack, ids in seeded.json\n'
   unset FAKE_HERDR_UP
@@ -502,8 +558,9 @@ test_clone_and_no_checks() {
   REVIEWS="$XDG_STATE_HOME/bercail/reviews/github.com/acme/remote-only"
   mkdir -p "$REVIEWS"
   out="$(cd / && FAKE_NO_CHECKS=1 "$BERCAIL" review-pr https://github.com/acme/remote-only/pull/8)"
-  [[ -d "$REVIEWS/clone.git" ]] || fail "no blobless clone"
-  assert_eq "$SHA8" "$(git -C "$REVIEWS/stack-8/worktree" rev-parse HEAD)" "worktree from the clone"
+  [[ -d "$HOME/Work/remote-only" ]] || fail "no fallback checkout at ~/Work/remote-only"
+  [[ ! -d "$REVIEWS/clone.git" && ! -d "$REVIEWS/stack-8/worktree" ]] || fail "fallback must not live in the state dir"
+  assert_eq "$SHA8" "$(git -C "$HOME/Work/remote-only.review-8" rev-parse HEAD)" "sibling of the fallback checkout"
   # No JSON from gh pr checks: the rollup from gh pr view stands in.
   assert_eq '[{"name":"lint","workflow":"CI","state":"FAILURE","link":"https://ci/lint","bucket":"fail"}]' \
     "$(jq -c . "$REVIEWS/stack-8/pr-8/$SHA8/ci.json")" "ci.json from statusCheckRollup"
@@ -518,16 +575,16 @@ test_clone_and_no_checks() {
   ln -s "$$" "$REVIEWS/stack-8/context.lock"
   assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/remote-only/pull/8 2>&1 || true)" \
     "the review stack is busy" "the worktree does not move under a live pass"
-  assert_eq "$SHA8" "$(git -C "$REVIEWS/stack-8/worktree" rev-parse HEAD)" "the worktree stays"
+  assert_eq "$SHA8" "$(git -C "$HOME/Work/remote-only.review-8" rev-parse HEAD)" "the worktree stays"
   rm -f "$REVIEWS/stack-8/context.lock"
   (cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/remote-only/pull/8) >/dev/null
-  assert_eq "$sha" "$(git -C "$REVIEWS/stack-8/worktree" rev-parse HEAD)" "the worktree moves to the new head"
+  assert_eq "$sha" "$(git -C "$HOME/Work/remote-only.review-8" rev-parse HEAD)" "the worktree moves to the new head"
   [[ -s "$REVIEWS/stack-8/pr-8/$sha/intent.md" ]] || fail "a run dir for the new head"
   # A pass queued for the old head does not review the new one.
   "$BERCAIL" review-pr run 8 --head "$SHA8" --stack "$REVIEWS/stack-8" >/dev/null && fail "a pass for a head the worktree left"
-  assert_has "$(jq -r .reason "$REVIEWS/stack-8/pr-8/$SHA8/run.json")" "no longer at ${SHA8:0:7}" "the old head's pass fails"
+  assert_has "$(jq -r .reason "$REVIEWS/stack-8/pr-8/$SHA8/run.json")" "not the gathered head" "the old head's pass fails"
   [[ ! -e "$REVIEWS/stack-8/pr-8/$sha/run.json" ]] || fail "the new head gets no run.json from it"
-  printf 'PASS: no checkout around: a blobless clone; no gh pr checks JSON: the rollup; a new head moves the worktree in its own repo\n'
+  printf 'PASS: no checkout around: ~/Work/<repo> plus a sibling; no gh pr checks JSON: the rollup; a queued head does not review a newer one\n'
 }
 
 test_help() {
@@ -552,6 +609,327 @@ test_agent_permissions() {
   printf 'PASS: bstack-pr-review: edit, subagents, shell, and reads outside the stack dir denied\n'
 }
 
+test_stacks() {
+  local seed="$TMP_DIR/seed" main_sha src_head src_branch src_status src_cfg other
+  main_sha="$(git -C "$seed" rev-parse main)"
+  src_head="$(git -C "$WORK" rev-parse HEAD)"
+  src_branch="$(git -C "$WORK" branch --show-current)"
+  src_status="$(git -C "$WORK" status --porcelain)"
+  src_cfg="$(git -C "$WORK" config --local --list | sort)"
+  printf 'sentinel\n' >"$WORK/.git/FETCH_HEAD"
+  other="$TMP_DIR/work/widgets.other"
+  git -C "$WORK" worktree add --detach -q "$other" HEAD
+  local other_sha
+  other_sha="$(git -C "$other" rev-parse HEAD)"
+
+  git -C "$seed" switch -q main
+  git -C "$seed" switch -qc s1
+  mkdir -p "$seed/lib"
+  printf 'S1ONLY\n' >"$seed/lib/s1.sh"
+  git -C "$seed" add lib/s1.sh && git -C "$seed" commit -qm s1
+  local sha21
+  sha21="$(git -C "$seed" rev-parse HEAD)"
+  git -C "$seed" push -q "$REMOTE" HEAD:refs/pull/21/head
+  git -C "$seed" switch -qc s2
+  printf 'S2ONLY\n' >"$seed/lib/s2.sh"
+  ln -s /etc/hostname "$seed/lib/s2-link"
+  git -C "$seed" add lib/s2.sh lib/s2-link && git -C "$seed" commit -qm s2
+  local sha22
+  sha22="$(git -C "$seed" rev-parse HEAD)"
+  git -C "$seed" push -q "$REMOTE" HEAD:refs/pull/22/head
+  git -C "$seed" switch -qc s3
+  printf 'S3ONLY\n' >"$seed/lib/s3.sh"
+  printf '{}\n' >"$seed/package-lock.json"
+  git -C "$seed" add lib/s3.sh package-lock.json && git -C "$seed" commit -qm s3
+  local sha23
+  sha23="$(git -C "$seed" rev-parse HEAD)"
+  git -C "$seed" push -q "$REMOTE" HEAD:refs/pull/23/head
+
+  pr_stack() { # n sha title body base head base_sha
+    jq -n --argjson n "$1" --arg sha "$2" --arg title "$3" --arg body "$4" --arg base "$5" --arg head "$6" --arg bsha "$7" '{
+      number: $n, title: $title, body: $body, url: "https://github.com/acme/widgets/pull/\($n)",
+      author: {login: "dana"}, isDraft: false, baseRefName: $base, headRefName: $head,
+      headRefOid: $sha, baseRefOid: $bsha, closingIssuesReferences: [],
+      files: [{path: "lib/\($head).sh", additions: 1, deletions: 0, changeType: "ADDED"}],
+      statusCheckRollup: []}' >"$FIX/pr-$1.json"
+  }
+  pr_stack 21 "$sha21" "Stack one" "Adds the first slice." main s1 "$main_sha"
+  pr_stack 22 "$sha22" "Stack two" "" s1 s2 "$sha21"
+  pr_stack 23 "$sha23" "Stack three" "Adds the third slice." s2 s3 "$sha22"
+  local linked='[{"number":12,"url":"https://github.com/acme/widgets/issues/12"}]'
+  for n in 21 23; do
+    jq --argjson c "$linked" '.closingIssuesReferences = $c' "$FIX/pr-$n.json" >"$FIX/pr-$n.json.new"
+    mv "$FIX/pr-$n.json.new" "$FIX/pr-$n.json"
+  done
+  jq -n --argjson n 21 --arg base main --arg head s1 '[{number:$n, baseRefName:$base, headRefName:$head, url:"https://github.com/acme/widgets/pull/21"}]' >"$FIX/list-head-s1.json"
+  jq -n --argjson n 22 --arg base s1 --arg head s2 '[{number:$n, baseRefName:$base, headRefName:$head, url:"https://github.com/acme/widgets/pull/22"}]' >"$FIX/list-head-s2.json"
+  jq -n --argjson n 22 --arg base s1 --arg head s2 '[{number:$n, baseRefName:$base, headRefName:$head, url:"https://github.com/acme/widgets/pull/22"}]' >"$FIX/list-base-s1.json"
+  jq -n --argjson n 23 --arg base s2 --arg head s3 '[{number:$n, baseRefName:$base, headRefName:$head, url:"https://github.com/acme/widgets/pull/23"}]' >"$FIX/list-base-s2.json"
+
+  local wreviews="$XDG_STATE_HOME/bercail/reviews/github.com/acme/widgets"
+  local out stack="$wreviews/stack-21" sib="$TMP_DIR/work/widgets.review-21"
+  out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/22 --no-run)"
+  assert_eq "$stack" "$(jq -r .stack <<<"$out")" "middle PR uses the root run dir"
+  assert_eq "$sib" "$(jq -r .worktree <<<"$out")" "middle PR uses the root sibling"
+  assert_eq '21 22 23' "$(jq -r '[.prs[].number] | join(" ")' "$stack/stack.json")" "root-to-tip order"
+  assert_eq "$main_sha $sha21 $sha22" "$(jq -r '[.prs[].base_sha] | join(" ")' "$stack/stack.json")" "base shas: trunk, then parent heads"
+  assert_eq "$sha21" "$(git -C "$sib" rev-parse HEAD)" "worktree starts at the root head"
+  assert_has "$(<"$stack/stack.md")" "1. #21" "stack.md order"
+  assert_eq '[] ["empty_body","no_linked_issue"] []' "$(jq -r '[.prs[].thin | tojson] | join(" ")' <<<"$out")" "thin is per PR"
+  assert_eq 'waiting waiting waiting' "$(jq -r '[.prs[].pass] | join(" ")' <<<"$out")" "--no-run waits"
+  local mid
+  mid="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/23 --no-run)"
+  assert_eq "$stack $sib" "$(jq -r '"\(.stack) \(.worktree)"' <<<"$mid")" "top PR is the same space"
+  mid="$(cd "$WORK" && "$BERCAIL" review-pr s2 --no-run)"
+  assert_eq "$stack" "$(jq -r .stack <<<"$mid")" "branch input is the same stack"
+  assert_has "$(<"$stack/pr-22/$sha22/diff.patch")" "S2ONLY" "diff vs parent includes this PR"
+  grep -q S1ONLY "$stack/pr-22/$sha22/diff.patch" && fail "diff vs parent must not be the trunk diff"
+  [[ ! -e "$stack/pr-23/$sha23/source/package-lock.json" ]] || fail "lock file not snapshotted"
+  [[ -s "$stack/pr-22/$sha22/source/lib/s2.sh" ]] || fail "parent diff snapshot"
+  env PAGER=cat "$BERCAIL" review-pr diff 22 --stack "$stack" >"$LOG/diff22"
+  assert_has "$(<"$LOG/diff22")" "S2ONLY" "d is git diff parent...head"
+  "$BERCAIL" review-pr select 23 --stack "$stack"
+  assert_eq "$sha23" "$(git -C "$sib" rev-parse HEAD)" "enter detaches the sibling"
+  assert_eq 23 "$(jq -r .current "$stack/stack.json")" "current follows select"
+  assert_eq "$src_head" "$(git -C "$WORK" rev-parse HEAD)" "select does not move the source"
+  # A failed regather must not publish a new stack.json that resets current to the root.
+  "$BERCAIL" review-pr select 22 --stack "$stack"
+  assert_eq "$sha22" "$(git -C "$sib" rev-parse HEAD)" "select middle"
+  cp "$stack/stack.json" "$LOG/stack-before-dirty.json"
+  printf 'note\n' >"$sib/review-pr-dirty-note"
+  assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/22 --no-run 2>&1 || true)" \
+    "local changes" "dirty review worktree refuses regather"
+  cmp -s "$LOG/stack-before-dirty.json" "$stack/stack.json" || fail "failed gather rewrote stack.json"
+  assert_eq 22 "$(jq -r .current "$stack/stack.json")" "current stays on the selected middle"
+  assert_eq "$sha22" "$(git -C "$sib" rev-parse HEAD)" "dirty refuse leaves the worktree"
+  rm -f "$sib/review-pr-dirty-note"
+
+  sha21="$(jq -r '.prs[0].head_sha' "$stack/stack.json")"
+  sha22="$(jq -r '.prs[1].head_sha' "$stack/stack.json")"
+  sha23="$(jq -r '.prs[2].head_sha' "$stack/stack.json")"
+  rm -f "$LOG/opencode.child" "$LOG/opencode.release"
+  FAKE_HOLD=1 "$BERCAIL" review-pr run --stack "$stack" >"$LOG/multi-run" 2>"$LOG/multi-err" &
+  local launcher=$!
+  sleep 1
+  [[ -L "$stack/pr-21/$sha21/pass.lock" ]] || {
+    echo "MULTI out=$(cat "$LOG/multi-run" 2>/dev/null) err=$(cat "$LOG/multi-err" 2>/dev/null)" >&2
+    find "$stack" -name 'pass.lock' -o -name 'pass.err' -o -name 'run.json' >&2
+    fail "parallel run did not lock PR 21"
+  }
+  sleep 0.5
+  [[ -L "$stack/pr-23/$sha23/pass.lock" ]] || {
+    echo "23 missing sha=$sha23" >&2
+    find "$stack/pr-23" -maxdepth 2 -type d -o -name 'pass.*' -o -name 'run.json' >&2
+    echo "err23=$(cat "$stack"/pr-23/*/pass.err 2>/dev/null)" >&2
+    fail "parallel run did not lock PR 23"
+  }
+  [[ ! -L "$stack/pr-22/$sha22/pass.lock" ]] || fail "a thin PR is not started by run without N"
+  [[ ! -L "$stack/context.lock" ]] || fail "passes must not hold the stack lock"
+  touch "$LOG/opencode.release"
+  wait "$launcher"
+  assert_eq ready "$(jq -r .status "$stack/pr-21/$sha21/run.json")" "parallel pass 21"
+  assert_eq ready "$(jq -r .status "$stack/pr-23/$sha23/run.json")" "parallel pass 23"
+  [[ ! -e "$stack/pr-22/$sha22/run.json" ]] || fail "thin PR still waiting"
+  "$BERCAIL" review-pr run 22 --stack "$stack" >/dev/null
+  assert_eq ready "$(jq -r .status "$stack/pr-22/$sha22/run.json")" "explicit run of a thin PR"
+
+  "$BERCAIL" review-pr ui --stack "$stack"
+  assert_has "$(<"$LOG/fzf.argv")" "review-pr select" "multi fzf enter"
+  assert_has "$(<"$LOG/fzf.argv")" "review-pr diff" "multi fzf d"
+  assert_has "$(<"$LOG/fzf.argv")" "Stack one" "multi header from stack.md"
+
+  pr_stack 41 "$main_sha" "Fork root" "Root of a fork." main fork-a "$main_sha"
+  pr_stack 42 "$main_sha" "Fork mid" "Middle of a fork." fork-a up-b "$main_sha"
+  pr_stack 44 "$main_sha" "Fork leaf" "Leaf of a fork." up-b up-b2 "$main_sha"
+  jq -n '[{number:42, baseRefName:"fork-a", headRefName:"up-b", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/42"},
+          {number:43, baseRefName:"fork-a", headRefName:"up-c", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/43"}]' >"$FIX/list-base-fork-a.json"
+  jq -n '[{number:41, baseRefName:"main", headRefName:"fork-a", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/41"}]' >"$FIX/list-head-fork-a.json"
+  jq -n '[{number:42, baseRefName:"fork-a", headRefName:"up-b", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/42"}]' >"$FIX/list-head-up-b.json"
+  jq -n '[{number:44, baseRefName:"up-b", headRefName:"up-b2", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/44"}]' >"$FIX/list-base-up-b.json"
+  # Middle and leaf first, so a partial stack-41 cannot already exist.
+  local fork_out
+  fork_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/42 --no-run 2>"$LOG/fork42.err")"
+  assert_has "$(<"$LOG/fork42.err")" "branched stack; reviewing PR #42 alone" "fork entered from the middle"
+  assert_eq '42' "$(jq -r '[.prs[].number] | join(" ")' <<<"$fork_out")" "middle fork is only itself"
+  assert_eq "$wreviews/stack-42" "$(jq -r .stack <<<"$fork_out")" "middle fork run dir is its own"
+  [[ ! -f "$wreviews/stack-41/stack.json" ]] || fail "middle fork must not write the root stack"
+  fork_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/44 --no-run 2>"$LOG/fork44.err")"
+  assert_has "$(<"$LOG/fork44.err")" "branched stack; reviewing PR #44 alone" "fork entered from a leaf"
+  assert_eq '44' "$(jq -r '[.prs[].number] | join(" ")' <<<"$fork_out")" "leaf fork is only itself"
+  assert_eq "$wreviews/stack-44" "$(jq -r .stack <<<"$fork_out")" "leaf fork run dir is its own"
+  [[ ! -f "$wreviews/stack-41/stack.json" ]] || fail "leaf fork must not write the root stack"
+  fork_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/41 --no-run 2>"$LOG/fork41.err")"
+  assert_has "$(<"$LOG/fork41.err")" "branched stack; reviewing PR #41 alone" "fork entered from the root"
+  assert_eq '41' "$(jq -r '[.prs[].number] | join(" ")' <<<"$fork_out")" "root fork is only itself"
+  assert_eq "$wreviews/stack-41" "$(jq -r .stack <<<"$fork_out")" "root fork run dir is its own"
+  # Two open PRs with the same head: same standalone fallback, not a hard error.
+  pr_stack 47 "$main_sha" "Twin" "Two parents." twin-head feat47 "$main_sha"
+  jq -n '[{number:48, baseRefName:"main", headRefName:"twin-head", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/48"},
+          {number:49, baseRefName:"main", headRefName:"twin-head", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/49"}]' >"$FIX/list-head-twin-head.json"
+  fork_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/47 --no-run 2>"$LOG/fork47.err")"
+  assert_has "$(<"$LOG/fork47.err")" "branched stack; reviewing PR #47 alone" "duplicate heads fall back to the entry"
+  assert_eq '47' "$(jq -r '[.prs[].number] | join(" ")' <<<"$fork_out")" "duplicate heads review only the entry"
+
+  # Trunk is origin/HEAD. A cross-repo PR whose head is also named main is not a parent
+  # and is not walked up from. Other PRs based on main are not children of develop.
+  jq -n --arg sha "$main_sha" '[{number:99, baseRefName:"main", headRefName:"other", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/99"},
+    {number:71, baseRefName:"main", headRefName:"feat", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/71"}]' >"$FIX/list-base-main.json"
+  jq -n --arg sha "$main_sha" '[{number:72, baseRefName:"main", headRefName:"main", isCrossRepository:true, url:"https://github.com/acme/widgets/pull/72"}]' >"$FIX/list-head-main.json"
+  pr_stack 71 "$main_sha" "Internal feat" "An internal PR." main feat "$main_sha"
+  pr_stack 72 "$main_sha" "Cross fork" "From a fork." main main "$main_sha"
+  pr_stack 73 "$main_sha" "Develop" "Based on develop." main develop "$main_sha"
+  jq '.isCrossRepository = false' "$FIX/pr-71.json" >"$FIX/pr-71.json.new" && mv "$FIX/pr-71.json.new" "$FIX/pr-71.json"
+  jq '.isCrossRepository = true' "$FIX/pr-72.json" >"$FIX/pr-72.json.new" && mv "$FIX/pr-72.json.new" "$FIX/pr-72.json"
+  jq '.isCrossRepository = false' "$FIX/pr-73.json" >"$FIX/pr-73.json.new" && mv "$FIX/pr-73.json.new" "$FIX/pr-73.json"
+  local gh_before cross_out
+  gh_before="$(wc -l <"$LOG/gh")"
+  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/71 --no-run)"
+  assert_eq '71' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "internal feat→main is its own stack"
+  tail -n +$((gh_before + 1)) "$LOG/gh" | grep -q -- '--head main' && fail "down walk must not probe --head trunk"
+  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/72 --no-run)"
+  assert_eq '72' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "a cross-repo PR is a stack of one"
+  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/73 --no-run)"
+  assert_eq '73' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "develop→main does not collect other main PRs"
+  # A unique cross-repo child of a same-repo branch stays in the stack.
+  pr_stack 81 "$main_sha" "Feat parent" "Parent." main feat81 "$main_sha"
+  pr_stack 82 "$main_sha" "Fork child" "Child." feat81 forkfeat "$main_sha"
+  jq '.isCrossRepository = true' "$FIX/pr-82.json" >"$FIX/pr-82.json.new" && mv "$FIX/pr-82.json.new" "$FIX/pr-82.json"
+  jq -n '[{number:81, baseRefName:"main", headRefName:"feat81", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/81"}]' >"$FIX/list-head-feat81.json"
+  jq -n '[{number:82, baseRefName:"feat81", headRefName:"forkfeat", isCrossRepository:true, url:"https://github.com/acme/widgets/pull/82"}]' >"$FIX/list-base-feat81.json"
+  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/82 --no-run)"
+  assert_eq '81 82' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "unique cross-repo child stays, entered from the child"
+  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/81 --no-run)"
+  assert_eq '81 82' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "unique cross-repo child stays, entered from the parent"
+  # Root base is develop, not the default main. No open PR has head develop.
+  pr_stack 91 "$main_sha" "Release" "Release train." develop rel91 "$main_sha"
+  pr_stack 92 "$main_sha" "On release" "Child of the release." rel91 rel92 "$main_sha"
+  jq -n '[{number:91, baseRefName:"develop", headRefName:"rel91", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/91"}]' >"$FIX/list-head-rel91.json"
+  jq -n '[{number:92, baseRefName:"rel91", headRefName:"rel92", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/92"}]' >"$FIX/list-base-rel91.json"
+  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/91 --no-run)"
+  assert_eq '91 92' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "develop root entered from the root"
+  assert_eq develop "$(jq -r .trunk "$wreviews/stack-91/stack.json")" "trunk is the root base, not default main"
+  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/92 --no-run)"
+  assert_eq '91 92' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "develop root entered from the child"
+  assert_eq develop "$(jq -r .trunk "$wreviews/stack-91/stack.json")" "child entry keeps trunk develop"
+
+  jq -n --arg sha "$sha21" '{number:51, title:"cycle a", body:"a", url:"https://github.com/acme/widgets/pull/51",
+    author:{login:"dana"}, isDraft:false, baseRefName:"cycle-b", headRefName:"cycle-a",
+    headRefOid:$sha, baseRefOid:$sha, closingIssuesReferences:[], files:[], statusCheckRollup:[]}' >"$FIX/pr-51.json"
+  jq -n --arg sha "$sha22" '{number:52, title:"cycle b", body:"b", url:"https://github.com/acme/widgets/pull/52",
+    author:{login:"dana"}, isDraft:false, baseRefName:"cycle-a", headRefName:"cycle-b",
+    headRefOid:$sha, baseRefOid:$sha, closingIssuesReferences:[], files:[], statusCheckRollup:[]}' >"$FIX/pr-52.json"
+  jq -n '[{number:52, baseRefName:"cycle-a", headRefName:"cycle-b", url:"https://github.com/acme/widgets/pull/52"}]' >"$FIX/list-head-cycle-b.json"
+  jq -n '[{number:51, baseRefName:"cycle-b", headRefName:"cycle-a", url:"https://github.com/acme/widgets/pull/51"}]' >"$FIX/list-head-cycle-a.json"
+  assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/51 2>&1 || true)" \
+    "cycle" "a cycle is an error"
+
+  rm -f "$LOG/gh.held" "$LOG/gh.release" "$LOG/opencode.release"
+  FAKE_GH_HOLD=1 "$BERCAIL" review-pr https://github.com/acme/widgets/pull/21 --no-run >"$LOG/gather-hold" &
+  local holder=$!
+  wait_for "$LOG/gh.held"
+  [[ -L "$stack/context.lock" ]] || fail "gather did not take the context lock"
+  assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/21 --no-run 2>&1 || true)" \
+    "review stack is busy" "a second gather waits"
+  touch "$LOG/gh.release"
+  wait "$holder"
+  unset FAKE_GH_HOLD
+
+  # Graphite: five PRs, entered from the middle. gt runs only in a private clone.
+  local i gsha prev="$main_sha"
+  git -C "$seed" switch -q main
+  for i in 1 2 3 4 5; do
+    git -C "$seed" switch -qc "g$i"
+    printf 'G%s\n' "$i" >"$seed/g$i.txt"
+    git -C "$seed" add "g$i.txt" && git -C "$seed" commit -qm "g$i"
+    gsha="$(git -C "$seed" rev-parse HEAD)"
+    git -C "$seed" push -q "$REMOTE" "HEAD:refs/pull/$((30 + i))/head"
+    local base_name=main
+    [[ "$i" -gt 1 ]] && base_name="g$((i - 1))"
+    pr_stack $((30 + i)) "$gsha" "Graphite $i" "Graphite slice $i." \
+      "$base_name" "g$i" "$prev"
+    prev="$gsha"
+  done
+  jq '.body = ""' "$FIX/pr-32.json" >"$FIX/pr-32.json.new" && mv "$FIX/pr-32.json.new" "$FIX/pr-32.json"
+  for n in 31 33 34 35; do
+    jq --argjson c "$linked" '.closingIssuesReferences = $c' "$FIX/pr-$n.json" >"$FIX/pr-$n.json.new"
+    mv "$FIX/pr-$n.json.new" "$FIX/pr-$n.json"
+  done
+  cat >"$FIX/gt-log" <<'EOF'
+◯                        g5
+◯                        g4
+◉                        g3
+◯                        g2
+◯                        g1
+◯                        main
+EOF
+  # gt 1.8.6 leaves Children: empty even for a parent. The log drawing is the fork check.
+  local name parent n
+  for i in 1 2 3 4 5; do
+    name="g$i"
+    n=$((30 + i))
+    if [[ "$i" -eq 1 ]]; then parent=main; else parent="g$((i - 1))"; fi
+    printf '%s\n\nPR #%s graphite\n\nParent: %s\nChildren:\n\ncommit abc\n' "$name" "$n" "$parent" >"$FIX/gt-info-$name"
+  done
+  local gcfg
+  gcfg="$(git -C "$WORK" rev-parse --path-format=absolute --git-common-dir)/.graphite_repo_config"
+  printf '%s\n' '{"trunk":"main"}' >"$gcfg"
+  : >"$LOG/gt"
+  out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/33 --no-run)"
+  rm -f "$gcfg"
+  assert_eq "$wreviews/stack-31" "$(jq -r .stack <<<"$out")" "graphite middle PR uses the root"
+  assert_eq '31 32 33 34 35' "$(jq -r '[.prs[].number] | join(" ")' "$wreviews/stack-31/stack.json")" "five-PR graphite stack"
+  assert_eq '["empty_body","no_linked_issue"]' "$(jq -c '.prs[1].thin' <<<"$out")" "one thin PR in the stack"
+  grep -q -- '--no-checkout' "$LOG/gt" || fail "gt get --no-checkout"
+  grep -q -- '--remote-upstack' "$LOG/gt" || fail "gt get --remote-upstack"
+  grep -q -- '--no-restack' "$LOG/gt" || fail "gt get --no-restack"
+  grep -q 'get g1 ' "$LOG/gt" || fail "gt get of the stack root when the entry is not the root"
+  grep -q 'gt-sync' "$LOG/gt" || fail "gt runs in the private clone"
+  grep -q "$WORK" "$LOG/gt" && fail "gt must not run against the source"
+  # A log from a leaf omits a sibling below it. The second log, from the root, shows the fork.
+  printf '%s\n' '{"trunk":"main"}' >"$gcfg"
+  local gt_before
+  gt_before="$(wc -l <"$LOG/gt")"
+  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/72 --no-run)"
+  assert_eq '72' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "fork entry in a Graphite repo uses the GitHub walk"
+  assert_eq "$gt_before" "$(wc -l <"$LOG/gt")" "gt must not sync a foreign head branch"
+  pr_stack 61 "$main_sha" "gt leaf" "Leaf of a graphite fork." groot gleaf "$main_sha"
+  cat >"$FIX/gt-log-gleaf" <<'EOF'
+◯                        gleaf
+◯                        groot
+◯                        main
+EOF
+  cat >"$FIX/gt-log-groot" <<'EOF'
+◯                        gleaf
+│ ◯                      gsib
+◯─┘                      groot
+◯                        main
+EOF
+  fork_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/61 --no-run 2>"$LOG/gtfork.err")"
+  assert_has "$(<"$LOG/gtfork.err")" "branched stack; reviewing PR #61 alone" "graphite fork entered from a leaf"
+  assert_eq '61' "$(jq -r '[.prs[].number] | join(" ")' <<<"$fork_out")" "graphite fork is only the entry"
+  assert_eq "$wreviews/stack-61" "$(jq -r .stack <<<"$fork_out")" "graphite fork run dir is the entry"
+  grep -q 'get groot ' "$LOG/gt" || fail "gt get of the graphite root after a leaf entry"
+  rm -f "$gcfg"
+  local sync="$XDG_STATE_HOME/bercail/reviews/github.com/acme/widgets/gt-sync"
+  [[ "$(git -C "$sync" rev-parse --path-format=absolute --git-common-dir)" != "$(git -C "$WORK" rev-parse --path-format=absolute --git-common-dir)" ]] \
+    || fail "private clone must not share the source git dir"
+
+  assert_eq "$src_head" "$(git -C "$WORK" rev-parse HEAD)" "source HEAD unchanged"
+  assert_eq "$src_branch" "$(git -C "$WORK" branch --show-current)" "source branch unchanged"
+  assert_eq "$src_status" "$(git -C "$WORK" status --porcelain)" "source status unchanged"
+  assert_eq "$src_cfg" "$(git -C "$WORK" config --local --list | sort)" "source config unchanged"
+  assert_eq "$other_sha" "$(git -C "$other" rev-parse HEAD)" "another worktree is untouched"
+  assert_eq sentinel "$(cat "$WORK/.git/FETCH_HEAD")" "FETCH_HEAD is not rewritten"
+  printf 'PASS: generic 3-PR stack, graphite 5-PR stack, middle PR, thin, parallel passes, ambiguous and cycle refused\n'
+
+  printf 'occupied\n' >"$HOME/Work/occupied"
+  out="$(cd / && "$BERCAIL" review-pr https://github.com/acme/occupied/pull/8 --no-run)"
+  [[ -f "$HOME/Work/occupied" && "$(cat "$HOME/Work/occupied")" == occupied ]] || fail "fallback must not overwrite"
+  [[ -d "$HOME/Work/acme-occupied" ]] || fail "fallback uses ~/Work/<owner>-<repo> when ~/Work/<repo> is taken"
+  assert_eq "$(jq -r .headRefOid "$FIX/pr-8.json")" "$(git -C "$HOME/Work/acme-occupied.review-8" rev-parse HEAD)" "sibling of the alternate checkout"
+  printf 'PASS: no-source fallback is ~/Work/<repo>, or ~/Work/<owner>-<repo> if that path is taken\n'
+}
+
 test_thin_rules
 test_thin_pr_stops
 test_pass
@@ -562,5 +940,6 @@ test_ui
 test_space
 test_open
 test_clone_and_no_checks
+test_stacks
 test_help
 test_agent_permissions

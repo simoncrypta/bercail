@@ -30,10 +30,10 @@ Post-install CLI (bercail):
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
-  review-pr     Someone else's PR by intent and decisions: review-pr <PR url> gathers it
-                into a run dir, a detached worktree, and a Review-<n>_<Repo> space whose
-                Stack tab shows the decisions card (t: tuicr seeded with [AI Agent]
-                questions). Then: run | card | ui | open | dir
+  review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
+                gathers every PR, with one detached sibling worktree and a Stack tab.
+                Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,
+                t: tuicr with [AI Agent] drafts. Then: run | card | ui | select | diff | open | dir
 
 Shell commands:
   dev, d        Show the Herdr app space for $PWD and start its desk agent

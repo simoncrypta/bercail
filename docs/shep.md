@@ -17,7 +17,7 @@ Bercail's workflow (beads issues, named stages, result files, review when a desk
 
 Shep runs the same workflow whichever harness works the issue.
 
-To review someone else's PR there is no issue and no stage: Shep runs `bercail review-pr <PR url>` and reads the JSON it prints. With no `thin` flag, Shep states each PR's intent and CI; the decisions pass has already started, and `run.json` in the PR's run dir says when it is `ready`. With a flag, Shep names the PR and the flag and asks you whether to review anyway (`bercail review-pr run --stack DIR`) or ask the author. See [review](review.md#someone-elses-pr-bercail-review-pr).
+To review someone else's PR there is no issue and no stage: Shep runs `bercail review-pr <PR url-or-branch>` and reads the printed JSON for the whole stack. Shep states each PR's intent and CI; non-thin PRs' decisions passes have already started in parallel, and each PR's `run.json` says when it is `ready`. Read `prs[].thin` and `prs[].pass`: only flagged PRs wait. For each flagged PR, ask whether to review anyway (`bercail review-pr run N --stack DIR`) or ask the author. A thin PR must not hold up the rest of the stack. See [review](review.md#someone-elses-pr-bercail-review-pr).
 
 Bercail works without Shep, but Shep is the intended orchestrator. To do Shep's part by hand, write the issue with `bd create`, then run the same `handoff-spawn` command.
 
