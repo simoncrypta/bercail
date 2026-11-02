@@ -172,14 +172,20 @@ const state = readFileSync(stateFile, "utf8");
 const S = JSON.parse(state);
 globalThis.herdr = { state, execs: [], runs: [], notes: [], files: {}, props: { stack: S.stack, bercail: "/bin/bercail" } };
 const urls = [];
-const cx = {
-  timer: { every: (_ms, f) => { herdr.timer = f; } },
-  focus_handle: () => ({ focus() {}, is_focused: () => true }),
-  spawn: (f) => f(cx),
-  notify() {},
-  open_url: (u) => urls.push(u),
-  stop_propagation() {},
+// As in gpui, a handler's cx ends when the handler returns; a task gets its own.
+const context = () => {
+  const c = {
+    live: true,
+    timer: { every: (_ms, f) => { herdr.timer = f; } },
+    focus_handle: () => ({ focus() {}, is_focused: () => true }),
+    spawn: (f) => f(context()),
+    notify() { if (!c.live) throw new Error("a cx used after its handler returned"); },
+    open_url: (u) => urls.push(u),
+    stop_propagation() {},
+  };
+  return c;
 };
+const cx = context();
 const fail = (m) => { console.error(`FAIL: ${m}`); process.exit(1); };
 const v = new Review();
 v.init({}, cx);
@@ -189,7 +195,7 @@ if (!dump(v.render(cx)).includes(`PR #${S.current}  ${S.prs.find((p) => p.number
   fail(`the card opens on the current PR, #${S.current}`);
 const shots = [];
 const shot = (label) => shots.push(`== ${label}`, ...dump(v.render(cx)));
-const key = (k) => v.key({ keystroke: k }, cx);
+const key = (k) => { const c = context(); v.key({ keystroke: k }, c); c.live = false; };
 const last = () => herdr.execs.at(-1).join(" ");
 // A detached command: the wrapper, its log, then the command line.
 const detached = (log, cmd) => { const l = last(); return l.startsWith("sh -c ") && l.includes(` ${log} `) && l.endsWith(cmd); };

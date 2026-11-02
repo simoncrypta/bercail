@@ -219,7 +219,8 @@ export default class Review extends View {
     if (!s || !pr) return;
     const self = props().bercail || "bercail";
     const n = String(pr.number);
-    const fail = (what) => (e) => {
+    // cx: the spawned task's, never this key handler's (it ends when the handler returns).
+    const fail = (what, cx) => (e) => {
       this.say(`${what} failed: ${e?.message ?? e}`, cx);
       notify({ title: `bercail: ${what}`, body: String(e?.message ?? e), level: "error" });
     };
@@ -239,21 +240,21 @@ export default class Review extends View {
             const r = await exec(self, ["review-pr", "select", n, "--stack", s.stack]);
             this.say(r.code === 0 ? `the review worktree is at #${n}` : r.stderr.trim(), cx);
           } catch (e) {
-            fail("select")(e);
+            fail("select", cx)(e);
           }
           await this.reload(cx);
         });
         return;
       case "tuicr":
         this.say(`opening tuicr on #${n}; log: open.log`, cx);
-        cx.spawn(async () => this.detach(`tuicr #${n}`, [self, "review-pr", "open", n, "--stack", s.stack], `${s.stack}/open.log`)
-          .catch(fail("tuicr")));
+        cx.spawn(async (cx) => this.detach(`tuicr #${n}`, [self, "review-pr", "open", n, "--stack", s.stack], `${s.stack}/open.log`)
+          .catch(fail("tuicr", cx)));
         return;
       case "pass":
         if (pr.pass === "running") return this.say(`#${n}'s pass is already running`, cx);
         this.say(`started a decisions pass for #${n}`, cx);
-        cx.spawn(async () => this.detach(`pass #${n}`, [self, "review-pr", "run", n, "--head", pr.head_sha, "--stack", s.stack],
-          `${pr.dir}/pass.log`).catch(fail("pass")));
+        cx.spawn(async (cx) => this.detach(`pass #${n}`, [self, "review-pr", "run", n, "--head", pr.head_sha, "--stack", s.stack],
+          `${pr.dir}/pass.log`).catch(fail("pass", cx)));
         return;
       case "refresh": {
         // review-pr refuses to gather while a pass runs, and only its log would say so.
@@ -264,8 +265,8 @@ export default class Review extends View {
         }
         const root = this.prs().find((p) => p.number === s.root) ?? pr;
         this.say("gathering the stack again; log: refresh.log", cx);
-        cx.spawn(async () => this.detach("refresh", [self, "review-pr", root.url], `${s.stack}/refresh.log`, s.source)
-          .catch(fail("refresh")));
+        cx.spawn(async (cx) => this.detach("refresh", [self, "review-pr", root.url], `${s.stack}/refresh.log`, s.source)
+          .catch(fail("refresh", cx)));
         return;
       }
     }
