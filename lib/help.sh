@@ -30,6 +30,10 @@ Post-install CLI (bercail):
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
+  review-pr     Someone else's PR by intent and decisions: review-pr <PR url> gathers it
+                into a run dir, a detached worktree, and a Review-<n>_<Repo> space whose
+                Stack tab shows the decisions card (t: tuicr seeded with [AI Agent]
+                questions). Then: run | card | ui | open | dir
 
 Shell commands:
   dev, d        Show the Herdr app space for $PWD and start its desk agent
@@ -77,7 +81,8 @@ bstack (opencode, bring your own Claude / GPT / Grok subscription):
   Roles: lead (the bstack agent), build (bstack-builder), judge (bstack-judge);
   council: one read-only reviewer per connected provider. In opencode: /council,
   /ready, /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
-  pushes, never merges). Settings: [bstack] in config.toml.
+  pushes, never merges), /pr-review (bercail review-pr's read-only decisions pass).
+  Settings: [bstack] in config.toml.
 
 Config:
   ~/.config/bercail/config.toml               desk agent default, review, [bstack]

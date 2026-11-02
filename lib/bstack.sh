@@ -15,9 +15,9 @@ BSTACK_FAMILIES=(claude gpt grok)
 BSTACK_ROLES=(lead build judge)
 # Agents and commands bstack renders into the opencode config dir.
 BSTACK_RENDERED=(agents/bstack.md agents/bstack-builder.md agents/bstack-judge.md
-  agents/bstack-autopilot.md commands/bstack-setup.md commands/council.md
-  commands/handoff.md commands/ready.md commands/autopilot.md commands/how.md
-  commands/why.md commands/unslop.md)
+  agents/bstack-autopilot.md agents/bstack-pr-review.md commands/bstack-setup.md
+  commands/council.md commands/handoff.md commands/ready.md commands/autopilot.md
+  commands/how.md commands/why.md commands/unslop.md commands/pr-review.md)
 
 # --- config.toml --------------------------------------------------------------
 

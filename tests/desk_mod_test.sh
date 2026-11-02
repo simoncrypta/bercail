@@ -369,6 +369,45 @@ console.log("PASS: agent next/prev walk agents in sidebar space order, wrapping"
   if (globalThis.herdr.notes[0]?.level !== "warning") fail("no Shell: the person is told why");
   console.log("PASS: with bstack on, a shown space gets its desk once, under its Shell (no tab of its own); a quit desk stays quit");
 }
+
+// review-pr-<N> (bercail review-pr open): tuicr pr N for an explicit N, in the
+// terminal's space, folder the review worktree. Same PR live: select only;
+// another PR or a quit tool: replace.
+{
+  globalThis.herdr = {
+    layout: structuredClone(shipped),
+    calls: [],
+    focused: { space: "s1", pane: "p1" },
+    spaces: [{ id: "s1", tabs: [{ id: "tab1" }], folder: "/r/worktree" }],
+    panes: [{ pane: "p1", tab: "tab1", terminal: "t-stack", cwd: "/r/worktree" }],
+    terminals: [{ address: "t-stack", state: "live", labels: {} }],
+  };
+  const d = new Desk();
+  Object.assign(d, { cfg: { autoReview: false, review: "tuicr" }, prev: {}, pendingReview: {}, lastAuto: {}, reviewing: {}, starting: {}, git: {}, hadDesk: new Set() });
+  const ran = async (cmd) => {
+    globalThis.herdr.calls = [];
+    await d.command(cmd);
+    return JSON.stringify(globalThis.herdr.calls.filter(([n]) => !n.startsWith("layout.")));
+  };
+  expect(await ran("review-pr-7:t-stack"),
+    '[["tab.new",{"space":"s1","name":"Review","folder":"/r/worktree","argv":["tuicr","pr","7","--no-update-check"]}]]',
+    "review-pr-7 opens tuicr pr 7");
+  globalThis.herdr.spaces[0].tabs.push({ id: "tab2", name: "Review" });
+  globalThis.herdr.panes.push({ pane: "p2", tab: "tab2", terminal: "t-rev", program: { key: "tuicr" } });
+  expect(await ran("review-pr-7:t-stack"), '[["tab.select",{"id":"tab2"}]]', "the same PR live is only selected");
+  expect(await ran("review-pr-8:t-stack"),
+    '[["tab.close",{"id":"tab2","confirmed":true}],["tab.new",{"space":"s1","name":"Review","folder":"/r/worktree","argv":["tuicr","pr","8","--no-update-check"]}]]',
+    "another PR replaces the live Review");
+  expect(await ran("review-pr-x:t-stack"), "[]", "review-pr needs a number");
+  // The PR's tool quits and Ctrl+Shift+R puts tuicr -w there: the next t reopens tuicr pr 8.
+  globalThis.herdr.panes[1].program = { key: "shell" };
+  await ran("review:t-stack");
+  globalThis.herdr.panes[1].program = { key: "tuicr" };
+  expect(await ran("review-pr-8:t-stack"),
+    '[["tab.close",{"id":"tab2","confirmed":true}],["tab.new",{"space":"s1","name":"Review","folder":"/r/worktree","argv":["tuicr","pr","8","--no-update-check"]}]]',
+    "a Review that is no longer the PR's is replaced");
+  console.log("PASS: review-pr-N opens tuicr pr N in the terminal's space, replacing a Review on another PR");
+}
 EOF
 
 node "$TMP_DIR/test.mjs"

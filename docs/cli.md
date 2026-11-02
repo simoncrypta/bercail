@@ -17,6 +17,7 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 | `bercail harness` | JSON: which of claude, codex, cursor-agent, opencode are on PATH (reports, does not choose) |
 | `bercail bstack setup` / `status` / `on` / `off` | [bstack](bstack.md): opencode on your own plans. No subcommand = `status` |
 | `bercail update` | Re-sync configs, Herdr layout and mods, helper, skills, and bstack; restart the notify follower. `--force` (`-f`) also replaces a changed layout and the worktrunk config, and writes the shell block despite conflicts |
+| `bercail review-pr <PR url>` / `run` / `card` / `ui` / `open` / `dir` | Review someone else's PR by intent and decisions: run dir, detached worktree, a `Review-<n>_<Repo>` space with the decisions card. See [review](review.md#someone-elses-pr-bercail-review-pr) |
 | `bercail reconfigure` | Re-read `config.toml`, refresh skills |
 | `bercail dry-run` | Show what install would do, without doing it |
 | `bercail uninstall` | Remove managed files and the shell marker |

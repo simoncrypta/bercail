@@ -158,6 +158,7 @@ Commands:
   harness       JSON: which of claude, codex, cursor-agent, opencode are on PATH
   bstack        opencode with your Claude/GPT/Grok subscriptions: status | setup | on | off
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
+  review-pr     Review someone else's PR by intent and decisions: review-pr <PR url> | run | card | ui | open
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills/integrations from config.toml (not a full redeploy)
   dry-run       Show planned install actions
@@ -195,6 +196,14 @@ main() {
     notify)
       load_libs
       cmd_notify "$@"
+      ;;
+    review-pr)
+      load_libs
+      # shellcheck source=/dev/null
+      source "$(find_lib_dir)/review.sh"
+      BERCAIL_SELF="$(bercail_bin_dir)/bercail"
+      export BERCAIL_SELF
+      cmd_review_pr "$@"
       ;;
     update)
       load_libs

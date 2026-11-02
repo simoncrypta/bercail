@@ -6,6 +6,7 @@ agents/bstack-builder.md
 agents/bstack-judge.md
 agents/bstack-autopilot.md
 agents/bstack-council.md
+agents/bstack-pr-review.md
 commands/bstack-setup.md
 commands/council.md
 commands/handoff.md
@@ -14,3 +15,4 @@ commands/autopilot.md
 commands/how.md
 commands/why.md
 commands/unslop.md
+commands/pr-review.md
