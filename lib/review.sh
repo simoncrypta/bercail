@@ -542,13 +542,16 @@ _review_space() {
   wt_herdr_layout_create "$label" "$R_WT" >&2 || return 1
   space="$(_wt_herdr_space_by_folder "$R_WT")"
   [[ -n "$space" ]] || return 1
-  if ! "$HERDR_APP" ls 2>/dev/null \
-    | jq -e --arg id "$space" '.spaces[] | select(.id == $id) | .tabs[]? | select(.name == "Stack")' >/dev/null; then
-    # The tab's shell is not the caller's: put mise and ~/.local/bin on PATH.
-    cmd="PATH=\"\$HOME/.local/bin:\$HOME/.local/share/mise/shims:\$PATH\"; exec $(_review_cmd ui)"
-    argv="$(jq -cn --arg cmd "$cmd" '["bash", "-lc", $cmd]')"
+  if [[ -z "$(_review_stack_tab "$space")" ]]; then
     keep="$(_wt_herdr_focused_space)"
-    "$HERDR_APP" "do" tab.new --space "$space" --name Stack --folder "$R_WT" --argv "$argv" >/dev/null || return 1
+    if _review_has_mod; then
+      _review_mod_tab "$space" >/dev/null || return 1
+    else
+      # The tab's shell is not the caller's: put mise and ~/.local/bin on PATH.
+      cmd="PATH=\"\$HOME/.local/bin:\$HOME/.local/share/mise/shims:\$PATH\"; exec $(_review_cmd ui)"
+      argv="$(jq -cn --arg cmd "$cmd" '["bash", "-lc", $cmd]')"
+      "$HERDR_APP" "do" tab.new --space "$space" --name Stack --folder "$R_WT" --argv "$argv" >/dev/null || return 1
+    fi
     _wt_herdr_keep_user_focus "$keep"
   fi
   printf '%s' "$space"
@@ -1099,8 +1102,98 @@ review_rows() {
   done
 }
 
+# A file's JSON, or $2 when it is missing or not JSON.
+_review_json() {
+  jq -c . "$1" 2>/dev/null || printf '%s' "$2"
+}
+
+# Everything the Stack tab mod (bercail-review) shows, as one JSON document. It
+# only reads the run dir: stack.json, stack.md, and per PR run.json, review.json,
+# ci.json and bots.json (when gathered), with the pass status the card prints.
+review_state() {
+  _review_load "$@"
+  local pr n sha thin dir status i=0 tmp
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf $(printf '%q' "$tmp")" EXIT
+  # Files, not arguments: a stack's cards outgrow one argv string.
+  if [[ "$(jq '.prs | length' "$R_STACK/stack.json")" -gt 1 && -f "$R_STACK/stack.md" ]]; then
+    cp "$R_STACK/stack.md" "$tmp/header"
+  else
+    : >"$tmp/header"
+  fi
+  while IFS= read -r pr; do
+    n="$(jq -r '.number' <<<"$pr")"
+    sha="$(jq -r '.head_sha' <<<"$pr")"
+    thin="$(jq -c '.thin // []' <<<"$pr")"
+    dir="$R_STACK/pr-$n/$sha"
+    status="$(_review_status "$dir" "$thin")"
+    _review_json "$dir/review.json" null >"$tmp/review"
+    _review_json "$dir/ci.json" '[]' >"$tmp/ci"
+    _review_json "$dir/bots.json" null >"$tmp/bots"
+    i=$((i + 1))
+    jq -n --argjson p "$pr" --arg dir "$dir" --arg status "$status" \
+      --slurpfile review "$tmp/review" --slurpfile ci "$tmp/ci" --slurpfile bots "$tmp/bots" \
+      "$REVIEW_JQ_DEFS"'
+      $review[0] as $review
+      | def bots: if type != "object" then null else
+          [.threads[]? | objects] as $t | [$review.decisions[]?.evidence[]?.file] as $files
+          | {threads: ($t | length), unresolved: ([$t[] | select(.isResolved == false)] | length),
+             on_decisions: ([$t[] | select(.isResolved == false and ((.path // "") | IN($files[])))] | length),
+             reviews: ([.reviews[]? | objects] | length), comments: ([.comments[]? | objects] | length),
+             authors: ([$t[], (.reviews[]?, .comments[]? | objects) | .author.login? // .author? // .user.login? | strings] | unique)}
+          end;
+      $p + {dir: $dir, status: $status, pass: ($status | split(":")[0]),
+        review: $review, ci: $ci[0], bots: ($bots[0] | bots),
+        questions: (if $review == null then [] else [$review | questions[] | {text, at: (.at | loc | select(. != "") // null)}] end)}' \
+      >"$tmp/pr-$(printf '%04d' "$i")"
+  done < <(jq -c '.prs[]' "$R_STACK/stack.json")
+  jq -n --slurpfile s "$R_STACK/stack.json" --slurpfile prs <(cat "$tmp"/pr-* 2>/dev/null) --arg stack "$R_STACK" \
+    --rawfile header "$tmp/header" '
+    $s[0] as $s | {schema: "bercail.review-ui/v1", stack: $stack,
+      repo: "\($s.owner)/\($s.repo)",
+      root: $s.root, current: $s.current, source: $s.source,
+      header: (if $header == "" then null else $header end), prs: $prs}'
+}
+
+# The Stack tab mod, when Herdr has it.
+_review_has_mod() {
+  [[ -f "$HERDR_APP_CONFIG_DIR/mods/bercail-review/main.js" ]]
+}
+
+# The space's Stack tab: "<id> mod" (the bercail-review mod, first if there are
+# both), "<id> term" (the fzf UI in a terminal), or nothing.
+_review_stack_tab() {
+  "$HERDR_APP" ls 2>/dev/null | jq -r --arg id "$1" '
+    [.spaces[] | select(.id == $id) | .tabs[]? | select(.name == "Stack")
+      | "\(.id) \(if (.terminals // []) | length == 0 then "mod" else "term" end)"]
+    | (map(select(endswith(" mod"))) + .)[0] // empty'
+}
+
+_review_mod_tab() {
+  "$HERDR_APP" "do" tab.new "$(jq -cn --arg space "$1" --arg stack "$R_STACK" --arg self "$(_review_self)" \
+    '{space: $space, name: "Stack", mod: "bercail-review", props: {stack: $stack, bercail: $self}}')"
+}
+
+# In the review space when Herdr is up and has the mod: show (or make) its Stack
+# tab. Otherwise the fzf UI in this terminal.
 review_ui() {
   _review_load "$@"
+  local space tab
+  if _review_herdr && _review_has_mod && space="$(_wt_herdr_space_by_folder "$R_WT")" && [[ -n "$space" ]]; then
+    tab="$(_review_stack_tab "$space")"
+    if [[ "$tab" != *" mod" ]]; then
+      tab="$(_review_mod_tab "$space")" || die "herdr-app did not open the Stack tab in $space: $tab"
+      tab="$(jq -r '.tab // empty' <<<"$tab" 2>/dev/null || true)"
+    fi
+    "$HERDR_APP" "do" space.select --id "$space" >/dev/null 2>&1 || true
+    [[ -z "${tab%% *}" ]] || "$HERDR_APP" "do" tab.select --id "${tab%% *}" >/dev/null 2>&1 || true
+    return 0
+  fi
+  _review_ui_fzf
+}
+
+_review_ui_fzf() {
   _review_need fzf
   local sock="$R_STACK/ui.sock" slug header count preview_window="down,85%,wrap,border-top"
   slug="$(_review_stack_get '"\(.host)/\(.owner)/\(.repo)"')"
@@ -1223,13 +1316,16 @@ Usage: bercail review-pr <command>
                         non-thin waiting pass in parallel (a stack of one runs
                         even if thin).
   card [N]              print the PR's card
-  ui                    the Stack tab: fzf, the card in the preview
+  ui                    the Stack tab: the bercail-review mod in the review
+                        space when the Herdr app is up, else fzf with the card
+                        in the preview
+  state                 the stack, cards, and pass status as JSON (the mod's input)
   select [N]            git switch --detach to that PR in the review worktree
   diff [N]              git diff <parent>...<head> in a pager
   open [N]              the Review tab with tuicr pr N, seeded with the questions
   dir [N]               print the PR's run dir
 
-run, card, ui, select, diff, open, and dir take --stack DIR, or find the stack
+run, card, ui, state, select, diff, open, and dir take --stack DIR, or find the stack
 from the review worktree they run in. N defaults to the stack's current PR.
 EOF
 }
@@ -1242,6 +1338,7 @@ cmd_review_pr() {
     card) shift; review_card "$@" ;;
     rows) shift; review_rows "$@" ;;
     ui) shift; review_ui "$@" ;;
+    state) shift; review_state "$@" ;;
     select) shift; review_select "$@" ;;
     diff) shift; review_diff "$@" ;;
     open) shift; review_open "$@" ;;

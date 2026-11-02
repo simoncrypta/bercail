@@ -6,6 +6,7 @@
 shellcheck install.sh lib/*.sh bin/bercail config/shell/bercail.inc.sh config/worktrunk/herdr-layout.sh
 herdr-app check bercail/mods/bercail-desk
 herdr-app check bercail/mods/bercail-agents
+herdr-app check bercail/mods/bercail-review
 for t in tests/*_test.sh; do bash "$t" || break; done
 ./install.sh --help
 bin/bercail dry-run   # this checkout's CLI; a bare `bercail` runs the installed copy

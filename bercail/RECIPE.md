@@ -31,7 +31,8 @@ these files.
 3. bercail copies the layout and the mods, and merges the keys, itself. Skip
    the copy and merge steps of the Herdr app's guide: copying again would
    add a renamed second copy. Run `herdr-app check` on
-   `~/.config/herdr-app/mods/bercail-desk` and `.../bercail-agents`, then
+   `~/.config/herdr-app/mods/bercail-desk`, `.../bercail-agents` and
+   `.../bercail-review`, then
    `herdr-app do layout.switch --name bercail`.
 4. Tell the person what [After the install](#after-the-install) says.
 
@@ -179,6 +180,18 @@ lights at 12,16):
   also keeps `bercail notify run` alive as the hidden hc terminal
   `bercail-notify` (checked every 60s), which posts desk status changes to
   webhooks.
+- `mods/bercail-review` (`place: "none"`): the Stack tab of a `bercail
+  review-pr` space, made by bercail with `tab.new {space, name: "Stack", mod:
+  "bercail-review", props: {stack, bercail}}`. It needs bercail: everything
+  it shows comes from `exec(<bercail>, ["review-pr", "state", "--stack",
+  <stack>])`, run again when `watchFolder(<stack>)` reports a change other
+  than a pass's logs. A 320px PR list on `surface` (only for two or more
+  PRs) sits beside the card, with a 28px key hint bar on `chrome`. Keys go
+  through its focus handle: j/k, Enter (`review-pr select`), o
+  (`cx.open_url`), d (`tab.new` "Diff #N" running `review-pr diff`), t
+  (`review-pr open`), p (`review-pr run`), r (`review-pr <root url>`). It runs
+  t, p and r detached through `sh -c` (`setsid`, else `nohup`), because a
+  pass or tuicr's wait outlasts exec's 30 s.
 
 ## Watch out
 

@@ -53,6 +53,7 @@ deploy_herdr_app >/dev/null
 cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "layout not installed"
 cmp -s "$ROOT/bercail/mods/bercail-desk/main.js" "$APP/mods/bercail-desk/main.js" || fail "mod not installed"
 cmp -s "$ROOT/bercail/mods/bercail-agents/main.js" "$APP/mods/bercail-agents/main.js" || fail "agents mod not installed"
+cmp -s "$ROOT/bercail/mods/bercail-review/main.js" "$APP/mods/bercail-review/main.js" || fail "review mod not installed"
 jq -e '.global["ctrl-shift-t"] == "tab.new"' "$APP/keys.json" >/dev/null || fail "the person's keys must stay"
 jq -e --slurpfile ours "$ROOT/bercail/keys.json" '.["layout:bercail"] == ($ours[0]["layout:bercail"] + {"x":"y"})' \
   "$APP/keys.json" >/dev/null || fail "layout:bercail must get bercail's keys and keep the person's: $(cat "$APP/keys.json")"
@@ -187,7 +188,7 @@ printf 'PASS: no Herdr app skips the step\n'
 deploy_herdr_app >/dev/null
 jq '.global = {"ctrl-shift-t":"tab.new"}' "$APP/keys.json" >"$TMP_DIR/k" && mv "$TMP_DIR/k" "$APP/keys.json"
 uninstall_agentic_dev >/dev/null 2>&1
-[[ ! -e "$APP/layouts/bercail.json" && ! -e "$APP/mods/bercail-desk" && ! -e "$APP/mods/bercail-agents" ]] \
+[[ ! -e "$APP/layouts/bercail.json" && ! -e "$APP/mods/bercail-desk" && ! -e "$APP/mods/bercail-agents" && ! -e "$APP/mods/bercail-review" ]] \
   || fail "uninstall leaves layout or mods"
 jq -e 'has("layout:bercail") | not' "$APP/keys.json" >/dev/null || fail "uninstall leaves layout:bercail keys"
 jq -e '.global["ctrl-shift-t"] == "tab.new"' "$APP/keys.json" >/dev/null || fail "uninstall must keep the person's keys"

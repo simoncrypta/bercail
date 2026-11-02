@@ -83,9 +83,10 @@ RECONFIGURE=0
 # agents list, which also lists each desk), and its keys.
 # Paths are relative to bercail/ (the shared layout folder) in the source and to the app's home.
 HERDR_APP_LAYOUT="layouts/bercail.json"
-HERDR_APP_MODS=(bercail-desk bercail-agents)
+HERDR_APP_MODS=(bercail-desk bercail-agents bercail-review)
 HERDR_APP_MOD_FILES=(mods/bercail-desk/main.js mods/bercail-desk/mod.json
-  mods/bercail-agents/main.js mods/bercail-agents/mod.json)
+  mods/bercail-agents/main.js mods/bercail-agents/mod.json
+  mods/bercail-review/main.js mods/bercail-review/mod.json)
 HERDR_APP_KEYS_SECTION="layout:bercail"
 
 # The app rewrites its layout file (the desk mod adds a block per desk with

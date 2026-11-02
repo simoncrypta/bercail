@@ -208,6 +208,10 @@ case "$1" in
   do)
     cmd="$2"; shift 2
     declare -A a=()
+    if [[ $# -eq 1 && "$1" == "{"* ]]; then
+      while IFS=$'\t' read -r k v; do a["$k"]="$v"; done \
+        < <(jq -r 'to_entries[] | [.key, (.value | if type == "string" then . else tojson end)] | @tsv' <<<"$1")
+    fi
     while [[ $# -gt 1 ]]; do a["${1#--}"]="$2"; shift 2; done
     case "$cmd" in
       space.new)
@@ -216,9 +220,20 @@ case "$1" in
           "$st" >"$st.tmp" && mv "$st.tmp" "$st"
         echo '{"space":"s1"}' ;;
       tab.new)
-        jq --arg s "${a[space]}" --arg n "${a[name]}" '(.spaces[] | select(.id == $s) | .tabs) += [{name: $n}]' \
+        # A mod tab has no terminals.
+        id="tb$(jq '[.spaces[].tabs[]?] | length' "$st")"
+        jq --arg s "${a[space]}" --arg n "${a[name]}" --arg id "$id" --arg argv "${a[argv]:-}" \
+          '(.spaces[] | select(.id == $s) | .tabs) += [{id: $id, name: $n,
+             terminals: (if $argv == "" then [] else [{terminal: "t-\($id)"}] end)}]' \
           "$st" >"$st.tmp" && mv "$st.tmp" "$st"
-        printf '%s\n' "${a[argv]}" >"$LOG/stack.argv" ;;
+        if [[ -n "${a[mod]:-}" ]]; then
+          printf '%s %s\n' "${a[mod]}" "${a[props]}" >>"$LOG/stack.mod"
+        else
+          printf '%s\n' "${a[argv]}" >"$LOG/stack.argv"
+        fi
+        printf '{"space":"%s","tab":"%s"}\n' "${a[space]}" "$id" ;;
+      tab.close)
+        jq --arg id "${a[id]}" '.spaces[].tabs |= map(select(.id != $id))' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
     esac ;;
 esac
 SH
@@ -522,6 +537,44 @@ test_space() {
   printf 'PASS: a Herdr space Review-<n>_<Repo> on the worktree, its desk, one Stack tab running review-pr ui\n'
 }
 
+# --- with the bercail-review mod, the Stack tab is the mod, not fzf ----------------
+test_ui_mod() {
+  local mods="$HOME/.config/herdr-app/mods/bercail-review" saved="$TMP_DIR/herdr.saved" props
+  export FAKE_HERDR_UP=1 HERDR_APP_CONFIG_DIR="$HOME/.config/herdr-app"
+  cp "$HERDR_STATE" "$saved"
+  mkdir -p "$mods" && : >"$mods/main.js"
+  : >"$LOG/herdr"
+  rm -f "$LOG/stack.mod" "$LOG/fzf.argv"
+  # The space's Stack tab runs fzf (made before the mod): ui opens the mod beside it.
+  "$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7"
+  [[ ! -e "$LOG/fzf.argv" ]] || fail "ui ran fzf with the mod there"
+  props="$(awk '$1 == "bercail-review" { print $2 }' "$LOG/stack.mod")"
+  assert_eq "$REVIEWS/stack-7 $ROOT/bin/bercail" "$(jq -r '"\(.stack) \(.bercail)"' <<<"$props")" "mod props"
+  # The fzf tab stays: a Stack tab with a terminal may be the mod's with a split.
+  assert_eq "fzf mod" "$(jq -r '[.spaces[] | select(.id == "s1") | .tabs[] | select(.name == "Stack")
+    | if (.terminals | length) == 0 then "mod" else "fzf" end] | join(" ")' "$HERDR_STATE")" \
+    "a mod Stack tab beside the fzf one"
+  grep -q "tab.close" "$LOG/herdr" && fail "ui closed a tab"
+  assert_has "$(<"$LOG/herdr")" "do space.select --id s1" "ui shows the review space"
+  # Again: the same tab, shown.
+  "$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7"
+  assert_eq 1 "$(wc -l <"$LOG/stack.mod" | tr -d ' ')" "no second mod tab"
+  assert_has "$(<"$LOG/herdr")" "do tab.select --id $(jq -r '.spaces[] | select(.id == "s1") | .tabs[] | select(.name == "Stack" and (.terminals | length) == 0) | .id' "$HERDR_STATE")" "ui selects the mod tab"
+  # A new review space gets the mod as its Stack tab.
+  jq '.spaces |= map(select(.id != "s1"))' "$saved" >"$HERDR_STATE"
+  rm -f "$LOG/stack.mod" "$LOG/stack.argv"
+  (cd / && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run) >/dev/null
+  [[ ! -e "$LOG/stack.argv" ]] || fail "gather made an fzf Stack tab with the mod there"
+  assert_eq 1 "$(wc -l <"$LOG/stack.mod" | tr -d ' ')" "gather made the mod Stack tab"
+  # No Herdr app: fzf, as before.
+  FAKE_HERDR_UP="" "$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7"
+  [[ -e "$LOG/fzf.argv" ]] || fail "no Herdr app: ui runs fzf"
+  rm -rf "$mods"
+  cp "$saved" "$HERDR_STATE"
+  unset HERDR_APP_CONFIG_DIR
+  printf 'PASS: ui with the mod: one mod Stack tab, shown; gather makes it; fzf without the Herdr app\n'
+}
+
 # --- open: tuicr pr N via the desk mod, seeded with [AI Agent] questions ----------
 test_open() {
   local out dir="$REVIEWS/stack-7/pr-7/$SHA7"
@@ -692,6 +745,9 @@ test_stacks() {
   assert_eq "$sha23" "$(git -C "$sib" rev-parse HEAD)" "enter detaches the sibling"
   assert_eq 23 "$(jq -r .current "$stack/stack.json")" "current follows select"
   assert_eq "$src_head" "$(git -C "$WORK" rev-parse HEAD)" "select does not move the source"
+  assert_eq '23 21,22,23 waiting,thin,waiting true' "$("$BERCAIL" review-pr state --stack "$stack" | jq -r '
+    "\(.current) \([.prs[].number] | join(",")) \([.prs[] | if (.thin | length) > 0 then "thin" else .pass end] | join(",")) \(.header | test("1. #21"))"')" \
+    "state: the Stack tab's input for a real stack"
   # A failed regather must not publish a new stack.json that resets current to the root.
   "$BERCAIL" review-pr select 22 --stack "$stack"
   assert_eq "$sha22" "$(git -C "$sib" rev-parse HEAD)" "select middle"
@@ -939,6 +995,7 @@ test_concurrency
 test_ui
 test_space
 test_open
+test_ui_mod
 test_clone_and_no_checks
 test_stacks
 test_help
