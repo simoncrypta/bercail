@@ -11,12 +11,22 @@
 // pass again, r gathers the stack again (heads, CI, bodies; starts passes that wait).
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { exec, notify, props, run, theme, watchFolder } from "herdr";
+import { exec, home, notify, props, readTextFile, run, theme, watchFolder } from "herdr";
 
 // What a pass or a gather streams into: no change to what the tab shows.
 const NOISE = /\/(pass\.(jsonl|err|log)|open\.log|refresh\.log)$|\/source\/|\.(json|md|patch)\.[A-Za-z0-9]{6}$/;
 const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const CI_ORDER = ["fail", "pending", "cancel", "pass", "skipping"];
+// Where a detached command leaves its exit code and its last output lines, one file
+// per job; the tab reads it and removes it. Not the run dir, which only bercail writes.
+const JOBS = "/.cache/bercail/review-jobs";
+// $0 log, $1 status file, then the command. The log keeps the whole output, as before.
+const INNER = 'log=$0; status=$1; shift; out=$("$@" 2>&1 </dev/null); rc=$?; printf "%s\\n" "$out" >>"$log"; '
+  + 'mkdir -p "${status%/*}" && { echo "$rc"; printf "%s\\n" "$out" | tail -n 40; } >"$status.tmp" && mv "$status.tmp" "$status"';
+const OUTER = 'inner=$1; shift; if command -v setsid >/dev/null 2>&1; '
+  + 'then setsid -f sh -c "$inner" "$@" >/dev/null 2>&1 </dev/null; '
+  + 'else nohup sh -c "$inner" "$@" >/dev/null 2>&1 </dev/null & fi';
+let seq = 0;
 
 export const loc = (e) =>
   !e?.file ? "" : e.file + (e.line ? `:${e.line}` + ((e.end_line ?? e.line) !== e.line ? `-${e.end_line}` : "") : "");
@@ -99,6 +109,11 @@ export default class Review extends View {
     this.error = "";
     this.message = "";
     this.sel = null;
+    this.jobs = [];
+    // Only while a detached command runs: its status file is outside the watched run dir.
+    cx.timer.every(1000, (cx) => {
+      if (this.jobs.length && !this.checking) cx.spawn(async (cx) => this.ended(cx));
+    });
     cx.spawn(async (cx) => {
       await this.reload(cx);
       this.h.focus();
@@ -114,7 +129,10 @@ export default class Review extends View {
     try {
       const r = await exec(bercail || "bercail", ["review-pr", "state", "--stack", stack]);
       if (r.code !== 0) throw new Error(r.stderr.trim() || `review-pr state exited ${r.code}`);
+      const was = this.state?.current;
       this.state = JSON.parse(r.stdout);
+      // The worktree moved (enter, or a gather back to the root): the card follows it.
+      if (this.state.current !== was) this.sel = null;
       this.error = "";
     } catch (e) {
       this.error = String(e?.message ?? e);
@@ -138,11 +156,47 @@ export default class Review extends View {
   }
 
   // Off the tab's exec (30 s limit): a pass, a gather or tuicr's wait takes longer.
-  async detach(argv, log, cwd) {
-    const script = 'log=$1; shift; if command -v setsid >/dev/null 2>&1; then setsid -f "$@" >>"$log" 2>&1 </dev/null; '
-      + 'else nohup "$@" >>"$log" 2>&1 </dev/null & fi';
-    const r = await exec("sh", ["-c", script, "sh", log, ...argv], cwd ? { cwd } : {});
-    if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
+  async detach(what, argv, log, cwd) {
+    const status = `${home()}${JOBS}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${++seq}`;
+    this.jobs.push({ what, status });
+    const r = await exec("sh", ["-c", OUTER, "sh", INNER, log, status, ...argv], cwd ? { cwd } : {});
+    if (r.code !== 0) {
+      this.jobs = this.jobs.filter((j) => j.status !== status);
+      throw new Error(r.stderr.trim() || `exit ${r.code}`);
+    }
+  }
+
+  // Detached commands that finished: a failure says why, in the bar and a toast.
+  async ended(cx) {
+    this.checking = true;
+    try {
+      for (const job of [...this.jobs]) {
+        let text;
+        try {
+          text = await readTextFile(job.status);
+        } catch (e) {
+          text = `1\ncould not read ${job.status}: ${e?.message ?? e}`;
+        }
+        if (text == null) continue;
+        this.jobs = this.jobs.filter((j) => j !== job);
+        await exec("rm", ["-f", job.status]).catch(() => {});
+        const [rc, ...lines] = text.split("\n");
+        // review-pr run prints run.json (blocked exits 0, with a reason); other commands end on an error line.
+        const out = lines.join("\n").trim();
+        let run = null;
+        try { run = JSON.parse(out); } catch {}
+        if (rc === "0" && run?.status !== "blocked") {
+          this.say(`${job.what}: done`, cx);
+          continue;
+        }
+        const why = run?.reason || (run ? "" : out.split("\n").at(-1)) || `exit ${rc}`;
+        const word = run?.status === "blocked" ? "blocked" : "failed";
+        this.say(`${job.what} ${word}: ${why}`, cx);
+        notify({ title: `bercail: ${job.what} ${word}`, body: why, level: word === "blocked" ? "warning" : "error" });
+      }
+    } finally {
+      this.checking = false;
+    }
   }
 
   act(name, cx) {
@@ -171,20 +225,23 @@ export default class Review extends View {
         return;
       case "tuicr":
         this.say(`opening tuicr on #${n}; log: open.log`, cx);
-        cx.spawn(async () => this.detach([self, "review-pr", "open", n, "--stack", s.stack], `${s.stack}/open.log`).catch(fail("tuicr")));
+        cx.spawn(async () => this.detach(`tuicr #${n}`, [self, "review-pr", "open", n, "--stack", s.stack], `${s.stack}/open.log`)
+          .catch(fail("tuicr")));
         return;
       case "pass":
         if (pr.pass === "running") return this.say(`#${n}'s pass is already running`, cx);
         this.say(`started a decisions pass for #${n}`, cx);
-        cx.spawn(async () => this.detach([self, "review-pr", "run", n, "--head", pr.head_sha, "--stack", s.stack],
+        cx.spawn(async () => this.detach(`pass #${n}`, [self, "review-pr", "run", n, "--head", pr.head_sha, "--stack", s.stack],
           `${pr.dir}/pass.log`).catch(fail("pass")));
         return;
       case "refresh": {
         // review-pr refuses to gather while a pass runs, and only its log would say so.
         if (this.prs().some((p) => p.pass === "running")) return this.say("a pass is running; refresh when it ends", cx);
+        if (this.jobs.some((j) => j.what === "refresh")) return this.say("already gathering the stack again", cx);
         const root = this.prs().find((p) => p.number === s.root) ?? pr;
         this.say("gathering the stack again; log: refresh.log", cx);
-        cx.spawn(async () => this.detach([self, "review-pr", root.url], `${s.stack}/refresh.log`, s.source).catch(fail("refresh")));
+        cx.spawn(async () => this.detach("refresh", [self, "review-pr", root.url], `${s.stack}/refresh.log`, s.source)
+          .catch(fail("refresh")));
         return;
       }
     }

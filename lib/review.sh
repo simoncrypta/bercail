@@ -1144,7 +1144,7 @@ review_state() {
              authors: ([$t[], (.reviews[]?, .comments[]? | objects) | .author.login? // .author? // .user.login? | strings] | unique)}
           end;
       $p + {dir: $dir, status: $status, pass: ($status | split(":")[0]),
-        review: $review, ci: $ci[0], bots: ($bots[0] | bots),
+        review: $review, ci: ($ci[0] // []), bots: ($bots[0] | bots),
         questions: (if $review == null then [] else [$review | questions[] | {text, at: (.at | loc | select(. != "") // null)}] end)}' \
       >"$tmp/pr-$(printf '%04d' "$i")"
   done < <(jq -c '.prs[]' "$R_STACK/stack.json")

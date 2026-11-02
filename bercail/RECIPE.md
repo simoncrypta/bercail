@@ -191,7 +191,12 @@ lights at 12,16):
   (`cx.open_url`), d (`tab.new` "Diff #N" running `review-pr diff`), t
   (`review-pr open`), p (`review-pr run`), r (`review-pr <root url>`). It runs
   t, p and r detached through `sh -c` (`setsid`, else `nohup`), because a
-  pass or tuicr's wait outlasts exec's 30 s.
+  pass or tuicr's wait outlasts exec's 30 s. Each appends its output to its
+  log (`open.log`, `pass.log`, `refresh.log`) and writes its exit code and
+  last 40 lines to its own file in `~/.cache/bercail/review-jobs/`. While a
+  job is pending a 1 s timer reads that file, removes it, and shows a failure
+  (or a blocked pass) in the bar and a toast. A reload that changes `current`
+  moves the card to it.
 
 ## Watch out
 

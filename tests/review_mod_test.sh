@@ -20,8 +20,8 @@ S="$TMP_DIR/stack-7"
 D7="$S/pr-7/aaaaaaa1111111"
 D8="$S/pr-8/bbbbbbb2222222"
 mkdir -p "$D7" "$D8"
-jq -n --arg wt "$TMP_DIR/widgets.review-7" '{schema: "bercail.stack/v1", host: "github.com", owner: "acme", repo: "widgets",
-  via: "github", trunk: "main", root: 7, current: 7, worktree: $wt, source: "/src/widgets", space: null,
+jq -n --arg wt "$TMP_DIR/widgets.review-7" --arg src "$TMP_DIR" '{schema: "bercail.stack/v1", host: "github.com", owner: "acme", repo: "widgets",
+  via: "github", trunk: "main", root: 7, current: 7, worktree: $wt, source: $src, space: null,
   prs: [
     {number: 7, title: "Retry flaky uploads", author: "dana", url: "https://github.com/acme/widgets/pull/7", draft: false,
      base: "main", head: "retry", head_sha: "aaaaaaa1111111", base_sha: "0000000", linked: [12], linear: [], thin: [],
@@ -99,16 +99,26 @@ fi
 
 cat >"$TMP_DIR/herdr.mjs" <<'EOF'
 const h = () => globalThis.herdr;
+import { spawnSync } from "child_process";
+import { readFileSync } from "fs";
 export const exec = async (cmd, args, opts) => {
   h().execs.push([cmd, ...(args ?? [])]);
   if (args?.[0] === "review-pr" && args[1] === "state") return { code: 0, stdout: h().state, stderr: "" };
+  // The detach wrapper and its cleanup run for real; /bin/bercail is the fake bercail.
+  if (cmd === "sh" || cmd === "rm") {
+    const r = spawnSync(cmd, args.map((a) => (a === "/bin/bercail" ? process.env.FAKE_BERCAIL : a)), { cwd: opts?.cwd, encoding: "utf8" });
+    return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+  }
   return { code: 0, stdout: "", stderr: "" };
 };
+export const home = () => process.env.FAKE_HOME;
 export const notify = (n) => h().notes.push(n);
 export const props = () => h().props;
 export const run = (name, args) => h().runs.push([name, args]);
 export const theme = () => new Proxy({}, { get: (_t, k) => String(k) });
-export const watchFolder = () => new Promise(() => {});
+export const readTextFile = async (path) => { try { return readFileSync(path, "utf8"); } catch { return null; } };
+// The test wakes the watch loop with h().wake(paths).
+export const watchFolder = () => new Promise((resolve) => { h().wake = resolve; });
 EOF
 cat >"$TMP_DIR/gpui.mjs" <<'EOF'
 // An element records its text children and nested elements, in order. A method
@@ -152,16 +162,17 @@ sed -e 's|from "herdr"|from "./herdr.mjs"|' -e 's|from "gpui-kit"|from "./gpui.m
   -e 's|from "gpui-base"|from "./gpui.mjs"|' "$ROOT/bercail/mods/bercail-review/main.js" >"$TMP_DIR/main.mjs"
 
 cat >"$TMP_DIR/test.mjs" <<'EOF'
-import { readFileSync, writeFileSync } from "fs";
+import { readdirSync, readFileSync, writeFileSync } from "fs";
 import Review from "./main.mjs";
 import { dump } from "./gpui.mjs";
 
 const [stateFile, outFile] = process.argv.slice(2);
 const state = readFileSync(stateFile, "utf8");
 const S = JSON.parse(state);
-globalThis.herdr = { state, execs: [], runs: [], notes: [], props: { stack: S.stack, bercail: "/bin/bercail" } };
+globalThis.herdr = { state, execs: [], runs: [], notes: [], files: {}, props: { stack: S.stack, bercail: "/bin/bercail" } };
 const urls = [];
 const cx = {
+  timer: { every: (_ms, f) => { herdr.timer = f; } },
   focus_handle: () => ({ focus() {}, is_focused: () => true }),
   spawn: (f) => f(cx),
   notify() {},
@@ -179,6 +190,8 @@ const shots = [];
 const shot = (label) => shots.push(`== ${label}`, ...dump(v.render(cx)));
 const key = (k) => v.key({ keystroke: k }, cx);
 const last = () => herdr.execs.at(-1).join(" ");
+// A detached command: the wrapper, its log, then the command line.
+const detached = (log, cmd) => { const l = last(); return l.startsWith("sh -c ") && l.includes(` ${log} `) && l.endsWith(cmd); };
 
 shot("open");
 key("o");
@@ -189,17 +202,20 @@ if (name !== "tab.new" || args.name !== `Diff #${S.current}` || args.argv.join("
   fail(`d pages the diff in a tab of its own: ${JSON.stringify(herdr.runs)}`);
 key("t");
 await new Promise((r) => setTimeout(r, 0));
-if (!last().endsWith(`${S.stack}/open.log /bin/bercail review-pr open ${S.current} --stack ${S.stack}`)) fail(`t opens tuicr: ${last()}`);
+if (!detached(`${S.stack}/open.log`, `/bin/bercail review-pr open ${S.current} --stack ${S.stack}`)) fail(`t opens tuicr: ${last()}`);
 key("r");
 await new Promise((r) => setTimeout(r, 0));
-if (!last().endsWith(`${S.stack}/refresh.log /bin/bercail review-pr https://github.com/acme/widgets/pull/${S.root}`)) fail(`r gathers again: ${last()}`);
+if (!detached(`${S.stack}/refresh.log`, `/bin/bercail review-pr https://github.com/acme/widgets/pull/${S.root}`)) fail(`r gathers again: ${last()}`);
+const execs = herdr.execs.length;
+key("r");
+if (herdr.execs.length !== execs || v.message !== "already gathering the stack again") fail(`a second r while one runs: ${v.message}`);
 if (S.prs.length > 1) {
   key("j");
   shot("j: the next PR");
   key("p");
   await new Promise((r) => setTimeout(r, 0));
   const pr = S.prs[1];
-  if (!last().endsWith(`${pr.dir}/pass.log /bin/bercail review-pr run ${pr.number} --head ${pr.head_sha} --stack ${S.stack}`))
+  if (!detached(`${pr.dir}/pass.log`, `/bin/bercail review-pr run ${pr.number} --head ${pr.head_sha} --stack ${S.stack}`))
     fail(`p runs the pass again: ${last()}`);
   key("enter");
   await new Promise((r) => setTimeout(r, 0));
@@ -213,9 +229,44 @@ if (S.prs.length > 1) {
   if (herdr.execs.length !== n) fail("a stack of one has no enter");
 }
 if (herdr.notes.length) fail(`notifications: ${JSON.stringify(herdr.notes)}`);
+const tick = () => new Promise((r) => setTimeout(r, 5));
+if (S.prs.length > 1) {
+  // A gather moves the worktree back to the root: the card follows current.
+  const other = S.prs.find((p) => p.number !== S.current);
+  herdr.state = JSON.stringify({ ...S, current: other.number });
+  herdr.wake([`${S.stack}/stack.json`]);
+  await tick();
+  if (!dump(v.render(cx)).includes(`PR #${other.number}  ${other.title}`)) fail(`the card follows current to #${other.number}`);
+}
+// The detached commands end (the fake bercail: tuicr and the gather fail, the pass
+// is blocked); each says how, once, from its status file, which is then removed.
+for (let i = 0; i < 100 && v.jobs.length; i++) { herdr.timer(cx); await tick(); }
+if (v.jobs.length) fail(`jobs never ended: ${JSON.stringify(v.jobs)}`);
+const said = herdr.notes.map((n) => `${n.level} ${n.title}: ${n.body}`).sort();
+const want = [
+  `error bercail: refresh failed: error: the review stack is busy gathering; try again when it ends`,
+  `error bercail: tuicr #${S.current} failed: error: tuicr did not open PR #${S.current} within 60s`,
+  ...(S.prs.length > 1 ? [`warning bercail: pass #${S.prs[1].number} blocked: diff.patch is empty`] : []),
+].sort();
+if (JSON.stringify(said) !== JSON.stringify(want)) fail(`how the detached commands ended:\n${said.join("\n")}`);
+for (let i = 0; i < 5; i++) { herdr.timer(cx); await tick(); }
+if (herdr.notes.length !== want.length) fail("a job's end is reported once");
+if (readdirSync(`${process.env.FAKE_HOME}/.cache/bercail/review-jobs`).length) fail("status files are removed");
+if (!readFileSync(`${S.stack}/refresh.log`, "utf8").includes("busy gathering")) fail("the log keeps the output");
 writeFileSync(outFile, shots.join("\n") + "\n");
 EOF
 
+# The bercail the detached keys run: tuicr and the gather fail, a pass is blocked.
+cat >"$TMP_DIR/fake-bercail" <<'SH'
+#!/usr/bin/env bash
+case "$2" in
+  open) echo "error: tuicr did not open PR #$3 within 60s" >&2; exit 1 ;;
+  run) printf '{\n  "status": "blocked",\n  "reason": "diff.patch is empty"\n}\n'; exit 0 ;;
+  *) echo "error: the review stack is busy gathering; try again when it ends" >&2; exit 1 ;;
+esac
+SH
+chmod +x "$TMP_DIR/fake-bercail"
+export FAKE_BERCAIL="$TMP_DIR/fake-bercail" FAKE_HOME="$TMP_DIR/home"
 METHODS="$TMP_DIR/methods.json" node "$TMP_DIR/test.mjs" "$TMP_DIR/state.json" "$TMP_DIR/render.txt"
 METHODS="$TMP_DIR/methods.json" node "$TMP_DIR/test.mjs" "$TMP_DIR/state1.json" "$TMP_DIR/render1.txt"
 # The worktree on #8: the tab opens there, not on the first PR.
@@ -280,9 +331,9 @@ Bots
   not gathered
 CI  no checks
 j/k pick · enter: this PR · o browser · d diff · t tuicr · p pass again · r refresh
-gathering the stack again; log: refresh.log
+already gathering the stack again
 EOF
-printf 'PASS: render snapshot, stack of two: rows, header, the card, keys\n'
+printf 'PASS: render snapshot, stack of two: rows, header, the card, keys, current followed, detached failures and a blocked pass reported\n'
 
 # A stack of one: the card alone, no list or header, and no enter.
 grep -q '^Stack #7' "$TMP_DIR/render1.txt" && fail "a stack of one shows the PR list: $(cat "$TMP_DIR/render1.txt")"
