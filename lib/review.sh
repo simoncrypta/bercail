@@ -507,7 +507,8 @@ _review_valid_reply() {
 review_run() {
   _review_load "$@"
   _review_need opencode jq
-  local t0 rc=0 session text block status reason="" summary="" prompt err
+  local t0 rc=0 session text block status reason="" summary="" prompt err id=""
+  local -a model=()
   _review_lock "$R_DIR/pass" || die "a decisions pass for PR #$R_N is already running"
   trap '_review_run_finish' EXIT
   trap 'exit 143' TERM
@@ -525,10 +526,14 @@ review_run() {
   # through an author's symlink escape the agent's external-directory deny.
   [[ -z "$(find "$R_WT" -type l -print -quit)" ]] || die "the review worktree contains symlinks; recreate it before running the pass"
   t0="$(_review_now)"
-  # The pass runs in the stack dir, not the worktree: the reviewed repo's own
-  # opencode config and plugins stay out of it. Never --model: bstack picks.
+  # The pass runs in the stack dir, not the worktree, so the reviewed repo's
+  # opencode config and plugins stay out. --model is the lead from [bstack],
+  # resolved in that dir: `opencode models` reads cwd config, and the running
+  # server can still have the previous agent model. No lead model: omit --model.
   prompt="Review the PR in pr-$R_N/$R_SHA/ (a bercail review-pr run dir). The repo at that head is ./worktree/, here in the current dir, not under pr-$R_N/. Follow your instructions and end with the one JSON block."
-  (cd "$R_STACK" && exec opencode run --format json --agent bstack-pr-review "$prompt") \
+  id="$(cd "$R_STACK" && bstack_load_state reload >/dev/null && bstack_role_model lead || true)"
+  [[ -n "$id" ]] && model=(--model "$id")
+  (cd "$R_STACK" && exec opencode run --format json --agent bstack-pr-review "${model[@]}" "$prompt") \
     >"$R_DIR/pass.jsonl" 2>"$R_DIR/pass.err" &
   R_CHILD=$!
   wait "$R_CHILD" || rc=$?

@@ -31,7 +31,9 @@ LOG="$TMP_DIR/log"
 FAKE_BIN="$TMP_DIR/bin"
 mkdir -p "$HOME" "$FIX" "$LOG" "$FAKE_BIN" "$XDG_CONFIG_HOME/bercail"
 export FIX LOG
-printf '[bstack]\nenabled = true\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+# A family name, so the pass has to ask opencode. The checkout hides other
+# providers; the stack dir does not. The pass must not inherit the checkout's list.
+printf '[bstack]\nenabled = true\nlead = "grok"\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
 BERCAIL="$ROOT/bin/bercail"
 REVIEWS="$XDG_STATE_HOME/bercail/reviews/github.com/acme/widgets"
 
@@ -54,6 +56,7 @@ SHA8="$(git -C "$TMP_DIR/seed" rev-parse docs)"
 export REMOTE
 git clone -q "$REMOTE" "$TMP_DIR/work/widgets"
 WORK="$TMP_DIR/work/widgets"
+printf '%s\n' '{"disabled_providers":["xai","openai"]}' >"$WORK/opencode.json"
 
 # --- fixtures -------------------------------------------------------------------
 pr_json() { # n sha title body closing
@@ -111,6 +114,21 @@ esac
 SH
 cat >"$FAKE_BIN/opencode" <<'SH'
 #!/usr/bin/env bash
+# Model lookup must not use the checkout's config. A file named opencode.json
+# stands in for a repo that hides providers.
+case "$1" in
+  auth)
+    printf '%s\n' '[{"id":"xai","connections":[{"id":"1"}]}]'
+    exit 0 ;;
+  models)
+    if [[ -f "$PWD/opencode.json" ]]; then
+      printf '%s\n' claude-agent/opus
+    else
+      printf '%s\n' xai/grok-4.7
+    fi
+    exit 0 ;;
+  api) exit 0 ;;
+esac
 printf '%s\n' "$PWD" >"$LOG/opencode.pwd"
 printf '%s\n' "$@" >"$LOG/opencode.argv"
 ev() { jq -cn --arg type "$1" --arg text "${2:-}" '{type: $type, sessionID: "ses_fake", part: {type: $type, text: $text}}'; }
@@ -271,8 +289,7 @@ test_pass() {
   assert_has "$(<"$dir/intent.md")" "### #12 Uploads fail on flaky networks" "linked issue in intent.md"
   wait_for "$dir/run.json"
   argv="$(<"$LOG/opencode.argv")"
-  assert_eq $'run\n--format\njson\n--agent\nbstack-pr-review' "$(head -5 <<<"$argv")" "opencode argv"
-  [[ "$argv" != *--model* ]] || fail "never --model: $argv"
+  assert_eq $'run\n--format\njson\n--agent\nbstack-pr-review\n--model\nxai/grok-4.7' "$(head -7 <<<"$argv")" "opencode argv"
   assert_has "$argv" "pr-7/$SHA7/" "the prompt names the run dir"
   assert_eq "$REVIEWS/stack-7" "$(<"$LOG/opencode.pwd")" "the pass runs in the stack dir, not the reviewed repo"
   assert_eq 'ready ses_fake' "$(jq -r '"\(.status) \(.session_id)"' "$dir/run.json")" "run.json"
@@ -284,7 +301,7 @@ test_pass() {
   assert_eq '' "$(git -C "$REVIEWS/stack-7/worktree" status --porcelain)" "materialized symlinks are clean"
   assert_eq false "$(git --git-dir="$REVIEWS/clone.git" config core.symlinks)" "symlink policy belongs to the private clone"
   [[ "$(git -C "$WORK" config --get core.symlinks || true)" != false ]] || fail "source repo's symlink policy changed"
-  printf 'PASS: a PR with intent: the pass runs bstack-pr-review (no --model) and writes review.json and run.json\n'
+  printf 'PASS: a PR with intent: the pass runs bstack-pr-review on the lead model and writes review.json and run.json\n'
 }
 
 test_card() {
