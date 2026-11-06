@@ -19,9 +19,12 @@ effort = "high"
 lead = "claude"
 build = "grok"
 judge = "claude"
+
+[graphite]                           # optional, one line per repo; see below
+"~/Work/some-repo" = false
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs the desk agent and review tool if they are missing. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md).
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs the desk agent and review tool if they are missing. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[graphite]` in [handoff](handoff.md#graphite).
 
 ## Files bercail manages
 

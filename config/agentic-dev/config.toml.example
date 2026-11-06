@@ -28,3 +28,9 @@ effort = "high"
 lead = "claude"
 build = "grok"
 judge = "claude"
+
+# [graphite]
+# Handoff detects Graphite by the branches gt tracks. Override it per repo, keyed
+# by the main checkout's path: true for a Graphite repo with no stack right now, false
+# for a repo where gt once ran but you don't use it.
+# "~/Work/some-repo" = false

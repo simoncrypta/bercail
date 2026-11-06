@@ -24,7 +24,7 @@ bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) 
 ~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME --stage cursor --issue ID [--dirty|--clean] [--space ID] [--base BRANCH]
 ```
 
-`--base BRANCH` cuts the desk branch from BRANCH instead of the default branch, so a dependent issue's desk stacks on its parent's branch (Graphite, when the repo uses it, tracks BRANCH as the parent). It works only with `--branch`, and stage `autopilot` can't take `--branch`: give it `--worktree` on the PR's checkout.
+`--base BRANCH` cuts the desk branch from BRANCH instead of the default branch, so a dependent issue's desk stacks on its parent's branch ([Graphite](#graphite), when the repo uses it, tracks BRANCH as the parent). It works only with `--branch`, and stage `autopilot` can't take `--branch`: give it `--worktree` on the PR's checkout.
 
 **Prompt.** One line pointing at the issue, the same for every harness: ``Your job is beads issue <id>. Run `bd show <id>` (read its comments too) and do the work it describes.``
 
@@ -39,3 +39,19 @@ bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) 
 **Which harnesses?** `bercail harness` reports which of claude, codex, cursor-agent, and opencode are on PATH, with a local model hint. It does not choose.
 
 Each `--branch` spawn is logged in `${XDG_STATE_HOME:-~/.local/state}/agentic-dev/handoffs.jsonl`; headless runs are not logged there. Follow a `--branch` desk through [agent status webhooks](shep.md#agent-status-webhooks) or with `hc wait <desk>`; `desk` and `space` (and `base`, when set) are in the spawn JSON.
+
+## graphite
+
+With `--branch`, a repo that uses Graphite gets `gt track` on the new branch and a line in the agent's handoff comment telling it to use `gt`. `--info` and the spawn JSON report it as `graphite`.
+
+Any `gt` command initializes the repo it runs in, so a stray one must not turn this on. A repo counts as Graphite when `gt` tracks a branch other than trunk. A repo that only has Graphite's config file doesn't count. The spawn prints a note because a real Graphite repo looks the same once its last stack is merged. The check reads `.graphite_metadata.db` with `sqlite3`. Without `sqlite3`, or if the file can't be read, the spawn skips Graphite and warns. Install `sqlite3` or use the override below.
+
+To decide for a repo yourself, add its main checkout to `~/.config/bercail/config.toml`. Linked worktrees follow it.
+
+```toml
+[graphite]
+"~/Work/leftlane_app" = true         # a Graphite repo with no stack right now
+"~/Work/bercail" = false             # gt once ran here, but you don't use it
+```
+
+Tracking can't stop a spawn. Each `gt` call is killed after 30 seconds (`HANDOFF_GT_TIMEOUT`). If `--base` is untracked, bercail tracks it on trunk and retries, then falls back to trunk. On any other failure, such as a locked Graphite database, it changes nothing, so your stack stays as it was. If tracking still fails, or `gt` hangs, the spawn prints a warning with the `gt track` command to run, and the desk still starts.

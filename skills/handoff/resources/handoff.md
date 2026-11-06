@@ -17,10 +17,10 @@ run `--info` then spawn — not assemble these steps.
 3. If `--dirty` or `default_copy` is dirty (and not `--clean`): copy
    `git diff HEAD` plus untracked files into the sibling as a **working tree**.
    Never `git add`.
-4. If Graphite config exists (`handoff_graphite_config`, in the shared git
-   dir), `gt track` a branch that has no parent yet.
+4. If the repo really uses Graphite (`handoff_is_graphite`, see below), `gt
+   track` a branch that has no parent yet. A gt problem never stops the spawn.
 5. Add the intro (worktree; stage, don't commit; Review opens on agent done;
-   gt on Graphite) to the beads issue as a `bd comment`. The prompt is one line
+   gt when Graphite is on) to the beads issue as a `bd comment`. The prompt is one line
    pointing at the issue, the same for every binary. No prompt file and no
    per-harness mode.
 6. `WT_HERDR_AGENT_CMD` is the stage table's binary and `WT_HERDR_AGENT_PROMPT`
@@ -98,3 +98,32 @@ Result: sibling `git diff --cached` empty; dirty files are unstaged/untracked.
 The script is the only spawn path. Callers must not `hc send` or type into a
 desk, start a desk with `hc run` themselves, or switch the user to the child's
 space.
+
+## Graphite
+
+Any `gt` command auto-initializes the repo it runs in, so the config file in the
+shared git dir (`.graphite_repo_config`) proves nothing. `handoff_is_graphite`
+decides in this order:
+
+1. An entry for the main checkout under `[graphite]` in bercail's config.toml
+   (`"~/Work/repo" = true` or `false`). Linked worktrees use their main
+   checkout's entry.
+2. No config file: not Graphite.
+3. gt tracks a branch other than trunk: a `refs/branch-metadata/*` ref (older
+   gt) or a row with a parent in `.graphite_metadata.db` (current gt, read with
+   `sqlite3 -readonly`). Auto-init only writes rows with no parent.
+4. A store that can't be read (no sqlite3, busy, unknown schema) skips Graphite,
+   with a warning that names the override. Install sqlite3 or set the override.
+
+A config with nothing tracked is off, with a note that names the override: a
+real repo looks the same as a stray one once its last stack is merged. An entry
+in `[graphite]` silences both.
+
+`handoff_track_graphite` runs every `gt` call through `handoff_gt`: its own
+process group, no stdin, stdout sent to stderr (stdout is the spawn's JSON), and
+killed with its children after `HANDOFF_GT_TIMEOUT` seconds (default 30). It tries the parent
+(`--base`, else trunk). Only when `gt branch info` says the parent is untracked
+or unknown does it track that parent on trunk and retry, then fall back to trunk.
+On any other failure (a tracked parent, a locked store) it changes nothing else:
+re-tracking would rewrite a real stack. It never passes `--force`. A failure or a hung gt warns and the desk still
+starts; after a hang it runs no more gt.

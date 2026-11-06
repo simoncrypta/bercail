@@ -88,8 +88,72 @@ handoff_graphite_config() {
   printf '%s' "$cfg"
 }
 
+# This repo's entry in [graphite] of bercail's config.toml: "<main checkout>" =
+# true|false. A linked worktree goes by its main checkout. Fails with no entry.
+handoff_graphite_override() {
+  local config="${BERCAIL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml}" main key value
+  [[ -f "$config" ]] || return 1
+  main="$(handoff_git_main "$1")"
+  [[ -n "$main" ]] || return 1
+  main="$(handoff_realpath "$main")"
+  while IFS=$'\t' read -r key value; do
+    [[ "$key" != \~/* ]] || key="$HOME/${key#\~/}"
+    if [[ "$(handoff_realpath "$key")" == "$main" ]]; then
+      printf '%s' "$value"
+      return 0
+    fi
+  done < <(awk '
+    /^[[:space:]]*\[/ { sec = $0; sub(/#.*/, "", sec); gsub(/[[:space:]"\047]/, "", sec); next }
+    sec != "[graphite]" { next }
+    {
+      line = $0
+      sub(/^[[:space:]]*/, "", line)
+      q = substr(line, 1, 1)
+      if (q != "\"" && q != "\047") next
+      line = substr(line, 2)
+      i = index(line, q)
+      if (!i) next
+      value = substr(line, i + 1)
+      sub(/^[[:space:]]*=[[:space:]]*/, "", value)
+      sub(/[[:space:]]*(#.*)?$/, "", value)
+      if (value == "true" || value == "false") print substr(line, 1, i - 1) "\t" value
+    }' "$config")
+  return 1
+}
+
+# Any gt command auto-inits a repo. Only non-trunk refs (older gt) or parented
+# rows in .graphite_metadata.db (current gt) prove branches are tracked.
+handoff_graphite_tracks_branches() {
+  local root="$1" cfg="$2" trunks refs db rows
+  trunks="$(jq -r '[.trunk, .trunks[]?.name] | map(select(. != null)) | .[]' "$cfg" 2>/dev/null || true)"
+  refs="$(git -C "$root" for-each-ref --format='%(refname:lstrip=2)' refs/branch-metadata/ 2>/dev/null || true)"
+  if [[ -n "$refs" ]] && grep -qvxF -e "$trunks" <<<"$refs"; then
+    return 0
+  fi
+  db="$(dirname "$cfg")/.graphite_metadata.db"
+  if [[ -f "$db" ]]; then
+    if ! rows="$("${HANDOFF_SQLITE3_BIN:-sqlite3}" -readonly "$db" \
+      "select 1 from branch_metadata where coalesce(parent_branch_name, '') <> '' limit 1" 2>/dev/null)"; then
+      printf 'handoff-spawn: cannot read %s (sqlite3 missing, database busy, or unknown schema); skipping Graphite. Set "%s" = true or false under [graphite] in bercail config.toml to override.\n' \
+        "$db" "$(handoff_git_main "$root")" >&2
+      return 1
+    fi
+    [[ -z "$rows" ]] || return 0
+  fi
+  # A real repo looks the same once its last stack is merged.
+  printf 'handoff-spawn: gt has a config here but tracks no branch, so not using Graphite. If this repo uses it, set "%s" = true under [graphite] in bercail config.toml.\n' \
+    "$(handoff_git_main "$root")" >&2
+  return 1
+}
+
 handoff_is_graphite() {
-  handoff_graphite_config "$1" >/dev/null
+  local override cfg
+  if override="$(handoff_graphite_override "$1")"; then
+    [[ "$override" == true ]]
+    return
+  fi
+  cfg="$(handoff_graphite_config "$1")" || return 1
+  handoff_graphite_tracks_branches "$1" "$cfg"
 }
 
 # Copy main's uncommitted tracked+untracked files into sibling as a working
@@ -113,23 +177,103 @@ handoff_copy_dirty() {
   done < <(git -C "$main" ls-files --others --exclude-standard)
 }
 
+# Run a command in its own process group, so its children die with it. Status
+# 124 when it outlives $1 seconds. Not timeout(1): macOS has none.
+handoff_bounded() {
+  local ticks=$(($1 * 10)) pid rc
+  shift
+  (
+    # Job control only for the fork: it is what gives the command its own group.
+    # Left on, bash also prints a notice ("[1]+ Done") when the command ends.
+    set -m
+    "$@" &
+    pid=$!
+    set +m
+    # gt left the terminal's group with set -m, so Ctrl-C only reaches it from here.
+    # Die by the signal: on a plain exit 130 the caller would carry on to the next gt.
+    trap 'kill -KILL -- "-$pid" 2>/dev/null; trap - INT; kill -INT 0' INT
+    trap 'kill -KILL -- "-$pid" 2>/dev/null; exit 143' TERM
+    while kill -0 "$pid" 2>/dev/null; do
+      if [[ "$ticks" -le 0 ]]; then
+        kill -TERM -- "-$pid" 2>/dev/null || true
+        sleep 1
+        kill -KILL -- "-$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        exit 124
+      fi
+      ticks=$((ticks - 1))
+      sleep 0.1
+    done
+    rc=0
+    wait "$pid" || rc=$?
+    # A child left behind would hold the caller's pipes open.
+    kill -KILL -- "-$pid" 2>/dev/null || true
+    exit "$rc"
+  )
+}
+
+handoff_gt_timeout() {
+  local secs="${HANDOFF_GT_TIMEOUT:-30}"
+  [[ "$secs" =~ ^[1-9][0-9]*$ ]] || secs=30
+  printf '%s' "$secs"
+}
+
+# No gt call can hold the spawn or answer a prompt, and stdout is the spawn's JSON.
+handoff_gt() {
+  local sibling="$1"
+  shift
+  handoff_bounded "$(handoff_gt_timeout)" gt --cwd "$sibling" "$@" --no-interactive </dev/null >&2
+}
+
+# Repair only when gt says the parent is untracked or unknown. Other errors
+# (such as a locked database) must never re-parent an existing stack.
+handoff_gt_track() {
+  local sibling="$1" parent="$2" trunk="$3" rc=0 info
+  handoff_gt "$sibling" track --parent "$parent" || rc=$?
+  [[ "$rc" -ne 0 && "$rc" -ne 124 && "$parent" != "$trunk" ]] || return "$rc"
+  rc=0
+  info="$(handoff_gt "$sibling" branch info --branch "$parent" 2>&1)" || rc=$?
+  [[ "$rc" -ne 124 ]] || return 124
+  [[ "$rc" -ne 0 && ( "$info" == *"untracked branch"* || "$info" == *"Could not find branch"* ) ]] || return 1
+  rc=0
+  handoff_gt "$sibling" track "$parent" --parent "$trunk" || rc=$?
+  [[ "$rc" -ne 124 ]] || return 124
+  if [[ "$rc" -eq 0 ]]; then
+    rc=0
+    handoff_gt "$sibling" track --parent "$parent" || rc=$?
+    [[ "$rc" -ne 0 ]] || return 0
+    [[ "$rc" -ne 124 ]] || return 124
+  fi
+  printf 'handoff-spawn: gt could not track %s as the parent; using trunk %s.\n' "$parent" "$trunk" >&2
+  handoff_gt "$sibling" track --parent "$trunk"
+}
+
 # parent: the branch the new one was cut from (--base); default is trunk.
+# Never fails the spawn: the worktree and its space exist by now, so a gt problem
+# is a warning and the desk still starts.
 handoff_track_graphite() {
-  local sibling="$1" parent="${2:-}" cfg trunk
-  cfg="$(handoff_graphite_config "$sibling")" || return 0
-  command -v gt >/dev/null 2>&1 || return 0
-  if gt --cwd "$sibling" parent >/dev/null 2>&1; then
+  local sibling="$1" parent="${2:-}" cfg trunk rc=0
+  # gt would auto-init here, on a trunk it guessed.
+  if ! cfg="$(handoff_graphite_config "$sibling")"; then
+    printf 'handoff-spawn: Graphite is on for this repo but it has no gt config; not tracking %s. Run gt init, then gt track.\n' "$sibling" >&2
     return 0
   fi
-  if [[ -n "$parent" ]]; then
-    trunk="$parent"
-  else
-    trunk="$(jq -r '.trunk // "main"' "$cfg" 2>/dev/null || true)"
-    trunk="${trunk:-main}"
+  command -v gt >/dev/null 2>&1 || return 0
+  handoff_gt "$sibling" parent >/dev/null 2>&1 || rc=$?
+  [[ "$rc" -ne 0 ]] || return 0
+  trunk="$(jq -r '.trunk // .trunks[0].name // "main"' "$cfg" 2>/dev/null || true)"
+  trunk="${trunk:-main}"
+  parent="${parent:-$trunk}"
+  if [[ "$rc" -ne 124 ]]; then
+    rc=0
+    handoff_gt_track "$sibling" "$parent" "$trunk" || rc=$?
   fi
-  gt --cwd "$sibling" track --parent "$trunk" --no-interactive \
-    || gt --cwd "$sibling" track --force --no-interactive \
-    || handoff_die "gt track failed for $sibling"
+  case "$rc" in
+    0) return 0 ;;
+    124) printf 'handoff-spawn: gt did not finish in %ss; ' "$(handoff_gt_timeout)" >&2 ;;
+    *) printf 'handoff-spawn: gt failed; ' >&2 ;;
+  esac
+  printf 'the desk starts anyway, untracked. In %s run: gt track --parent %s\n' "$sibling" "$parent" >&2
 }
 
 handoff_sibling_path() {

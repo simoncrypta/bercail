@@ -25,21 +25,120 @@ git_init() {
   git -C "$dir" commit -qm base
 }
 
-test_graphite_rev_parse_is_not_enough() {
+git_dir() { git -C "$1" rev-parse --path-format=absolute --git-common-dir; }
+
+# What any gt command leaves behind in a repo: the config, nothing tracked.
+graphite_auto_init() {
+  printf '{"trunk":"master","trunks":[{"name":"master"}]}\n' >"$(git_dir "$1")/.graphite_repo_config"
+}
+
+# Current gt stores every branch it has seen. Only tracked branches have a parent.
+graphite_db_row() {
+  local parent=null
+  [[ -z "${3:-}" ]] || parent="'$3'"
+  sqlite3 "$(git_dir "$1")/.graphite_metadata.db" \
+    "create table if not exists branch_metadata (branch_name text primary key, parent_branch_name text);
+     insert into branch_metadata values ('$2', $parent);"
+}
+
+test_graphite_config_file_alone_is_not_graphite() {
   local repo="$TMP_DIR/plain"
   git_init "$repo"
-  local printed
-  printed="$(git -C "$repo" rev-parse --git-path .graphite_repo_config)"
-  [[ -n "$printed" ]] || fail "rev-parse always prints a path"
   handoff_is_graphite "$repo" && fail "plain repo must not count as Graphite"
-  mkdir -p "$(dirname "$repo/$printed")"
-  if [[ "$printed" == /* ]]; then
-    printf '{}\n' >"$printed"
-  else
-    printf '{}\n' >"$repo/$printed"
+  graphite_auto_init "$repo"
+  handoff_is_graphite "$repo" && fail "an auto-created config must not count as Graphite"
+  git -C "$repo" update-ref refs/branch-metadata/master HEAD
+  handoff_is_graphite "$repo" && fail "metadata for trunk alone must not count as Graphite"
+  printf 'PASS: an auto-created Graphite config, even with a trunk ref, is not Graphite\n'
+}
+
+test_graphite_metadata_refs_are_graphite() {
+  local repo="$TMP_DIR/gt-refs" sibling="$TMP_DIR/gt-refs.feat"
+  git_init "$repo"
+  git -C "$repo" worktree add -q -b feat "$sibling"
+  graphite_auto_init "$repo"
+  git -C "$repo" update-ref refs/branch-metadata/stack/one HEAD
+  handoff_is_graphite "$repo" || fail "a tracked branch ref must count as Graphite"
+  handoff_is_graphite "$sibling" || fail "a linked worktree shares the refs"
+  printf 'PASS: branch metadata refs for a non-trunk branch are Graphite, from any worktree\n'
+}
+
+test_graphite_second_trunk_ref_is_not_graphite() {
+  local repo="$TMP_DIR/gt-trunks"
+  git_init "$repo"
+  printf '{"trunk":"main","trunks":[{"name":"main"},{"name":"sandbox"}]}\n' >"$(git_dir "$repo")/.graphite_repo_config"
+  git -C "$repo" update-ref refs/branch-metadata/sandbox HEAD
+  handoff_is_graphite "$repo" && fail "every trunk is excluded, not only the first"
+  printf 'PASS: metadata refs of any configured trunk do not count\n'
+}
+
+test_graphite_metadata_db_rows() {
+  local repo="$TMP_DIR/gt-db" err
+  git_init "$repo"
+  graphite_auto_init "$repo"
+  export HANDOFF_SQLITE3_BIN="$TMP_DIR/no-sqlite3"
+  : >"$(git_dir "$repo")/.graphite_metadata.db"
+  err="$(handoff_is_graphite "$repo" 2>&1)" && fail "an unreadable store is not evidence of Graphite: $err"
+  printf '%s' "$err" | grep -q '\[graphite\]' || fail "unreadable store should name the override: $err"
+  unset HANDOFF_SQLITE3_BIN
+  if ! command -v sqlite3 >/dev/null 2>&1; then
+    printf 'SKIP: sqlite3 not found; the store rows are untested\n'
+    return 0
   fi
-  handoff_is_graphite "$repo" || fail "file present must count as Graphite"
-  printf 'PASS: Graphite detection is test -f of git-path, not rev-parse alone\n'
+  err="$(handoff_is_graphite "$repo" 2>&1)" && fail "an unknown schema is not evidence of Graphite: $err"
+  printf '%s' "$err" | grep -q '\[graphite\]' || fail "unknown schema should name the override: $err"
+  rm -f "$(git_dir "$repo")/.graphite_metadata.db"
+  graphite_db_row "$repo" master
+  graphite_db_row "$repo" stray-branch
+  err="$(handoff_is_graphite "$repo" 2>&1)" && fail "rows with no parent are only what auto-init saw: $err"
+  printf '%s' "$err" | grep -q 'tracks no branch' || fail "say why Graphite is off, and how to turn it on: $err"
+  printf '%s' "$err" | grep -q 'cannot read' && fail "a readable store is not unreadable: $err"
+  graphite_db_row "$repo" feat master
+  handoff_is_graphite "$repo" || fail "a branch with a parent is tracked: Graphite"
+  printf 'PASS: the metadata store counts only rows with a parent; unreadable skips Graphite and warns\n'
+}
+
+test_graphite_config_override() {
+  local plain="$TMP_DIR/ov-plain" real="$TMP_DIR/ov-real" sibling="$TMP_DIR/ov-real.feat" cfg="$TMP_DIR/ov.toml"
+  local home="$TMP_DIR/ov-home"
+  git_init "$plain"
+  git_init "$real"
+  git -C "$real" worktree add -q -b feat "$sibling"
+  graphite_auto_init "$real"
+  git -C "$real" update-ref refs/branch-metadata/feat HEAD
+  export BERCAIL_CONFIG="$cfg"
+  cat >"$cfg" <<EOF
+[graphite] # by main checkout
+"$real" = false   # no longer stacks here
+'$plain' = true
+
+[bstack]
+"$TMP_DIR/ov-other" = true
+EOF
+  handoff_is_graphite "$real" && fail "false wins over refs"
+  handoff_is_graphite "$sibling" && fail "a linked worktree uses its main checkout's entry"
+  handoff_is_graphite "$plain" || fail "true wins over no signal at all"
+  cat >"$cfg" <<EOF
+[bstack]
+"$real" = false
+
+[graphite]
+"$TMP_DIR/ov-other" = false
+"$plain" = maybe
+EOF
+  handoff_is_graphite "$real" || fail "a key in another section or for another repo is ignored"
+  handoff_is_graphite "$plain" && fail "a value that is not a boolean is ignored"
+  printf '["graphite"]\n"%s" = true\n' "$plain" >"$cfg"
+  handoff_is_graphite "$plain" || fail "a quoted table name is the same table"
+  [[ -z "$(handoff_is_graphite "$plain" 2>&1)" ]] || fail "a repo that has settled it hears nothing"
+  mkdir -p "$home"
+  git_init "$home/repo"
+  printf '[graphite]\n"~/repo" = true\n' >"$cfg"
+  (HOME="$home"; handoff_is_graphite "$home/repo") || fail "~/ in a key is the home directory"
+  rm -f "$cfg"
+  handoff_is_graphite "$real" || fail "no config file falls through to detection"
+  unset BERCAIL_CONFIG
+  printf 'PASS: [graphite] in config.toml overrides detection for one repo, from any worktree\n'
 }
 
 test_copy_dirty_is_working_tree_not_index() {
@@ -97,6 +196,7 @@ test_graphite_track_uses_resolved_config_path() {
   fi
   mkdir -p "$(dirname "$cfg")"
   printf '{"trunk":"master"}\n' >"$cfg"
+  git -C "$repo" update-ref refs/branch-metadata/feat HEAD
   [[ "$(handoff_graphite_config "$repo")" == "$cfg" ]] \
     || fail "graphite config path should resolve relative git-path"
   (
@@ -118,7 +218,7 @@ test_graphite_tracks_new_branch_in_linked_worktree() {
   cat >"$bin/gt" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >>"$TMP_DIR/gt.log"
-case "\$*" in *" parent") exit 1 ;; esac
+case "\$*" in *" parent "*) exit 1 ;; esac
 EOF
   chmod +x "$bin/gt"
   : >"$TMP_DIR/gt.log"
@@ -141,6 +241,10 @@ test_info_json_reports_graphite_and_dirty() {
   printf '#!/bin/sh\nexit 1\n' >"$TMP_DIR/no-herdr"
   chmod +x "$TMP_DIR/no-herdr"
   unset HC_TERMINAL_ID HANDOFF_SPACE
+  out="$(cd "$repo" && HERDR_APP_BIN="$TMP_DIR/no-herdr" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
+  printf '%s' "$out" | jq -e '.graphite == false' >/dev/null || fail "info with only an auto-created config: $out"
+  git -C "$repo" update-ref refs/branch-metadata/feat HEAD
   out="$(cd "$repo" && HERDR_APP_BIN="$TMP_DIR/no-herdr" \
     CURSOR_CONFIG_DIR="$TMP_DIR/no-cursor" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
@@ -244,7 +348,7 @@ test_graphite_tracks_base_as_parent() {
   cat >"$bin/gt" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >>"$TMP_DIR/gt-base.log"
-case "\$*" in *" parent") exit 1 ;; esac
+case "\$*" in *" parent "*) exit 1 ;; esac
 EOF
   chmod +x "$bin/gt"
   : >"$TMP_DIR/gt-base.log"
@@ -264,7 +368,11 @@ test_base_needs_branch() {
   printf 'PASS: --base needs --branch and is in --help\n'
 }
 
-test_graphite_rev_parse_is_not_enough
+test_graphite_config_file_alone_is_not_graphite
+test_graphite_metadata_refs_are_graphite
+test_graphite_second_trunk_ref_is_not_graphite
+test_graphite_metadata_db_rows
+test_graphite_config_override
 test_copy_dirty_is_working_tree_not_index
 test_usage
 test_issue_prompt_points_at_the_issue
@@ -903,3 +1011,439 @@ test_no_session_id_is_not_invented() {
 }
 
 test_no_session_id_is_not_invented
+
+# A fake gt: $1 is the case body run on its joined argv, after logging it.
+_fake_gt() {
+  local bin="$1" log="$2" body="$3"
+  mkdir -p "$bin"
+  : >"$log"
+  cat >"$bin/gt" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >>"$log"
+args=" \$* "
+$body
+EOF
+  chmod +x "$bin/gt"
+}
+
+_track_fixture() {
+  local repo="$1" sibling="$1.feat"
+  git_init "$repo"
+  git -C "$repo" branch parent-branch
+  git -C "$repo" worktree add -q -b feat "$sibling" parent-branch
+  graphite_auto_init "$repo"
+}
+
+test_track_already_tracked_does_nothing() {
+  local repo="$TMP_DIR/tr-done" bin="$TMP_DIR/tr-done-bin" log="$TMP_DIR/tr-done.log"
+  _track_fixture "$repo"
+  _fake_gt "$bin" "$log" 'exit 0'
+  PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" parent-branch
+  grep -q ' track ' "$log" && fail "a branch with a parent is not tracked again: $(cat "$log")"
+  printf 'PASS: a branch gt already knows is left alone\n'
+}
+
+test_track_tracks_an_untracked_parent_first() {
+  local repo="$TMP_DIR/tr-parent" bin="$TMP_DIR/tr-parent-bin" log="$TMP_DIR/tr-parent.log" order
+  _track_fixture "$repo"
+  # Like gt: the new branch can't sit on a parent until that parent is tracked.
+  _fake_gt "$bin" "$log" "
+case \"\$args\" in
+  *' parent --no-interactive '*) exit 1 ;;
+  *' track parent-branch --parent master '*) : >'$TMP_DIR/tr-parent-tracked'; exit 0 ;;
+  *' track --parent parent-branch '*) [[ -f '$TMP_DIR/tr-parent-tracked' ]] ;;
+  *' branch info '*) echo 'ERROR: Cannot perform this operation on untracked branch parent-branch.' >&2; exit 1 ;;
+  *) exit 7 ;;
+esac"
+  PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" parent-branch
+  order="$(grep -c . "$log")"
+  [[ "$order" -eq 5 ]] || fail "parent check, try, is parent tracked, track parent, retry; log=$(cat "$log")"
+  [[ "$(sed -n 5p "$log")" == "--cwd $repo.feat track --parent parent-branch --no-interactive" ]] \
+    || fail "the branch should end up on its real parent; log=$(cat "$log")"
+  grep -q -- '--force' "$log" && fail "--force must never run: $(cat "$log")"
+  printf 'PASS: an untracked --base is tracked on trunk first, then the branch on it\n'
+}
+
+test_track_falls_back_to_trunk_with_a_warning() {
+  local repo="$TMP_DIR/tr-trunk" bin="$TMP_DIR/tr-trunk-bin" log="$TMP_DIR/tr-trunk.log" err
+  _track_fixture "$repo"
+  _fake_gt "$bin" "$log" "
+case \"\$args\" in
+  *' track --parent master '*) exit 0 ;;
+  *' branch info '*) echo 'ERROR: Could not find branch parent-branch.' >&2; exit 1 ;;
+  *) exit 1 ;;
+esac"
+  err="$(PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" parent-branch 2>&1)" \
+    || fail "fallback must not fail: $err"
+  [[ "$(tail -1 "$log")" == "--cwd $repo.feat track --parent master --no-interactive" ]] \
+    || fail "should end on trunk; log=$(cat "$log")"
+  printf '%s' "$err" | grep -q 'parent-branch' || fail "warn that the parent was not used: $err"
+  printf '%s' "$err" | grep -qE '\[[0-9]+\]' && fail "job notices on stderr: $err"
+  grep -q -- '--force' "$log" && fail "--force must never run: $(cat "$log")"
+  printf 'PASS: when the parent cannot be tracked the branch goes on trunk, with a warning\n'
+}
+
+test_track_leaves_a_tracked_parent_in_its_stack() {
+  local repo="$TMP_DIR/tr-stack" bin="$TMP_DIR/tr-stack-bin" log="$TMP_DIR/tr-stack.log" err
+  _track_fixture "$repo"
+  # The parent is tracked, so this failure is about something else.
+  _fake_gt "$bin" "$log" "
+case \"\$args\" in
+  *' branch info --branch parent-branch '*) exit 0 ;;
+  *) exit 1 ;;
+esac"
+  err="$(PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" parent-branch 2>&1)" || fail "must not fail: $err"
+  grep -q ' track parent-branch ' "$log" && fail "re-tracking a tracked parent cuts it out of its stack: $(cat "$log")"
+  grep -q ' track --parent master ' "$log" && fail "a stacked branch must not silently move to trunk: $(cat "$log")"
+  printf '%s' "$err" | grep -q 'gt track --parent parent-branch' || fail "warn with the real parent: $err"
+  printf 'PASS: a gt failure never re-parents a tracked --base or moves the branch to trunk\n'
+}
+
+# A locked store fails every gt call, then clears: the repair must not run on that.
+test_track_transient_failure_never_touches_the_parent() {
+  local repo="$TMP_DIR/tr-lock" bin="$TMP_DIR/tr-lock-bin" log="$TMP_DIR/tr-lock.log" err
+  _track_fixture "$repo"
+  _fake_gt "$bin" "$log" "
+case \"\$args\" in
+  *' track parent-branch '*) exit 0 ;;
+  *' track --parent master '*) exit 0 ;;
+  *) echo 'database is locked' >&2; exit 1 ;;
+esac"
+  err="$(PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" parent-branch 2>&1)" || fail "must not fail: $err"
+  grep -q ' track parent-branch ' "$log" && fail "a failure that is not 'untracked' re-parented the base: $(cat "$log")"
+  grep -q ' track --parent master ' "$log" && fail "a failure that is not 'untracked' moved the branch to trunk: $(cat "$log")"
+  printf '%s' "$err" | grep -q 'gt track --parent parent-branch' || fail "warn with the real parent: $err"
+  printf 'PASS: only an untracked or unknown --base is repaired; a locked store changes nothing\n'
+}
+
+test_track_child_left_behind_does_not_hold_the_caller() {
+  local repo="$TMP_DIR/tr-left" bin="$TMP_DIR/tr-left-bin" log="$TMP_DIR/tr-left.log" err start
+  _track_fixture "$repo"
+  _fake_gt "$bin" "$log" "
+case \"\$args\" in
+  *' parent --no-interactive '*) exit 1 ;;
+  *' track '*) sleep 300 & exit 1 ;;
+  *) exit 0 ;;
+esac"
+  start=$SECONDS
+  err="$(PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" parent-branch 2>&1)" || fail "must not fail: $err"
+  [[ $((SECONDS - start)) -lt 15 ]] || fail "a child gt left behind held the capture for $((SECONDS - start))s"
+  printf 'PASS: a child gt leaves behind cannot hold the pipes of the caller\n'
+}
+
+test_track_bad_timeout_is_ignored() {
+  local repo="$TMP_DIR/tr-badt" bin="$TMP_DIR/tr-badt-bin" log="$TMP_DIR/tr-badt.log" value err
+  _track_fixture "$repo"
+  for value in abc 1.5 30s 0 ''; do
+    _fake_gt "$bin" "$log" "case \"\$args\" in *' parent --no-interactive '*) exit 1 ;; esac"
+    err="$( (set -e; PATH="$bin:$PATH" HANDOFF_GT_TIMEOUT="$value" handoff_track_graphite "$repo.feat"; printf 'still-here\n') 2>&1)" \
+      || fail "HANDOFF_GT_TIMEOUT=$value aborted: $err"
+    printf '%s' "$err" | grep -q 'still-here' || fail "HANDOFF_GT_TIMEOUT=$value: $err"
+    grep -q ' track --parent master ' "$log" || fail "HANDOFF_GT_TIMEOUT=$value skipped gt: $(cat "$log")"
+  done
+  printf 'PASS: a bad HANDOFF_GT_TIMEOUT falls back to the default\n'
+}
+
+test_track_failure_warns_and_continues() {
+  local repo="$TMP_DIR/tr-fail" bin="$TMP_DIR/tr-fail-bin" log="$TMP_DIR/tr-fail.log" err rc=0
+  _track_fixture "$repo"
+  _fake_gt "$bin" "$log" 'exit 1'
+  err="$( (set -e; PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" parent-branch; printf 'still-here\n') 2>&1)" || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "a failed gt must not abort: rc=$rc $err"
+  printf '%s' "$err" | grep -q 'still-here' || fail "must keep going: $err"
+  printf '%s' "$err" | grep -q 'gt track' || fail "must warn with what to run: $err"
+  grep -q -- '--force' "$log" && fail "--force must never run: $(cat "$log")"
+  printf 'PASS: gt track failing warns and returns\n'
+}
+
+test_track_timeout_is_bounded_and_kills_the_group() {
+  local repo="$TMP_DIR/tr-hang" bin="$TMP_DIR/tr-hang-bin" log="$TMP_DIR/tr-hang.log" err start body
+  _track_fixture "$repo"
+  # The sleep is a grandchild holding stderr: $(...) below only returns once it is dead.
+  for body in \
+    'sleep 300 & wait' \
+    'trap "" TERM; sleep 300 & wait; sleep 300' \
+    'case "$args" in *" parent "*) exit 1 ;; esac; sleep 300 & wait'; do
+    _fake_gt "$bin" "$log" "$body"
+    start=$SECONDS
+    err="$(PATH="$bin:$PATH" HANDOFF_GT_TIMEOUT=1 handoff_track_graphite "$repo.feat" parent-branch 2>&1)" \
+      || fail "a hung gt must not abort: $err"
+    [[ $((SECONDS - start)) -lt 15 ]] || fail "hung gt held the spawn for $((SECONDS - start))s: $body"
+    printf '%s' "$err" | grep -q 'did not finish' || fail "must warn that gt hung: $err"
+    printf '%s' "$err" | grep -qE '\[[0-9]+\]' && fail "job notices on stderr: $err"
+    [[ "$(grep -c ' track ' "$log")" -le 1 ]] || fail "no more gt once one has hung: $(cat "$log")"
+  done
+  printf 'PASS: a hung gt is killed with its children, warned about, and not retried\n'
+}
+
+# Spawns usually run from a terminal, where job control has a foreground to manage.
+test_track_timeout_under_a_terminal() {
+  command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1 || {
+    printf 'SKIP: no util-linux script for a pty\n'
+    return 0
+  }
+  local repo="$TMP_DIR/tr-pty" bin="$TMP_DIR/tr-pty-bin" log="$TMP_DIR/tr-pty.log" run="$TMP_DIR/tr-pty.sh" out rc=0
+  _track_fixture "$repo"
+  _fake_gt "$bin" "$log" 'sleep 300 & wait'
+  cat >"$run" <<EOF
+source "$ROOT/skills/handoff/scripts/handoff-spawn"
+PATH="$bin:\$PATH" HANDOFF_GT_TIMEOUT=1 handoff_track_graphite "$repo.feat" parent-branch
+echo "returned rc=\$?"
+EOF
+  # handoff_bounded: a regression here is a hang, so the suite must not wait on it.
+  out="$(handoff_bounded 20 script -qec "bash $run" /dev/null </dev/null)" || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "a hung gt under a terminal held the spawn: rc=$rc $out"
+  printf '%s' "$out" | grep -q 'returned rc=0' || fail "should return 0: $out"
+  printf '%s' "$out" | grep -q 'did not finish' || fail "should warn: $out"
+  printf '%s' "$out" | grep -qE '\[[0-9]+\]\+?[[:space:]]+(Done|Exit|Terminated|Killed)' && fail "job notices on stderr: $out"
+  printf 'PASS: a hung gt is bounded under a controlling terminal, with no job notices\n'
+}
+
+test_track_ctrl_c_kills_gt() {
+  command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1 || {
+    printf 'SKIP: no util-linux script for a pty\n'
+    return 0
+  }
+  local repo="$TMP_DIR/tr-int" bin="$TMP_DIR/tr-int-bin" log="$TMP_DIR/tr-int.log" run="$TMP_DIR/tr-int.sh" pids="$TMP_DIR/tr-int.pid" pid
+  _track_fixture "$repo"
+  _fake_gt "$bin" "$log" "sleep 300 & echo \$! >'$pids'; wait"
+  cat >"$run" <<EOF
+source "$ROOT/skills/handoff/scripts/handoff-spawn"
+PATH="$bin:\$PATH" handoff_track_graphite "$repo.feat"
+: >"$TMP_DIR/tr-int-carried-on"
+EOF
+  # Not handoff_bounded: its background job does not read this pipe. util-linux has timeout.
+  (sleep 1; printf '\003'; sleep 1) | timeout 15 script -qec "bash $run" /dev/null >/dev/null 2>&1 || true
+  [[ -s "$pids" ]] || fail "the fake gt never ran: $(cat "$log")"
+  pid="$(<"$pids")"
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid"
+    fail "Ctrl-C left gt running with nothing to bound it"
+  fi
+  [[ "$(grep -c . "$log")" -eq 1 ]] || fail "Ctrl-C must stop the gt calls: $(cat "$log")"
+  [[ ! -e "$TMP_DIR/tr-int-carried-on" ]] || fail "Ctrl-C must stop the spawn"
+  printf 'PASS: Ctrl-C during a hung gt kills it and stops the spawn\n'
+}
+
+test_track_output_stays_off_stdout() {
+  local repo="$TMP_DIR/tr-out" bin="$TMP_DIR/tr-out-bin" log="$TMP_DIR/tr-out.log" out
+  _track_fixture "$repo"
+  _fake_gt "$bin" "$log" "echo chatter; case \"\$args\" in *' parent --no-interactive '*) exit 1 ;; esac"
+  out="$(PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" 2>/dev/null)"
+  [[ -z "$out" ]] || fail "spawn's stdout is the JSON result, got: $out"
+  printf 'PASS: gt output never reaches the JSON on stdout\n'
+}
+
+test_track_sigterm_kills_gt() {
+  command -v setsid >/dev/null 2>&1 || {
+    printf 'SKIP: no setsid for the SIGTERM process-group test\n'
+    return 0
+  }
+  local repo="$TMP_DIR/tr-term" bin="$TMP_DIR/tr-term-bin" log="$TMP_DIR/tr-term.log"
+  local run="$TMP_DIR/tr-term.sh" ready="$TMP_DIR/tr-term.ready" pidfile="$TMP_DIR/tr-term.pid"
+  local runner group pid attempt
+  _track_fixture "$repo"
+  _fake_gt "$bin" "$log" "echo \$\$ >'$pidfile'; exec sleep 300"
+  cat >"$run" <<EOF
+source "$ROOT/skills/handoff/scripts/handoff-spawn"
+echo \$\$ >"$ready"
+PATH="$bin:\$PATH" HANDOFF_GT_TIMEOUT=1 handoff_track_graphite "$repo.feat"
+EOF
+  # The caller and watchdog share this new group; gt has its own.
+  setsid bash "$run" >"$TMP_DIR/tr-term.out" 2>&1 &
+  runner=$!
+  for ((attempt=0; attempt<50; attempt++)); do
+    [[ ! -s "$ready" || ! -s "$pidfile" ]] || break
+    sleep 0.1
+  done
+  if [[ ! -s "$ready" || ! -s "$pidfile" ]]; then
+    kill -TERM "$runner" 2>/dev/null || true
+    wait "$runner" 2>/dev/null || true
+    fail "the SIGTERM fixture did not start: $(cat "$TMP_DIR/tr-term.out")"
+  fi
+  group="$(<"$ready")"
+  pid="$(<"$pidfile")"
+  kill -TERM -- "-$group"
+  wait "$runner" 2>/dev/null || true
+  for ((attempt=0; attempt<30; attempt++)); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL -- "-$pid" 2>/dev/null || true
+    fail "SIGTERM killed the watchdog but left gt running"
+  fi
+  printf 'PASS: SIGTERM to the spawn process group also kills gt\n'
+}
+
+test_track_trunk_from_trunks_list() {
+  local repo="$TMP_DIR/tr-list" bin="$TMP_DIR/tr-list-bin" log="$TMP_DIR/tr-list.log"
+  _track_fixture "$repo"
+  printf '{"trunks":[{"name":"develop"}]}\n' >"$(git_dir "$repo")/.graphite_repo_config"
+  _fake_gt "$bin" "$log" "case \"\$args\" in *' parent --no-interactive '*) exit 1 ;; esac"
+  PATH="$bin:$PATH" handoff_track_graphite "$repo.feat"
+  grep -qxF -- "--cwd $repo.feat track --parent develop --no-interactive" "$log" \
+    || fail "a config with only trunks[] names trunk; log=$(cat "$log")"
+  printf 'PASS: trunk is read from trunks[] when trunk is absent\n'
+}
+
+test_track_on_without_config_warns() {
+  local repo="$TMP_DIR/tr-nocfg" bin="$TMP_DIR/tr-nocfg-bin" log="$TMP_DIR/tr-nocfg.log" err
+  git_init "$repo"
+  _fake_gt "$bin" "$log" 'exit 0'
+  err="$(PATH="$bin:$PATH" handoff_track_graphite "$repo" 2>&1)" || fail "must not fail: $err"
+  [[ ! -s "$log" ]] || fail "gt auto-inits on any command; never run it here: $(cat "$log")"
+  printf '%s' "$err" | grep -q 'gt init' || fail "should say to run gt init: $err"
+  printf 'PASS: Graphite forced on with no gt config warns instead of letting gt auto-init\n'
+}
+
+# A whole --branch spawn with stubs for everything but git and the gt under test.
+_spawn_branch() {
+  local name="$1" repo="$2" bin="$3" home="$4" base="${5:-}"
+  mkdir -p "$home/.config/worktrunk"
+  cat >"$bin/wt" <<'WT'
+#!/usr/bin/env bash
+branch="" base=HEAD
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --create) branch="$2"; shift 2 ;;
+    --base) base="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+main="$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
+git -C "$main" worktree add -q -b "$branch" "$main.$branch" "$base"
+WT
+  cat >"$bin/herdr-app" <<'HERDR'
+#!/bin/sh
+printf '%s\n' '{"space":"sp1"}'
+HERDR
+  printf '#!/bin/sh\nexit 0\n' >"$bin/claude"
+  chmod +x "$bin/wt" "$bin/herdr-app" "$bin/claude"
+  cat >"$home/.config/worktrunk/herdr-layout.sh" <<HELPER
+_wt_herdr_keep_user_focus() { :; }
+_wt_generate_session_name() { printf 'Lbl'; }
+wt_herdr_handoff_agent() { : >"$TMP_DIR/$name-desk-started"; }
+_wt_herdr_space_by_folder() { printf 'sp1'; }
+_wt_herdr_space_desk() { printf 'desk1'; }
+HELPER
+  _bd_stub
+  : >"$BD_COMMENTS"
+  (
+    cd "$repo"
+    HOME="$home" PATH="$bin:$PATH" HERDR_APP_BIN="$bin/herdr-app" HANDOFF_GT_TIMEOUT=1 \
+      XDG_STATE_HOME="$TMP_DIR/$name-state" BERCAIL_BIN="$TMP_DIR/no-bercail" \
+      "$ROOT/skills/handoff/scripts/handoff-spawn" \
+      --branch feat --stage start --issue "$ISSUE" --clean ${base:+--base "$base"}
+  )
+}
+
+test_spawn_in_a_plain_repo_with_a_stray_config() {
+  local repo="$TMP_DIR/sp-stray" bin="$TMP_DIR/sp-stray-bin" log="$TMP_DIR/sp-stray.log" out
+  git_init "$repo"
+  graphite_auto_init "$repo"
+  _fake_gt "$bin" "$log" 'exit 1'
+  out="$(_spawn_branch sp-stray "$repo" "$bin" "$TMP_DIR/sp-stray-home")" || fail "spawn failed: $out"
+  printf '%s' "$out" | jq -e '.graphite == false and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  [[ ! -s "$log" ]] || fail "gt must not run in a plain repo: $(cat "$log")"
+  grep -q 'Use gt' "$BD_COMMENTS" && fail "no gt intro in a plain repo: $(cat "$BD_COMMENTS")"
+  grep -q 'bercail handoff: stage start' "$BD_COMMENTS" || fail "intro missing: $(cat "$BD_COMMENTS")"
+  printf 'PASS: a plain repo with a stray config spawns with no gt and no gt intro\n'
+}
+
+test_spawn_survives_a_hung_gt() {
+  local repo="$TMP_DIR/sp-hang" bin="$TMP_DIR/sp-hang-bin" log="$TMP_DIR/sp-hang.log" out
+  git_init "$repo"
+  graphite_auto_init "$repo"
+  git -C "$repo" update-ref refs/branch-metadata/other HEAD
+  _fake_gt "$bin" "$log" 'sleep 300 & wait'
+  out="$(_spawn_branch sp-hang "$repo" "$bin" "$TMP_DIR/sp-hang-home" 2>"$TMP_DIR/sp-hang.err")" \
+    || fail "a hung gt must not abort the spawn: $out $(cat "$TMP_DIR/sp-hang.err")"
+  printf '%s' "$out" | jq -e '.graphite == true and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  [[ -f "$TMP_DIR/sp-hang-desk-started" ]] || fail "the desk must still start"
+  grep -q 'did not finish' "$TMP_DIR/sp-hang.err" || fail "warn: $(cat "$TMP_DIR/sp-hang.err")"
+  grep -q 'Use gt' "$BD_COMMENTS" || fail "a real Graphite repo keeps the gt intro: $(cat "$BD_COMMENTS")"
+  printf 'PASS: a hung gt warns and the desk still starts\n'
+}
+
+test_spawn_without_sqlite_skips_gt() {
+  local repo="$TMP_DIR/sp-nosql" bin="$TMP_DIR/sp-nosql-bin" log="$TMP_DIR/sp-nosql.log" out
+  git_init "$repo"
+  graphite_auto_init "$repo"
+  : >"$(git_dir "$repo")/.graphite_metadata.db"
+  _fake_gt "$bin" "$log" 'exit 1'
+  out="$(HANDOFF_SQLITE3_BIN="$TMP_DIR/no-sqlite3" \
+    _spawn_branch sp-nosql "$repo" "$bin" "$TMP_DIR/sp-nosql-home" 2>"$TMP_DIR/sp-nosql.err")" \
+    || fail "spawn failed: $out"
+  printf '%s' "$out" | jq -e '.graphite == false and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  [[ ! -s "$log" ]] || fail "gt must not run when detection is inconclusive: $(cat "$log")"
+  grep -q 'Use gt' "$BD_COMMENTS" && fail "no gt intro without evidence of Graphite"
+  grep -q 'cannot read' "$TMP_DIR/sp-nosql.err" || fail "warn about sqlite3: $(cat "$TMP_DIR/sp-nosql.err")"
+  printf 'PASS: missing sqlite3 cannot turn a plain repo into Graphite or block the desk\n'
+}
+
+test_spawn_survives_a_failed_gt() {
+  local repo="$TMP_DIR/sp-fail" bin="$TMP_DIR/sp-fail-bin" log="$TMP_DIR/sp-fail.log" out
+  git_init "$repo"
+  graphite_auto_init "$repo"
+  git -C "$repo" update-ref refs/branch-metadata/other HEAD
+  _fake_gt "$bin" "$log" 'exit 1'
+  out="$(_spawn_branch sp-fail "$repo" "$bin" "$TMP_DIR/sp-fail-home" 2>"$TMP_DIR/sp-fail.err")" \
+    || fail "a failed gt must not abort the spawn: $out"
+  printf '%s' "$out" | jq -e '.graphite == true and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  [[ -f "$TMP_DIR/sp-fail-desk-started" ]] || fail "the desk must still start"
+  grep -q 'gt failed' "$TMP_DIR/sp-fail.err" || fail "warn: $(cat "$TMP_DIR/sp-fail.err")"
+  printf 'PASS: a failed gt warns and the desk still starts\n'
+}
+
+test_spawn_real_graphite_tracks_trunk() {
+  local repo="$TMP_DIR/sp-real" bin="$TMP_DIR/sp-real-bin" log="$TMP_DIR/sp-real.log" out
+  git_init "$repo"
+  graphite_auto_init "$repo"
+  git -C "$repo" update-ref refs/branch-metadata/other HEAD
+  _fake_gt "$bin" "$log" "case \"\$args\" in *' parent --no-interactive '*) exit 1 ;; esac"
+  out="$(_spawn_branch sp-real "$repo" "$bin" "$TMP_DIR/sp-real-home" 2>/dev/null)" || fail "spawn failed: $out"
+  printf '%s' "$out" | jq -e '.graphite == true and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  grep -qxF -- "--cwd $repo.feat track --parent master --no-interactive" "$log" \
+    || fail "a real stack still gets gt track on trunk; log=$(cat "$log")"
+  grep -c ' track ' "$log" | grep -qx 1 || fail "one track call is enough: $(cat "$log")"
+  grep -q 'Use gt' "$BD_COMMENTS" || fail "a real Graphite repo keeps the gt intro: $(cat "$BD_COMMENTS")"
+  printf 'PASS: a real Graphite repo spawns with gt track and the gt intro, as before\n'
+}
+
+test_spawn_real_stack_tracks_on_its_base() {
+  local repo="$TMP_DIR/sp-stack" bin="$TMP_DIR/sp-stack-bin" log="$TMP_DIR/sp-stack.log" out
+  git_init "$repo"
+  graphite_auto_init "$repo"
+  git -C "$repo" branch stack-one
+  git -C "$repo" update-ref refs/branch-metadata/stack-one HEAD
+  _fake_gt "$bin" "$log" "case \"\$args\" in *' parent --no-interactive '*) exit 1 ;; esac"
+  out="$(_spawn_branch sp-stack "$repo" "$bin" "$TMP_DIR/sp-stack-home" stack-one 2>/dev/null)" || fail "spawn failed: $out"
+  printf '%s' "$out" | jq -e '.graphite == true and .agent_started == true and .base == "stack-one"' >/dev/null || fail "spawn json: $out"
+  [[ "$(grep ' track ' "$log")" == "--cwd $repo.feat track --parent stack-one --no-interactive" ]] \
+    || fail "a stack gets exactly one gt track, on its base; log=$(cat "$log")"
+  grep -q 'Use gt' "$BD_COMMENTS" || fail "a real Graphite repo keeps the gt intro: $(cat "$BD_COMMENTS")"
+  printf 'PASS: a real stack spawned with --base is tracked on that base, as before\n'
+}
+
+test_track_already_tracked_does_nothing
+test_track_tracks_an_untracked_parent_first
+test_track_falls_back_to_trunk_with_a_warning
+test_track_leaves_a_tracked_parent_in_its_stack
+test_track_transient_failure_never_touches_the_parent
+test_track_child_left_behind_does_not_hold_the_caller
+test_track_bad_timeout_is_ignored
+test_track_ctrl_c_kills_gt
+test_track_sigterm_kills_gt
+test_track_failure_warns_and_continues
+test_track_timeout_is_bounded_and_kills_the_group
+test_track_timeout_under_a_terminal
+test_track_output_stays_off_stdout
+test_track_trunk_from_trunks_list
+test_track_on_without_config_warns
+test_spawn_in_a_plain_repo_with_a_stray_config
+test_spawn_survives_a_hung_gt
+test_spawn_without_sqlite_skips_gt
+test_spawn_survives_a_failed_gt
+test_spawn_real_graphite_tracks_trunk
+test_spawn_real_stack_tracks_on_its_base
