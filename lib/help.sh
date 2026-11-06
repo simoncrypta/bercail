@@ -25,11 +25,16 @@ Post-install CLI (bercail):
   doctor        Check dependencies and integration
   harness       JSON: claude, codex, cursor-agent, opencode on PATH (missing is not fatal)
   bstack        opencode with your own subscriptions: status | setup | on | off
+  desk          Bring back the desk agents a reboot took: desk restore [--dry-run]
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills from config.toml (not a full redeploy)
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
+  review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
+                gathers every PR, with one detached sibling worktree and a Stack tab.
+                Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,
+                t: tuicr with [AI Agent] drafts. Then: run | card | ui | select | diff | open | dir
 
 Shell commands:
   dev, d        Show the Herdr app space for $PWD and start its desk agent
@@ -77,7 +82,8 @@ bstack (opencode, bring your own Claude / GPT / Grok subscription):
   Roles: lead (the bstack agent), build (bstack-builder), judge (bstack-judge);
   council: one read-only reviewer per connected provider. In opencode: /council,
   /ready, /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
-  pushes, never merges). Settings: [bstack] in config.toml.
+  pushes, never merges), /pr-review (bercail review-pr's read-only decisions pass).
+  Settings: [bstack] in config.toml.
 
 Config:
   ~/.config/bercail/config.toml               desk agent default, review, [bstack]
@@ -90,10 +96,12 @@ Config:
   ~/.agents/skills/review/                    tuicr review skill (wait / optional GH publish)
   ~/.agents/skills/bstack/, council/          bstack playbooks, cross-provider review
   ~/.agents/skills/{how,why,unslop,autopilot}/  explain, history, cleanup, PR to green
+  ~/.agents/skills/desk-restore/              put a desk with no record back by hand
+  ~/.local/state/bercail/desk-sessions/       which session runs in which desk
   ~/.config/opencode/opencode.jsonc           bstack's opencode config (agents/, commands/ beside it)
   ~/.config/fcitx5/conf/keyboard.conf         Linux fcitx5 hint trigger override
 
-Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`):
+Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`):
   Installed to ~/.agents/skills/<id> (https://agentskills.io). cursor-agent
   reads that dir. Extra symlink only if you set another [agent] command.
   Source: skills/handoff/, skills/review/.
@@ -120,7 +128,7 @@ show_summary() {
   log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff stages: start=claude, codex=Codex CLI, cursor=cursor-agent, bstack=opencode, autopilot=opencode bstack-autopilot; equal, no default)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Config: ${AGENTIC_DEV_USER_CONFIG}"
-  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop}"
+  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore}"
   log ""
   log "Try: dev"
   log "Help: bercail help"

@@ -155,6 +155,7 @@ EOF
     [[ -f "$oc/$rel" ]] || fail "missing $rel"
   done
   grep -qx 'model: claude-agent/opus#high' "$oc/agents/bstack.md" || fail "lead model: $(cat "$oc/agents/bstack.md")"
+  grep -qx 'model: claude-agent/opus#high' "$oc/agents/bstack-pr-review.md" || fail "pr-review follows the lead"
   grep -qx 'model: openai/gpt-6.1-sol' "$oc/agents/bstack-judge.md" || fail "judge model"
   grep -qx 'model: openai/gpt-6.1-sol' "$oc/agents/bstack-builder.md" || fail "builder with no grok falls to gpt"
   grep -q '@' "$oc/agents/bstack-builder.md" "$oc/agents/bstack.md" "$oc/opencode.jsonc" && fail "unrendered token"
@@ -265,6 +266,8 @@ EOF
   assert_eq "openrouter/x-ai/grok-5" "$(_bstack_toml_get bstack grok)" "pinned grok kept"
   assert_eq "openai/gpt-6.1-sol" "$(bstack_role_model lead)" "lead falls to gpt with claude disconnected"
   assert_eq "openrouter/x-ai/grok-5" "$(bstack_role_model build)" "build uses the pinned grok"
+  grep -qx 'model: openai/gpt-6.1-sol' "$OPENCODE_CONFIG_DIR/agents/bstack-pr-review.md" \
+    || fail "pr-review follows the lead after setup: $(grep '^model:' "$OPENCODE_CONFIG_DIR/agents/bstack-pr-review.md")"
   grep -q 'openrouter/x-ai/grok-5 (pinned' "$TMP_DIR/setup.log" || fail "status says pinned: $(cat "$TMP_DIR/setup.log")"
   printf 'PASS: setup picks models automatically; pinned ones stay; doctor flags a due update\n'
 }

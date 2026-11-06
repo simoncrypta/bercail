@@ -1,0 +1,10 @@
+#!/bin/bash
+# Installed by bercail (bercail update keeps it current). Runs once the desktop
+# is up: brings back the desk agents that were running at shutdown. It waits for
+# Herdr to open, so it goes in the background and never holds up the login.
+command -v bercail >/dev/null 2>&1 || exit 0
+log="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/desk-restore.log"
+mkdir -p "$(dirname "$log")"
+nohup bercail desk restore --boot </dev/null >>"$log" 2>&1 &
+disown
+exit 0

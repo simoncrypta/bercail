@@ -18,7 +18,7 @@ Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
 ## What you get
 
-- **The desk.** Each space's agent is pinned beside the tabs and keeps running when the window closes.
+- **The desk.** Each space's agent is pinned beside the tabs and keeps running when the window closes. Supported sessions [come back after a reboot](docs/config.md#desks-after-a-reboot).
 - **Review on `done`.** tuicr opens the uncommitted work the agent left you. `Ctrl+Shift+R` opens it anytime.
 - **Parallel handoff.** One beads issue per job, run headless or in a sibling worktree with its own desk.
 - **Your keyboard, your mouse.** `Ctrl+Shift` keys like the rest of the Herdr app, plus a file tree you can click.
@@ -29,14 +29,14 @@ The easy way: add [Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF), our Grok Bot t
 
 ### Or install it yourself
 
-Current release: [v0.10.0](https://github.com/simoncrypta/bercail/releases/tag/v0.10.0).
+Current release: [v0.11.0](https://github.com/simoncrypta/bercail/releases/tag/v0.11.0).
 
 ```bash
 mise use -g packslip:github.com/simoncrypta/bercail   # mise 2026.9.2+
 bercail install
 ```
 
-mise waits 24 hours before it takes a new release. Can't wait? Pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.10.0`. No mise? `packslip install github.com/simoncrypta/bercail` does the same job, or use curl:
+mise waits 24 hours before it takes a new release. Can't wait? Pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.11.0`. No mise? `packslip install github.com/simoncrypta/bercail` does the same job, or use curl:
 
 ```bash
 curl -fsSL https://bercail.dev/install.sh | bash

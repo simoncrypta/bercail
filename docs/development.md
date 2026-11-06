@@ -3,9 +3,10 @@
 ## Hacking on bercail
 
 ```bash
-shellcheck install.sh lib/*.sh bin/bercail config/shell/bercail.inc.sh config/worktrunk/herdr-layout.sh
+shellcheck install.sh lib/*.sh bin/bercail bin/bercail-desk-agent bin/bercail-desk-claude-hook config/shell/bercail.inc.sh config/worktrunk/herdr-layout.sh
 herdr-app check bercail/mods/bercail-desk
 herdr-app check bercail/mods/bercail-agents
+herdr-app check bercail/mods/bercail-review
 for t in tests/*_test.sh; do bash "$t" || break; done
 ./install.sh --help
 bin/bercail dry-run   # this checkout's CLI; a bare `bercail` runs the installed copy
@@ -14,6 +15,8 @@ npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the berc
 ```
 
 CI runs every `tests/*.sh` on each push and PR, and deploys from master when `CLOUDFLARE_API_TOKEN` is set.
+
+Use Node 26 for the plugin unit tests. When opencode is installed, `tests/desk_session_plugin_test.sh` also checks the plugin in disposable TUIs against a private server, without sending a model prompt or changing your sessions.
 
 `site/` is bercail.dev: an Astro site served by the `bercail-site` Worker, which also serves `/install.sh` from master. `workers/setup-domain` keeps the legacy setup.simoncrypta.dev host alive for older installs. Both share `workers/setup-domain/src/github.js`.
 
@@ -29,7 +32,9 @@ With bstack on: [opencode](https://github.com/anomalyco/opencode) 2.2.3+ (mise, 
 
 ## platforms
 
-**Omarchy.** mise first, `omarchy pkg add`, optional `SUPER+ALT+RETURN` → open or focus the Herdr app, and a post-update hook (`~/.config/omarchy/hooks/post-update.d/bercail.hook`, when `omarchy-hook-install` exists): after `omarchy-update`, it fast-forwards the clone bercail was installed from and runs `bercail update` without prompting (each question takes its default, no). It acts only on a git clone, so curl and mise/packslip installs skip it (update those with `bercail update` or `mise up`). It skips with one line when offline, dirty, off master/main, or diverged. Herdr updates itself; `bercail doctor` says when a downloaded Herdr waits on a window restart.
+**Omarchy.** mise first, `omarchy pkg add`, optional `SUPER+ALT+RETURN` → open or focus the Herdr app, and a post-update hook (`~/.config/omarchy/hooks/post-update.d/bercail.hook`, when `omarchy-hook-install` exists): after `omarchy-update`, it fast-forwards the clone bercail was installed from and runs `bercail update` without prompting (each question takes its default, no). It acts only on a git clone, so curl and mise/packslip installs skip it (update those with `bercail update` or `mise up`). It skips with one line when offline, dirty, off master/main, or diverged. Herdr updates itself; `bercail doctor` says when a downloaded Herdr waits on a window restart. A post-boot hook (`~/.config/omarchy/hooks/post-boot.d/bercail-desk-restore.hook`) brings back [the desks that were running](config.md#desks-after-a-reboot) once Herdr opens.
+
+**Linux with a systemd user manager** (not Omarchy). The `bercail-desk-restore.service` user unit does the same.
 
 **Linux with fcitx5** (Omarchy included). fcitx5 `Ctrl+Alt+H/J` hint keys cleared.
 

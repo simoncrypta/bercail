@@ -40,7 +40,7 @@ curl -fsSL https://bercail.dev/install.sh | bash
 
 ## What the installer does
 
-Bercail runs on the Herdr app. When it is missing, the installer runs [herdr.dev](https://herdr.dev)'s own installer (`~/.local`, no sudo), which brings herdr-core (`hc`); the app keeps both updated after that. The installer copies the bercail layout and its two mods into `~/.config/herdr-app`: `bercail-desk` (the desk and Review) and `bercail-agents` (Herdr's agents list, with a row for each desk). It adds its keys to the `layout:bercail` section of `keys.json`. Switch to it once with `Ctrl+Shift+L` → bercail.
+Bercail runs on the Herdr app. When it is missing, the installer runs [herdr.dev](https://herdr.dev)'s own installer (`~/.local`, no sudo), which brings herdr-core (`hc`); the app keeps both updated after that. The installer copies the bercail layout and its three mods into `~/.config/herdr-app`: `bercail-desk` (the desk and Review), `bercail-agents` (Herdr's agents list, with a row for each desk), and `bercail-review` (the Stack tab of a `bercail review-pr` space). It adds its keys to the `layout:bercail` section of `keys.json`. Switch to it once with `Ctrl+Shift+L` → bercail.
 
 It also installs what bercail needs, and does a little extra on Omarchy, Linux, and macOS. See [development](development.md#dependencies) for the list and [platforms](development.md#platforms) for the details. Every file it writes is listed in [config](config.md#files-bercail-manages).
 
@@ -63,4 +63,4 @@ dev          # this directory's space, with its desk agent
 # or: t      # open the Herdr app
 ```
 
-With [bstack](bstack.md) on, a space starts its desk as bstack (opencode with your terminal's colors) on its own, shown in the desk column. Quit it and it stays quit until `Ctrl+Shift+A` or `dev`. With bstack off nothing starts on its own; `Ctrl+Shift+A` or `dev` starts `[agent] command` from `~/.config/bercail/config.toml`. Handoff stages do not read either; each stage names its own binary.
+With [bstack](bstack.md) on, a space starts its desk as bstack (opencode with your terminal's colors) on its own, shown in the desk column. Quit it and it stays quit until `Ctrl+Shift+A` or `dev`, even across a reboot; one still running at shutdown [comes back](config.md#desks-after-a-reboot). With bstack off nothing starts on its own; `Ctrl+Shift+A` or `dev` starts `[agent] command` from `~/.config/bercail/config.toml`. Handoff stages do not read either; each stage names its own binary.
