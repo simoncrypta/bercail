@@ -16,8 +16,9 @@
 # A clone made here is not Graphite-initialized.
 #
 # Gather is plain gh and git. Diffs are git diff <parent>...<head>, not trunk.
-# The decisions pass is one bstack-pr-review opencode run per non-thin PR,
-# in parallel, read-only, with no --model. Each pass reads pr-<n>/<sha>/source/,
+# The decisions pass is one bstack-pr-review opencode turn per non-thin PR,
+# serially in the visible desk (parallel without Herdr), read-only, with no --model.
+# Each pass reads pr-<n>/<sha>/source/,
 # a snapshot of the changed text files at that sha, and cannot see the worktree.
 # Agents never post to GitHub.
 
@@ -26,12 +27,14 @@ REVIEW_PR_FIELDS="number,title,body,url,author,isDraft,baseRefName,headRefName,h
 
 # shellcheck source=lib/stack.sh
 source "$(dirname "${BASH_SOURCE[0]}")/stack.sh"
+# shellcheck source=lib/review-desk.sh
+source "$(dirname "${BASH_SOURCE[0]}")/review-desk.sh"
 
 _review_root() {
   printf '%s/bercail/reviews' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
 
-# This bercail, for the commands the Stack tab and fzf keys run.
+# This bercail, for the commands the Stack tab runs.
 _review_self() {
   if [[ -n "${BERCAIL_SELF:-}" ]]; then
     printf '%s' "$BERCAIL_SELF"
@@ -270,8 +273,11 @@ _review_check_worktree() {
   gd="$(git -C "$wt" rev-parse --absolute-git-dir)" || return 1
   [[ ! -L "$wt" && -f "$gd/bercail-review-stack" && "$(<"$gd/bercail-review-stack")" == "$R_STACK" ]] \
     || die "refusing to switch $wt: not this stack's review worktree"
-  if git -C "$wt" symbolic-ref -q HEAD >/dev/null; then
-    die "refusing to switch $wt: it is no longer detached"
+  # Detached, or on a PR's branch that review-pr checkout put it on.
+  local branch
+  if branch="$(git -C "$wt" symbolic-ref -q HEAD)" && branch="${branch#refs/heads/}" \
+    && ! jq -e --arg b "$branch" 'any(.prs[]; .head == $b)' "$R_STACK/stack.json" >/dev/null 2>&1; then
+    die "refusing to switch $wt: it is on $branch, not detached or on a PR's branch"
   fi
   [[ -z "$(git -C "$wt" status --porcelain)" ]] \
     || die "refusing to switch $wt: it has local changes"
@@ -399,8 +405,9 @@ _review_thin() {
 }
 
 _review_intent_md() {
-  local pr="$1" issues="$2" linear="$3" thin="$4"
-  jq -r --slurpfile issues "$issues" --argjson linear "$linear" --argjson thin "$thin" '
+  local pr="$1" issues="$2" linear="$3" thin="$4" commits="$5"
+  jq -r --slurpfile issues "$issues" --argjson linear "$linear" --argjson thin "$thin" \
+    --rawfile commits "$commits" '
     def lockish: test("(^|/)(package-lock\\.json|npm-shrinkwrap\\.json|yarn\\.lock|pnpm-lock\\.yaml|bun\\.lockb?|Cargo\\.lock|Gemfile\\.lock|poetry\\.lock|uv\\.lock|composer\\.lock|go\\.sum|mix\\.lock|Podfile\\.lock|flake\\.lock)$")
       or test("(^|/)(dist|vendor|node_modules)/") or test("\\.(min\\.js|map|snap)$") or test("[._-]generated[._-]");
     "# PR #\(.number): \(.title)",
@@ -411,28 +418,35 @@ _review_intent_md() {
     (if .isDraft then "- draft" else empty end),
     "- thin: \(if ($thin | length) == 0 then "none" else ($thin | join(", ")) end)",
     "",
-    "## PR body",
+    "## Comparison clues",
     "",
-    (if (.body // "" | test("\\S")) then .body else "(empty)" end),
+    "Infer intent from diff.patch first, then compare it with these clues.",
+    "Issues may be loose or sloppy; commit messages are further clues.",
+    "PR title/body are the weakest clues and may be stale.",
     "",
     "## Linked issues",
     "",
-    (if ($issues | length) == 0 then "(none)"
+    (if ($issues | length) == 0 then
+       (if ((.closingIssuesReferences // []) | length) > 0 or ($linear | length) > 0
+        then "Linked issue content was not fetched; comparison is unavailable."
+        else "No linked issue clues to compare; still infer intent from the code." end)
      else ($issues[] | "### #\(.number) \(.title)\n\n\(.url)\n\n\(.body // "")\n") end),
     (if ($linear | length) > 0
-     then "", "## Linear", "", "Detected, not fetched: \($linear | join(", ")). Shep fetches them into issue.md."
-     else empty end),
+      then "", "## Linear", "", "Detected, not fetched: \($linear | join(", ")). An id alone is not issue content."
+      else empty end),
+    "",
+    "## Commit messages",
+    "",
+    (if ($commits | test("\\S")) then $commits else "(none)" end),
+    "",
+    "## PR body (weak hint)",
+    "",
+    (if (.body // "" | test("\\S")) then .body else "(empty)" end),
     "",
     "## Changed files",
     "",
     (.files[]? | "- \(.path) (+\(.additions) -\(.deletions), \(.changeType | ascii_downcase))\(if (.path | lockish) then " [lock or generated: name only]" else "" end)")
   ' "$pr"
-}
-
-_review_summary() {
-  jq -r '((.body // "") | gsub("<!--[\\s\\S]*?-->"; "") | split("\n")
-    | map(select(test("^\\s*#|^\\s*(Loom|Video|Demo)\\s*:|^\\s*https?://"; "i") | not)
-      | gsub("^[>*\\s-]+"; "") | select(test("\\S"))) | .[0] // "")[0:240]' "$1"
 }
 
 _review_stack_md() {
@@ -489,12 +503,6 @@ _review_stack_get() {
   jq -r "$1" "$R_STACK/stack.json"
 }
 
-_review_cmd() {
-  local self
-  self="$(_review_self)"
-  printf '%q review-pr %s --stack %q' "$self" "$1" "$R_STACK"
-}
-
 # One line about a PR's pass: running, else from run.json, else waiting.
 _review_status() {
   local dir="$1" thin="$2"
@@ -515,7 +523,7 @@ _review_ci_counts() {
   jq -c 'reduce .[]? as $c ({}; .[$c.bucket // "pending"] += 1)' "$1" 2>/dev/null || printf '{}'
 }
 
-# Detach the decisions pass from whoever asked (Shep's shell, an fzf key).
+# Detach the decisions pass from whoever asked (Shep's shell, the Stack tab).
 _review_spawn() {
   local log="$1"
   shift
@@ -534,24 +542,19 @@ _review_wait_all() {
   return "$rc"
 }
 
-# The space, its desk, and its Stack tab. Prints the space id.
+# The space and its Stack tab. Prints the space id.
 # The name comes from the sibling path (Review-<root>_<Repo>), not a hand-built label.
 _review_space() {
-  local label space keep argv cmd
+  local label space keep
   label="$(_wt_generate_session_name "$R_WT")"
-  wt_herdr_layout_create "$label" "$R_WT" >&2 || return 1
+  WT_HERDR_NO_DESK=1 wt_herdr_layout_create "$label" "$R_WT" >&2 || return 1
   space="$(_wt_herdr_space_by_folder "$R_WT")"
   [[ -n "$space" ]] || return 1
-  if [[ -z "$(_review_stack_tab "$space")" ]]; then
+  if ! _review_has_mod; then
+    warn "the Herdr app has no bercail-review mod, so the space has no Stack tab; run: bercail update"
+  else
     keep="$(_wt_herdr_focused_space)"
-    if _review_has_mod; then
-      _review_mod_tab "$space" >/dev/null || return 1
-    else
-      # The tab's shell is not the caller's: put mise and ~/.local/bin on PATH.
-      cmd="PATH=\"\$HOME/.local/bin:\$HOME/.local/share/mise/shims:\$PATH\"; exec $(_review_cmd ui)"
-      argv="$(jq -cn --arg cmd "$cmd" '["bash", "-lc", $cmd]')"
-      "$HERDR_APP" "do" tab.new --space "$space" --name Stack --folder "$R_WT" --argv "$argv" >/dev/null || return 1
-    fi
+    _review_mod_tab "$space" >/dev/null || return 1
     _wt_herdr_keep_user_focus "$keep"
   fi
   printf '%s' "$space"
@@ -571,7 +574,7 @@ _review_parse_url() {
 
 review_start() {
   local url="" branch="" run=1 arg host owner repo n slug t0 tmp order via trunk
-  local source="" root sha base main sibling space="" gather dir linear thin
+  local source="" root sha base main sibling space="" gather dir linear thin desk_ready=0
   local -a numbers=() jobs=() fetch_args=() to_spawn=()
   declare -A spawned=()
   for arg in "$@"; do
@@ -696,6 +699,7 @@ review_start() {
     prdir="$R_STACK/pr-$num/$head_sha"
     (
       git -C "$main" --no-pager diff --no-ext-diff "$base_sha...$head_sha" >"$tmp/diff-$num" \
+        && git -C "$main" --no-pager log --no-show-signature --no-decorate --format='commit %H%n%B' "$base_sha..$head_sha" -- >"$tmp/commits-$num" \
         && _review_snapshot "$main" "$head_sha" "$base_sha" "$prdir/source"
     ) &
     jobs+=("$!")
@@ -711,12 +715,12 @@ review_start() {
     [[ -f "$tmp/issues-$num.jsonl" ]] || : >"$tmp/issues-$num.jsonl"
     linear="$(_review_linear_ids "$prdir/pr.json")"
     thin="$(_review_thin "$prdir/pr.json" "$linear")"
-    _review_intent_md "$prdir/pr.json" "$tmp/issues-$num.jsonl" "$linear" "$thin" | _review_write "$prdir/intent.md"
+    _review_intent_md "$prdir/pr.json" "$tmp/issues-$num.jsonl" "$linear" "$thin" "$tmp/commits-$num" | _review_write "$prdir/intent.md"
     jq -nc --slurpfile pr "$prdir/pr.json" --argjson thin "$thin" --argjson linear "$linear" --arg base "$base_sha" \
-      --arg intent "$(_review_summary "$prdir/pr.json")" \
       '$pr[0] as $p | {number: $p.number, title: $p.title, author: $p.author.login, url: $p.url, draft: $p.isDraft,
         base: $p.baseRefName, head: $p.headRefName, head_sha: $p.headRefOid, base_sha: $base,
-        linked: [$p.closingIssuesReferences[]?.number], linear: $linear, thin: $thin, intent: $intent}' >"$tmp/row-$num.json"
+        linked: [$p.closingIssuesReferences[]?.number], linear: $linear, thin: $thin,
+        intent: "Awaiting code-based intent inference."}' >"$tmp/row-$num.json"
     pr_rows+=("$tmp/row-$num.json")
   done
 
@@ -737,9 +741,15 @@ review_start() {
   R_WT="$sibling"
 
   if _review_herdr; then
-    space="$(_review_space)" || { warn "the Herdr space for $sibling did not open"; space=""; }
+    space="$(_review_space)" || { warn "the Herdr space for $sibling did not open; passes not started"; space=""; run=0; }
     if [[ -n "$space" ]]; then
       jq --arg s "$space" '.space = $s' "$R_STACK/stack.json" | _review_write "$R_STACK/stack.json"
+      if _review_desk_session "$space" >/dev/null; then
+        desk_ready=1
+      else
+        warn "the review desk is unavailable; passes not started"
+        run=0
+      fi
     fi
   fi
 
@@ -771,6 +781,7 @@ review_start() {
     _review_spawn "$dir/pass.log" "$(_review_self)" review-pr run "$spawn_n" --head "$spawn_sha" --stack "$R_STACK"
     spawned["$spawn_n"]=1
   done
+  [[ "$desk_ready" != 1 || ${#to_spawn[@]} -gt 0 ]] || _review_spawn_summary
 
   local rows="[]" row_n row_sha row_dir row_pass row_sum row_ci
   for num in "${numbers[@]}"; do
@@ -786,7 +797,8 @@ review_start() {
     else
       row_pass=waiting
     fi
-    row_sum="$(_review_summary "$row_dir/pr.json")"
+    row_sum="$(jq -er 'select(.intent_analysis != null) | .why' "$row_dir/review.json" 2>/dev/null \
+      || printf 'Awaiting code-based intent inference.')"
     row_ci="$(_review_ci_counts "$row_dir/ci.json")"
     rows="$(jq -nc --argjson rows "$rows" --argjson n "$row_n" --arg pass "$row_pass" --arg dir "$row_dir" \
       --arg summary "$row_sum" --argjson ci "$row_ci" \
@@ -844,23 +856,25 @@ _review_run_died() {
 
 _review_run_finish() {
   if [[ -n "${R_CHILD:-}" ]]; then
+    if [[ -n "${R_DESK_SESSION:-}" ]]; then
+      opencode api post "/api/session/$R_DESK_SESSION/interrupt" --data '{}' >/dev/null 2>&1 || true
+    fi
     kill "$R_CHILD" 2>/dev/null || true
     wait "$R_CHILD" 2>/dev/null || true
   fi
-  _review_run_died
-  if [[ "$(jq -r .status "$R_DIR/run.json")" != ready ]]; then
-    rm -f "$R_DIR/review.json"
+  if [[ "${R_STARTED:-0}" -eq 1 ]]; then
+    _review_run_died
+    if [[ "$(jq -r .status "$R_DIR/run.json")" != ready ]]; then
+      rm -f "$R_DIR/review.json"
+    fi
   fi
   _review_unlock "$R_STACK/context"
   _review_unlock "$R_DIR/pass"
-  # Reload only after releasing the lock, so the row no longer says running.
-  if [[ -S "$R_STACK/ui.sock" ]] && command -v curl >/dev/null 2>&1; then
-    curl -fsS -m 2 --unix-socket "$R_STACK/ui.sock" http://localhost \
-      -d "reload($(_review_cmd rows))" >/dev/null 2>&1 || true
-  fi
+  _review_unlock "$R_STACK/desk-pass"
 }
 
 # Validate the model's untrusted output before a card or tuicr ever reads it.
+# Older saved cards remain valid summary inputs without intent_analysis.
 _review_valid_reply() {
   jq -se '
     def text: type == "string";
@@ -872,7 +886,15 @@ _review_valid_reply() {
       (.line == null or (.line | line)) and
       (.end_line == null or ((.end_line | line) and .line != null and .end_line >= .line)) and
       (.side == null or (.side | IN("old", "new")));
+    def inference:
+      type == "object" and (.confidence | IN("high", "medium", "low")) and
+      (.evidence | type == "array") and all(.evidence[]; evidence and (.file | length > 0)) and
+      (.clues | type == "array" and length > 0) and all(.clues[];
+        type == "object" and (.source | text and length > 0) and (.detail | text and length > 0) and
+        (.alignment | IN("agrees", "more", "less", "different", "stale", "unavailable"))) and
+      (.assessment | text and length > 0);
     def review: type == "object" and (.why | text) and (.why_source | optional_text) and
+    (.intent_analysis == null or ((.why | length > 0) and .why_source == "diff" and (.intent_analysis | inference))) and
     (.decisions | type == "array") and
     all(.decisions[];
       type == "object" and (.statement | text) and
@@ -893,19 +915,21 @@ _review_valid_reply() {
 review_run_one() {
   _review_load "$@"
   _review_need opencode jq
-  local t0 rc=0 session text block status reason="" summary="" prompt err gathered
+  local t0 rc=0 session text block status reason="" summary="" prompt err gathered desk=""
   _review_lock_wait "$R_STACK/context" 15 || die "the review stack is busy gathering; try again"
   if ! _review_lock "$R_DIR/pass"; then
     _review_unlock "$R_STACK/context"
     die "a decisions pass for PR #$R_N is already running"
   fi
   _review_unlock "$R_STACK/context"
+  R_STARTED=0
   trap '_review_run_finish' EXIT
   trap 'exit 143' TERM
   trap 'exit 130' INT
-  rm -f "$R_DIR/run.json" "$R_DIR/review.json"
   gathered="$(jq -r --argjson n "$R_N" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
   if [[ "$R_SHA" != "$gathered" ]]; then
+    R_STARTED=1
+    rm -f "$R_DIR/run.json" "$R_DIR/review.json"
     jq -n --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sha "$R_SHA" --arg cur "$gathered" \
       '{status: "failed", summary: "", session_id: null, finished_at: $at,
         reason: "queued head \($sha[0:7]) is not the gathered head \($cur[0:7]) in stack.json; run review-pr again"}' \
@@ -913,15 +937,27 @@ review_run_one() {
     cat "$R_DIR/run.json"
     return 1
   fi
-  t0="$(_review_now)"
   # Cwd is the stack dir, not the worktree and not the reviewed repo, so the
   # author's opencode config is not loaded. No --model: bercail/opencode picks.
   prompt="Review the PR in pr-$R_N/$R_SHA/ (a bercail review-pr run dir). Files at that head that this PR changes are in pr-$R_N/$R_SHA/source/ (text only; a symlink is the link target as text, not a link). Follow your instructions and end with the one JSON block."
-  (cd "$R_STACK" && exec opencode run --format json --agent bstack-pr-review "$prompt") \
+  local -a session_args=()
+  if _review_herdr; then
+    desk="$(_review_desk_session)" || return 1
+    _review_lock_wait "$R_STACK/desk-pass" 3600 || die "the review desk is busy; try again later"
+    R_DESK_SESSION="$desk"
+    session_args=(--session "$desk")
+  fi
+  t0="$(_review_now)"
+  : >"$R_DIR/pass.jsonl"
+  : >"$R_DIR/pass.err"
+  R_STARTED=1
+  rm -f "$R_DIR/run.json" "$R_DIR/review.json"
+  (cd "$R_STACK" && exec opencode run --format json --agent bstack-pr-review "${session_args[@]}" "$prompt") \
     >"$R_DIR/pass.jsonl" 2>"$R_DIR/pass.err" &
   R_CHILD=$!
   wait "$R_CHILD" || rc=$?
   R_CHILD=""
+  _review_unlock "$R_STACK/desk-pass"
 
   session="$(jq -rRn 'first(inputs | fromjson? | .sessionID? // empty | select(. != "")) // ""' "$R_DIR/pass.jsonl")"
   text="$(jq -rR 'fromjson? | select(.type? == "text") | .part.text // empty' "$R_DIR/pass.jsonl")"
@@ -930,11 +966,13 @@ review_run_one() {
   if jq -se 'length == 1 and (.[0] | type == "object" and (.blocked | type) == "string")' <<<"$block" >/dev/null 2>&1; then
     status=blocked
     reason="$(jq -r '.blocked' <<<"$block")"
-  elif [[ "$rc" -eq 0 ]] && _review_valid_reply <<<"$block"; then
+  elif [[ "$rc" -eq 0 ]] && _review_valid_reply <<<"$block" \
+    && jq -e '.intent_analysis != null' <<<"$block" >/dev/null \
+    && { [[ ! -s "$R_DIR/diff.patch" ]] || jq -e '.intent_analysis.evidence | length > 0' <<<"$block" >/dev/null; }; then
     status=ready
     jq --arg schema "$REVIEW_SCHEMA" --argjson pr "$R_N" --arg sha "$R_SHA" --arg session "$session" '
       {schema: $schema, pr: $pr, head_sha: $sha, session_id: $session,
-       why: .why, why_source: (.why_source // null), decisions: .decisions,
+       why: .why, why_source: (.why_source // null), intent_analysis: .intent_analysis, decisions: .decisions,
        unmet_intent: (.unmet_intent // []), questions: (.questions // [])}' <<<"$block" \
       | _review_write "$R_DIR/review.json"
     summary="$(jq -r '"\(.decisions | length) decisions, \([.decisions[] | select(.stated == null)] | length) undocumented, \(.unmet_intent | length) unmet, \(([.decisions[] | select(.question)] | length) + ([.unmet_intent[] | select(.question)] | length) + (.questions | length)) questions"' "$R_DIR/review.json")"
@@ -957,6 +995,7 @@ review_run_one() {
     | _review_write "$R_DIR/run.json"
 
   cat "$R_DIR/run.json"
+  [[ -z "$desk" || "$status" != ready ]] || _review_spawn_summary
   [[ "$status" != failed ]]
 }
 
@@ -964,6 +1003,7 @@ review_run_one() {
 # PR that is not already ready or running.
 review_run_waiting() {
   local pr n sha thin dir out rc=0
+  if _review_herdr; then _review_desk_session >/dev/null || return 1; fi
   local -a pids=()
   local tmp
   tmp="$(mktemp -d)"
@@ -1052,8 +1092,15 @@ review_card() {
     "",
     (if $r == null then "Decisions pass: \($status)"
      else
-       "Why",
+       (if $r.intent_analysis then "Inferred intent (best guess)" else "Saved review context (Re-review for code-based intent)" end),
        "  \($r.why // "(not given)")\(if $r.why_source then "  [\($r.why_source)]" else "" end)",
+       (if $r.intent_analysis then
+         "  Confidence: \($r.intent_analysis.confidence)",
+         "  Evidence: \($r.intent_analysis.evidence | map(loc) | join(", "))",
+         "  Right thing to build: \($r.intent_analysis.assessment)",
+         "", "Clue comparison",
+         ($r.intent_analysis.clues[] | "  \(.alignment) · \(.source): \(.detail)")
+        else empty end),
        "",
        "Decisions (\($r.decisions | length), \([$r.decisions[] | select(.stated == null)] | length) undocumented)",
        ($r.decisions | to_entries[] | .key as $i | .value |
@@ -1080,26 +1127,6 @@ review_card() {
      end),
     "",
     "[t] tuicr with these questions as [AI Agent] drafts · [o] open in the browser"'
-}
-
-review_rows() {
-  _review_load "$@"
-  local pr n sha thin dir ci status count
-  count="$(jq '.prs | length' "$R_STACK/stack.json")"
-  jq -c '.prs[]' "$R_STACK/stack.json" | while IFS= read -r pr; do
-    n="$(jq -r '.number' <<<"$pr")"
-    sha="$(jq -r '.head_sha' <<<"$pr")"
-    thin="$(jq -c '.thin // []' <<<"$pr")"
-    dir="$R_STACK/pr-$n/$sha"
-    ci="$(jq -r 'if length == 0 then "no checks" else ([to_entries[] | "\(.value) \(.key)"] | join(", ")) end' \
-      <<<"$(_review_ci_counts "$dir/ci.json")")"
-    status="$(_review_status "$dir" "$thin")"
-    if [[ "$count" -gt 1 ]]; then
-      printf '%s\t#%s [%s] %s  ·  CI %s\n' "$n" "$n" "${status%%:*}" "$(jq -r '.title' <<<"$pr")" "$ci"
-    else
-      printf '%s\t#%s  %s  ·  %s  ·  CI %s\n' "$n" "$n" "$(jq -r '.title' <<<"$pr")" "$status" "$ci"
-    fi
-  done
 }
 
 # A file's JSON, or $2 when it is missing or not JSON.
@@ -1144,16 +1171,21 @@ review_state() {
              authors: ([$t[], (.reviews[]?, .comments[]? | objects) | .author.login? // .author? // .user.login? | strings] | unique)}
           end;
       $p + {dir: $dir, status: $status, pass: ($status | split(":")[0]),
+        intent: (if $review.intent_analysis != null then $review.why
+          elif $review != null then "Re-review for code-based intent."
+          else "Awaiting code-based intent inference." end),
         review: $review, ci: ($ci[0] // []), bots: ($bots[0] | bots),
         questions: (if $review == null then [] else [$review | questions[] | {text, at: (.at | loc | select(. != "") // null)}] end)}' \
       >"$tmp/pr-$(printf '%04d' "$i")"
   done < <(jq -c '.prs[]' "$R_STACK/stack.json")
+  _review_summary_state "$tmp/summary-input.json" >"$tmp/summary.json"
   jq -n --slurpfile s "$R_STACK/stack.json" --slurpfile prs <(cat "$tmp"/pr-* 2>/dev/null) --arg stack "$R_STACK" \
+    --slurpfile summary "$tmp/summary.json" \
     --rawfile header "$tmp/header" '
     $s[0] as $s | {schema: "bercail.review-ui/v1", stack: $stack,
       repo: "\($s.owner)/\($s.repo)",
       root: $s.root, current: $s.current, source: $s.source,
-      header: (if $header == "" then null else $header end), prs: $prs}'
+      header: (if $header == "" then null else $header end), prs: $prs, summary: $summary[0]}'
 }
 
 # The Stack tab mod, when Herdr has it.
@@ -1161,65 +1193,51 @@ _review_has_mod() {
   [[ -f "$HERDR_APP_CONFIG_DIR/mods/bercail-review/main.js" ]]
 }
 
-# The space's Stack tab: "<id> mod" (the bercail-review mod, first if there are
-# both), "<id> term" (the fzf UI in a terminal), or nothing.
+# The space's native Stack tab, never a legacy terminal tab.
 _review_stack_tab() {
   "$HERDR_APP" ls 2>/dev/null | jq -r --arg id "$1" '
-    [.spaces[] | select(.id == $id) | .tabs[]? | select(.name == "Stack")
-      | "\(.id) \(if (.terminals // []) | length == 0 then "mod" else "term" end)"]
-    | (map(select(endswith(" mod"))) + .)[0] // empty'
+    first(.spaces[] | select(.id == $id) | .tabs[]?
+      | select(.name == "Stack" and ((.terminals // []) | length == 0)) | .id) // empty'
 }
 
+# Open the mod before retiring the old fzf Stack terminal in this space.
 _review_mod_tab() {
-  "$HERDR_APP" "do" tab.new "$(jq -cn --arg space "$1" --arg stack "$R_STACK" --arg self "$(_review_self)" \
-    '{space: $space, name: "Stack", mod: "bercail-review", props: {stack: $stack, bercail: $self}}')"
+  local space="$1" tab out id
+  tab="$(_review_stack_tab "$space")"
+  if [[ -z "$tab" ]]; then
+    out="$("$HERDR_APP" "do" tab.new "$(jq -cn --arg space "$space" --arg stack "$R_STACK" --arg self "$(_review_self)" \
+      '{space: $space, name: "Stack", mod: "bercail-review", props: {stack: $stack, bercail: $self}}')")" || return 1
+    tab="$(jq -er '.tab' <<<"$out")" || return 1
+  fi
+  while IFS= read -r id; do
+    [[ -z "$id" ]] || "$HERDR_APP" "do" tab.close --id "$id" --confirmed true >/dev/null || return 1
+  done < <("$HERDR_APP" ls 2>/dev/null | jq -r --arg id "$space" '.spaces[] | select(.id == $id) | .tabs[]?
+    | select(.name == "Stack" and ((.terminals // []) | length > 0)) | .id')
+  printf '%s\n' "$tab"
 }
 
-# In the review space when Herdr is up and has the mod: show (or make) its Stack
-# tab. Otherwise the fzf UI in this terminal.
+# Sets R_SPACE, the review space in the Herdr app, or dies saying what to do.
+_review_space_id() {
+  _review_herdr || die "the Herdr app is not running; review-pr shows its stack there. Open it, then: bercail review-pr $1"
+  R_SPACE="$(_wt_herdr_space_by_folder "$R_WT")"
+  [[ -n "$R_SPACE" ]] || die "no Herdr space on $R_WT; run bercail review-pr <url> again"
+}
+
+# Show the review space's Stack tab (the bercail-review mod), or make it.
 review_ui() {
   _review_load "$@"
   local space tab
-  if _review_herdr && _review_has_mod && space="$(_wt_herdr_space_by_folder "$R_WT")" && [[ -n "$space" ]]; then
-    tab="$(_review_stack_tab "$space")"
-    if [[ "$tab" != *" mod" ]]; then
-      tab="$(_review_mod_tab "$space")" || die "herdr-app did not open the Stack tab in $space: $tab"
-      tab="$(jq -r '.tab // empty' <<<"$tab" 2>/dev/null || true)"
-    fi
-    "$HERDR_APP" "do" space.select --id "$space" >/dev/null 2>&1 || true
-    [[ -z "${tab%% *}" ]] || "$HERDR_APP" "do" tab.select --id "${tab%% *}" >/dev/null 2>&1 || true
-    return 0
-  fi
-  _review_ui_fzf
-}
-
-_review_ui_fzf() {
-  _review_need fzf
-  local sock="$R_STACK/ui.sock" slug header count preview_window="down,85%,wrap,border-top"
-  slug="$(_review_stack_get '"\(.host)/\(.owner)/\(.repo)"')"
-  count="$(jq '.prs | length' "$R_STACK/stack.json")"
-  rm -f "$sock"
-  local -a extra=()
-  if [[ "$count" -gt 1 ]]; then
-    preview_window="right,65%,wrap,border-left"
-    header="$(cat "$R_STACK/stack.md")
-enter: this PR · d: diff vs parent · t: tuicr · o: browser · ctrl-c: quit"
-    extra+=(--bind="enter:execute($(_review_cmd select) {1})")
-    extra+=(--bind="d:execute($(_review_cmd diff) {1})")
+  _review_space_id ui
+  space="$R_SPACE"
+  _review_has_mod || die "the Herdr app has no bercail-review mod; run: bercail update"
+  tab="$(_review_mod_tab "$space")" || die "herdr-app did not open the Stack tab in $space: $tab"
+  "$HERDR_APP" "do" space.select --id "$space" >/dev/null 2>&1 || true
+  "$HERDR_APP" "do" tab.select --id "$tab" >/dev/null 2>&1 || true
+  if _review_desk_session "$space" >/dev/null; then
+    _review_spawn_summary
   else
-    header="t: tuicr with the questions · o: open in the browser · ctrl-c: quit"
-    extra+=(--bind="enter:ignore")
+    warn "the review desk is unavailable; showing saved cards without starting desk work"
   fi
-  (review_rows --stack "$R_STACK") | FZF_DEFAULT_OPTS="" fzf \
-    --listen="$sock" --disabled --no-sort --layout=reverse --delimiter=$'\t' --with-nth=2 \
-    --header="$header" \
-    --preview="$(_review_cmd card) {1}" --preview-window="$preview_window" \
-    --bind="load:refresh-preview" --bind="esc:ignore" \
-    "${extra[@]}" \
-    --bind="t:execute-silent($(_review_cmd open) {1} >>$(printf '%q' "$R_STACK/open.log") 2>&1 &)" \
-    --bind="o:execute-silent(gh pr view {1} -R $(printf '%q' "$slug") --web >/dev/null 2>&1 &)" \
-    || true
-  rm -f "$sock"
 }
 
 # Move the review worktree only. The source checkout is not switched.
@@ -1234,44 +1252,104 @@ review_select() {
   jq --argjson n "$R_N" '.current = $n' "$R_STACK/stack.json" | _review_write "$R_STACK/stack.json"
 }
 
-# git diff <parent>...<head>. A tty gets the pager; a pipe does not.
-review_diff() {
+# The review worktree on PR N's branch, for a shell in it. A missing local branch
+# is made at the PR head (not for a fork's PR). One that exists is used only when it is at the head:
+# bercail never moves a branch of yours, and a branch checked out in another
+# worktree can't be checked out here. Then the worktree is at the head, detached,
+# and the note says why. Prints {worktree, branch, note}.
+review_checkout() {
   _review_load "$@"
-  local base head
-  base="$(jq -r --argjson n "$R_N" '.prs[] | select(.number == $n) | .base_sha' "$R_STACK/stack.json")"
-  head="$(jq -r --argjson n "$R_N" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
-  git -C "$R_WT" diff "$base...$head"
+  # Under the Stack tab's 30 s exec, so a busy stack says so.
+  _review_lock_wait "$R_STACK/context" 10 || die "the review stack is busy gathering; try again"
+  trap '_review_unlock "$R_STACK/context"' EXIT
+  local sha branch tip where on="" note=""
+  sha="$(jq -r --argjson n "$R_N" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
+  branch="$(jq -r --argjson n "$R_N" '.prs[] | select(.number == $n) | .head' "$R_STACK/stack.json")"
+  _review_check_worktree "$R_WT"
+  where="$(git -C "$R_WT" worktree list --porcelain | awk -v want="branch refs/heads/$branch" '
+    /^worktree / { w = substr($0, 10) } $0 == want { print w; exit }')"
+  if [[ "$(jq -r '.isCrossRepository // false' "$R_DIR/pr.json" 2>/dev/null)" == true ]]; then
+    note="$branch is a fork's branch; no local branch is made for it"
+  elif ! git check-ref-format --branch "$branch" >/dev/null 2>&1; then
+    note="$branch is not a branch name git takes"
+  elif [[ -n "$where" && "$(cd "$where" && pwd -P)" != "$(cd "$R_WT" && pwd -P)" ]]; then
+    note="$branch is checked out in $where"
+  elif tip="$(git -C "$R_WT" rev-parse -q --verify "refs/heads/$branch^{commit}")"; then
+    if [[ "$tip" == "$sha" ]]; then
+      git -C "$R_WT" switch --quiet "$branch" && on="$branch"
+    else
+      note="your $branch is at ${tip:0:7}, not the PR head ${sha:0:7}; it is left alone"
+    fi
+  else
+    git -C "$R_WT" switch --quiet --create "$branch" "$sha" && on="$branch"
+  fi
+  if [[ -z "$on" ]]; then
+    git -C "$R_WT" switch --quiet --detach "$sha" || die "could not detach $R_WT at $sha"
+  fi
+  jq --argjson n "$R_N" '.current = $n' "$R_STACK/stack.json" | _review_write "$R_STACK/stack.json"
+  jq -n --arg wt "$R_WT" --arg branch "$on" --arg note "$note" \
+    '{worktree: $wt, branch: (if $branch == "" then null else $branch end), note: (if $note == "" then null else $note end)}'
+}
+
+# Re-review: gather the stack again (heads, CI, bodies), then run PR N's pass
+# again, even if it was ready.
+review_rereview() {
+  _review_load "$@"
+  if _review_herdr; then _review_desk_session >/dev/null || return 1; fi
+  local self url source
+  self="$(_review_self)"
+  url="$(jq -r '.root as $r | .prs[] | select(.number == $r) | .url' "$R_STACK/stack.json")"
+  source="$(_review_stack_get .source)"
+  (cd "$source" && "$self" review-pr "$url" --no-run) >&2 || die "could not gather the stack again"
+  # A gather puts the worktree and current back on the root: this PR again.
+  "$self" review-pr select "$R_N" --stack "$R_STACK" >&2 || die "could not move the review worktree back to #$R_N"
+  exec "$self" review-pr run "$R_N" --stack "$R_STACK"
 }
 
 # --- open: tuicr, seeded with the questions --------------------------------------
 
+# The live tuicr session for a PR (its slug ends with $2), or nothing.
+_review_tuicr_slug() {
+  tuicr review list --repo "$1" 2>/dev/null | jq -r --arg want "$2" '
+    first(.[]? | select(.kind == "pr" and .active == true and (.slug | ascii_downcase | endswith($want))) | .slug) // empty' \
+    2>/dev/null || true
+}
+
+# The space's "Review #N" tab on `tuicr pr N`, made fresh: one tuicr per review
+# space, so any Review tab goes first. A tab can't tell whether its tuicr still
+# runs, and tuicr keeps the drafts in its session, not in the tab.
+_review_review_tab() {
+  local space="$1" id
+  while IFS= read -r id; do
+    [[ -z "$id" ]] || "$HERDR_APP" "do" tab.close --id "$id" --confirmed true >/dev/null 2>&1 || true
+  done < <("$HERDR_APP" ls 2>/dev/null | jq -r --arg id "$space" '.spaces[] | select(.id == $id) | .tabs[]?
+    | select(.name == "Review" or (.name | startswith("Review #"))) | .id')
+  "$HERDR_APP" "do" tab.new "$(jq -cn --arg space "$space" --arg n "$R_N" --arg wt "$R_WT" \
+    '{space: $space, name: "Review #\($n)", folder: $wt, argv: ["tuicr", "pr", $n, "--no-update-check"]}')" >/dev/null \
+    || die "herdr-app did not open the Review #$R_N tab"
+}
+
 review_open() {
   _review_load "$@"
   _review_need tuicr jq
-  local owner repo space term want slug="" i secs payload out id seeded="[]"
+  local owner repo space want slug="" i secs payload out id seeded="[]"
   _review_lock "$R_DIR/open" || die "PR #$R_N is already being opened in tuicr"
   trap 'rm -f "$R_DIR/open.lock"' EXIT
   owner="$(_review_stack_get .owner)"
   repo="$(_review_stack_get .repo)"
-  _review_herdr || die "the Herdr app is not running; open it, then: bercail review-pr open $R_N"
-  space="$(_wt_herdr_space_by_folder "$R_WT")"
-  [[ -n "$space" ]] || die "no Herdr space on $R_WT; run bercail review-pr <url> again"
-  # The review space's own terminal: the mod acts on that terminal's space.
-  term="$(_wt_herdr_space_shell "$space")"
-  [[ -n "$term" ]] || die "the review space has no terminal to send the command from"
-  "$HERDR_APP" "do" "bercail-desk.review-pr-$R_N:$term" >/dev/null \
-    || die "herdr-app did not take bercail-desk.review-pr-$R_N"
+  _review_space_id "open $R_N"
+  space="$R_SPACE"
+  want=":${owner,,}/${repo,,}/pr/$R_N"
+  _review_review_tab "$space"
 
   # tuicr errors on a PR slug it has not opened: wait for its live session.
-  want=":${owner,,}/${repo,,}/pr/$R_N"
   secs="${BERCAIL_REVIEW_OPEN_WAIT:-60}"
   for ((i = 0; i < secs * 2; i++)); do
-    slug="$(tuicr review list --repo "$owner/$repo" 2>/dev/null | jq -r --arg want "$want" '
-      first(.[]? | select(.kind == "pr" and .active == true and (.slug | ascii_downcase | endswith($want))) | .slug) // empty' 2>/dev/null || true)"
+    slug="$(_review_tuicr_slug "$owner/$repo" "$want")"
     [[ -n "$slug" ]] && break
     sleep 0.5
   done
-  [[ -n "$slug" ]] || die "tuicr did not open PR #$R_N within ${secs}s (does the desk mod know review-pr? bercail update)"
+  [[ -n "$slug" ]] || die "tuicr did not open PR #$R_N within ${secs}s; see its Review #$R_N tab"
 
   if [[ -f "$R_DIR/seeded.json" ]]; then
     info "already seeded; delete $R_DIR/seeded.json to seed again" >&2
@@ -1316,16 +1394,18 @@ Usage: bercail review-pr <command>
                         non-thin waiting pass in parallel (a stack of one runs
                         even if thin).
   card [N]              print the PR's card
-  ui                    the Stack tab: the bercail-review mod in the review
-                        space when the Herdr app is up, else fzf with the card
-                        in the preview
+  ui                    show the Stack tab (the bercail-review mod) in the
+                        review space; needs the Herdr app
   state                 the stack, cards, and pass status as JSON (the mod's input)
+  summarize             retry the desk's summary of an entirely ready stack
   select [N]            git switch --detach to that PR in the review worktree
-  diff [N]              git diff <parent>...<head> in a pager
-  open [N]              the Review tab with tuicr pr N, seeded with the questions
+  checkout [N]          the review worktree on that PR's branch (made at the head
+                        if missing; never moves a branch of yours)
+  rereview [N]          gather the stack again, then run that PR's pass again
+  open [N]              a Review #N tab with tuicr pr N, seeded with the questions
   dir [N]               print the PR's run dir
 
-run, card, ui, state, select, diff, open, and dir take --stack DIR, or find the stack
+run, card, ui, state, summarize, select, checkout, rereview, open, and dir take --stack DIR, or find the stack
 from the review worktree they run in. N defaults to the stack's current PR.
 EOF
 }
@@ -1336,11 +1416,12 @@ cmd_review_pr() {
     ""|help|-h|--help) review_usage ;;
     run) shift; review_run "$@" ;;
     card) shift; review_card "$@" ;;
-    rows) shift; review_rows "$@" ;;
     ui) shift; review_ui "$@" ;;
     state) shift; review_state "$@" ;;
+    summarize) shift; review_summarize "$@" ;;
     select) shift; review_select "$@" ;;
-    diff) shift; review_diff "$@" ;;
+    checkout) shift; review_checkout "$@" ;;
+    rereview) shift; review_rereview "$@" ;;
     open) shift; review_open "$@" ;;
     dir) shift; _review_load "$@"; printf '%s\n' "$R_DIR" ;;
     *) review_start "$@" ;;

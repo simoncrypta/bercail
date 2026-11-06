@@ -371,7 +371,7 @@ deploy_lib() {
     deploy_tree "$src/lib" "${AGENTIC_DEV_SHARE_DIR}/lib"
   else
     local libfile
-    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh harness.sh bstack.sh review.sh stack.sh; do
+    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh harness.sh bstack.sh review.sh review-desk.sh stack.sh; do
       deploy_install_file "lib/$libfile" "${AGENTIC_DEV_SHARE_DIR}/lib/$libfile"
     done
   fi

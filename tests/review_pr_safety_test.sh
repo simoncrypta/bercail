@@ -12,10 +12,6 @@ source "$ROOT/lib/common.sh"
 source "$ROOT/lib/review.sh"
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 
-jq -n '{body: "## Summary\n\nLoom: https://example.test/video\n\nFreeze both counts at the terminal date."}' >"$TMP_DIR/pr.json"
-[[ "$(_review_summary "$TMP_DIR/pr.json")" == 'Freeze both counts at the terminal date.' ]] \
-  || fail 'summary includes a heading or video link instead of intent'
-
 main="$TMP_DIR/repo"
 git init -qb main "$main"
 printf 'base\n' >"$main/old.txt"

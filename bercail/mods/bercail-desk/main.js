@@ -186,7 +186,6 @@ export default class BercailDesk extends View {
     this.pendingReview = {}; // space id -> folder, opened when the space is shown
     this.starting = {};      // space id -> true while hc run is in flight
     this.lastAuto = {};      // space id -> when Review last opened on its own (ms)
-    this.reviewing = {};     // space id -> the PR number its Review tab runs (review-pr-N)
     this.lastPane = null;    // the pane the keyboard was last in, to come back from the desk
     this.git = {};           // [machine, folder] -> { at, git: { repo, linked } | null }
     this.hadDesk = new Set(); // space ids that had a desk or got one started: no auto-start again
@@ -273,12 +272,6 @@ export default class BercailDesk extends View {
         run("layout.select", { stack: "panel-body", child: c });
         run("layout.show", { id: "panel" });
         break;
-      }
-      default: {
-        // review-pr-<N> (from `bercail review-pr open`): tuicr pr N for an explicit N.
-        // The review worktree is detached, so foreignPr() can't name the PR.
-        const pr = c.match(/^review-pr-(\d+)$/);
-        if (pr) this.reviewPr(space, desk?.cwd ?? space.folder, pr[1]);
       }
     }
   }
@@ -391,24 +384,10 @@ export default class BercailDesk extends View {
         const st = await exec("git", ["status", "--porcelain"], { cwd: folder });
         if (st.code !== 0 || !st.stdout.trim()) return;
       }
-      delete this.reviewing[space.id];
       run("tab.new", { space: space.id, name: "Review", folder, argv: await reviewArgv(this.cfg.review, folder) });
     } catch (e) {
       notify({ title: "bercail: Review did not open", body: String(e?.message ?? e), level: "error" });
     }
-  }
-
-  // The Review tab on `tuicr pr N`. A live one on the same PR is only selected; one
-  // on anything else (another PR, `tuicr -w`) is replaced.
-  reviewPr(space, folder, n) {
-    const tab = space.tabs.find((t) => t.name === "Review");
-    if (tab) {
-      const live = panes().some((p) => p.tab === tab.id && p.terminal && p.program?.key !== "shell");
-      if (live && this.reviewing[space.id] === n) { run("tab.select", { id: tab.id }); return; }
-      run("tab.close", { id: tab.id, confirmed: true });
-    }
-    this.reviewing[space.id] = n;
-    run("tab.new", { space: space.id, name: "Review", folder, argv: ["tuicr", "pr", n, "--no-update-check"] });
   }
 
   ensureNotifier() {

@@ -185,18 +185,33 @@ lights at 12,16):
   "bercail-review", props: {stack, bercail}}`. It needs bercail: everything
   it shows comes from `exec(<bercail>, ["review-pr", "state", "--stack",
   <stack>])`, run again when `watchFolder(<stack>)` reports a change other
-  than a pass's logs. A 320px PR list on `surface` (only for two or more
-  PRs) sits beside the card, with a 28px key hint bar on `chrome`. Keys go
-  through its focus handle: j/k, Enter (`review-pr select`), o
-  (`cx.open_url`), d (`tab.new` "Diff #N" running `review-pr diff`), t
-  (`review-pr open`), p (`review-pr run`), r (`review-pr <root url>`). It runs
-  t, p and r detached through `sh -c` (`setsid`, else `nohup`), because a
-  pass or tuicr's wait outlasts exec's 30 s. Each appends its output to its
-  log (`open.log`, `pass.log`, `refresh.log`) and writes its exit code and
-  last 40 lines to its own file in `~/.cache/bercail/review-jobs/`. While a
-  job is pending a 1 s timer reads that file, removes it, and shows a failure
-  (or a blocked pass) in the bar and a toast. A reload that changes `current`
-  moves the card to it.
+  than a pass's logs. A 350px PR picker on `surface` (only for two or more
+  PRs) sits beside the card. Rows have a semibold title, a one-line truncated
+  code-inferred intent in `foreground`, and status/CI in `muted`. Above the
+  picker is the desk's stack summary: overall purpose, order, risks and where to start.
+  Its own scroll area is at most 260px tall; the picker below scrolls
+  independently, so a long summary never pushes the PRs out of view.
+  There is no second numbered PR list. The card's native header has `#N`
+  muted, the title bold at 18px, a muted meta line, the pass status, and three
+  buttons on `raised` with their key in a chip. The body has 16px bold `accent`
+  section headings with spacing and rules. Decisions sit on `surface`,
+  with separate labeled Kind, Summary, Evidence,
+  Stated, Fit and Alternative lines. Code chips use JetBrains Mono 12.5px,
+  `ansi6` on `raised`, without mid-path wrapping. Long paths show the basename
+  and line, with the full path in a tooltip. A 30px key hint bar sits on `chrome`. Keys go
+  through its focus handle: j/k pick; c, r and o (or the buttons) run Code
+  review (`review-pr open`), Re-review (`review-pr rereview`) and Shell
+  (`review-pr checkout`, then `tab.new {name: "Shell #N", folder}`). It runs
+  c and r detached through `sh -c` (`setsid`, else `nohup`), because a pass
+  or tuicr's wait outlasts exec's 30 s. Each appends its output to its log
+  (`open.log`, `rereview.log`) and writes its exit code and last 40 lines to
+  its own file in `~/.cache/bercail/review-jobs/`. While a job is pending a
+  1 s timer reads that file, removes it, and shows a failure (or a blocked
+  pass) in the bar and a toast. A reload that changes `current` moves the
+  card to it. `lib/review-desk.sh` attaches one read-only opencode session to
+  this space's desk. Passes use that session serially. Once all cards are
+  ready it synthesizes the stack summary, fingerprinted against the exact
+  card inputs. Both the cards and summary are visible in that desk session.
 
 ## Watch out
 

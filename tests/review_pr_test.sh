@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# bercail review-pr against fake gh, opencode, tuicr, herdr-app, hc, and fzf.
+# bercail review-pr against fake gh, opencode, tuicr, herdr-app, and hc.
 # No network: the PR heads come from a local bare repo.
 set -euo pipefail
 
@@ -46,7 +46,7 @@ git init -q -b main "$TMP_DIR/seed"
   echo base >README && git add README && git commit -qm base
   git push -q "$REMOTE" main
   git switch -qc retry && mkdir lib && echo 'retry() { :; }' >lib/retry.sh
-  ln -s /etc/hostname lib/host-link && git add lib && git commit -qm retry
+  ln -s /etc/hostname lib/host-link && git add lib && git commit -qm retry -m 'Use a retry helper to isolate upload retries.'
   git push -q "$REMOTE" HEAD:refs/pull/7/head
   git switch -q main && git switch -qc docs && echo more >>README && git commit -qam docs
   git push -q "$REMOTE" HEAD:refs/pull/8/head
@@ -80,12 +80,20 @@ cat >"$FIX/checks.json" <<'EOF'
  {"name":"lint","bucket":"fail","state":"FAILURE","workflow":"CI","link":"https://ci/lint"}]
 EOF
 jq -n '{number: 12, title: "Uploads fail on flaky networks", body: "Retry with backoff, and log each retry.", url: "https://github.com/acme/widgets/issues/12"}' >"$FIX/issue-12.json"
-cat >"$FIX/reply.json" <<'EOF'
-{"why": "Uploads fail on flaky networks; the issue asks for retries.", "why_source": "issue #12",
+cat >"$FIX/reply.json" <<EOF
+{"why": "Best guess: make uploads resilient by retrying failures.", "why_source": "diff",
+ "intent_analysis": {
+   "confidence": "medium",
+   "evidence": [{"file": "lib/retry.sh", "line": 1, "side": "new"}],
+   "clues": [
+     {"source": "issue #12", "alignment": "less", "detail": "The code retries, but omits requested backoff and logging."},
+     {"source": "commit $SHA7", "alignment": "agrees", "detail": "The helper isolates upload retries."},
+     {"source": "PR body", "alignment": "stale", "detail": "The description implies failures stop, but retry exhaustion can still fail."}],
+   "assessment": "Resilience is worth building, but the retry policy needs a tradeoff discussion."},
  "decisions": [
   {"kind": "approach", "statement": "Retries live in a new retry.sh helper",
    "evidence": [{"file": "lib/retry.sh", "line": 3, "end_line": 9, "side": "new"}],
-   "stated": "PR body: adds a retry helper", "fits_intent": "yes", "alternative": null, "question": null},
+    "stated": "commit $SHA7: use a retry helper", "fits_intent": "yes", "alternative": null, "question": null},
   {"kind": "behavior", "statement": "Uploads retry 5 times with no backoff",
    "evidence": [{"file": "lib/upload.sh", "line": 12, "side": "new"}],
    "stated": null, "fits_intent": "partial", "alternative": "exponential backoff",
@@ -149,11 +157,36 @@ case "$1" in
       printf '%s\n' xai/grok-4.7
     fi
     exit 0 ;;
-  api) exit 0 ;;
+  api)
+    printf '%s\n' "$*" >>"$LOG/opencode.api"
+    if [[ "$2 $3" == "post /api/session" ]]; then
+      body="$5"
+      printf '%s\n' "$body" >"$LOG/session-create.json"
+      count="$(cat "$LOG/session-count" 2>/dev/null || echo 0)"; count=$((count + 1)); echo "$count" >"$LOG/session-count"
+      id="ses_desk_$(jq -r .location.directory <<<"$body" | cksum | awk '{print $1}')_$count"
+      jq -n --arg id "$id" --argjson b "$body" '{data:{id:$id,location:$b.location,agent:$b.agent}}' >"$LOG/session-$id.json"
+    else
+      if [[ "${FAKE_SESSION_LOOKUP:-}" == unavailable ]]; then
+        echo '{"_tag":"ServiceUnavailableError","message":"server unavailable"}'; exit 1
+      fi
+      id="${3##*/}"
+      if [[ ! -f "$LOG/session-$id.json" ]]; then
+        jq -n --arg id "$id" '{_tag:"SessionNotFoundError",sessionID:$id}'; exit 1
+      fi
+    fi
+    cat "$LOG/session-$id.json"
+    exit 0 ;;
 esac
 printf '%s\n' "$PWD" >"$LOG/opencode.pwd"
 printf '%s\n' "$@" >"$LOG/opencode.argv"
-ev() { jq -cn --arg type "$1" --arg text "${2:-}" '{type: $type, sessionID: "ses_fake", part: {type: $type, text: $text}}'; }
+printf '%s\n' "$*" >>"$LOG/opencode.runs"
+sid=ses_fake prev=""
+for arg in "$@"; do [[ "$prev" == --session ]] && sid="$arg"; prev="$arg"; done
+if [[ "$sid" != ses_fake ]]; then
+  mkdir "$LOG/active-$sid" 2>/dev/null || { touch "$LOG/desk-collision"; exit 3; }
+  trap 'rmdir "$LOG/active-$sid"' EXIT
+fi
+ev() { jq -cn --arg sid "$sid" --arg type "$1" --arg text "${2:-}" '{type: $type, sessionID: $sid, part: {type: $type, text: $text}}'; }
 ev step_start
 if [[ -n "${FAKE_HOLD:-}" ]]; then
   trap 'exit 143' TERM
@@ -161,7 +194,12 @@ if [[ -n "${FAKE_HOLD:-}" ]]; then
   while [[ ! -f "$LOG/opencode.release" ]]; do sleep 0.05; done
 fi
 case "${FAKE_OPENCODE:-ok}" in
-  ok) ev text "Read intent.md and diff.patch."
+  ok) if [[ "$*" == *"Stack summary mode"* ]]; then
+        reply="$(jq -c '{overview:"The stack improves uploads.",order:[.prs[] | "#\(.number) \(.review.why)"],risks:["No backoff"],start_here:["Read retry.sh"]}' summary-input.json)"
+        ev text "$(printf '```json\n%s\n```' "$reply")"
+        exit 0
+      fi
+      ev text "Read intent.md and diff.patch."
       ev text "$(printf 'Three decisions.\n\n```json\n%s\n```' "$(cat "$FIX/reply.json")")" ;;
   noblock) ev text "I looked at it and it seems fine." ;;
   long) for ((i = 0; i < 3000; i++)); do ev tool_use; done
@@ -177,13 +215,13 @@ case "$1 $2" in
   "review list")
     # The session shows up on the second look, as when tuicr is still starting.
     n="$(cat "$LOG/tuicr.lists" 2>/dev/null || echo 0)"; echo $((n + 1)) >"$LOG/tuicr.lists"
-    if [[ "$n" -ge 1 ]]; then
-      echo '[{"slug":"gh:acme/widgets/pr/8","kind":"pr","active":true},{"slug":"gh:acme/widgets/pr/7","kind":"pr","active":true}]'
+    if [[ "$n" -ge 1 && -f "$LOG/tuicr.active" ]]; then
+      jq -n --arg n "$(cat "$LOG/tuicr.active")" '[{slug:("gh:acme/widgets/pr/" + $n),kind:"pr",active:true}]'
     else
       echo '[{"slug":"gh:acme/widgets/pr/7","kind":"pr","active":false}]'
     fi ;;
   "review add")
-    [[ "$*" == *"--session gh:acme/widgets/pr/7 --input -"* ]] || { echo "bad args: $*" >&2; exit 2; }
+    [[ "$*" == *"--session gh:acme/widgets/pr/$(cat "$LOG/tuicr.active") --input -"* ]] || { echo "bad args: $*" >&2; exit 2; }
     payload="$(cat)"
     # A line outside the PR diff: tuicr can't anchor it.
     [[ "$(jq -r '.file // ""' <<<"$payload")" == outside.txt ]] && { echo "not in diff" >&2; exit 1; }
@@ -230,9 +268,15 @@ case "$1" in
           printf '%s %s\n' "${a[mod]}" "${a[props]}" >>"$LOG/stack.mod"
         else
           printf '%s\n' "${a[argv]}" >"$LOG/stack.argv"
+          if [[ "$(jq -r '.[0:2] | join(" ")' <<<"${a[argv]}" 2>/dev/null)" == "tuicr pr" ]]; then
+            jq -r '.[2]' <<<"${a[argv]}" >"$LOG/tuicr.active"
+          fi
         fi
         printf '{"space":"%s","tab":"%s"}\n' "${a[space]}" "$id" ;;
       tab.close)
+        if jq -e --arg id "${a[id]}" 'any(.spaces[].tabs[]; .id == $id and (.name | startswith("Review")))' "$st" >/dev/null; then
+          rm -f "$LOG/tuicr.active"
+        fi
         jq --arg id "${a[id]}" '.spaces[].tabs |= map(select(.id != $id))' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
     esac ;;
 esac
@@ -241,13 +285,17 @@ cat >"$FAKE_BIN/hc" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$LOG/hc"
 case "$1" in
-  ls) echo '{"terminals":[]}' ;;
+  ls) if [[ -f "$LOG/desk.json" ]]; then jq '{terminals:[{address:.address,state:"live"}]}' "$LOG/desk.json"; else echo '{"terminals":[]}'; fi ;;
+  get) cat "$LOG/desk.json" ;;
+  run)
+    space="" session=""
+    for arg in "$@"; do
+      [[ "$arg" == bercail.space=* ]] && space="${arg#*=}"
+      [[ "$arg" == bercail.review.session=* ]] && session="${arg#*=}"
+    done
+    jq -n --arg space "$space" --arg session "$session" '{address:"t-desk",state:"live",status:{state:"idle"},labels:{"bercail.role":"agent","bercail.space":$space,"bercail.review.session":$session}}' >"$LOG/desk.json" ;;
+  kill|rm) rm -f "$LOG/desk.json" ;;
 esac
-SH
-cat >"$FAKE_BIN/fzf" <<'SH'
-#!/usr/bin/env bash
-printf '%s\n' "$@" >"$LOG/fzf.argv"
-cat >"$LOG/fzf.stdin"
 SH
 cat >"$FAKE_BIN/gt" <<'SH'
 #!/usr/bin/env bash
@@ -280,6 +328,11 @@ export PATH="$FAKE_BIN:$PATH"
 export HERDR_APP_BIN="$FAKE_BIN/herdr-app" HC_BIN="$FAKE_BIN/hc"
 export BERCAIL_HERDR_LAYOUT="$ROOT/config/worktrunk/herdr-layout.sh"
 export HERDR_STATE="$TMP_DIR/herdr.json"
+export HERDR_APP_CONFIG_DIR="$HOME/.config/herdr-app"
+MOD="$HERDR_APP_CONFIG_DIR/mods/bercail-review"
+mkdir -p "$MOD" && : >"$MOD/main.js"
+# A PR's pass status as the Stack tab gets it.
+status_of() { "$BERCAIL" review-pr state --stack "$1" | jq -r --argjson n "$2" '.prs[] | select(.number == $n) | .status'; }
 
 wait_for() {
   local i
@@ -317,6 +370,62 @@ test_thin_rules() {
   printf 'PASS: thin rules (empty, restates title, no linked issue, part N of M only) and Linear ids\n'
 }
 
+test_intent_sources() (
+  # shellcheck source=lib/common.sh
+  source "$ROOT/lib/common.sh"
+  # shellcheck source=lib/review.sh
+  source "$ROOT/lib/review.sh"
+  local issues="$TMP_DIR/intent-issues.jsonl" commits="$TMP_DIR/intent-commits.txt" md agent
+  cp "$FIX/issue-12.json" "$issues"
+  printf 'commit %s\nretry\n\nUse a retry helper to isolate upload retries.\n' "$SHA7" >"$commits"
+  md="$(_review_intent_md "$FIX/pr-7.json" "$issues" '[]' '[]' "$commits")"
+  assert_has "$md" 'Infer intent from diff.patch first, then compare it with these clues.' "gathered code-first policy"
+  assert_has "$md" 'PR title/body are the weakest clues and may be stale.' "PR prose is not source of truth"
+  assert_has "$md" "commit $SHA7" "commit provenance"
+  printf '%s\n' "$md" >"$TMP_DIR/intent-sources.md"
+  "$PY" - "$TMP_DIR/intent-sources.md" <<'PY'
+import sys
+from pathlib import Path
+text = Path(sys.argv[1]).read_text()
+assert text.index('## Linked issues') < text.index('## Commit messages') < text.index('## PR body (weak hint)')
+PY
+  : >"$issues"
+  jq '.closingIssuesReferences = [] | .body = "Retries uploads forever to prevent failures. This description may be stale."' "$FIX/pr-7.json" >"$TMP_DIR/no-issue.json"
+  md="$(_review_intent_md "$TMP_DIR/no-issue.json" "$issues" '[]' '[]' "$commits")"
+  assert_has "$md" 'No linked issue clues to compare; still infer intent from the code.' "missing issues do not prevent inference"
+  assert_has "$md" 'Retries uploads forever' "body retained as a weak hint"
+  md="$(_review_intent_md "$FIX/pr-7.json" "$issues" '[]' '[]' "$commits")"
+  assert_has "$md" 'Linked issue content was not fetched; comparison is unavailable.' "a failed issue fetch is a missing clue"
+  md="$(_review_intent_md "$TMP_DIR/no-issue.json" "$issues" '["LEF-42"]' '[]' "$commits")"
+  assert_has "$md" 'Detected, not fetched: LEF-42' "Linear ids remain unfetched clues"
+  grep -qF 'Intent unknown' <<<"$md" && fail "missing clues produced unknown intent"
+
+  agent="$(<"$ROOT/bstack/agents/bstack-pr-review.md")"
+  assert_has "$agent" 'The diff is the source of truth.' "agent source priority"
+  assert_has "$agent" 'Always infer intent from what the code actually does' "code-based inference is required"
+  assert_has "$agent" 'best educated guess' "inference is not claimed as author fact"
+  assert_has "$agent" 'A PR body mention alone never makes a decision documented' "no body-only stated decisions"
+  assert_has "$agent" 'Missing issues mean no issue clues to compare' "agent keeps inferring without issues"
+  assert_has "$agent" 'likely stale description' "stale description policy"
+  assert_has "$agent" 'not as an author question about the code' "stale descriptions do not seed code questions"
+  "$PY" - "$ROOT/bstack/agents/bstack-pr-review.md" <<'PY'
+import json, re, sys
+from pathlib import Path
+schema = json.loads(re.findall(r'```json\n(.*?)\n```', Path(sys.argv[1]).read_text(), re.S)[-1])
+assert schema['why_source'] == 'diff'
+assert 'commit' in schema['decisions'][0]['stated'] and 'PR body' not in schema['decisions'][0]['stated']
+assert 'best educated guess' in schema['why']
+analysis = schema['intent_analysis']
+assert set(analysis) == {'confidence', 'evidence', 'clues', 'assessment'}
+assert all(level in analysis['confidence'] for level in ('high', 'medium', 'low'))
+assert analysis['evidence'][0]['file'] and analysis['evidence'][0]['line']
+assert all(status in analysis['clues'][0]['alignment'] for status in ('agrees', 'more', 'less', 'different', 'stale', 'unavailable'))
+assert 'right thing to build' in analysis['assessment']
+assert 'PR body' not in schema['unmet_intent'][0]['source']
+PY
+  printf 'PASS: code-first inference, confidence/evidence/clue schema, missing issue clues and stale-description policy\n'
+)
+
 # --- review-pr <url>: a thin PR stops at the JSON --------------------------------
 test_thin_pr_stops() {
   local out dir
@@ -340,6 +449,7 @@ test_thin_pr_stops() {
   assert_eq 3 "$(jq length "$dir/ci.json")" "ci.json from gh pr checks"
   assert_eq '{"pass":1,"pending":1,"fail":1}' "$(jq -c '.prs[0].ci' <<<"$out")" "CI counts"
   assert_has "$(<"$dir/intent.md")" "- thin: empty_body, no_linked_issue" "intent.md thin"
+  assert_eq 'Awaiting code-based intent inference.' "$(jq -r '.prs[0].intent' "$REVIEWS/stack-8/stack.json")" "pending card does not invent intent from prose"
   assert_has "$(<"$dir/intent.md")" "package-lock.json (+40 -2, modified) [lock or generated: name only]" "lock files by name"
   assert_has "$("$BERCAIL" review-pr card --stack "$REVIEWS/stack-8")" "Decisions pass: waiting: thin (empty_body, no_linked_issue)" "card before the pass"
   printf 'PASS: a thin PR: run dir, detached worktree, CI kept from a failing gh pr checks, JSON stops with thin flags\n'
@@ -352,6 +462,11 @@ test_pass() {
   assert_eq 'false started' "$(jq -r '"\(.thin) \(.pass)"' <<<"$out")" "a PR with intent starts the pass"
   dir="$REVIEWS/stack-7/pr-7/$SHA7"
   assert_has "$(<"$dir/intent.md")" "### #12 Uploads fail on flaky networks" "linked issue in intent.md"
+  assert_has "$(<"$dir/intent.md")" "commit $SHA7" "gathered commits are pinned to this PR head"
+  assert_has "$(<"$dir/intent.md")" 'Use a retry helper to isolate upload retries.' "full commit message is available to the pass"
+  assert_eq 'Awaiting code-based intent inference.' "$(jq -r '.prs[0].intent' "$REVIEWS/stack-7/stack.json")" "gather does not label issue clues as intent"
+  jq -e --arg why "$(jq -r .why "$FIX/reply.json")" '.prs[0].summary | . == $why or . == "Awaiting code-based intent inference."' <<<"$out" >/dev/null \
+    || fail "gather summary promoted a clue to inferred intent"
   wait_for "$dir/run.json"
   argv="$(<"$LOG/opencode.argv")"
   assert_eq $'run\n--format\njson\n--agent\nbstack-pr-review' "$(head -5 <<<"$argv")" "opencode argv"
@@ -363,6 +478,11 @@ test_pass() {
   assert_eq '3 decisions, 2 undocumented, 1 unmet, 3 questions' "$(jq -r .summary "$dir/run.json")" "run.json summary"
   assert_eq "bercail.review/v1 7 $SHA7 ses_fake 3" \
     "$(jq -r '"\(.schema) \(.pr) \(.head_sha) \(.session_id) \(.decisions | length)"' "$dir/review.json")" "review.json"
+  jq -e '.why_source == "diff" and .intent_analysis.confidence == "medium"
+    and .intent_analysis.evidence[0].file == "lib/retry.sh"
+    and [.intent_analysis.clues[].alignment] == ["less","agrees","stale"]' "$dir/review.json" >/dev/null \
+    || fail "inference metadata was lost on save"
+  assert_eq 'Best guess: make uploads resilient by retrying failures.' "$("$BERCAIL" review-pr state --stack "$REVIEWS/stack-7" | jq -r '.prs[0].intent')" "picker intent uses code inference, not issue or body"
   local sib7="$TMP_DIR/work/widgets.review-7"
   [[ -L "$sib7/lib/host-link" ]] || fail "the review worktree keeps a normal symlink"
   [[ ! -L "$dir/source/lib/host-link" ]] || fail "the snapshot must not be a symlink"
@@ -379,10 +499,15 @@ test_card() {
   card="$(cd "$TMP_DIR/work/widgets.review-7" && "$BERCAIL" review-pr card)"
   assert_has "$card" "PR #7  Retry flaky uploads" "card title"
   assert_has "$card" "by dana · main ← retry · ${SHA7:0:7}" "card author, base, head"
-  assert_has "$card" "  Uploads fail on flaky networks; the issue asks for retries.  [issue #12]" "why"
+  assert_has "$card" "  Best guess: make uploads resilient by retrying failures.  [diff]" "inferred intent"
+  assert_has "$card" 'Confidence: medium' "intent confidence"
+  assert_has "$card" 'Evidence: lib/retry.sh:1' "intent evidence"
+  assert_has "$card" 'less · issue #12: The code retries' "clue divergence"
+  assert_has "$card" 'stale · PR body:' "stale description is shown"
+  assert_has "$card" 'Right thing to build: Resilience is worth building' "intent assessment"
   assert_has "$card" "Decisions (3, 2 undocumented)" "decision counts"
   assert_has "$card" "  1. [approach] Retries live in a new retry.sh helper" "decision"
-  assert_has "$card" "     lib/retry.sh:3-9  stated: PR body: adds a retry helper · fits intent: yes" "stated decision"
+  assert_has "$card" "     lib/retry.sh:3-9  stated: commit $SHA7: use a retry helper · fits intent: yes" "commit-documented decision"
   assert_has "$card" "     lib/upload.sh:12  UNDOCUMENTED · fits intent: partial" "undocumented decision"
   assert_has "$card" "     over: exponential backoff" "alternative"
   assert_has "$card" $'Intent with no change\n  - Log each retry  [issue #12]' "unmet intent"
@@ -390,10 +515,30 @@ test_card() {
   assert_has "$card" "  3. (whole PR)  The issue asks to log each retry; is that in another PR?" "whole-PR question"
   assert_has "$card" "CI  1 fail · 1 pending · 1 pass" "CI counts"
   assert_has "$card" "  fail     lint (CI)  https://ci/lint" "failing check with its link"
-  assert_has "$("$BERCAIL" review-pr rows --stack "$REVIEWS/stack-7")" \
-    $'7\t#7  Retry flaky uploads  ·  ready: 3 decisions' "rows"
+  assert_has "$(status_of "$REVIEWS/stack-7" 7)" "ready: 3 decisions" "pass status in state"
   assert_eq "$REVIEWS/stack-7/pr-7/$SHA7" "$(cd "$TMP_DIR/work/widgets.review-7" && "$BERCAIL" review-pr dir)" "dir"
   printf 'PASS: card: why, decisions (kind, file:line, stated or undocumented, fits intent), unmet intent, questions, CI\n'
+}
+
+test_infer_without_issue() {
+  local stack="$REVIEWS/stack-8" card
+  cp "$FIX/reply.json" "$FIX/linked-reply.json"
+  jq -n --arg sha "$SHA8" '{
+    why: "Best guess: clarify the README with another note.", why_source: "diff",
+    intent_analysis: {confidence:"medium", evidence:[{file:"README",line:2,side:"new"}],
+      clues:[{source:"linked issues",alignment:"unavailable",detail:"No linked issue clues to compare."},
+        {source:("commit " + $sha),alignment:"agrees",detail:"The commit describes a docs update."}],
+      assessment:"A small documentation update looks reasonable; its value depends on the note."},
+    decisions:[], unmet_intent:[], questions:[]}' >"$FIX/reply.json"
+  "$BERCAIL" review-pr run 8 --stack "$stack" >/dev/null
+  assert_eq 'Best guess: clarify the README with another note.' "$("$BERCAIL" review-pr state --stack "$stack" | jq -r '.prs[0].intent')" "no linked issue still yields inferred intent"
+  card="$("$BERCAIL" review-pr card 8 --stack "$stack")"
+  assert_has "$card" 'Confidence: medium' "no-issue inference keeps confidence"
+  assert_has "$card" 'Evidence: README:2' "no-issue inference keeps evidence"
+  assert_has "$card" 'unavailable · linked issues: No linked issue clues to compare.' "missing clue is not missing intent"
+  grep -qF 'Intent unknown' <<<"$card" && fail "missing issue hid inferred intent"
+  mv "$FIX/linked-reply.json" "$FIX/reply.json"
+  printf 'PASS: a PR without linked issues gets code-inferred intent, confidence, evidence and a missing-clue comparison\n'
 }
 
 test_run_outcomes() {
@@ -404,7 +549,11 @@ test_run_outcomes() {
   assert_eq 'failed opencode exited 3: provider error' "$(jq -r '"\(.status) \(.reason)"' "$dir/run.json")" "crash"
   cp "$FIX/reply.json" "$FIX/good-reply.json"
   local bad
-  for bad in '.decisions = ["not an object"]' '.decisions[0].evidence = {file:"a",line:1}' \
+  for bad in 'del(.intent_analysis)' '.why = ""' '.why_source = "issue #12"' \
+    '.intent_analysis.confidence = "certain"' '.intent_analysis.evidence = "a"' '.intent_analysis.evidence = []' \
+    '.intent_analysis.evidence[0].file = "../outside"' '.intent_analysis.clues[0].alignment = "okay"' \
+    '.intent_analysis.clues = []' '.intent_analysis.assessment = 42' \
+    '.decisions = ["not an object"]' '.decisions[0].evidence = {file:"a",line:1}' \
     '.unmet_intent = ["not an object"]' '.questions = [{text:42}]' '., .'; do
     jq "$bad" "$FIX/good-reply.json" >"$FIX/reply.json"
     "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null && fail "malformed review must fail: $bad"
@@ -415,7 +564,7 @@ test_run_outcomes() {
   mv "$FIX/good-reply.json" "$FIX/reply.json"
   FAKE_OPENCODE=blocked "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null || fail "blocked is not a failure"
   assert_eq 'blocked diff.patch is empty ses_fake' "$(jq -r '"\(.status) \(.reason) \(.session_id)"' "$dir/run.json")" "blocked"
-  assert_has "$("$BERCAIL" review-pr rows --stack "$REVIEWS/stack-7")" "blocked: diff.patch is empty" "a blocked row"
+  assert_has "$(status_of "$REVIEWS/stack-7" 7)" "blocked: diff.patch is empty" "a blocked row"
   [[ ! -e "$dir/review.json" ]] || fail "a rerun that blocks drops the last review"
   assert_has "$("$BERCAIL" review-pr card --stack "$REVIEWS/stack-7")" "Decisions pass: blocked: diff.patch is empty" "card after a blocked rerun"
 
@@ -426,29 +575,16 @@ test_run_outcomes() {
   # One pass at a time. A lock whose process is gone reads as a pass that died.
   ln -s "$$" "$dir/pass.lock"
   assert_has "$("$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" 2>&1 || true)" "already running" "a second pass is refused"
-  assert_has "$("$BERCAIL" review-pr rows --stack "$REVIEWS/stack-7")" "running" "a live pass is running"
+  assert_has "$(status_of "$REVIEWS/stack-7" 7)" "running" "a live pass is running"
   rm -f "$dir/run.json"
   ln -sfn 999999 "$dir/pass.lock"
-  assert_has "$("$BERCAIL" review-pr rows --stack "$REVIEWS/stack-7")" "failed: the pass stopped before it finished" "a dead pass"
+  assert_has "$(status_of "$REVIEWS/stack-7" 7)" "failed: the pass stopped before it finished" "a dead pass"
   "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null || fail "a dead pass's lock is taken over"
   [[ ! -e "$dir/pass.lock" ]] || fail "the lock goes when the pass ends"
 
-  # The Stack tab's fzf gets a reload when run.json lands.
-  "$PY" -I - "$REVIEWS/stack-7/ui.sock" "$LOG/ui.req" <<'PY' &
-import socket, sys
-s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.listen(1)
-c, _ = s.accept(); data = c.recv(65536)
-open(sys.argv[2], "wb").write(data)
-c.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"); c.close()
-PY
-  local server=$!
-  wait_for "$REVIEWS/stack-7/ui.sock"
   "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null
-  wait "$server"
-  assert_has "$(<"$LOG/ui.req")" "reload($ROOT/bin/bercail review-pr rows --stack $REVIEWS/stack-7)" "reload sent to the Stack tab"
-  rm -f "$REVIEWS/stack-7/ui.sock"
   assert_eq ready "$(jq -r .status "$dir/run.json")" "rerun is ready again"
-  printf 'PASS: run: failed (no block, crash), blocked (drops the old review), a long pass, one pass at a time, a dead pass; the Stack tab reloads\n'
+  printf 'PASS: run: failed (no block, crash), blocked (drops the old review), a long pass, one pass at a time, a dead pass\n'
 }
 
 test_concurrency() {
@@ -497,22 +633,17 @@ test_concurrency() {
 }
 
 test_ui() {
-  local argv
-  "$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7"
-  argv="$(<"$LOG/fzf.argv")"
-  assert_has "$argv" "--listen=$REVIEWS/stack-7/ui.sock" "fzf listens"
-  assert_has "$argv" "--preview=$ROOT/bin/bercail review-pr card --stack $REVIEWS/stack-7 {1}" "preview is the card"
-  assert_has "$argv" "t:execute-silent($ROOT/bin/bercail review-pr open --stack $REVIEWS/stack-7 {1}" "t opens tuicr"
-  assert_has "$argv" "o:execute-silent(gh pr view {1} -R github.com/acme/widgets --web" "o opens the browser"
-  grep -q 'review-pr select' <<<"$argv" && fail "a stack of one has no enter bind"
-  assert_has "$(<"$LOG/fzf.stdin")" $'7\t#7  Retry flaky uploads' "fzf rows"
-  printf 'PASS: ui: fzf with --listen, the card as preview, t and o\n'
+  local out
+  out="$("$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7" 2>&1)" && fail "ui without the Herdr app must fail"
+  assert_has "$out" "the Herdr app is not running" "ui says why"
+  printf 'PASS: ui without the Herdr app fails and says why\n'
 }
 
 # --- a Herdr space: Review-<n>_<Repo>, its desk, a Stack tab -----------------------
 test_space() {
-  local out argv
+  local out
   export FAKE_HERDR_UP=1
+  rm -f "$LOG/stack.mod" "$LOG/stack.argv"
   # The checkout is found through a Herdr space on it, not the caller's cwd.
   jq -n --arg f "$WORK" '{spaces: [{id: "s0", name: "Main_Widgets", folder: $f, tabs: []}]}' >"$HERDR_STATE"
   git -C "$WORK" worktree remove -f "$TMP_DIR/work/widgets.review-7" 2>/dev/null || true
@@ -524,58 +655,219 @@ test_space() {
   assert_eq "Review-7_Widgets $(cd "$TMP_DIR/work/widgets.review-7" && pwd -P)" \
     "$(jq -r '.spaces[] | select(.id == "s1") | "\(.name) \(.folder)"' "$HERDR_STATE")" "space name and folder"
   [[ "$(git -C "$WORK" worktree list --porcelain)" == *"widgets.review-7"* ]] || fail "sibling worktree of the source"
-  argv="$(<"$LOG/stack.argv")"
-  assert_eq bash "$(jq -r '.[0]' <<<"$argv")" "Stack tab runs bash -lc"
-  assert_has "$(jq -r '.[2]' <<<"$argv")" "exec $ROOT/bin/bercail review-pr ui --stack $REVIEWS/stack-7" "Stack tab runs review-pr ui"
+  assert_eq "bercail-review $REVIEWS/stack-7 $ROOT/bin/bercail" \
+    "$(awk '{ print $1 }' "$LOG/stack.mod") $(awk '{ print $2 }' "$LOG/stack.mod" | jq -r '"\(.stack) \(.bercail)"')" \
+    "the Stack tab is the mod, on this stack"
+  [[ ! -e "$LOG/stack.argv" ]] || fail "the Stack tab runs no terminal"
   assert_has "$(<"$LOG/hc")" "--label bercail.space=s1" "the desk starts (bstack on)"
+  local session
+  session="$(jq -r .session_id "$REVIEWS/stack-7/desk.json")"
+  assert_has "$(<"$LOG/hc")" "--label bercail.review.session=$session" "desk is attached to the review session"
+  assert_has "$(<"$LOG/hc")" "opencode --session $session $REVIEWS/stack-7" "the visible desk uses the safe stack cwd"
+  jq -e '.agent == "bstack-pr-review" and .permissions[0].effect == "deny"
+    and [.permissions[] | select(.effect == "allow") | .action] == ["read","glob","grep"]' "$LOG/session-create.json" >/dev/null \
+    || fail "review session is not read-only"
   # Again: the same space and tab, no second desk.
   : >"$LOG/hc"
-  rm -f "$LOG/stack.argv"
   (cd / && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run) >/dev/null
-  [[ ! -e "$LOG/stack.argv" ]] || fail "a second Stack tab"
+  assert_eq 1 "$(wc -l <"$LOG/stack.mod" | tr -d ' ')" "no second Stack tab"
   assert_eq 1 "$(jq '[.spaces[] | select(.name == "Review-7_Widgets")] | length' "$HERDR_STATE")" "one space"
-  printf 'PASS: a Herdr space Review-<n>_<Repo> on the worktree, its desk, one Stack tab running review-pr ui\n'
+  grep -q '^run ' "$LOG/hc" && fail "gather started a second desk"
+  printf 'PASS: a Herdr space Review-<n>_<Repo> on the worktree, its desk, one Stack tab, the bercail-review mod\n'
 }
 
-# --- with the bercail-review mod, the Stack tab is the mod, not fzf ----------------
+# --- ui: shows the Stack tab, or makes it ------------------------------------------
 test_ui_mod() {
-  local mods="$HOME/.config/herdr-app/mods/bercail-review" saved="$TMP_DIR/herdr.saved" props
-  export FAKE_HERDR_UP=1 HERDR_APP_CONFIG_DIR="$HOME/.config/herdr-app"
+  local saved="$TMP_DIR/herdr.saved" out
+  export FAKE_HERDR_UP=1
   cp "$HERDR_STATE" "$saved"
-  mkdir -p "$mods" && : >"$mods/main.js"
   : >"$LOG/herdr"
-  rm -f "$LOG/stack.mod" "$LOG/fzf.argv"
-  # The space's Stack tab runs fzf (made before the mod): ui opens the mod beside it.
+  rm -f "$LOG/stack.mod"
   "$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7"
-  [[ ! -e "$LOG/fzf.argv" ]] || fail "ui ran fzf with the mod there"
-  props="$(awk '$1 == "bercail-review" { print $2 }' "$LOG/stack.mod")"
-  assert_eq "$REVIEWS/stack-7 $ROOT/bin/bercail" "$(jq -r '"\(.stack) \(.bercail)"' <<<"$props")" "mod props"
-  # The fzf tab stays: a Stack tab with a terminal may be the mod's with a split.
-  assert_eq "fzf mod" "$(jq -r '[.spaces[] | select(.id == "s1") | .tabs[] | select(.name == "Stack")
-    | if (.terminals | length) == 0 then "mod" else "fzf" end] | join(" ")' "$HERDR_STATE")" \
-    "a mod Stack tab beside the fzf one"
-  grep -q "tab.close" "$LOG/herdr" && fail "ui closed a tab"
+  [[ ! -e "$LOG/stack.mod" ]] || fail "ui made a second Stack tab"
   assert_has "$(<"$LOG/herdr")" "do space.select --id s1" "ui shows the review space"
-  # Again: the same tab, shown.
+  assert_has "$(<"$LOG/herdr")" "do tab.select --id $(jq -r '.spaces[] | select(.id == "s1") | .tabs[] | select(.name == "Stack") | .id' "$HERDR_STATE")" "ui selects the Stack tab"
+  # An older bercail's Stack terminal is replaced, not left beside the mod.
+  jq '(.spaces[] | select(.id == "s1") | .tabs) |= map(if .name == "Stack" then .terminals = [{terminal: "t-old"}] else . end)' \
+    "$saved" >"$HERDR_STATE"
   "$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7"
-  assert_eq 1 "$(wc -l <"$LOG/stack.mod" | tr -d ' ')" "no second mod tab"
-  assert_has "$(<"$LOG/herdr")" "do tab.select --id $(jq -r '.spaces[] | select(.id == "s1") | .tabs[] | select(.name == "Stack" and (.terminals | length) == 0) | .id' "$HERDR_STATE")" "ui selects the mod tab"
-  # A new review space gets the mod as its Stack tab.
-  jq '.spaces |= map(select(.id != "s1"))' "$saved" >"$HERDR_STATE"
-  rm -f "$LOG/stack.mod" "$LOG/stack.argv"
-  (cd / && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run) >/dev/null
-  [[ ! -e "$LOG/stack.argv" ]] || fail "gather made an fzf Stack tab with the mod there"
-  assert_eq 1 "$(wc -l <"$LOG/stack.mod" | tr -d ' ')" "gather made the mod Stack tab"
-  # No Herdr app: fzf, as before.
-  FAKE_HERDR_UP="" "$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7"
-  [[ -e "$LOG/fzf.argv" ]] || fail "no Herdr app: ui runs fzf"
-  rm -rf "$mods"
+  assert_eq 1 "$(wc -l <"$LOG/stack.mod" | tr -d ' ')" "a replacement mod Stack tab"
+  assert_eq 1 "$(jq '[.spaces[] | select(.id == "s1") | .tabs[] | select(.name == "Stack")] | length' "$HERDR_STATE")" \
+    "only the mod Stack tab remains"
+  assert_has "$(<"$LOG/herdr")" "do tab.close" "the legacy Stack terminal is closed"
+  # Gathering also migrates old spaces, including one that already has both tabs.
   cp "$saved" "$HERDR_STATE"
-  unset HERDR_APP_CONFIG_DIR
-  printf 'PASS: ui with the mod: one mod Stack tab, shown; gather makes it; fzf without the Herdr app\n'
+  jq '(.spaces[] | select(.id == "s1") | .tabs) += [{id: "old-stack", name: "Stack", terminals: [{terminal: "t-old"}]},
+      {id: "keep-shell", name: "Shell", terminals: [{terminal: "t-keep"}]}]' "$HERDR_STATE" >"$HERDR_STATE.tmp"
+  mv "$HERDR_STATE.tmp" "$HERDR_STATE"
+  : >"$LOG/herdr"
+  (cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run) >/dev/null
+  assert_has "$(<"$LOG/herdr")" "do tab.close --id old-stack" "gather removes the legacy terminal beside the mod"
+  assert_eq 1 "$(jq '[.spaces[] | select(.id == "s1") | .tabs[] | select(.id == "keep-shell")] | length' "$HERDR_STATE")" \
+    "migration keeps the shell"
+  assert_eq 1 "$(wc -l <"$LOG/stack.mod" | tr -d ' ')" "gather reuses the existing mod"
+  # No mod: ui says to update, and a gather warns.
+  mv "$MOD/main.js" "$MOD/main.js.off"
+  out="$("$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7" 2>&1)" && fail "ui without the mod must fail"
+  assert_has "$out" "bercail update" "ui without the mod says to update"
+  jq '.spaces |= map(select(.id != "s1"))' "$saved" >"$HERDR_STATE"
+  assert_has "$(cd / && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run 2>&1 >/dev/null)" \
+    "no bercail-review mod" "gather without the mod warns"
+  mv "$MOD/main.js.off" "$MOD/main.js"
+  cp "$saved" "$HERDR_STATE"
+  printf 'PASS: ui/gather replace legacy Stack terminals, keep other tabs and reuse the mod; no mod says to update\n'
 }
 
-# --- open: tuicr pr N via the desk mod, seeded with [AI Agent] questions ----------
+# --- checkout: the PR's branch in the review worktree; rereview: gather, then pass ----
+test_checkout() {
+  local wt="$TMP_DIR/work/widgets.review-7" out main_sha
+  main_sha="$(git -C "$WORK" rev-parse main)"
+  git -C "$WORK" branch -D retry >/dev/null 2>&1 || true
+  out="$("$BERCAIL" review-pr checkout 7 --stack "$REVIEWS/stack-7")"
+  assert_eq "retry null $wt" "$(jq -r '"\(.branch) \(.note) \(.worktree)"' <<<"$out")" "a missing branch is made"
+  assert_eq "retry $SHA7" "$(git -C "$wt" symbolic-ref --short HEAD) $(git -C "$wt" rev-parse HEAD)" "on the branch, at the head"
+  # On a PR's branch the stack still moves it, a tag of the same name or not.
+  git -C "$WORK" tag retry "$main_sha"
+  "$BERCAIL" review-pr select 7 --stack "$REVIEWS/stack-7"
+  git -C "$WORK" tag -d retry >/dev/null
+  git -C "$wt" symbolic-ref -q HEAD >/dev/null && fail "select detaches again"
+  # Your branch elsewhere: left alone, the worktree at the head, detached.
+  git -C "$WORK" branch -f retry "$main_sha"
+  out="$("$BERCAIL" review-pr checkout 7 --stack "$REVIEWS/stack-7")"
+  assert_has "$(jq -r .note <<<"$out")" "left alone" "a branch not at the head"
+  assert_eq "null $main_sha $SHA7" "$(jq -r .branch <<<"$out") $(git -C "$WORK" rev-parse retry) $(git -C "$wt" rev-parse HEAD)" \
+    "the branch did not move; the worktree is at the head"
+  git -C "$WORK" branch -f retry "$SHA7"
+  git -C "$WORK" switch -q retry
+  out="$("$BERCAIL" review-pr checkout 7 --stack "$REVIEWS/stack-7")"
+  git -C "$WORK" switch -q main
+  assert_has "$(jq -r .note <<<"$out")" "checked out in $WORK" "a branch checked out in another worktree"
+  # A fork's PR: no local branch named after the fork's.
+  git -C "$WORK" branch -D retry >/dev/null
+  jq '.isCrossRepository = true' "$REVIEWS/stack-7/pr-7/$SHA7/pr.json" >"$LOG/fork.json"
+  cp "$REVIEWS/stack-7/pr-7/$SHA7/pr.json" "$LOG/pr.json.saved" && cp "$LOG/fork.json" "$REVIEWS/stack-7/pr-7/$SHA7/pr.json"
+  out="$("$BERCAIL" review-pr checkout 7 --stack "$REVIEWS/stack-7")"
+  cp "$LOG/pr.json.saved" "$REVIEWS/stack-7/pr-7/$SHA7/pr.json"
+  assert_has "$(jq -r .note <<<"$out")" "a fork's branch" "a fork's PR"
+  git -C "$WORK" rev-parse -q --verify refs/heads/retry >/dev/null && fail "a fork's PR made a local branch"
+  # Any other branch is the person's: the stack refuses to move it.
+  git -C "$wt" switch -q -c mine
+  assert_has "$("$BERCAIL" review-pr select 7 --stack "$REVIEWS/stack-7" 2>&1 || true)" "not detached or on a PR's branch" \
+    "a branch that is not the stack's"
+  git -C "$wt" switch -q --detach "$SHA7" && git -C "$wt" branch -q -D mine
+  # rereview: the stack is gathered again, then #7's pass runs again though it was ready.
+  : >"$LOG/gh"
+  jq '.finished_at = "old"' "$REVIEWS/stack-7/pr-7/$SHA7/run.json" >"$LOG/run.old" && cp "$LOG/run.old" "$REVIEWS/stack-7/pr-7/$SHA7/run.json"
+  FAKE_OPENCODE=ok "$BERCAIL" review-pr rereview 7 --stack "$REVIEWS/stack-7" >/dev/null 2>"$LOG/rereview.err" \
+    || fail "rereview: $(cat "$LOG/rereview.err")"
+  assert_has "$(<"$LOG/gh")" "pr view 7" "rereview gathers"
+  assert_eq ready "$(jq -r 'select(.finished_at != "old") | .status' "$REVIEWS/stack-7/pr-7/$SHA7/run.json")" "rereview runs the pass again"
+  assert_eq 7 "$(jq -r .current "$REVIEWS/stack-7/stack.json")" "rereview leaves the stack on its PR"
+  printf 'PASS: checkout puts the PR branch in the review worktree, never moves yours; rereview gathers then passes\n'
+}
+
+test_desk_summary() {
+  local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" session before out i
+  session="$(jq -r .session_id "$stack/desk.json")"
+  assert_eq "$session" "$(jq -r .session_id "$dir/review.json")" "the desk session produced the card"
+  wait_for "$stack/stack-summary.json"
+  for ((i = 0; i < 100; i++)); do [[ ! -L "$stack/summary.lock" ]] && break; sleep 0.05; done
+  assert_eq "ready $session" "$(jq -r '"\(.status) \(.session_id)"' "$stack/stack-summary.json")" "same desk produced the stack summary"
+  assert_has "$(jq -r '.order[]' "$stack/stack-summary.json")" 'Best guess: make uploads resilient' "stack summary reads the inferred purpose"
+  before="$(grep -c 'Stack summary mode' "$LOG/opencode.runs")"
+  "$BERCAIL" review-pr summarize --stack "$stack"
+  assert_eq "$before" "$(grep -c 'Stack summary mode' "$LOG/opencode.runs")" "a matching summary is cached"
+  assert_eq ready "$("$BERCAIL" review-pr state --stack "$stack" | jq -r .summary.status)" "summary reaches the mod"
+
+  cp "$dir/run.json" "$LOG/ready-run.json"
+  jq '.status = "blocked"' "$LOG/ready-run.json" >"$dir/run.json"
+  "$BERCAIL" review-pr summarize --stack "$stack"
+  assert_eq "$before" "$(grep -c 'Stack summary mode' "$LOG/opencode.runs")" "summary waits for every card"
+  assert_eq waiting "$("$BERCAIL" review-pr state --stack "$stack" | jq -r .summary.status)" "old summary hidden while a card is not ready"
+  cp "$LOG/ready-run.json" "$dir/run.json"
+  jq '.decisions[0].statement = "A new decision at the same SHA"' "$dir/review.json" >"$LOG/new-card.json"
+  cp "$LOG/new-card.json" "$dir/review.json"
+  assert_eq waiting "$("$BERCAIL" review-pr state --stack "$stack" | jq -r .summary.status)" "a changed card invalidates the old summary"
+  FAKE_OPENCODE=noblock "$BERCAIL" review-pr summarize --stack "$stack" && fail "invalid stack summary accepted"
+  assert_eq failed "$("$BERCAIL" review-pr state --stack "$stack" | jq -r .summary.status)" "summary failure is visible"
+  "$BERCAIL" review-pr summarize --stack "$stack"
+  assert_eq ready "$("$BERCAIL" review-pr state --stack "$stack" | jq -r .summary.status)" "summary retry succeeds"
+
+  # Viewing a legacy card must not implicitly rerun it or discard a valid result.
+  jq '.session_id = "ses_old_headless" | del(.intent_analysis)' "$dir/review.json" >"$LOG/foreign-card.json"
+  cp "$LOG/foreign-card.json" "$dir/review.json"
+  (
+    # shellcheck source=/dev/null
+    source "$ROOT/lib/common.sh"
+    # shellcheck source=/dev/null
+    source "$ROOT/lib/review.sh"
+    export BERCAIL_SELF="$BERCAIL"
+    _review_load --stack "$stack"
+    _review_summary_input "$LOG/legacy-summary-input.json" || fail "saved cards without intent_analysis must remain valid summary inputs"
+    # shellcheck disable=SC2329
+    _review_spawn() { printf '%s\n' "$*" >>"$LOG/ui-spawns"; }
+    review_ui --stack "$stack"
+  )
+  grep -q ' review-pr run ' "$LOG/ui-spawns" && fail "ui implicitly reran a ready card"
+  cmp -s "$LOG/foreign-card.json" "$dir/review.json" || fail "ui changed a ready card"
+  assert_eq 'Re-review for code-based intent.' "$("$BERCAIL" review-pr state --stack "$stack" | jq -r '.prs[0].intent')" "legacy context is not labeled inferred intent"
+
+  cp "$LOG/desk.json" "$LOG/desk.saved.json"
+  jq '.status.state = "working" | .labels["bercail.review.session"] = "other-session"' "$LOG/desk.saved.json" >"$LOG/desk.json"
+  : >"$LOG/hc"
+  out="$("$BERCAIL" review-pr ui --stack "$stack" 2>&1)" || fail "a busy desk prevented showing the Stack tab"
+  assert_has "$out" "is working" "busy desk error"
+  grep -qE '^(run|kill|rm) ' "$LOG/hc" && fail "interrupted a working desk"
+  cp "$LOG/desk.saved.json" "$LOG/desk.json"
+  [[ ! -f "$LOG/desk-collision" ]] || fail "two passes used the same desk session at once"
+  printf 'PASS: one read-only visible desk session, cached ready-stack summary, invalidation, failure, and busy desk protection\n'
+}
+
+test_desk_preflight() {
+  local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" out session fresh
+  cp "$dir/run.json" "$LOG/preflight-run.json"
+  cp "$dir/review.json" "$LOG/preflight-review.json"
+  cp "$LOG/desk.json" "$LOG/preflight-desk.json"
+  jq '.status.state = "working" | .labels["bercail.review.session"] = "other-session"' "$LOG/preflight-desk.json" >"$LOG/desk.json"
+  out="$("$BERCAIL" review-pr run 7 --stack "$stack" 2>&1)" && fail "used a busy unrelated desk"
+  assert_has "$out" "is working" "run explains why it could not start"
+  cmp -s "$LOG/preflight-run.json" "$dir/run.json" || fail "preflight failure replaced run.json"
+  cmp -s "$LOG/preflight-review.json" "$dir/review.json" || fail "preflight failure deleted the ready card"
+
+  # A gather can still show the space when its desk is busy, but must not claim a pass started.
+  rm -f "$dir/run.json"
+  out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 2>"$LOG/busy-gather.err")"
+  assert_eq 's1 waiting' "$(jq -r '"\(.space) \(.pass)"' <<<"$out")" "busy desk keeps its space and waits"
+  [[ ! -f "$dir/run.json" ]] || fail "gather launched a pass against an unavailable desk"
+  cmp -s "$LOG/preflight-review.json" "$dir/review.json" || fail "busy gather changed the card"
+  cp "$LOG/preflight-run.json" "$dir/run.json"
+  cp "$LOG/preflight-desk.json" "$LOG/desk.json"
+
+  cp "$HERDR_STATE" "$LOG/preflight-spaces.json"
+  jq '.spaces |= map(select(.id != "s1"))' "$LOG/preflight-spaces.json" >"$HERDR_STATE"
+  out="$("$BERCAIL" review-pr run 7 --stack "$stack" 2>&1)" && fail "run used a closed review space"
+  assert_has "$out" "no Herdr space" "closed-space preflight error"
+  cmp -s "$LOG/preflight-run.json" "$dir/run.json" || fail "closed-space preflight replaced run.json"
+  cmp -s "$LOG/preflight-review.json" "$dir/review.json" || fail "closed-space preflight deleted the card"
+  cp "$LOG/preflight-spaces.json" "$HERDR_STATE"
+
+  # Deleted server sessions are recoverable; a server outage is not a reason to replace one.
+  session="$(jq -r .session_id "$stack/desk.json")"
+  rm -f "$LOG/session-$session.json"
+  "$BERCAIL" review-pr ui --stack "$stack"
+  fresh="$(jq -r .session_id "$stack/desk.json")"
+  [[ "$fresh" != "$session" ]] || fail "a deleted session was not replaced"
+  assert_has "$(<"$LOG/hc")" "bercail.review.session=$fresh" "replacement desk is attached to the new session"
+  out="$(FAKE_SESSION_LOOKUP=unavailable "$BERCAIL" review-pr run 7 --stack "$stack" 2>&1)" && fail "used an unavailable server"
+  assert_has "$out" "could not read" "server outage is reported"
+  assert_eq "$fresh" "$(jq -r .session_id "$stack/desk.json")" "outage did not replace the session"
+  cmp -s "$LOG/preflight-run.json" "$dir/run.json" || fail "outage changed run.json"
+  cmp -s "$LOG/preflight-review.json" "$dir/review.json" || fail "outage changed the card"
+  [[ ! -L "$dir/pass.lock" && ! -L "$stack/desk-pass.lock" ]] || fail "preflight failure leaked a lock"
+  printf 'PASS: desk preflight preserves cards, busy gathers wait, deleted sessions recover, outages do not reset sessions\n'
+}
+
+# --- open: tuicr pr N directly, seeded with [AI Agent] questions ------------------
 test_open() {
   local out dir="$REVIEWS/stack-7/pr-7/$SHA7"
   FAKE_OPENCODE=ok "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null
@@ -587,7 +879,9 @@ test_open() {
   touch "$LOG/tuicr.release"
   wait "$opener"
   out="$(cat "$LOG/open-result")"
-  assert_has "$(<"$LOG/herdr")" "do bercail-desk.review-pr-7:t-sh" "the desk mod action, on the review space's terminal (not the caller's)"
+  assert_eq '{"space":"s1","name":"Review #7","folder":"'"$TMP_DIR/work/widgets.review-7"'","argv":["tuicr","pr","7","--no-update-check"]}' \
+    "$(sed -n 's/^do tab.new //p' "$LOG/herdr" | grep '"Review #7"')" "a Review #7 tab on tuicr pr 7, in the review space"
+  grep -q "bercail-desk" "$LOG/herdr" && fail "open needs no desk mod"
   [[ "$(cat "$LOG/tuicr.lists")" -ge 2 ]] || fail "open waits for the active session"
   assert_eq gh:acme/widgets/pr/7 "$(jq -r .session <<<"$out")" "session slug"
   assert_eq 3 "$(jq '.comments | length' "$dir/seeded.json")" "three questions seeded"
@@ -598,10 +892,59 @@ test_open() {
     "$(sed -n 2p "$LOG/tuicr.add")" "a line tuicr can't anchor becomes a review comment"
   assert_eq '{"content":"[AI Agent] The issue asks to log each retry; is that in another PR?","type":"note","username":"bstack"}' \
     "$(sed -n 3p "$LOG/tuicr.add")" "a whole-PR question has no file"
-  (cd "$TMP_DIR/work/widgets.review-7" && HC_TERMINAL_ID=t-stack BERCAIL_REVIEW_OPEN_WAIT=5 "$BERCAIL" review-pr open) >/dev/null 2>&1
+  # Again: the Review tab is made fresh (its tuicr may be gone), and nothing is seeded twice.
+  : >"$LOG/herdr"
+  (cd "$TMP_DIR/work/widgets.review-7" && BERCAIL_REVIEW_OPEN_WAIT=5 "$BERCAIL" review-pr open) >/dev/null 2>&1
+  assert_eq 1 "$(jq '[.spaces[] | select(.id == "s1") | .tabs[] | select(.name | startswith("Review"))] | length' "$HERDR_STATE")" \
+    "one Review tab"
+  assert_has "$(<"$LOG/herdr")" "do tab.close" "the old Review #7 tab goes"
   assert_eq 3 "$(wc -l <"$LOG/tuicr.add" | tr -d ' ')" "opening again does not seed twice"
-  printf 'PASS: open: bercail-desk.review-pr-N, waits for tuicr, seeds [AI Agent] notes as bstack, ids in seeded.json\n'
+  # Another PR's Review tab goes first: one tuicr per space.
+  jq '(.spaces[] | select(.id == "s1") | .tabs[] | select(.name == "Review #7") | .name) = "Review #9"' "$HERDR_STATE" >"$HERDR_STATE.tmp" \
+    && mv "$HERDR_STATE.tmp" "$HERDR_STATE"
+  : >"$LOG/herdr"
+  (cd "$TMP_DIR/work/widgets.review-7" && BERCAIL_REVIEW_OPEN_WAIT=5 "$BERCAIL" review-pr open) >/dev/null 2>&1
+  assert_has "$(<"$LOG/herdr")" "do tab.close" "another PR's Review tab is closed"
+  assert_has "$(<"$LOG/herdr")" '"name":"Review #7"' "and #7's is made"
+  printf 'PASS: open: a Review #N tab on tuicr pr N (no desk mod), waits for tuicr, seeds [AI Agent] notes once, made fresh, one tuicr per space\n'
   unset FAKE_HERDR_UP
+}
+
+test_open_middle_pr() {
+  local stack="$1" wt="$2" current head out
+  current="$(jq -r .current "$stack/stack.json")"
+  "$BERCAIL" review-pr select 21 --stack "$stack"
+  head="$(git -C "$wt" rev-parse HEAD)"
+  cp "$HERDR_STATE" "$LOG/middle-open-spaces.json"
+  jq -n --arg wt "$wt" '{spaces:[{id:"s-middle",folder:$wt,tabs:[
+    {id:"middle-shell",name:"Shell",terminals:[{terminal:"t-middle"}]},
+    {id:"old-review",name:"Review #7",terminals:[{terminal:"t-old-review"}]}]}]}' >"$HERDR_STATE"
+  echo 7 >"$LOG/tuicr.active"
+
+  # The old launcher succeeds as an RPC but an older desk ignores the command.
+  # Another active PR must not make the requested middle PR look ready.
+  (
+    # shellcheck source=/dev/null
+    source "$ROOT/lib/common.sh"
+    # shellcheck source=/dev/null
+    source "$ROOT/lib/review.sh"
+    # shellcheck disable=SC2329
+    _review_review_tab() { "$HERDR_APP" "do" "bercail-desk.review-pr-22:t-middle" >/dev/null; }
+    BERCAIL_REVIEW_OPEN_WAIT=1 review_open 22 --stack "$stack"
+  ) >"$LOG/legacy-middle-open" 2>&1 && fail "legacy desk dispatch unexpectedly opened tuicr"
+  assert_has "$(<"$LOG/legacy-middle-open")" "did not open PR #22 within 1s" "legacy dispatch reproduces the timeout"
+  assert_eq 7 "$(cat "$LOG/tuicr.active")" "the unrelated active PR was not accepted"
+
+  : >"$LOG/herdr"
+  out="$(BERCAIL_REVIEW_OPEN_WAIT=2 "$BERCAIL" review-pr open 22 --stack "$stack")"
+  assert_eq gh:acme/widgets/pr/22 "$(jq -r .session <<<"$out")" "opens the middle PR, not the worktree's PR"
+  assert_has "$(<"$LOG/herdr")" '"name":"Review #22"' "creates the requested Review tab"
+  assert_eq '["tuicr","pr","22","--no-update-check"]' "$(jq -c . "$LOG/stack.argv")" "direct tuicr launch needs no desk callback"
+  grep -q 'bercail-desk' "$LOG/herdr" && fail "direct open still dispatched to the desk mod"
+  assert_eq "21 $head" "$(jq -r .current "$stack/stack.json") $(git -C "$wt" rev-parse HEAD)" "open does not switch the worktree"
+  cp "$LOG/middle-open-spaces.json" "$HERDR_STATE"
+  "$BERCAIL" review-pr select "$current" --stack "$stack"
+  printf 'PASS: legacy desk dispatch times out; direct middle-PR tuicr launch works without a desk callback or checkout\n'
 }
 
 # --- the blobless clone when no checkout is around; no checks at all ---------------
@@ -737,10 +1080,11 @@ test_stacks() {
   assert_eq "$stack" "$(jq -r .stack <<<"$mid")" "branch input is the same stack"
   assert_has "$(<"$stack/pr-22/$sha22/diff.patch")" "S2ONLY" "diff vs parent includes this PR"
   grep -q S1ONLY "$stack/pr-22/$sha22/diff.patch" && fail "diff vs parent must not be the trunk diff"
+  assert_has "$(<"$stack/pr-22/$sha22/intent.md")" "commit $sha22" "middle PR includes its own commit"
+  grep -qF "commit $sha21" "$stack/pr-22/$sha22/intent.md" && fail "middle PR includes its parent's commit"
+  grep -qF "commit $sha23" "$stack/pr-22/$sha22/intent.md" && fail "middle PR includes the next PR's commit"
   [[ ! -e "$stack/pr-23/$sha23/source/package-lock.json" ]] || fail "lock file not snapshotted"
   [[ -s "$stack/pr-22/$sha22/source/lib/s2.sh" ]] || fail "parent diff snapshot"
-  env PAGER=cat "$BERCAIL" review-pr diff 22 --stack "$stack" >"$LOG/diff22"
-  assert_has "$(<"$LOG/diff22")" "S2ONLY" "d is git diff parent...head"
   "$BERCAIL" review-pr select 23 --stack "$stack"
   assert_eq "$sha23" "$(git -C "$sib" rev-parse HEAD)" "enter detaches the sibling"
   assert_eq 23 "$(jq -r .current "$stack/stack.json")" "current follows select"
@@ -788,11 +1132,27 @@ test_stacks() {
   [[ ! -e "$stack/pr-22/$sha22/run.json" ]] || fail "thin PR still waiting"
   "$BERCAIL" review-pr run 22 --stack "$stack" >/dev/null
   assert_eq ready "$(jq -r .status "$stack/pr-22/$sha22/run.json")" "explicit run of a thin PR"
+  local desk_session
+  desk_session="$(jq -r .session_id "$stack/desk.json")"
+  for n in 21 22 23; do
+    assert_eq "$desk_session" "$(jq -r .session_id "$stack/pr-$n/$(jq -r --argjson n "$n" '.prs[] | select(.number == $n) | .head_sha' "$stack/stack.json")/run.json")" \
+      "all stack passes share the visible desk session"
+  done
 
-  "$BERCAIL" review-pr ui --stack "$stack"
-  assert_has "$(<"$LOG/fzf.argv")" "review-pr select" "multi fzf enter"
-  assert_has "$(<"$LOG/fzf.argv")" "review-pr diff" "multi fzf d"
-  assert_has "$(<"$LOG/fzf.argv")" "Stack one" "multi header from stack.md"
+  "$BERCAIL" review-pr state --stack "$stack" | jq -e '.header | test("Stack one")' >/dev/null || fail "multi header from stack.md"
+
+  # Re-reviewing the middle refreshes the whole stack and reruns only that PR.
+  cp "$stack/pr-21/$sha21/run.json" "$LOG/sibling-before-rereview.json"
+  jq '.finished_at = "old"' "$stack/pr-22/$sha22/run.json" >"$LOG/middle-old.json"
+  cp "$LOG/middle-old.json" "$stack/pr-22/$sha22/run.json"
+  : >"$LOG/gh"
+  "$BERCAIL" review-pr rereview 22 --stack "$stack" >/dev/null 2>"$LOG/middle-rereview.err" \
+    || fail "middle re-review: $(cat "$LOG/middle-rereview.err")"
+  for n in 21 22 23; do assert_has "$(<"$LOG/gh")" "pr view $n" "re-review refreshes #$n"; done
+  assert_eq ready "$(jq -r 'select(.finished_at != "old") | .status' "$stack/pr-22/$sha22/run.json")" "middle pass reran"
+  cmp -s "$LOG/sibling-before-rereview.json" "$stack/pr-21/$sha21/run.json" || fail "re-review reran another PR's pass"
+  assert_eq "22 $sha22" "$(jq -r .current "$stack/stack.json") $(git -C "$sib" rev-parse HEAD)" "re-review restores the middle PR"
+  test_open_middle_pr "$stack" "$sib"
 
   pr_stack 41 "$main_sha" "Fork root" "Root of a fork." main fork-a "$main_sha"
   pr_stack 42 "$main_sha" "Fork mid" "Middle of a fork." fork-a up-b "$main_sha"
@@ -987,16 +1347,22 @@ EOF
 }
 
 test_thin_rules
+test_intent_sources
 test_thin_pr_stops
 test_pass
 test_card
+test_infer_without_issue
 test_run_outcomes
 test_concurrency
 test_ui
 test_space
 test_open
 test_ui_mod
+test_checkout
+test_desk_summary
+test_desk_preflight
 test_clone_and_no_checks
 test_stacks
 test_help
 test_agent_permissions
+[[ ! -f "$LOG/desk-collision" ]] || fail "concurrent work reached one desk session"
