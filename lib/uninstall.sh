@@ -14,7 +14,11 @@ uninstall_agentic_dev() {
     info "remove: $LOCAL_BIN/bercail"
     run rm -f "$LOCAL_BIN/bercail"
   fi
-  for bin in agentic-dev bercail-desk-agent; do
+  if declare -F remove_desk_restore >/dev/null; then
+    remove_desk_restore
+  fi
+  run rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/bercail-desk/tui.ts"
+  for bin in agentic-dev bercail-desk-agent bercail-desk-claude-hook; do
     if [[ -e "$LOCAL_BIN/$bin" ]]; then
       info "remove: $LOCAL_BIN/$bin"
       run rm -f "$LOCAL_BIN/$bin"
@@ -70,7 +74,7 @@ uninstall_agentic_dev() {
     remove_bstack
   fi
 
-  if confirm "Remove managed skills (~/.agents/skills/handoff, review, bstack, council, autopilot, how, why, unslop)?"; then
+  if confirm "Remove managed skills (~/.agents/skills/handoff, review, bstack, council, autopilot, how, why, unslop, desk-restore)?"; then
     remove_managed_skills
   fi
 

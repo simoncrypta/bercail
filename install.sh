@@ -9,7 +9,7 @@ bootstrap_remote_libs() {
   local tmp lib
   tmp="$(mktemp -d)"
   mkdir -p "$tmp/lib"
-  for lib in common detect deps config skills shell-rc uninstall help omarchy notify doctor harness bstack; do
+  for lib in common detect deps config skills shell-rc uninstall help omarchy notify doctor harness bstack desk; do
     curl -fsSL "${base%/}/lib/${lib}.sh" -o "$tmp/lib/${lib}.sh"
   done
   printf '%s' "$tmp"
@@ -62,6 +62,8 @@ source "$ROOT/lib/notify.sh"
 source "$ROOT/lib/harness.sh"
 # shellcheck source=lib/bstack.sh
 source "$ROOT/lib/bstack.sh"
+# shellcheck source=lib/desk.sh
+source "$ROOT/lib/desk.sh"
 
 parse_install_args() {
   while [[ $# -gt 0 ]]; do

@@ -78,6 +78,8 @@ load_libs() {
   source "$lib/harness.sh"
   # shellcheck source=/dev/null
   source "$lib/bstack.sh"
+  # shellcheck source=/dev/null
+  source "$lib/desk.sh"
 }
 
 cmd_doctor() {
@@ -110,6 +112,7 @@ cmd_doctor() {
   doctor_omarchy_integration || failures=1
   doctor_notify || failures=1
   doctor_bstack || failures=1
+  doctor_desk_restore || failures=1
   return "$failures"
 }
 
@@ -157,6 +160,7 @@ Commands:
   doctor        Check dependencies and integration
   harness       JSON: which of claude, codex, cursor-agent, opencode are on PATH
   bstack        opencode with your Claude/GPT/Grok subscriptions: status | setup | on | off
+  desk          Bring back the desk agents a reboot took: desk restore [--dry-run]
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
   review-pr     Review someone else's PR by intent and decisions: review-pr <PR url> | run | card | ui | open
   update        Re-sync configs, Herdr layout and mod, helper, and skills
@@ -192,6 +196,10 @@ main() {
     bstack)
       load_libs
       cmd_bstack "$@"
+      ;;
+    desk)
+      load_libs
+      cmd_desk "$@"
       ;;
     notify)
       load_libs

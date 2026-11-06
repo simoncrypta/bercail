@@ -16,10 +16,11 @@ HERDR_APP_CONFIG_DIR="${HERDR_APP_CONFIG_DIR:-${HOME}/.config/herdr-app}"
 WORKTRUNK_CONFIG_DIR="${HOME}/.config/worktrunk"
 FCITX5_CONFIG_DIR="${HOME}/.config/fcitx5"
 OMARCHY_POST_UPDATE_HOOK="${HOME}/.config/omarchy/hooks/post-update.d/bercail.hook"
+OMARCHY_POST_BOOT_HOOK="${HOME}/.config/omarchy/hooks/post-boot.d/bercail-desk-restore.hook"
 LOCAL_BIN="${HOME}/.local/bin"
 # Canonical skill install per Agent Skills (https://agentskills.io): ~/.agents/skills.
 AGENTS_SKILLS_DIR="${HOME}/.agents/skills"
-AGENTIC_DEV_SKILL_IDS=(handoff review bstack council autopilot how why unslop)
+AGENTIC_DEV_SKILL_IDS=(handoff review bstack council autopilot how why unslop desk-restore)
 # First skill kept as a convenience alias (tests, summary, uninstall prompt).
 AGENTIC_DEV_SKILL_ID="${AGENTIC_DEV_SKILL_IDS[0]}"
 AGENTIC_DEV_SKILL_DIR="${AGENTS_SKILLS_DIR}/${AGENTIC_DEV_SKILL_ID}"

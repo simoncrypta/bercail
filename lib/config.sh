@@ -371,7 +371,7 @@ deploy_lib() {
     deploy_tree "$src/lib" "${AGENTIC_DEV_SHARE_DIR}/lib"
   else
     local libfile
-    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh harness.sh bstack.sh review.sh review-desk.sh stack.sh; do
+    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh harness.sh bstack.sh desk.sh review.sh review-desk.sh stack.sh; do
       deploy_install_file "lib/$libfile" "${AGENTIC_DEV_SHARE_DIR}/lib/$libfile"
     done
   fi
@@ -536,7 +536,29 @@ migrate_worktrunk_layout_echo() {
 }
 
 deploy_finalize_permissions() {
+  # Older update callers reload this library before finalizing, but their file
+  # list and remaining steps still belong to the old release.
+  deploy_install_file "bin/bercail-desk-claude-hook" "$LOCAL_BIN/bercail-desk-claude-hook"
+  deploy_install_file "config/opencode/plugins/bercail-desk/tui.ts" \
+    "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/bercail-desk/tui.ts"
+  deploy_install_file "lib/desk.sh" "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh"
+  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh"
+  fi
+  if declare -F deploy_desk_restore >/dev/null; then
+    OMARCHY_POST_BOOT_HOOK="${OMARCHY_POST_BOOT_HOOK:-$HOME/.config/omarchy/hooks/post-boot.d/bercail-desk-restore.hook}"
+    deploy_desk_restore
+  fi
+  if ! _skill_ids | grep -qx desk-restore; then
+    deploy_skill_tree desk-restore
+    local agent_skills_dir
+    if agent_skills_dir="$(skill_agent_extra_global_dirs "$(read_agent_command)")"; then
+      ensure_skill_symlink "$agent_skills_dir" desk-restore
+    fi
+  fi
   run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/agentic-dev" "$LOCAL_BIN/bercail-desk-agent" \
+    "$LOCAL_BIN/bercail-desk-claude-hook" \
     "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.zsh" \
@@ -604,7 +626,6 @@ deploy_configs() {
   if declare -F deploy_bstack >/dev/null; then
     deploy_bstack || true
   fi
-
   if [[ ! -f "$WORKTRUNK_CONFIG_DIR/config.toml" ]] || [[ "$FORCE" -eq 1 ]]; then
     deploy_install_file "config/worktrunk/config.toml" "$WORKTRUNK_CONFIG_DIR/config.toml"
   else

@@ -16,6 +16,7 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 | `bercail doctor` | Deps, Herdr layout, mod and keys, skills, webhook sinks and follower |
 | `bercail harness` | JSON: which of claude, codex, cursor-agent, opencode are on PATH (reports, does not choose) |
 | `bercail bstack setup` / `status` / `on` / `off` | [bstack](bstack.md): opencode on your own plans. No subcommand = `status` |
+| `bercail desk restore` / `--dry-run` | Bring back the desk agents a reboot or a core restart took, each on its session in its own space. See [desks after a reboot](config.md#desks-after-a-reboot). `--dry-run` lists each desk and what would happen to it |
 | `bercail update` | Re-sync configs, Herdr layout and mods, helper, skills, and bstack; restart the notify follower. `--force` (`-f`) also replaces a changed layout and the worktrunk config, and writes the shell block despite conflicts |
 | `bercail review-pr <PR url-or-branch>` / `run` / `card` / `ui` / `state` / `select` / `checkout` / `rereview` / `open` / `dir` | Review a whole PR stack by intent and decisions: one visible review desk session, cards and a stack summary beside its worktree. See [review](review.md#someone-elses-pr-bercail-review-pr) |
 | `bercail reconfigure` | Re-read `config.toml`, refresh skills |
@@ -48,6 +49,7 @@ Call by name. Skills install to `~/.agents/skills`; bercail adds a link where th
 | `how` / `why` | How code works now; why it is that way, from git, PRs, and beads. Read-only |
 | `unslop` | Clean machine-writing tells out of prose and a diff |
 | `autopilot` | Drive an open PR to green: CI, review threads, conflicts. Pushes; never merges |
+| `desk-restore` | Put a desk with no record back on its session by hand, matched by folder and content |
 
 autopilot's PR snapshot, `pr-state.sh`, is in [Ship with autopilot](bstack/06-autopilot.md#what-it-does). The review helpers:
 

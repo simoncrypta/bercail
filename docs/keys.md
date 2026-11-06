@@ -12,7 +12,7 @@ Keyboard and mouse both work: `Ctrl+Shift` keys like the rest of the Herdr app, 
 └─────────┴──────────────┴────────────────────────┴─────────────┘
 ```
 
-The desk (bstack when it is on, else your `[agent] command`) sits under the tab bar, beside the current tab's panes. It is an hc terminal, so it keeps running when the window closes or the Shell's program ends. The sidebar's agents list (bercail's `bercail-agents` mod) has a row for each desk; click it to focus that desk.
+The desk (bstack when it is on, else your `[agent] command`) sits under the tab bar, beside the current tab's panes. It is an hc terminal, so it keeps running when the window closes or the Shell's program ends. Supported sessions [come back after a reboot](config.md#desks-after-a-reboot). The sidebar's agents list (bercail's `bercail-agents` mod) has a row for each desk; click it to focus that desk.
 
 In the bercail layout (`~/.config/herdr-app/keys.json`, section `layout:bercail`):
 

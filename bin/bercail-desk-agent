@@ -43,6 +43,155 @@ if [[ ${#argv[@]} -eq 0 ]]; then
   fi
 fi
 
+# An idle harness writes nothing. Heartbeat the record, using hc events to
+# notice its exit without waiting a full minute. Session identity comes from
+# the TUI plugin or Claude hook, not hc's turn-only status reports.
+watch_desk() {
+  local pid="$1" record="$2" events
+  trap '' INT
+  exec </dev/null >/dev/null 2>&1
+  while kill -0 "$pid"; do
+    exec 3< <(hc events --json --terminal "$HC_TERMINAL_ID")
+    events=$!
+    while kill -0 "$pid"; do
+      touch -c "$record"
+      if IFS= read -r -t 60 -u 3 _; then
+        continue
+      elif (($? <= 128)); then
+        break
+      fi
+    done
+    kill "$events"
+    exec 3<&-
+    kill -0 "$pid" && sleep 5
+  done
+}
+
+# 0 when FLAG takes the next argv word. An equals form already holds its value.
+# Only listed flags do. A value is not a subcommand (`opencode --prompt run`
+# stays a desk); a word after a boolean flag is (`opencode --print-logs run`).
+flag_has_value() {
+  case "$1 $2" in
+    "opencode --server" | "opencode --completions" | "opencode --log-level" \
+      | "codex -c" | "codex --config" | "codex --enable" | "codex --disable" \
+      | "codex --remote" | "codex --remote-auth-token-env" | "codex -i" | "codex --image" \
+      | "codex -m" | "codex --model" | "codex --local-provider" | "codex -p" | "codex --profile" \
+      | "codex -s" | "codex --sandbox" | "codex -C" | "codex --cd" | "codex --add-dir" \
+      | "codex -a" | "codex --ask-for-approval" \
+      | "claude --add-dir" | "claude --agent" | "claude --agents" \
+      | "claude --allowedTools" | "claude --allowed-tools" | "claude --append-system-prompt" \
+      | "claude --autocompact" | "claude --betas" | "claude --cloud" | "claude -d" | "claude --debug" \
+      | "claude --debug-file" | "claude --disallowedTools" | "claude --disallowed-tools" \
+      | "claude --effort" | "claude --environment" | "claude --fallback-model" | "claude --file" \
+      | "claude --from-pr" | "claude --input-format" | "claude --json-schema" \
+      | "claude --max-budget-usd" | "claude --mcp-config" | "claude --model" | "claude -n" \
+      | "claude --name" | "claude --output-format" | "claude --permission-mode" \
+      | "claude --permission-prompts" | "claude --plugin-dir" | "claude --plugin-url" \
+      | "claude --prompt-suggestions" | "claude --remote-control" \
+      | "claude --remote-control-session-name-prefix" \
+      | "claude --setting-sources" | "claude --settings" | "claude --system-prompt" \
+      | "claude --system-prompt-snapshot" | "claude --teleport" | "claude --tools" \
+      | "claude -w" | "claude --worktree")
+      return 0 ;;
+  esac
+  return 1
+}
+
+# Run before exec: the watcher and the harness share this pid's life. Only a
+# labelled desk gets a record, and headless runs have nothing to resume.
+# Recorded args are what a resume can replay beside an explicit session: not a
+# prompt, not "continue the latest", and not the session flag restore adds.
+remember_desk() {
+  local harness session="" issue="" space record tmp flags="[]" arg name
+  local dir="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/desk-sessions"
+  local -a rest=()
+  local saw_pos=0
+  [[ -n "${HC_TERMINAL_ID:-}" ]] && command -v hc >/dev/null && command -v jq >/dev/null || return 0
+  harness="$(basename "${argv[0]}")"
+  set -- "${argv[@]:1}"
+  while (($#)); do
+    arg="$1"
+    shift
+    if [[ "$arg" == -- ]]; then
+      [[ "$harness" == claude ]] || rest+=("$arg" "$@")
+      break
+    fi
+    if [[ "$arg" != -* ]]; then
+      if [[ "$saw_pos" -eq 0 ]]; then
+        saw_pos=1
+        case "$harness $arg" in
+          "opencode run" | "codex exec") return 0 ;;
+        esac
+      fi
+      # Claude's free positional is its initial prompt, not a resume option.
+      [[ "$harness" != claude ]] || continue
+      rest+=("$arg")
+      continue
+    fi
+    name="$arg"
+    [[ "$arg" == *=* ]] && name="${arg%%=*}"
+    case "$harness $name" in
+      "claude -p" | "claude --print" | "cursor-agent -p" | "cursor-agent --print")
+        return 0 ;;
+      "opencode --session" | "opencode -s")
+        if [[ "$arg" == *=* ]]; then
+          session="${arg#*=}"
+        else
+          session="${1:-}"
+          shift || true
+        fi
+        continue ;;
+      "claude --resume" | "claude -r" | "claude --session-id")
+        if [[ "$arg" == *=* ]]; then
+          session="${arg#*=}"
+        elif [[ -n "${1:-}" && "${1}" != -* ]]; then
+          session="$1"
+          shift
+        fi
+        continue ;;
+      "opencode --prompt")
+        [[ "$arg" == *=* ]] || shift || true
+        continue ;;
+      "opencode --continue" | "opencode -c" | "claude --continue" | "claude -c" | "claude --fork-session")
+        continue ;;
+    esac
+    if [[ "$arg" != *=* && -n "${1:-}" && "${1}" != -* ]] && flag_has_value "$harness" "$name"; then
+      rest+=("$arg" "$1")
+      shift
+      continue
+    fi
+    rest+=("$arg")
+  done
+  space="$(hc get "$HC_TERMINAL_ID" --json 2>/dev/null \
+    | jq -r 'select(.labels["bercail.role"] == "agent") | .labels["bercail.space"] // empty')" || return 0
+  [[ -n "$space" ]] || return 0
+  [[ "$prompt" =~ beads\ issue\ ([A-Za-z0-9_-]+) ]] && issue="${BASH_REMATCH[1]}"
+  # Private only when we create it. An existing dir keeps its mode, and this
+  # does not change the process umask the harness inherits. Parents, if missing,
+  # keep that umask too.
+  if [[ ! -d "$dir" ]]; then
+    mkdir -p "$(dirname "$dir")" || return 0
+    mkdir -m 0700 "$dir" 2>/dev/null || [[ -d "$dir" ]] || return 0
+  fi
+  record="$dir/$HC_TERMINAL_ID.json"
+  # A resume has no prompt: the issue stays what it was in this terminal.
+  [[ -n "$issue" ]] || issue="$(jq -r '.issue // empty' "$record" 2>/dev/null)" || issue=""
+  [[ ${#rest[@]} -eq 0 ]] || flags="$(jq -cn --args '$ARGS.positional' -- "${rest[@]}")"
+  # 0600 in a subshell, so the harness keeps the umask it was started with.
+  tmp="$(umask 077 && mktemp "$dir/.${HC_TERMINAL_ID}.json.XXXXXX")" || return 0
+  if ! jq -n --arg address "$HC_TERMINAL_ID" --arg session "$session" --arg cwd "$PWD" \
+    --arg harness "$harness" --arg issue "$issue" --arg space "$space" \
+    --argjson pid "$$" --argjson args "$flags" \
+    '{address: $address, session: $session, cwd: $cwd, harness: $harness,
+      issue: $issue, space: $space, args: $args, pid: $pid}' >"$tmp" || ! mv "$tmp" "$record"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  (set +e; watch_desk "$$" "$record") &
+}
+
+remember_desk || true
+
 case "$(basename "${argv[0]}")" in
   codex)
     # hc runs codex without its app-server daemon.

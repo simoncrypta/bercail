@@ -43,7 +43,7 @@ EOF
 cp "$ROOT/config/worktrunk/herdr-layout.sh" "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh"
 cp "$ROOT/skills/handoff/SKILL.md" "$AGENTIC_DEV_SKILL_DIR/SKILL.md"
 cp "$ROOT/skills/review/SKILL.md" "$AGENTS_SKILLS_DIR/review/SKILL.md"
-for id in bstack council autopilot how why unslop; do
+for id in bstack council autopilot how why unslop desk-restore; do
   mkdir -p "$AGENTS_SKILLS_DIR/$id"
   cp "$ROOT/skills/$id/SKILL.md" "$AGENTS_SKILLS_DIR/$id/SKILL.md"
 done

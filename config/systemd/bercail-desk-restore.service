@@ -1,0 +1,14 @@
+# Installed by bercail (bercail update keeps it current). Brings back the desk
+# agents that were running at shutdown, once Herdr opens.
+[Unit]
+Description=Bring back Bercail desk agents after a reboot
+
+[Service]
+Type=exec
+# mise shims: harness tools, and jq when it came from mise. A packaged install
+# rewrites ExecStart to the release's bin/bercail; that binary is not copied here.
+Environment=PATH=%h/.local/share/mise/shims:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/bin/bercail desk restore --boot
+
+[Install]
+WantedBy=default.target

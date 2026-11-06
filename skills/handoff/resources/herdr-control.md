@@ -46,6 +46,9 @@ hc keys <t> enter
 herdr-app do space.select --id <child>
 ```
 
+The one exception is `bercail desk restore` (and its `desk-restore` skill). It types a
+resume command into a desk's bare recovery shell, after checking nothing runs there.
+
 ## Helpers in the same checkout
 
 Not a substitute for a handoff:
