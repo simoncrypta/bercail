@@ -5,10 +5,14 @@
 # else bercail's [agent] command. opencode with bstack on gets the terminal's
 # palette (the system theme) and runs bstack, its default agent. The full TUI,
 # not `opencode mini`: only the full TUI reports its status (OSC 7501), which
-# the desk column's header and Review's auto-open read.
+# the desk column's header and Review's auto-open read. With [bstack]
+# harness = "pi" it is Pi with the lead's profile, which bercail update writes.
 set -euo pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml"
+PI_LEAD="$HOME/.local/share/bercail/pi/lead.json"
+# Every Pi desk loads it: it tells the record which session runs there.
+PI_DESK_EXTENSION="$HOME/.local/share/bercail/pi-extensions/bercail-desk.ts"
 # Tabs off: the TUI then reports only its own session, not the other sessions
 # open in this folder.
 CLI_CONFIG='{"theme":{"name":"system","mode":"system"},"highlights":false,"tabs":{"mode":"off"}}'
@@ -30,12 +34,21 @@ if [[ "${1:-}" == --prompt ]]; then
   shift 2 || shift $#
 fi
 
-bstack=0
+bstack=0 on_pi=0
 [[ "$(toml_get bstack enabled)" == true ]] && bstack=1
+[[ "$bstack" -eq 1 && "$(toml_get bstack harness)" == pi ]] && on_pi=1
 
 argv=("$@")
 if [[ ${#argv[@]} -eq 0 ]]; then
-  if [[ "$bstack" -eq 1 ]]; then
+  if [[ "$on_pi" -eq 1 ]]; then
+    [[ -r "$PI_LEAD" ]] || {
+      printf 'bercail-desk-agent: %s is missing; run bercail update\n' "$PI_LEAD" >&2
+      exit 1
+    }
+    while IFS= read -r -d '' arg; do
+      argv+=("$arg")
+    done < <(jq -j '.[] | ., "\u0000"' "$PI_LEAD")
+  elif [[ "$bstack" -eq 1 ]]; then
     argv=(opencode)
   else
     read -r -a argv <<<"$(toml_get agent command)"
@@ -91,7 +104,12 @@ flag_has_value() {
       | "claude --remote-control-session-name-prefix" \
       | "claude --setting-sources" | "claude --settings" | "claude --system-prompt" \
       | "claude --system-prompt-snapshot" | "claude --teleport" | "claude --tools" \
-      | "claude -w" | "claude --worktree")
+      | "claude -w" | "claude --worktree" \
+      | "pi --provider" | "pi --model" | "pi --api-key" | "pi --system-prompt" \
+      | "pi --append-system-prompt" | "pi --mode" | "pi --session-dir" | "pi --name" | "pi -n" \
+      | "pi --models" | "pi --tools" | "pi -t" | "pi --exclude-tools" | "pi -xt" \
+      | "pi --thinking" | "pi --extension" | "pi -e" | "pi --skill" | "pi --prompt-template" \
+      | "pi --theme" | "pi --use-theme" | "pi --tui-mode")
       return 0 ;;
   esac
   return 1
@@ -113,7 +131,7 @@ remember_desk() {
     arg="$1"
     shift
     if [[ "$arg" == -- ]]; then
-      [[ "$harness" == claude ]] || rest+=("$arg" "$@")
+      [[ "$harness" == claude || "$harness" == pi ]] || rest+=("$arg" "$@")
       break
     fi
     if [[ "$arg" != -* ]]; then
@@ -123,17 +141,17 @@ remember_desk() {
           "opencode run" | "codex exec") return 0 ;;
         esac
       fi
-      # Claude's free positional is its initial prompt, not a resume option.
-      [[ "$harness" != claude ]] || continue
+      # Claude's and Pi's free positionals are their first messages, not resume options.
+      [[ "$harness" != claude && "$harness" != pi ]] || continue
       rest+=("$arg")
       continue
     fi
     name="$arg"
     [[ "$arg" == *=* ]] && name="${arg%%=*}"
     case "$harness $name" in
-      "claude -p" | "claude --print" | "cursor-agent -p" | "cursor-agent --print")
+      "claude -p" | "claude --print" | "cursor-agent -p" | "cursor-agent --print" | "pi -p" | "pi --print")
         return 0 ;;
-      "opencode --session" | "opencode -s")
+      "opencode --session" | "opencode -s" | "pi --session" | "pi --session-id")
         if [[ "$arg" == *=* ]]; then
           session="${arg#*=}"
         else
@@ -149,10 +167,11 @@ remember_desk() {
           shift
         fi
         continue ;;
-      "opencode --prompt")
+      "opencode --prompt" | "pi --fork")
         [[ "$arg" == *=* ]] || shift || true
         continue ;;
-      "opencode --continue" | "opencode -c" | "claude --continue" | "claude -c" | "claude --fork-session")
+      "opencode --continue" | "opencode -c" | "claude --continue" | "claude -c" | "claude --fork-session" \
+        | "pi --continue" | "pi -c" | "pi --resume" | "pi -r")
         continue ;;
     esac
     if [[ "$arg" != *=* && -n "${1:-}" && "${1}" != -* ]] && flag_has_value "$harness" "$name"; then
@@ -202,6 +221,14 @@ case "$(basename "${argv[0]}")" in
     # opencode's TUI reads a positional argument as a directory.
     [[ -z "$prompt" ]] || argv+=(--prompt "$prompt")
     prompt=""
+    ;;
+  pi)
+    # First, so a `--` in the command cannot make it a message.
+    if [[ -f "$PI_DESK_EXTENSION" && " ${argv[*]} " != *" $PI_DESK_EXTENSION "* ]]; then
+      argv=("${argv[0]}" -e "$PI_DESK_EXTENSION" "${argv[@]:1}")
+    fi
+    # bstack reaches Claude through pi-claude-bridge on the plan, not an API key.
+    [[ "$on_pi" -eq 0 ]] || unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
     ;;
 esac
 [[ -z "$prompt" ]] || argv+=("$prompt")

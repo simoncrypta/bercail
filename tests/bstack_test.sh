@@ -603,6 +603,13 @@ test_pi_deploy() {
   grep -rqi 'headless' "$p/prompts" "$p/instructions.md" && fail "Pi has no headless fallback"
   grep -q -- '--branch NAME --stage bstack --issue ID' "$p/prompts/handoff.md" || fail "handoff opens a desk"
   cmp "$ROOT/bstack/pi/extensions/fallback.ts" "$p/extensions/fallback.ts" || fail "managed fallback extension"
+  jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
+    and (index(["-e", "npm:pi-claude-bridge@0.11.0"]) != null)
+    and (index(["-e", "\($p)/extensions/fallback.ts"]) != null)
+    and (index(["--prompt-template", "\($p)/prompts"]) != null)
+    and (index(["--append-system-prompt", "\($p)/instructions.md"]) != null)
+    and (index("--skill") != null) and (index("env") == null)' "$p/lead.json" >/dev/null \
+    || fail "the desk's lead: $(cat "$p/lead.json")"
   assert_eq "$(printf 'claude\ngpt\ngrok')" "$(<"$p/fallback")" "default runtime fallback"
   grep -q 'bercail.role=agent' "$p/instructions.md" || fail "instructions warn off the desk's label"
 

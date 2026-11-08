@@ -54,6 +54,9 @@ when nothing fits.
 # Claude Code: find the folder's transcripts by their recorded cwd
 rg -l --fixed-strings -- "$(jq -cn --arg cwd "$FOLDER" '{cwd:$cwd}' | sed 's/^{//;s/}$//')" \
   ~/.claude/projects --glob '*.jsonl'
+# Pi: each session file's first line is its header, with its id and cwd
+rg -l --fixed-strings -- "$(jq -cn --arg cwd "$FOLDER" '{cwd:$cwd}' | sed 's/^{//;s/}$//')" \
+  ~/.pi/agent/sessions --glob '*.jsonl'
 # Codex
 rg -l --fixed-strings -- "$(jq -cn --arg cwd "$FOLDER" '{cwd:$cwd}' | sed 's/^{//;s/}$//')" \
   ~/.codex/sessions --glob 'rollout-*.jsonl'
@@ -92,6 +95,7 @@ AGENT="$HOME/.local/bin/bercail-desk-agent"
 # Choose ONE harness and use the verified session, address and folder.
 argv=(opencode --session "$SESSION")
 # argv=(claude --resume "$SESSION")
+# argv=(pi --session-id "$SESSION")
 # argv=(codex resume "$SESSION")
 # argv=(cursor-agent --resume "$SESSION")
 printf -v command 'cd %q && exec %q' "$FOLDER" "$AGENT"

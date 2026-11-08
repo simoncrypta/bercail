@@ -393,21 +393,29 @@ _bstack_pi_model_id() {
   printf '%s' "${1/\#/:}"
 }
 
+# The pi argv a bstack agent runs, into BSTACK_PI_ARGV. Skills are named because
+# settings.json may filter them out.
+_bstack_pi_argv() {
+  local model="$1" brief="${2:-}" id
+  BSTACK_PI_ARGV=(pi)
+  [[ -z "$model" ]] || BSTACK_PI_ARGV+=(--model "$(_bstack_pi_model_id "$model")")
+  BSTACK_PI_ARGV+=(-e "$BSTACK_PI_BRIDGE" -e "$BSTACK_PI_DIR/extensions/fallback.ts")
+  BSTACK_PI_ARGV+=(--prompt-template "$BSTACK_PI_DIR/prompts"
+    --append-system-prompt "$BSTACK_PI_DIR/instructions.md")
+  [[ -z "$brief" ]] || BSTACK_PI_ARGV+=(--append-system-prompt "$BSTACK_PI_DIR/agents/$brief.md")
+  for id in "${AGENTIC_DEV_SKILL_IDS[@]}"; do
+    BSTACK_PI_ARGV+=(--skill "$(skill_canonical_dir "$id")")
+  done
+}
+
 # The command line a bstack agent starts with. BERCAIL_ROLE identifies its role;
-# empty is the lead. Skills are named because settings.json may filter them out.
+# empty is the lead.
 bstack_pi_command() {
-  local role="$1" model="$2" brief="${3:-}" id
+  local role="$1" model="$2" brief="${3:-}"
   local -a argv=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN)
   [[ -z "$role" ]] || argv+=("BERCAIL_ROLE=$role")
-  argv+=(pi)
-  [[ -z "$model" ]] || argv+=(--model "$(_bstack_pi_model_id "$model")")
-  argv+=(-e "$BSTACK_PI_BRIDGE" -e "$BSTACK_PI_DIR/extensions/fallback.ts")
-  argv+=(--prompt-template "$BSTACK_PI_DIR/prompts"
-    --append-system-prompt "$BSTACK_PI_DIR/instructions.md")
-  [[ -z "$brief" ]] || argv+=(--append-system-prompt "$BSTACK_PI_DIR/agents/$brief.md")
-  for id in "${AGENTIC_DEV_SKILL_IDS[@]}"; do
-    argv+=(--skill "$(skill_canonical_dir "$id")")
-  done
+  _bstack_pi_argv "$model" "$brief"
+  argv+=("${BSTACK_PI_ARGV[@]}")
   printf '%q ' "${argv[@]}" | sed 's/ $//'
 }
 
@@ -440,6 +448,11 @@ _bstack_deploy_pi() {
   copy_file "$work/fallback" "$BSTACK_PI_DIR/fallback"
   _bstack_body "$work/src/agents/bstack-pr-review.md" >"$work/pr-review.md"
   copy_file "$work/pr-review.md" "$BSTACK_PI_DIR/agents/bstack-pr-review.md"
+  # The desk's lead, as a JSON argv: bercail-desk-agent runs it with the
+  # Anthropic env unset.
+  _bstack_pi_argv "$(bstack_role_model lead)"
+  jq -n '$ARGS.positional' --args -- "${BSTACK_PI_ARGV[@]}" >"$work/lead.json"
+  copy_file "$work/lead.json" "$BSTACK_PI_DIR/lead.json"
 
   ensure_dir "$BSTACK_PI_TEMPLATES"
   _bstack_pi_template "$work" bstack-builder builder "$(bstack_role_model build)" bstack-builder \
@@ -594,7 +607,7 @@ _bstack_doctor_pi() {
   else
     log "  --  Claude auth: no subscription login (claude auth login)"
   fi
-  for rel in "${BSTACK_PI_RENDERED[@]}" agents/bstack-pr-review.md extensions/fallback.ts models fallback; do
+  for rel in "${BSTACK_PI_RENDERED[@]}" agents/bstack-pr-review.md extensions/fallback.ts models fallback lead.json; do
     if [[ ! -f "$BSTACK_PI_DIR/$rel" ]]; then
       log "  missing  bstack $BSTACK_PI_DIR/$rel (bercail update)"
       missing=1

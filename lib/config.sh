@@ -546,6 +546,8 @@ deploy_finalize_permissions() {
   deploy_install_file "bin/bercail-desk-claude-hook" "$LOCAL_BIN/bercail-desk-claude-hook"
   deploy_install_file "config/opencode/plugins/bercail-desk/tui.ts" \
     "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/bercail-desk/tui.ts"
+  deploy_install_file "config/pi/extensions/bercail-desk.ts" \
+    "${AGENTIC_DEV_SHARE_DIR}/pi-extensions/bercail-desk.ts"
   deploy_install_file "lib/desk.sh" "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh"
   if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh" ]]; then
     # shellcheck source=/dev/null

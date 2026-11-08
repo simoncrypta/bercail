@@ -99,7 +99,19 @@ expect "$(one "$(record ses_a)" "$fresh" "$bare" true false '["ses_a"]')" \
 printf 'PASS: a desk without a session, folder or free session stays a shell\n'
 
 expect "$(jq -r '.[0].action' <<<"$(fact t1 "$(record ses_a claude)" "$fresh" "$bare" | jq -s . | desk_restore_plan "$SHUTDOWN")")" resume "claude resumes"
-printf 'PASS: claude desks resume too\n'
+expect "$(one "$(record 0199-pi pi)" "$fresh" "$bare")" "t1 resume " "pi resumes"
+printf 'PASS: claude and pi desks resume too\n'
+
+# The lead's hc siblings (bstack-builder, judge, council...) are not desks. After
+# a reboot they are bare or still recovering; neither is acted on or waited for.
+sibling="$(jq -c '.labels = {"bercail.role": "bstack-builder", "bercail.space": "sp1"}' <<<"$bare")"
+working="$(jq -c '.labels = {"bercail.role": "bstack-judge", "bercail.space": "sp1"}
+  | .foreground = {name: "pi", pid: 12} | .records = {"0199-judge": {"app": "pi", "state": "working"}}' <<<"$running")"
+got="$(verdict "$(fact t1 "$(record 0199-pi pi)" "$fresh" "$bare")" "$(fact t2 null 0 "$sibling")" \
+  "$(fact t3 null 0 "$(jq -c '.reason = "stopped_by_restart" | .foreground = null' <<<"$sibling")")" \
+  "$(fact t4 null 0 "$working")")"
+expect "$got" "t1 resume " "siblings are not resumed and do not hold the desk back"
+printf 'PASS: hc siblings are left alone and do not block their desk\n'
 
 # --- what gets typed ---
 
@@ -110,6 +122,9 @@ cmd="$(desk_resume_command "$rec")"
 [[ "$cmd" != *--prompt* && "$cmd" != *x-1* ]] || fail "the issue prompt is not resent: $cmd"
 cmd="$(desk_resume_command "$(jq -c '.harness = "claude" | .args = ["--verbose"]' <<<"$rec")")"
 [[ "$cmd" == *"claude --resume ses_a --verbose" ]] || fail "claude resumes with --resume: $cmd"
+cmd="$(desk_resume_command "$(jq -c '.harness = "pi" | .session = "0199-a" | .args = ["--model", "m:high"]' <<<"$rec")")"
+[[ "$cmd" == *"bercail-desk-agent pi --session-id 0199-a --model m:high" ]] \
+  || fail "pi resumes with --session-id, which also opens a session never written: $cmd"
 nl="$(printf 'line1\nline2')"
 cmd="$(desk_resume_command "$(jq -cn --arg a "$nl" '{session: "ses_a", harness: "opencode", cwd: "/w", args: [$a]}')")"
 [[ "$cmd" == *"\$'line1\\nline2'" ]] || fail "a newline in a flag stays one argument: $cmd"
@@ -184,10 +199,10 @@ chmod +x "$TMP_DIR/bin/journalctl"
 terminal() { # address json
   jq -c --arg a "$1" '. + {address: $a}' <<<"$2" >"$TERMS/$1.json"
 }
-put_record() { # address session age-before-shutdown
+put_record() { # address session age-before-shutdown [harness]
   mkdir -p "$RECORDS"
-  jq -n --arg a "$1" --arg s "$2" --arg cwd "$TMP_DIR" \
-    '{address: $a, session: $s, harness: "opencode", cwd: $cwd, issue: "x-1", space: "sp1", args: []}' >"$RECORDS/$1.json"
+  jq -n --arg a "$1" --arg s "$2" --arg cwd "$TMP_DIR" --arg h "${4:-opencode}" \
+    '{address: $a, session: $s, harness: $h, cwd: $cwd, issue: "x-1", space: "sp1", args: []}' >"$RECORDS/$1.json"
   touch -d "@$(($(cat "$TMP_DIR/shutdown") - $3))" "$RECORDS/$1.json"
 }
 reset_pass() {
@@ -221,6 +236,18 @@ expect "$(wc -l <"$SENT" | tr -d ' ')" 1 "only the fresh desk is typed into"
 [[ -f "$RECORDS/t2.json" ]] || fail "a stale record of a live terminal stays"
 [[ "$out" == *"1 came back"* ]] || fail "restore counts: $out"
 printf 'PASS: restore types into the fresh desk only and drops dead records\n'
+
+# A reboot with one Pi desk, one opencode desk from before Pi, and the Pi lead's
+# sibling still recovering: both desks come back in one pass.
+reset_pass
+terminal t1 "$bare"; put_record t1 0199-pi 60 pi
+terminal t2 "$bare"; put_record t2 ses_old 60
+terminal t3 "$(jq -c '.reason = "stopped_by_restart" | .foreground = null' <<<"$sibling")"
+out="$(cmd_desk restore)"
+expect "$(sort "$SENT" | sed 's/^\(t[0-9]*\) .*exec [^ ]* /\1 /')" $'t1 pi --session-id 0199-pi\nt2 opencode --session ses_old' \
+  "the Pi desk and the opencode desk are typed into"
+[[ "$out" == *"2 came back"* && "$out" != *t3* ]] || fail "siblings are not counted or waited for: $out"
+printf 'PASS: a Pi desk and an opencode desk come back together\n'
 
 touch "$TMP_DIR/hc-down"
 if out="$(cmd_desk restore 2>&1)"; then fail "hc down should fail: $out"; fi

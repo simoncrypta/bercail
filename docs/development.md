@@ -16,7 +16,7 @@ npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the berc
 
 CI runs every `tests/*.sh` on each push and PR, and deploys from master when `CLOUDFLARE_API_TOKEN` is set.
 
-Use Node 26 for the plugin unit tests. When opencode is installed, `tests/desk_session_plugin_test.sh` also checks the plugin in disposable TUIs against a private server, without sending a model prompt or changing your sessions.
+Use Node 26 for the plugin unit tests. When opencode is installed, `tests/desk_session_plugin_test.sh` also checks the plugin in disposable TUIs against a private server, without sending a model prompt or changing your sessions. When Pi is installed, `tests/desk_session_pi_test.sh` does the same for the Pi desk extension, offline, with a stand-in model.
 
 `site/` is bercail.dev: an Astro site served by the `bercail-site` Worker, which also serves `/install.sh` from master. `workers/setup-domain` keeps the legacy setup.simoncrypta.dev host alive for older installs. Both share `workers/setup-domain/src/github.js`.
 

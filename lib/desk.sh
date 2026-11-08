@@ -6,7 +6,7 @@
 #
 # Record: desk-sessions/<address>.json {address, session, cwd, harness, issue,
 # space, args, pid}. Its mtime is a heartbeat while the agent lives.
-# A live TUI also writes $XDG_RUNTIME_DIR/bercail/open-sessions/<pid>.json
+# A live opencode TUI or Pi also writes $XDG_RUNTIME_DIR/bercail/open-sessions/<pid>.json
 # {pid, start_ticks, sessions} so an idle agent (hc records {}) is not started twice.
 
 # A record this close to the shutdown was still running then.
@@ -70,7 +70,7 @@ desk_restore_plan() {
         elif $r == null then ["skip", "no record: see the desk-restore skill"]
         elif $r.space != $t.labels["bercail.space"] then ["skip", "record is for another space"]
         elif ($r.session // "") == "" then ["skip", "no session yet"]
-        elif ($r.harness | IN("opencode", "claude") | not) then ["skip", "cannot resume \($r.harness)"]
+        elif ($r.harness | IN("opencode", "claude", "pi") | not) then ["skip", "cannot resume \($r.harness)"]
         elif $d.mtime < ($shutdown - $window) then ["skip", "closed before the shutdown"]
         elif ($d.cwd_exists | not) then ["skip", "folder is gone: \($r.cwd)"]
         elif $d.in_ps or ($open | index($r.session)) or ($taken | index($r.session)) then ["skip", "session is open elsewhere"]
@@ -89,6 +89,8 @@ desk_restore_plan() {
 # The line typed into the bare shell. exec: quitting the agent then finishes the
 # terminal as a quit desk does, instead of leaving a live labelled shell.
 # Same terminal settings as a desk's spawn; no prompt, the session has it.
+# Pi takes --session-id: it creates the session when it was never written (Pi
+# writes one at its first message), where --session would exit.
 desk_resume_command() {
   local record="$1" agent harness session cwd flag arg cmd
   agent="$LOCAL_BIN/bercail-desk-agent"
@@ -96,8 +98,11 @@ desk_resume_command() {
   harness="$(jq -r .harness <<<"$record")"
   session="$(jq -r .session <<<"$record")"
   cwd="$(jq -r .cwd <<<"$record")"
-  flag=--session
-  [[ "$harness" == claude ]] && flag=--resume
+  case "$harness" in
+    claude) flag=--resume ;;
+    pi) flag=--session-id ;;
+    *) flag=--session ;;
+  esac
   printf -v cmd 'cd %q && TERM=xterm-256color COLORTERM=truecolor exec %q %q %q %q' \
     "$cwd" "$agent" "$harness" "$flag" "$session"
   # NUL, not lines: a recorded flag may contain a newline, and a line split would
