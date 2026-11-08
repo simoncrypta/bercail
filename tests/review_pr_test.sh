@@ -125,6 +125,7 @@ case "$1 $2" in
     if [[ " $* " == *" --bare "* ]]; then git clone -q --bare "$REMOTE" "$4"
     else git clone -q "$REMOTE" "$4"; fi ;;
   "repo view") echo '{"defaultBranchRef":{"name":"main"}}' ;;
+  "api --hostname") echo '[]' ;;
   "pr list")
     base="" head=""
     shift 2
@@ -1288,6 +1289,7 @@ EOF
   done
   local gcfg
   gcfg="$(git -C "$WORK" rev-parse --path-format=absolute --git-common-dir)/.graphite_repo_config"
+  git -C "$WORK" update-ref refs/branch-metadata/g1 HEAD
   printf '%s\n' '{"trunk":"main"}' >"$gcfg"
   : >"$LOG/gt"
   out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/33 --no-run)"
@@ -1326,6 +1328,7 @@ EOF
   assert_eq "$wreviews/stack-61" "$(jq -r .stack <<<"$fork_out")" "graphite fork run dir is the entry"
   grep -q 'get groot ' "$LOG/gt" || fail "gt get of the graphite root after a leaf entry"
   rm -f "$gcfg"
+  git -C "$WORK" update-ref -d refs/branch-metadata/g1
   local sync="$XDG_STATE_HOME/bercail/reviews/github.com/acme/widgets/gt-sync"
   [[ "$(git -C "$sync" rev-parse --path-format=absolute --git-common-dir)" != "$(git -C "$WORK" rev-parse --path-format=absolute --git-common-dir)" ]] \
     || fail "private clone must not share the source git dir"

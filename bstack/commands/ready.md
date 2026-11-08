@@ -11,7 +11,7 @@ Verify skill: !`ls "$(git rev-parse --show-toplevel 2>/dev/null)"/.agents/skills
 Fix what fails at each step, then rerun that step. Note every command, its exit code, and where its evidence is.
 
 1. Re-read the job (the beads issue when there is one) and check each part of it is done.
-2. Run the tests that cover the diff.
+2. Run the tests that cover the diff. Read `git` (`gh` | `gt` | `origin`) from `handoff-spawn --info`; dependent branches must use that backend's stack commands (`gh stack init/add/submit/sync`, `gt create/track/submit/get`, or `origin stack track/get/restack/push` and `origin pr create --stack-on`). Never run `gt` in a `gh` repo or hand-make a PR merely based on another PR's branch. This readiness check does not authorize submitting, pushing, or merging.
 3. When the verify skill above is not `none`, read it and follow it from launch to cleanup.
 4. Run any formal check whose coverage the diff touches: a `statechart` spec in `.bercail/statechart/` or committed in the repo. When none covers it, say so.
 5. When a beads issue names the job, ask `bstack-judge` one question, giving it the issue and the diff: does the diff match the issue? It names what is missing or was never asked for, and it changes nothing.

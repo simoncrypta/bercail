@@ -16,13 +16,35 @@ the PR, never pushes to the base branch, and never passes `--no-verify`.
 In opencode, `/autopilot` runs as the `bstack-autopilot` agent, which may commit
 and push without asking. Other harnesses ask at each push.
 
-## 0. The PR
+## 0. The backend and PR
+
+Read `git` (`gh` | `gt` | `origin`) from the handoff skill's
+`scripts/handoff-spawn --info` in this checkout. Never run `gt` to detect it.
+Use the same backend for checkout, stack updates, and publication:
+
+| Backend | Checkout and stack updates |
+|---------|----------------------------|
+| `gh` | For a stack, `gh stack checkout`, `gh stack sync`, and `gh stack submit`. Independent branches use `gh pr checkout` and `git push`. |
+| `gt` | `gt get` to fetch the stack, then `gt submit` to publish fixes. Use `gt create` or `gt track` only when adding a branch. |
+| `origin` | `origin stack get`, `origin stack restack`, and `origin stack push --all`. Local parents use `origin stack track --onto`; child PRs use `origin pr create --stack-on`, not just `--base`. |
+
+Never hand-make a PR merely based on another PR's branch, and never run `gt`
+in a `gh` or `origin` repo. Do not rewrite someone else's stack members. If
+native sync/restack needs a force-push or an unauthorized branch update, stop
+and report it; autopilot's no-force-push and no-merge rules still apply.
+
+The snapshot helper and GitHub commands below apply to `gh` and `gt` only.
+For `origin`, use `origin pr view`, `origin pr checks`, `origin pr requirements`,
+`origin pr thread`, and `origin pr watch` instead. Read `origin agent prompt ci`
+and `origin agent prompt review` for this installed CLI's flags and JSON fields.
+Apply the same fix/check/reply loop and stopping rules; do not call GitHub
+GraphQL, `gh run`, or the GitHub snapshot helper for an Origin PR.
 
 - `scripts/pr-state.sh [--pr N]` prints one JSON snapshot: `checks`, `failing`
   (with run ids), `pending`, `threads` (unresolved, last word not yours),
   `mergeable`, and `next`.
 - No PR for this branch: stop and say so. Open one only when asked.
-- Check out the PR's branch in this worktree (`gh pr checkout N` when it is not).
+- Check out the PR's branch in this worktree through the backend above.
   Uncommitted work that is not yours: stop, do not stash it.
 
 ## 1. Loop on `next`
@@ -31,7 +53,7 @@ Run `pr-state.sh`, do what `next` says, push, then run it again.
 
 | `next` | Do |
 |--------|----|
-| `conflicts` | `git fetch origin <base> && git merge origin/<base>`. Resolve each file from both sides' intent, run the tests, commit the merge, push. No rebase: it needs a force-push. |
+| `conflicts` | For an independent `gh` branch, `git fetch origin <base> && git merge origin/<base>`; resolve from both sides' intent, test, commit, push. For a stack, use the backend's stack update commands above, not a plain merge into one layer. Stop if publication requires a force-push. |
 | `fix-ci` | Take one failing check. `gh run view <run> --log-failed`. Reproduce locally with the same command. Fix the cause, run it again, commit, push. |
 | `answer-threads` | Section 2. |
 | `wait-ci` | `pr-state.sh --wait 900`. It returns when a check finishes, a thread arrives, or the head moves (exit 124 on timeout: run it again). |

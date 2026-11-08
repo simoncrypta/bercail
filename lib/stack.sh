@@ -2,7 +2,8 @@
 # shellcheck shell=bash
 # Stack discovery for bercail review-pr.
 #
-# Graphite: when the source checkout's shared git dir has .graphite_repo_config.
+# Backend: shared handoff detection chooses gh, gt, or origin. A Graphite
+# config alone is not evidence: only tracked branches (or an override) select gt.
 # Local `gt log` is not the source of truth (it can omit a remote stack). Sync
 # with `gt get` only in a private clone (its own git dir, never a linked
 # worktree of the source). Never run gt against the source: even
@@ -33,11 +34,10 @@ _stack_strip_ansi() {
   printf '%s' "$s" | sed $'s/\x1b\\[[0-9;]*[A-Za-z]//g'
 }
 
-_stack_is_graphite() {
-  local cfg
-  cfg="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/.graphite_repo_config" || return 1
-  [[ -f "$cfg" ]]
-}
+# Source tree: symlink to the skill script. Installed CLI: a standalone copy.
+# shellcheck source=lib/git-backend.sh
+source "$(dirname "${BASH_SOURCE[0]}")/git-backend.sh"
+
 
 _stack_trunk_name() {
   jq -r '.trunk // .trunks[0].name // "main"' "$1"
@@ -342,18 +342,120 @@ _stack_github() {
 # source may be empty (GitHub walk only). sync is the private clone path.
 # A fork is not fatal: review the named PR alone, in its own run dir.
 _stack_alone() {
-  local entry="$1" n
+  local entry="$1" via="${2:-github}" n
   n="$(jq -r '.number' "$entry")"
   printf 'branched stack; reviewing PR #%s alone\n' "$n" >&2
-  jq -nc --argjson n "$n" --arg trunk "$(jq -r '.baseRefName' "$entry")" \
-    '{via: "github", trunk: $trunk, numbers: [$n]}'
+  jq -nc --argjson n "$n" --arg via "$via" --arg trunk "$(jq -r '.baseRefName' "$entry")" \
+    '{via: $via, trunk: $trunk, numbers: [$n]}'
+}
+
+# Validate a native backend's parent graph before emitting a linear PR order.
+_stack_native_order() {
+  local payload="$1" parent count row branch n total used=0
+  # shellcheck disable=SC2034 # nameref targets of _stack_seen_add
+  local -A seen=() pr_seen=()
+  parent="$(jq -r '.trunk | sub("^refs/heads/"; "")' <<<"$payload")"
+  total="$(jq '.members | length' <<<"$payload")"
+  [[ "$total" -gt 0 && -n "$parent" && "$parent" != null ]] || return 1
+  _stack_seen_add seen "$parent" || return 1
+  while [[ "$used" -lt "$total" ]]; do
+    row="$(jq -c --arg parent "$parent" '[.members[] | select((.parent | sub("^refs/heads/"; "")) == $parent)]' <<<"$payload")" || return 1
+    count="$(jq length <<<"$row")"
+    [[ "$count" -le 1 ]] || return 2
+    [[ "$count" -eq 1 ]] || { printf 'disconnected or cyclic native stack\n' >&2; return 1; }
+    branch="$(jq -r '.[0].branch | sub("^refs/heads/"; "")' <<<"$row")"
+    n="$(jq -r '.[0].number // empty' <<<"$row")"
+    [[ "$n" =~ ^[1-9][0-9]*$ ]] || { printf 'stack branch %s has no PR\n' "$branch" >&2; return 1; }
+    _stack_seen_add seen "$branch" || return 1
+    _stack_seen_add pr_seen "$n" || return 1
+    printf '%s\n' "$n"
+    parent="$branch"
+    used=$((used + 1))
+  done
+}
+
+# Select by requested PR/head, not whichever stack happens to be checked out.
+_stack_gh_stack() {
+  local source="$1" entry="$2" sync="$3" slug="$4" catalog selected=null branch remote payload common name err rc=0 remote_stack=0
+  common="$(git -C "$source" rev-parse --path-format=absolute --git-common-dir)" || return 1
+  catalog="$common/gh-stack"
+  if [[ -f "$catalog" ]]; then
+    selected="$(jq -c --argjson n "$(jq '.number' "$entry")" --arg head "$(jq -r .headRefName "$entry")" \
+      '[.stacks[] | select(any(.branches[]; .pullRequest.number == $n or .branch == $head))] |
+       if length == 0 then null elif length == 1 then .[0] else error("ambiguous stack membership") end' "$catalog")" || return 1
+  fi
+  err="$(mktemp)"
+  payload="$(gh api --hostname "${slug%%/*}" "repos/${slug#*/}/stacks?pull_request=$(jq '.number' "$entry")" 2>"$err")" || rc=$?
+  if [[ "$rc" -ne 0 ]]; then
+    if grep -q 'HTTP 404' "$err"; then
+      payload='[]'
+    else
+      printf 'GitHub stack discovery failed: %s\n' "$(<"$err")" >&2
+      rm -f "$err"
+      return 1
+    fi
+  fi
+  rm -f "$err"
+  jq -e 'type == "array"' <<<"$payload" >/dev/null || return 1
+  case "$(jq length <<<"$payload")" in
+    0) [[ "$selected" != null ]] || return 3 ;;
+    1) remote_stack=1 ;;
+    *) return 1 ;;
+  esac
+  remote="$(git -C "$source" remote get-url origin)" || return 1
+  if [[ ! -d "$sync/.git" ]]; then
+    git clone --quiet "$source" "$sync" >&2 || return 1
+  fi
+  [[ "$(git -C "$sync" rev-parse --path-format=absolute --git-common-dir)" != "$common" ]] || return 1
+  git -C "$sync" remote set-url origin "$remote" || return 1
+  # This clone is disposable. Detach before moving its branch refs so a repeat
+  # gather cannot leave its index/worktree at an older branch tip.
+  git -C "$sync" checkout --quiet --detach --force >&2 || return 1
+  if [[ "$remote_stack" -eq 1 ]]; then
+    # checkout prefers local membership. Discard only this private catalog so
+    # a previous review cannot hide newly added remote stack members.
+    rm -f "$sync/.git/gh-stack"
+    (cd "$sync" && gh stack checkout "$(jq -r '.url' "$entry")" </dev/null >&2) || return 1
+  else
+    cp "$catalog" "$sync/.git/gh-stack" || return 1
+    git -C "$sync" fetch --quiet origin >&2 || return 1
+    while IFS= read -r name; do
+      if git -C "$sync" rev-parse --verify "refs/remotes/origin/$name" >/dev/null 2>&1; then
+        git -C "$sync" update-ref "refs/heads/$name" "refs/remotes/origin/$name" || return 1
+      fi
+    done < <(jq -r '.branches[].branch' <<<"$selected")
+    branch="$(jq -r '.headRefName' "$entry")"
+    git -C "$sync" checkout --quiet -B "$branch" "$(jq -r '.headRefOid' "$entry")" >&2 || return 1
+  fi
+  payload="$(cd "$sync" && gh stack view --json </dev/null)" || return 1
+  jq -c '. as $s | {trunk, members: [.branches | to_entries[] |
+    {branch: .value.name, parent: (if .key == 0 then $s.trunk else $s.branches[.key - 1].name end), number: .value.pr.number}]}' <<<"$payload"
+}
+
+_stack_origin_stack() {
+  local slug="$2" n="$3" neutral rc=0
+  # Even view can reconcile/write records inside a checkout. Query remotely
+  # outside any repository so stale local records cannot hide remote members.
+  neutral="$(mktemp -d)" || return 1
+  (cd "$neutral" && origin stack view "$n" -R "${slug#*/}" --json source,trunk,members </dev/null) || rc=$?
+  rmdir "$neutral"
+  return "$rc"
 }
 
 stack_discover() {
-  local slug="$1" entry="$2" source="$3" sync="$4" via trunk text line rc=0 n
+  local slug="$1" entry="$2" source="$3" sync="$4" via trunk text line rc=0 n backend="${5:-}" payload
   local -a numbers=()
   n="$(jq -r '.number' "$entry")"
-  if [[ -n "$source" ]] && _stack_is_graphite "$source" \
+  if [[ -z "$backend" ]]; then
+    backend=gh
+    [[ -z "$source" ]] || backend="$(git_backend "$source")"
+  fi
+  if [[ "$backend" == origin ]]; then
+    via=origin
+    payload="$(_stack_origin_stack "$source" "$slug" "$n")" || return 1
+    trunk="$(jq -r '.trunk | sub("^refs/heads/"; "")' <<<"$payload")"
+    text="$(_stack_native_order "$payload")" || rc=$?
+  elif [[ "$backend" == gt && -n "$source" ]] \
     && jq -e '.isCrossRepository != true' "$entry" >/dev/null; then
     via=graphite
     trunk="$(_stack_trunk_name "$(git -C "$source" rev-parse --path-format=absolute --git-common-dir)/.graphite_repo_config")"
@@ -364,10 +466,22 @@ stack_discover() {
       printf 'could not tell the trunk branch for %s\n' "$slug" >&2
       return 1
     }
-    text="$(_stack_github "$slug" "$entry" "$trunk")" || rc=$?
+    if [[ -n "$source" ]] && jq -e '.isCrossRepository != true' "$entry" >/dev/null; then
+      payload="$(_stack_gh_stack "$source" "$entry" "$sync" "$slug")" || rc=$?
+    else
+      rc=3
+    fi
+    if [[ "$rc" -eq 3 ]]; then
+      rc=0
+      text="$(_stack_github "$slug" "$entry" "$trunk")" || rc=$?
+    elif [[ "$rc" -eq 0 ]]; then
+      via=gh-stack
+      trunk="$(jq -r .trunk <<<"$payload")"
+      text="$(_stack_native_order "$payload")" || rc=$?
+    fi
   fi
   if [[ "$rc" -eq 2 ]]; then
-    _stack_alone "$entry"
+    if [[ "$backend" == origin ]]; then _stack_alone "$entry" origin; else _stack_alone "$entry"; fi
     return 0
   fi
   [[ "$rc" -eq 0 ]] || return "$rc"
@@ -383,6 +497,10 @@ stack_discover() {
     fi
   fi
   [[ ${#numbers[@]} -gt 0 ]] || return 1
+  printf '%s\n' "${numbers[@]}" | grep -qxF "$n" || {
+    printf 'native stack omitted requested PR #%s\n' "$n" >&2
+    return 1
+  }
   jq -nc --arg via "$via" --arg trunk "$trunk" --args \
     '{via: $via, trunk: $trunk, numbers: ($ARGS.positional | map(tonumber))}' -- "${numbers[@]}"
 }

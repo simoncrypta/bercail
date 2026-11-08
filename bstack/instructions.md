@@ -22,6 +22,13 @@ that is strongest at it. These rules apply to every bstack agent and subagent.
   options, wrappers, or compatibility shims nobody asked for.
 - Fix the root cause. A guard is a fix only when the state it guards is legitimate.
 - Get the data shape right first; the code that follows should be obvious.
+- Read the repo's git backend from `handoff-spawn --info` (`git`: `gh`, `gt`,
+  or `origin`). Dependent branches use that backend's stack commands:
+  `gh stack init/add/submit/sync`, `gt create/track/submit/get`, or
+  `origin stack track/get/restack/push` with `origin pr create --stack-on`.
+  Never hand-make a PR merely based on another PR's branch, and never run `gt`
+  in a `gh` or `origin` repo. Stage only unless asked to publish; autopilot
+  may commit and push its PR branch, never merge.
 - Match the code around you: naming, comment density, error handling, test style.
 - For library docs, error messages, and anything newer than you, search the web
   (`websearch`, `webfetch`) instead of guessing.

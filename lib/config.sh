@@ -79,6 +79,7 @@ read_layout_review() {
   fi
 }
 
+# shellcheck disable=SC2034 # Read by the installer that sources this library.
 RECONFIGURE=0
 
 # The Herdr app half of bercail: the bercail layout, its mods (the desk, and the
@@ -377,6 +378,8 @@ deploy_lib() {
       deploy_install_file "lib/$libfile" "${AGENTIC_DEV_SHARE_DIR}/lib/$libfile"
     done
   fi
+  # Installed lib/ has no adjacent skills tree.
+  deploy_install_file "skills/handoff/scripts/git-backend.sh" "${AGENTIC_DEV_SHARE_DIR}/lib/git-backend.sh"
 }
 
 _recorded_install_source() {

@@ -20,11 +20,11 @@ lead = "claude"
 build = "grok"
 judge = "claude"
 
-[graphite]                           # optional, one line per repo; see below
-"~/Work/some-repo" = false
+[git]                                # optional, one line per main checkout
+"~/Work/some-repo" = "gh"              # gh | gt | origin
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs the desk agent and review tool if they are missing. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[graphite]` in [handoff](handoff.md#graphite).
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs the desk agent and review tool if they are missing. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend). Legacy `[graphite]` booleans still work (`true` → `gt`, `false` → `gh`), but `[git]` takes precedence.
 
 ## Files bercail manages
 

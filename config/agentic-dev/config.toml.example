@@ -32,8 +32,11 @@ judge = "claude"
 # works when off: the lead reviews alone.
 council = false
 
-# [graphite]
-# Handoff detects Graphite by the branches gt tracks. Override it per repo, keyed
-# by the main checkout's path: true for a Graphite repo with no stack right now, false
-# for a repo where gt once ran but you don't use it.
-# "~/Work/some-repo" = false
+# [git]
+# Git backend per repo: gh (git + GitHub CLI), gt (Graphite), or origin (Cursor
+# Origin). Keys are main-checkout paths; linked worktrees share that choice.
+# Without an override: real Graphite tracking, then Cursor Origin, else gh.
+# "~/Work/some-repo" = "gh"
+# "~/Work/graphite-repo" = "gt"
+# "~/Work/origin-repo" = "origin"
+# Legacy [graphite] true/false still maps to gt/gh; [git] takes precedence.

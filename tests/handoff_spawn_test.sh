@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# Fixtures contain shell code whose variables must expand only when executed.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 unset BASH_ENV
@@ -134,11 +136,145 @@ EOF
   mkdir -p "$home"
   git_init "$home/repo"
   printf '[graphite]\n"~/repo" = true\n' >"$cfg"
-  (HOME="$home"; handoff_is_graphite "$home/repo") || fail "~/ in a key is the home directory"
+  (HOME="$home"; handoff_is_graphite "$home/repo") || fail "home-relative config keys expand to the home directory"
   rm -f "$cfg"
   handoff_is_graphite "$real" || fail "no config file falls through to detection"
   unset BERCAIL_CONFIG
   printf 'PASS: [graphite] in config.toml overrides detection for one repo, from any worktree\n'
+}
+
+test_git_enum_override_beats_graphite_and_detection() {
+  local plain="$TMP_DIR/git-plain" tracked="$TMP_DIR/git-tracked" cfg="$TMP_DIR/git.toml" home="$TMP_DIR/git-home"
+  git_init "$plain"
+  git_init "$tracked"
+  graphite_auto_init "$tracked"
+  git -C "$tracked" update-ref refs/branch-metadata/feat HEAD
+  export BERCAIL_CONFIG="$cfg"
+  cat >"$cfg" <<EOF
+[graphite]
+"$tracked" = true
+"$plain" = false
+
+[git]
+"$tracked" = "gh"
+"$plain" = "origin"
+EOF
+  [[ "$(git_backend "$tracked")" == gh ]] || fail "[git] wins over [graphite] true and over refs: $(git_backend "$tracked")"
+  [[ "$(git_backend "$plain")" == origin ]] || fail "[git] origin wins over [graphite] false"
+  handoff_is_graphite "$tracked" && fail "gh override is not graphite"
+  [[ -z "$(git_backend "$plain" 2>&1 >/dev/null)" ]] || fail "a settled [git] entry is silent"
+  cat >"$cfg" <<EOF
+[git]
+"$plain" = "maybe"
+
+[graphite]
+"$plain" = true
+EOF
+  [[ "$(git_backend "$plain")" == gt ]] || fail "a non-enum [git] value is ignored and [graphite] still maps"
+  printf '[git]\n"~/repo" = "gt"\n' >"$cfg"
+  mkdir -p "$home"
+  git_init "$home/repo"
+  [[ "$(HOME="$home" git_backend "$home/repo")" == gt ]] || fail "home-relative [git] keys expand to the home directory"
+  unset BERCAIL_CONFIG
+  printf 'PASS: [git] enum overrides [graphite] and detection; bad values are ignored\n'
+}
+
+_origin_remote() {
+  git -C "$1" remote remove origin 2>/dev/null || true
+  git -C "$1" remote add origin "$2"
+}
+
+test_origin_remote_is_offline_until_the_host_matches() {
+  local repo="$TMP_DIR/ori-off" bin="$TMP_DIR/ori-off-bin" log="$TMP_DIR/ori-off.log"
+  git_init "$repo"
+  mkdir -p "$bin"
+  cat >"$bin/origin" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$log"
+printf '%s\n' '{"mirrorStatus":"no-mirror"}'
+EOF
+  chmod +x "$bin/origin"
+  : >"$log"
+  _origin_remote "$repo" https://github.com/acme/widgets.git
+  [[ "$(PATH="$bin:$PATH" git_backend "$repo")" == gh ]] || fail "a GitHub remote is gh"
+  [[ ! -s "$log" ]] || fail "origin must not be probed for a GitHub remote: $(cat "$log")"
+  git_backend_origin_remote "$repo" && fail "github.com is not an Origin git host"
+  _origin_remote "$repo" git@origin.cursor.com:acme/widgets.git
+  git_backend_origin_remote "$repo" || fail "scp origin.cursor.com is an Origin git host"
+  _origin_remote "$repo" https://origin.cursor.com/git/acme/widgets.git
+  git_backend_origin_remote "$repo" || fail "/git/org/repo is an Origin git host"
+  _origin_remote "$repo" https://origin-staging.cursor.com/acme/widgets
+  git_backend_origin_remote "$repo" || fail "origin-<id>.cursor.com is an Origin git host"
+  _origin_remote "$repo" https://github.com/origin.cursor.com/acme/widgets.git
+  git_backend_origin_remote "$repo" && fail "a lookalike path on github.com is not Origin"
+  printf 'PASS: Origin host match is offline; a GitHub remote is never probed\n'
+}
+
+test_origin_ownership_uses_mirror_status() {
+  local repo="$TMP_DIR/ori-own" bin="$TMP_DIR/ori-own-bin" log="$TMP_DIR/ori-own.log" status
+  git_init "$repo"
+  _origin_remote "$repo" https://origin.cursor.com/acme/widgets.git
+  mkdir -p "$bin"
+  cat >"$bin/origin" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$log"
+if [[ "\$*" == *"repo view --json mirrorStatus"* ]]; then
+  printf '%s\n' "{\"mirrorStatus\":\"$TMP_DIR/ori-status\"}"
+  # status file holds the value; the JSON is written below by the test via env
+  printf '%s\n' "{\"mirrorStatus\":\"\${ORIGIN_STATUS}\"}"
+  exit 0
+fi
+exit 1
+EOF
+  # The fake above prints two JSON lines when ORIGIN_STATUS is set. Rewrite it cleanly.
+  cat >"$bin/origin" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$BERCAIL_ORIGIN_LOG"
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '%s\n' "{\"mirrorStatus\":\"${ORIGIN_STATUS}\"}"
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$bin/origin"
+  export BERCAIL_ORIGIN_LOG="$log"
+  for status in no-mirror outbound; do
+    : >"$log"
+    [[ "$(PATH="$bin:$PATH" ORIGIN_STATUS="$status" git_backend "$repo")" == origin ]] \
+      || fail "$status must be origin"
+    grep -q 'repo view --json mirrorStatus' "$log" || fail "ownership probe missing: $(cat "$log")"
+  done
+  : >"$log"
+  [[ "$(PATH="$bin:$PATH" ORIGIN_STATUS=inbound git_backend "$repo")" == gh ]] \
+    || fail "inbound mirror is GitHub-owned"
+  [[ "$(PATH="$bin:$PATH" ORIGIN_STATUS=other git_backend "$repo")" == gh ]] \
+    || fail "any other mirrorStatus is gh"
+  : >"$log"
+  [[ "$(PATH="/usr/bin:/bin" git_backend "$repo" 2>"$TMP_DIR/ori-missing.err")" == gh ]] \
+    || fail "missing origin CLI is unknown ownership, so gh"
+  grep -q '\[git\]' "$TMP_DIR/ori-missing.err" || fail "missing CLI should name the override: $(cat "$TMP_DIR/ori-missing.err")"
+  cat >"$bin/origin" <<'EOF'
+#!/bin/sh
+printf 'origin: not logged in\n' >&2
+exit 1
+EOF
+  chmod +x "$bin/origin"
+  [[ "$(PATH="$bin:$PATH" git_backend "$repo" 2>"$TMP_DIR/ori-fail.err")" == gh ]] \
+    || fail "a failed ownership probe is gh"
+  grep -q 'origin repo view failed' "$TMP_DIR/ori-fail.err" || fail "failed probe should say why: $(cat "$TMP_DIR/ori-fail.err")"
+  grep -q '\[git\]' "$TMP_DIR/ori-fail.err" || fail "failed probe should name the override: $(cat "$TMP_DIR/ori-fail.err")"
+  cat >"$bin/origin" <<'EOF'
+#!/bin/sh
+exit 130
+EOF
+  chmod +x "$bin/origin"
+  local rc=0 out
+  out="$(PATH="$bin:$PATH" git_backend "$repo" 2>"$TMP_DIR/ori-int.err")" || rc=$?
+  [[ "$rc" -eq 130 ]] || fail "an interrupted probe must exit 130, not guess gh (rc=$rc out=$out)"
+  [[ -z "$out" ]] || fail "an interrupted probe must not print a backend: $out"
+  grep -q 'using gh' "$TMP_DIR/ori-int.err" && fail "interrupt is not an unknown-ownership fallback: $(cat "$TMP_DIR/ori-int.err")"
+  unset BERCAIL_ORIGIN_LOG ORIGIN_STATUS
+  printf 'PASS: Origin ownership is mirrorStatus; unknown ownership warns and stays gh\n'
 }
 
 test_copy_dirty_is_working_tree_not_index() {
@@ -243,13 +379,13 @@ test_info_json_reports_graphite_and_dirty() {
   unset HC_TERMINAL_ID HANDOFF_SPACE
   out="$(cd "$repo" && HERDR_APP_BIN="$TMP_DIR/no-herdr" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
-  printf '%s' "$out" | jq -e '.graphite == false' >/dev/null || fail "info with only an auto-created config: $out"
+  printf '%s' "$out" | jq -e '.graphite == false and .git == "gh"' >/dev/null || fail "info with only an auto-created config: $out"
   git -C "$repo" update-ref refs/branch-metadata/feat HEAD
   out="$(cd "$repo" && HERDR_APP_BIN="$TMP_DIR/no-herdr" \
     CURSOR_CONFIG_DIR="$TMP_DIR/no-cursor" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
   printf '%s' "$out" | jq -e '.dirty == true' >/dev/null || fail "info dirty: $out"
-  printf '%s' "$out" | jq -e '.graphite == true' >/dev/null || fail "info graphite: $out"
+  printf '%s' "$out" | jq -e '.graphite == true and .git == "gt"' >/dev/null || fail "info graphite: $out"
   printf '%s' "$out" | jq -e '.default_copy == "dirty"' >/dev/null || fail "info default_copy: $out"
   printf '%s' "$out" | jq -e '.herdr == false' >/dev/null || fail "info herdr: $out"
   printf '%s' "$out" | jq -e '.herdr_env == false' >/dev/null || fail "info herdr_env: $out"
@@ -369,6 +505,9 @@ test_base_needs_branch() {
 }
 
 test_graphite_config_file_alone_is_not_graphite
+test_git_enum_override_beats_graphite_and_detection
+test_origin_remote_is_offline_until_the_host_matches
+test_origin_ownership_uses_mirror_status
 test_graphite_metadata_refs_are_graphite
 test_graphite_second_trunk_ref_is_not_graphite
 test_graphite_metadata_db_rows
@@ -458,7 +597,7 @@ JSON
   printf 'PASS: opus-5.5 resolves to the catalog id, never a *-max slug\n'
 }
 
-ISSUE=bercail-0s1
+ISSUE='bercail-0s1'
 
 # Stub bd: knows $BD_KNOWN ids, logs comments, reports $BD_BEADS_DIR.
 _bd_stub() {
@@ -1238,6 +1377,7 @@ test_track_timeout_is_bounded_and_kills_the_group() {
 
 # Spawns usually run from a terminal, where job control has a foreground to manage.
 test_track_timeout_under_a_terminal() {
+  # shellcheck disable=SC2015 # Either an absent script or an unsupported -qec skips.
   command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1 || {
     printf 'SKIP: no util-linux script for a pty\n'
     return 0
@@ -1260,6 +1400,7 @@ EOF
 }
 
 test_track_ctrl_c_kills_gt() {
+  # shellcheck disable=SC2015 # Either an absent script or an unsupported -qec skips.
   command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1 || {
     printf 'SKIP: no util-linux script for a pty\n'
     return 0
@@ -1486,6 +1627,87 @@ test_spawn_real_stack_tracks_on_its_base() {
   printf 'PASS: a real stack spawned with --base is tracked on that base, as before\n'
 }
 
+_fake_logger() {
+  local bin="$1" name="$2" log="$3"
+  mkdir -p "$bin"
+  : >"$log"
+  cat >"$bin/$name" <<EOF
+#!/bin/sh
+printf '%s\n' "\$(pwd) \$*" >>"$log"
+exit 0
+EOF
+  chmod +x "$bin/$name"
+}
+
+test_gh_base_inits_a_new_stack_and_refuses_a_middle_parent() {
+  local repo="$TMP_DIR/gh-init" bin="$TMP_DIR/gh-init-bin" log="$TMP_DIR/gh-init.log" trunk
+  git_init "$repo"
+  trunk="$(git -C "$repo" branch --show-current)"
+  git -C "$repo" branch parent-branch
+  git -C "$repo" worktree add -q -b feat "$repo.feat" parent-branch
+  _fake_logger "$bin" gh "$log"
+  _fake_logger "$bin" gt "$TMP_DIR/gh-init-gt.log"
+  PATH="$bin:$PATH" handoff_track_gh "$repo.feat" feat parent-branch
+  grep -q "stack init --base $trunk parent-branch feat" "$log" \
+    || fail "a new dependent is gh stack init; log=$(cat "$log")"
+  [[ "$(awk '{ print $1 }' "$log")" == "$repo.feat" ]] || fail "init runs in the child worktree: $(cat "$log")"
+  [[ ! -s "$TMP_DIR/gh-init-gt.log" ]] || fail "gt must not run for gh: $(cat "$TMP_DIR/gh-init-gt.log")"
+  local catalog
+  catalog="$(git_dir "$repo")/gh-stack"
+  jq -n --arg p parent-branch '{stacks:[{trunk:{branch:"main"},branches:[{branch:"bottom"},{branch:$p},{branch:"tip"}]}]}' >"$catalog"
+  : >"$log"
+  local err
+  err="$(PATH="$bin:$PATH" handoff_track_gh "$repo.feat" feat parent-branch 2>&1)" || fail "a middle parent must not fail the spawn: $err"
+  [[ ! -s "$log" ]] || fail "a middle parent must not call gh stack: $(cat "$log")"
+  printf '%s' "$err" | grep -q 'not the top' || fail "say why it was not attached: $err"
+  printf 'PASS: gh --base inits a stack, and a middle parent is not attached\n'
+}
+
+test_gh_base_adds_from_the_parent_worktree() {
+  local repo="$TMP_DIR/gh-add" bin="$TMP_DIR/gh-add-bin" log="$TMP_DIR/gh-add.log"
+  git_init "$repo"
+  git -C "$repo" branch parent-branch
+  git -C "$repo" worktree add -q "$repo.parent" parent-branch
+  git -C "$repo" worktree add -q -b feat "$repo.feat" parent-branch
+  jq -n '{stacks:[{trunk:{branch:"main"},branches:[{branch:"parent-branch"}]}]}' >"$(git_dir "$repo")/gh-stack"
+  _fake_logger "$bin" gh "$log"
+  PATH="$bin:$PATH" handoff_track_gh "$repo.feat" feat parent-branch
+  [[ "$(cat "$log")" == "$repo.parent stack add feat" ]] \
+    || fail "add runs in the worktree that has the top checked out; log=$(cat "$log")"
+  printf 'PASS: gh stack add uses the parent worktree and does not switch main\n'
+}
+
+test_origin_base_tracks_locally() {
+  local repo="$TMP_DIR/ori-track" bin="$TMP_DIR/ori-track-bin" log="$TMP_DIR/ori-track.log"
+  git_init "$repo"
+  git -C "$repo" branch parent-branch
+  git -C "$repo" worktree add -q -b feat "$repo.feat" parent-branch
+  _fake_logger "$bin" origin "$log"
+  _fake_logger "$bin" gt "$TMP_DIR/ori-track-gt.log"
+  PATH="$bin:$PATH" handoff_track_origin "$repo.feat" feat parent-branch
+  [[ "$(cat "$log")" == "$repo.feat stack track feat --onto parent-branch --json" ]] \
+    || fail "origin stack track --onto; log=$(cat "$log")"
+  [[ ! -s "$TMP_DIR/ori-track-gt.log" ]] || fail "gt must not run for origin"
+  printf 'PASS: origin --base is origin stack track, local, not gt\n'
+}
+
+test_spawn_gh_base_does_not_call_gt() {
+  local repo="$TMP_DIR/sp-gh" bin="$TMP_DIR/sp-gh-bin" log="$TMP_DIR/sp-gh.log" gtlog="$TMP_DIR/sp-gh-gt.log" out
+  git_init "$repo"
+  git -C "$repo" branch parent-branch
+  _fake_logger "$bin" gh "$log"
+  _fake_logger "$bin" gt "$gtlog"
+  out="$(_spawn_branch sp-gh "$repo" "$bin" "$TMP_DIR/sp-gh-home" parent-branch 2>"$TMP_DIR/sp-gh.err")" \
+    || fail "spawn failed: $out $(cat "$TMP_DIR/sp-gh.err")"
+  printf '%s' "$out" | jq -e '.graphite == false and .agent_started == true and .base == "parent-branch" and (has("git")|not)' >/dev/null \
+    || fail "spawn json keeps the old contract: $out"
+  grep -q 'stack init' "$log" || fail "spawn --base on gh records a stack; log=$(cat "$log")"
+  [[ ! -s "$gtlog" ]] || fail "gt must not run: $(cat "$gtlog")"
+  grep -q 'Use gt' "$BD_COMMENTS" && fail "no gt intro on gh: $(cat "$BD_COMMENTS")"
+  grep -q 'gh stack' "$BD_COMMENTS" || fail "the desk is told to use gh stack: $(cat "$BD_COMMENTS")"
+  printf 'PASS: a gh --base spawn uses gh stack, not gt, and does not change the result JSON\n'
+}
+
 test_track_already_tracked_does_nothing
 test_track_tracks_an_untracked_parent_first
 test_track_falls_back_to_trunk_with_a_warning
@@ -1507,3 +1729,7 @@ test_spawn_without_sqlite_skips_gt
 test_spawn_survives_a_failed_gt
 test_spawn_real_graphite_tracks_trunk
 test_spawn_real_stack_tracks_on_its_base
+test_gh_base_inits_a_new_stack_and_refuses_a_middle_parent
+test_gh_base_adds_from_the_parent_worktree
+test_origin_base_tracks_locally
+test_spawn_gh_base_does_not_call_gt
