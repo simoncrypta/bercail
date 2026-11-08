@@ -12,7 +12,7 @@ the role that fits.
 | X is broken | bug fix | a repro before a fix, the root cause |
 | add or change behavior | feature | the data shape first, the real path proven |
 | same behavior, better shape | refactor | behavior pinned before anything moves |
-| review this | review | the council, findings checked |
+| review this | review | tests and the verify skill; `/council` when you ask |
 | the PR is open | ship | autopilot until green |
 | several jobs at once | handoff | one beads issue per job |
 | finish this branch | takeover | read the trail before touching it |
@@ -28,8 +28,8 @@ Read it once. It is short.
 |------|-------|------|
 | lead | `bstack` | your ask; plans, routes, checks, reports |
 | build | `bstack-builder` | code from a precise brief |
-| judge | `bstack-judge` | hard design calls, prose, and disagreements |
-| council | `bstack-council-<plan>` | read-only review, one per plan with a model (connected, or pinned) |
+| judge | `bstack-judge` | hard design calls, prose, and the intent check at `/ready` |
+| council | `bstack-council-<plan>` | read-only adversarial review, one per plan with a model, when `[bstack] council = true` |
 | autopilot | `bstack-autopilot` | an open PR to get green |
 
 By default the lead and judge run on Claude and the builder on Grok. A role

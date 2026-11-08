@@ -128,11 +128,16 @@ _review_herdr() {
 # --- source checkout ----------------------------------------------------------
 
 _review_origin_matches() {
-  local url
+  local url host="${4:-}"
   url="$(git -C "$1" remote get-url origin 2>/dev/null)" || return 1
   url="${url%/}"
   url="${url%.git}"
-  [[ "${url,,}" == *[/:]"${2,,}/${3,,}" ]]
+  [[ "${url,,}" == *[/:]"${2,,}/${3,,}" ]] || return 1
+  if [[ "$host" == origin.cursor.com ]]; then
+    git_backend_origin_remote "$1"
+  else
+    ! git_backend_origin_remote "$1"
+  fi
 }
 
 # Written only into a checkout this command created, never into the user's repo.
@@ -143,7 +148,7 @@ _review_marker_matches() {
 }
 
 _review_is_repo() {
-  _review_origin_matches "$1" "$3" "$4" || _review_marker_matches "$1" "$2" "$3" "$4"
+  _review_origin_matches "$1" "$3" "$4" "$2" || _review_marker_matches "$1" "$2" "$3" "$4"
 }
 
 _review_main_of() {
@@ -196,8 +201,11 @@ _review_fallback_checkout() {
   fi
   if [[ ! -e "$dest/.git" ]]; then
     mkdir -p "$(dirname "$dest")"
-    gh repo clone "$slug" "$dest" -- --quiet >&2 \
-      || die "could not clone $slug to $dest"
+    if [[ "${R_BACKEND:-gh}" == origin ]]; then
+      origin repo clone "$owner/$repo" "$dest" >&2 || die "could not clone $slug to $dest"
+    else
+      gh repo clone "$slug" "$dest" -- --quiet >&2 || die "could not clone $slug to $dest"
+    fi
     printf '%s\n' "$slug" > "$(git -C "$dest" rev-parse --path-format=absolute --git-common-dir)/bercail-review-repo"
   fi
   _review_main_of "$dest"
@@ -223,7 +231,11 @@ _review_fetch_objects() {
     sha="$2"
     shift 2
     if ! git -C "$main" cat-file -e "$sha^{commit}" 2>/dev/null; then
-      specs+=("refs/pull/$n/head")
+      if [[ "${R_BACKEND:-gh}" == origin ]]; then
+        specs+=("$sha")
+      else
+        specs+=("refs/pull/$n/head")
+      fi
       missing+=("$n" "$sha")
     fi
   done
@@ -352,8 +364,34 @@ _review_snapshot() {
 # gh pr checks exits non-zero while checks are pending or failing (and when
 # there are none) but still prints the JSON. Without JSON, the rollup from gh
 # pr view stands in, in the same shape.
+_review_pr_view() {
+  local n="$1" slug="$2"
+  if [[ "${R_BACKEND:-gh}" == origin ]]; then
+    local raw
+    raw="$(origin pr view "$n" -R "${slug#*/}" --json number,title,body,url,author,isDraft,baseRefName,headRefName,headRefOid,baseRefOid,files)" || return 1
+    jq '. + {isCrossRepository:false, closingIssuesReferences:[], statusCheckRollup:[]}
+      | .author = (if (.author | type) == "object" then .author + {login:(.author.login // .author.displayName // .author.id // "")}
+                   else {login:(.author // "")} end)
+      | .files = [.files[]? | . + {changeType:(.changeKind // "modified")} ]' <<<"$raw"
+  else
+    gh pr view "$n" -R "$slug" --json "$REVIEW_PR_FIELDS"
+  fi
+}
+
 _review_ci() {
   local n="$1" slug="$2" dir="$3" raw
+  if [[ "${R_BACKEND:-gh}" == origin ]]; then
+    raw="$(origin pr checks "$n" -R "${slug#*/}" --json name,status,conclusion,detailsUrl 2>/dev/null)" || true
+    if ! jq -e 'type == "array"' <<<"$raw" >/dev/null 2>&1; then
+      printf 'could not read Origin checks for PR #%s\n' "$n" >&2
+      return 1
+    fi
+    jq '[.[] | ((.conclusion // .status // "") | ascii_upcase) as $s |
+      {name, state:$s, workflow:"", link:(.detailsUrl // ""),
+       bucket:(if $s == "SUCCESS" then "pass" elif ($s | IN("FAILURE","FAILING","ERROR","TIMED_OUT","ACTION_REQUIRED")) then "fail"
+         elif $s == "CANCELLED" then "cancel" elif ($s | IN("SKIPPED","NEUTRAL")) then "skipping" else "pending" end)}]' <<<"$raw" | _review_write "$dir/ci.json"
+    return
+  fi
   raw="$(gh pr checks "$n" -R "$slug" --json name,bucket,state,workflow,link 2>/dev/null)" || true
   if jq -e 'type == "array"' <<<"$raw" >/dev/null 2>&1; then
     printf '%s\n' "$raw" | _review_write "$dir/ci.json"
@@ -497,6 +535,7 @@ _review_load() {
   R_DIR="$R_STACK/pr-$R_N/$R_SHA"
   [[ -d "$R_DIR" ]] || die "no run dir for PR #$R_N at $R_SHA"
   R_WT="$(jq -r '.worktree' "$R_STACK/stack.json")"
+  R_BACKEND="$(jq -r '.git // (if .via == "origin" then "origin" elif .via == "graphite" then "gt" else "gh" end)' "$R_STACK/stack.json")"
 }
 
 _review_stack_get() {
@@ -564,6 +603,15 @@ _review_space() {
 
 _review_parse_url() {
   local url="$1"
+  if [[ "$url" =~ ^https?://review\.cursor\.com/pr/([^/]+)/([^/]+)/([0-9]+) ]]; then
+    R_HOST=origin.cursor.com R_OWNER="${BASH_REMATCH[1]}" R_REPO="${BASH_REMATCH[2]}" R_WANT="${BASH_REMATCH[3]}"
+    R_BACKEND=origin
+    return
+  elif [[ "$url" =~ ^https?://cursor\.com/codebase/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
+    R_HOST=origin.cursor.com R_OWNER="${BASH_REMATCH[1]}" R_REPO="${BASH_REMATCH[2]}" R_WANT="${BASH_REMATCH[3]}"
+    R_BACKEND=origin
+    return
+  fi
   [[ "$url" =~ ^https?://([^/]+)/([^/]+)/([^/]+)/pull/([0-9]+) ]] \
     || die "not a pull request URL: ${url:-(none)} (https://github.com/OWNER/REPO/pull/N)"
   R_HOST="${BASH_REMATCH[1]}"
@@ -586,7 +634,8 @@ review_start() {
     esac
   done
   [[ -n "$url" || -n "$branch" ]] || die "usage: bercail review-pr <PR url or branch> [--no-run]"
-  _review_need gh jq git
+  _review_need jq git
+  R_BACKEND=gh
   t0="$(_review_now)"
   tmp="$(mktemp -d)"
   # shellcheck disable=SC2064
@@ -596,7 +645,10 @@ review_start() {
     git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
       || die "pass a PR url, or run review-pr from a checkout of the repo"
     local listed count
-    listed="$(gh pr list --head "$branch" --state open --limit 20 --json number,url)" \
+    R_BACKEND="$(git_backend "$PWD")"
+    local pr_cli=gh
+    [[ "$R_BACKEND" != origin ]] || pr_cli=origin
+    listed="$("$pr_cli" pr list --head "$branch" --state open --limit 20 --json number,url)" \
       || die "gh pr list --head $branch failed"
     count="$(jq 'length' <<<"$listed")"
     if [[ "$count" -gt 1 ]]; then
@@ -609,23 +661,30 @@ review_start() {
   host="$R_HOST" owner="$R_OWNER" repo="$R_REPO" n="$R_WANT"
   slug="$host/$owner/$repo"
 
-  gh pr view "$n" -R "$slug" --json "$REVIEW_PR_FIELDS" >"$tmp/pr-$n.json" 2>"$tmp/view.err" \
-    || die "gh pr view $n -R $slug: $(<"$tmp/view.err")"
   source="$(_review_find_source "$host" "$owner" "$repo" || true)"
+  if [[ "$R_BACKEND" != origin && -n "$source" ]]; then
+    R_BACKEND="$(git_backend "$source")"
+  fi
+  if [[ "$R_BACKEND" == origin ]]; then _review_need origin; else _review_need gh; fi
+  _review_pr_view "$n" "$slug" >"$tmp/pr-$n.json" 2>"$tmp/view.err" \
+    || die "PR view $n -R $slug: $(<"$tmp/view.err")"
+  if [[ -z "$source" ]]; then
+    source="$(_review_fallback_checkout "$host" "$owner" "$repo")" || die "no checkout for $slug"
+  fi
   local sync
   sync="$(_review_root)/$host/$owner/$repo/gt-sync"
-  if [[ -n "$source" ]] && _stack_is_graphite "$source"; then
+  if [[ "$R_BACKEND" != origin && -n "$source" ]]; then
     local repo_dir
     repo_dir="$(_review_root)/$host/$owner/$repo"
     mkdir -p "$repo_dir"
-    _review_lock "$repo_dir/gt" || die "graphite sync is busy; try again when it ends"
-    if ! stack_discover "$slug" "$tmp/pr-$n.json" "$source" "$sync" >"$tmp/order.json"; then
-      _review_unlock "$repo_dir/gt"
-      die "could not discover the Graphite stack for PR #$n"
+    _review_lock "$repo_dir/$R_BACKEND" || die "$R_BACKEND stack discovery is busy; try again when it ends"
+    if ! stack_discover "$slug" "$tmp/pr-$n.json" "$source" "$sync" "$R_BACKEND" >"$tmp/order.json"; then
+      _review_unlock "$repo_dir/$R_BACKEND"
+      die "could not discover the $R_BACKEND stack for PR #$n"
     fi
-    _review_unlock "$repo_dir/gt"
+    _review_unlock "$repo_dir/$R_BACKEND"
   else
-    stack_discover "$slug" "$tmp/pr-$n.json" "$source" "$sync" >"$tmp/order.json" \
+    stack_discover "$slug" "$tmp/pr-$n.json" "$source" "$sync" "$R_BACKEND" >"$tmp/order.json" \
       || die "could not discover the stack for PR #$n"
   fi
   order="$(<"$tmp/order.json")"
@@ -639,9 +698,6 @@ review_start() {
   root="${numbers[0]}"
   R_STACK="$(_review_root)/$host/$owner/$repo/stack-$root"
 
-  if [[ -z "$source" ]]; then
-    source="$(_review_fallback_checkout "$host" "$owner" "$repo")" || die "no checkout for $slug"
-  fi
   main="$(cd "$source" && pwd -P)"
   sibling="$(_review_sibling_path "$main" "$root")"
 
@@ -656,7 +712,7 @@ review_start() {
   local num
   for num in "${numbers[@]}"; do
     if [[ ! -s "$tmp/pr-$num.json" ]]; then
-      gh pr view "$num" -R "$slug" --json "$REVIEW_PR_FIELDS" >"$tmp/pr-$num.json" 2>"$tmp/view-$num.err" &
+      _review_pr_view "$num" "$slug" >"$tmp/pr-$num.json" 2>"$tmp/view-$num.err" &
       jobs+=("$!")
     fi
   done
@@ -724,10 +780,10 @@ review_start() {
     pr_rows+=("$tmp/row-$num.json")
   done
 
-  jq -n --arg host "$host" --arg owner "$owner" --arg repo "$repo" --arg via "$via" --arg trunk "$trunk" \
+  jq -n --arg host "$host" --arg owner "$owner" --arg repo "$repo" --arg via "$via" --arg trunk "$trunk" --arg git "$R_BACKEND" \
     --arg wt "$sibling" --arg main "$main" --argjson root "$root" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --slurpfile prs <(cat "${pr_rows[@]}") \
-    '{schema: "bercail.stack/v1", host: $host, owner: $owner, repo: $repo, via: $via, trunk: $trunk,
+    '{schema: "bercail.stack/v1", host: $host, owner: $owner, repo: $repo, git: $git, via: $via, trunk: $trunk,
       root: $root, current: $root, worktree: $wt, source: $main, space: null, gathered_at: $at,
       prs: $prs}' >"$tmp/stack.json"
   _review_stack_md "$tmp/stack.json" "$trunk" "$via" >"$tmp/stack.md"
@@ -1331,6 +1387,15 @@ _review_review_tab() {
 
 review_open() {
   _review_load "$@"
+  if [[ "$R_BACKEND" == origin ]]; then
+    # tuicr pr supports GitHub/GitLab, not Origin. Keep this forge-native.
+    _review_need origin jq
+    origin pr view "$R_N" -R "$(_review_stack_get .owner)/$(_review_stack_get .repo)" --web >/dev/null \
+      || die "could not open Origin PR #$R_N"
+    jq -n --argjson number "$R_N" --arg url "$(jq -r .url "$R_DIR/pr.json")" --arg context "$R_DIR" \
+      '{number:$number, url:$url, context:$context, note:"Origin opened in the browser; review cards remain in the local context, not seeded into tuicr."}'
+    return
+  fi
   _review_need tuicr jq
   local owner repo space want slug="" i secs payload out id seeded="[]"
   _review_lock "$R_DIR/open" || die "PR #$R_N is already being opened in tuicr"

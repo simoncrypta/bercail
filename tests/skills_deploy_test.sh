@@ -167,6 +167,8 @@ test_handoff_spawn_is_the_recipe() {
     || fail "SKILL.md must forbid prompt-on-argv"
   grep -q 'handoff-spawn' "$ROOT/skills/handoff/MANIFEST" \
     || fail "MANIFEST must list handoff-spawn"
+  grep -q 'scripts/git-backend.sh' "$ROOT/skills/handoff/MANIFEST" \
+    || fail "MANIFEST must list git-backend.sh"
   grep -qi 'poteto\|pstack' "$ROOT/skills/handoff/SKILL.md" \
     && fail "SKILL.md must not keep a cursor-only poteto/pstack mode"
   printf 'PASS: handoff skill recipe is the spawn script\n'
@@ -179,5 +181,15 @@ test_opencode_reads_agents_skills
 test_custom_agent_canonical_only
 test_grok_gets_extra_skill_link
 test_pi_gets_extra_skill_link
+test_deploy_lib_copies_git_backend() {
+  deploy_lib >/dev/null
+  cmp -s "$ROOT/skills/handoff/scripts/git-backend.sh" "$AGENTIC_DEV_SHARE_DIR/lib/git-backend.sh" \
+    || fail "installed lib/git-backend.sh must match the skill script"
+  cmp -s "$ROOT/skills/handoff/scripts/git-backend.sh" "$ROOT/lib/git-backend.sh" \
+    || fail "repo lib/git-backend.sh must be the skill script"
+  printf 'PASS: deploy_lib copies git-backend.sh next to the other libs\n'
+}
+
 test_handoff_spawn_is_the_recipe
 test_review_skill_recipe
+test_deploy_lib_copies_git_backend

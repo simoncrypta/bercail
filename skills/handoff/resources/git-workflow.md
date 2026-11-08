@@ -1,18 +1,26 @@
-# Project git / Graphite / GitHub (handoff)
+# Project git backend (handoff)
 
-Spawn (`scripts/handoff-spawn --info` then spawn) already reports `graphite`
-and Graphite-tracks the sibling when that is true. Do not re-detect, and do not
-run `gt` to check: any `gt` command auto-initializes a plain repo. The child
-intro already says to use `gt` on Graphite repos. How detection works and how to
-override it: [handoff.md](handoff.md#graphite).
+Read `git` from `scripts/handoff-spawn --info`: `gh`, `gt`, or `origin`.
+Use that backend throughout the job; do not probe with `gt`, because any `gt`
+command auto-initializes a plain repo. `graphite` remains for one release as
+`git == "gt"`; new callers use `git`. Detection and per-repo overrides:
+[handoff.md](handoff.md#git-backend).
 
 Handoff never auto-commits. Agents stage their work (`git add`) and leave it
 uncommitted: the staged diff is what the human reviews in tuicr (`tuicr -w`,
 uncommitted changes only). When the user later asks to commit/submit:
 
-| Spawn JSON | Tooling |
-|------------|---------|
-| `graphite: true` | `gt create` / `gt modify` / `gt submit` (or Graphite MCP `run_gt_cmd`) |
-| otherwise | `git` + `gh` via `git-master` / PR workflows |
+| `git` | Stacked branches and publishing |
+|-------|--------------------------------|
+| `gh` | `gh stack init <parent> <child>` adopts existing branches; `gh stack add <child>` extends a stack from its tip. Publish with `gh stack submit`, update with `gh stack sync`. |
+| `gt` | `gt create` for a new branch, `gt track --parent <parent>` for an existing branch, `gt submit`, and `gt get` for remote stack updates. |
+| `origin` | `origin stack track <child> --onto <parent>` before publication. Open the child with `origin pr create --stack-on <parent-PR> --status open`; update with `origin stack get`, `origin stack restack`, and `origin stack push --all`. |
 
-Do not commit/submit unless the user asked.
+`--base <parent>` dependents are stacks, not hand-made PRs that merely target
+another PR's branch. Keep the parent relation in the selected backend. Never
+run `gt` in a `gh` or `origin` repo. For an independent `gh` branch, plain
+`git` and `gh pr` remain appropriate.
+
+Do not commit/submit unless the user asked. Autopilot may commit and push to
+its PR branch, but never merges. Stop if updating a stack would rewrite a
+branch you do not own or require a force-push.

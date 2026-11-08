@@ -2,6 +2,7 @@ SKILL.md
 MANIFEST
 scripts/handoff-spawn
 scripts/handoff-stages.sh
+scripts/git-backend.sh
 resources/handoff.md
 resources/babysit.md
 resources/herdr-control.md

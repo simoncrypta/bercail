@@ -87,7 +87,7 @@ doctor_herdr_app_update() {
 # started, later than the last transition the follower recorded, is one it
 # didn't see. A follower without a record runs a bercail older than this check.
 doctor_notify_missed() {
-  local f started last address ms
+  local f started last address ms term issue title
   f="$(notify_follower_file)"
   started="$(jq -r '.started_at // empty' "$f" 2>/dev/null)"
   if [[ ! "$started" =~ ^[0-9]+$ ]]; then
@@ -98,12 +98,20 @@ doctor_notify_missed() {
   [[ "$last" =~ ^[0-9]+$ ]] || last=0
   while IFS= read -r address; do
     [[ -n "$address" ]] || continue
-    ms="$("$(notify_hc)" get "$address" --json 2>/dev/null </dev/null \
-      | jq -r 'select(.status.state == "done" or .status.state == "blocked") | .status_ms // empty' 2>/dev/null)"
+    term="$("$(notify_hc)" get "$address" --json 2>/dev/null </dev/null)" || continue
+    ms="$(jq -r 'select(.status.state == "done" or .status.state == "blocked") | .status_ms // empty' <<<"$term" 2>/dev/null)" || true
     [[ "$ms" =~ ^[0-9]+$ ]] || continue
     # Slack: the follower records a transition a moment after hc stamps it.
     if (( ms / 1000 > started + 5 && ms / 1000 > last + 60 )); then
-      printf 'missed desk %s finishing or blocking' "$address"
+      issue="$(jq -r '.labels["bercail.issue"] // empty' <<<"$term" 2>/dev/null)" || issue=""
+      title="$(jq -r '.labels["bercail.issue_title"] // empty' <<<"$term" 2>/dev/null)" || title=""
+      if [[ -n "$issue" && -n "$title" ]]; then
+        printf 'missed desk %s (%s: %s) finishing or blocking' "$address" "$issue" "$title"
+      elif [[ -n "$issue" ]]; then
+        printf 'missed desk %s (%s) finishing or blocking' "$address" "$issue"
+      else
+        printf 'missed desk %s finishing or blocking' "$address"
+      fi
       return 1
     fi
   done < <("$(notify_hc)" ls --json --label bercail.role=agent 2>/dev/null </dev/null \

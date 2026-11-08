@@ -2,15 +2,16 @@
 # The job lives in a beads issue (bd). An agent's prompt is one line pointing at it.
 # shellcheck shell=bash
 
+# bstack and autopilot run Pi unless [bstack] harness is explicitly opencode.
 handoff_stage_table() {
-  cat <<'TABLE'
-# name	binary	mode	model
-start	claude	headless	opus-5.5
-codex	codex	headless	-
-cursor	cursor-agent	headless	-
-bstack	opencode	headless	lead
-autopilot	opencode	headless	lead
-TABLE
+  local bin=pi
+  [[ "$(_handoff_bstack_get harness)" == opencode ]] && bin=opencode
+  printf '# name\tbinary\tmode\tmodel\n'
+  printf 'start\tclaude\theadless\topus-5.5\n'
+  printf 'codex\tcodex\theadless\t-\n'
+  printf 'cursor\tcursor-agent\theadless\t-\n'
+  printf 'bstack\t%s\theadless\tlead\n' "$bin"
+  printf 'autopilot\t%s\theadless\tlead\n' "$bin"
 }
 
 if ! declare -F handoff_die >/dev/null 2>&1; then
@@ -123,11 +124,36 @@ handoff_issue_comment() {
     || printf 'handoff: could not add the handoff comment to %s\n' "$id" >&2
 }
 
+# Past this, a title is the first max-1 characters, right-trimmed, plus "…".
+HANDOFF_TITLE_MAX=60
+
+# Title of beads issue ID from DIR. Empty, and 0, on any failure (missing bd,
+# unknown issue, bad JSON). Whitespace and control runs become one space.
+handoff_issue_title() {
+  local dir="$1" id="$2" raw="" title=""
+  raw="$(cd "$dir" && "$(handoff_bd_bin)" show "$id" --json 2>/dev/null)" || return 0
+  title="$(jq -r --argjson max "$HANDOFF_TITLE_MAX" '
+    (if type == "array" then .[0] else . end).title // ""
+    | gsub("[[:space:][:cntrl:]]+"; " ")
+    | gsub("^ +| +$"; "")
+    | if length > $max then (.[0:($max - 1)] | gsub(" +$"; "")) + "…" else . end
+  ' <<<"$raw" 2>/dev/null)" || return 0
+  printf '%s' "$title"
+}
+
 # The whole agent prompt, the same for every harness: one line pointing at the
-# beads issue (a bare id makes agents ask what it is instead of reading it).
+# beads issue. TITLE, when set, is named after the id; its own "." or a
+# truncation's "…" ends the clause. A bare id stays the old sentence.
 # Shep owns the workflow; bercail adds no per-binary mode.
 handoff_issue_prompt() {
-  printf 'Your job is beads issue %s. Run `bd show %s` (read its comments too) and do the work it describes.' "$1" "$1"
+  local id="$1" title="${2:-}" stop="."
+  title="${title%.}"
+  [[ "$title" != *… ]] || stop=""
+  if [[ -n "$title" ]]; then
+    printf 'Your job is beads issue %s: %s%s Run `bd show %s` (read its comments too) and do the work it describes.' "$id" "$title" "$stop" "$id"
+  else
+    printf 'Your job is beads issue %s. Run `bd show %s` (read its comments too) and do the work it describes.' "$id" "$id"
+  fi
 }
 
 # reason is optional. Empty omits the field; Shep reads it, and unknown fields
@@ -144,11 +170,34 @@ handoff_write_result() {
      + if $reason == "" then {} else {reason:$reason} end' >"$dest"
 }
 
+# issue, and issue_title when known, on a result file. Other fields stay.
+handoff_stamp_issue() {
+  local dest="$1" issue="$2" title="${3:-}" stamped
+  [[ -f "$dest" ]] || return 0
+  stamped="$(jq -c --arg issue "$issue" --arg issue_title "$title" '
+    . + {issue:$issue} + (if $issue_title == "" then {} else {issue_title:$issue_title} end)
+  ' "$dest" 2>/dev/null)" || return 0
+  printf '%s\n' "$stamped" >"$dest"
+}
+
+# verification is optional: [{kind, command, exit_code, evidence}]. A statechart
+# entry may carry spec and chart in place of command and evidence (bercail-86a).
+HANDOFF_VERIFICATION_DEF='
+  def verification_ok:
+    .verification | . == null or (type == "array" and all(.[];
+      type == "object"
+      and (.kind == "test" or .kind == "verify-skill" or .kind == "statechart")
+      and (.exit_code | type == "number")
+      and (((.command | type == "string") and (.evidence | type == "string"))
+        or (.kind == "statechart" and (.spec | type == "string") and (.chart | type == "string")))));
+'
+
 handoff_result_ok() {
-  jq -e '
+  jq -e "$HANDOFF_VERIFICATION_DEF"'
     (.status == "ready" or .status == "blocked" or .status == "failed")
     and (.summary | type == "string" and length > 0)
     and (.session_id | type == "string" and length > 0)
+    and verification_ok
   ' "$1" >/dev/null
 }
 
@@ -230,6 +279,7 @@ handoff_headless_bin() {
     codex) printf '%s' "${HANDOFF_CODEX_BIN:-$binary}" ;;
     cursor-agent) printf '%s' "${HANDOFF_CURSOR_BIN:-$binary}" ;;
     opencode) printf '%s' "${HANDOFF_OPENCODE_BIN:-$binary}" ;;
+    pi) printf '%s' "${HANDOFF_PI_BIN:-pi}" ;;
     *) handoff_die "unsupported headless binary: $binary" ;;
   esac
 }
@@ -307,10 +357,59 @@ handoff_opencode_session_id() {
 # event, or from stderr when the process exits before one. Other JSON is not a
 # limit. A provider.rate-limit, including a bare HTTP 429, is not one: xAI's
 # weekly-limit body is unverified.
+# Pi json mode: a session header, then events. Other harness logs are not this.
+handoff_log_is_pi() {
+  local log="$1"
+  [[ -f "$log" ]] || return 1
+  jq -e -s -R '
+    [ split("\n")[] | fromjson? | select(type == "object") ]
+    | any(.[]; .type == "session" or .type == "message_end")
+  ' "$log" >/dev/null 2>&1
+}
+
+# The last assistant message_end decides. A plain 429 is not a plan limit.
+handoff_pi_usage_limit_reason() {
+  local log="$1"
+  local phrase="You've hit your (5-hour|weekly|Opus|Sonnet|Fable) limit|You've hit your usage limit|You've hit your limit|You've reached your Fable limit|You're out of usage credits|Third-party apps now draw from your extra usage, not your plan limits|Claude quota exceeded — rate limit|You're out of extra usage|You have hit your ChatGPT usage limit|You've reached your ChatGPT workspace's usage limit|subscription_sharing_usage_limit_exceeded"
+  if jq -e -s -R --arg phrase "$phrase" '
+    [ split("\n")[] | fromjson? | select(type == "object" and .type == "message_end" and (.message.role == "assistant")) ] as $ends
+    | ($ends | last) as $last
+    | $last != null
+    and $last.message.stopReason == "error"
+    and (($last.message.errorMessage // "") | test($phrase))
+  ' "$log" >/dev/null 2>&1; then
+    printf 'usage-limit'
+  fi
+}
+
+# Pi exits 0 when the provider failed. The last assistant message_end says so.
+handoff_pi_provider_failed() {
+  local log="$1"
+  [[ -f "$log" ]] || return 1
+  jq -e -s -R '
+    [ split("\n")[] | fromjson? | select(type == "object" and .type == "message_end" and (.message.role == "assistant")) ]
+    | last | .message.stopReason == "error"
+  ' "$log" >/dev/null 2>&1
+}
+
+handoff_pi_session_id() {
+  local log="$1" id
+  [[ -f "$log" ]] || return 1
+  id="$(jq -r -s -R '
+    [ split("\n")[] | fromjson? | select(type == "object" and .type == "session") ][0].id // empty
+  ' "$log" 2>/dev/null)"
+  [[ -n "$id" && "$id" != null ]] || return 1
+  printf '%s' "$id"
+}
+
 handoff_usage_limit_reason() {
   local log="$1" events
   local phrase="You've hit your (5-hour|weekly|Opus|Sonnet|Fable) limit|You've hit your usage limit|You've hit your limit|You've reached your Fable limit|You're out of usage credits|Third-party apps now draw from your extra usage, not your plan limits"
   [[ -f "$log" ]] || return 0
+  if handoff_log_is_pi "$log"; then
+    handoff_pi_usage_limit_reason "$log"
+    return 0
+  fi
   events="$(jq -c -R 'fromjson? | select(type == "object" and .type == "error" and (.error | type == "object")) | .error' "$log" 2>/dev/null || true)"
   # A JSON error event decides. Stderr counts only when the process exits first.
   if [[ -n "$events" ]]; then
@@ -401,6 +500,122 @@ handoff_opencode_spec_for_stage() {
     codex) printf 'gpt' ;;
     *) printf 'lead' ;;
   esac
+}
+
+# --binary pi mirrors that: start is claude, codex is gpt, the rest is the lead.
+handoff_pi_spec_for_stage() {
+  case "$1" in
+    start) printf 'claude' ;;
+    codex) printf 'gpt' ;;
+    *) printf 'lead' ;;
+  esac
+}
+
+handoff_pi_profile() {
+  printf '%s' "${HANDOFF_PI_PROFILE:-$HOME/.local/share/bercail/pi}"
+}
+
+handoff_pi_lead_file() {
+  printf '%s/lead.json' "$(handoff_pi_profile)"
+}
+
+handoff_pi_guard_path() {
+  printf '%s/extensions/guard.ts' "$(handoff_pi_profile)"
+}
+
+handoff_pi_has_guard() {
+  local lead="$1" guard="$2"
+  jq -e --arg guard "$guard" '
+    type == "array" and (
+      . as $a
+      | any(range(0; if length > 1 then length - 1 else 0 end); $a[.] == "-e" and $a[. + 1] == $guard)
+    )
+  ' "$lead" >/dev/null 2>&1
+}
+
+handoff_pi_lead_model() {
+  jq -r '
+    . as $a
+    | [ range(0; if length > 1 then length - 1 else 0 end) | select($a[.] == "--model") | $a[. + 1] ][0] // empty
+  ' "$1"
+}
+
+# models file is family=model#effort. Pi's --model wants the effort as :effort.
+handoff_pi_family_model() {
+  local family="$1" file model
+  file="$(handoff_pi_profile)/models"
+  [[ -f "$file" ]] || return 1
+  model="$(awk -F= -v key="$family" '$1 == key { sub(/^[^=]*=/, ""); print; exit }' "$file")"
+  [[ -n "$model" ]] || return 1
+  printf '%s' "${model/\#/:}"
+}
+
+# Sets HANDOFF_PI_LEAD and HANDOFF_PI_MODEL. On failure, HANDOFF_PI_BLOCK is the summary.
+handoff_pi_prepare() {
+  local spec="$1" lead guard
+  HANDOFF_PI_BLOCK=""
+  HANDOFF_PI_MODEL=""
+  HANDOFF_PI_LEAD=""
+  lead="$(handoff_pi_lead_file)"
+  guard="$(handoff_pi_guard_path)"
+  if [[ ! -f "$lead" ]]; then
+    HANDOFF_PI_BLOCK="Pi lead profile is missing (${lead}). Run bercail update."
+    return 1
+  fi
+  if ! jq -e 'type == "array"' "$lead" >/dev/null 2>&1; then
+    HANDOFF_PI_BLOCK="Pi lead profile is not a JSON argv (${lead}). Run bercail update."
+    return 1
+  fi
+  if ! handoff_pi_has_guard "$lead" "$guard"; then
+    HANDOFF_PI_BLOCK="Pi lead profile has no guard (${guard}). Run bercail update."
+    return 1
+  fi
+  HANDOFF_PI_LEAD="$lead"
+  if [[ "$spec" == lead || -z "$spec" ]]; then
+    HANDOFF_PI_MODEL="$(handoff_pi_lead_model "$lead")"
+    return 0
+  fi
+  HANDOFF_PI_MODEL="$(handoff_pi_family_model "$spec" || true)"
+  if [[ -z "$HANDOFF_PI_MODEL" ]]; then
+    HANDOFF_PI_BLOCK="Pi profile has no ${spec} model ($(handoff_pi_profile)/models). Run bercail update."
+    return 1
+  fi
+}
+
+# env prefix, then pi -p --mode json --session-id, then lead.json[1:], then the headless brief.
+# No --add-dir: Pi has no sandbox flag for a beads dir outside the worktree.
+handoff_build_pi_argv() {
+  local bin="$1" session="$2" prompt="$3" stage="$4" lead="$5" model="$6"
+  local -a args=() replaced=()
+  local arg i=0 saw=0
+  while IFS= read -r -d '' arg; do
+    args+=("$arg")
+  done < <(jq -j '.[1:][] | ., "\u0000"' "$lead")
+  while [[ $i -lt ${#args[@]} ]]; do
+    if [[ "${args[$i]}" == --model ]]; then
+      saw=1
+      if [[ -n "$model" ]]; then
+        replaced+=(--model "$model")
+      fi
+      i=$((i + 2))
+      continue
+    fi
+    replaced+=("${args[$i]}")
+    i=$((i + 1))
+  done
+  if [[ "$saw" -eq 0 && -n "$model" ]]; then
+    replaced=(--model "$model" "${replaced[@]+"${replaced[@]}"}")
+  fi
+  # No HC_TERMINAL_ID: a run started from a desk is not that desk.
+  HANDOFF_START_ARGV=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u BERCAIL_ROLE -u HC_TERMINAL_ID)
+  [[ "$stage" == autopilot ]] && HANDOFF_START_ARGV+=(BERCAIL_ROLE=autopilot)
+  HANDOFF_START_ARGV+=("$bin" -p --mode json --session-id "$session")
+  if [[ ${#replaced[@]} -gt 0 ]]; then
+    HANDOFF_START_ARGV+=("${replaced[@]}")
+  fi
+  HANDOFF_START_ARGV+=(--append-system-prompt "$(handoff_pi_profile)/agents/bstack-headless.md")
+  [[ "$stage" == autopilot ]] && HANDOFF_START_ARGV+=(--append-system-prompt "$(handoff_pi_profile)/agents/bstack-autopilot.md")
+  HANDOFF_START_ARGV+=(-- "$prompt")
 }
 
 handoff_resolve_headless_model() {
@@ -523,30 +738,36 @@ handoff_headless_comment_text() {
 handoff_run_headless() {
   local stage="$1" worktree="$2" issue="$3" resume="$4" dry="$5" binary_override="${6:-}"
   local mode binary native model_spec model session="" resumed=0 prompt bd beads_dir=""
-  local result log bin cmd_json out rc=0 tid present=false bd_present=false reason=""
+  local result log bin cmd_json out rc=0 tid present=false bd_present=false reason="" issue_title=""
 
   command -v jq >/dev/null 2>&1 || handoff_die "jq is required"
   mode="$(handoff_stage_field "$stage" mode)" || handoff_die "unknown stage: $stage"
   [[ "$mode" == headless ]] || handoff_die "stage $stage is not headless"
   binary="$(handoff_stage_field "$stage" binary)" || handoff_die "unknown stage: $stage"
   native="$binary"
-  if [[ "$stage" == autopilot && -n "$binary_override" && "$binary_override" != opencode ]]; then
-    handoff_die "stage autopilot runs opencode's bstack-autopilot agent; --binary does not apply"
+  if [[ "$stage" == autopilot && -n "$binary_override" && "$binary_override" != opencode && "$binary_override" != pi ]]; then
+    handoff_die "stage autopilot accepts --binary pi or --binary opencode, nothing else: $binary_override"
   fi
   if [[ -n "$binary_override" ]]; then
     case "$binary_override" in
-      claude|codex|cursor-agent|opencode) binary="$binary_override" ;;
-      *) handoff_die "headless --binary must be claude, codex, cursor-agent, or opencode: $binary_override" ;;
+      claude|codex|cursor-agent|opencode|pi) binary="$binary_override" ;;
+      *) handoff_die "headless --binary must be claude, codex, cursor-agent, opencode, or pi: $binary_override" ;;
     esac
   fi
   if [[ -n "$binary_override" && "$binary" != "$native" && "$binary" == opencode ]]; then
     model_spec="$(handoff_opencode_spec_for_stage "$stage")"
+  elif [[ -n "$binary_override" && "$binary" != "$native" && "$binary" == pi ]]; then
+    model_spec="$(handoff_pi_spec_for_stage "$stage")"
   elif [[ -n "$binary_override" && "$binary" != "$native" ]]; then
     model_spec="$(handoff_stage_model_for_binary "$binary")"
   else
     model_spec="$(handoff_stage_field "$stage" model)" || handoff_die "unknown stage: $stage"
   fi
-  model="$(handoff_resolve_headless_model "$binary" "$model_spec")"
+  if [[ "$binary" == pi ]]; then
+    model=""
+  else
+    model="$(handoff_resolve_headless_model "$binary" "$model_spec")"
+  fi
   if [[ "$binary" == claude && -z "$model" ]]; then
     handoff_die "stage $stage has no model"
   fi
@@ -562,13 +783,32 @@ handoff_run_headless() {
     handoff_is_opencode_session "$resume" || handoff_die "resume session_id must be an opencode session (ses_...): $resume"
     session="$resume"
     resumed=1
+  elif [[ -n "$resume" && "$binary" == pi ]]; then
+    if handoff_is_opencode_session "$resume"; then
+      handoff_die "opencode sessions cannot be resumed on Pi: $resume"
+    fi
+    handoff_is_uuid "$resume" || handoff_die "resume session_id must be a uuid: $resume"
+    session="$resume"
+    resumed=1
   elif [[ -n "$resume" ]]; then
     handoff_is_uuid "$resume" || handoff_die "resume session_id must be a uuid: $resume"
     session="$resume"
     resumed=1
-  elif [[ "$binary" == claude ]]; then
+  elif [[ "$binary" == claude || "$binary" == pi ]]; then
     session="$(handoff_new_session_id)"
     handoff_is_uuid "$session" || handoff_die "could not mint a session uuid"
+  fi
+
+  if [[ "$binary" == pi ]]; then
+    if ! handoff_pi_prepare "$model_spec"; then
+      # A dry run writes nothing: a blocked result would replace a resumable one.
+      [[ "$dry" -ne 1 ]] || handoff_die "$HANDOFF_PI_BLOCK"
+      [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
+      handoff_block "$result" "$HANDOFF_PI_BLOCK" "$session" || true
+      cat -- "$result"; printf '\n'
+      return 1
+    fi
+    model="$HANDOFF_PI_MODEL"
   fi
 
   bd="$(handoff_bd_bin)"
@@ -583,6 +823,7 @@ handoff_run_headless() {
     if [[ -n "$beads_dir" && "$beads_dir/" == "$worktree/"* ]]; then
       beads_dir=""
     fi
+    issue_title="$(handoff_issue_title "$worktree" "$issue")"
   fi
 
   bin="$(handoff_headless_bin "$binary")"
@@ -590,27 +831,34 @@ handoff_run_headless() {
     if [[ "$bd_present" != true ]]; then
       [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
       handoff_block "$result" "bd (beads) is not on PATH. The job is a beads issue; install beads (bercail update installs it)." "$session" || true
+      handoff_stamp_issue "$result" "$issue" "$issue_title"
       cat -- "$result"; printf '\n'
       return 1
     fi
     if ! handoff_issue_exists "$worktree" "$issue"; then
       [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
       handoff_block "$result" "beads issue ${issue} not found from ${worktree} (bd show ${issue})." "$session" || true
+      handoff_stamp_issue "$result" "$issue" "$issue_title"
       cat -- "$result"; printf '\n'
       return 1
     fi
     if ! handoff_bin_present "$bin"; then
       [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
       handoff_block_missing_harness "$result" "$binary" "$session" || true
+      handoff_stamp_issue "$result" "$issue" "$issue_title"
       cat -- "$result"; printf '\n'
       return 1
     fi
   fi
 
-  prompt="$(handoff_issue_prompt "$issue")"
+  prompt="$(handoff_issue_prompt "$issue" "$issue_title")"
   local agent=bstack
   [[ "$stage" == autopilot ]] && agent=bstack-autopilot
-  handoff_build_headless_argv "$binary" "$bin" "$model" "$session" "$resumed" "$prompt" "$beads_dir" "$agent"
+  if [[ "$binary" == pi ]]; then
+    handoff_build_pi_argv "$bin" "$session" "$prompt" "$stage" "$HANDOFF_PI_LEAD" "$model"
+  else
+    handoff_build_headless_argv "$binary" "$bin" "$model" "$session" "$resumed" "$prompt" "$beads_dir" "$agent"
+  fi
 
   cmd_json="$(printf '%s\0' "${HANDOFF_START_ARGV[@]}" | jq -Rs 'split("\u0000") | .[:-1]')"
   if handoff_bin_present "$bin"; then
@@ -631,7 +879,9 @@ handoff_run_headless() {
     --argjson present "$present" \
     --argjson bd_present "$bd_present" \
     --argjson command "$cmd_json" \
-    '{ok:true,stage:$stage,mode:$mode,binary:$binary,model:$model,worktree:$worktree,issue:$issue,result:$result,session_id:$session_id,resume:$resume,dry_run:$dry_run,present:$present,bd_present:$bd_present,command:$command}')"
+    --arg issue_title "$issue_title" \
+    '{ok:true,stage:$stage,mode:$mode,binary:$binary,model:$model,worktree:$worktree,issue:$issue,result:$result,session_id:$session_id,resume:$resume,dry_run:$dry_run,present:$present,bd_present:$bd_present,command:$command}
+     + (if $issue_title == "" then {} else {issue_title:$issue_title} end)')"
 
   if [[ "$dry" -eq 1 ]]; then
     printf '%s\n' "$out"
@@ -657,8 +907,18 @@ handoff_run_headless() {
     codex) tid="$(handoff_codex_thread_id "$log" || true)" ;;
     cursor-agent) tid="$(handoff_cursor_session_id "$log" || true)" ;;
     opencode) tid="$(handoff_opencode_session_id "$log" || true)" ;;
+    pi) tid="$(handoff_pi_session_id "$log" || true)" ;;
   esac
-  if [[ -n "$tid" ]]; then
+  if [[ "$binary" == pi ]]; then
+    if [[ -n "$tid" && "$tid" != "$session" ]]; then
+      printf 'handoff: Pi session header is %s, not %s; using the header\n' "$tid" "$session" >&2
+      session="$tid"
+      out="$(jq --arg session_id "$session" '.session_id = $session_id' <<<"$out")"
+    fi
+    if handoff_pi_provider_failed "$log"; then
+      rc=1
+    fi
+  elif [[ -n "$tid" ]]; then
     session="$tid"
     out="$(jq --arg session_id "$session" '.session_id = $session_id' <<<"$out")"
   fi
@@ -672,7 +932,7 @@ handoff_run_headless() {
   # made-up id would look resumable. Say so in the summary instead.
   if [[ -f "$result" ]] && jq -e 'type == "object"' "$result" >/dev/null 2>&1; then
     local filled
-    filled="$(jq --arg session_id "$session" --arg none "$HANDOFF_NO_SESSION" --arg reason "$reason" '
+    filled="$(jq --arg session_id "$session" --arg none "$HANDOFF_NO_SESSION" --arg reason "$reason" "$HANDOFF_VERIFICATION_DEF"'
       (.session_id | type == "string" and test("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")) as $own
       | .status = (if (.status == "ready" or .status == "blocked" or .status == "failed") then .status else "failed" end)
       | .summary = (if (.summary | type == "string" and length > 0) then .summary else "headless stage finished without a usable summary" end)
@@ -681,6 +941,7 @@ handoff_run_headless() {
         else .session_id = $none | .summary += " (bercail found no session id in the CLI log, so this run cannot be resumed.)"
         end
       | if $reason != "" then .reason = $reason else del(.reason) end
+      | if verification_ok then . else del(.verification) | .summary += " (bercail dropped a malformed verification list.)" end
     ' "$result")"
     printf '%s\n' "$filled" >"$result"
   fi
@@ -689,6 +950,7 @@ handoff_run_headless() {
     [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
     handoff_write_result "$result" failed "headless stage exited ${rc} without a result file" "$session" "$reason"
   fi
+  handoff_stamp_issue "$result" "$issue" "$issue_title"
   if [[ "$rc" -ne 0 ]]; then
     printf 'handoff: %s exited %s; result is %s\n' "$bin" "$rc" "$result" >&2
     return "$rc"

@@ -13,8 +13,8 @@ that is strongest at it. These rules apply to every bstack agent and subagent.
 - Load the `bstack` skill for anything beyond a one-line change. It holds the
   playbooks (bug fix, feature, refactor, investigation, review, ship, handoff).
 - Other bercail skills: `how` (how code works now), `why` (why it is that way,
-  from the record), `unslop` (clean prose and diffs), `council` (cross-provider
-  review), `autopilot` (drive a PR to green).
+  from the record), `unslop` (clean prose and diffs), `council` (adversarial
+  review, only when asked for), `autopilot` (drive a PR to green).
 
 ## How to work
 
@@ -22,6 +22,13 @@ that is strongest at it. These rules apply to every bstack agent and subagent.
   options, wrappers, or compatibility shims nobody asked for.
 - Fix the root cause. A guard is a fix only when the state it guards is legitimate.
 - Get the data shape right first; the code that follows should be obvious.
+- Read the repo's git backend from `handoff-spawn --info` (`git`: `gh`, `gt`,
+  or `origin`). Dependent branches use that backend's stack commands:
+  `gh stack init/add/submit/sync`, `gt create/track/submit/get`, or
+  `origin stack track/get/restack/push` with `origin pr create --stack-on`.
+  Never hand-make a PR merely based on another PR's branch, and never run `gt`
+  in a `gh` or `origin` repo. Stage only unless asked to publish; autopilot
+  may commit and push its PR branch, never merge.
 - Match the code around you: naming, comment density, error handling, test style.
 - For library docs, error messages, and anything newer than you, search the web
   (`websearch`, `webfetch`) instead of guessing.
@@ -36,8 +43,8 @@ that is strongest at it. These rules apply to every bstack agent and subagent.
 | Role | Agent | Use it for |
 |------|-------|------------|
 | build | `bstack-builder` | Code: features, refactors, bug fixes, perf. Hand it a precise brief. |
-| judge | `bstack-judge` | The hardest design calls, prose, plans, and settling disagreements. |
-| council | `bstack-council-*` | Read-only review, one per connected provider. Run them through the `council` skill. |
+| judge | `bstack-judge` | The hardest design calls, prose, plans, and the intent check at `/ready`. |
+| council | `bstack-council-*` | Read-only adversarial review, when `[bstack] council = true`. Run them through the `council` skill, only when `/council` is asked for. |
 
 - Briefs are self-contained: the goal, the files, the constraint, what done looks
   like, and how to prove it. A subagent has none of your context.
@@ -56,4 +63,6 @@ that is strongest at it. These rules apply to every bstack agent and subagent.
   No inventory of every file. When a beads issue names the job, also post that
   report on it (`bd comment <id>`), so it outlives the desk's screen.
 - In a headless handoff, write the result file the issue comment names
-  (`status` ready|blocked|failed, `summary`). `blocked` with a reason beats a guess.
+  (`status` ready|blocked|failed, `summary`, and optionally `verification`: a list
+  of `{kind: test|verify-skill|statechart, command, exit_code, evidence}`).
+  `blocked` with a reason beats a guess.

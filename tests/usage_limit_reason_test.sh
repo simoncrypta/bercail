@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# A stub opencode replays recorded plan-limit errors. No live provider calls.
+# Stub harnesses replay recorded plan-limit errors. No live provider calls.
+# Existing cases pin harness = opencode so they do not follow the Pi default.
 set -euo pipefail
 
 unset BASH_ENV
@@ -55,6 +56,10 @@ export HANDOFF_OPENCODE_BIN="$TMP_DIR/bin/opencode"
 export HANDOFF_ARGV_LOG="$TMP_DIR/argv.log"
 export HANDOFF_RUNS="$TMP_DIR/runs"
 export HANDOFF_STUB_PAYLOAD="$TMP_DIR/payload"
+printf '[bstack]\nharness = "opencode"\nlead = "openai/gpt-6.1-sol"\n' >"$TMP_DIR/opencode.toml"
+export BERCAIL_CONFIG="$TMP_DIR/opencode.toml"
+export BERCAIL_BSTACK_MODELS="$TMP_DIR/no-bstack-models"
+: >"$BERCAIL_BSTACK_MODELS"
 
 run_stage() {
   local stage="$1" name="$2" rc=0
@@ -164,6 +169,77 @@ test_rate_limit_has_no_reason() {
   printf 'PASS: a plain 429 yields no usage-limit reason\n'
 }
 
+test_pi_limit_sets_reason() {
+  local profile="$TMP_DIR/pi-profile" guard header wt
+  mkdir -p "$profile/extensions" "$profile/agents"
+  guard="$profile/extensions/guard.ts"
+  printf '// guard\n' >"$guard"
+  jq -n --arg guard "$guard" --arg model "claude-bridge/lead-model:high" \
+    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard]' >"$profile/lead.json"
+  printf 'claude=claude-bridge/family-claude#high\ngpt=openai/family-gpt#high\n' >"$profile/models"
+  printf '[bstack]\nharness = "pi"\nenabled = true\n' >"$TMP_DIR/pi.toml"
+  export BERCAIL_CONFIG="$TMP_DIR/pi.toml"
+  export HANDOFF_PI_PROFILE="$profile"
+  export HANDOFF_PI_BIN="$TMP_DIR/bin/pi"
+  cat >"$HANDOFF_PI_BIN" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >>"${HANDOFF_ARGV_LOG:?}"
+printf '1\n' >>"${HANDOFF_RUNS:?}"
+cat "${HANDOFF_STUB_PAYLOAD:?}"
+exit 0
+STUB
+  chmod +x "$HANDOFF_PI_BIN"
+
+  header=11111111-2222-4333-8444-555555555555
+  jq -nc --arg id "$header" --arg msg "Claude quota exceeded — rate limit (five_hour) — resets 9:00:00 PM: You've hit your 5-hour limit · resets 9pm" \
+    '{type:"session",version:3,id:$id},{type:"message_end",message:{role:"assistant",stopReason:"error",errorMessage:$msg}}' \
+    >"$HANDOFF_STUB_PAYLOAD"
+  wt="$(run_stage bstack pi-claude)"
+  assert_limit "$wt" "pi claude"
+  jq -e --arg id "$header" '.session_id == $id' "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "pi claude session: $(cat "$wt/.bercail/handoff-result.json")"
+
+  header=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
+  jq -nc --arg id "$header" --arg msg "You have hit your ChatGPT usage limit. Try again later." \
+    '{type:"session",version:3,id:$id},{type:"message_end",message:{role:"assistant",stopReason:"error",errorMessage:$msg}}' \
+    >"$HANDOFF_STUB_PAYLOAD"
+  wt="$(run_stage bstack pi-chatgpt)"
+  assert_limit "$wt" "pi chatgpt"
+  jq -e --arg id "$header" '.session_id == $id' "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "pi chatgpt session: $(cat "$wt/.bercail/handoff-result.json")"
+
+  header=bbbbbbbb-cccc-4ddd-8eee-ffffffffffff
+  jq -nc --arg id "$header" --arg msg "429 Too many requests: xAI weekly limit unverified" \
+    '{type:"session",version:3,id:$id},{type:"message_end",message:{role:"assistant",stopReason:"error",errorMessage:$msg}}' \
+    >"$HANDOFF_STUB_PAYLOAD"
+  wt="$(run_stage bstack pi-xai)"
+  jq -e --arg id "$header" '.status == "failed" and .session_id == $id and (has("reason") | not)' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "xAI 429 must not set reason: $(cat "$wt/.bercail/handoff-result.json")"
+
+  printf '%s\n' \
+    '{"type":"session","id":"cccccccc-dddd-4eee-8fff-000000000001"}' \
+    '{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"You'\''re out of extra usage · resets 6:30pm"}}' \
+    >"$TMP_DIR/pi-extra.log"
+  [[ "$(handoff_usage_limit_reason "$TMP_DIR/pi-extra.log")" == usage-limit ]] \
+    || fail "out of extra usage should be a Pi plan limit"
+  printf '%s\n' \
+    '{"type":"session","id":"cccccccc-dddd-4eee-8fff-000000000002"}' \
+    '{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"You'\''ve reached your ChatGPT workspace'\''s usage limit"}}' \
+    >"$TMP_DIR/pi-workspace.log"
+  [[ "$(handoff_usage_limit_reason "$TMP_DIR/pi-workspace.log")" == usage-limit ]] \
+    || fail "workspace usage limit should be a Pi plan limit"
+  printf '%s\n' \
+    '{"type":"session","id":"cccccccc-dddd-4eee-8fff-000000000003"}' \
+    '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}' \
+    "You've hit your 5-hour limit" >"$TMP_DIR/pi-stop.log"
+  [[ -z "$(handoff_usage_limit_reason "$TMP_DIR/pi-stop.log")" ]] \
+    || fail "a Pi stop must not pick up a phrase on another line"
+  printf 'PASS: Pi error message_end yields usage-limit, and a plain xAI 429 does not\n'
+}
+
 test_chatgpt_limit_sets_reason
 test_claude_text_sets_reason
 test_rate_limit_has_no_reason
+test_pi_limit_sets_reason

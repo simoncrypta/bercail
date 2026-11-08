@@ -189,7 +189,7 @@ notify_desk_info() {
   fi
   jq -nc --arg branch "$branch" --arg agent "$agent" --argjson h "$handoff" --argjson r "$result" '
     {branch:(if $branch == "" then ($h.branch // null) else $branch end),
-     issue:($h.issue // null), stage:($h.stage // null),
+     issue:($h.issue // null), issue_title:($h.issue_title // null), stage:($h.stage // null),
      harness:($h.harness // (if $agent == "" then null else $agent end)),
      result:$r}'
 }
@@ -288,8 +288,22 @@ notify_payload() {
   jq -nc --arg schema "$NOTIFY_SCHEMA" --arg kind "$kind" --arg sink "$sink" \
     --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg event_id "$event_id" \
     --argjson agent "$agent_json" --argjson space "$space_json" --argjson desk "$desk_json" '
+    def titled: if type == "string" and endswith(".") then .[:-1] else . end;
+    def where:
+      "Desk " + ($agent.address // "")
+      + (if ($space.name // "") == "" then "" else " (" + $space.name + ")" end);
+    def line:
+      (($desk.issue_title // "") | titled) as $title
+      | if $kind == "test" then "Test from bercail (sink " + $sink + ")."
+        else
+          (if ($desk.issue // "") == "" then ""
+           elif $title == "" then $desk.issue + ". "
+           else $desk.issue + ": " + $title + (if $title | endswith("…") then " " else ". " end) end)
+          + where
+          + (if $kind == "blocked" then " is blocked." else " finished." end)
+        end;
     {source:"bercail", schema:$schema, kind:$kind, sink:$sink, at:$at,
-     event_id:$event_id, agent:$agent, space:$space, desk:$desk}'
+     event_id:$event_id, agent:$agent, space:$space, desk:$desk, text:line}'
 }
 
 notify_deliver_all() {
@@ -528,7 +542,7 @@ notify_test() {
   [[ -f "$f" ]] || { _notify_err "no sink $f"; return 1; }
   agent='{"address":null,"app":null,"status":"test","previous_status":null,"title":null}'
   space='{"id":null,"name":null,"repo":null,"checkout_path":null,"linked":false}'
-  desk='{"branch":null,"issue":null,"stage":null,"harness":null,"result":null}'
+  desk='{"branch":null,"issue":null,"issue_title":null,"stage":null,"harness":null,"result":null}'
   code="$(notify_post "$f" "$(notify_payload test "$name" "$agent" "$space" "$desk" "test:$(_notify_now)")")"
   case "$code" in
     nourl|insecure) _notify_err "sink '$name': $code"; return 1 ;;

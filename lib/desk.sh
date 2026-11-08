@@ -6,7 +6,7 @@
 #
 # Record: desk-sessions/<address>.json {address, session, cwd, harness, issue,
 # space, args, pid}. Its mtime is a heartbeat while the agent lives.
-# A live TUI also writes $XDG_RUNTIME_DIR/bercail/open-sessions/<pid>.json
+# A live opencode TUI or Pi also writes $XDG_RUNTIME_DIR/bercail/open-sessions/<pid>.json
 # {pid, start_ticks, sessions} so an idle agent (hc records {}) is not started twice.
 
 # A record this close to the shutdown was still running then.
@@ -70,7 +70,7 @@ desk_restore_plan() {
         elif $r == null then ["skip", "no record: see the desk-restore skill"]
         elif $r.space != $t.labels["bercail.space"] then ["skip", "record is for another space"]
         elif ($r.session // "") == "" then ["skip", "no session yet"]
-        elif ($r.harness | IN("opencode", "claude") | not) then ["skip", "cannot resume \($r.harness)"]
+        elif ($r.harness | IN("opencode", "claude", "pi") | not) then ["skip", "cannot resume \($r.harness)"]
         elif $d.mtime < ($shutdown - $window) then ["skip", "closed before the shutdown"]
         elif ($d.cwd_exists | not) then ["skip", "folder is gone: \($r.cwd)"]
         elif $d.in_ps or ($open | index($r.session)) or ($taken | index($r.session)) then ["skip", "session is open elsewhere"]
@@ -89,6 +89,8 @@ desk_restore_plan() {
 # The line typed into the bare shell. exec: quitting the agent then finishes the
 # terminal as a quit desk does, instead of leaving a live labelled shell.
 # Same terminal settings as a desk's spawn; no prompt, the session has it.
+# Pi takes --session-id: it creates the session when it was never written (Pi
+# writes one at its first message), where --session would exit.
 desk_resume_command() {
   local record="$1" agent harness session cwd flag arg cmd
   agent="$LOCAL_BIN/bercail-desk-agent"
@@ -96,8 +98,11 @@ desk_resume_command() {
   harness="$(jq -r .harness <<<"$record")"
   session="$(jq -r .session <<<"$record")"
   cwd="$(jq -r .cwd <<<"$record")"
-  flag=--session
-  [[ "$harness" == claude ]] && flag=--resume
+  case "$harness" in
+    claude) flag=--resume ;;
+    pi) flag=--session-id ;;
+    *) flag=--session ;;
+  esac
   printf -v cmd 'cd %q && TERM=xterm-256color COLORTERM=truecolor exec %q %q %q %q' \
     "$cwd" "$agent" "$harness" "$flag" "$session"
   # NUL, not lines: a recorded flag may contain a newline, and a line split would
@@ -203,7 +208,7 @@ _desk_confirm_resume() {
 # on the next pass, and a second line would land in the agent's input.
 declare -gA DESK_TYPED=()
 _desk_restore_pass() {
-  local dry="$1" facts plan shutdown row address action why record what confirm
+  local dry="$1" facts plan shutdown row address action why record what confirm named tag
   DESK_RESUMED=0 DESK_WAITING=0
   facts="$(_desk_gather)" || { warn "hc did not answer: desks left alone"; return 1; }
   shutdown="$(_desk_shutdown_time)"
@@ -214,9 +219,13 @@ _desk_restore_pass() {
     action="$(jq -r .action <<<"$row")"
     why="$(jq -r .why <<<"$row")"
     record="$(jq -c .record <<<"$row")"
+    # The desk's issue as "id: title", or the bare id, so an address reads as a job.
+    named="$(jq -r '(.issue // "") as $i | (.issue_title // "") as $t
+      | if $i != "" and $t != "" then "\($i): \($t)" else $i end' <<<"$record")"
+    tag="${named:+  ($named)}"
     case "$action" in
       resume)
-        what="$(jq -r '[.issue, .session, .cwd] | map(select(. != "")) | join("  ")' <<<"$record")"
+        what="$(jq -r --arg named "$named" '[$named, .session, .cwd] | map(select(. != "")) | join("  ")' <<<"$record")"
         if [[ "$dry" -eq 1 ]]; then
           printf '%-6s would resume  %s\n' "$address" "$what"
           DESK_RESUMED=$((DESK_RESUMED + 1))
@@ -227,9 +236,9 @@ _desk_restore_pass() {
             why="$(jq -r .why <<<"$confirm")"
             if [[ "$action" == wait ]]; then
               DESK_WAITING=$((DESK_WAITING + 1))
-              printf '%-6s waiting: %s\n' "$address" "$why"
+              printf '%-6s waiting: %s%s\n' "$address" "$why" "$tag"
             else
-              printf '%-6s skip: %s\n' "$address" "$why"
+              printf '%-6s skip: %s%s\n' "$address" "$why" "$tag"
             fi
           elif _desk_hc send "$address" "$(desk_resume_command "$record")" >/dev/null; then
             DESK_TYPED["$address"]=1
@@ -243,12 +252,12 @@ _desk_restore_pass() {
         ;;
       wait)
         DESK_WAITING=$((DESK_WAITING + 1))
-        printf '%-6s waiting: %s\n' "$address" "$why"
+        printf '%-6s waiting: %s%s\n' "$address" "$why" "$tag"
         ;;
       gone)
         [[ "$dry" -eq 1 ]] || rm -f "$(_desk_sessions_dir)/$address.json"
         ;;
-      *) printf '%-6s skip: %s\n' "$address" "$why" ;;
+      *) printf '%-6s skip: %s%s\n' "$address" "$why" "$tag" ;;
     esac
   done < <(jq -c '.[]' <<<"$plan")
 }

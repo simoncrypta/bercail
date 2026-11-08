@@ -12,6 +12,14 @@ bercail bstack status    # what is connected, which model each role uses
 dev                      # the desk starts opencode as the bstack agent
 ```
 
+## On Pi
+
+New configs set `harness = "pi"` under `[bstack]`. Set it in an existing `config.toml` and run `bercail bstack setup` to install [Pi](https://pi.dev) (>=1.2.0) and `npm:pi-claude-bridge@0.11.0`. Claude uses your Claude Code login (`claude auth login`), not Pi's `/login anthropic` or per-token Extra Usage. GPT and Grok use `/login openai` and `/login xai` inside Pi. Existing configs without `harness` keep using opencode; `harness = "opencode"` selects it explicitly. With bstack on Pi, a desk runs Pi as the lead: `bercail update` writes its command line to `pi/lead.json`, and the desk shows its status and [comes back after a reboot](config.md#desks-after-a-reboot) like an opencode desk.
+
+bercail renders the profile to `~/.local/share/bercail/pi/`. Installing the bridge adds its pinned package to Pi's settings, leaving unrelated settings and auth intact. Every role explicitly loads the bridge and the managed `extensions/fallback.ts` with `-e`, and unsets `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, and `ANTHROPIC_AUTH_TOKEN` so fallback to Claude uses your plan. Role boundaries and git rules remain instructions, not enforced tool restrictions. The builder, judge, council, and autopilot run as interactive `hc` sibling agents from templates in `~/.config/herdr-core/templates/`. Pi handoffs use desks or interactive siblings, not one-shot runs.
+
+After Pi exhausts its own rate-limit retries, the extension tries the next model in `[bstack] fallback` (default `["claude", "gpt", "grok"]`). It scans from the start, skipping the current and already attempted models, and leaves the initial role picks unchanged. Set `fallback = ["gpt", "grok"]` to limit candidates, or `[]` to disable them. Families must be unique. The profile stores resolved `family=model` lines in `pi/models` and one fallback family per line in `pi/fallback`. `bercail bstack status` reports the order, bridge availability, and Claude Code subscription auth (`authMethod` `claude.ai` or `oauth_token`, not an API key). `bercail doctor` checks the installed bridge and flags missing or stale profile data.
+
 ## Where to find what
 
 [The bstack guide](bstack/README.md) is the full story, with prompts to copy. Each fact lives on one page:

@@ -23,13 +23,30 @@ judge = "claude"
 
 Then `bercail bstack setup` or `bercail update`. `bercail bstack status` shows
 each model as `auto` or `pinned`. A pin stays until you clear it, gets a council
-seat even when its plan isn't connected, and skips every new release; auto
-picks again on every update.
+seat (with `council = true`) even when its plan isn't connected, and skips
+every new release; auto picks again on every update.
 
 Roles fall back to the next connected plan, so you can set them once and
 connect plans later ([the order](./02-the-bstack-agent.md#the-roles)). Higher
 effort reasons longer and spends more of each plan; a model without the level
 you ask for gets the next one down.
+
+### Pi rate-limit fallback
+
+On `harness = "pi"`, `fallback = ["claude", "gpt", "grok"]` sets runtime
+candidates after Pi exhausts rate-limit retries. Each switch scans from the
+start, skipping the current and already attempted models. For example,
+`fallback = ["gpt", "grok"]` tries GPT before Grok. Only these three family
+names are valid, duplicates are rejected, and `[]` disables fallback. This does
+not change the initial role model picks above or opencode behavior.
+
+Pi Claude IDs use `claude-bridge/`, for example
+`claude-bridge/claude-opus-5-5#high`. The bridge uses `claude auth login`, not
+Pi's Anthropic login. Status and doctor count a subscription only when
+`claude auth status` reports `authMethod` `claude.ai` or `oauth_token`.
+Run `bercail update` after changing fallback or model pins. `bercail bstack status`
+shows the order and `bercail doctor` flags stale profile data. See
+[On Pi](../bstack.md#on-pi) for installation and role launches.
 
 ## What bstack turns on in opencode
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# Fixtures contain shell code whose variables must expand only when executed.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 unset BASH_ENV
@@ -134,11 +136,145 @@ EOF
   mkdir -p "$home"
   git_init "$home/repo"
   printf '[graphite]\n"~/repo" = true\n' >"$cfg"
-  (HOME="$home"; handoff_is_graphite "$home/repo") || fail "~/ in a key is the home directory"
+  (HOME="$home"; handoff_is_graphite "$home/repo") || fail "home-relative config keys expand to the home directory"
   rm -f "$cfg"
   handoff_is_graphite "$real" || fail "no config file falls through to detection"
   unset BERCAIL_CONFIG
   printf 'PASS: [graphite] in config.toml overrides detection for one repo, from any worktree\n'
+}
+
+test_git_enum_override_beats_graphite_and_detection() {
+  local plain="$TMP_DIR/git-plain" tracked="$TMP_DIR/git-tracked" cfg="$TMP_DIR/git.toml" home="$TMP_DIR/git-home"
+  git_init "$plain"
+  git_init "$tracked"
+  graphite_auto_init "$tracked"
+  git -C "$tracked" update-ref refs/branch-metadata/feat HEAD
+  export BERCAIL_CONFIG="$cfg"
+  cat >"$cfg" <<EOF
+[graphite]
+"$tracked" = true
+"$plain" = false
+
+[git]
+"$tracked" = "gh"
+"$plain" = "origin"
+EOF
+  [[ "$(git_backend "$tracked")" == gh ]] || fail "[git] wins over [graphite] true and over refs: $(git_backend "$tracked")"
+  [[ "$(git_backend "$plain")" == origin ]] || fail "[git] origin wins over [graphite] false"
+  handoff_is_graphite "$tracked" && fail "gh override is not graphite"
+  [[ -z "$(git_backend "$plain" 2>&1 >/dev/null)" ]] || fail "a settled [git] entry is silent"
+  cat >"$cfg" <<EOF
+[git]
+"$plain" = "maybe"
+
+[graphite]
+"$plain" = true
+EOF
+  [[ "$(git_backend "$plain")" == gt ]] || fail "a non-enum [git] value is ignored and [graphite] still maps"
+  printf '[git]\n"~/repo" = "gt"\n' >"$cfg"
+  mkdir -p "$home"
+  git_init "$home/repo"
+  [[ "$(HOME="$home" git_backend "$home/repo")" == gt ]] || fail "home-relative [git] keys expand to the home directory"
+  unset BERCAIL_CONFIG
+  printf 'PASS: [git] enum overrides [graphite] and detection; bad values are ignored\n'
+}
+
+_origin_remote() {
+  git -C "$1" remote remove origin 2>/dev/null || true
+  git -C "$1" remote add origin "$2"
+}
+
+test_origin_remote_is_offline_until_the_host_matches() {
+  local repo="$TMP_DIR/ori-off" bin="$TMP_DIR/ori-off-bin" log="$TMP_DIR/ori-off.log"
+  git_init "$repo"
+  mkdir -p "$bin"
+  cat >"$bin/origin" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$log"
+printf '%s\n' '{"mirrorStatus":"no-mirror"}'
+EOF
+  chmod +x "$bin/origin"
+  : >"$log"
+  _origin_remote "$repo" https://github.com/acme/widgets.git
+  [[ "$(PATH="$bin:$PATH" git_backend "$repo")" == gh ]] || fail "a GitHub remote is gh"
+  [[ ! -s "$log" ]] || fail "origin must not be probed for a GitHub remote: $(cat "$log")"
+  git_backend_origin_remote "$repo" && fail "github.com is not an Origin git host"
+  _origin_remote "$repo" git@origin.cursor.com:acme/widgets.git
+  git_backend_origin_remote "$repo" || fail "scp origin.cursor.com is an Origin git host"
+  _origin_remote "$repo" https://origin.cursor.com/git/acme/widgets.git
+  git_backend_origin_remote "$repo" || fail "/git/org/repo is an Origin git host"
+  _origin_remote "$repo" https://origin-staging.cursor.com/acme/widgets
+  git_backend_origin_remote "$repo" || fail "origin-<id>.cursor.com is an Origin git host"
+  _origin_remote "$repo" https://github.com/origin.cursor.com/acme/widgets.git
+  git_backend_origin_remote "$repo" && fail "a lookalike path on github.com is not Origin"
+  printf 'PASS: Origin host match is offline; a GitHub remote is never probed\n'
+}
+
+test_origin_ownership_uses_mirror_status() {
+  local repo="$TMP_DIR/ori-own" bin="$TMP_DIR/ori-own-bin" log="$TMP_DIR/ori-own.log" status
+  git_init "$repo"
+  _origin_remote "$repo" https://origin.cursor.com/acme/widgets.git
+  mkdir -p "$bin"
+  cat >"$bin/origin" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$log"
+if [[ "\$*" == *"repo view --json mirrorStatus"* ]]; then
+  printf '%s\n' "{\"mirrorStatus\":\"$TMP_DIR/ori-status\"}"
+  # status file holds the value; the JSON is written below by the test via env
+  printf '%s\n' "{\"mirrorStatus\":\"\${ORIGIN_STATUS}\"}"
+  exit 0
+fi
+exit 1
+EOF
+  # The fake above prints two JSON lines when ORIGIN_STATUS is set. Rewrite it cleanly.
+  cat >"$bin/origin" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >>"$BERCAIL_ORIGIN_LOG"
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '%s\n' "{\"mirrorStatus\":\"${ORIGIN_STATUS}\"}"
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "$bin/origin"
+  export BERCAIL_ORIGIN_LOG="$log"
+  for status in no-mirror outbound; do
+    : >"$log"
+    [[ "$(PATH="$bin:$PATH" ORIGIN_STATUS="$status" git_backend "$repo")" == origin ]] \
+      || fail "$status must be origin"
+    grep -q 'repo view --json mirrorStatus' "$log" || fail "ownership probe missing: $(cat "$log")"
+  done
+  : >"$log"
+  [[ "$(PATH="$bin:$PATH" ORIGIN_STATUS=inbound git_backend "$repo")" == gh ]] \
+    || fail "inbound mirror is GitHub-owned"
+  [[ "$(PATH="$bin:$PATH" ORIGIN_STATUS=other git_backend "$repo")" == gh ]] \
+    || fail "any other mirrorStatus is gh"
+  : >"$log"
+  [[ "$(PATH="/usr/bin:/bin" git_backend "$repo" 2>"$TMP_DIR/ori-missing.err")" == gh ]] \
+    || fail "missing origin CLI is unknown ownership, so gh"
+  grep -q '\[git\]' "$TMP_DIR/ori-missing.err" || fail "missing CLI should name the override: $(cat "$TMP_DIR/ori-missing.err")"
+  cat >"$bin/origin" <<'EOF'
+#!/bin/sh
+printf 'origin: not logged in\n' >&2
+exit 1
+EOF
+  chmod +x "$bin/origin"
+  [[ "$(PATH="$bin:$PATH" git_backend "$repo" 2>"$TMP_DIR/ori-fail.err")" == gh ]] \
+    || fail "a failed ownership probe is gh"
+  grep -q 'origin repo view failed' "$TMP_DIR/ori-fail.err" || fail "failed probe should say why: $(cat "$TMP_DIR/ori-fail.err")"
+  grep -q '\[git\]' "$TMP_DIR/ori-fail.err" || fail "failed probe should name the override: $(cat "$TMP_DIR/ori-fail.err")"
+  cat >"$bin/origin" <<'EOF'
+#!/bin/sh
+exit 130
+EOF
+  chmod +x "$bin/origin"
+  local rc=0 out
+  out="$(PATH="$bin:$PATH" git_backend "$repo" 2>"$TMP_DIR/ori-int.err")" || rc=$?
+  [[ "$rc" -eq 130 ]] || fail "an interrupted probe must exit 130, not guess gh (rc=$rc out=$out)"
+  [[ -z "$out" ]] || fail "an interrupted probe must not print a backend: $out"
+  grep -q 'using gh' "$TMP_DIR/ori-int.err" && fail "interrupt is not an unknown-ownership fallback: $(cat "$TMP_DIR/ori-int.err")"
+  unset BERCAIL_ORIGIN_LOG ORIGIN_STATUS
+  printf 'PASS: Origin ownership is mirrorStatus; unknown ownership warns and stays gh\n'
 }
 
 test_copy_dirty_is_working_tree_not_index() {
@@ -174,6 +310,10 @@ test_usage() {
 test_issue_prompt_points_at_the_issue() {
   [[ "$(handoff_issue_prompt bercail-0s1)" == 'Your job is beads issue bercail-0s1. Run `bd show bercail-0s1` (read its comments too) and do the work it describes.' ]] \
     || fail "prompt points at the issue: $(handoff_issue_prompt bercail-0s1)"
+  [[ "$(handoff_issue_prompt bercail-0s1 'Show the title')" == 'Your job is beads issue bercail-0s1: Show the title. Run `bd show bercail-0s1` (read its comments too) and do the work it describes.' ]] \
+    || fail "prompt with a title: $(handoff_issue_prompt bercail-0s1 'Show the title')"
+  [[ "$(handoff_issue_prompt bercail-0s1 'Done.')" == 'Your job is beads issue bercail-0s1: Done. Run `bd show bercail-0s1` (read its comments too) and do the work it describes.' ]] \
+    || fail "a trailing period on the title must not read as two: $(handoff_issue_prompt bercail-0s1 'Done.')"
   handoff_issue_id_ok bercail-0s1 || fail "plain beads id"
   handoff_issue_id_ok bercail-0s1.2 || fail "child beads id"
   handoff_issue_id_ok --help && fail "flag is not an id"
@@ -243,13 +383,13 @@ test_info_json_reports_graphite_and_dirty() {
   unset HC_TERMINAL_ID HANDOFF_SPACE
   out="$(cd "$repo" && HERDR_APP_BIN="$TMP_DIR/no-herdr" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
-  printf '%s' "$out" | jq -e '.graphite == false' >/dev/null || fail "info with only an auto-created config: $out"
+  printf '%s' "$out" | jq -e '.graphite == false and .git == "gh"' >/dev/null || fail "info with only an auto-created config: $out"
   git -C "$repo" update-ref refs/branch-metadata/feat HEAD
   out="$(cd "$repo" && HERDR_APP_BIN="$TMP_DIR/no-herdr" \
     CURSOR_CONFIG_DIR="$TMP_DIR/no-cursor" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
   printf '%s' "$out" | jq -e '.dirty == true' >/dev/null || fail "info dirty: $out"
-  printf '%s' "$out" | jq -e '.graphite == true' >/dev/null || fail "info graphite: $out"
+  printf '%s' "$out" | jq -e '.graphite == true and .git == "gt"' >/dev/null || fail "info graphite: $out"
   printf '%s' "$out" | jq -e '.default_copy == "dirty"' >/dev/null || fail "info default_copy: $out"
   printf '%s' "$out" | jq -e '.herdr == false' >/dev/null || fail "info herdr: $out"
   printf '%s' "$out" | jq -e '.herdr_env == false' >/dev/null || fail "info herdr_env: $out"
@@ -285,7 +425,10 @@ test_result_json_records_unconfirmed_agent() {
   printf '%s' "$got" | jq -e '.agent_started == false' >/dev/null || fail "started: $got"
   printf '%s' "$got" | jq -e '.graphite == true' >/dev/null || fail "graphite: $got"
   printf '%s' "$got" | jq -e '.path == "/tmp/wt"' >/dev/null || fail "path: $got"
-  printf '%s' "$got" | jq -e '(has("stage")|not) and (has("harness")|not)' >/dev/null || fail "no stage: $got"
+  printf '%s' "$got" | jq -e '(has("stage")|not) and (has("harness")|not) and (has("issue_title")|not)' >/dev/null || fail "no stage: $got"
+  got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 1 0 0 start claude "" "" "Show the title")"
+  printf '%s' "$got" | jq -e '.issue_title == "Show the title" and .stage == "start" and .harness == "claude" and (has("space")|not)' >/dev/null \
+    || fail "issue_title: $got"
   got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 1 0 0 start claude)"
   printf '%s' "$got" | jq -e '.stage == "start" and .harness == "claude"' >/dev/null || fail "stage/harness: $got"
   printf 'PASS: result JSON is emitted when agent start is unconfirmed\n'
@@ -369,6 +512,9 @@ test_base_needs_branch() {
 }
 
 test_graphite_config_file_alone_is_not_graphite
+test_git_enum_override_beats_graphite_and_detection
+test_origin_remote_is_offline_until_the_host_matches
+test_origin_ownership_uses_mirror_status
 test_graphite_metadata_refs_are_graphite
 test_graphite_second_trunk_ref_is_not_graphite
 test_graphite_metadata_db_rows
@@ -458,7 +604,7 @@ JSON
   printf 'PASS: opus-5.5 resolves to the catalog id, never a *-max slug\n'
 }
 
-ISSUE=bercail-0s1
+ISSUE='bercail-0s1'
 
 # Stub bd: knows $BD_KNOWN ids, logs comments, reports $BD_BEADS_DIR.
 _bd_stub() {
@@ -469,7 +615,11 @@ set -euo pipefail
 case "$1" in
   show)
     [[ " ${BD_KNOWN:-} " == *" $2 "* ]] || { echo "no issue $2" >&2; exit 1; }
-    printf '[{"id":"%s"}]\n' "$2"
+    if [[ -n "${BD_TITLE:-}" ]]; then
+      jq -nc --arg id "$2" --arg title "$BD_TITLE" '[{id:$id, title:$title}]'
+    else
+      jq -nc --arg id "$2" '[{id:$id}]'
+    fi
     ;;
   comment)
     [[ "${3:-}" == --stdin ]] || exit 3
@@ -580,6 +730,66 @@ test_model_resolves_opus_55_not_max_slug
 test_start_stage_dry_run
 test_start_stage_resume_and_fixture_result
 
+test_result_ok_verification() {
+  local f="$TMP_DIR/verification.json"
+  local base='{"status":"ready","summary":"done","session_id":"s1"}' good bad
+  ok_with() { jq -c --argjson v "$1" '. + {verification: $v}' <<<"$base" >"$f"; handoff_result_ok "$f"; }
+  printf '%s\n' "$base" >"$f"
+  handoff_result_ok "$f" || fail "a result without verification still passes"
+  for good in '[]' \
+    '[{"kind":"test","command":"bash t.sh","exit_code":0,"evidence":"t.log"}]' \
+    '[{"kind":"verify-skill","command":"run.sh","exit_code":1,"evidence":".bercail/verify/x"},{"kind":"statechart","command":"statechart a.tla","exit_code":0,"evidence":"tlc.out"}]' \
+    '[{"kind":"statechart","spec":"a.tla","exit_code":0,"rules_broken":[],"chart":"chart.mmd","replayed":false}]'; do
+    ok_with "$good" || fail "should pass: $good"
+  done
+  for bad in '"passed"' 'false' '[1]' \
+    '[{"kind":"vibes","command":"x","exit_code":0,"evidence":"e"}]' \
+    '[{"kind":"test","command":"x","exit_code":"0","evidence":"e"}]' \
+    '[{"kind":"test","exit_code":0,"evidence":"e"}]' \
+    '[{"kind":"test","command":"x","exit_code":0}]' \
+    '[{"kind":"statechart","exit_code":0}]'; do
+    if ok_with "$bad"; then fail "should fail: $bad"; fi
+  done
+  jq -nc '{status:"ready", summary:"done"}' >"$f"
+  if handoff_result_ok "$f"; then fail "session_id stays required"; fi
+  printf 'PASS: handoff_result_ok takes an optional, well-formed verification array\n'
+}
+
+# A headless run whose agent writes $1 as its result.
+_run_with_agent_result() {
+  local wt="$1" result="$2" stub="$TMP_DIR/bin/claude"
+  mkdir -p "$TMP_DIR/bin"
+  _start_fixture "$wt"
+  cat >"$stub" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' '$result' >"\$BERCAIL_RESULT_PATH"
+STUB
+  chmod +x "$stub"
+  HANDOFF_CLAUDE_BIN="$stub" "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" >/dev/null
+}
+
+test_runner_keeps_verification() {
+  local wt="$TMP_DIR/verify-keep" got
+  _run_with_agent_result "$wt" '{"status":"ready","summary":"proved","verification":[{"kind":"test","command":"bash t.sh","exit_code":0,"evidence":"t.log"}]}' \
+    || fail "run with verification"
+  got="$wt/.bercail/handoff-result.json"
+  jq -e '.status == "ready" and .summary == "proved" and (.session_id | length > 0)
+    and .verification == [{kind:"test",command:"bash t.sh",exit_code:0,evidence:"t.log"}]' "$got" >/dev/null \
+    || fail "verification must survive the run: $(cat "$got")"
+
+  wt="$TMP_DIR/verify-drop"
+  _run_with_agent_result "$wt" '{"status":"ready","summary":"proved","verification":"all good"}' \
+    || fail "a malformed verification list must not fail the run"
+  got="$wt/.bercail/handoff-result.json"
+  jq -e '.status == "ready" and (.summary | startswith("proved")) and (.summary | contains("malformed verification"))
+    and (has("verification") | not)' "$got" >/dev/null \
+    || fail "a malformed list is dropped and the result stands: $(cat "$got")"
+  printf 'PASS: the runner keeps a good verification list and drops only a malformed one\n'
+}
+
+test_result_ok_verification
+test_runner_keeps_verification
+
 test_codex_headless_argv_shape() {
   local sid="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
   handoff_build_headless_argv codex /stub/codex "" "$sid" 0 "do the job"
@@ -653,7 +863,7 @@ test_codex_stage_dry_run() {
   err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" \
     --stage start --issue "$ISSUE" --binary cursor --worktree "$wt" --dry-run 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "bad --binary should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q 'claude, codex, cursor-agent, or opencode' || fail "bad --binary message: $err"
+  printf '%s' "$err" | grep -q 'claude, codex, cursor-agent, opencode, or pi' || fail "bad --binary message: $err"
   unset BERCAIL_CLAUDE_MODEL_CATALOG
   printf 'PASS: codex dry-run is exec --json; resume is exec resume; --binary selects it\n'
 }
@@ -1178,6 +1388,7 @@ test_track_timeout_is_bounded_and_kills_the_group() {
 
 # Spawns usually run from a terminal, where job control has a foreground to manage.
 test_track_timeout_under_a_terminal() {
+  # shellcheck disable=SC2015 # Either an absent script or an unsupported -qec skips.
   command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1 || {
     printf 'SKIP: no util-linux script for a pty\n'
     return 0
@@ -1200,6 +1411,7 @@ EOF
 }
 
 test_track_ctrl_c_kills_gt() {
+  # shellcheck disable=SC2015 # Either an absent script or an unsupported -qec skips.
   command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1 || {
     printf 'SKIP: no util-linux script for a pty\n'
     return 0
@@ -1426,6 +1638,87 @@ test_spawn_real_stack_tracks_on_its_base() {
   printf 'PASS: a real stack spawned with --base is tracked on that base, as before\n'
 }
 
+_fake_logger() {
+  local bin="$1" name="$2" log="$3"
+  mkdir -p "$bin"
+  : >"$log"
+  cat >"$bin/$name" <<EOF
+#!/bin/sh
+printf '%s\n' "\$(pwd) \$*" >>"$log"
+exit 0
+EOF
+  chmod +x "$bin/$name"
+}
+
+test_gh_base_inits_a_new_stack_and_refuses_a_middle_parent() {
+  local repo="$TMP_DIR/gh-init" bin="$TMP_DIR/gh-init-bin" log="$TMP_DIR/gh-init.log" trunk
+  git_init "$repo"
+  trunk="$(git -C "$repo" branch --show-current)"
+  git -C "$repo" branch parent-branch
+  git -C "$repo" worktree add -q -b feat "$repo.feat" parent-branch
+  _fake_logger "$bin" gh "$log"
+  _fake_logger "$bin" gt "$TMP_DIR/gh-init-gt.log"
+  PATH="$bin:$PATH" handoff_track_gh "$repo.feat" feat parent-branch
+  grep -q "stack init --base $trunk parent-branch feat" "$log" \
+    || fail "a new dependent is gh stack init; log=$(cat "$log")"
+  [[ "$(awk '{ print $1 }' "$log")" == "$repo.feat" ]] || fail "init runs in the child worktree: $(cat "$log")"
+  [[ ! -s "$TMP_DIR/gh-init-gt.log" ]] || fail "gt must not run for gh: $(cat "$TMP_DIR/gh-init-gt.log")"
+  local catalog
+  catalog="$(git_dir "$repo")/gh-stack"
+  jq -n --arg p parent-branch '{stacks:[{trunk:{branch:"main"},branches:[{branch:"bottom"},{branch:$p},{branch:"tip"}]}]}' >"$catalog"
+  : >"$log"
+  local err
+  err="$(PATH="$bin:$PATH" handoff_track_gh "$repo.feat" feat parent-branch 2>&1)" || fail "a middle parent must not fail the spawn: $err"
+  [[ ! -s "$log" ]] || fail "a middle parent must not call gh stack: $(cat "$log")"
+  printf '%s' "$err" | grep -q 'not the top' || fail "say why it was not attached: $err"
+  printf 'PASS: gh --base inits a stack, and a middle parent is not attached\n'
+}
+
+test_gh_base_adds_from_the_parent_worktree() {
+  local repo="$TMP_DIR/gh-add" bin="$TMP_DIR/gh-add-bin" log="$TMP_DIR/gh-add.log"
+  git_init "$repo"
+  git -C "$repo" branch parent-branch
+  git -C "$repo" worktree add -q "$repo.parent" parent-branch
+  git -C "$repo" worktree add -q -b feat "$repo.feat" parent-branch
+  jq -n '{stacks:[{trunk:{branch:"main"},branches:[{branch:"parent-branch"}]}]}' >"$(git_dir "$repo")/gh-stack"
+  _fake_logger "$bin" gh "$log"
+  PATH="$bin:$PATH" handoff_track_gh "$repo.feat" feat parent-branch
+  [[ "$(cat "$log")" == "$repo.parent stack add feat" ]] \
+    || fail "add runs in the worktree that has the top checked out; log=$(cat "$log")"
+  printf 'PASS: gh stack add uses the parent worktree and does not switch main\n'
+}
+
+test_origin_base_tracks_locally() {
+  local repo="$TMP_DIR/ori-track" bin="$TMP_DIR/ori-track-bin" log="$TMP_DIR/ori-track.log"
+  git_init "$repo"
+  git -C "$repo" branch parent-branch
+  git -C "$repo" worktree add -q -b feat "$repo.feat" parent-branch
+  _fake_logger "$bin" origin "$log"
+  _fake_logger "$bin" gt "$TMP_DIR/ori-track-gt.log"
+  PATH="$bin:$PATH" handoff_track_origin "$repo.feat" feat parent-branch
+  [[ "$(cat "$log")" == "$repo.feat stack track feat --onto parent-branch --json" ]] \
+    || fail "origin stack track --onto; log=$(cat "$log")"
+  [[ ! -s "$TMP_DIR/ori-track-gt.log" ]] || fail "gt must not run for origin"
+  printf 'PASS: origin --base is origin stack track, local, not gt\n'
+}
+
+test_spawn_gh_base_does_not_call_gt() {
+  local repo="$TMP_DIR/sp-gh" bin="$TMP_DIR/sp-gh-bin" log="$TMP_DIR/sp-gh.log" gtlog="$TMP_DIR/sp-gh-gt.log" out
+  git_init "$repo"
+  git -C "$repo" branch parent-branch
+  _fake_logger "$bin" gh "$log"
+  _fake_logger "$bin" gt "$gtlog"
+  out="$(_spawn_branch sp-gh "$repo" "$bin" "$TMP_DIR/sp-gh-home" parent-branch 2>"$TMP_DIR/sp-gh.err")" \
+    || fail "spawn failed: $out $(cat "$TMP_DIR/sp-gh.err")"
+  printf '%s' "$out" | jq -e '.graphite == false and .agent_started == true and .base == "parent-branch" and (has("git")|not)' >/dev/null \
+    || fail "spawn json keeps the old contract: $out"
+  grep -q 'stack init' "$log" || fail "spawn --base on gh records a stack; log=$(cat "$log")"
+  [[ ! -s "$gtlog" ]] || fail "gt must not run: $(cat "$gtlog")"
+  grep -q 'Use gt' "$BD_COMMENTS" && fail "no gt intro on gh: $(cat "$BD_COMMENTS")"
+  grep -q 'gh stack' "$BD_COMMENTS" || fail "the desk is told to use gh stack: $(cat "$BD_COMMENTS")"
+  printf 'PASS: a gh --base spawn uses gh stack, not gt, and does not change the result JSON\n'
+}
+
 test_track_already_tracked_does_nothing
 test_track_tracks_an_untracked_parent_first
 test_track_falls_back_to_trunk_with_a_warning
@@ -1447,3 +1740,346 @@ test_spawn_without_sqlite_skips_gt
 test_spawn_survives_a_failed_gt
 test_spawn_real_graphite_tracks_trunk
 test_spawn_real_stack_tracks_on_its_base
+test_gh_base_inits_a_new_stack_and_refuses_a_middle_parent
+test_gh_base_adds_from_the_parent_worktree
+test_origin_base_tracks_locally
+test_spawn_gh_base_does_not_call_gt
+
+test_issue_title_normalises_and_degrades() {
+  local wt="$TMP_DIR/title-norm" got err long want messy
+  mkdir -p "$wt"
+  _bd_stub
+  long="$(printf '%70s' '' | tr ' ' 'x')"
+  want="${long:0:59}"$'…'
+  got="$(BD_TITLE="$long" handoff_issue_title "$wt" "$ISSUE")" || fail "title lookup failed"
+  [[ "$got" == "$want" ]] || fail "70-char title should be 60 with an ellipsis: ${#got} [$got]"
+  [[ "$(handoff_issue_prompt "$ISSUE" "$got")" == "Your job is beads issue $ISSUE: $want Run \`bd show $ISSUE\` (read its comments too) and do the work it describes." ]] \
+    || fail "truncated title in the prompt: $(handoff_issue_prompt "$ISSUE" "$got")"
+
+  messy="$(printf 'say "hi" \\ path\n\tand')"
+  got="$(BD_TITLE="$messy" handoff_issue_title "$wt" "$ISSUE")" || fail "messy title lookup failed"
+  [[ "$got" == 'say "hi" \ path and' ]] || fail "normalised title: [$got]"
+  if printf '%s' "$got" | grep -q '[[:cntrl:]]'; then fail "title must be one line: [$got]"; fi
+
+  err="$(HANDOFF_BD_BIN="$TMP_DIR/no-such-bd" handoff_issue_title "$wt" "$ISSUE" 2>&1)" || fail "missing bd must not fail the lookup"
+  [[ -z "$err" ]] || fail "missing bd should print nothing: $err"
+  err="$(BD_KNOWN=other handoff_issue_title "$wt" "$ISSUE" 2>&1)" || fail "unknown issue must not fail the lookup"
+  [[ -z "$err" ]] || fail "unknown issue should print nothing: $err"
+  printf 'PASS: a title is truncated, one line, and a missing bd or issue is a bare id\n'
+}
+
+test_issue_title_on_headless_runs() {
+  local wt="$TMP_DIR/title-head" out stub="$TMP_DIR/bin/title-claude" rc=0
+  local title='Show the title' messy long want
+  mkdir -p "$TMP_DIR/bin"
+  _start_fixture "$wt"
+  messy="$(printf 'say "hi" \\ path\n\tand')"
+  out="$(cd "$wt" && BD_TITLE="$messy" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" --dry-run 2>"$TMP_DIR/title-dry.err")" \
+    || fail "dry-run with a title failed: $out $(cat "$TMP_DIR/title-dry.err")"
+  [[ ! -s "$TMP_DIR/title-dry.err" ]] || fail "title lookup must not write stderr: $(cat "$TMP_DIR/title-dry.err")"
+  printf '%s' "$out" | jq -e --arg id "$ISSUE" --arg t 'say "hi" \ path and' '
+    .issue_title == $t
+    and (.command[-1] | test("\n|\t") | not)
+    and .command[-1] == ("Your job is beads issue " + $id + ": " + $t + ". Run `bd show " + $id + "` (read its comments too) and do the work it describes.")
+  ' >/dev/null || fail "dry-run prompt/json: $out"
+  [[ ! -f "$wt/.bercail/handoff-result.json" ]] || fail "dry-run must not write a result"
+
+  long="$(printf '%70s' '' | tr ' ' 'x')"
+  want="${long:0:59}"$'\u2026'
+  out="$(cd "$wt" && BD_TITLE="$long" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e --arg t "$want" '.issue_title == $t and (.command[-1] | contains($t))' >/dev/null \
+    || fail "dry-run should carry the truncated title: $out"
+
+  out="$(cd "$wt" && BD_KNOWN=other \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" --dry-run 2>"$TMP_DIR/title-unk.err")" \
+    || fail "unknown issue dry-run must not fail: $(cat "$TMP_DIR/title-unk.err")"
+  printf '%s' "$out" | jq -e --arg id "$ISSUE" '(has("issue_title") | not) and (.command[-1] | startswith("Your job is beads issue " + $id + "."))' >/dev/null \
+    || fail "unknown issue stays a bare id: $out"
+  [[ ! -s "$TMP_DIR/title-unk.err" ]] || fail "unknown issue dry-run stderr: $(cat "$TMP_DIR/title-unk.err")"
+
+  cat >"$stub" <<'STUB'
+#!/bin/sh
+jq -nc '{status:"ready", summary:"done the work"}' >"$BERCAIL_RESULT_PATH"
+STUB
+  chmod +x "$stub"
+  out="$(cd "$wt" && BD_TITLE="$title" HANDOFF_CLAUDE_BIN="$stub" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt")" \
+    || fail "titled run failed: $out"
+  printf '%s' "$out" | jq -e --arg t "$title" --arg id "$ISSUE" '.issue == $id and .issue_title == $t' >/dev/null \
+    || fail "out json: $out"
+  jq -e --arg t "$title" --arg id "$ISSUE" \
+    '.status == "ready" and .issue == $id and .issue_title == $t' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "result file: $(cat "$wt/.bercail/handoff-result.json")"
+  handoff_result_ok "$wt/.bercail/handoff-result.json" || fail "stamped result must still pass handoff_result_ok"
+
+  rm -f "$wt/.bercail/handoff-result.json"
+  rc=0
+  out="$(cd "$wt" && BD_TITLE="$title" HANDOFF_CLAUDE_BIN="$TMP_DIR/no-such-claude" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" 2>/dev/null)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "missing harness should still block"
+  jq -e --arg t "$title" --arg id "$ISSUE" \
+    '.status == "blocked" and .issue == $id and .issue_title == $t' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "blocked result should carry the title: $(cat "$wt/.bercail/handoff-result.json")"
+
+  rc=0
+  out="$(cd "$wt" && HANDOFF_CLAUDE_BIN="$stub" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue bercail-nope --worktree "$wt" 2>/dev/null)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "unknown issue should block"
+  jq -e '.status == "blocked" and .issue == "bercail-nope" and (has("issue_title") | not)' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "unknown issue is a bare id: $(cat "$wt/.bercail/handoff-result.json")"
+
+  rc=0
+  out="$(cd "$wt" && HANDOFF_BD_BIN="$TMP_DIR/no-such-bd" HANDOFF_CLAUDE_BIN="$stub" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" 2>"$TMP_DIR/title-bd.err")" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "missing bd should block"
+  jq -e --arg id "$ISSUE" '.status == "blocked" and .issue == $id and (has("issue_title") | not)' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "missing bd is a bare id: $(cat "$wt/.bercail/handoff-result.json")"
+  grep -q 'jq:' "$TMP_DIR/title-bd.err" && fail "missing bd must not surface a title error: $(cat "$TMP_DIR/title-bd.err")"
+
+  out="$(cd "$wt" && HANDOFF_BD_BIN="$TMP_DIR/no-such-bd" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" --dry-run 2>"$TMP_DIR/title-bd-dry.err")" \
+    || fail "dry-run with missing bd failed: $(cat "$TMP_DIR/title-bd-dry.err")"
+  printf '%s' "$out" | jq -e --arg id "$ISSUE" '(has("issue_title") | not) and (.command[-1] | startswith("Your job is beads issue " + $id + "."))' >/dev/null \
+    || fail "missing bd dry-run should keep the bare prompt: $out"
+  [[ ! -s "$TMP_DIR/title-bd-dry.err" ]] || fail "missing bd dry-run stderr: $(cat "$TMP_DIR/title-bd-dry.err")"
+  unset HANDOFF_CLAUDE_BIN BERCAIL_CLAUDE_MODEL_CATALOG
+  printf 'PASS: headless JSON and the result file carry the title, or the bare id\n'
+}
+
+test_branch_carries_issue_title() {
+  local repo="$TMP_DIR/title-branch" bin="$TMP_DIR/title-branch-bin" home="$TMP_DIR/title-branch-home"
+  local state="$TMP_DIR/title-branch-state" out title='Say "hi"'
+  local folder="$TMP_DIR/title-folder" hclog="$TMP_DIR/title-hc.log" argv="$TMP_DIR/title-hc.argv"
+  git_init "$repo"
+  mkdir -p "$bin" "$home/.config/worktrunk"
+  cp "$ROOT/config/worktrunk/herdr-layout.sh" "$home/.config/worktrunk/herdr-layout.sh"
+  cat >"$bin/wt" <<'WT'
+#!/usr/bin/env bash
+branch=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --create) branch="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+main="$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
+git -C "$main" worktree add -q -b "$branch" "$main.$branch" HEAD
+printf '%s' "$(cd "$main.$branch" && pwd -P)" >"$TITLE_FOLDER"
+WT
+  cat >"$bin/herdr-app" <<'HERDR'
+#!/usr/bin/env bash
+case "$1 ${2:-}" in
+  "status ") printf '{"space":"sp-keep"}\n' ;;
+  "ls ")
+    f=""
+    [[ -f "$TITLE_FOLDER" ]] && f="$(cat "$TITLE_FOLDER")"
+    if [[ -n "$f" ]]; then
+      jq -nc --arg f "$f" '{spaces:[{id:"sp1",name:"Lbl",folder:$f,tabs:[{terminals:[{terminal:"t9"}]}]}]}'
+    else
+      printf '{"spaces":[]}\n'
+    fi
+    ;;
+  "do space.new")
+    printf '%s' "$6" >"$TITLE_FOLDER"
+    printf '{"space":"sp1"}\n'
+    ;;
+  *) printf '{"ok":true}\n' ;;
+esac
+HERDR
+  cat >"$bin/hc" <<'HC'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$TITLE_HC_LOG"
+if [[ "$1" == run ]]; then
+  printf '%s\0' "$@" | jq -Rs 'split("\u0000") | .[:-1]' >"$TITLE_HC_ARGV"
+fi
+case "$1" in
+  ls) printf '{"terminals":[]}\n' ;;
+  *) printf '{}\n' ;;
+esac
+HC
+  printf '#!/bin/sh\nexit 0\n' >"$bin/claude"
+  chmod +x "$bin/wt" "$bin/herdr-app" "$bin/hc" "$bin/claude"
+  _bd_stub
+  : >"$BD_COMMENTS"
+  : >"$hclog"
+  export TITLE_FOLDER="$folder" TITLE_HC_LOG="$hclog" TITLE_HC_ARGV="$argv"
+  out="$(cd "$repo" && BD_TITLE="$title" HOME="$home" PATH="$bin:$PATH" \
+    HERDR_APP_BIN="$bin/herdr-app" HC_BIN="$bin/hc" \
+    XDG_STATE_HOME="$state" BERCAIL_BIN="$TMP_DIR/no-bercail" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    --branch feat --stage start --issue "$ISSUE" --clean 2>"$TMP_DIR/title-branch.err")" \
+    || fail "branch spawn failed: $out $(cat "$TMP_DIR/title-branch.err")"
+  printf '%s' "$out" | jq -e --arg t "$title" --arg id "$ISSUE" \
+    '.issue == $id and .issue_title == $t and .agent_started == true' >/dev/null \
+    || fail "branch json: $out $(cat "$TMP_DIR/title-branch.err")"
+  jq -e --arg t "$title" --arg id "$ISSUE" '.issue == $id and .issue_title == $t' \
+    "$state/agentic-dev/handoffs.jsonl" >/dev/null \
+    || fail "handoffs.jsonl: $(cat "$state/agentic-dev/handoffs.jsonl")"
+  jq -e --arg issue "bercail.issue=$ISSUE" --arg titled "bercail.issue_title=$title" \
+    'index($issue) and index($titled)' "$argv" >/dev/null \
+    || fail "hc run labels: $(cat "$argv" 2>/dev/null) log=$(cat "$hclog")"
+  unset TITLE_FOLDER TITLE_HC_LOG TITLE_HC_ARGV
+  printf 'PASS: a --branch spawn puts the title in JSON, handoffs.jsonl, and the desk labels\n'
+}
+
+test_issue_title_normalises_and_degrades
+test_issue_title_on_headless_runs
+test_branch_carries_issue_title
+
+_pi_profile() {
+  local profile="$TMP_DIR/pi-profile" guard="$TMP_DIR/pi-profile/extensions/guard.ts"
+  mkdir -p "$profile/extensions" "$profile/agents"
+  printf '// guard\n' >"$guard"
+  jq -n --arg guard "$guard" --arg model "claude-bridge/lead-model:high" \
+    --arg prompts "$profile/prompts" --arg instructions "$profile/instructions.md" \
+    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard,"--prompt-template",$prompts,"--append-system-prompt",$instructions]' \
+    >"$profile/lead.json"
+  printf 'claude=claude-bridge/family-claude#high\ngpt=openai/family-gpt#high\n' >"$profile/models"
+  printf '%s' "$profile"
+}
+
+test_pi_headless_stage() {
+  local saved_config="${BERCAIL_CONFIG-}" saved_profile="${HANDOFF_PI_PROFILE-}" saved_models="${BERCAIL_BSTACK_MODELS-}"
+  local profile wt out err rc=0 sid stub
+  profile="$(_pi_profile)"
+  printf '[bstack]\nharness = "pi"\nenabled = true\nlead = "openai/from-config"\n' >"$TMP_DIR/pi.toml"
+  printf '[bstack]\nharness = "opencode"\nlead = "openai/from-config"\n' >"$TMP_DIR/oc.toml"
+  export BERCAIL_CONFIG="$TMP_DIR/pi.toml"
+  export HANDOFF_PI_PROFILE="$profile"
+  export BERCAIL_BSTACK_MODELS="$TMP_DIR/no-bstack-models"
+  : >"$BERCAIL_BSTACK_MODELS"
+  export HANDOFF_PI_BIN="$TMP_DIR/bin/pi-missing"
+  wt="$TMP_DIR/pi-dry"
+  mkdir -p "$wt"
+
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e --arg bin "$HANDOFF_PI_BIN" --arg profile "$profile" --arg model "claude-bridge/lead-model:high" --arg id "$ISSUE" '
+    .dry_run == true and .binary == "pi" and .model == $model and .stage == "bstack"
+    and .command[0:11] == ["env","-u","ANTHROPIC_API_KEY","-u","ANTHROPIC_BASE_URL","-u","ANTHROPIC_AUTH_TOKEN","-u","BERCAIL_ROLE","-u","HC_TERMINAL_ID"]
+    and (any(.command[]; . == "BERCAIL_ROLE=autopilot") | not)
+    and .command[11] == $bin
+    and .command[12:16] == ["-p","--mode","json","--session-id"]
+    and (.command[16] | test("^[0-9a-fA-F-]{36}$"))
+    and .session_id == .command[16]
+    and .command[(.command | index("--model")) + 1] == $model
+    and any(.command[]; . == ($profile + "/extensions/guard.ts"))
+    and any(.command[]; . == ($profile + "/agents/bstack-headless.md"))
+    and (any(.command[]; . == ($profile + "/agents/bstack-autopilot.md")) | not)
+    and (any(.command[]; . == "--add-dir") | not)
+    and .command[-2] == "--"
+    and (.command[-1] | startswith("Your job is beads issue " + $id))
+  ' >/dev/null || fail "bstack pi argv: $out"
+
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage autopilot --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e --arg bin "$HANDOFF_PI_BIN" --arg profile "$profile" '
+    .binary == "pi" and .stage == "autopilot"
+    and .command[0:11] == ["env","-u","ANTHROPIC_API_KEY","-u","ANTHROPIC_BASE_URL","-u","ANTHROPIC_AUTH_TOKEN","-u","BERCAIL_ROLE","-u","HC_TERMINAL_ID"]
+    and .command[11] == "BERCAIL_ROLE=autopilot"
+    and .command[12] == $bin
+    and .command[13:17] == ["-p","--mode","json","--session-id"]
+    and any(.command[]; . == ($profile + "/agents/bstack-headless.md"))
+    and any(.command[]; . == ($profile + "/agents/bstack-autopilot.md"))
+    and .command[-2] == "--"
+  ' >/dev/null || fail "autopilot pi argv: $out"
+
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --binary pi --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.binary == "pi" and .model == "claude-bridge/family-claude:high" and .command[(.command | index("--model")) + 1] == "claude-bridge/family-claude:high"' >/dev/null \
+    || fail "start --binary pi family model: $out"
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage codex --issue "$ISSUE" --binary pi --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.binary == "pi" and .model == "openai/family-gpt:high"' >/dev/null \
+    || fail "codex --binary pi family model: $out"
+
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --binary opencode --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.binary == "opencode" and .command[0:6] == ["opencode","run","--format","json","--agent","bstack"] and .model == "openai/from-config"' >/dev/null \
+    || fail "--binary opencode still runs opencode: $out"
+
+  export BERCAIL_CONFIG="$TMP_DIR/oc.toml"
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.binary == "opencode" and .command[0:6] == ["opencode","run","--format","json","--agent","bstack"] and .model == "openai/from-config"' >/dev/null \
+    || fail "harness opencode keeps today argv: $out"
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage autopilot --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.binary == "opencode" and .command[5] == "bstack-autopilot"' >/dev/null \
+    || fail "harness opencode autopilot: $out"
+  export BERCAIL_CONFIG="$TMP_DIR/pi.toml"
+
+  sid=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --resume "$sid" --dry-run)"
+  printf '%s' "$out" | jq -e --arg sid "$sid" '.resume == true and .session_id == $sid and .command[(.command | index("--session-id")) + 1] == $sid and (any(.command[]; . == "--resume") | not)' >/dev/null \
+    || fail "pi resume reuses the uuid: $out"
+  rc=0
+  err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --resume ses_abc --dry-run 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "ses_ resume should fail"
+  printf '%s' "$err" | grep -q 'opencode sessions cannot be resumed on Pi' || fail "ses_ message: $err"
+
+  export HANDOFF_PI_PROFILE="$TMP_DIR/no-pi-profile"
+  mkdir -p "$HANDOFF_PI_PROFILE"
+  rm -f "$wt/.bercail/handoff-result.json"
+  rc=0
+  err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --dry-run 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "missing lead.json should fail a dry run"
+  printf '%s' "$err" | grep -q 'bercail update' || fail "missing lead.json dry-run message: $err"
+  [[ ! -e "$wt/.bercail/handoff-result.json" ]] || fail "a dry run writes no result file"
+  rc=0
+  err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "missing lead.json should block"
+  jq -e '.status == "blocked" and (.summary | test("bercail update"))' "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "missing lead.json result: $(cat "$wt/.bercail/handoff-result.json") $err"
+  rm -f "$wt/.bercail/handoff-result.json"
+  jq -n --arg model "claude-bridge/lead-model:high" '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0"]' >"$HANDOFF_PI_PROFILE/lead.json"
+  rc=0
+  err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "missing guard should block"
+  jq -e '.status == "blocked" and (.summary | test("guard")) and (.summary | test("bercail update"))' "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "missing guard result: $(cat "$wt/.bercail/handoff-result.json")"
+  export HANDOFF_PI_PROFILE="$profile"
+
+  _bd_stub
+  stub="$TMP_DIR/bin/pi"
+  mkdir -p "$TMP_DIR/bin"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${PI_STUB_MODE:-}" == error ]]; then
+  printf '%s\n' '{"type":"session","version":3,"id":"bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"}'
+  printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"provider exploded"}}'
+  exit 0
+fi
+printf '%s\n' '{"type":"session","version":3,"id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}'
+printf '%s\n' '{"type":"agent_settled"}'
+jq -nc '{status:"ready", summary:"wrote the fix"}' >"$BERCAIL_RESULT_PATH"
+exit 0
+STUB
+  chmod +x "$stub"
+  export HANDOFF_PI_BIN="$stub"
+  local runwt="$TMP_DIR/pi-run" errf="$TMP_DIR/pi-header.err"
+  mkdir -p "$runwt"
+  out="$(cd "$runwt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$runwt" 2>"$errf")"
+  grep -q 'using the header' "$errf" || fail "header mismatch should be said: $(cat "$errf")"
+  jq -e '.status == "ready" and .session_id == "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"' "$runwt/.bercail/handoff-result.json" >/dev/null \
+    || fail "header session: $(cat "$runwt/.bercail/handoff-result.json")"
+
+  export PI_STUB_MODE=error
+  local failwt="$TMP_DIR/pi-fail"
+  mkdir -p "$failwt"
+  rc=0
+  out="$(cd "$failwt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$failwt" 2>"$TMP_DIR/pi-fail.err")" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "pi exit 0 with an error message_end should fail"
+  jq -e '.status == "failed" and .session_id == "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff" and (has("reason") | not)' \
+    "$failwt/.bercail/handoff-result.json" >/dev/null \
+    || fail "pi provider error result: $(cat "$failwt/.bercail/handoff-result.json")"
+  unset PI_STUB_MODE
+
+  if [[ -n "$saved_config" ]]; then export BERCAIL_CONFIG="$saved_config"; else unset BERCAIL_CONFIG; fi
+  if [[ -n "$saved_profile" ]]; then export HANDOFF_PI_PROFILE="$saved_profile"; else unset HANDOFF_PI_PROFILE; fi
+  if [[ -n "$saved_models" ]]; then export BERCAIL_BSTACK_MODELS="$saved_models"; else unset BERCAIL_BSTACK_MODELS; fi
+  unset HANDOFF_PI_BIN
+  printf 'PASS: headless bstack and autopilot run Pi, and opencode stays opt-in\n'
+}
+
+test_pi_headless_stage

@@ -10,33 +10,37 @@ handoff_die() {
 }
 
 _HANDOFF_SPAWN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=handoff-stages.sh
+# shellcheck source=skills/handoff/scripts/handoff-stages.sh
 source "$_HANDOFF_SPAWN_DIR/handoff-stages.sh"
+# shellcheck source=skills/handoff/scripts/git-backend.sh
+source "$_HANDOFF_SPAWN_DIR/git-backend.sh"
 
 handoff_usage() {
   cat >&2 <<'EOF'
 usage: handoff-spawn --info
        handoff-spawn --stage start|codex|cursor|bstack|autopilot --issue ID --worktree PATH
-                     [--binary claude|codex|cursor-agent|opencode] [--resume SESSION] [--dry-run]
+                     [--binary claude|codex|cursor-agent|opencode|pi] [--resume SESSION] [--dry-run]
        handoff-spawn --branch <name> --stage start|codex|cursor|bstack --issue ID
                      [--dirty|--clean] [--space <id>] [--base <branch>]
 
   --info          print JSON facts and exit
   --issue ID      beads issue to work (bd show ID). It holds the detail. The
-                  agent's whole prompt is the id, for every harness.
+                  agent's whole prompt is the id and its short title, for every harness.
   --stage NAME    required; named stage (see handoff-stages.sh). start is claude,
-                  codex is Codex CLI, cursor is cursor-agent, bstack is opencode
-                  (agent bstack, the lead's model), autopilot is opencode's
-                  bstack-autopilot (commits and pushes a PR's fixes; headless
-                  only, --worktree on the PR's checkout). Without --branch the
-                  stage runs headless (same result file). With --branch it opens a
-                  space whose desk agent runs that stage's binary. Bercail has no default.
-  --binary NAME   headless only: claude, codex, cursor-agent, or opencode. Overrides
-                  the stage table binary. opencode keeps the stage's provider
-                  (start: claude, codex: gpt). Bercail never switches it for you.
+                  codex is Codex CLI, cursor is cursor-agent. bstack and autopilot
+                  are Pi (the lead profile) unless [bstack] harness = "opencode",
+                  which keeps opencode. autopilot may commit and push a PR's fixes;
+                  headless only, --worktree on the PR's checkout. Without --branch
+                  the stage runs headless (same result file). With --branch it opens
+                  a space whose desk agent runs that stage's binary. Bercail has no default.
+  --binary NAME   headless only: claude, codex, cursor-agent, opencode, or pi.
+                  Overrides the stage table binary. opencode and pi keep the stage's
+                  provider (start: claude, codex: gpt, cursor and bstack: lead).
+                  Autopilot accepts only pi or opencode. Bercail never switches it for you.
   --worktree PATH checkout for a headless stage (default: cwd)
   --resume ID     re-handoff: claude --resume, cursor-agent --resume,
-                  codex exec resume, or opencode run --session (no kill)
+                  codex exec resume, opencode run --session, or pi --session-id
+                  (a uuid; an opencode ses_ id cannot be resumed on Pi)
   --dry-run       print the headless command as JSON; no run, no issue check, no comment
   --branch NAME   feature branch for a new space with a desk agent (any stage)
   --dirty         copy uncommitted main changes into the sibling as a working tree
@@ -46,7 +50,8 @@ usage: handoff-spawn --info
                   --workspace is the same flag)
   --base BRANCH   --branch only: cut the new branch from BRANCH instead of the
                   default branch (wt switch --create --base), so a dependent
-                  issue stacks on its parent's branch. Graphite tracks it on BRANCH.
+                  issue stacks on its parent's branch. The repo's git backend
+                  records that parent (gh stack, gt track, or origin stack track).
 
 Shep writes the beads issue first and owns the workflow. There are no prompt
 files and no per-harness modes. Each real handoff adds a bd comment to the
@@ -77,83 +82,17 @@ handoff_main_is_dirty() {
   [[ -n "$(git -C "$1" status --porcelain --untracked-files=all 2>/dev/null)" ]]
 }
 
-# Graphite keeps its config in the shared git dir; --git-path would name a
-# linked worktree's own dir, where it never is.
+# Wrappers so callers written against the Graphite bool keep working.
+# Detection lives in git-backend.sh (no gt).
 handoff_graphite_config() {
-  local root="$1" cfg
-  cfg="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
-  [[ -n "$cfg" ]] || return 1
-  cfg="$cfg/.graphite_repo_config"
-  [[ -f "$cfg" ]] || return 1
-  printf '%s' "$cfg"
-}
-
-# This repo's entry in [graphite] of bercail's config.toml: "<main checkout>" =
-# true|false. A linked worktree goes by its main checkout. Fails with no entry.
-handoff_graphite_override() {
-  local config="${BERCAIL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml}" main key value
-  [[ -f "$config" ]] || return 1
-  main="$(handoff_git_main "$1")"
-  [[ -n "$main" ]] || return 1
-  main="$(handoff_realpath "$main")"
-  while IFS=$'\t' read -r key value; do
-    [[ "$key" != \~/* ]] || key="$HOME/${key#\~/}"
-    if [[ "$(handoff_realpath "$key")" == "$main" ]]; then
-      printf '%s' "$value"
-      return 0
-    fi
-  done < <(awk '
-    /^[[:space:]]*\[/ { sec = $0; sub(/#.*/, "", sec); gsub(/[[:space:]"\047]/, "", sec); next }
-    sec != "[graphite]" { next }
-    {
-      line = $0
-      sub(/^[[:space:]]*/, "", line)
-      q = substr(line, 1, 1)
-      if (q != "\"" && q != "\047") next
-      line = substr(line, 2)
-      i = index(line, q)
-      if (!i) next
-      value = substr(line, i + 1)
-      sub(/^[[:space:]]*=[[:space:]]*/, "", value)
-      sub(/[[:space:]]*(#.*)?$/, "", value)
-      if (value == "true" || value == "false") print substr(line, 1, i - 1) "\t" value
-    }' "$config")
-  return 1
-}
-
-# Any gt command auto-inits a repo. Only non-trunk refs (older gt) or parented
-# rows in .graphite_metadata.db (current gt) prove branches are tracked.
-handoff_graphite_tracks_branches() {
-  local root="$1" cfg="$2" trunks refs db rows
-  trunks="$(jq -r '[.trunk, .trunks[]?.name] | map(select(. != null)) | .[]' "$cfg" 2>/dev/null || true)"
-  refs="$(git -C "$root" for-each-ref --format='%(refname:lstrip=2)' refs/branch-metadata/ 2>/dev/null || true)"
-  if [[ -n "$refs" ]] && grep -qvxF -e "$trunks" <<<"$refs"; then
-    return 0
-  fi
-  db="$(dirname "$cfg")/.graphite_metadata.db"
-  if [[ -f "$db" ]]; then
-    if ! rows="$("${HANDOFF_SQLITE3_BIN:-sqlite3}" -readonly "$db" \
-      "select 1 from branch_metadata where coalesce(parent_branch_name, '') <> '' limit 1" 2>/dev/null)"; then
-      printf 'handoff-spawn: cannot read %s (sqlite3 missing, database busy, or unknown schema); skipping Graphite. Set "%s" = true or false under [graphite] in bercail config.toml to override.\n' \
-        "$db" "$(handoff_git_main "$root")" >&2
-      return 1
-    fi
-    [[ -z "$rows" ]] || return 0
-  fi
-  # A real repo looks the same once its last stack is merged.
-  printf 'handoff-spawn: gt has a config here but tracks no branch, so not using Graphite. If this repo uses it, set "%s" = true under [graphite] in bercail config.toml.\n' \
-    "$(handoff_git_main "$root")" >&2
-  return 1
+  git_backend_graphite_config "$1"
 }
 
 handoff_is_graphite() {
-  local override cfg
-  if override="$(handoff_graphite_override "$1")"; then
-    [[ "$override" == true ]]
-    return
-  fi
-  cfg="$(handoff_graphite_config "$1")" || return 1
-  handoff_graphite_tracks_branches "$1" "$cfg"
+  local name rc=0
+  name="$(git_backend "$1")" || rc=$?
+  [[ "$rc" -ne 130 ]] || exit 130
+  [[ "$name" == gt ]]
 }
 
 # Copy main's uncommitted tracked+untracked files into sibling as a working
@@ -276,6 +215,112 @@ handoff_track_graphite() {
   printf 'the desk starts anyway, untracked. In %s run: gt track --parent %s\n' "$sibling" "$parent" >&2
 }
 
+handoff_trunk_name() {
+  local root="$1" ref name
+  ref="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [[ "$ref" == refs/remotes/origin/* ]]; then
+    printf '%s' "${ref#refs/remotes/origin/}"
+    return 0
+  fi
+  name="$(git -C "$root" config --get init.defaultBranch 2>/dev/null || true)"
+  if [[ -n "$name" ]] && git -C "$root" show-ref --verify --quiet "refs/heads/$name"; then
+    printf '%s' "$name"
+    return 0
+  fi
+  if git -C "$root" show-ref --verify --quiet refs/heads/master; then
+    printf 'master'
+    return 0
+  fi
+  printf 'main'
+}
+
+handoff_worktree_of() {
+  local root="$1" branch="$2" path
+  path="$(git -C "$root" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$branch" '
+    /^worktree / { p = substr($0, 10) }
+    /^branch / && $2 == b { print p; exit }
+  ')"
+  [[ -n "$path" && -d "$path" ]] || return 1
+  printf '%s' "$path"
+}
+
+handoff_gh_catalog() {
+  local dir
+  dir="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  printf '%s/gh-stack' "$dir"
+}
+
+# gh stack add only appends at the current top, and it uses the cwd's branch.
+# Run it where that parent is checked out. A missing checkout gets a temp
+# worktree so main is not switched. Never -A/-u/-m: adoption is metadata-only.
+# A parent that is in a stack but not the top is refused: init would reject it,
+# and add would attach the child to the wrong branch.
+handoff_track_gh() {
+  local sibling="$1" branch="$2" parent="$3" main catalog trunk wt tmp="" rc=0
+  command -v gh >/dev/null 2>&1 || {
+    printf 'handoff-spawn: gh is not on PATH; not recording the stack. In %s run: gh stack init %s %s\n' \
+      "$sibling" "$parent" "$branch" >&2
+    return 0
+  }
+  main="$(git_backend_main "$sibling")" || main="$sibling"
+  catalog="$(handoff_gh_catalog "$sibling")"
+  trunk="$(handoff_trunk_name "$main")"
+  if [[ -f "$catalog" ]] && jq -e --arg p "$parent" \
+    'any(.stacks[]?; any(.branches[]?; .branch == $p))' "$catalog" >/dev/null 2>&1; then
+    if ! jq -e --arg p "$parent" 'any(.stacks[]?; .branches[-1].branch == $p)' "$catalog" >/dev/null 2>&1; then
+      printf 'handoff-spawn: %s is not the top of its gh stack; not attaching %s. gh stack add only extends the top.\n' \
+        "$parent" "$branch" >&2
+      return 0
+    fi
+    wt="$(handoff_worktree_of "$main" "$parent" || true)"
+    if [[ -z "$wt" ]]; then
+      tmp="$(mktemp -d)"
+      if ! git -C "$main" worktree add --quiet "$tmp" "$parent" >&2; then
+        printf 'handoff-spawn: could not check out %s to run gh stack add; the desk starts anyway.\n' "$parent" >&2
+        rm -rf "$tmp"
+        return 0
+      fi
+      wt="$tmp"
+    fi
+    (
+      cd "$wt" || exit 1
+      handoff_bounded "$(handoff_gt_timeout)" gh stack add "$branch" </dev/null >&2
+    ) || rc=$?
+    if [[ -n "$tmp" ]]; then
+      git -C "$main" worktree remove --force "$tmp" >&2 || true
+      rm -rf "$tmp"
+    fi
+  elif [[ "$parent" == "$trunk" ]]; then
+    (
+      cd "$sibling" || exit 1
+      handoff_bounded "$(handoff_gt_timeout)" gh stack init --base "$trunk" "$branch" </dev/null >&2
+    ) || rc=$?
+  else
+    (
+      cd "$sibling" || exit 1
+      handoff_bounded "$(handoff_gt_timeout)" gh stack init --base "$trunk" "$parent" "$branch" </dev/null >&2
+    ) || rc=$?
+  fi
+  [[ "$rc" -eq 0 ]] || printf 'handoff-spawn: gh stack did not record %s on %s; the desk starts anyway.\n' \
+    "$branch" "$parent" >&2
+}
+
+# origin stack track is local. It does not publish and does not need a PR.
+handoff_track_origin() {
+  local sibling="$1" branch="$2" parent="$3" rc=0
+  command -v origin >/dev/null 2>&1 || {
+    printf 'handoff-spawn: origin is not on PATH; not recording the stack. In %s run: origin stack track %s --onto %s\n' \
+      "$sibling" "$branch" "$parent" >&2
+    return 0
+  }
+  (
+    cd "$sibling" || exit 1
+    handoff_bounded "$(handoff_gt_timeout)" origin stack track "$branch" --onto "$parent" --json </dev/null >&2
+  ) || rc=$?
+  [[ "$rc" -eq 0 ]] || printf 'handoff-spawn: origin stack track did not record %s on %s; the desk starts anyway. In %s run: origin stack track %s --onto %s\n' \
+    "$branch" "$parent" "$sibling" "$branch" "$parent" >&2
+}
+
 handoff_sibling_path() {
   local main="$1" branch="$2" path
   path="$(git -C "$main" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$branch" '
@@ -338,7 +383,7 @@ handoff_bool_json() {
 
 handoff_result_json() {
   local label="$1" sibling="$2" branch="$3" issue="$4" started="$5" copied="$6" graphite="$7"
-  local stage="${8:-}" harness="${9:-}" space="${10:-}" desk="${11:-}"
+  local stage="${8:-}" harness="${9:-}" space="${10:-}" desk="${11:-}" issue_title="${12:-}"
   # stage/harness: what the desk agent runs; space/desk: where it runs (hc address).
   jq -nc \
     --arg label "$label" \
@@ -352,15 +397,17 @@ handoff_result_json() {
     --arg harness "$harness" \
     --arg space "$space" \
     --arg desk "$desk" \
+    --arg issue_title "$issue_title" \
     '{ok:true,label:$label,path:$path,branch:$branch,issue:$issue,agent_started:$agent_started,dirty_copied:$dirty_copied,graphite:$graphite}
      + (if $stage == "" then {} else {stage:$stage} end)
      + (if $harness == "" then {} else {harness:$harness} end)
      + (if $space == "" then {} else {space:$space} end)
-     + (if $desk == "" then {} else {desk:$desk} end)'
+     + (if $desk == "" then {} else {desk:$desk} end)
+     + (if $issue_title == "" then {} else {issue_title:$issue_title} end)'
 }
 
 handoff_info_json() {
-  local cwd branch helper default_copy
+  local cwd branch helper default_copy backend=gh
   local herdr_env=0 socket=0 herdr=0 main_ok=0 dirty=0 graphite=0 helper_present=0 beads=0
   cwd="$(handoff_realpath "$PWD")"
   [[ -n "${HC_TERMINAL_ID:-}" ]] && herdr_env=1
@@ -376,8 +423,11 @@ handoff_info_json() {
   if command -v git >/dev/null 2>&1 && handoff_main_is_dirty "$cwd"; then
     dirty=1
   fi
-  if command -v git >/dev/null 2>&1 && handoff_is_graphite "$cwd"; then
-    graphite=1
+  if command -v git >/dev/null 2>&1; then
+    local info_rc=0
+    backend="$(git_backend "$cwd")" || info_rc=$?
+    [[ "$info_rc" -ne 130 ]] || exit 130
+    [[ "$backend" == gt ]] && graphite=1
   fi
   branch="$(git -C "$cwd" branch --show-current 2>/dev/null || true)"
   helper="${HOME}/.config/worktrunk/herdr-layout.sh"
@@ -402,6 +452,7 @@ handoff_info_json() {
     --argjson socket "$(handoff_bool_json "$socket")" \
     --argjson main_checkout "$(handoff_bool_json "$main_ok")" \
     --argjson dirty "$(handoff_bool_json "$dirty")" \
+    --arg git "$backend" \
     --argjson graphite "$(handoff_bool_json "$graphite")" \
     --argjson helper_present "$(handoff_bool_json "$helper_present")" \
     --argjson beads "$(handoff_bool_json "$beads")" \
@@ -413,6 +464,7 @@ handoff_info_json() {
       cwd:$cwd,
       branch:$branch,
       dirty:$dirty,
+      git:$git,
       graphite:$graphite,
       default_copy:$default_copy,
       helper:$helper,
@@ -425,7 +477,7 @@ handoff_info_json() {
 }
 
 handoff_spawn_main() {
-  local branch="" dirty="auto" issue="" prompt main sibling label intro graphite=0 copied=0
+  local branch="" dirty="auto" issue="" issue_title="" prompt main sibling label intro graphite=0 copied=0 backend=gh
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0 mode="" binary="" binary_override="" desk_bin=""
@@ -514,9 +566,18 @@ handoff_spawn_main() {
     [[ -z "$binary_override" ]] || handoff_die "stage $stage --branch starts a desk agent; --binary is for headless stages"
     [[ -z "$resume" && "$dry" -eq 0 && -z "$worktree" ]] \
       || handoff_die "stage $stage --branch starts a desk agent; --resume/--dry-run/--worktree are for headless stages"
-    desk_bin="$(handoff_headless_bin "$binary")"
-    if ! handoff_bin_present "$desk_bin"; then
-      handoff_die "requested harness $binary is not on PATH. Install it, or name another stage yourself (bercail harness lists what is present). Bercail does not switch harnesses."
+    if [[ "$binary" == pi ]]; then
+      [[ "$(_handoff_bstack_get enabled)" == true ]] \
+        || handoff_die "stage $stage on a Pi desk needs bstack on ([bstack] enabled = true). Run bercail bstack on."
+      [[ -f "$(handoff_pi_lead_file)" ]] \
+        || handoff_die "Pi lead profile is missing ($(handoff_pi_lead_file)). Run bercail update."
+      # Empty: bercail-desk-agent runs the lead from lead.json when harness is Pi.
+      desk_bin=""
+    else
+      desk_bin="$(handoff_headless_bin "$binary")"
+      if ! handoff_bin_present "$desk_bin"; then
+        handoff_die "requested harness $binary is not on PATH. Install it, or name another stage yourself (bercail harness lists what is present). Bercail does not switch harnesses."
+      fi
     fi
   elif [[ "$mode" == headless ]]; then
     [[ "$dirty" == auto ]] || handoff_die "stage $stage does not copy a dirty tree"
@@ -535,6 +596,7 @@ handoff_spawn_main() {
 
   main="$(handoff_realpath "$PWD")"
   handoff_issue_exists "$main" "$issue" || handoff_die "beads issue $issue not found (bd show $issue)"
+  issue_title="$(handoff_issue_title "$main" "$issue")"
 
   handoff_herdr_socket_ok \
     || handoff_die "cannot reach the Herdr app (herdr-app status failed); open it first"
@@ -579,10 +641,21 @@ handoff_spawn_main() {
     fi
   fi
 
-  if handoff_is_graphite "$sibling"; then
-    graphite=1
-    handoff_track_graphite "$sibling" "$base"
-  fi
+  local track_rc=0
+  backend="$(git_backend "$sibling")" || track_rc=$?
+  [[ "$track_rc" -ne 130 ]] || exit 130
+  case "$backend" in
+    gt)
+      graphite=1
+      handoff_track_graphite "$sibling" "$base"
+      ;;
+    gh)
+      [[ -z "$base" ]] || handoff_track_gh "$sibling" "$branch" "$base"
+      ;;
+    origin)
+      [[ -z "$base" ]] || handoff_track_origin "$sibling" "$branch" "$base"
+      ;;
+  esac
 
   label="$(_wt_generate_session_name "$sibling")"
 
@@ -594,16 +667,27 @@ handoff_spawn_main() {
     "$stage" "$binary" "$sibling" "$branch" "$issue")"
   if [[ "$graphite" -eq 1 ]]; then
     intro="$(printf '%s\nUse gt, not raw git commit/push, unless asked.' "$intro")"
+  else
+    intro="$(printf '%s\nGit backend is %s. Do not run gt.' "$intro" "$backend")"
+    if [[ -n "$base" && "$backend" == gh ]]; then
+      intro="$(printf '%s Stack %s on %s with gh stack init or gh stack add, then gh stack submit. Do not open a PR that only targets %s.' "$intro" "$branch" "$base" "$base")"
+    elif [[ -n "$base" && "$backend" == origin ]]; then
+      intro="$(printf '%s Stack %s on %s with origin stack track --onto and origin pr create --stack-on. Do not open a PR that only targets %s.' "$intro" "$branch" "$base" "$base")"
+    fi
   fi
   handoff_issue_comment "$sibling" "$issue" "$intro"
 
-  prompt="$(handoff_issue_prompt "$issue")"
+  prompt="$(handoff_issue_prompt "$issue" "$issue_title")"
 
-  # The desk gets the table binary through WT_HERDR_AGENT_CMD and the one-line
-  # prompt (pointing at the issue) through WT_HERDR_AGENT_PROMPT. No file.
+  # The desk gets the table binary through WT_HERDR_AGENT_CMD, the one-line
+  # prompt through WT_HERDR_AGENT_PROMPT, and the issue through WT_HERDR_ISSUE
+  # and WT_HERDR_ISSUE_TITLE. No file.
+  # Pi passes an empty command so the desk agent runs the lead from lead.json.
   if WT_HERDR_KEEP_FOCUS="$keep_space" \
     WT_HERDR_AGENT_CMD="$desk_bin" \
     WT_HERDR_AGENT_PROMPT="$prompt" \
+    WT_HERDR_ISSUE="$issue" \
+    WT_HERDR_ISSUE_TITLE="$issue_title" \
     wt_herdr_handoff_agent "$label" "$sibling"; then
     started=1
   else
@@ -612,7 +696,7 @@ handoff_spawn_main() {
 
   space="$(_wt_herdr_space_by_folder "$sibling" 2>/dev/null || true)"
   [[ -z "$space" ]] || desk="$(_wt_herdr_space_desk "$space" 2>/dev/null || true)"
-  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" "$binary" "$space" "$desk")"
+  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" "$binary" "$space" "$desk" "$issue_title")"
   [[ -z "$base" ]] || json="$(jq -c --arg base "$base" '. + {base:$base}' <<<"$json")"
   handoff_notify_check "$sibling"
   handoff_remember "$json"

@@ -17,14 +17,14 @@ install.sh options:
   -h, --help   Show this help
   -y, --yes    Non-interactive (existing/default config)
   --no-bstack  New install without bstack: the desk default stays cursor-agent
-  --bstack     New install with bstack (the default): opencode on the desk
+  --bstack     New install with bstack (the default): Pi on the desk
 
 Post-install CLI (bercail):
   help          This help
   install       Full install from the release mise or packslip unpacked
   doctor        Check dependencies and integration
-  harness       JSON: claude, codex, cursor-agent, opencode on PATH (missing is not fatal)
-  bstack        opencode with your own subscriptions: status | setup | on | off
+  harness       JSON: claude, codex, cursor-agent, opencode, pi on PATH (missing is not fatal)
+  bstack        Pi (opencode only with harness = "opencode"): status | setup | on | off
   desk          Bring back the desk agents a reboot took: desk restore [--dry-run]
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills from config.toml (not a full redeploy)
@@ -76,14 +76,20 @@ Ubuntu / Debian:
   Uses apt for git, fzf, jq, curl when mise is unavailable
   Downloads worktrunk, beads and tuicr from upstream when needed
 
-bstack (opencode, bring your own Claude / GPT / Grok subscription):
-  bercail bstack setup   install opencode, connect plans (models are picked for you)
+bstack (Pi by default, bring your own Claude / GPT / Grok subscription):
+  bercail bstack setup   install Pi, connect plans (models are picked for you)
   bercail bstack status  what is connected, each model (auto or pinned), each role
   Roles: lead (the bstack agent), build (bstack-builder), judge (bstack-judge);
-  council: one read-only reviewer per connected provider. In opencode: /council,
+  council ([bstack] council = true): one read-only reviewer per provider. In opencode: /council,
   /ready, /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
   pushes, never merges), /pr-review (bercail review-pr's read-only decisions pass).
   Settings: [bstack] in config.toml.
+  Pi is the default (>=1.2, pi-claude-bridge@0.11.0). opencode only with
+  harness = "opencode". Claude uses claude auth login; GPT and Grok use /login
+  openai and /login xai in pi. bercail update renders ~/.local/share/bercail/pi/
+  and herdr-core templates. Every role loads the bridge, the rate-limit fallback,
+  and bercail's guard. [bstack] fallback sets candidate order (default
+  ["claude", "gpt", "grok"]). The lead starts roles as hc siblings.
 
 Config:
   ~/.config/bercail/config.toml               desk agent default, review, [bstack]
@@ -99,6 +105,8 @@ Config:
   ~/.agents/skills/desk-restore/              put a desk with no record back by hand
   ~/.local/state/bercail/desk-sessions/       which session runs in which desk
   ~/.config/opencode/opencode.jsonc           bstack's opencode config (agents/, commands/ beside it)
+  ~/.local/share/bercail/pi/                  bstack's Pi profile (default harness)
+  ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates (default harness)
   ~/.config/fcitx5/conf/keyboard.conf         Linux fcitx5 hint trigger override
 
 Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`):
@@ -110,22 +118,32 @@ Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`
   cursor is cursor-agent (--print --output-format json). Each works a beads
   issue; the prompt is one line pointing at it. Headless runs write
   .bercail/handoff-result.json; --branch starts a desk agent for any stage.
-  bstack is opencode (opencode run --agent bstack); --binary opencode runs
-  start (Claude) or codex (GPT) through your opencode subscriptions.
-  claude, codex, cursor-agent, and opencode are optional and equal; bercail does not
+  bstack and autopilot run \`pi -p\` headless. harness = "opencode" keeps
+  opencode run --agent bstack; --binary opencode runs start (Claude) or codex
+  (GPT) through those subscriptions.
+  claude, codex, cursor-agent, opencode, and pi are optional; bercail does not
   pick one. Shep owns the workflow. bercail harness reports which are on PATH
   plus a local model hint.
 EOF
 }
 
 show_summary() {
+  local harness=pi stages
+  if declare -F bstack_harness >/dev/null && [[ "$(bstack_harness)" == opencode ]]; then
+    harness=opencode
+  fi
+  if [[ "$harness" == opencode ]]; then
+    stages="bstack=opencode, autopilot=opencode bstack-autopilot"
+  else
+    stages="bstack=pi, autopilot=pi (BERCAIL_ROLE=autopilot)"
+  fi
   log ""
   log "bercail installed (v${AGENTIC_DEV_VERSION})"
   log ""
   if declare -F bstack_enabled >/dev/null && bstack_enabled; then
-    log "bstack: on (opencode). Connect your Claude, ChatGPT, or X subscription: bercail bstack setup"
+    log "bstack: on (${harness}). Connect your Claude, ChatGPT, or X subscription: bercail bstack setup"
   fi
-  log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff stages: start=claude, codex=Codex CLI, cursor=cursor-agent, bstack=opencode, autopilot=opencode bstack-autopilot; equal, no default)"
+  log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff stages: start=claude, codex=Codex CLI, cursor=cursor-agent, ${stages}; equal, no default)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Config: ${AGENTIC_DEV_USER_CONFIG}"
   log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore}"

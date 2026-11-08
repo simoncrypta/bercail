@@ -1,16 +1,16 @@
 ---
 name: council
 description: >-
-  Reviews a change with one read-only reviewer per connected provider (Claude,
-  GPT, Grok) in parallel, checks every finding, and keeps only the ones that
-  hold up. Loops until no blocker is left. Use to review a diff, branch, or PR,
-  before calling work ready, or when asked for "council" or a second opinion.
+  Adversarial review on request: one read-only reviewer per provider tries to
+  break a change, each finding must come with a run, and only findings a rerun
+  confirms are reported. Use only when someone asks for /council or "council";
+  /ready and ordinary review do not run it.
 ---
 
 # council
 
-Different providers miss different bugs. The council puts each connected one on
-the same change, then you check each finding before you believe it.
+Different providers miss different bugs. The council puts each one on the same
+change. A finding counts only when a run shows it and your rerun shows it again.
 
 ## 1. The target
 
@@ -22,34 +22,48 @@ the same change, then you check each finding before you believe it.
 
 ## 2. Convene
 
-Launch every `bstack-council-*` subagent that exists (one per connected provider),
-in parallel, with the same brief. Do not tell them what the others said.
+Launch every `bstack-council-*` subagent that exists (one per provider), in
+parallel, with the same brief and the reviewer rules below. Do not tell them
+what the others said.
 
-With only one provider connected, the council is one reviewer: say so in the report.
-Outside opencode there are no council agents: review it yourself, with the
-reviewer rules below, and say the council was skipped.
+With one seat, say so in the report. On Pi each reviewer is a
+`bstack-council-<family>` template from `hc templates`, started as a sibling
+terminal the way your instructions say. With none (`[bstack] council` is off,
+or you are outside opencode and Pi), review it yourself by the same rules and
+say the panel did not run. `[bstack] council = true` and `bercail update` turn it on.
 
-## 3. Check every finding
+## Reviewer rules
 
-A finding is a claim until you check it.
+- Try to break the change: wrong behavior, missed cases, broken callers, races,
+  security holes, data loss, tests that pass for the wrong reason.
+- Prove each finding with a run: a failing test, a repro, or command output.
+  Give the exact command and what it printed. Scratch files go in /tmp.
+- A finding you cannot show with a run is not a finding. Leave it out.
+- Leave out style, naming, and YAGNI.
+- Report each one as: severity (blocker, major, minor), `file:line`, what breaks,
+  the command, its output. With nothing proven, say `no findings` and list what
+  you ran.
 
-- Read the code at the `file:line` it names. Run the repro or the test when it
-  depends on behavior.
-- Keep: shown by a run, or plain from the code. Drop: wrong, already handled, or
-  style only. Mark `unverified` what you could not settle either way.
+## 3. Rerun every finding
+
+A finding is a claim until you rerun it. Run its command yourself, in this
+checkout, and compare the output.
+
+- Keep what the rerun confirms.
+- Drop everything else, and do not report it: a finding that does not reproduce,
+  has no run, or is style, naming, or YAGNI. There is no `unverified` list.
 - Merge duplicates. Two providers finding the same bug raises confidence, not severity.
-- When two reviewers disagree on a finding that matters, ask `bstack-judge` to
-  settle it with the evidence from both.
+- Reviewers disagreeing is settled by the rerun, not by another opinion.
 
 ## 4. Fix and loop
 
-- When the task is to get the change ready, fix the findings you kept, then run
-  the council again on the new diff.
-- Stop when a round has no kept blocker or major finding, or after three rounds.
-  Report what is still open after the third.
+- When the ask includes fixing, fix the findings you kept, then run the council
+  again on the new diff.
+- Stop when a round has no confirmed blocker or major finding, or after three
+  rounds. Report what is still open after the third.
 
 ## 5. Report
 
-Worst first, one line each: severity, `file:line`, what breaks, how it was shown,
-and which providers found it. Then one line: the providers on the council and
-the number of rounds. Change nothing outside the fixes you were asked to make.
+Worst first, one line each: severity, `file:line`, what breaks, the command you
+reran, and which providers found it. Then one line: the providers on the council
+and the number of rounds. Change nothing outside the fixes you were asked to make.

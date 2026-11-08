@@ -7,7 +7,8 @@ run `--info` then spawn — not assemble these steps.
 ## Sequence
 
 1. `--info` prints JSON facts (`herdr`, `herdr_env`, `main_checkout`, `dirty`,
-   `graphite`, `default_copy`, `space`, …). `--branch` itself requires the
+   `git` (`gh` | `gt` | `origin`), `graphite` (legacy: `git == "gt"`),
+   `default_copy`, `space`, …). `--branch` itself requires the
    Herdr app to answer (`herdr-app status`) and a **main** git checkout.
 2. `wt switch --create <branch> --no-cd`. Worktrunk `post-start` opens a Herdr
    app space on the sibling (no desk agent yet: handoff-spawn sets
@@ -17,20 +18,23 @@ run `--info` then spawn — not assemble these steps.
 3. If `--dirty` or `default_copy` is dirty (and not `--clean`): copy
    `git diff HEAD` plus untracked files into the sibling as a **working tree**.
    Never `git add`.
-4. If the repo really uses Graphite (`handoff_is_graphite`, see below), `gt
-   track` a branch that has no parent yet. A gt problem never stops the spawn.
+4. Register the sibling with the selected backend: `gt track` for Graphite;
+   for `--base` dependents, `gh stack init/add` or `origin stack track --onto`.
+   Keep the parent relation in that backend; publishing uses its stack commands.
 5. Add the intro (worktree; stage, don't commit; Review opens on agent done;
-   gt when Graphite is on) to the beads issue as a `bd comment`. The prompt is one line
-   pointing at the issue, the same for every binary. No prompt file and no
+   selected git backend and stack commands) to the beads issue as a `bd comment`. The prompt is one line
+   pointing at the issue (`<id>: <title>`, or the id alone when bd has no title), the same for every binary. No prompt file and no
    per-harness mode.
 6. `WT_HERDR_AGENT_CMD` is the stage table's binary and `WT_HERDR_AGENT_PROMPT`
-   that one-line prompt. `wt_herdr_handoff_agent` starts the space's desk:
+   that one-line prompt. `WT_HERDR_ISSUE` and `WT_HERDR_ISSUE_TITLE` name the issue.
+   `wt_herdr_handoff_agent` starts the space's desk:
    `hc run --bg --keep --outlive-parent --parent <space's first terminal>` of
    `bercail-desk-agent --prompt <prompt> <binary>` with labels
-   `bercail.role=agent` and `bercail.space=<space id>`, replacing a live desk
+   `bercail.role=agent`, `bercail.space=<space id>`, and, when set, `bercail.issue`
+   and `bercail.issue_title`, replacing a live desk
    in that space. A failed start does **not** discard the worktree.
-7. Print JSON `{ok,label,path,branch,issue,agent_started,dirty_copied,graphite,stage,harness,space,desk}`
-   and append `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling
+7. Print JSON `{ok,label,path,branch,issue,issue_title,agent_started,dirty_copied,graphite,stage,harness,space,desk}`
+   (`issue_title` omitted when unknown) and append `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling
    exists.
 
 Callers in no hc terminal (`HC_TERMINAL_ID` unset) run the **resolved script
@@ -58,21 +62,28 @@ model. `handoff-spawn --stage` reads it.
   `opus-5.5` spec). `--sandbox workspace-write` is required because `codex
   exec` defaults to read-only; `codex exec resume` has no `--sandbox`, so it
   stays before the subcommand. `codex exec` has no `--ask-for-approval`.
-`--binary claude|codex|cursor-agent` overrides the table binary on a headless
-stage, so `--stage start --binary cursor-agent` picks cursor-agent without
-renaming the job. Bercail never picks or skips a harness on its own.
+`--binary claude|codex|cursor-agent|opencode|pi` overrides the table binary on a
+headless stage, so `--stage start --binary cursor-agent` picks cursor-agent
+without renaming the job. Bercail never picks or skips a harness on its own.
 `bercail harness` reports which of claude, codex, and cursor-agent are on PATH,
 with a local model hint. It does not choose one.
 A missing requested harness writes status `blocked` and exits nonzero. It does
 not fall through to another binary.
 
-All three headless stages get that one-line prompt and write
+`bstack` and `autopilot` run headless Pi (`pi -p --mode json --session-id
+<uuid>`, the lead profile) unless `[bstack] harness = "opencode"`, which keeps
+`opencode run`. `--binary pi` and `--binary opencode` still select that harness.
+Pi resume reuses the uuid; an opencode `ses_` id cannot be resumed on Pi. Pi
+gets no `--add-dir`. `--branch` with Pi passes an empty agent command so the
+desk runs the lead from lead.json. Autopilot sets `BERCAIL_ROLE=autopilot`.
+
+Every headless stage gets that one-line prompt and writes
 `<worktree>/.bercail/handoff-result.json`. Before the run, bercail checks bd
 and the issue (`bd show <id>`) and adds a `bd comment` with the worktree,
 result path, and session id. claude gets `--tools Read,Edit,Write,Bash
---allowedTools "Bash(bd *)"`. When bd's `.beads` is outside the worktree, each
-harness gets `--add-dir` for it (codex: before `resume`, which has no
-`--add-dir`). bercail fills `session_id` in the result after the run.
+--allowedTools "Bash(bd *)"`. When bd's `.beads` is outside the worktree,
+claude, codex, and cursor-agent get `--add-dir` for it (codex: before `resume`,
+which has no `--add-dir`). bercail fills `session_id` in the result after the run.
 Re-handoff is `--resume <session_id>`. For Codex that id is the JSONL
 `thread.started` thread id. For cursor-agent it is the print JSON `session_id`.
 
@@ -99,25 +110,52 @@ The script is the only spawn path. Callers must not `hc send` or type into a
 desk, start a desk with `hc run` themselves, or switch the user to the child's
 space.
 
-## Graphite
+## Git backend
+
+`--info` reports one `git` backend for the repo. Linked worktrees use their
+main checkout's choice. Detection never invokes `gt`:
+
+1. A `[git]` entry in bercail's config.toml, keyed by main-checkout path,
+   chooses `"gh"`, `"gt"`, or `"origin"`.
+2. A legacy `[graphite]` entry maps `true` to `gt` and `false` to `gh`.
+   `[git]` wins when both are set.
+3. Real Graphite tracking (below) selects `gt`.
+4. A remote on an exact `origin.cursor.com` or `origin-<environment>.cursor.com`
+   host and `/org/repo` or `/git/org/repo` path is an Origin candidate. A bounded
+   `origin repo view --json mirrorStatus` selects `origin` only for `no-mirror`
+   or `outbound`. Other reported statuses select `gh`. A missing CLI or failed
+   lookup warns and falls back to `gh`; use `[git]` to settle an unknown result
+   before publishing. GitHub remotes never make this probe.
+
+For example:
+
+```toml
+[git]
+"~/Work/github-repo" = "gh"
+"~/Work/graphite-repo" = "gt"
+"~/Work/cursor-repo" = "origin"
+```
+
+`graphite` stays in `--info` for one release, derived from `git == "gt"`.
+Consumers should read `git`, not re-detect. See
+[git-workflow.md](git-workflow.md) for publishing and updating each stack.
+
+### Graphite tracking
 
 Any `gt` command auto-initializes the repo it runs in, so the config file in the
-shared git dir (`.graphite_repo_config`) proves nothing. `handoff_is_graphite`
-decides in this order:
+shared git dir (`.graphite_repo_config`) proves nothing. After the config
+overrides above, tracking evidence decides:
 
-1. An entry for the main checkout under `[graphite]` in bercail's config.toml
-   (`"~/Work/repo" = true` or `false`). Linked worktrees use their main
-   checkout's entry.
-2. No config file: not Graphite.
-3. gt tracks a branch other than trunk: a `refs/branch-metadata/*` ref (older
+1. No Graphite config file: not Graphite.
+2. gt tracks a branch other than trunk: a `refs/branch-metadata/*` ref (older
    gt) or a row with a parent in `.graphite_metadata.db` (current gt, read with
    `sqlite3 -readonly`). Auto-init only writes rows with no parent.
-4. A store that can't be read (no sqlite3, busy, unknown schema) skips Graphite,
+3. A store that can't be read (no sqlite3, busy, unknown schema) skips Graphite,
    with a warning that names the override. Install sqlite3 or set the override.
 
 A config with nothing tracked is off, with a note that names the override: a
 real repo looks the same as a stray one once its last stack is merged. An entry
-in `[graphite]` silences both.
+in `[git]` (or legacy `[graphite]`) silences both.
 
 `handoff_track_graphite` runs every `gt` call through `handoff_gt`: its own
 process group, no stdin, stdout sent to stderr (stdout is the spawn's JSON), and

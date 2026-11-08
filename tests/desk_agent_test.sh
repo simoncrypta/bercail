@@ -20,22 +20,30 @@ printf ' cli=%s\n' "${OPENCODE_CLI_CONFIG_CONTENT:-none}"
 AGENT
   chmod +x "$TMP_DIR/bin/$agent"
 done
-export PATH="$TMP_DIR/bin:$PATH" XDG_CONFIG_HOME="$TMP_DIR/xdg"
+cat >"$TMP_DIR/bin/pi" <<'AGENT'
+#!/usr/bin/env bash
+printf 'pi'
+for a in "$@"; do printf ' [%s]' "$a"; done
+printf ' key=%s\n' "${ANTHROPIC_API_KEY:-none}"
+AGENT
+chmod +x "$TMP_DIR/bin/pi"
+# HOME holds the Pi lead and the desk extension bercail update writes.
+export PATH="$TMP_DIR/bin:$PATH" XDG_CONFIG_HOME="$TMP_DIR/xdg" HOME="$TMP_DIR/home"
 # BASH_ENV can put the real agents back in front of the fakes.
 unset OPENCODE_CLI_CONFIG_CONTENT BASH_ENV HC_TERMINAL_ID
 CONFIG="$XDG_CONFIG_HOME/bercail/config.toml"
 desk() { "$ROOT/bin/bercail-desk-agent" "$@"; }
 expect() { [[ "$1" == "$2" ]] || fail "$3: got '$1', want '$2'"; }
 
-printf '[agent]\ncommand = "claude --verbose"  # mine\n\n[bstack]\nenabled = true\n' >"$CONFIG"
+printf '[agent]\ncommand = "claude --verbose"  # mine\n\n[bstack]\nenabled = true\nharness = "opencode"\n' >"$CONFIG"
 got="$(desk)"
-[[ "$got" == "opencode cli="* ]] || fail "bstack on runs opencode with no flags: $got"
+[[ "$got" == "opencode cli="* ]] || fail "pinned opencode runs opencode with no flags: $got"
 cli="${got#opencode cli=}"
 expect "$(jq -c '.theme' <<<"$cli")" '{"name":"system","mode":"system"}' "bstack's desk takes the terminal's palette"
 expect "$(jq -c '.highlights' <<<"$cli")" false "no release highlights on the desk"
 expect "$(jq -r '.tabs.mode' <<<"$cli")" off "tabs off: the TUI reports only its own session"
 expect "$(desk --prompt 'Do bercail-1')" "opencode [--prompt] [Do bercail-1] cli=$cli" "bstack prompt"
-printf 'PASS: bstack on runs opencode (full TUI, system theme), its prompt through --prompt\n'
+printf 'PASS: pinned opencode runs opencode (full TUI, system theme), its prompt through --prompt\n'
 
 expect "$(desk --prompt 'Do bercail-1' codex)" "codex [--no-daemon] [Do bercail-1] cli=none" "handoff codex"
 expect "$(desk codex --no-daemon)" "codex [--no-daemon] cli=none" "codex keeps one --no-daemon"
@@ -50,6 +58,37 @@ expect "$(desk opencode)" "opencode cli=none" "plain opencode with bstack off ke
 rm "$CONFIG"
 expect "$(desk)" "cursor-agent cli=none" "no config"
 printf 'PASS: bstack off runs [agent] command (cursor-agent without a config)\n'
+
+# --- bstack on Pi ---
+
+LEAD="$HOME/.local/share/bercail/pi/lead.json"
+EXT="$HOME/.local/share/bercail/pi-extensions/bercail-desk.ts"
+printf '[agent]\ncommand = "claude"\n\n[bstack]\nenabled = true\nharness = "pi"\n' >"$CONFIG"
+got="$(desk 2>&1)" && fail "a Pi desk without its lead should not start: $got"
+[[ "$got" == *"lead.json is missing; run bercail update"* ]] || fail "missing lead says what to run: $got"
+mkdir -p "$(dirname "$LEAD")" "$(dirname "$EXT")"
+jq -n '$ARGS.positional' --args -- pi --model claude-bridge/opus:high --append-system-prompt "/a b/instructions.md" >"$LEAD"
+expect "$(ANTHROPIC_API_KEY=secret desk --prompt 'Do bercail-1')" \
+  "pi [--model] [claude-bridge/opus:high] [--append-system-prompt] [/a b/instructions.md] [Do bercail-1] key=none" \
+  "bstack on Pi runs the lead, the prompt as its first message, without an API key"
+: >"$EXT"
+expect "$(desk)" "pi [-e] [$EXT] [--model] [claude-bridge/opus:high] [--append-system-prompt] [/a b/instructions.md] key=none" \
+  "the lead loads the desk extension"
+expect "$(desk pi -e "$EXT" --verbose)" "pi [-e] [$EXT] [--verbose] key=none" "the desk extension is loaded once"
+expect "$(desk pi -- '- a message')" "pi [-e] [$EXT] [--] [- a message] key=none" "the extension comes before --"
+printf '[bstack]\nenabled = false\nharness = "pi"\n' >"$CONFIG"
+expect "$(ANTHROPIC_API_KEY=mine desk pi)" "pi [-e] [$EXT] key=mine" "bstack off: any Pi desk gets the extension, the env stays"
+rm -f "$EXT"
+printf 'PASS: bstack on Pi runs the lead from lead.json, with the desk extension and no Anthropic env\n'
+
+printf '[bstack]\nenabled = true\n' >"$CONFIG"
+expect "$(ANTHROPIC_API_KEY=secret desk)" \
+  "pi [--model] [claude-bridge/opus:high] [--append-system-prompt] [/a b/instructions.md] key=none" \
+  "bstack on, harness unset, runs the Pi lead from lead.json"
+printf '[bstack]\nenabled = true\nharness = "opencode"\n' >"$CONFIG"
+got="$(desk)"
+[[ "$got" == "opencode cli="* ]] || fail "pinned harness opencode stays opencode: $got"
+printf 'PASS: unset harness is the Pi lead; pinned opencode stays opencode\n'
 
 # --- the desk's record, for bercail desk restore ---
 
@@ -83,8 +122,8 @@ export HC_TERMINAL_ID=t9
 got="$(desk --prompt 'Your job is beads issue bercail-0uo. Run it.' opencode --verbose)"
 [[ "$got" == "opencode [--verbose] [--prompt] [Your job is beads issue bercail-0uo. Run it.] cli="* ]] \
   || fail "the argv a desk runs does not change: $got"
-expect "$(record '[.address, .session, .harness, .issue, .space, .args]')" \
-  '["t9","","opencode","bercail-0uo","sp1",["--verbose"]]' "a record, with the prompt out of its flags"
+expect "$(record '[.address, .session, .harness, .issue, .issue_title, .space, .args]')" \
+  '["t9","","opencode","bercail-0uo","","sp1",["--verbose"]]' "a record, with the prompt out of its flags"
 expect "$(record .cwd | jq -r .)" "$PWD" "the record has the folder"
 printf 'PASS: a desk writes its record and its command stays the same\n'
 
@@ -94,6 +133,16 @@ expect "$(record '[.session, .issue, .args]')" '["ses_given","bercail-0uo",["--v
 desk claude --resume abc >/dev/null
 expect "$(record '[.session, .harness]')" '["abc","claude"]' "claude's resume flag"
 printf 'PASS: a resume keeps session, flags and issue\n'
+
+printf '{"labels":{"bercail.role":"agent","bercail.space":"sp1","bercail.issue":"bercail-0uo","bercail.issue_title":"Short title"}}\n' >"$TMP_DIR/terminal.json"
+desk --prompt 'Your job is beads issue bercail-0uo: Short title. Run it.' opencode --verbose >/dev/null
+expect "$(record .issue_title)" '"Short title"' "title comes from the label when it names the issue"
+printf '{"labels":{"bercail.role":"agent","bercail.space":"sp1","bercail.issue":"other-1","bercail.issue_title":"Wrong"}}\n' >"$TMP_DIR/terminal.json"
+desk opencode --session ses_kept --verbose >/dev/null
+expect "$(record '[.issue, .issue_title, .session]')" '["bercail-0uo","Short title","ses_kept"]' \
+  "resume keeps the title when the label names a different issue"
+printf '{"labels":{"bercail.role":"agent","bercail.space":"sp1"}}\n' >"$TMP_DIR/terminal.json"
+printf 'PASS: the desk record takes issue_title from the label, and a resume keeps it\n'
 
 # Resume replays args beside an explicit session, so a prompt or "continue the
 # latest" must not be in them. The command that ran is unchanged.
@@ -148,6 +197,19 @@ desk claude --model sonnet -- 'another prompt' >/dev/null
 expect "$(record .args)" '["--model","sonnet"]' "Claude keeps flag values but not a prompt after --"
 printf 'PASS: claude replays no initial prompt\n'
 
+got="$(desk --prompt 'Your job is beads issue bercail-yql. Run it.' pi --model m:high -e /x.ts --skill /s 'native')"
+[[ "$got" == "pi [--model] [m:high] [-e] [/x.ts] [--skill] [/s] [native] [Your job is beads issue bercail-yql. Run it.] key=none" ]] \
+  || fail "a Pi desk's argv does not change: $got"
+expect "$(record '[.session, .harness, .issue, .args]')" '["","pi","bercail-yql",["--model","m:high","-e","/x.ts","--skill","/s"]]' \
+  "Pi keeps flag values, not its first messages"
+desk pi --session-id 0199-a --thinking high -- 'a message' >/dev/null
+expect "$(record '[.session, .issue, .args]')" '["0199-a","bercail-yql",["--thinking","high"]]' \
+  "Pi's resume names its session and keeps the terminal's issue"
+desk pi --session=0199-b -c --resume --fork 0199-c --name desk >/dev/null
+expect "$(record '[.session, .args]')" '["0199-b",["--name","desk"]]' \
+  "Pi does not replay continue, resume or fork beside its session"
+printf 'PASS: Pi records its session and resume-safe flags\n'
+
 settings=$'{\n  "permissions": {}\n}'
 desk claude --settings "$settings" >/dev/null
 expect "$(record .args)" "$(jq -cn --arg settings "$settings" '["--settings", $settings]')" \
@@ -194,7 +256,8 @@ rm -f "$RECORDS/t9.json"
 for headless in "opencode run hi" "claude -p hi" "claude --print hi" "codex exec hi" "cursor-agent -p hi" \
   "opencode --print-logs run hi" "opencode --log-level debug run hi" "opencode --server http://127.0.0.1:1 run hi" \
   "opencode --continue run hi" "codex --no-daemon exec hi" "codex --model gpt exec hi" "codex -m gpt exec" \
-  "claude --print=hi" "claude --verbose --print hi" "cursor-agent --print=hi" "cursor-agent --force --print=out"; do
+  "claude --print=hi" "claude --verbose --print hi" "cursor-agent --print=hi" "cursor-agent --force --print=out" \
+  "pi -p hi" "pi --model m --print hi"; do
   # shellcheck disable=SC2086
   desk $headless >/dev/null
   [[ ! -e "$RECORDS/t9.json" ]] || fail "headless run got a record: $headless"

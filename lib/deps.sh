@@ -503,9 +503,13 @@ ensure_selected_agent() {
     pi) maybe_mise_install pi pi || true ;;
     opencode) install_opencode_binary || true ;;
   esac
-  # bstack runs on opencode whatever the desk agent is (handoff stage bstack).
-  if [[ "$cmd" != opencode ]] && declare -F bstack_enabled >/dev/null && bstack_enabled; then
-    install_opencode_binary || true
+  # bstack runs on its harness whatever the desk agent is (handoff stage bstack).
+  if declare -F bstack_enabled >/dev/null && bstack_enabled; then
+    if [[ "$(bstack_harness)" == pi ]]; then
+      [[ "$cmd" == pi ]] || maybe_mise_install pi pi || true
+    elif [[ "$cmd" != opencode ]]; then
+      install_opencode_binary || true
+    fi
   fi
 }
 

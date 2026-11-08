@@ -1,6 +1,6 @@
 ---
 # managed by bercail (bstack). `bercail update` rewrites this file; delete this line to keep your own.
-description: Review the current change with one reviewer per provider (Claude, GPT, Grok) and keep only findings that hold up
+description: Adversarial review on request. Reviewers must prove each finding with a run, and only findings a rerun confirms are reported
 ---
 Load the `council` skill and follow it. Review target: $ARGUMENTS
 

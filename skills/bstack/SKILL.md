@@ -3,8 +3,8 @@ name: bstack
 description: >-
   bercail's playbooks for rigorous work on opencode with your own Claude, GPT,
   and Grok subscriptions: investigation, bug fix, feature, refactor, review,
-  ship, handoff, and takeover. Routes code to the builder, hard calls to the judge,
-  and review to the council. Use at the start of any non-trivial task, or when
+  ship, handoff, and takeover. Routes code to the builder and hard calls to the
+  judge; the council runs only on request. Use at the start of any non-trivial task, or when
   asked which bstack playbook or role fits.
 ---
 
@@ -14,8 +14,9 @@ Pick the playbook that matches the task. Copy its steps into your todo list
 before you start, then work through them in order. Roles and finishing rules are
 in bstack's instructions (`~/.config/opencode/bstack/instructions.md`).
 
-Outside opencode (Claude Code, Codex, cursor-agent) there are no `bstack-*`
-subagents: do the role's work yourself in this session and say so once.
+On Pi, `bstack-*` subagents are `hc` sibling agents; your instructions show how
+to start one. Outside opencode and Pi (Claude Code, Codex, cursor-agent) there are
+no `bstack-*` subagents: do the role's work yourself in this session and say so once.
 
 ## Pick a playbook
 
@@ -73,8 +74,10 @@ each step ending in something you can check.
 ## review
 
 1. Get the target: the uncommitted diff, `git diff <base>...HEAD`, or `gh pr diff <n>`.
-2. Run the `council` skill on it.
-3. Report only findings that hold up, worst first, with `file:line`.
+2. Prove it: run the tests that cover the diff, then the repo's `verify-<repo>`
+   skill when `.agents/skills/` has one. Run the `council` skill only when the
+   person asks for `/council`.
+3. Report only findings a run shows, worst first, with `file:line` and the command.
 4. Post to GitHub only when asked (the `review` skill's `publish-github.sh`).
 
 ## ship
@@ -89,10 +92,10 @@ The person reviewed in tuicr, committed, and opened the PR. Now:
 
 1. One beads issue per job (`bd create`). The issue is the spec; it says what
    done looks like.
-2. Run the `handoff` skill. Stage `bstack` runs on the lead's model through
-   opencode; `--binary opencode` with `--stage start` or `--stage codex` runs
-   Claude or GPT through opencode. `--branch NAME` opens a sibling desk; without
-   it the run is headless.
+2. Run the `handoff` skill. Stage `bstack` runs the lead on Pi (opencode only
+   with `[bstack] harness = "opencode"`); `--binary pi` with `--stage start` or
+   `--stage codex` runs Claude or GPT through Pi. `--branch NAME` opens a
+   sibling desk; without it the run is headless and single-agent.
 3. Report the spawn JSON and stop. Follow a desk with `hc wait <desk>`; read a
    headless run's `.bercail/handoff-result.json`.
 

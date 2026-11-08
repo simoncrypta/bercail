@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 # The desk agent. Usage: bercail-desk-agent [--prompt TEXT] [COMMAND [ARGS...]]
 #
-# COMMAND defaults to opencode when bstack is on ([bstack] enabled = true),
-# else bercail's [agent] command. opencode with bstack on gets the terminal's
-# palette (the system theme) and runs bstack, its default agent. The full TUI,
-# not `opencode mini`: only the full TUI reports its status (OSC 7501), which
-# the desk column's header and Review's auto-open read.
+# COMMAND defaults to the Pi lead when bstack is on ([bstack] enabled = true)
+# and harness is not "opencode" (unset is Pi). Pinned opencode gets the
+# terminal's palette and runs the full TUI, not `opencode mini`: only the full
+# TUI reports its status (OSC 7501), which the desk column's header and Review's
+# auto-open read. Otherwise the default is [agent] command. The Pi lead is
+# lead.json, which bercail update writes.
 set -euo pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml"
+PI_LEAD="$HOME/.local/share/bercail/pi/lead.json"
+# Every Pi desk loads it: it tells the record which session runs there.
+PI_DESK_EXTENSION="$HOME/.local/share/bercail/pi-extensions/bercail-desk.ts"
 # Tabs off: the TUI then reports only its own session, not the other sessions
 # open in this folder.
 CLI_CONFIG='{"theme":{"name":"system","mode":"system"},"highlights":false,"tabs":{"mode":"off"}}'
@@ -30,12 +34,21 @@ if [[ "${1:-}" == --prompt ]]; then
   shift 2 || shift $#
 fi
 
-bstack=0
+bstack=0 on_pi=0
 [[ "$(toml_get bstack enabled)" == true ]] && bstack=1
+[[ "$bstack" -eq 1 && "$(toml_get bstack harness)" != opencode ]] && on_pi=1
 
 argv=("$@")
 if [[ ${#argv[@]} -eq 0 ]]; then
-  if [[ "$bstack" -eq 1 ]]; then
+  if [[ "$on_pi" -eq 1 ]]; then
+    [[ -r "$PI_LEAD" ]] || {
+      printf 'bercail-desk-agent: %s is missing; run bercail update\n' "$PI_LEAD" >&2
+      exit 1
+    }
+    while IFS= read -r -d '' arg; do
+      argv+=("$arg")
+    done < <(jq -j '.[] | ., "\u0000"' "$PI_LEAD")
+  elif [[ "$bstack" -eq 1 ]]; then
     argv=(opencode)
   else
     read -r -a argv <<<"$(toml_get agent command)"
@@ -91,7 +104,12 @@ flag_has_value() {
       | "claude --remote-control-session-name-prefix" \
       | "claude --setting-sources" | "claude --settings" | "claude --system-prompt" \
       | "claude --system-prompt-snapshot" | "claude --teleport" | "claude --tools" \
-      | "claude -w" | "claude --worktree")
+      | "claude -w" | "claude --worktree" \
+      | "pi --provider" | "pi --model" | "pi --api-key" | "pi --system-prompt" \
+      | "pi --append-system-prompt" | "pi --mode" | "pi --session-dir" | "pi --name" | "pi -n" \
+      | "pi --models" | "pi --tools" | "pi -t" | "pi --exclude-tools" | "pi -xt" \
+      | "pi --thinking" | "pi --extension" | "pi -e" | "pi --skill" | "pi --prompt-template" \
+      | "pi --theme" | "pi --use-theme" | "pi --tui-mode")
       return 0 ;;
   esac
   return 1
@@ -102,7 +120,7 @@ flag_has_value() {
 # Recorded args are what a resume can replay beside an explicit session: not a
 # prompt, not "continue the latest", and not the session flag restore adds.
 remember_desk() {
-  local harness session="" issue="" space record tmp flags="[]" arg name
+  local harness session="" issue="" issue_title="" space record tmp flags="[]" arg name hcjson=""
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/desk-sessions"
   local -a rest=()
   local saw_pos=0
@@ -113,7 +131,7 @@ remember_desk() {
     arg="$1"
     shift
     if [[ "$arg" == -- ]]; then
-      [[ "$harness" == claude ]] || rest+=("$arg" "$@")
+      [[ "$harness" == claude || "$harness" == pi ]] || rest+=("$arg" "$@")
       break
     fi
     if [[ "$arg" != -* ]]; then
@@ -123,17 +141,17 @@ remember_desk() {
           "opencode run" | "codex exec") return 0 ;;
         esac
       fi
-      # Claude's free positional is its initial prompt, not a resume option.
-      [[ "$harness" != claude ]] || continue
+      # Claude's and Pi's free positionals are their first messages, not resume options.
+      [[ "$harness" != claude && "$harness" != pi ]] || continue
       rest+=("$arg")
       continue
     fi
     name="$arg"
     [[ "$arg" == *=* ]] && name="${arg%%=*}"
     case "$harness $name" in
-      "claude -p" | "claude --print" | "cursor-agent -p" | "cursor-agent --print")
+      "claude -p" | "claude --print" | "cursor-agent -p" | "cursor-agent --print" | "pi -p" | "pi --print")
         return 0 ;;
-      "opencode --session" | "opencode -s")
+      "opencode --session" | "opencode -s" | "pi --session" | "pi --session-id")
         if [[ "$arg" == *=* ]]; then
           session="${arg#*=}"
         else
@@ -149,10 +167,11 @@ remember_desk() {
           shift
         fi
         continue ;;
-      "opencode --prompt")
+      "opencode --prompt" | "pi --fork")
         [[ "$arg" == *=* ]] || shift || true
         continue ;;
-      "opencode --continue" | "opencode -c" | "claude --continue" | "claude -c" | "claude --fork-session")
+      "opencode --continue" | "opencode -c" | "claude --continue" | "claude -c" | "claude --fork-session" \
+        | "pi --continue" | "pi -c" | "pi --resume" | "pi -r")
         continue ;;
     esac
     if [[ "$arg" != *=* && -n "${1:-}" && "${1}" != -* ]] && flag_has_value "$harness" "$name"; then
@@ -162,8 +181,8 @@ remember_desk() {
     fi
     rest+=("$arg")
   done
-  space="$(hc get "$HC_TERMINAL_ID" --json 2>/dev/null \
-    | jq -r 'select(.labels["bercail.role"] == "agent") | .labels["bercail.space"] // empty')" || return 0
+  hcjson="$(hc get "$HC_TERMINAL_ID" --json 2>/dev/null)" || return 0
+  space="$(jq -r 'select(.labels["bercail.role"] == "agent") | .labels["bercail.space"] // empty' <<<"$hcjson")" || return 0
   [[ -n "$space" ]] || return 0
   [[ "$prompt" =~ beads\ issue\ ([A-Za-z0-9_-]+) ]] && issue="${BASH_REMATCH[1]}"
   # Private only when we create it. An existing dir keeps its mode, and this
@@ -176,14 +195,20 @@ remember_desk() {
   record="$dir/$HC_TERMINAL_ID.json"
   # A resume has no prompt: the issue stays what it was in this terminal.
   [[ -n "$issue" ]] || issue="$(jq -r '.issue // empty' "$record" 2>/dev/null)" || issue=""
+  # Label title when it names this issue; else the record's, on resume.
+  if [[ -n "$issue" ]] && jq -e --arg issue "$issue" '.labels["bercail.issue"] == $issue' <<<"$hcjson" >/dev/null 2>&1; then
+    issue_title="$(jq -r '.labels["bercail.issue_title"] // ""' <<<"$hcjson" 2>/dev/null)" || issue_title=""
+  elif [[ -n "$issue" && -r "$record" ]]; then
+    issue_title="$(jq -r --arg issue "$issue" 'if (.issue // "") == $issue then .issue_title // "" else "" end' "$record" 2>/dev/null)" || issue_title=""
+  fi
   [[ ${#rest[@]} -eq 0 ]] || flags="$(jq -cn --args '$ARGS.positional' -- "${rest[@]}")"
   # 0600 in a subshell, so the harness keeps the umask it was started with.
   tmp="$(umask 077 && mktemp "$dir/.${HC_TERMINAL_ID}.json.XXXXXX")" || return 0
   if ! jq -n --arg address "$HC_TERMINAL_ID" --arg session "$session" --arg cwd "$PWD" \
-    --arg harness "$harness" --arg issue "$issue" --arg space "$space" \
+    --arg harness "$harness" --arg issue "$issue" --arg issue_title "$issue_title" --arg space "$space" \
     --argjson pid "$$" --argjson args "$flags" \
     '{address: $address, session: $session, cwd: $cwd, harness: $harness,
-      issue: $issue, space: $space, args: $args, pid: $pid}' >"$tmp" || ! mv "$tmp" "$record"; then
+      issue: $issue, issue_title: $issue_title, space: $space, args: $args, pid: $pid}' >"$tmp" || ! mv "$tmp" "$record"; then
     rm -f "$tmp"
     return 0
   fi
@@ -202,6 +227,14 @@ case "$(basename "${argv[0]}")" in
     # opencode's TUI reads a positional argument as a directory.
     [[ -z "$prompt" ]] || argv+=(--prompt "$prompt")
     prompt=""
+    ;;
+  pi)
+    # First, so a `--` in the command cannot make it a message.
+    if [[ -f "$PI_DESK_EXTENSION" && " ${argv[*]} " != *" $PI_DESK_EXTENSION "* ]]; then
+      argv=("${argv[0]}" -e "$PI_DESK_EXTENSION" "${argv[@]:1}")
+    fi
+    # bstack reaches Claude through pi-claude-bridge on the plan, not an API key.
+    [[ "$on_pi" -eq 0 ]] || unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
     ;;
 esac
 [[ -z "$prompt" ]] || argv+=("$prompt")
