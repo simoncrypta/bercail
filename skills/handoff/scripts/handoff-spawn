@@ -25,7 +25,7 @@ usage: handoff-spawn --info
 
   --info          print JSON facts and exit
   --issue ID      beads issue to work (bd show ID). It holds the detail. The
-                  agent's whole prompt is the id, for every harness.
+                  agent's whole prompt is the id and its short title, for every harness.
   --stage NAME    required; named stage (see handoff-stages.sh). start is claude,
                   codex is Codex CLI, cursor is cursor-agent, bstack is opencode
                   (agent bstack, the lead's model), autopilot is opencode's
@@ -381,7 +381,7 @@ handoff_bool_json() {
 
 handoff_result_json() {
   local label="$1" sibling="$2" branch="$3" issue="$4" started="$5" copied="$6" graphite="$7"
-  local stage="${8:-}" harness="${9:-}" space="${10:-}" desk="${11:-}"
+  local stage="${8:-}" harness="${9:-}" space="${10:-}" desk="${11:-}" issue_title="${12:-}"
   # stage/harness: what the desk agent runs; space/desk: where it runs (hc address).
   jq -nc \
     --arg label "$label" \
@@ -395,11 +395,13 @@ handoff_result_json() {
     --arg harness "$harness" \
     --arg space "$space" \
     --arg desk "$desk" \
+    --arg issue_title "$issue_title" \
     '{ok:true,label:$label,path:$path,branch:$branch,issue:$issue,agent_started:$agent_started,dirty_copied:$dirty_copied,graphite:$graphite}
      + (if $stage == "" then {} else {stage:$stage} end)
      + (if $harness == "" then {} else {harness:$harness} end)
      + (if $space == "" then {} else {space:$space} end)
-     + (if $desk == "" then {} else {desk:$desk} end)'
+     + (if $desk == "" then {} else {desk:$desk} end)
+     + (if $issue_title == "" then {} else {issue_title:$issue_title} end)'
 }
 
 handoff_info_json() {
@@ -473,7 +475,7 @@ handoff_info_json() {
 }
 
 handoff_spawn_main() {
-  local branch="" dirty="auto" issue="" prompt main sibling label intro graphite=0 copied=0 backend=gh
+  local branch="" dirty="auto" issue="" issue_title="" prompt main sibling label intro graphite=0 copied=0 backend=gh
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0 mode="" binary="" binary_override="" desk_bin=""
@@ -583,6 +585,7 @@ handoff_spawn_main() {
 
   main="$(handoff_realpath "$PWD")"
   handoff_issue_exists "$main" "$issue" || handoff_die "beads issue $issue not found (bd show $issue)"
+  issue_title="$(handoff_issue_title "$main" "$issue")"
 
   handoff_herdr_socket_ok \
     || handoff_die "cannot reach the Herdr app (herdr-app status failed); open it first"
@@ -663,13 +666,16 @@ handoff_spawn_main() {
   fi
   handoff_issue_comment "$sibling" "$issue" "$intro"
 
-  prompt="$(handoff_issue_prompt "$issue")"
+  prompt="$(handoff_issue_prompt "$issue" "$issue_title")"
 
-  # The desk gets the table binary through WT_HERDR_AGENT_CMD and the one-line
-  # prompt (pointing at the issue) through WT_HERDR_AGENT_PROMPT. No file.
+  # The desk gets the table binary through WT_HERDR_AGENT_CMD, the one-line
+  # prompt through WT_HERDR_AGENT_PROMPT, and the issue through WT_HERDR_ISSUE
+  # and WT_HERDR_ISSUE_TITLE. No file.
   if WT_HERDR_KEEP_FOCUS="$keep_space" \
     WT_HERDR_AGENT_CMD="$desk_bin" \
     WT_HERDR_AGENT_PROMPT="$prompt" \
+    WT_HERDR_ISSUE="$issue" \
+    WT_HERDR_ISSUE_TITLE="$issue_title" \
     wt_herdr_handoff_agent "$label" "$sibling"; then
     started=1
   else
@@ -678,7 +684,7 @@ handoff_spawn_main() {
 
   space="$(_wt_herdr_space_by_folder "$sibling" 2>/dev/null || true)"
   [[ -z "$space" ]] || desk="$(_wt_herdr_space_desk "$space" 2>/dev/null || true)"
-  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" "$binary" "$space" "$desk")"
+  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" "$binary" "$space" "$desk" "$issue_title")"
   [[ -z "$base" ]] || json="$(jq -c --arg base "$base" '. + {base:$base}' <<<"$json")"
   handoff_notify_check "$sibling"
   handoff_remember "$json"

@@ -123,11 +123,36 @@ handoff_issue_comment() {
     || printf 'handoff: could not add the handoff comment to %s\n' "$id" >&2
 }
 
+# Past this, a title is the first max-1 characters, right-trimmed, plus "…".
+HANDOFF_TITLE_MAX=60
+
+# Title of beads issue ID from DIR. Empty, and 0, on any failure (missing bd,
+# unknown issue, bad JSON). Whitespace and control runs become one space.
+handoff_issue_title() {
+  local dir="$1" id="$2" raw="" title=""
+  raw="$(cd "$dir" && "$(handoff_bd_bin)" show "$id" --json 2>/dev/null)" || return 0
+  title="$(jq -r --argjson max "$HANDOFF_TITLE_MAX" '
+    (if type == "array" then .[0] else . end).title // ""
+    | gsub("[[:space:][:cntrl:]]+"; " ")
+    | gsub("^ +| +$"; "")
+    | if length > $max then (.[0:($max - 1)] | gsub(" +$"; "")) + "…" else . end
+  ' <<<"$raw" 2>/dev/null)" || return 0
+  printf '%s' "$title"
+}
+
 # The whole agent prompt, the same for every harness: one line pointing at the
-# beads issue (a bare id makes agents ask what it is instead of reading it).
+# beads issue. TITLE, when set, is named after the id; its own "." or a
+# truncation's "…" ends the clause. A bare id stays the old sentence.
 # Shep owns the workflow; bercail adds no per-binary mode.
 handoff_issue_prompt() {
-  printf 'Your job is beads issue %s. Run `bd show %s` (read its comments too) and do the work it describes.' "$1" "$1"
+  local id="$1" title="${2:-}" stop="."
+  title="${title%.}"
+  [[ "$title" != *… ]] || stop=""
+  if [[ -n "$title" ]]; then
+    printf 'Your job is beads issue %s: %s%s Run `bd show %s` (read its comments too) and do the work it describes.' "$id" "$title" "$stop" "$id"
+  else
+    printf 'Your job is beads issue %s. Run `bd show %s` (read its comments too) and do the work it describes.' "$id" "$id"
+  fi
 }
 
 # reason is optional. Empty omits the field; Shep reads it, and unknown fields
@@ -142,6 +167,16 @@ handoff_write_result() {
     --arg reason "$reason" \
     '{status:$status, summary:$summary, session_id:$session_id}
      + if $reason == "" then {} else {reason:$reason} end' >"$dest"
+}
+
+# issue, and issue_title when known, on a result file. Other fields stay.
+handoff_stamp_issue() {
+  local dest="$1" issue="$2" title="${3:-}" stamped
+  [[ -f "$dest" ]] || return 0
+  stamped="$(jq -c --arg issue "$issue" --arg issue_title "$title" '
+    . + {issue:$issue} + (if $issue_title == "" then {} else {issue_title:$issue_title} end)
+  ' "$dest" 2>/dev/null)" || return 0
+  printf '%s\n' "$stamped" >"$dest"
 }
 
 # verification is optional: [{kind, command, exit_code, evidence}]. A statechart
@@ -536,7 +571,7 @@ handoff_headless_comment_text() {
 handoff_run_headless() {
   local stage="$1" worktree="$2" issue="$3" resume="$4" dry="$5" binary_override="${6:-}"
   local mode binary native model_spec model session="" resumed=0 prompt bd beads_dir=""
-  local result log bin cmd_json out rc=0 tid present=false bd_present=false reason=""
+  local result log bin cmd_json out rc=0 tid present=false bd_present=false reason="" issue_title=""
 
   command -v jq >/dev/null 2>&1 || handoff_die "jq is required"
   mode="$(handoff_stage_field "$stage" mode)" || handoff_die "unknown stage: $stage"
@@ -596,6 +631,7 @@ handoff_run_headless() {
     if [[ -n "$beads_dir" && "$beads_dir/" == "$worktree/"* ]]; then
       beads_dir=""
     fi
+    issue_title="$(handoff_issue_title "$worktree" "$issue")"
   fi
 
   bin="$(handoff_headless_bin "$binary")"
@@ -603,24 +639,27 @@ handoff_run_headless() {
     if [[ "$bd_present" != true ]]; then
       [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
       handoff_block "$result" "bd (beads) is not on PATH. The job is a beads issue; install beads (bercail update installs it)." "$session" || true
+      handoff_stamp_issue "$result" "$issue" "$issue_title"
       cat -- "$result"; printf '\n'
       return 1
     fi
     if ! handoff_issue_exists "$worktree" "$issue"; then
       [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
       handoff_block "$result" "beads issue ${issue} not found from ${worktree} (bd show ${issue})." "$session" || true
+      handoff_stamp_issue "$result" "$issue" "$issue_title"
       cat -- "$result"; printf '\n'
       return 1
     fi
     if ! handoff_bin_present "$bin"; then
       [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
       handoff_block_missing_harness "$result" "$binary" "$session" || true
+      handoff_stamp_issue "$result" "$issue" "$issue_title"
       cat -- "$result"; printf '\n'
       return 1
     fi
   fi
 
-  prompt="$(handoff_issue_prompt "$issue")"
+  prompt="$(handoff_issue_prompt "$issue" "$issue_title")"
   local agent=bstack
   [[ "$stage" == autopilot ]] && agent=bstack-autopilot
   handoff_build_headless_argv "$binary" "$bin" "$model" "$session" "$resumed" "$prompt" "$beads_dir" "$agent"
@@ -644,7 +683,9 @@ handoff_run_headless() {
     --argjson present "$present" \
     --argjson bd_present "$bd_present" \
     --argjson command "$cmd_json" \
-    '{ok:true,stage:$stage,mode:$mode,binary:$binary,model:$model,worktree:$worktree,issue:$issue,result:$result,session_id:$session_id,resume:$resume,dry_run:$dry_run,present:$present,bd_present:$bd_present,command:$command}')"
+    --arg issue_title "$issue_title" \
+    '{ok:true,stage:$stage,mode:$mode,binary:$binary,model:$model,worktree:$worktree,issue:$issue,result:$result,session_id:$session_id,resume:$resume,dry_run:$dry_run,present:$present,bd_present:$bd_present,command:$command}
+     + (if $issue_title == "" then {} else {issue_title:$issue_title} end)')"
 
   if [[ "$dry" -eq 1 ]]; then
     printf '%s\n' "$out"
@@ -703,6 +744,7 @@ handoff_run_headless() {
     [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
     handoff_write_result "$result" failed "headless stage exited ${rc} without a result file" "$session" "$reason"
   fi
+  handoff_stamp_issue "$result" "$issue" "$issue_title"
   if [[ "$rc" -ne 0 ]]; then
     printf 'handoff: %s exited %s; result is %s\n' "$bin" "$rc" "$result" >&2
     return "$rc"

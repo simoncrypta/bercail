@@ -120,7 +120,7 @@ flag_has_value() {
 # Recorded args are what a resume can replay beside an explicit session: not a
 # prompt, not "continue the latest", and not the session flag restore adds.
 remember_desk() {
-  local harness session="" issue="" space record tmp flags="[]" arg name
+  local harness session="" issue="" issue_title="" space record tmp flags="[]" arg name hcjson=""
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/desk-sessions"
   local -a rest=()
   local saw_pos=0
@@ -181,8 +181,8 @@ remember_desk() {
     fi
     rest+=("$arg")
   done
-  space="$(hc get "$HC_TERMINAL_ID" --json 2>/dev/null \
-    | jq -r 'select(.labels["bercail.role"] == "agent") | .labels["bercail.space"] // empty')" || return 0
+  hcjson="$(hc get "$HC_TERMINAL_ID" --json 2>/dev/null)" || return 0
+  space="$(jq -r 'select(.labels["bercail.role"] == "agent") | .labels["bercail.space"] // empty' <<<"$hcjson")" || return 0
   [[ -n "$space" ]] || return 0
   [[ "$prompt" =~ beads\ issue\ ([A-Za-z0-9_-]+) ]] && issue="${BASH_REMATCH[1]}"
   # Private only when we create it. An existing dir keeps its mode, and this
@@ -195,14 +195,20 @@ remember_desk() {
   record="$dir/$HC_TERMINAL_ID.json"
   # A resume has no prompt: the issue stays what it was in this terminal.
   [[ -n "$issue" ]] || issue="$(jq -r '.issue // empty' "$record" 2>/dev/null)" || issue=""
+  # Label title when it names this issue; else the record's, on resume.
+  if [[ -n "$issue" ]] && jq -e --arg issue "$issue" '.labels["bercail.issue"] == $issue' <<<"$hcjson" >/dev/null 2>&1; then
+    issue_title="$(jq -r '.labels["bercail.issue_title"] // ""' <<<"$hcjson" 2>/dev/null)" || issue_title=""
+  elif [[ -n "$issue" && -r "$record" ]]; then
+    issue_title="$(jq -r --arg issue "$issue" 'if (.issue // "") == $issue then .issue_title // "" else "" end' "$record" 2>/dev/null)" || issue_title=""
+  fi
   [[ ${#rest[@]} -eq 0 ]] || flags="$(jq -cn --args '$ARGS.positional' -- "${rest[@]}")"
   # 0600 in a subshell, so the harness keeps the umask it was started with.
   tmp="$(umask 077 && mktemp "$dir/.${HC_TERMINAL_ID}.json.XXXXXX")" || return 0
   if ! jq -n --arg address "$HC_TERMINAL_ID" --arg session "$session" --arg cwd "$PWD" \
-    --arg harness "$harness" --arg issue "$issue" --arg space "$space" \
+    --arg harness "$harness" --arg issue "$issue" --arg issue_title "$issue_title" --arg space "$space" \
     --argjson pid "$$" --argjson args "$flags" \
     '{address: $address, session: $session, cwd: $cwd, harness: $harness,
-      issue: $issue, space: $space, args: $args, pid: $pid}' >"$tmp" || ! mv "$tmp" "$record"; then
+      issue: $issue, issue_title: $issue_title, space: $space, args: $args, pid: $pid}' >"$tmp" || ! mv "$tmp" "$record"; then
     rm -f "$tmp"
     return 0
   fi

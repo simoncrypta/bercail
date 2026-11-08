@@ -23,16 +23,18 @@ run `--info` then spawn — not assemble these steps.
    Keep the parent relation in that backend; publishing uses its stack commands.
 5. Add the intro (worktree; stage, don't commit; Review opens on agent done;
    selected git backend and stack commands) to the beads issue as a `bd comment`. The prompt is one line
-   pointing at the issue, the same for every binary. No prompt file and no
+   pointing at the issue (`<id>: <title>`, or the id alone when bd has no title), the same for every binary. No prompt file and no
    per-harness mode.
 6. `WT_HERDR_AGENT_CMD` is the stage table's binary and `WT_HERDR_AGENT_PROMPT`
-   that one-line prompt. `wt_herdr_handoff_agent` starts the space's desk:
+   that one-line prompt. `WT_HERDR_ISSUE` and `WT_HERDR_ISSUE_TITLE` name the issue.
+   `wt_herdr_handoff_agent` starts the space's desk:
    `hc run --bg --keep --outlive-parent --parent <space's first terminal>` of
    `bercail-desk-agent --prompt <prompt> <binary>` with labels
-   `bercail.role=agent` and `bercail.space=<space id>`, replacing a live desk
+   `bercail.role=agent`, `bercail.space=<space id>`, and, when set, `bercail.issue`
+   and `bercail.issue_title`, replacing a live desk
    in that space. A failed start does **not** discard the worktree.
-7. Print JSON `{ok,label,path,branch,issue,agent_started,dirty_copied,graphite,stage,harness,space,desk}`
-   and append `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling
+7. Print JSON `{ok,label,path,branch,issue,issue_title,agent_started,dirty_copied,graphite,stage,harness,space,desk}`
+   (`issue_title` omitted when unknown) and append `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling
    exists.
 
 Callers in no hc terminal (`HC_TERMINAL_ID` unset) run the **resolved script

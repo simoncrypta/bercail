@@ -45,8 +45,8 @@ Auto-review rejects those as unbound executable content.
 Shep writes the job as a beads issue first (`bd create`, `bd show <id>`). The
 issue holds the ask, the repo, links, and any plan-only note. There are no
 prompt files, briefs, or pending prompts. The agent's whole prompt is one line
-pointing at the issue (`Your job is beads issue <id>. Run bd show <id> …`), the
-same for claude, codex, and cursor-agent. Shep owns the workflow
+pointing at the issue (`Your job is beads issue <id>: <title>. Run bd show <id> …`,
+or the id alone when bd has no title), the same for claude, codex, and cursor-agent. Shep owns the workflow
 (planning, review, which harness); bercail has no cursor-only mode.
 
 Each real handoff adds a `bd comment` to the issue with what the agent needs
@@ -135,15 +135,15 @@ working directory to `cwd` from `--info`. Flags only.
 space on it (worktrunk's post-start hook), and starts that space's desk agent:
 an hc terminal running the named stage's binary (claude, codex,
 cursor-agent, or opencode) with a one-line prompt pointing at the issue as its first message, labelled
-`bercail.role=agent` and `bercail.space=<space id>`. The bercail layout shows
+`bercail.role=agent`, `bercail.space=<space id>`, and, when known, `bercail.issue` and `bercail.issue_title`. The bercail layout shows
 it in the desk column. `--stage` is required; bercail has no default harness.
 A missing binary fails before any worktree is made. A desk already running in
 that space is replaced. `wt remove <branch>` closes the space and its desk.
 
 ## After a `--branch` spawn
 
-The script prints JSON: `ok`, `label`, `path`, `branch`, `issue`,
-`agent_started`, `dirty_copied`, `graphite`, `stage`, `harness`, `space` (the
+The script prints JSON: `ok`, `label`, `path`, `branch`, `issue`, `issue_title`
+(when known), `agent_started`, `dirty_copied`, `graphite`, `stage`, `harness`, `space` (the
 child's Herdr app space) and `desk` (the desk agent's hc address). It appends that line to
 `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling exists.
 

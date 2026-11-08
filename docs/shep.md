@@ -61,8 +61,9 @@ Each POST body is `bercail.agent_status/v2`:
  "at":"2026-10-29T22:42:00Z","event_id":"t9:finished:1793312520:4242",
  "agent":{"address":"t9","app":"claude-code","status":"done","previous_status":"working","title":"..."},
  "space":{"id":"sp98de","name":"Render-preview_Leftlane_app","repo":"leftlane_app","checkout_path":"/path/desk","linked":true},
- "desk":{"branch":"feat/render","issue":"lef2745-2vs","stage":"start","harness":"claude",
-         "result":{"status":"ready","summary":"...","session_id":"..."}}}
+ "desk":{"branch":"feat/render","issue":"lef2745-2vs","issue_title":"Fix the login timeout","stage":"start","harness":"claude",
+         "result":{"status":"ready","summary":"...","session_id":"..."}},
+ "text":"lef2745-2vs: Fix the login timeout. Desk t9 (Render-preview_Leftlane_app) finished."}
 ```
 
-`agent.address` is the hc terminal (`hc get`/`hc read` it). `desk.issue`, `stage`, and `harness` come from the matching `handoffs.jsonl` record (`harness` falls back to `agent.app`). `desk.result` is `status`, `summary` (its first 500 characters), and `session_id` from the checkout's `.bercail/handoff-result.json` when one exists (usually `null`: headless runs have no desk terminal, so they send nothing).
+`agent.address` is the hc terminal (`hc get`/`hc read` it). `desk.issue`, `desk.issue_title`, `stage`, and `harness` come from the matching `handoffs.jsonl` record (`harness` falls back to `agent.app`; `issue_title` is null when that record has none). `desk.result` is `status`, `summary` (its first 500 characters), and `session_id` from the checkout's `.bercail/handoff-result.json` when one exists (usually `null`: headless runs have no desk terminal, so they send nothing). `text` is one line for a person: `<id>: <title>. Desk <address> (<space name>) finished.` or `is blocked.`; the bare id when there is no title, no parentheses when the space has no name, and `Test from bercail (sink <name>).` for a test post.

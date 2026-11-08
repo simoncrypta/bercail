@@ -249,6 +249,20 @@ expect "$(sort "$SENT" | sed 's/^\(t[0-9]*\) .*exec [^ ]* /\1 /')" $'t1 pi --ses
 [[ "$out" == *"2 came back"* && "$out" != *t3* ]] || fail "siblings are not counted or waited for: $out"
 printf 'PASS: a Pi desk and an opencode desk come back together\n'
 
+reset_pass
+terminal t1 "$bare"
+put_record t1 ses_titled 60
+jq '.issue_title = "Fix login"' "$RECORDS/t1.json" >"$RECORDS/t1.json.new"
+mv "$RECORDS/t1.json.new" "$RECORDS/t1.json"
+out="$(cmd_desk restore --dry-run)"
+[[ "$out" == *"t1     would resume  x-1: Fix login  ses_titled  $TMP_DIR"* ]] \
+  || fail "resume line should name the title: $out"
+terminal t1 "$(jq -c '.foreground = {name: "opencode", pid: 99}' <<<"$bare")"
+out="$(cmd_desk restore --dry-run)"
+[[ "$out" == *"t1     skip: already running  (x-1: Fix login)"* ]] \
+  || fail "skip line should name the issue: $out"
+printf 'PASS: a desk is listed as id: title, resumed or skipped\n'
+
 touch "$TMP_DIR/hc-down"
 if out="$(cmd_desk restore 2>&1)"; then fail "hc down should fail: $out"; fi
 [[ -f "$RECORDS/t1.json" ]] || fail "hc down must not read as terminals gone"

@@ -8,6 +8,8 @@ at it. These rules apply to every bstack agent.
 
 - The job is one thing, written down. When a beads issue names it (`bd show <id>`),
   that issue and its comments are the spec. Re-read them before you stop.
+- When you name a beads issue or a desk to the person or a sibling (reports,
+  `hc send`, `bd comment`), write it as `<id>: <title>`, not the bare id.
 - Restate the goal in one sentence before non-trivial work. If the ask is too thin
   to act on, say what is missing in one message, then do the part you can.
 - Load the `bstack` skill for anything beyond a one-line change. It holds the
@@ -52,6 +54,7 @@ Start one from your own terminal:
 space="$(hc get "$HC_TERMINAL_ID" --json | jq -r '.labels["bercail.space"] // empty')"
 hc run --bg --name <issue>-build --cwd <worktree> \
   --label bercail.role=bstack-builder --label "bercail.space=$space" --label bercail.issue=<id> \
+  --label "bercail.issue_title=<title>" \
   bstack-builder "<brief>. Write long output to a file. Report with hc send $HC_TERMINAL_ID when done or stuck."
 ```
 

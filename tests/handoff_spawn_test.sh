@@ -310,6 +310,10 @@ test_usage() {
 test_issue_prompt_points_at_the_issue() {
   [[ "$(handoff_issue_prompt bercail-0s1)" == 'Your job is beads issue bercail-0s1. Run `bd show bercail-0s1` (read its comments too) and do the work it describes.' ]] \
     || fail "prompt points at the issue: $(handoff_issue_prompt bercail-0s1)"
+  [[ "$(handoff_issue_prompt bercail-0s1 'Show the title')" == 'Your job is beads issue bercail-0s1: Show the title. Run `bd show bercail-0s1` (read its comments too) and do the work it describes.' ]] \
+    || fail "prompt with a title: $(handoff_issue_prompt bercail-0s1 'Show the title')"
+  [[ "$(handoff_issue_prompt bercail-0s1 'Done.')" == 'Your job is beads issue bercail-0s1: Done. Run `bd show bercail-0s1` (read its comments too) and do the work it describes.' ]] \
+    || fail "a trailing period on the title must not read as two: $(handoff_issue_prompt bercail-0s1 'Done.')"
   handoff_issue_id_ok bercail-0s1 || fail "plain beads id"
   handoff_issue_id_ok bercail-0s1.2 || fail "child beads id"
   handoff_issue_id_ok --help && fail "flag is not an id"
@@ -421,7 +425,10 @@ test_result_json_records_unconfirmed_agent() {
   printf '%s' "$got" | jq -e '.agent_started == false' >/dev/null || fail "started: $got"
   printf '%s' "$got" | jq -e '.graphite == true' >/dev/null || fail "graphite: $got"
   printf '%s' "$got" | jq -e '.path == "/tmp/wt"' >/dev/null || fail "path: $got"
-  printf '%s' "$got" | jq -e '(has("stage")|not) and (has("harness")|not)' >/dev/null || fail "no stage: $got"
+  printf '%s' "$got" | jq -e '(has("stage")|not) and (has("harness")|not) and (has("issue_title")|not)' >/dev/null || fail "no stage: $got"
+  got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 1 0 0 start claude "" "" "Show the title")"
+  printf '%s' "$got" | jq -e '.issue_title == "Show the title" and .stage == "start" and .harness == "claude" and (has("space")|not)' >/dev/null \
+    || fail "issue_title: $got"
   got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 1 0 0 start claude)"
   printf '%s' "$got" | jq -e '.stage == "start" and .harness == "claude"' >/dev/null || fail "stage/harness: $got"
   printf 'PASS: result JSON is emitted when agent start is unconfirmed\n'
@@ -608,7 +615,11 @@ set -euo pipefail
 case "$1" in
   show)
     [[ " ${BD_KNOWN:-} " == *" $2 "* ]] || { echo "no issue $2" >&2; exit 1; }
-    printf '[{"id":"%s"}]\n' "$2"
+    if [[ -n "${BD_TITLE:-}" ]]; then
+      jq -nc --arg id "$2" --arg title "$BD_TITLE" '[{id:$id, title:$title}]'
+    else
+      jq -nc --arg id "$2" '[{id:$id}]'
+    fi
     ;;
   comment)
     [[ "${3:-}" == --stdin ]] || exit 3
@@ -1733,3 +1744,190 @@ test_gh_base_inits_a_new_stack_and_refuses_a_middle_parent
 test_gh_base_adds_from_the_parent_worktree
 test_origin_base_tracks_locally
 test_spawn_gh_base_does_not_call_gt
+
+test_issue_title_normalises_and_degrades() {
+  local wt="$TMP_DIR/title-norm" got err long want messy
+  mkdir -p "$wt"
+  _bd_stub
+  long="$(printf '%70s' '' | tr ' ' 'x')"
+  want="${long:0:59}"$'…'
+  got="$(BD_TITLE="$long" handoff_issue_title "$wt" "$ISSUE")" || fail "title lookup failed"
+  [[ "$got" == "$want" ]] || fail "70-char title should be 60 with an ellipsis: ${#got} [$got]"
+  [[ "$(handoff_issue_prompt "$ISSUE" "$got")" == "Your job is beads issue $ISSUE: $want Run \`bd show $ISSUE\` (read its comments too) and do the work it describes." ]] \
+    || fail "truncated title in the prompt: $(handoff_issue_prompt "$ISSUE" "$got")"
+
+  messy="$(printf 'say "hi" \\ path\n\tand')"
+  got="$(BD_TITLE="$messy" handoff_issue_title "$wt" "$ISSUE")" || fail "messy title lookup failed"
+  [[ "$got" == 'say "hi" \ path and' ]] || fail "normalised title: [$got]"
+  if printf '%s' "$got" | grep -q '[[:cntrl:]]'; then fail "title must be one line: [$got]"; fi
+
+  err="$(HANDOFF_BD_BIN="$TMP_DIR/no-such-bd" handoff_issue_title "$wt" "$ISSUE" 2>&1)" || fail "missing bd must not fail the lookup"
+  [[ -z "$err" ]] || fail "missing bd should print nothing: $err"
+  err="$(BD_KNOWN=other handoff_issue_title "$wt" "$ISSUE" 2>&1)" || fail "unknown issue must not fail the lookup"
+  [[ -z "$err" ]] || fail "unknown issue should print nothing: $err"
+  printf 'PASS: a title is truncated, one line, and a missing bd or issue is a bare id\n'
+}
+
+test_issue_title_on_headless_runs() {
+  local wt="$TMP_DIR/title-head" out stub="$TMP_DIR/bin/title-claude" rc=0
+  local title='Show the title' messy long want
+  mkdir -p "$TMP_DIR/bin"
+  _start_fixture "$wt"
+  messy="$(printf 'say "hi" \\ path\n\tand')"
+  out="$(cd "$wt" && BD_TITLE="$messy" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" --dry-run 2>"$TMP_DIR/title-dry.err")" \
+    || fail "dry-run with a title failed: $out $(cat "$TMP_DIR/title-dry.err")"
+  [[ ! -s "$TMP_DIR/title-dry.err" ]] || fail "title lookup must not write stderr: $(cat "$TMP_DIR/title-dry.err")"
+  printf '%s' "$out" | jq -e --arg id "$ISSUE" --arg t 'say "hi" \ path and' '
+    .issue_title == $t
+    and (.command[-1] | test("\n|\t") | not)
+    and .command[-1] == ("Your job is beads issue " + $id + ": " + $t + ". Run `bd show " + $id + "` (read its comments too) and do the work it describes.")
+  ' >/dev/null || fail "dry-run prompt/json: $out"
+  [[ ! -f "$wt/.bercail/handoff-result.json" ]] || fail "dry-run must not write a result"
+
+  long="$(printf '%70s' '' | tr ' ' 'x')"
+  want="${long:0:59}"$'\u2026'
+  out="$(cd "$wt" && BD_TITLE="$long" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e --arg t "$want" '.issue_title == $t and (.command[-1] | contains($t))' >/dev/null \
+    || fail "dry-run should carry the truncated title: $out"
+
+  out="$(cd "$wt" && BD_KNOWN=other \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" --dry-run 2>"$TMP_DIR/title-unk.err")" \
+    || fail "unknown issue dry-run must not fail: $(cat "$TMP_DIR/title-unk.err")"
+  printf '%s' "$out" | jq -e --arg id "$ISSUE" '(has("issue_title") | not) and (.command[-1] | startswith("Your job is beads issue " + $id + "."))' >/dev/null \
+    || fail "unknown issue stays a bare id: $out"
+  [[ ! -s "$TMP_DIR/title-unk.err" ]] || fail "unknown issue dry-run stderr: $(cat "$TMP_DIR/title-unk.err")"
+
+  cat >"$stub" <<'STUB'
+#!/bin/sh
+jq -nc '{status:"ready", summary:"done the work"}' >"$BERCAIL_RESULT_PATH"
+STUB
+  chmod +x "$stub"
+  out="$(cd "$wt" && BD_TITLE="$title" HANDOFF_CLAUDE_BIN="$stub" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt")" \
+    || fail "titled run failed: $out"
+  printf '%s' "$out" | jq -e --arg t "$title" --arg id "$ISSUE" '.issue == $id and .issue_title == $t' >/dev/null \
+    || fail "out json: $out"
+  jq -e --arg t "$title" --arg id "$ISSUE" \
+    '.status == "ready" and .issue == $id and .issue_title == $t' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "result file: $(cat "$wt/.bercail/handoff-result.json")"
+  handoff_result_ok "$wt/.bercail/handoff-result.json" || fail "stamped result must still pass handoff_result_ok"
+
+  rm -f "$wt/.bercail/handoff-result.json"
+  rc=0
+  out="$(cd "$wt" && BD_TITLE="$title" HANDOFF_CLAUDE_BIN="$TMP_DIR/no-such-claude" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" 2>/dev/null)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "missing harness should still block"
+  jq -e --arg t "$title" --arg id "$ISSUE" \
+    '.status == "blocked" and .issue == $id and .issue_title == $t' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "blocked result should carry the title: $(cat "$wt/.bercail/handoff-result.json")"
+
+  rc=0
+  out="$(cd "$wt" && HANDOFF_CLAUDE_BIN="$stub" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue bercail-nope --worktree "$wt" 2>/dev/null)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "unknown issue should block"
+  jq -e '.status == "blocked" and .issue == "bercail-nope" and (has("issue_title") | not)' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "unknown issue is a bare id: $(cat "$wt/.bercail/handoff-result.json")"
+
+  rc=0
+  out="$(cd "$wt" && HANDOFF_BD_BIN="$TMP_DIR/no-such-bd" HANDOFF_CLAUDE_BIN="$stub" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" 2>"$TMP_DIR/title-bd.err")" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "missing bd should block"
+  jq -e --arg id "$ISSUE" '.status == "blocked" and .issue == $id and (has("issue_title") | not)' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "missing bd is a bare id: $(cat "$wt/.bercail/handoff-result.json")"
+  grep -q 'jq:' "$TMP_DIR/title-bd.err" && fail "missing bd must not surface a title error: $(cat "$TMP_DIR/title-bd.err")"
+
+  out="$(cd "$wt" && HANDOFF_BD_BIN="$TMP_DIR/no-such-bd" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" --dry-run 2>"$TMP_DIR/title-bd-dry.err")" \
+    || fail "dry-run with missing bd failed: $(cat "$TMP_DIR/title-bd-dry.err")"
+  printf '%s' "$out" | jq -e --arg id "$ISSUE" '(has("issue_title") | not) and (.command[-1] | startswith("Your job is beads issue " + $id + "."))' >/dev/null \
+    || fail "missing bd dry-run should keep the bare prompt: $out"
+  [[ ! -s "$TMP_DIR/title-bd-dry.err" ]] || fail "missing bd dry-run stderr: $(cat "$TMP_DIR/title-bd-dry.err")"
+  unset HANDOFF_CLAUDE_BIN BERCAIL_CLAUDE_MODEL_CATALOG
+  printf 'PASS: headless JSON and the result file carry the title, or the bare id\n'
+}
+
+test_branch_carries_issue_title() {
+  local repo="$TMP_DIR/title-branch" bin="$TMP_DIR/title-branch-bin" home="$TMP_DIR/title-branch-home"
+  local state="$TMP_DIR/title-branch-state" out title='Say "hi"'
+  local folder="$TMP_DIR/title-folder" hclog="$TMP_DIR/title-hc.log" argv="$TMP_DIR/title-hc.argv"
+  git_init "$repo"
+  mkdir -p "$bin" "$home/.config/worktrunk"
+  cp "$ROOT/config/worktrunk/herdr-layout.sh" "$home/.config/worktrunk/herdr-layout.sh"
+  cat >"$bin/wt" <<'WT'
+#!/usr/bin/env bash
+branch=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --create) branch="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+main="$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
+git -C "$main" worktree add -q -b "$branch" "$main.$branch" HEAD
+printf '%s' "$(cd "$main.$branch" && pwd -P)" >"$TITLE_FOLDER"
+WT
+  cat >"$bin/herdr-app" <<'HERDR'
+#!/usr/bin/env bash
+case "$1 ${2:-}" in
+  "status ") printf '{"space":"sp-keep"}\n' ;;
+  "ls ")
+    f=""
+    [[ -f "$TITLE_FOLDER" ]] && f="$(cat "$TITLE_FOLDER")"
+    if [[ -n "$f" ]]; then
+      jq -nc --arg f "$f" '{spaces:[{id:"sp1",name:"Lbl",folder:$f,tabs:[{terminals:[{terminal:"t9"}]}]}]}'
+    else
+      printf '{"spaces":[]}\n'
+    fi
+    ;;
+  "do space.new")
+    printf '%s' "$6" >"$TITLE_FOLDER"
+    printf '{"space":"sp1"}\n'
+    ;;
+  *) printf '{"ok":true}\n' ;;
+esac
+HERDR
+  cat >"$bin/hc" <<'HC'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$TITLE_HC_LOG"
+if [[ "$1" == run ]]; then
+  printf '%s\0' "$@" | jq -Rs 'split("\u0000") | .[:-1]' >"$TITLE_HC_ARGV"
+fi
+case "$1" in
+  ls) printf '{"terminals":[]}\n' ;;
+  *) printf '{}\n' ;;
+esac
+HC
+  printf '#!/bin/sh\nexit 0\n' >"$bin/claude"
+  chmod +x "$bin/wt" "$bin/herdr-app" "$bin/hc" "$bin/claude"
+  _bd_stub
+  : >"$BD_COMMENTS"
+  : >"$hclog"
+  export TITLE_FOLDER="$folder" TITLE_HC_LOG="$hclog" TITLE_HC_ARGV="$argv"
+  out="$(cd "$repo" && BD_TITLE="$title" HOME="$home" PATH="$bin:$PATH" \
+    HERDR_APP_BIN="$bin/herdr-app" HC_BIN="$bin/hc" \
+    XDG_STATE_HOME="$state" BERCAIL_BIN="$TMP_DIR/no-bercail" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    --branch feat --stage start --issue "$ISSUE" --clean 2>"$TMP_DIR/title-branch.err")" \
+    || fail "branch spawn failed: $out $(cat "$TMP_DIR/title-branch.err")"
+  printf '%s' "$out" | jq -e --arg t "$title" --arg id "$ISSUE" \
+    '.issue == $id and .issue_title == $t and .agent_started == true' >/dev/null \
+    || fail "branch json: $out $(cat "$TMP_DIR/title-branch.err")"
+  jq -e --arg t "$title" --arg id "$ISSUE" '.issue == $id and .issue_title == $t' \
+    "$state/agentic-dev/handoffs.jsonl" >/dev/null \
+    || fail "handoffs.jsonl: $(cat "$state/agentic-dev/handoffs.jsonl")"
+  jq -e --arg issue "bercail.issue=$ISSUE" --arg titled "bercail.issue_title=$title" \
+    'index($issue) and index($titled)' "$argv" >/dev/null \
+    || fail "hc run labels: $(cat "$argv" 2>/dev/null) log=$(cat "$hclog")"
+  unset TITLE_FOLDER TITLE_HC_LOG TITLE_HC_ARGV
+  printf 'PASS: a --branch spawn puts the title in JSON, handoffs.jsonl, and the desk labels\n'
+}
+
+test_issue_title_normalises_and_degrades
+test_issue_title_on_headless_runs
+test_branch_carries_issue_title

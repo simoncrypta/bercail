@@ -113,8 +113,8 @@ export HC_TERMINAL_ID=t9
 got="$(desk --prompt 'Your job is beads issue bercail-0uo. Run it.' opencode --verbose)"
 [[ "$got" == "opencode [--verbose] [--prompt] [Your job is beads issue bercail-0uo. Run it.] cli="* ]] \
   || fail "the argv a desk runs does not change: $got"
-expect "$(record '[.address, .session, .harness, .issue, .space, .args]')" \
-  '["t9","","opencode","bercail-0uo","sp1",["--verbose"]]' "a record, with the prompt out of its flags"
+expect "$(record '[.address, .session, .harness, .issue, .issue_title, .space, .args]')" \
+  '["t9","","opencode","bercail-0uo","","sp1",["--verbose"]]' "a record, with the prompt out of its flags"
 expect "$(record .cwd | jq -r .)" "$PWD" "the record has the folder"
 printf 'PASS: a desk writes its record and its command stays the same\n'
 
@@ -124,6 +124,16 @@ expect "$(record '[.session, .issue, .args]')" '["ses_given","bercail-0uo",["--v
 desk claude --resume abc >/dev/null
 expect "$(record '[.session, .harness]')" '["abc","claude"]' "claude's resume flag"
 printf 'PASS: a resume keeps session, flags and issue\n'
+
+printf '{"labels":{"bercail.role":"agent","bercail.space":"sp1","bercail.issue":"bercail-0uo","bercail.issue_title":"Short title"}}\n' >"$TMP_DIR/terminal.json"
+desk --prompt 'Your job is beads issue bercail-0uo: Short title. Run it.' opencode --verbose >/dev/null
+expect "$(record .issue_title)" '"Short title"' "title comes from the label when it names the issue"
+printf '{"labels":{"bercail.role":"agent","bercail.space":"sp1","bercail.issue":"other-1","bercail.issue_title":"Wrong"}}\n' >"$TMP_DIR/terminal.json"
+desk opencode --session ses_kept --verbose >/dev/null
+expect "$(record '[.issue, .issue_title, .session]')" '["bercail-0uo","Short title","ses_kept"]' \
+  "resume keeps the title when the label names a different issue"
+printf '{"labels":{"bercail.role":"agent","bercail.space":"sp1"}}\n' >"$TMP_DIR/terminal.json"
+printf 'PASS: the desk record takes issue_title from the label, and a resume keeps it\n'
 
 # Resume replays args beside an explicit session, so a prompt or "continue the
 # latest" must not be in them. The command that ran is unchanged.

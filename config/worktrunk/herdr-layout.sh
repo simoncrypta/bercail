@@ -137,11 +137,20 @@ _wt_herdr_start_desk() {
     read -r -a cmd <<<"$WT_HERDR_AGENT_CMD"
     argv+=("${cmd[@]}")
   fi
+  # Handoff names the issue on the desk. A default start clears those vars.
+  local -a issue_labels=()
+  if [[ -n "${WT_HERDR_ISSUE:-}" ]]; then
+    issue_labels+=(--label "bercail.issue=${WT_HERDR_ISSUE}")
+    if [[ -n "${WT_HERDR_ISSUE_TITLE:-}" ]]; then
+      issue_labels+=(--label "bercail.issue_title=${WT_HERDR_ISSUE_TITLE}")
+    fi
+  fi
   # hc passes on the caller's environment; a headless caller (Shep) has
   # TERM=dumb, which leaves the desk without colors or key handling.
   TERM=xterm-256color COLORTERM=truecolor "$HC" run --bg --keep --outlive-parent --no-notify \
     --parent "$shell" --cwd "$(_wt_realpath "$workdir")" \
     --label bercail.role=agent --label "bercail.space=$space" \
+    "${issue_labels[@]}" \
     "${argv[@]}" >/dev/null
 }
 
@@ -159,12 +168,12 @@ wt_herdr_layout_create() {
 }
 
 # Clear session of the configured agent (d / dev / apply). Ignores any
-# inherited handoff prompt.
+# inherited handoff prompt or issue labels.
 wt_herdr_start_default_agent() {
   local label="$1" workdir="$2" space
   _wt_herdr_app_running || { echo "Herdr app is not running" >&2; return 1; }
   space="$(_wt_herdr_resolve_space "$label" "$workdir")" || return 1
-  WT_HERDR_AGENT_CMD= _wt_herdr_start_desk "$space" "$workdir"
+  WT_HERDR_AGENT_CMD= WT_HERDR_ISSUE= WT_HERDR_ISSUE_TITLE= _wt_herdr_start_desk "$space" "$workdir"
 }
 
 # Orchestrator / handoff-spawn: start or replace the desk agent with

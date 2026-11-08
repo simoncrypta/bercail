@@ -57,7 +57,7 @@ git -C "$TMP_DIR/myapp" commit -q --allow-empty -m init
 git -C "$TMP_DIR/myapp" worktree add -q -b feat "$TMP_DIR/myapp.feat"
 desk="$TMP_DIR/myapp.feat"
 mkdir -p "$XDG_STATE_HOME/agentic-dev"
-jq -nc --arg p "$desk" '{path:$p, branch:"feat", issue:"myapp-1", stage:"start", harness:"claude"}' \
+jq -nc --arg p "$desk" '{path:$p, branch:"feat", issue:"myapp-1", issue_title:"Fix the login", stage:"start", harness:"claude"}' \
   >"$XDG_STATE_HOME/agentic-dev/handoffs.jsonl"
 
 # One `hc events` line: every terminal, the desk with STATUS.
@@ -81,8 +81,11 @@ jq -e --arg p "$desk" '
   and .agent.address == "t9" and .agent.status == "done" and .agent.previous_status == "working"
   and .agent.app == "claude-code" and .agent.title == "Beads issue myapp-1"
   and .space.id == "sp1" and .space.repo == "myapp" and .space.checkout_path == $p and .space.linked == true
-  and .desk.issue == "myapp-1" and .desk.stage == "start" and .desk.branch == "feat"' <<<"$first" >/dev/null \
+  and .desk.issue == "myapp-1" and .desk.issue_title == "Fix the login" and .desk.stage == "start" and .desk.branch == "feat"
+  and .text == "myapp-1: Fix the login. Desk t9 finished."' <<<"$first" >/dev/null \
   || fail "payload: $first"
+jq -se '.[1].kind == "blocked" and .[1].text == "myapp-1: Fix the login. Desk t9 is blocked." and .[1].desk.issue_title == "Fix the login"' \
+  "$TMP_DIR/bodies.jsonl" >/dev/null || fail "blocked text: $(sed -n 2p "$TMP_DIR/bodies.jsonl")"
 grep -q 'Authorization: Bearer secret-key' "$TMP_DIR/headers.txt" || fail "bearer header"
 grep -q 'X-Automation-Key: secret-key' "$TMP_DIR/headers.txt" || fail "automation key header"
 grep -q secret-key "$TMP_DIR/bodies.jsonl" && fail "the key must not be in the body"
@@ -183,8 +186,34 @@ printf 'PASS: a rejected key is recorded and status prints no url or key\n'
 
 out="$(notify_test work-shep)" || fail "test send: $out"
 [[ "$out" == "work-shep HTTP 200" ]] || fail "test output: $out"
-jq -e 'select(.kind == "test")' "$TMP_DIR/bodies.jsonl" >/dev/null || fail "test payload"
+jq -e 'select(.kind == "test") | .desk.issue_title == null and .text == "Test from bercail (sink work-shep)."' \
+  "$TMP_DIR/bodies.jsonl" >/dev/null || fail "test payload: $(jq -c 'select(.kind == "test")' "$TMP_DIR/bodies.jsonl")"
 printf 'PASS: notify test sends a kind=test payload\n'
+
+agent='{"address":"t9","app":"claude","status":"done","previous_status":"working","title":null}'
+space='{"id":"sp1","name":"Readable-titles_Bercail","repo":"bercail","checkout_path":"/w","linked":true}'
+noname='{"id":"sp1","name":null,"repo":"bercail","checkout_path":"/w","linked":true}'
+desk_t='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":"Show the issue title next to every bd and desk id","stage":"start","harness":"claude","result":null}'
+notitle='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":null,"stage":"start","harness":"claude","result":null}'
+noissue='{"branch":null,"issue":null,"issue_title":null,"stage":null,"harness":null,"result":null}'
+dotted='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":"Show the title.","stage":"start","harness":"claude","result":null}'
+payload_text() { notify_payload "$1" work-shep "$agent" "$2" "$3" e1 | jq -r .text; }
+[[ "$(payload_text finished "$space" "$desk_t")" == "bercail-wb1: Show the issue title next to every bd and desk id. Desk t9 (Readable-titles_Bercail) finished." ]] \
+  || fail "finished text: $(payload_text finished "$space" "$desk_t")"
+[[ "$(payload_text blocked "$space" "$desk_t")" == "bercail-wb1: Show the issue title next to every bd and desk id. Desk t9 (Readable-titles_Bercail) is blocked." ]] \
+  || fail "blocked text: $(payload_text blocked "$space" "$desk_t")"
+[[ "$(payload_text finished "$space" "$noissue")" == "Desk t9 (Readable-titles_Bercail) finished." ]] \
+  || fail "no issue text: $(payload_text finished "$space" "$noissue")"
+[[ "$(payload_text finished "$space" "$notitle")" == "bercail-wb1. Desk t9 (Readable-titles_Bercail) finished." ]] \
+  || fail "bare id text: $(payload_text finished "$space" "$notitle")"
+[[ "$(payload_text finished "$noname" "$desk_t")" == "bercail-wb1: Show the issue title next to every bd and desk id. Desk t9 finished." ]] \
+  || fail "no space name: $(payload_text finished "$noname" "$desk_t")"
+[[ "$(payload_text finished "$space" "$dotted")" == "bercail-wb1: Show the title. Desk t9 (Readable-titles_Bercail) finished." ]] \
+  || fail "trailing period: $(payload_text finished "$space" "$dotted")"
+cut='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":"Show the issue…","stage":"start","harness":"claude","result":null}'
+[[ "$(payload_text finished "$space" "$cut")" == "bercail-wb1: Show the issue… Desk t9 (Readable-titles_Bercail) finished." ]] \
+  || fail "truncated title: $(payload_text finished "$space" "$cut")"
+printf 'PASS: payload text names the issue and the desk\n'
 
 # doctor shows when the live follower last posted, without the url or key.
 # shellcheck source=lib/doctor.sh
@@ -219,7 +248,27 @@ EOF
 chmod +x "$TMP_DIR/bin/hc-desk"
 printf '{"pid":1,"started_at":%s}\n' "$((now - 600))" >"$(notify_follower_file)"
 out="$(HC_BIN="$TMP_DIR/bin/hc-desk" doctor_notify)" && fail "a deaf follower passed doctor: $out"
-printf '%s' "$out" | grep -q 'deaf  notify follower is live but missed desk t3s' || fail "deaf: $out"
+printf '%s' "$out" | grep -q 'deaf  notify follower is live but missed desk t3s finishing or blocking' || fail "deaf: $out"
+cat >"$TMP_DIR/bin/hc-titled" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in
+  ls) printf '{"terminals":[{"address":"t3s","state":"live"}]}\n' ;;
+  get)
+    if [[ "$2" == t3s ]]; then
+      jq -nc --argjson ms "$HC_STATUS_MS" --arg title "${HC_ISSUE_TITLE:-}" '
+        {address:"t3s", state:"live", status:{state:"done"}, status_ms:$ms,
+         labels: ({"bercail.issue":"bercail-wb1"} + (if $title == "" then {} else {"bercail.issue_title":$title} end))}'
+    else
+      printf '{"state":"live"}\n'
+    fi
+    ;;
+esac
+EOF
+chmod +x "$TMP_DIR/bin/hc-titled"
+out="$(HC_BIN="$TMP_DIR/bin/hc-titled" HC_STATUS_MS="$(( (now - 30) * 1000 ))" HC_ISSUE_TITLE='Show the title' doctor_notify)" && fail "titled miss passed: $out"
+printf '%s' "$out" | grep -q 'missed desk t3s (bercail-wb1: Show the title) finishing or blocking' || fail "titled deaf: $out"
+out="$(HC_BIN="$TMP_DIR/bin/hc-titled" HC_STATUS_MS="$(( (now - 30) * 1000 ))" HC_ISSUE_TITLE='' doctor_notify)" && fail "bare id miss passed: $out"
+printf '%s' "$out" | grep -q 'missed desk t3s (bercail-wb1) finishing or blocking' || fail "bare id deaf: $out"
 printf '{"pid":1,"started_at":%s,"last_transition_at":%s}\n' "$((now - 600))" "$((now - 29))" >"$(notify_follower_file)"
 out="$(HC_BIN="$TMP_DIR/bin/hc-desk" doctor_notify)" || fail "a follower that saw it: $out"
 printf '{"pid":1,"started_at":%s}\n' "$((now - 10))" >"$(notify_follower_file)"

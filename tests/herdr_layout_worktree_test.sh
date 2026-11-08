@@ -138,10 +138,25 @@ fi
 printf 'PASS: handoff requires a prompt\n'
 
 : >"$CALL_LOG"
+WT_HERDR_AGENT_CMD=claude WT_HERDR_AGENT_PROMPT='Your job is beads issue bercail-0s1: Fix login.' \
+  WT_HERDR_ISSUE=bercail-0s1 WT_HERDR_ISSUE_TITLE='Fix login' \
+  wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
+grep -q -- '--label bercail.issue=bercail-0s1' "$CALL_LOG" || fail "issue label missing: $(cat "$CALL_LOG")"
+grep -q -- '--label bercail.issue_title=Fix login' "$CALL_LOG" || fail "title label missing: $(cat "$CALL_LOG")"
+: >"$CALL_LOG"
+WT_HERDR_AGENT_CMD=claude WT_HERDR_AGENT_PROMPT=x \
+  wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
+grep -q 'bercail.issue' "$CALL_LOG" && fail "no issue env, no issue label: $(cat "$CALL_LOG")"
+: >"$CALL_LOG"
 WT_HERDR_AGENT_PROMPT=ignored wt_herdr_start_default_agent "Main_Feature" "$TMP_DIR/main.feature"
 grep -qx "$RUN" "$CALL_LOG" \
   || fail "default agent is bercail-desk-agent's pick, without a prompt; log=$(cat "$CALL_LOG")"
-printf 'PASS: default agent is bercail-desk-agent with no prompt\n'
+: >"$CALL_LOG"
+WT_HERDR_ISSUE=bercail-0s1 WT_HERDR_ISSUE_TITLE='Fix login' WT_HERDR_AGENT_PROMPT=ignored \
+  wt_herdr_start_default_agent "Main_Feature" "$TMP_DIR/main.feature"
+grep -q 'bercail.issue' "$CALL_LOG" && fail "default agent must not inherit issue labels: $(cat "$CALL_LOG")"
+grep -qx "$RUN" "$CALL_LOG" || fail "default agent argv unchanged: $(cat "$CALL_LOG")"
+printf 'PASS: default agent is bercail-desk-agent with no prompt; issue labels only when set\n'
 
 cp "$FAKE_STATE/spaces.json" "$FAKE_STATE/spaces.bak"
 jq 'map(if .id == "sp-child" then .tabs = [] else . end)' "$FAKE_STATE/spaces.bak" >"$FAKE_STATE/spaces.json"
