@@ -3,8 +3,8 @@ name: bstack
 description: >-
   bercail's playbooks for rigorous work on opencode with your own Claude, GPT,
   and Grok subscriptions: investigation, bug fix, feature, refactor, review,
-  ship, handoff, and takeover. Routes code to the builder, hard calls to the judge,
-  and review to the council. Use at the start of any non-trivial task, or when
+  ship, handoff, and takeover. Routes code to the builder and hard calls to the
+  judge; the council runs only on request. Use at the start of any non-trivial task, or when
   asked which bstack playbook or role fits.
 ---
 
@@ -73,8 +73,10 @@ each step ending in something you can check.
 ## review
 
 1. Get the target: the uncommitted diff, `git diff <base>...HEAD`, or `gh pr diff <n>`.
-2. Run the `council` skill on it.
-3. Report only findings that hold up, worst first, with `file:line`.
+2. Prove it: run the tests that cover the diff, then the repo's `verify-<repo>`
+   skill when `.agents/skills/` has one. Run the `council` skill only when the
+   person asks for `/council`.
+3. Report only findings a run shows, worst first, with `file:line` and the command.
 4. Post to GitHub only when asked (the `review` skill's `publish-github.sh`).
 
 ## ship

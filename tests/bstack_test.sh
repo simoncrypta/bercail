@@ -148,6 +148,7 @@ grok = ""
 lead = "claude"
 build = "grok"
 judge = "gpt"
+council = true
 EOF
   deploy_bstack >/dev/null 2>&1 || fail "deploy_bstack failed"
   local oc="$OPENCODE_CONFIG_DIR" rel
@@ -196,6 +197,7 @@ test_off_removes_only_ours() {
 [bstack]
 enabled = true
 claude = "claude-agent/opus"
+council = true
 EOF
   deploy_bstack >/dev/null 2>&1
   printf '{}\n' >"$OPENCODE_CONFIG_DIR/opencode.json"
@@ -211,6 +213,70 @@ EOF
   deploy_bstack >/dev/null 2>&1
   [[ ! -e "$OPENCODE_CONFIG_DIR/agents/bstack.md" ]] || fail "update with bstack off deploys nothing"
   printf 'PASS: bstack off removes only what bstack manages\n'
+}
+
+test_council_seats_need_the_setting() {
+  reset_home
+  local oc="$OPENCODE_CONFIG_DIR" config='[bstack]
+enabled = true
+claude = "claude-agent/opus#high"
+gpt = "openai/gpt-6.1-sol"'
+  write_config <<<"$config"
+  deploy_bstack >/dev/null 2>&1 || fail "deploy without council"
+  [[ ! -e "$oc/agents/bstack-council-claude.md" && ! -e "$oc/agents/bstack-council-gpt.md" ]] \
+    || fail "seats rendered with council unset"
+  [[ -f "$oc/commands/council.md" ]] || fail "/council must stay callable with the seats off"
+
+  write_config <<<"$config"$'\ncouncil = true'
+  deploy_bstack >/dev/null 2>&1 || fail "deploy with council"
+  [[ -f "$oc/agents/bstack-council-claude.md" && -f "$oc/agents/bstack-council-gpt.md" ]] || fail "council = true renders seats"
+
+  # Turning it off takes back bstack's seats and leaves one the person owns.
+  printf 'my own reviewer\n' >"$oc/agents/bstack-council-gpt.md"
+  write_config <<<"$config"$'\ncouncil = false'
+  deploy_bstack >/dev/null 2>&1 || fail "deploy with council = false"
+  [[ ! -e "$oc/agents/bstack-council-claude.md" ]] || fail "council = false removes bstack's seat"
+  grep -qx 'my own reviewer' "$oc/agents/bstack-council-gpt.md" || fail "their seat changed"
+  printf 'PASS: council seats render only with [bstack] council = true; /council stays\n'
+}
+
+test_ready_verifies_without_the_council() {
+  local ready="$ROOT/bstack/commands/ready.md" prev=0 n step
+  if grep -qi council "$ready"; then fail "ready.md must not run the council"; fi
+  for step in 'tests that cover the diff' 'verify skill above' 'Run any formal check' 'bstack-judge' '`unslop`' 'git add' 'exit code and evidence path'; do
+    n="$(grep -nF -- "$step" "$ready" | head -1 | cut -d: -f1)"
+    ((${n:-0} > prev)) || fail "ready.md: '$step' is missing or out of order"
+    prev="$n"
+  done
+  grep -qF 'does the diff match the issue?' "$ready" || fail "the judge gets the intent question"
+  if grep -q 'settl' "$ROOT/bstack/agents/bstack-judge.md"; then fail "the judge no longer settles disputes"; fi
+  if grep -q 'bstack-judge' "$ROOT/skills/council/SKILL.md"; then fail "the council must not call the judge"; fi
+  grep -q 'verify-<repo>' "$ROOT/skills/bstack/SKILL.md" || fail "the review playbook proves with the verify skill"
+  printf 'PASS: /ready runs tests, verify, formal checks, the judge, unslop, stage, report; no council\n'
+}
+
+test_council_keeps_only_rerun_findings() {
+  local skill="$ROOT/skills/council/SKILL.md" agent="$ROOT/bstack/agents/bstack-council.md"
+  grep -qF 'Prove each finding with a run' "$skill" || fail "skill: a finding needs a run"
+  grep -qF 'Prove each finding with a run' "$agent" || fail "agent: a finding needs a run"
+  grep -qF 'Run its command yourself' "$skill" || fail "skill: the lead reruns"
+  grep -q 'style, naming, or YAGNI' "$skill" || fail "skill: style findings are dropped"
+  if grep -qF '`unverified`' "$agent"; then fail "agent: nothing is marked unverified"; fi
+  grep -qF 'There is no `unverified` list' "$skill" || fail "skill: unverified findings are dropped"
+  grep -qF '[bstack] council' "$skill" || fail "skill: says what to do with no seats"
+  printf 'PASS: the council reports only findings a run proved and a rerun confirmed\n'
+}
+
+test_verify_skill_shape() {
+  local dir="$ROOT/.agents/skills/verify-bercail" run step
+  head -2 "$dir/SKILL.md" | grep -qx 'name: verify-bercail' || fail "verify skill frontmatter"
+  run="$dir/run.sh"
+  [[ -x "$run" ]] || fail "run.sh is executable"
+  bash -n "$run" || fail "run.sh parses"
+  for step in 'export HOME=' 'bercail" doctor' 'desk restore --dry-run' 'handoff-spawn" --info' 'bstack status' '.bercail/verify' "trap 'rm -rf"; do
+    grep -qF -- "$step" "$run" || fail "run.sh is missing: $step"
+  done
+  printf 'PASS: verify-bercail covers temp HOME, doctor, restore, info, status, evidence, cleanup\n'
 }
 
 test_on_switches_stock_desk_agent() {
@@ -236,6 +302,9 @@ test_setup_auto_models() {
   write_config <<'EOF'
 [agent]
 command = "cursor-agent"
+
+[bstack]
+council = true
 EOF
   FAKE_CONNECTED="claude-agent xai" bstack_setup >"$TMP_DIR/setup.log" 2>&1 || fail "setup: $(cat "$TMP_DIR/setup.log")"
   grep -q 'model' "$TMP_DIR/setup.log" && grep -q 'Pick' "$TMP_DIR/setup.log" && fail "setup must not ask about models"
@@ -398,6 +467,10 @@ test_roles_resolve
 test_deploy_renders_agents
 test_deploy_keeps_their_files
 test_off_removes_only_ours
+test_council_seats_need_the_setting
+test_ready_verifies_without_the_council
+test_council_keeps_only_rerun_findings
+test_verify_skill_shape
 test_on_switches_stock_desk_agent
 test_setup_auto_models
 test_handoff_bstack_stage

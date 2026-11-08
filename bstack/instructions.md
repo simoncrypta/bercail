@@ -13,8 +13,8 @@ that is strongest at it. These rules apply to every bstack agent and subagent.
 - Load the `bstack` skill for anything beyond a one-line change. It holds the
   playbooks (bug fix, feature, refactor, investigation, review, ship, handoff).
 - Other bercail skills: `how` (how code works now), `why` (why it is that way,
-  from the record), `unslop` (clean prose and diffs), `council` (cross-provider
-  review), `autopilot` (drive a PR to green).
+  from the record), `unslop` (clean prose and diffs), `council` (adversarial
+  review, only when asked for), `autopilot` (drive a PR to green).
 
 ## How to work
 
@@ -36,8 +36,8 @@ that is strongest at it. These rules apply to every bstack agent and subagent.
 | Role | Agent | Use it for |
 |------|-------|------------|
 | build | `bstack-builder` | Code: features, refactors, bug fixes, perf. Hand it a precise brief. |
-| judge | `bstack-judge` | The hardest design calls, prose, plans, and settling disagreements. |
-| council | `bstack-council-*` | Read-only review, one per connected provider. Run them through the `council` skill. |
+| judge | `bstack-judge` | The hardest design calls, prose, plans, and the intent check at `/ready`. |
+| council | `bstack-council-*` | Read-only adversarial review, when `[bstack] council = true`. Run them through the `council` skill, only when `/council` is asked for. |
 
 - Briefs are self-contained: the goal, the files, the constraint, what done looks
   like, and how to prove it. A subagent has none of your context.
@@ -56,4 +56,6 @@ that is strongest at it. These rules apply to every bstack agent and subagent.
   No inventory of every file. When a beads issue names the job, also post that
   report on it (`bd comment <id>`), so it outlives the desk's screen.
 - In a headless handoff, write the result file the issue comment names
-  (`status` ready|blocked|failed, `summary`). `blocked` with a reason beats a guess.
+  (`status` ready|blocked|failed, `summary`, and optionally `verification`: a list
+  of `{kind: test|verify-skill|statechart, command, exit_code, evidence}`).
+  `blocked` with a reason beats a guess.

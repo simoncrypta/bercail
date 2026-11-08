@@ -80,7 +80,7 @@ bstack (opencode, bring your own Claude / GPT / Grok subscription):
   bercail bstack setup   install opencode, connect plans (models are picked for you)
   bercail bstack status  what is connected, each model (auto or pinned), each role
   Roles: lead (the bstack agent), build (bstack-builder), judge (bstack-judge);
-  council: one read-only reviewer per connected provider. In opencode: /council,
+  council ([bstack] council = true): one read-only reviewer per provider. In opencode: /council,
   /ready, /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
   pushes, never merges), /pr-review (bercail review-pr's read-only decisions pass).
   Settings: [bstack] in config.toml.

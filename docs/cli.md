@@ -45,7 +45,7 @@ Call by name. Skills install to `~/.agents/skills`; bercail adds a link where th
 | `handoff` | Run a beads issue on a stage, headless or as a `--branch` desk (`--base` stacks it on a parent branch). See [handoff](handoff.md) |
 | `review` | Wait for **human** tuicr notes; publish to GitHub only if asked. See [review](review.md) |
 | `bstack` | Playbooks for rigorous work, routed by role. See [bstack](bstack.md) |
-| `council` | One reviewer per connected provider; keep only findings that hold up |
+| `council` | Adversarial review on request; only findings a rerun confirms are reported |
 | `how` / `why` | How code works now; why it is that way, from git, PRs, and beads. Read-only |
 | `unslop` | Clean machine-writing tells out of prose and a diff |
 | `autopilot` | Drive an open PR to green: CI, review threads, conflicts. Pushes; never merges |

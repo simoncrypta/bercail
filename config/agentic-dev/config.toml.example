@@ -28,6 +28,9 @@ effort = "high"
 lead = "claude"
 build = "grok"
 judge = "claude"
+# Render one bstack-council-<plan> reviewer per plan for /council. /council still
+# works when off: the lead reviews alone.
+council = false
 
 # [graphite]
 # Handoff detects Graphite by the branches gt tracks. Override it per repo, keyed

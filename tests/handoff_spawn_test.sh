@@ -580,6 +580,66 @@ test_model_resolves_opus_55_not_max_slug
 test_start_stage_dry_run
 test_start_stage_resume_and_fixture_result
 
+test_result_ok_verification() {
+  local f="$TMP_DIR/verification.json"
+  local base='{"status":"ready","summary":"done","session_id":"s1"}' good bad
+  ok_with() { jq -c --argjson v "$1" '. + {verification: $v}' <<<"$base" >"$f"; handoff_result_ok "$f"; }
+  printf '%s\n' "$base" >"$f"
+  handoff_result_ok "$f" || fail "a result without verification still passes"
+  for good in '[]' \
+    '[{"kind":"test","command":"bash t.sh","exit_code":0,"evidence":"t.log"}]' \
+    '[{"kind":"verify-skill","command":"run.sh","exit_code":1,"evidence":".bercail/verify/x"},{"kind":"statechart","command":"statechart a.tla","exit_code":0,"evidence":"tlc.out"}]' \
+    '[{"kind":"statechart","spec":"a.tla","exit_code":0,"rules_broken":[],"chart":"chart.mmd","replayed":false}]'; do
+    ok_with "$good" || fail "should pass: $good"
+  done
+  for bad in '"passed"' 'false' '[1]' \
+    '[{"kind":"vibes","command":"x","exit_code":0,"evidence":"e"}]' \
+    '[{"kind":"test","command":"x","exit_code":"0","evidence":"e"}]' \
+    '[{"kind":"test","exit_code":0,"evidence":"e"}]' \
+    '[{"kind":"test","command":"x","exit_code":0}]' \
+    '[{"kind":"statechart","exit_code":0}]'; do
+    if ok_with "$bad"; then fail "should fail: $bad"; fi
+  done
+  jq -nc '{status:"ready", summary:"done"}' >"$f"
+  if handoff_result_ok "$f"; then fail "session_id stays required"; fi
+  printf 'PASS: handoff_result_ok takes an optional, well-formed verification array\n'
+}
+
+# A headless run whose agent writes $1 as its result.
+_run_with_agent_result() {
+  local wt="$1" result="$2" stub="$TMP_DIR/bin/claude"
+  mkdir -p "$TMP_DIR/bin"
+  _start_fixture "$wt"
+  cat >"$stub" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' '$result' >"\$BERCAIL_RESULT_PATH"
+STUB
+  chmod +x "$stub"
+  HANDOFF_CLAUDE_BIN="$stub" "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --worktree "$wt" >/dev/null
+}
+
+test_runner_keeps_verification() {
+  local wt="$TMP_DIR/verify-keep" got
+  _run_with_agent_result "$wt" '{"status":"ready","summary":"proved","verification":[{"kind":"test","command":"bash t.sh","exit_code":0,"evidence":"t.log"}]}' \
+    || fail "run with verification"
+  got="$wt/.bercail/handoff-result.json"
+  jq -e '.status == "ready" and .summary == "proved" and (.session_id | length > 0)
+    and .verification == [{kind:"test",command:"bash t.sh",exit_code:0,evidence:"t.log"}]' "$got" >/dev/null \
+    || fail "verification must survive the run: $(cat "$got")"
+
+  wt="$TMP_DIR/verify-drop"
+  _run_with_agent_result "$wt" '{"status":"ready","summary":"proved","verification":"all good"}' \
+    || fail "a malformed verification list must not fail the run"
+  got="$wt/.bercail/handoff-result.json"
+  jq -e '.status == "ready" and (.summary | startswith("proved")) and (.summary | contains("malformed verification"))
+    and (has("verification") | not)' "$got" >/dev/null \
+    || fail "a malformed list is dropped and the result stands: $(cat "$got")"
+  printf 'PASS: the runner keeps a good verification list and drops only a malformed one\n'
+}
+
+test_result_ok_verification
+test_runner_keeps_verification
+
 test_codex_headless_argv_shape() {
   local sid="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
   handoff_build_headless_argv codex /stub/codex "" "$sid" 0 "do the job"

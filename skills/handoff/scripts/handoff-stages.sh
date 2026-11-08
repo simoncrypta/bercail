@@ -144,11 +144,24 @@ handoff_write_result() {
      + if $reason == "" then {} else {reason:$reason} end' >"$dest"
 }
 
+# verification is optional: [{kind, command, exit_code, evidence}]. A statechart
+# entry may carry spec and chart in place of command and evidence (bercail-86a).
+HANDOFF_VERIFICATION_DEF='
+  def verification_ok:
+    .verification | . == null or (type == "array" and all(.[];
+      type == "object"
+      and (.kind == "test" or .kind == "verify-skill" or .kind == "statechart")
+      and (.exit_code | type == "number")
+      and (((.command | type == "string") and (.evidence | type == "string"))
+        or (.kind == "statechart" and (.spec | type == "string") and (.chart | type == "string")))));
+'
+
 handoff_result_ok() {
-  jq -e '
+  jq -e "$HANDOFF_VERIFICATION_DEF"'
     (.status == "ready" or .status == "blocked" or .status == "failed")
     and (.summary | type == "string" and length > 0)
     and (.session_id | type == "string" and length > 0)
+    and verification_ok
   ' "$1" >/dev/null
 }
 
@@ -672,7 +685,7 @@ handoff_run_headless() {
   # made-up id would look resumable. Say so in the summary instead.
   if [[ -f "$result" ]] && jq -e 'type == "object"' "$result" >/dev/null 2>&1; then
     local filled
-    filled="$(jq --arg session_id "$session" --arg none "$HANDOFF_NO_SESSION" --arg reason "$reason" '
+    filled="$(jq --arg session_id "$session" --arg none "$HANDOFF_NO_SESSION" --arg reason "$reason" "$HANDOFF_VERIFICATION_DEF"'
       (.session_id | type == "string" and test("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")) as $own
       | .status = (if (.status == "ready" or .status == "blocked" or .status == "failed") then .status else "failed" end)
       | .summary = (if (.summary | type == "string" and length > 0) then .summary else "headless stage finished without a usable summary" end)
@@ -681,6 +694,7 @@ handoff_run_headless() {
         else .session_id = $none | .summary += " (bercail found no session id in the CLI log, so this run cannot be resumed.)"
         end
       | if $reason != "" then .reason = $reason else del(.reason) end
+      | if verification_ok then . else del(.verification) | .summary += " (bercail dropped a malformed verification list.)" end
     ' "$result")"
     printf '%s\n' "$filled" >"$result"
   fi

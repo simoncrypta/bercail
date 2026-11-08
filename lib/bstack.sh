@@ -72,6 +72,10 @@ bstack_enabled() {
   [[ "$(_bstack_toml_get bstack enabled)" == true ]]
 }
 
+bstack_council_enabled() {
+  [[ "$(_bstack_toml_get bstack council)" == true ]]
+}
+
 _bstack_role_default() {
   case "$1" in
     lead|judge) printf 'claude' ;;
@@ -323,9 +327,12 @@ deploy_bstack() {
     _bstack_render "$work/src/$rel" "$work/$(basename "$rel")"
     _bstack_place "$work/$(basename "$rel")" "$OPENCODE_CONFIG_DIR/$rel" || true
   done
-  # One read-only reviewer per family with a model: the council's panel.
+  # With [bstack] council = true, one read-only reviewer per family with a model.
   for family in "${BSTACK_FAMILIES[@]}"; do
-    model="$(bstack_resolve_model "$family")"
+    model=""
+    if bstack_council_enabled; then
+      model="$(bstack_resolve_model "$family")"
+    fi
     if [[ -n "$model" ]]; then
       _bstack_render "$work/src/agents/bstack-council.md" "$work/council-$family.md" "$family" "$model"
       _bstack_place "$work/council-$family.md" "$OPENCODE_CONFIG_DIR/agents/bstack-council-$family.md" || true

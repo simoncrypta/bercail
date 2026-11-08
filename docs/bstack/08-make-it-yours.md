@@ -23,8 +23,8 @@ judge = "claude"
 
 Then `bercail bstack setup` or `bercail update`. `bercail bstack status` shows
 each model as `auto` or `pinned`. A pin stays until you clear it, gets a council
-seat even when its plan isn't connected, and skips every new release; auto
-picks again on every update.
+seat (with `council = true`) even when its plan isn't connected, and skips
+every new release; auto picks again on every update.
 
 Roles fall back to the next connected plan, so you can set them once and
 connect plans later ([the order](./02-the-bstack-agent.md#the-roles)). Higher
