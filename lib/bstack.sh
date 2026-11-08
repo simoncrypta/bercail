@@ -23,6 +23,7 @@ BSTACK_RENDERED=(agents/bstack.md agents/bstack-builder.md agents/bstack-judge.m
 # and every launch names this dir with flags.
 BSTACK_PI_DIR="${AGENTIC_DEV_SHARE_DIR}/pi"
 BSTACK_PI_TEMPLATES="${XDG_CONFIG_HOME:-$HOME/.config}/herdr-core/templates"
+BSTACK_PI_BRIDGE="npm:pi-claude-bridge@0.11.0"
 BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge.md
   agents/bstack-autopilot.md prompts/ready.md prompts/council.md prompts/handoff.md
   prompts/autopilot.md prompts/how.md prompts/why.md prompts/unslop.md prompts/pr-review.md
@@ -171,7 +172,7 @@ _bstack_integration_id() {
 _bstack_family_label() {
   if _bstack_on_pi; then
     case "$1" in
-      claude) printf "Pi's Anthropic login (billed per token as extra usage)" ;;
+      claude) printf 'Claude plan (Claude Code via pi-claude-bridge)' ;;
       gpt) printf 'Sign in with ChatGPT (openai, or openai-codex)' ;;
       grok) printf 'xAI login' ;;
     esac
@@ -285,6 +286,7 @@ _bstack_pick_model() {
 
 bstack_login_command() {
   if _bstack_on_pi; then
+    if [[ "$1" == claude ]]; then printf 'claude auth login'; return 0; fi
     printf '/login %s (inside pi)' "$(_bstack_pi_providers "$1" | head -1)"
     return 0
   fi
@@ -297,10 +299,45 @@ bstack_login_command() {
 
 # --- pi -----------------------------------------------------------------------
 
+# Runtime fallback candidates, separate from the initial role model picks.
+# The array is a list of family names; an empty array disables fallback.
+bstack_pi_fallback() {
+  local raw
+  raw="$(_bstack_toml_get bstack fallback)"
+  [[ -n "$raw" ]] || raw='["claude", "gpt", "grok"]'
+  if ! jq -e 'type == "array" and all(.[]; . == "claude" or . == "gpt" or . == "grok") and (length == (unique | length))' \
+    <<<"$raw" >/dev/null 2>&1; then
+    warn '[bstack] fallback must be an array of claude, gpt, grok, without duplicates'
+    return 1
+  fi
+  jq -r '.[]' <<<"$raw"
+}
+
+_bstack_pi_version_ok() {
+  local v
+  v="$(pi --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1)"
+  [[ -n "$v" && "$(printf '%s\n' 1.2.0 "$v" | sort -V | head -1)" == 1.2.0 ]]
+}
+
+_bstack_pi_bridge_present() {
+  dep_present pi || return 1
+  local table
+  table="$(pi --offline -e "$BSTACK_PI_BRIDGE" --list-models 2>/dev/null)" || return 1
+  awk '$1 == "claude-bridge" { found = 1 } END { exit !found }' <<<"$table"
+}
+
+# The bridge's dummy key and Claude Code's API-key auth are not plan logins.
+_bstack_pi_claude_ready() {
+  dep_present claude || return 1
+  env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN \
+    claude auth status --json 2>/dev/null \
+    | jq -e '.loggedIn == true and (.authMethod == "claude.ai" or .authMethod == "oauth_token")' >/dev/null 2>&1
+}
+
 # The Pi providers behind a family, the one to log in to first.
 _bstack_pi_providers() {
   case "$1" in
-    claude) printf '%s\n' anthropic ;;
+    claude) printf '%s\n' claude-bridge ;;
     gpt) printf '%s\n' openai openai-codex ;;
     grok) printf '%s\n' xai ;;
   esac
@@ -311,7 +348,8 @@ _bstack_pi_providers() {
 _bstack_pi_connected_ids() {
   local provider
   dep_present pi || return 0
-  for provider in anthropic openai openai-codex xai; do
+  _bstack_pi_claude_ready && printf '%s\n' claude-bridge
+  for provider in openai openai-codex xai; do
     if pi auth check --provider "$provider" --no-refresh --json 2>/dev/null \
       | jq -e '.status == "ready"' >/dev/null 2>&1; then
       printf '%s\n' "$provider"
@@ -323,7 +361,7 @@ _bstack_pi_connected_ids() {
 # Pi clamps a thinking level the model lacks, so a model that thinks offers them all.
 _bstack_pi_load_models() {
   local table
-  table="$(pi --offline --list-models 2>/dev/null || true)"
+  table="$(pi --offline -e "$BSTACK_PI_BRIDGE" --list-models 2>/dev/null || true)"
   BSTACK_MODELS="$(awk 'NR > 1 && NF >= 5 { print $1 "/" $2 }' <<<"$table")"
   BSTACK_VARIANTS="$(awk 'NR > 1 && NF >= 5 { print $1 "/" $2, ($5 == "yes" ? "low,medium,high,xhigh,max" : "") }' <<<"$table")"
 }
@@ -333,7 +371,7 @@ _bstack_pi_pick_model() {
   local list provider model=""
   list="$(cat)"
   case "$1" in
-    claude) model="$(grep -E '^anthropic/claude-opus-[0-9]+(-[0-9]{1,2})?$' <<<"$list" | sort -V | tail -1)" ;;
+    claude) model="$(grep -E '^claude-bridge/claude-opus-[0-9]+(-[0-9]{1,2})?$' <<<"$list" | sort -V | tail -1)" ;;
     gpt)
       for provider in openai openai-codex; do
         grep -qxF "$provider" <<<"$BSTACK_CONNECTED" || continue
@@ -359,15 +397,17 @@ _bstack_pi_model_id() {
 # empty is the lead. Skills are named because settings.json may filter them out.
 bstack_pi_command() {
   local role="$1" model="$2" brief="${3:-}" id
-  local -a argv=(pi)
+  local -a argv=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN)
+  [[ -z "$role" ]] || argv+=("BERCAIL_ROLE=$role")
+  argv+=(pi)
   [[ -z "$model" ]] || argv+=(--model "$(_bstack_pi_model_id "$model")")
+  argv+=(-e "$BSTACK_PI_BRIDGE" -e "$BSTACK_PI_DIR/extensions/fallback.ts")
   argv+=(--prompt-template "$BSTACK_PI_DIR/prompts"
     --append-system-prompt "$BSTACK_PI_DIR/instructions.md")
   [[ -z "$brief" ]] || argv+=(--append-system-prompt "$BSTACK_PI_DIR/agents/$brief.md")
   for id in "${AGENTIC_DEV_SKILL_IDS[@]}"; do
     argv+=(--skill "$(skill_canonical_dir "$id")")
   done
-  [[ -z "$role" ]] || printf 'env BERCAIL_ROLE=%s ' "$role"
   printf '%q ' "${argv[@]}" | sed 's/ $//'
 }
 
@@ -395,6 +435,9 @@ _bstack_deploy_pi() {
     _bstack_render "$work/src/pi/$rel" "$work/pi-rendered"
     copy_file "$work/pi-rendered" "$BSTACK_PI_DIR/$rel"
   done
+  copy_file "$work/src/pi/extensions/fallback.ts" "$BSTACK_PI_DIR/extensions/fallback.ts"
+  bstack_pi_fallback >"$work/fallback" || return 1
+  copy_file "$work/fallback" "$BSTACK_PI_DIR/fallback"
   _bstack_body "$work/src/agents/bstack-pr-review.md" >"$work/pr-review.md"
   copy_file "$work/pr-review.md" "$BSTACK_PI_DIR/agents/bstack-pr-review.md"
 
@@ -449,7 +492,9 @@ _bstack_remove_pi() {
 # Install what the harness needs: Pi, or opencode.
 _bstack_install_harness() {
   if _bstack_on_pi; then
-    maybe_mise_install pi pi
+    maybe_mise_install pi pi || return 1
+    _bstack_pi_version_ok || { warn 'bstack needs Pi >=1.2.0'; return 1; }
+    _bstack_pi_bridge_present || run pi install "$BSTACK_PI_BRIDGE"
   else
     install_opencode_binary
   fi
@@ -474,6 +519,22 @@ _bstack_status_pi() {
     log "  pi: $(command -v pi) (${ver:-unknown version})"
   else
     log "  pi: missing (bercail bstack setup installs it)"
+  fi
+  if _bstack_pi_bridge_present; then
+    log "  bridge: present ($BSTACK_PI_BRIDGE)"
+  else
+    log "  bridge: missing (pi install $BSTACK_PI_BRIDGE)"
+  fi
+  if _bstack_pi_claude_ready; then
+    log "  Claude auth: ready (claude auth status --json)"
+  else
+    log "  Claude auth: no subscription login (claude auth login)"
+  fi
+  local fallback
+  if fallback="$(bstack_pi_fallback)"; then
+    log "  fallback: $(paste -sd' ' - <<<"$fallback") (skips current/already attempted)"
+  else
+    log "  fallback: invalid [bstack] fallback"
   fi
   log "  logins:"
   for family in "${BSTACK_FAMILIES[@]}"; do
@@ -507,7 +568,7 @@ _bstack_setup_pi() {
   deploy_bstack
   bstack_status
   log ""
-  log "next: type the /login lines above in pi for anything missing, then run: bercail update"
+  log "next: run claude auth login for Claude; type the /login lines above in pi for other missing logins, then run: bercail update"
 }
 
 _bstack_doctor_pi() {
@@ -516,8 +577,24 @@ _bstack_doctor_pi() {
     log "  missing  pi (bstack harness is pi; bercail bstack setup)"
     return 1
   fi
-  log "  ok  pi $(pi --version 2>/dev/null)"
-  for rel in "${BSTACK_PI_RENDERED[@]}" agents/bstack-pr-review.md; do
+  if _bstack_pi_version_ok; then
+    log "  ok  pi $(pi --version 2>/dev/null)"
+  else
+    log "  old  pi $(pi --version 2>/dev/null) (bstack needs >=1.2.0)"
+    missing=1
+  fi
+  if _bstack_pi_bridge_present; then
+    log "  ok  bridge $BSTACK_PI_BRIDGE"
+  else
+    log "  missing  bridge $BSTACK_PI_BRIDGE (bercail bstack setup)"
+    missing=1
+  fi
+  if _bstack_pi_claude_ready; then
+    log "  ok  Claude auth (claude auth status --json)"
+  else
+    log "  --  Claude auth: no subscription login (claude auth login)"
+  fi
+  for rel in "${BSTACK_PI_RENDERED[@]}" agents/bstack-pr-review.md extensions/fallback.ts models fallback; do
     if [[ ! -f "$BSTACK_PI_DIR/$rel" ]]; then
       log "  missing  bstack $BSTACK_PI_DIR/$rel (bercail update)"
       missing=1
@@ -531,6 +608,14 @@ _bstack_doctor_pi() {
       log "  yours  $path (not managed by bstack)"
     fi
   done
+  local fallback
+  if ! fallback="$(bstack_pi_fallback)"; then
+    log "  invalid  bstack fallback (fix [bstack] fallback, then bercail update)"
+    missing=1
+  elif [[ -f "$BSTACK_PI_DIR/fallback" && "$fallback" != "$(<"$BSTACK_PI_DIR/fallback")" ]]; then
+    log "  stale  bstack fallback (bercail update)"
+    missing=1
+  fi
   if [[ -f "$BSTACK_PI_DIR/models" ]] && [[ "$(_bstack_resolved_text)" != "$(<"$BSTACK_PI_DIR/models")" ]]; then
     log "  stale  bstack models (a login or model changed since the last deploy; bercail update)"
     missing=1
@@ -548,7 +633,7 @@ _bstack_doctor_pi() {
     fi
   done
   if [[ "$any_login" -eq 0 ]]; then
-    log "  missing  bstack login: none of anthropic, openai, xai is ready in Pi"
+    log "  missing  bstack login: none of Claude Code, openai, xai is ready in Pi"
     missing=1
   fi
   if [[ "$missing" -eq 0 ]]; then
@@ -621,6 +706,10 @@ deploy_bstack() {
     remove_bstack quiet
     return 0
   fi
+  if _bstack_on_pi; then
+    bstack_pi_fallback >/dev/null || return 1
+    _bstack_install_harness || return 1
+  fi
   bstack_load_state reload
   work="$(mktemp -d)"
   if ! DRY_RUN=0 deploy_install_file "bstack/MANIFEST" "$work/MANIFEST" >/dev/null; then
@@ -638,9 +727,10 @@ deploy_bstack() {
   done <"$work/MANIFEST"
 
   if _bstack_on_pi; then
-    _bstack_deploy_pi "$work"
+    local result=0
+    _bstack_deploy_pi "$work" || result=$?
     rm -rf "$work"
-    return 0
+    return "$result"
   fi
   [[ "$(bstack_harness)" == opencode ]] || warn "[bstack] harness = \"$(bstack_harness)\" is not pi or opencode; using opencode"
   _bstack_remove_pi

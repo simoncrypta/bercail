@@ -84,10 +84,12 @@ bstack (opencode, bring your own Claude / GPT / Grok subscription):
   /ready, /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
   pushes, never merges), /pr-review (bercail review-pr's read-only decisions pass).
   Settings: [bstack] in config.toml.
-  [bstack] harness = "pi" runs bstack on Pi with your own logins (/login anthropic,
-  /login openai, /login xai inside pi): bercail update renders ~/.local/share/bercail/pi/
-  and herdr-core templates, and the lead starts roles as hc siblings. opencode stays
-  the fallback for existing configs without a harness setting. New configs select Pi.
+  [bstack] harness = "pi" runs bstack on Pi >=1.2 with pi-claude-bridge@0.11.0:
+  Claude uses claude auth login; GPT and Grok use /login openai and /login xai in pi.
+  bercail update renders ~/.local/share/bercail/pi/ and herdr-core templates. Every
+  role loads the bridge and managed rate-limit fallback extension. [bstack] fallback
+  sets candidate order (default ["claude", "gpt", "grok"]). The lead starts roles as
+  hc siblings. Existing configs without harness keep opencode. New configs select Pi.
 
 Config:
   ~/.config/bercail/config.toml               desk agent default, review, [bstack]

@@ -16,6 +16,7 @@ commands/how.md
 commands/why.md
 commands/unslop.md
 commands/pr-review.md
+pi/extensions/fallback.ts
 pi/instructions.md
 pi/agents/bstack-builder.md
 pi/agents/bstack-judge.md

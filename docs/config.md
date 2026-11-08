@@ -12,6 +12,8 @@ auto_review = true
 
 [bstack]
 enabled = true
+harness = "pi"                      # unset in older configs: opencode
+fallback = ["claude", "gpt", "grok"] # Pi rate-limit candidates, no duplicates
 claude = ""
 gpt = ""
 grok = ""
@@ -33,7 +35,7 @@ After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and b
 - worktrunk hooks (`~/.config/worktrunk/config.toml`, `herdr-layout.sh`).
 - `~/.local/bin/{bercail,agentic-dev,bercail-desk-agent,bercail-desk-claude-hook}` (a mise or packslip install keeps its own `bercail`), and `~/.local/share/bercail/`.
 - `~/.agents/skills/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore}`.
-- bstack's files in `~/.config/opencode` (see [Make it yours](bstack/08-make-it-yours.md#your-own-files)).
+- bstack's Pi profile in `~/.local/share/bercail/pi/` and role templates in `~/.config/herdr-core/templates/`, or its files in `~/.config/opencode` (see [Make it yours](bstack/08-make-it-yours.md#your-own-files)). The Pi harness installs `npm:pi-claude-bridge@0.11.0` into Pi's package settings.
 - The local TUI plugin `~/.config/opencode/plugins/bercail-desk/tui.ts`, including when bstack is off.
 - `diff_watch_interval_ms` in `~/.config/tuicr/config.toml`, unless you set it already.
 - On Linux and Omarchy, the extras in [platforms](development.md#platforms).
