@@ -172,7 +172,7 @@ EOF
 test_new_install_defaults() {
   reset_home
   BSTACK_NEW_INSTALL=1 default_user_config >"$TMP_DIR/on.toml"
-  assert_eq "opencode" "$(_bstack_toml_get agent command "$TMP_DIR/on.toml")" "new install desk agent"
+  assert_eq "pi" "$(_bstack_toml_get agent command "$TMP_DIR/on.toml")" "new install desk agent"
   assert_eq "true" "$(_bstack_toml_get bstack enabled "$TMP_DIR/on.toml")" "new install turns bstack on"
   assert_eq "pi" "$(_bstack_toml_get bstack harness "$TMP_DIR/on.toml")" "new config selects Pi"
   assert_eq "grok" "$(_bstack_toml_get bstack build "$TMP_DIR/on.toml")" "build role default"
@@ -213,6 +213,7 @@ test_deploy_renders_agents() {
   write_config <<'EOF'
 [bstack]
 enabled = true
+harness = "opencode"
 claude = "claude-agent/opus#high"
 gpt = "openai/gpt-6.1-sol"
 grok = ""
@@ -248,6 +249,7 @@ test_deploy_keeps_their_files() {
   write_config <<'EOF'
 [bstack]
 enabled = true
+harness = "opencode"
 EOF
   mkdir -p "$OPENCODE_CONFIG_DIR/commands"
   printf '{ "model": "mine/model" }\n' >"$OPENCODE_CONFIG_DIR/opencode.jsonc"
@@ -267,6 +269,7 @@ test_off_removes_only_ours() {
   write_config <<'EOF'
 [bstack]
 enabled = true
+harness = "opencode"
 claude = "claude-agent/opus"
 council = true
 EOF
@@ -290,6 +293,7 @@ test_council_seats_need_the_setting() {
   reset_home
   local oc="$OPENCODE_CONFIG_DIR" config='[bstack]
 enabled = true
+harness = "opencode"
 claude = "claude-agent/opus#high"
 gpt = "openai/gpt-6.1-sol"'
   write_config <<<"$config"
@@ -355,6 +359,9 @@ test_on_switches_stock_desk_agent() {
   write_config <<'EOF'
 [agent]
 command = "cursor-agent"
+
+[bstack]
+harness = "opencode"
 EOF
   bstack_on >/dev/null 2>&1
   assert_eq "opencode" "$(_bstack_toml_get agent command)" "on moves the stock desk agent to opencode"
@@ -362,6 +369,9 @@ EOF
   write_config <<'EOF'
 [agent]
 command = "claude"
+
+[bstack]
+harness = "opencode"
 EOF
   bstack_on >/dev/null 2>&1
   assert_eq "claude" "$(_bstack_toml_get agent command)" "on keeps a desk agent the person picked"
@@ -375,6 +385,7 @@ test_setup_auto_models() {
 command = "cursor-agent"
 
 [bstack]
+harness = "opencode"
 council = true
 EOF
   FAKE_CONNECTED="claude-agent xai" bstack_setup >"$TMP_DIR/setup.log" 2>&1 || fail "setup: $(cat "$TMP_DIR/setup.log")"
@@ -416,6 +427,7 @@ test_handoff_bstack_stage() {
   reset_home
   write_config <<'EOF'
 [bstack]
+harness = "opencode"
 claude = "claude-agent/opus#high"
 gpt = "openai/gpt-6.1-sol"
 lead = "gpt"
@@ -465,6 +477,7 @@ EOF
   write_config <<'EOF'
 [bstack]
 enabled = true
+harness = "opencode"
 claude = "claude-agent/opus"
 EOF
   FAKE_CONNECTED="" deploy_bstack >/dev/null 2>&1
@@ -477,6 +490,8 @@ EOF
 }
 
 test_pick_model() {
+  mkdir -p "$(dirname "$AGENTIC_DEV_USER_CONFIG")"
+  printf '[bstack]\nharness = "opencode"\n' >"$AGENTIC_DEV_USER_CONFIG"
   local m='xai/grok-4.20-0309-reasoning
 xai/grok-4.20-multi-agent-0309
 xai/grok-4.3
@@ -505,11 +520,12 @@ claude-agent/opus'
   local BSTACK_VARIANTS='xai/grok-4.7 low,medium,high,xhigh
 openai/gpt-6.1-sol low,medium,high,xhigh,max
 claude-agent/opus low,medium,high,xhigh,max'
+  printf '[bstack]\nharness = "opencode"\n' >"$AGENTIC_DEV_USER_CONFIG"
   assert_eq "openai/gpt-6.1-sol#high" "$(_bstack_pick_model gpt <<<"$m")" "high by default"
-  printf '[bstack]\neffort = "max"\n' >"$AGENTIC_DEV_USER_CONFIG"
+  printf '[bstack]\nharness = "opencode"\neffort = "max"\n' >"$AGENTIC_DEV_USER_CONFIG"
   assert_eq "xai/grok-4.7#xhigh" "$(_bstack_pick_model grok <<<"$m")" "grok has no max: the next level down"
   assert_eq "claude-agent/opus#max" "$(_bstack_pick_model claude <<<"$m")" "claude at max"
-  printf '[bstack]\neffort = "none"\n' >"$AGENTIC_DEV_USER_CONFIG"
+  printf '[bstack]\nharness = "opencode"\neffort = "none"\n' >"$AGENTIC_DEV_USER_CONFIG"
   assert_eq "openai/gpt-6.1-sol" "$(_bstack_pick_model gpt <<<"$m")" "none: the provider default"
   printf 'PASS: auto adds the [bstack] effort variant each model offers\n'
 }
@@ -600,12 +616,16 @@ test_pi_deploy() {
   grep -q 'You review someone else' "$p/agents/bstack-pr-review.md" || fail "pr-review keeps its body"
   grep -q 'one reviewer on a council' "$p/agents/bstack-council-claude.md" || fail "council keeps its body"
   grep -q 'Desks only' "$p/instructions.md" || fail "instructions require a desk"
-  grep -rqi 'headless' "$p/prompts" "$p/instructions.md" && fail "Pi has no headless fallback"
+  # A desk never falls back to headless; only a headless handoff's own brief says so.
+  grep -q 'exception: its system prompt says so' "$p/instructions.md" || fail "headless is only the handoff's exception"
+  grep -q 'Work single-agent' "$p/agents/bstack-headless.md" || fail "the headless brief is single-agent"
   grep -q -- '--branch NAME --stage bstack --issue ID' "$p/prompts/handoff.md" || fail "handoff opens a desk"
   cmp "$ROOT/bstack/pi/extensions/fallback.ts" "$p/extensions/fallback.ts" || fail "managed fallback extension"
+  cmp "$ROOT/bstack/pi/extensions/guard.ts" "$p/extensions/guard.ts" || fail "managed guard extension"
+  [[ -f "$p/agents/bstack-headless.md" ]] || fail "headless lead brief"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
     and (index(["-e", "npm:pi-claude-bridge@0.11.0"]) != null)
-    and (index(["-e", "\($p)/extensions/fallback.ts"]) != null)
+    and (index(["-e", "\($p)/extensions/fallback.ts", "-e", "\($p)/extensions/guard.ts"]) != null)
     and (index(["--prompt-template", "\($p)/prompts"]) != null)
     and (index(["--append-system-prompt", "\($p)/instructions.md"]) != null)
     and (index("--skill") != null) and (index("env") == null)' "$p/lead.json" >/dev/null \
@@ -620,7 +640,7 @@ test_pi_deploy() {
     sed -n 3p "$t/$rel.md" | grep -q "managed by bercail (bstack)" || fail "marker in the description of $rel"
     sed -n 5p "$t/$rel.md" | grep -qx -- '---' || fail "frontmatter holds only key: value in $rel"
     grep -q ' pi ' "$t/$rel.md" || fail "$rel runs pi"
-    grep -q -- "-e $p/extensions/fallback.ts" "$t/$rel.md" || fail "$rel loads fallback"
+    grep -q -- "-e $p/extensions/fallback.ts -e $p/extensions/guard.ts" "$t/$rel.md" || fail "$rel loads fallback then guard"
     grep -q -- "-e npm:pi-claude-bridge@0.11.0" "$t/$rel.md" || fail "$rel loads bridge"
     grep -q -- "env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN " "$t/$rel.md" || fail "$rel unsets Anthropic env"
     grep -q -- "--prompt-template $p/prompts" "$t/$rel.md" || fail "--prompt-template in $rel"
@@ -741,7 +761,25 @@ harness = "pi"
 command = "cursor-agent"
 EOF
   FAKE_PI_READY="claude-bridge" bstack_on >/dev/null 2>&1
-  assert_eq "cursor-agent" "$(_bstack_toml_get agent command)" "on with harness pi does not move the desk to opencode"
+  assert_eq "pi" "$(_bstack_toml_get agent command)" "on with harness pi moves the stock desk to pi"
+  write_config <<'EOF'
+[bstack]
+enabled = true
+
+[agent]
+command = "opencode"
+EOF
+  FAKE_PI_READY="claude-bridge" bstack_on >/dev/null 2>&1
+  assert_eq "pi" "$(_bstack_toml_get agent command)" "on moves bercail's old opencode desk to pi"
+  write_config <<'EOF'
+[bstack]
+enabled = true
+
+[agent]
+command = "claude"
+EOF
+  bstack_on >/dev/null 2>&1
+  assert_eq "claude" "$(_bstack_toml_get agent command)" "on keeps a desk agent the person picked"
   printf 'PASS: setup on Pi deploys and prints the logins to run\n'
 }
 test_pi_launch_contract() {
@@ -756,17 +794,19 @@ test_pi_launch_contract() {
     cmd="$(awk '/^command: / { sub(/^command: /, ""); print }' "$template")"
     eval "$cmd"
     grep -qxF "$(PI_DIR)/extensions/fallback.ts" "$FAKE_PI_LAUNCH_LOG" || fail "fallback in $template"
+    grep -qxF "$(PI_DIR)/extensions/guard.ts" "$FAKE_PI_LAUNCH_LOG" || fail "guard in $template"
     grep -qxF 'npm:pi-claude-bridge@0.11.0' "$FAKE_PI_LAUNCH_LOG" || fail "bridge in $template"
     grep -q '^ANTHROPIC_' "$FAKE_PI_LAUNCH_LOG.env" && fail "Anthropic env leaked from $template"
   done
   cmd="$(bstack_pi_command '' "$(bstack_role_model lead)")"
   eval "$cmd"
   grep -qxF "$(PI_DIR)/extensions/fallback.ts" "$FAKE_PI_LAUNCH_LOG" || fail "lead fallback"
+  grep -qxF "$(PI_DIR)/extensions/guard.ts" "$FAKE_PI_LAUNCH_LOG" || fail "lead guard"
   grep -qxF 'npm:pi-claude-bridge@0.11.0' "$FAKE_PI_LAUNCH_LOG" || fail "lead bridge"
   grep -q '^ANTHROPIC_' "$FAKE_PI_LAUNCH_LOG.env" && fail "Anthropic env leaked from lead"
   _bstack_pi_claude_ready || fail "Claude auth probe also sanitizes env"
   unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN FAKE_PI_LAUNCH_LOG FAKE_PI_READY
-  printf 'PASS: every Pi role including GPT/Grok council seats and empty-role lead loads both extensions and unsets Anthropic env\n'
+  printf 'PASS: every Pi role including GPT/Grok council seats and empty-role lead loads bridge, fallback, and guard, and unsets Anthropic env\n'
 }
 
 test_pi_fallback_config() {
@@ -796,10 +836,12 @@ test_pi_fallback_config() {
   _bstack_toml_set bstack fallback '[]'
   deploy_bstack >/dev/null 2>&1
   [[ ! -s "$(PI_DIR)/fallback" ]] || fail "empty fallback disables candidates"
-  rm "$(PI_DIR)/fallback" "$(PI_DIR)/models"
+  rm "$(PI_DIR)/fallback" "$(PI_DIR)/models" "$(PI_DIR)/extensions/guard.ts" "$(PI_DIR)/agents/bstack-headless.md"
   out="$(doctor_bstack)" && fail "doctor missing data files"
   grep -q 'missing  bstack .*fallback' <<<"$out" || fail "missing fallback: $out"
   grep -q 'missing  bstack .*models' <<<"$out" || fail "missing models: $out"
+  grep -q 'missing  bstack .*extensions/guard.ts' <<<"$out" || fail "missing guard: $out"
+  grep -q 'missing  bstack .*bstack-headless.md' <<<"$out" || fail "missing headless brief: $out"
   unset FAKE_PI_READY
   printf 'PASS: Pi fallback order validates families and duplicates, deploys separately, and doctor catches missing/stale config\n'
 }
@@ -843,19 +885,85 @@ test_pi_bridge_doctor() {
   printf 'PASS: Pi bridge install is required and idempotent; doctor verifies actual bridge, Claude Code auth and minimum Pi version\n'
 }
 
-test_harness_defaults_to_opencode() {
+test_harness_defaults_to_pi() {
   reset_home
   write_config <<'EOF'
 [bstack]
 enabled = true
 EOF
-  assert_eq "opencode" "$(bstack_harness)" "unset is opencode"
+  assert_eq "pi" "$(bstack_harness)" "unset is pi"
+  _bstack_toml_set bstack harness '"nope"'
+  assert_eq "pi" "$(bstack_harness)" "unknown falls back to pi"
+  local out
+  out="$(deploy_bstack 2>&1)" || fail "unknown harness deploys Pi: $out"
+  grep -q 'using pi' <<<"$out" || fail "unknown harness warns: $out"
+  grep -q 'using opencode' <<<"$out" && fail "unknown harness must not fall back to opencode: $out"
+  [[ -f "$(PI_DIR)/lead.json" ]] || fail "unknown harness deploys the Pi profile"
   _bstack_toml_set bstack harness '"opencode"'
   FAKE_CONNECTED="claude-agent" deploy_bstack >/dev/null 2>&1
-  [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "opencode renders no Pi profile"
+  [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "pinned opencode renders no Pi profile"
   grep -qx 'model: claude-agent/opus#high' "$OPENCODE_CONFIG_DIR/agents/bstack.md" || fail "opencode rendering is unchanged"
   grep -q 'harness' <<<"$(FAKE_CONNECTED="claude-agent" bstack_status)" && fail "opencode status is unchanged"
-  printf 'PASS: opencode stays the default harness\n'
+  printf 'PASS: Pi is the default harness; opencode only when pinned\n'
+}
+
+test_share_dir_defaults_when_unset() {
+  local dir
+  dir="$(
+    env -u AGENTIC_DEV_SHARE_DIR HOME="$HOME" bash --noprofile --norc -c \
+      'source "$1"; printf "%s" "$BSTACK_PI_DIR"' _ "$ROOT/lib/bstack.sh"
+  )"
+  assert_eq "$HOME/.local/share/bercail/pi" "$dir" "unset share dir is ~/.local/share/bercail/pi"
+  printf 'PASS: bstack paths default when AGENTIC_DEV_SHARE_DIR is unset\n'
+}
+
+test_migrate_opencode_desk_and_summary() {
+  reset_home
+  # shellcheck source=lib/help.sh
+  source "$ROOT/lib/help.sh"
+  write_config <<'EOF'
+[agent]
+command = "opencode"
+
+[bstack]
+enabled = true
+EOF
+  migrate_opencode_desk_command
+  assert_eq "pi" "$(_bstack_toml_get agent command)" "update migrates the old desk default"
+  local out
+  out="$(show_summary)"
+  grep -q 'bstack: on (pi)' <<<"$out" || fail "summary harness: $out"
+  grep -q 'bstack=pi, autopilot=pi (BERCAIL_ROLE=autopilot)' <<<"$out" || fail "summary stages: $out"
+  grep -q 'Agent command: pi ' <<<"$out" || fail "summary agent: $out"
+  grep -q 'opencode' <<<"$out" && fail "summary on Pi must not say opencode: $out"
+  write_config <<'EOF'
+[agent]
+command = "opencode"
+
+[bstack]
+enabled = true
+harness = "opencode"
+EOF
+  migrate_opencode_desk_command
+  assert_eq "opencode" "$(_bstack_toml_get agent command)" "pinned opencode harness keeps its desk"
+  out="$(show_summary)"
+  grep -q 'bstack: on (opencode)' <<<"$out" || fail "pinned summary: $out"
+  grep -q 'bstack=opencode, autopilot=opencode bstack-autopilot' <<<"$out" || fail "pinned stages: $out"
+  write_config <<'EOF'
+[agent]
+command = "claude"
+
+[bstack]
+enabled = true
+EOF
+  migrate_opencode_desk_command
+  assert_eq "claude" "$(_bstack_toml_get agent command)" "a chosen desk agent stays"
+  grep -q 'Existing configs without harness keep opencode' "$ROOT/lib/help.sh" \
+    && fail "help still says unset harness is opencode"
+  grep -q 'Pi on the desk' "$ROOT/lib/help.sh" || fail "help --bstack should say Pi on the desk"
+  grep -q 'pi -p' "$ROOT/lib/help.sh" || fail "help should say bstack runs pi -p"
+  grep -q 'opencode or Pi' "$ROOT/bin/bercail" && fail "usage still leads with opencode"
+  printf 'PASS: update migrates the old opencode desk default; summary names the harness\n'
 }
 
 test_toml_get_set
@@ -875,7 +983,9 @@ test_on_switches_stock_desk_agent
 test_setup_auto_models
 test_handoff_bstack_stage
 test_doctor
-test_harness_defaults_to_opencode
+test_harness_defaults_to_pi
+test_share_dir_defaults_when_unset
+test_migrate_opencode_desk_and_summary
 test_pi_models
 test_pi_deploy
 test_pi_keeps_their_template

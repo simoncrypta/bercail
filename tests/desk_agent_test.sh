@@ -35,15 +35,15 @@ CONFIG="$XDG_CONFIG_HOME/bercail/config.toml"
 desk() { "$ROOT/bin/bercail-desk-agent" "$@"; }
 expect() { [[ "$1" == "$2" ]] || fail "$3: got '$1', want '$2'"; }
 
-printf '[agent]\ncommand = "claude --verbose"  # mine\n\n[bstack]\nenabled = true\n' >"$CONFIG"
+printf '[agent]\ncommand = "claude --verbose"  # mine\n\n[bstack]\nenabled = true\nharness = "opencode"\n' >"$CONFIG"
 got="$(desk)"
-[[ "$got" == "opencode cli="* ]] || fail "bstack on runs opencode with no flags: $got"
+[[ "$got" == "opencode cli="* ]] || fail "pinned opencode runs opencode with no flags: $got"
 cli="${got#opencode cli=}"
 expect "$(jq -c '.theme' <<<"$cli")" '{"name":"system","mode":"system"}' "bstack's desk takes the terminal's palette"
 expect "$(jq -c '.highlights' <<<"$cli")" false "no release highlights on the desk"
 expect "$(jq -r '.tabs.mode' <<<"$cli")" off "tabs off: the TUI reports only its own session"
 expect "$(desk --prompt 'Do bercail-1')" "opencode [--prompt] [Do bercail-1] cli=$cli" "bstack prompt"
-printf 'PASS: bstack on runs opencode (full TUI, system theme), its prompt through --prompt\n'
+printf 'PASS: pinned opencode runs opencode (full TUI, system theme), its prompt through --prompt\n'
 
 expect "$(desk --prompt 'Do bercail-1' codex)" "codex [--no-daemon] [Do bercail-1] cli=none" "handoff codex"
 expect "$(desk codex --no-daemon)" "codex [--no-daemon] cli=none" "codex keeps one --no-daemon"
@@ -80,6 +80,15 @@ printf '[bstack]\nenabled = false\nharness = "pi"\n' >"$CONFIG"
 expect "$(ANTHROPIC_API_KEY=mine desk pi)" "pi [-e] [$EXT] key=mine" "bstack off: any Pi desk gets the extension, the env stays"
 rm -f "$EXT"
 printf 'PASS: bstack on Pi runs the lead from lead.json, with the desk extension and no Anthropic env\n'
+
+printf '[bstack]\nenabled = true\n' >"$CONFIG"
+expect "$(ANTHROPIC_API_KEY=secret desk)" \
+  "pi [--model] [claude-bridge/opus:high] [--append-system-prompt] [/a b/instructions.md] key=none" \
+  "bstack on, harness unset, runs the Pi lead from lead.json"
+printf '[bstack]\nenabled = true\nharness = "opencode"\n' >"$CONFIG"
+got="$(desk)"
+[[ "$got" == "opencode cli="* ]] || fail "pinned harness opencode stays opencode: $got"
+printf 'PASS: unset harness is the Pi lead; pinned opencode stays opencode\n'
 
 # --- the desk's record, for bercail desk restore ---
 

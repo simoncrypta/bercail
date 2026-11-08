@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# bstack: bercail's agent setup. One harness (opencode v2, or Pi with
-# [bstack] harness = "pi"), your own Claude, GPT, and Grok logins behind it, and
-# bercail's workflow on top. [bstack] in config.toml turns it on and maps roles
-# to models.
+# bstack: bercail's agent setup. Pi by default; opencode only with
+# [bstack] harness = "opencode". Your own Claude, GPT, and Grok logins sit behind
+# it, and bercail's workflow on top. [bstack] in config.toml turns it on and maps
+# roles to models.
 
 OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
 BSTACK_MARKER="managed by bercail (bstack)"
+# Paths below expand at source time. Same default as lib/common.sh: an unset
+# share dir would otherwise become /pi/...
+: "${AGENTIC_DEV_SHARE_DIR:=${HOME}/.local/share/bercail}"
 # The models deploy resolved, family=model per line. handoff-spawn reads it for
 # the families config.toml leaves on auto.
 BSTACK_RESOLVED="${AGENTIC_DEV_SHARE_DIR}/bstack-models"
@@ -25,7 +28,7 @@ BSTACK_PI_DIR="${AGENTIC_DEV_SHARE_DIR}/pi"
 BSTACK_PI_TEMPLATES="${XDG_CONFIG_HOME:-$HOME/.config}/herdr-core/templates"
 BSTACK_PI_BRIDGE="npm:pi-claude-bridge@0.11.0"
 BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge.md
-  agents/bstack-autopilot.md prompts/ready.md prompts/council.md prompts/handoff.md
+  agents/bstack-autopilot.md agents/bstack-headless.md prompts/ready.md prompts/council.md prompts/handoff.md
   prompts/autopilot.md prompts/how.md prompts/why.md prompts/unslop.md prompts/pr-review.md
   prompts/bstack-setup.md)
 
@@ -86,11 +89,16 @@ bstack_council_enabled() {
   [[ "$(_bstack_toml_get bstack council)" == true ]]
 }
 
-# Which harness runs bstack: pi, or opencode when unset.
+# Which harness runs bstack. Unset is pi. Only an explicit "opencode" is
+# opencode; anything else is pi (deploy warns).
 bstack_harness() {
   local harness
   harness="$(_bstack_toml_get bstack harness)"
-  printf '%s' "${harness:-opencode}"
+  if [[ "$harness" == opencode ]]; then
+    printf 'opencode'
+  else
+    printf 'pi'
+  fi
 }
 
 _bstack_on_pi() {
@@ -399,7 +407,7 @@ _bstack_pi_argv() {
   local model="$1" brief="${2:-}" id
   BSTACK_PI_ARGV=(pi)
   [[ -z "$model" ]] || BSTACK_PI_ARGV+=(--model "$(_bstack_pi_model_id "$model")")
-  BSTACK_PI_ARGV+=(-e "$BSTACK_PI_BRIDGE" -e "$BSTACK_PI_DIR/extensions/fallback.ts")
+  BSTACK_PI_ARGV+=(-e "$BSTACK_PI_BRIDGE" -e "$BSTACK_PI_DIR/extensions/fallback.ts" -e "$BSTACK_PI_DIR/extensions/guard.ts")
   BSTACK_PI_ARGV+=(--prompt-template "$BSTACK_PI_DIR/prompts"
     --append-system-prompt "$BSTACK_PI_DIR/instructions.md")
   [[ -z "$brief" ]] || BSTACK_PI_ARGV+=(--append-system-prompt "$BSTACK_PI_DIR/agents/$brief.md")
@@ -444,6 +452,7 @@ _bstack_deploy_pi() {
     copy_file "$work/pi-rendered" "$BSTACK_PI_DIR/$rel"
   done
   copy_file "$work/src/pi/extensions/fallback.ts" "$BSTACK_PI_DIR/extensions/fallback.ts"
+  copy_file "$work/src/pi/extensions/guard.ts" "$BSTACK_PI_DIR/extensions/guard.ts"
   bstack_pi_fallback >"$work/fallback" || return 1
   copy_file "$work/fallback" "$BSTACK_PI_DIR/fallback"
   _bstack_body "$work/src/agents/bstack-pr-review.md" >"$work/pr-review.md"
@@ -502,7 +511,7 @@ _bstack_remove_pi() {
   [[ ! -d "$BSTACK_PI_DIR" ]] || { info "remove: $BSTACK_PI_DIR"; run rm -rf "$BSTACK_PI_DIR"; }
 }
 
-# Install what the harness needs: Pi, or opencode.
+# Install what the harness needs: Pi, or opencode when that harness is pinned.
 _bstack_install_harness() {
   if _bstack_on_pi; then
     maybe_mise_install pi pi || return 1
@@ -607,7 +616,7 @@ _bstack_doctor_pi() {
   else
     log "  --  Claude auth: no subscription login (claude auth login)"
   fi
-  for rel in "${BSTACK_PI_RENDERED[@]}" agents/bstack-pr-review.md extensions/fallback.ts models fallback lead.json; do
+  for rel in "${BSTACK_PI_RENDERED[@]}" agents/bstack-pr-review.md extensions/fallback.ts extensions/guard.ts models fallback lead.json; do
     if [[ ! -f "$BSTACK_PI_DIR/$rel" ]]; then
       log "  missing  bstack $BSTACK_PI_DIR/$rel (bercail update)"
       missing=1
@@ -714,10 +723,18 @@ _bstack_resolved_text() {
 }
 
 deploy_bstack() {
-  local work rel family model jsonc
+  local work rel family model jsonc raw
   if ! bstack_enabled; then
     remove_bstack quiet
     return 0
+  fi
+  raw="$(_bstack_toml_get bstack harness)"
+  if [[ -n "$raw" && "$raw" != pi && "$raw" != opencode ]]; then
+    warn "[bstack] harness = \"$raw\" is not pi or opencode; using pi"
+  fi
+  # First update from an older bercail sources this file, then calls deploy_bstack.
+  if declare -F migrate_opencode_desk_command >/dev/null; then
+    migrate_opencode_desk_command
   fi
   if _bstack_on_pi; then
     bstack_pi_fallback >/dev/null || return 1
@@ -745,7 +762,6 @@ deploy_bstack() {
     rm -rf "$work"
     return "$result"
   fi
-  [[ "$(bstack_harness)" == opencode ]] || warn "[bstack] harness = \"$(bstack_harness)\" is not pi or opencode; using opencode"
   _bstack_remove_pi
 
   ensure_dir "$OPENCODE_CONFIG_DIR"
@@ -849,11 +865,18 @@ bstack_status() {
   log "  config: [bstack] in $AGENTIC_DEV_USER_CONFIG (auto picks the newest model; set claude/gpt/grok to pin one)"
 }
 
-# On: bstack becomes the desk's default agent when the desk still runs bercail's
-# old default. Off: remove bstack's opencode files; the agent command stays.
+# On: the desk's old default becomes this harness's agent. Off: remove bstack's
+# files; the agent command stays.
 bstack_on() {
+  local cmd
   _bstack_toml_set bstack enabled true
-  if ! _bstack_on_pi && [[ "$(read_agent_command)" == cursor-agent ]]; then
+  cmd="$(read_agent_command)"
+  if _bstack_on_pi; then
+    if [[ "$cmd" == cursor-agent || "$cmd" == opencode ]]; then
+      _bstack_toml_set agent command '"pi"'
+      info "desk agent default: pi (was $cmd)"
+    fi
+  elif [[ "$cmd" == cursor-agent ]]; then
     _bstack_toml_set agent command '"opencode"'
     info "desk agent default: opencode (was cursor-agent)"
   fi

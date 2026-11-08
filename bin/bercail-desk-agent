@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # The desk agent. Usage: bercail-desk-agent [--prompt TEXT] [COMMAND [ARGS...]]
 #
-# COMMAND defaults to opencode when bstack is on ([bstack] enabled = true),
-# else bercail's [agent] command. opencode with bstack on gets the terminal's
-# palette (the system theme) and runs bstack, its default agent. The full TUI,
-# not `opencode mini`: only the full TUI reports its status (OSC 7501), which
-# the desk column's header and Review's auto-open read. With [bstack]
-# harness = "pi" it is Pi with the lead's profile, which bercail update writes.
+# COMMAND defaults to the Pi lead when bstack is on ([bstack] enabled = true)
+# and harness is not "opencode" (unset is Pi). Pinned opencode gets the
+# terminal's palette and runs the full TUI, not `opencode mini`: only the full
+# TUI reports its status (OSC 7501), which the desk column's header and Review's
+# auto-open read. Otherwise the default is [agent] command. The Pi lead is
+# lead.json, which bercail update writes.
 set -euo pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml"
@@ -36,7 +36,7 @@ fi
 
 bstack=0 on_pi=0
 [[ "$(toml_get bstack enabled)" == true ]] && bstack=1
-[[ "$bstack" -eq 1 && "$(toml_get bstack harness)" == pi ]] && on_pi=1
+[[ "$bstack" -eq 1 && "$(toml_get bstack harness)" != opencode ]] && on_pi=1
 
 argv=("$@")
 if [[ ${#argv[@]} -eq 0 ]]; then

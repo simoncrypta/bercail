@@ -195,6 +195,27 @@ EOF
   rm -rf "$HOME/.local/share/omarchy" "$HOME/.config/omarchy" "$HOME/.config/agentic-dev"
 }
 
+test_sync_omarchy_rewrites_old_opencode_default() {
+  mkdir -p "$HOME/.local/share/omarchy" "$HOME/.config/omarchy/defaults"
+  printf 'opencode\n' >"$HOME/.config/omarchy/defaults/agent"
+  read_agent_command() { printf 'pi'; }
+  RECONFIGURE=0
+  sync_omarchy_default_agent
+  assert_eq "pi" "$(tr -d '\n' <"$HOME/.config/omarchy/defaults/agent")" \
+    "old opencode default follows the desk command to pi"
+  printf 'claude\n' >"$HOME/.config/omarchy/defaults/agent"
+  sync_omarchy_default_agent
+  assert_eq "claude" "$(tr -d '\n' <"$HOME/.config/omarchy/defaults/agent")" \
+    "a chosen omarchy agent stays"
+  printf 'opencode\n' >"$HOME/.config/omarchy/defaults/agent"
+  read_agent_command() { printf 'opencode'; }
+  sync_omarchy_default_agent
+  assert_eq "opencode" "$(tr -d '\n' <"$HOME/.config/omarchy/defaults/agent")" \
+    "pinned opencode desk keeps the omarchy default"
+  unset -f read_agent_command
+  rm -rf "$HOME/.local/share/omarchy" "$HOME/.config/omarchy"
+}
+
 test_is_omarchy_isolated_home
 test_is_omarchy_user_share
 test_is_omarchy_omarchy_path
@@ -206,6 +227,7 @@ test_lua_binding_generic
 test_patch_lua_bindings
 test_doctor_herdr_app_binding
 test_sync_omarchy_default_agent
+test_sync_omarchy_rewrites_old_opencode_default
 
 printf '%s passed, %s failed\n' "$pass" "$fail"
 ((fail == 0))

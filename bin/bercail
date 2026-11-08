@@ -140,14 +140,15 @@ cmd_update() {
 cmd_reconfigure() {
   RECONFIGURE=1
   prompt_user_config
+  migrate_opencode_desk_command
   deploy_skills
   ensure_selected_agent
   ensure_selected_layout_tools
   deploy_bstack
   sync_omarchy_default_agent
   info "desk agent: $(read_agent_command)  review=$(read_layout_review)"
-  info "claude, codex, cursor-agent, and opencode are optional; run bercail harness to see what is on PATH"
-  info "the desk runs bstack when it is on (it starts on its own in each space), else [agent] command in $AGENTIC_DEV_USER_CONFIG"
+  info "claude, codex, cursor-agent, opencode, and pi are optional; run bercail harness to see what is on PATH"
+  info "the desk runs Pi when bstack is on (opencode only with harness = \"opencode\"), else [agent] command in $AGENTIC_DEV_USER_CONFIG"
 }
 
 usage() {
@@ -159,7 +160,7 @@ Commands:
   install       Full install from this release (after mise or packslip)
   doctor        Check dependencies and integration
   harness       JSON: which of claude, codex, cursor-agent, opencode, pi are on PATH
-  bstack        opencode or Pi with your Claude/GPT/Grok subscriptions: status | setup | on | off
+  bstack        Pi (opencode only with harness = "opencode"): status | setup | on | off
   desk          Bring back the desk agents a reboot took: desk restore [--dry-run]
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
   review-pr     Review someone else's PR by intent and decisions: review-pr <PR url> | run | card | ui | open

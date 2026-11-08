@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-# A new install runs bstack (opencode) on the desk; --no-bstack keeps cursor-agent.
+# A new install runs bstack (Pi) on the desk; --no-bstack keeps cursor-agent.
 default_user_config() {
   local agent=cursor-agent
-  [[ "${BSTACK_NEW_INSTALL:-1}" -eq 1 ]] && agent=opencode
+  [[ "${BSTACK_NEW_INSTALL:-1}" -eq 1 ]] && agent=pi
   printf '[agent]\ncommand = "%s"\n' "$agent"
   cat <<'EOF'
 
@@ -22,7 +22,7 @@ EOF
 # Pi with your own logins. `bercail bstack setup` shows what's missing;
 # `bercail bstack off` turns bstack off.
 enabled = true
-# Which harness runs bstack: pi, or opencode to keep the older harness.
+# Which harness runs bstack: pi, or opencode (opt-in).
 harness = "pi"
 # A model per provider. Empty: auto, the newest model of each connected plan
 # (re-picked on bercail update). Set a provider/model id (#variant allowed) to pin one.
@@ -306,7 +306,7 @@ EOF
   info "saved config to $AGENTIC_DEV_USER_CONFIG"
 }
 
-# No install-time agent picker. The desk agent defaults to opencode as bstack
+# No install-time agent picker. The desk agent defaults to pi as bstack
 # (cursor-agent with --no-bstack).
 # Override [agent] command in config.toml yourself, then bercail reconfigure.
 prompt_user_config() {
@@ -316,7 +316,7 @@ prompt_user_config() {
     return 0
   fi
   local agent=cursor-agent
-  [[ "${BSTACK_NEW_INSTALL:-1}" -eq 1 ]] && agent="opencode (bstack)"
+  [[ "${BSTACK_NEW_INSTALL:-1}" -eq 1 ]] && agent="pi (bstack)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     info "[dry-run] would write default $AGENTIC_DEV_USER_CONFIG (agent=$agent)"
     return 0
@@ -407,6 +407,31 @@ migrate_cursor_cli_command() {
   ' "$dest" >"$tmp"
   mv "$tmp" "$dest"
   info "migrated agent command to cursor-agent"
+}
+
+# bercail's old desk default was opencode. On Pi, that becomes pi. A pinned
+# harness = "opencode" is left alone, and so is any command the person chose.
+migrate_opencode_desk_command() {
+  local dest="$AGENTIC_DEV_USER_CONFIG" tmp
+  [[ -f "$dest" ]] || return 0
+  declare -F bstack_enabled >/dev/null || return 0
+  bstack_enabled || return 0
+  declare -F bstack_harness >/dev/null || return 0
+  [[ "$(bstack_harness)" == pi ]] || return 0
+  grep -Eq '^command[[:space:]]*=[[:space:]]*"opencode"[[:space:]]*$' "$dest" || return 0
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "[dry-run] would migrate agent command opencode → pi"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  awk '
+    /^command[[:space:]]*=[[:space:]]*"opencode"[[:space:]]*$/ {
+      sub(/"opencode"/, "\"pi\"")
+    }
+    { print }
+  ' "$dest" >"$tmp"
+  mv "$tmp" "$dest"
+  info "migrated agent command to pi"
 }
 
 # Say what this install or update deploys from. A clone off master (or off a
@@ -590,6 +615,7 @@ deploy_configs() {
   migrate_agentic_dev_to_bercail
   prompt_user_config
   migrate_cursor_cli_command
+  migrate_opencode_desk_command
   migrate_hunk_review_to_tuicr
 
   ensure_dir "$AGENTIC_DEV_CONFIG_DIR"

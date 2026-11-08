@@ -5,8 +5,9 @@ description: >-
   issue (bd); the agent prompt is one line pointing at it. Stage start is one headless claude
   process. Stage codex is one headless `codex exec` process. Stage cursor is
   one headless `cursor-agent --print` process. Stage bstack is one headless
-  `opencode run --agent bstack` process; stage autopilot is the same with
-  `--agent bstack-autopilot`, which may commit and push a PR's fixes. None of those open anything in
+  `pi -p` process (opencode only when `[bstack] harness = "opencode"`); stage
+  autopilot is the same run with `BERCAIL_ROLE=autopilot`, which may commit and
+  push a PR's fixes. None of those open anything in
   the Herdr app. `--branch` makes a sibling worktree with its own Herdr app
   space whose desk agent runs the stage's binary. Shep owns the workflow;
   bercail adds no per-harness mode.
@@ -54,7 +55,7 @@ from bercail: the worktree, and for headless stages the result file and
 session id. `--info` reports `beads` (bd on PATH). bercail install and update
 install beads; the command is `bd`.
 
-## Headless stages (claude, Codex, cursor-agent, or opencode)
+## Headless stages (claude, Codex, cursor-agent, or Pi)
 
 Shep runs these. They do not open anything in the Herdr app. Bercail has no preference
 among claude, codex, and cursor-agent; the caller names the stage or
@@ -65,17 +66,20 @@ It does not choose. Missing CLIs are `present: false`, not an error.
 `codex exec --json` process (`-m` when the table has a model; resume is
 `codex exec resume`). `--stage cursor` or `--binary cursor-agent` is one
 `cursor-agent --print --output-format json` process (`--model` when the table
-has a model; resume is `--resume <session_id>`). `--stage bstack` or
-`--binary opencode` is one `opencode run --format json --agent bstack`
-process on your own subscriptions. It has no `--auto`, so every "ask" (commit,
-push, merge) is rejected and the agent goes on without it. `--stage autopilot`
-runs `--agent bstack-autopilot` instead: that agent allows commit and push, and
-denies merge; point `--worktree` at the PR's checkout (headless only); `--model` comes from `[bstack]` in
-bercail's config.toml (bstack: the lead's model; with `--binary opencode`,
-start uses claude and codex uses gpt). Resume is `--session <ses_...>`, and
-`session_id` is the `sessionID` in its JSON lines. claude gets `Bash(bd *)` so
+has a model; resume is `--resume <session_id>`). `--stage bstack` is one
+`pi -p --mode json --session-id <uuid>` process on the lead's profile, unless
+`[bstack] harness = "opencode"`, which keeps `opencode run --format json
+--agent bstack`. `--binary pi` on start uses the claude family model and on
+codex the gpt family; cursor and bstack use the lead. `--binary opencode` still
+runs opencode and keeps that provider (start: claude, codex: gpt). Pi has no
+`--add-dir`. It mints the session uuid up front; resume passes the same
+`--session-id`. An opencode `ses_` id cannot be resumed on Pi. `--stage
+autopilot` is the same Pi run with `BERCAIL_ROLE=autopilot` (or opencode's
+`bstack-autopilot` when that harness is selected): it may commit and push, and
+the guard blocks a push to main or master, a force-push, and a merge. Point
+`--worktree` at the PR's checkout (headless only). claude gets `Bash(bd *)` so
 it can run bd in `--print`. When bd's `.beads` is outside the worktree (a
-linked worktree), every harness gets `--add-dir` for it.
+linked worktree), claude, codex, and cursor-agent get `--add-dir` for it.
 
 If the requested harness, bd, or the issue is missing, the stage writes
 `<worktree>/.bercail/handoff-result.json` with status `blocked`, starts
@@ -87,14 +91,15 @@ drops a malformed array and keeps the rest of the result. When the run stops on 
 `usage-limit`. It does not rerun or switch plans. Read that file. Do not scrape
 terminal output. For Codex,
 `session_id` is the JSONL `thread.started` thread id. For cursor-agent, it is
-the print JSON `session_id`. When there is no resumable session (blocked before
+the print JSON `session_id`. For Pi, it is the uuid bercail passed, or the
+session header's id when Pi reports a different one. When there is no resumable session (blocked before
 codex or cursor-agent ran, or no id in its log), `session_id` is `none`;
 `--resume` refuses it.
 
 ```bash
 bercail harness
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --stage start --issue <id> --worktree <checkout> [--binary claude|codex|cursor-agent|opencode] [--dry-run]
+  --stage start --issue <id> --worktree <checkout> [--binary claude|codex|cursor-agent|opencode|pi] [--dry-run]
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
   --stage start --issue <id> --worktree <checkout> --resume <session_id>
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
@@ -102,9 +107,9 @@ bercail harness
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
   --stage cursor --issue <id> --worktree <checkout> [--resume <session_id>] [--dry-run]
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --stage bstack --issue <id> --worktree <checkout> [--resume <ses_id>] [--dry-run]
+  --stage bstack --issue <id> --worktree <checkout> [--resume <uuid>] [--dry-run]
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --stage autopilot --issue <id> --worktree <the PR's checkout> [--resume <ses_id>]
+  --stage autopilot --issue <id> --worktree <the PR's checkout> [--resume <uuid>]
 ```
 
 `--resume` continues that session. It does not touch any desk agent. `--dry-run` prints
@@ -134,7 +139,7 @@ working directory to `cwd` from `--info`. Flags only.
 `--branch` makes a sibling worktree (`wt switch --create`), opens a Herdr app
 space on it (worktrunk's post-start hook), and starts that space's desk agent:
 an hc terminal running the named stage's binary (claude, codex,
-cursor-agent, or opencode) with a one-line prompt pointing at the issue as its first message, labelled
+cursor-agent, or pi) with a one-line prompt pointing at the issue as its first message, labelled
 `bercail.role=agent`, `bercail.space=<space id>`, and, when known, `bercail.issue` and `bercail.issue_title`. The bercail layout shows
 it in the desk column. `--stage` is required; bercail has no default harness.
 A missing binary fails before any worktree is made. A desk already running in

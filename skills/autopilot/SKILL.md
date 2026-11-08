@@ -13,8 +13,10 @@ Asking for autopilot is the ask to commit and push to the PR's branch. That is
 the exception to "stage, do not commit". It never force-pushes, never merges
 the PR, never pushes to the base branch, and never passes `--no-verify`.
 
-In opencode, `/autopilot` runs as the `bstack-autopilot` agent, which may commit
-and push without asking. Other harnesses ask at each push.
+On Pi, a headless autopilot run may commit and push; the guard blocks a push to
+main or master, a force-push, and a merge. With `[bstack] harness = "opencode"`,
+`/autopilot` runs as the `bstack-autopilot` agent, which may commit and push
+without asking. Other harnesses ask at each push.
 
 ## 0. The backend and PR
 
@@ -108,9 +110,10 @@ a person. Do not merge. Say "ready to merge" when it is.
 
 ## Inside bercail
 
-- Watch from a desk: `/autopilot` in opencode, or hand it off as its own job
-  (a beads issue that names the PR, then `handoff-spawn --stage autopilot
-  --issue <id> --worktree <the PR's checkout>`). Headless runs reject every
-  "ask", so the `bstack` stage cannot push; `autopilot` runs `bstack-autopilot`.
+- Watch from a desk, or hand it off as its own job (a beads issue that names
+  the PR, then `handoff-spawn --stage autopilot --issue <id> --worktree <the
+  PR's checkout>`). That headless stage runs Pi unless `[bstack] harness =
+  "opencode"`. The `bstack` stage cannot push; `autopilot` can, and the guard
+  still blocks a push to main or master.
 - The person's tuicr review comes before the PR, not after: autopilot answers
   GitHub, not tuicr.

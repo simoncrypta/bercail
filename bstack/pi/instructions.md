@@ -77,7 +77,8 @@ hc run --bg --name <issue>-build --cwd <worktree> \
 
 Run bstack in an interactive Herdr desk. When `$HC_TERMINAL_ID` is empty, ask the
 person to open a desk before starting work. Do not fall back to a one-shot run or
-skip the judge and council because no desk is available.
+skip the judge and council because no desk is available. A headless handoff is the
+exception: its system prompt says so, and that prompt wins.
 
 ## Finishing (bercail's review loop)
 

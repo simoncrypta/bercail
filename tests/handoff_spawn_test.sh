@@ -863,7 +863,7 @@ test_codex_stage_dry_run() {
   err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" \
     --stage start --issue "$ISSUE" --binary cursor --worktree "$wt" --dry-run 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "bad --binary should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q 'claude, codex, cursor-agent, or opencode' || fail "bad --binary message: $err"
+  printf '%s' "$err" | grep -q 'claude, codex, cursor-agent, opencode, or pi' || fail "bad --binary message: $err"
   unset BERCAIL_CLAUDE_MODEL_CATALOG
   printf 'PASS: codex dry-run is exec --json; resume is exec resume; --binary selects it\n'
 }
@@ -1931,3 +1931,155 @@ HC
 test_issue_title_normalises_and_degrades
 test_issue_title_on_headless_runs
 test_branch_carries_issue_title
+
+_pi_profile() {
+  local profile="$TMP_DIR/pi-profile" guard="$TMP_DIR/pi-profile/extensions/guard.ts"
+  mkdir -p "$profile/extensions" "$profile/agents"
+  printf '// guard\n' >"$guard"
+  jq -n --arg guard "$guard" --arg model "claude-bridge/lead-model:high" \
+    --arg prompts "$profile/prompts" --arg instructions "$profile/instructions.md" \
+    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard,"--prompt-template",$prompts,"--append-system-prompt",$instructions]' \
+    >"$profile/lead.json"
+  printf 'claude=claude-bridge/family-claude#high\ngpt=openai/family-gpt#high\n' >"$profile/models"
+  printf '%s' "$profile"
+}
+
+test_pi_headless_stage() {
+  local saved_config="${BERCAIL_CONFIG-}" saved_profile="${HANDOFF_PI_PROFILE-}" saved_models="${BERCAIL_BSTACK_MODELS-}"
+  local profile wt out err rc=0 sid stub
+  profile="$(_pi_profile)"
+  printf '[bstack]\nharness = "pi"\nenabled = true\nlead = "openai/from-config"\n' >"$TMP_DIR/pi.toml"
+  printf '[bstack]\nharness = "opencode"\nlead = "openai/from-config"\n' >"$TMP_DIR/oc.toml"
+  export BERCAIL_CONFIG="$TMP_DIR/pi.toml"
+  export HANDOFF_PI_PROFILE="$profile"
+  export BERCAIL_BSTACK_MODELS="$TMP_DIR/no-bstack-models"
+  : >"$BERCAIL_BSTACK_MODELS"
+  export HANDOFF_PI_BIN="$TMP_DIR/bin/pi-missing"
+  wt="$TMP_DIR/pi-dry"
+  mkdir -p "$wt"
+
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e --arg bin "$HANDOFF_PI_BIN" --arg profile "$profile" --arg model "claude-bridge/lead-model:high" --arg id "$ISSUE" '
+    .dry_run == true and .binary == "pi" and .model == $model and .stage == "bstack"
+    and .command[0:11] == ["env","-u","ANTHROPIC_API_KEY","-u","ANTHROPIC_BASE_URL","-u","ANTHROPIC_AUTH_TOKEN","-u","BERCAIL_ROLE","-u","HC_TERMINAL_ID"]
+    and (any(.command[]; . == "BERCAIL_ROLE=autopilot") | not)
+    and .command[11] == $bin
+    and .command[12:16] == ["-p","--mode","json","--session-id"]
+    and (.command[16] | test("^[0-9a-fA-F-]{36}$"))
+    and .session_id == .command[16]
+    and .command[(.command | index("--model")) + 1] == $model
+    and any(.command[]; . == ($profile + "/extensions/guard.ts"))
+    and any(.command[]; . == ($profile + "/agents/bstack-headless.md"))
+    and (any(.command[]; . == ($profile + "/agents/bstack-autopilot.md")) | not)
+    and (any(.command[]; . == "--add-dir") | not)
+    and .command[-2] == "--"
+    and (.command[-1] | startswith("Your job is beads issue " + $id))
+  ' >/dev/null || fail "bstack pi argv: $out"
+
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage autopilot --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e --arg bin "$HANDOFF_PI_BIN" --arg profile "$profile" '
+    .binary == "pi" and .stage == "autopilot"
+    and .command[0:11] == ["env","-u","ANTHROPIC_API_KEY","-u","ANTHROPIC_BASE_URL","-u","ANTHROPIC_AUTH_TOKEN","-u","BERCAIL_ROLE","-u","HC_TERMINAL_ID"]
+    and .command[11] == "BERCAIL_ROLE=autopilot"
+    and .command[12] == $bin
+    and .command[13:17] == ["-p","--mode","json","--session-id"]
+    and any(.command[]; . == ($profile + "/agents/bstack-headless.md"))
+    and any(.command[]; . == ($profile + "/agents/bstack-autopilot.md"))
+    and .command[-2] == "--"
+  ' >/dev/null || fail "autopilot pi argv: $out"
+
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage start --issue "$ISSUE" --binary pi --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.binary == "pi" and .model == "claude-bridge/family-claude:high" and .command[(.command | index("--model")) + 1] == "claude-bridge/family-claude:high"' >/dev/null \
+    || fail "start --binary pi family model: $out"
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage codex --issue "$ISSUE" --binary pi --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.binary == "pi" and .model == "openai/family-gpt:high"' >/dev/null \
+    || fail "codex --binary pi family model: $out"
+
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --binary opencode --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.binary == "opencode" and .command[0:6] == ["opencode","run","--format","json","--agent","bstack"] and .model == "openai/from-config"' >/dev/null \
+    || fail "--binary opencode still runs opencode: $out"
+
+  export BERCAIL_CONFIG="$TMP_DIR/oc.toml"
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.binary == "opencode" and .command[0:6] == ["opencode","run","--format","json","--agent","bstack"] and .model == "openai/from-config"' >/dev/null \
+    || fail "harness opencode keeps today argv: $out"
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage autopilot --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  printf '%s' "$out" | jq -e '.binary == "opencode" and .command[5] == "bstack-autopilot"' >/dev/null \
+    || fail "harness opencode autopilot: $out"
+  export BERCAIL_CONFIG="$TMP_DIR/pi.toml"
+
+  sid=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --resume "$sid" --dry-run)"
+  printf '%s' "$out" | jq -e --arg sid "$sid" '.resume == true and .session_id == $sid and .command[(.command | index("--session-id")) + 1] == $sid and (any(.command[]; . == "--resume") | not)' >/dev/null \
+    || fail "pi resume reuses the uuid: $out"
+  rc=0
+  err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --resume ses_abc --dry-run 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "ses_ resume should fail"
+  printf '%s' "$err" | grep -q 'opencode sessions cannot be resumed on Pi' || fail "ses_ message: $err"
+
+  export HANDOFF_PI_PROFILE="$TMP_DIR/no-pi-profile"
+  mkdir -p "$HANDOFF_PI_PROFILE"
+  rm -f "$wt/.bercail/handoff-result.json"
+  rc=0
+  err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --dry-run 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "missing lead.json should fail a dry run"
+  printf '%s' "$err" | grep -q 'bercail update' || fail "missing lead.json dry-run message: $err"
+  [[ ! -e "$wt/.bercail/handoff-result.json" ]] || fail "a dry run writes no result file"
+  rc=0
+  err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "missing lead.json should block"
+  jq -e '.status == "blocked" and (.summary | test("bercail update"))' "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "missing lead.json result: $(cat "$wt/.bercail/handoff-result.json") $err"
+  rm -f "$wt/.bercail/handoff-result.json"
+  jq -n --arg model "claude-bridge/lead-model:high" '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0"]' >"$HANDOFF_PI_PROFILE/lead.json"
+  rc=0
+  err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "missing guard should block"
+  jq -e '.status == "blocked" and (.summary | test("guard")) and (.summary | test("bercail update"))' "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "missing guard result: $(cat "$wt/.bercail/handoff-result.json")"
+  export HANDOFF_PI_PROFILE="$profile"
+
+  _bd_stub
+  stub="$TMP_DIR/bin/pi"
+  mkdir -p "$TMP_DIR/bin"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${PI_STUB_MODE:-}" == error ]]; then
+  printf '%s\n' '{"type":"session","version":3,"id":"bbbbbbbb-cccc-4ddd-8eee-ffffffffffff"}'
+  printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"provider exploded"}}'
+  exit 0
+fi
+printf '%s\n' '{"type":"session","version":3,"id":"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"}'
+printf '%s\n' '{"type":"agent_settled"}'
+jq -nc '{status:"ready", summary:"wrote the fix"}' >"$BERCAIL_RESULT_PATH"
+exit 0
+STUB
+  chmod +x "$stub"
+  export HANDOFF_PI_BIN="$stub"
+  local runwt="$TMP_DIR/pi-run" errf="$TMP_DIR/pi-header.err"
+  mkdir -p "$runwt"
+  out="$(cd "$runwt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$runwt" 2>"$errf")"
+  grep -q 'using the header' "$errf" || fail "header mismatch should be said: $(cat "$errf")"
+  jq -e '.status == "ready" and .session_id == "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"' "$runwt/.bercail/handoff-result.json" >/dev/null \
+    || fail "header session: $(cat "$runwt/.bercail/handoff-result.json")"
+
+  export PI_STUB_MODE=error
+  local failwt="$TMP_DIR/pi-fail"
+  mkdir -p "$failwt"
+  rc=0
+  out="$(cd "$failwt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$failwt" 2>"$TMP_DIR/pi-fail.err")" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "pi exit 0 with an error message_end should fail"
+  jq -e '.status == "failed" and .session_id == "bbbbbbbb-cccc-4ddd-8eee-ffffffffffff" and (has("reason") | not)' \
+    "$failwt/.bercail/handoff-result.json" >/dev/null \
+    || fail "pi provider error result: $(cat "$failwt/.bercail/handoff-result.json")"
+  unset PI_STUB_MODE
+
+  if [[ -n "$saved_config" ]]; then export BERCAIL_CONFIG="$saved_config"; else unset BERCAIL_CONFIG; fi
+  if [[ -n "$saved_profile" ]]; then export HANDOFF_PI_PROFILE="$saved_profile"; else unset HANDOFF_PI_PROFILE; fi
+  if [[ -n "$saved_models" ]]; then export BERCAIL_BSTACK_MODELS="$saved_models"; else unset BERCAIL_BSTACK_MODELS; fi
+  unset HANDOFF_PI_BIN
+  printf 'PASS: headless bstack and autopilot run Pi, and opencode stays opt-in\n'
+}
+
+test_pi_headless_stage

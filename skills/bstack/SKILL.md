@@ -92,10 +92,10 @@ The person reviewed in tuicr, committed, and opened the PR. Now:
 
 1. One beads issue per job (`bd create`). The issue is the spec; it says what
    done looks like.
-2. Run the `handoff` skill. Stage `bstack` runs on the lead's model through
-   opencode; `--binary opencode` with `--stage start` or `--stage codex` runs
-   Claude or GPT through opencode. `--branch NAME` opens a sibling desk; without
-   it the run is headless.
+2. Run the `handoff` skill. Stage `bstack` runs the lead on Pi (opencode only
+   with `[bstack] harness = "opencode"`); `--binary pi` with `--stage start` or
+   `--stage codex` runs Claude or GPT through Pi. `--branch NAME` opens a
+   sibling desk; without it the run is headless and single-agent.
 3. Report the spawn JSON and stop. Follow a desk with `hc wait <desk>`; read a
    headless run's `.bercail/handoff-result.json`.
 

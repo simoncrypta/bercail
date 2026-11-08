@@ -62,21 +62,28 @@ model. `handoff-spawn --stage` reads it.
   `opus-5.5` spec). `--sandbox workspace-write` is required because `codex
   exec` defaults to read-only; `codex exec resume` has no `--sandbox`, so it
   stays before the subcommand. `codex exec` has no `--ask-for-approval`.
-`--binary claude|codex|cursor-agent` overrides the table binary on a headless
-stage, so `--stage start --binary cursor-agent` picks cursor-agent without
-renaming the job. Bercail never picks or skips a harness on its own.
+`--binary claude|codex|cursor-agent|opencode|pi` overrides the table binary on a
+headless stage, so `--stage start --binary cursor-agent` picks cursor-agent
+without renaming the job. Bercail never picks or skips a harness on its own.
 `bercail harness` reports which of claude, codex, and cursor-agent are on PATH,
 with a local model hint. It does not choose one.
 A missing requested harness writes status `blocked` and exits nonzero. It does
 not fall through to another binary.
 
-All three headless stages get that one-line prompt and write
+`bstack` and `autopilot` run headless Pi (`pi -p --mode json --session-id
+<uuid>`, the lead profile) unless `[bstack] harness = "opencode"`, which keeps
+`opencode run`. `--binary pi` and `--binary opencode` still select that harness.
+Pi resume reuses the uuid; an opencode `ses_` id cannot be resumed on Pi. Pi
+gets no `--add-dir`. `--branch` with Pi passes an empty agent command so the
+desk runs the lead from lead.json. Autopilot sets `BERCAIL_ROLE=autopilot`.
+
+Every headless stage gets that one-line prompt and writes
 `<worktree>/.bercail/handoff-result.json`. Before the run, bercail checks bd
 and the issue (`bd show <id>`) and adds a `bd comment` with the worktree,
 result path, and session id. claude gets `--tools Read,Edit,Write,Bash
---allowedTools "Bash(bd *)"`. When bd's `.beads` is outside the worktree, each
-harness gets `--add-dir` for it (codex: before `resume`, which has no
-`--add-dir`). bercail fills `session_id` in the result after the run.
+--allowedTools "Bash(bd *)"`. When bd's `.beads` is outside the worktree,
+claude, codex, and cursor-agent get `--add-dir` for it (codex: before `resume`,
+which has no `--add-dir`). bercail fills `session_id` in the result after the run.
 Re-handoff is `--resume <session_id>`. For Codex that id is the JSONL
 `thread.started` thread id. For cursor-agent it is the print JSON `session_id`.
 

@@ -1,8 +1,8 @@
 [agent]
 # The desk agent when none was picked on the desk yet (the desk remembers the
 # last pick). Handoff stages do not read this command; each stage names its
-# own binary (claude, codex, cursor-agent, or opencode).
-command = "opencode"
+# own binary (claude, codex, cursor-agent, opencode, or pi).
+command = "pi"
 
 [layout]
 # Bare "tuicr" expands to `tuicr -w` (uncommitted changes only, watching;
@@ -15,7 +15,7 @@ auto_review = true
 # Pi with your own Claude, ChatGPT, and X subscriptions. Setup installs the
 # Claude bridge. Sign in with `claude auth login`, /login openai, /login xai.
 enabled = true
-# Existing configs without this key keep opencode.
+# pi, or opencode (opt-in).
 harness = "pi"
 # Pi rate-limit fallback candidates, scanned from the start, skipping the current
 # and already attempted models. Only claude/gpt/grok, no duplicates. [] disables it.
