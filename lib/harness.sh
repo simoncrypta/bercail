@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # Optional harness discovery. Missing CLIs are reported, not fatal.
-# No preference among claude, codex, cursor-agent, and opencode.
+# No preference among claude, codex, cursor-agent, opencode, and pi.
 # Do not call claude/codex/cursor-agent in a way that hits the network.
 
 harness_ids() {
-  printf '%s\n' claude codex cursor-agent opencode
+  printf '%s\n' claude codex cursor-agent opencode pi
 }
 
 harness_path() {
@@ -74,11 +74,25 @@ harness_codex_models_json() {
 # `opencode models` asks the running service. Do not run it.
 harness_opencode_models_json() {
   local id=""
-  if declare -F bstack_role_model >/dev/null 2>&1; then
+  if declare -F bstack_role_model >/dev/null 2>&1 && ! _bstack_on_pi; then
     id="$(bstack_role_model lead 2>/dev/null || true)"
   fi
   if [[ -n "$id" ]]; then
     jq -nc --arg id "$id" '[$id]'
+  else
+    jq -nc '[]'
+  fi
+}
+
+# pi: the bstack lead's model when bstack runs on Pi. Offline: the catalog and
+# pi auth check --no-refresh.
+harness_pi_models_json() {
+  local id=""
+  if declare -F bstack_role_model >/dev/null 2>&1 && _bstack_on_pi; then
+    id="$(bstack_role_model lead 2>/dev/null || true)"
+  fi
+  if [[ -n "$id" ]]; then
+    jq -nc --arg id "$(_bstack_pi_model_id "$id")" '[$id]'
   else
     jq -nc '[]'
   fi
@@ -118,6 +132,13 @@ harness_one_json() {
     opencode)
       if [[ "$present" == true ]]; then
         models="$(harness_opencode_models_json)"
+      else
+        models='[]'
+      fi
+      ;;
+    pi)
+      if [[ "$present" == true ]]; then
+        models="$(harness_pi_models_json)"
       else
         models='[]'
       fi

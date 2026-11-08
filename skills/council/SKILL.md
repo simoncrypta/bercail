@@ -26,9 +26,11 @@ Launch every `bstack-council-*` subagent that exists (one per provider), in
 parallel, with the same brief and the reviewer rules below. Do not tell them
 what the others said.
 
-With one seat, say so in the report. With none (`[bstack] council` is off, or
-you are outside opencode), review it yourself by the same rules and say the
-panel did not run. `[bstack] council = true` and `bercail update` turn it on.
+With one seat, say so in the report. On Pi each reviewer is a
+`bstack-council-<family>` template from `hc templates`, started as a sibling
+terminal the way your instructions say. With none (`[bstack] council` is off,
+or you are outside opencode and Pi), review it yourself by the same rules and
+say the panel did not run. `[bstack] council = true` and `bercail update` turn it on.
 
 ## Reviewer rules
 

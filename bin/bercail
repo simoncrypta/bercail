@@ -158,8 +158,8 @@ Commands:
   help          Show full help
   install       Full install from this release (after mise or packslip)
   doctor        Check dependencies and integration
-  harness       JSON: which of claude, codex, cursor-agent, opencode are on PATH
-  bstack        opencode with your Claude/GPT/Grok subscriptions: status | setup | on | off
+  harness       JSON: which of claude, codex, cursor-agent, opencode, pi are on PATH
+  bstack        opencode or Pi with your Claude/GPT/Grok subscriptions: status | setup | on | off
   desk          Bring back the desk agents a reboot took: desk restore [--dry-run]
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
   review-pr     Review someone else's PR by intent and decisions: review-pr <PR url> | run | card | ui | open

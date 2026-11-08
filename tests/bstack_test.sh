@@ -59,6 +59,40 @@ case "$1 $2" in
 esac
 SH
 chmod +x "$FAKE_BIN/opencode"
+# A stand-in pi: the logins in $FAKE_PI_READY are ready. Refuses --credentials.
+cat >"$FAKE_BIN/pi" <<'SH'
+#!/usr/bin/env bash
+if [[ "$*" == *--credentials* ]]; then echo "credentials must never be requested" >&2; exit 9; fi
+case "$1" in
+  --version) echo "1.5.0" ;;
+  auth)
+    for id in ${FAKE_PI_READY:-}; do
+      if [[ "$*" == *"--provider $id "* ]]; then printf '{"status":"ready","provider":"%s"}\n' "$id"; exit 0; fi
+    done
+    printf '{"status":"not_ready"}\n'; exit 1 ;;
+  --offline)
+    [[ "$2" == --list-models ]] || exit 2
+    cat <<'EOF'
+provider   model                       context  max-out  thinking  images
+anthropic  claude-opus-4-8             1M       128K     yes       yes
+anthropic  claude-opus-4-5-20251101    200K     64K      yes       yes
+anthropic  claude-opus-5               1M       128K     yes       yes
+anthropic  claude-opus-5-5             1M       128K     yes       yes
+anthropic  claude-sonnet-5-5           1M       128K     yes       yes
+openai     gpt-6-sol                   272K     128K     yes       yes
+openai     gpt-6.1-sol                 272K     128K     yes       yes
+openai     gpt-6.1-terra               272K     128K     yes       yes
+openai-codex gpt-6.1                   272K     128K     yes       yes
+xai        grok-4.20-0309-reasoning    2M       30K      yes       yes
+xai        grok-4.6                    500K     500K     yes       yes
+xai        grok-4.7                    500K     500K     yes       yes
+xai        grok-plain                  500K     500K     no        yes
+EOF
+    ;;
+  *) exit 2 ;;
+esac
+SH
+chmod +x "$FAKE_BIN/pi"
 export PATH="$FAKE_BIN:$PATH"
 
 reset_home() {
@@ -104,6 +138,7 @@ test_new_install_defaults() {
   BSTACK_NEW_INSTALL=1 default_user_config >"$TMP_DIR/on.toml"
   assert_eq "opencode" "$(_bstack_toml_get agent command "$TMP_DIR/on.toml")" "new install desk agent"
   assert_eq "true" "$(_bstack_toml_get bstack enabled "$TMP_DIR/on.toml")" "new install turns bstack on"
+  assert_eq "pi" "$(_bstack_toml_get bstack harness "$TMP_DIR/on.toml")" "new config selects Pi"
   assert_eq "grok" "$(_bstack_toml_get bstack build "$TMP_DIR/on.toml")" "build role default"
   BSTACK_NEW_INSTALL=0 default_user_config >"$TMP_DIR/off.toml"
   assert_eq "cursor-agent" "$(_bstack_toml_get agent command "$TMP_DIR/off.toml")" "--no-bstack desk agent"
@@ -458,6 +493,225 @@ test_installed_cli_reads_its_source() {
   printf 'PASS: the installed CLI reads files from the tree it was installed from\n'
 }
 
+PI_DIR() { printf '%s' "$HOME/.local/share/bercail/pi"; }
+PI_TEMPLATES() { printf '%s' "$XDG_CONFIG_HOME/herdr-core/templates"; }
+
+write_pi_config() {
+  write_config <<'EOF'
+[bstack]
+enabled = true
+harness = "pi"
+EOF
+}
+
+test_pi_models() {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="anthropic openai xai"
+  bstack_load_state reload
+  assert_eq "anthropic/claude-opus-5-5#high" "$(bstack_resolve_model claude)" "newest plain opus"
+  assert_eq "openai/gpt-6.1-sol#high" "$(bstack_resolve_model gpt)" "newest sol"
+  assert_eq "xai/grok-4.7#high" "$(bstack_resolve_model grok)" "a dated 4.20 build is not newer"
+  assert_eq "anthropic/claude-opus-5-5:high" "$(_bstack_pi_model_id "$(bstack_role_model lead)")" "#high maps to :high"
+  assert_eq "xai/grok-4.7#high" "$(bstack_role_model build)" "build defaults to grok"
+
+  FAKE_PI_READY="anthropic openai-codex" bstack_load_state reload
+  assert_eq "openai-codex/gpt-6.1#high" "$(FAKE_PI_READY="anthropic openai-codex" bstack_resolve_model gpt)" "openai-codex stands in for openai"
+  assert_eq "" "$(FAKE_PI_READY="anthropic openai-codex" bstack_resolve_model grok)" "no xai login: no grok"
+  assert_eq "openai-codex/gpt-6.1#high" "$(FAKE_PI_READY="anthropic openai-codex" bstack_role_model build)" "build falls through to the next family with a login"
+
+  FAKE_PI_READY="" bstack_load_state reload
+  assert_eq "" "$(FAKE_PI_READY="" bstack_role_model lead)" "no login at all: Pi's default"
+
+  _bstack_toml_set bstack effort '"none"'
+  FAKE_PI_READY="anthropic" bstack_load_state reload
+  assert_eq "anthropic/claude-opus-5-5" "$(FAKE_PI_READY="anthropic" bstack_resolve_model claude)" "effort none: no suffix"
+  _bstack_toml_set bstack effort '"max"'
+  assert_eq "anthropic/claude-opus-5-5#max" "$(FAKE_PI_READY="anthropic" bstack_resolve_model claude)" "effort max"
+  local BSTACK_MODELS BSTACK_VARIANTS
+  BSTACK_MODELS="xai/grok-plain"
+  BSTACK_VARIANTS="xai/grok-plain "
+  assert_eq "" "$(_bstack_variant xai/grok-plain)" "a model that does not think gets no level"
+  unset FAKE_PI_READY
+  printf 'PASS: Pi families resolve from the catalog and auth check; variants map to :level\n'
+}
+
+test_pi_deploy() {
+  reset_home
+  write_pi_config
+  mkdir -p "$HOME/.pi/agent"
+  printf '{"defaultModel":"mine"}\n' >"$HOME/.pi/agent/settings.json"
+  printf '{"token":"secret"}\n' >"$HOME/.pi/agent/auth.json"
+  export FAKE_PI_READY="anthropic xai"
+  deploy_bstack >"$TMP_DIR/pi.log" 2>&1 || fail "deploy: $(cat "$TMP_DIR/pi.log")"
+  local p t rel
+  p="$(PI_DIR)"
+  t="$(PI_TEMPLATES)"
+  for rel in instructions.md agents/bstack-builder.md agents/bstack-judge.md \
+    agents/bstack-autopilot.md agents/bstack-pr-review.md agents/bstack-council-claude.md agents/bstack-council-grok.md; do
+    [[ -f "$p/$rel" ]] || fail "missing $rel"
+  done
+  for rel in ready council handoff autopilot how why unslop pr-review bstack-setup; do
+    [[ -f "$p/prompts/$rel.md" ]] || fail "missing prompt $rel"
+    grep -q '!`' "$p/prompts/$rel.md" && fail "Pi templates have no !cmd: $rel"
+    grep -q '^agent:' "$p/prompts/$rel.md" && fail "Pi templates have no agent key: $rel"
+    head -1 "$p/prompts/$rel.md" | grep -qx -- '---' || fail "frontmatter starts $rel"
+  done
+  grep -rq '@[a-z_]*@' "$p/prompts" "$p/agents/bstack-builder.md" "$p/instructions.md" && fail "unrendered token"
+  grep -q "$p/agents/bstack-pr-review.md" "$p/prompts/pr-review.md" || fail "pr-review names its brief"
+  head -1 "$p/agents/bstack-pr-review.md" | grep -q -- '^---$' && fail "a brief has no opencode frontmatter"
+  grep -q 'You review someone else' "$p/agents/bstack-pr-review.md" || fail "pr-review keeps its body"
+  grep -q 'one reviewer on a council' "$p/agents/bstack-council-claude.md" || fail "council keeps its body"
+  grep -q 'Desks only' "$p/instructions.md" || fail "instructions require a desk"
+  grep -rqi 'headless' "$p/prompts" "$p/instructions.md" && fail "Pi has no headless fallback"
+  grep -q -- '--branch NAME --stage bstack --issue ID' "$p/prompts/handoff.md" || fail "handoff opens a desk"
+  [[ ! -d "$p/extensions" ]] || fail "Pi deploys no extensions"
+  grep -q 'bercail.role=agent' "$p/instructions.md" || fail "instructions warn off the desk's label"
+
+  for rel in bstack-builder bstack-judge bstack-autopilot bstack-council-claude bstack-council-grok; do
+    [[ -f "$t/$rel.md" ]] || fail "missing template $rel"
+    sed -n 1p "$t/$rel.md" | grep -qx -- '---' || fail "frontmatter starts $rel"
+    sed -n 2p "$t/$rel.md" | grep -qx "name: $rel" || fail "name $rel"
+    sed -n 3p "$t/$rel.md" | grep -q "managed by bercail (bstack)" || fail "marker in the description of $rel"
+    sed -n 5p "$t/$rel.md" | grep -qx -- '---' || fail "frontmatter holds only key: value in $rel"
+    grep -q ' pi ' "$t/$rel.md" || fail "$rel runs pi"
+    grep -Eq -- ' (-e|--extension)( |$)' "$t/$rel.md" && fail "$rel loads no bercail extension"
+    grep -q -- "--prompt-template $p/prompts" "$t/$rel.md" || fail "--prompt-template in $rel"
+    grep -q -- "--append-system-prompt $p/instructions.md" "$t/$rel.md" || fail "instructions in $rel"
+    grep -q -- '--skill .*/skills/council' "$t/$rel.md" || fail "--skill in $rel"
+  done
+  [[ ! -e "$t/bstack-council-gpt.md" ]] || fail "no gpt seat without a login"
+  grep -q '^command: env BERCAIL_ROLE=builder pi --model xai/grok-4.7:high ' "$t/bstack-builder.md" || fail "builder: $(cat "$t/bstack-builder.md")"
+  grep -q '^command: env BERCAIL_ROLE=judge pi --model anthropic/claude-opus-5-5:high ' "$t/bstack-judge.md" || fail "judge"
+  grep -q '^command: env BERCAIL_ROLE=autopilot pi --model anthropic/claude-opus-5-5:high ' "$t/bstack-autopilot.md" || fail "autopilot"
+  grep -q '^command: env BERCAIL_ROLE=council pi --model xai/grok-4.7:high ' "$t/bstack-council-grok.md" || fail "council seat on its own family"
+  grep -q -- "--append-system-prompt $p/agents/bstack-council-grok.md" "$t/bstack-council-grok.md" || fail "council brief"
+  grep -q 'bstack-builder.md' "$t/bstack-builder.md" || fail "builder brief"
+
+  assert_eq '{"defaultModel":"mine"}' "$(cat "$HOME/.pi/agent/settings.json")" "settings.json untouched"
+  assert_eq '{"token":"secret"}' "$(cat "$HOME/.pi/agent/auth.json")" "auth.json untouched"
+  [[ ! -e "$OPENCODE_CONFIG_DIR/opencode.jsonc" && ! -e "$OPENCODE_CONFIG_DIR/agents/bstack.md" ]] \
+    || fail "the Pi harness renders no opencode files"
+  [[ ! -e "$BSTACK_RESOLVED" ]] || fail "opencode's resolved models are left for its handoff stages"
+
+  grep -qx 'grok=xai/grok-4.7#high' "$p/models" || fail "resolved models: $(cat "$p/models")"
+  # A family that lost its login loses its seat.
+  mkdir -p "$p/extensions/bercail-guard"
+  printf 'old guard\n' >"$p/extensions/bercail-guard/index.ts"
+  FAKE_PI_READY="anthropic" deploy_bstack >/dev/null 2>&1
+  [[ ! -d "$p/extensions" ]] || fail "update removes the old managed guard"
+  [[ ! -e "$t/bstack-council-grok.md" && ! -e "$p/agents/bstack-council-grok.md" ]] || fail "stale council seat"
+  grep -q 'BERCAIL_ROLE=builder pi --model anthropic/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder falls through"
+  unset FAKE_PI_READY
+  printf 'PASS: harness = pi renders the profile and hc templates, and leaves ~/.pi alone\n'
+}
+
+test_pi_keeps_their_template() {
+  reset_home
+  write_pi_config
+  mkdir -p "$(PI_TEMPLATES)"
+  printf 'my own builder\n' >"$(PI_TEMPLATES)/bstack-builder.md"
+  FAKE_PI_READY="anthropic" deploy_bstack >"$TMP_DIR/pi.log" 2>&1 || fail "deploy"
+  grep -qx 'my own builder' "$(PI_TEMPLATES)/bstack-builder.md" || fail "their template changed"
+  grep -q 'keeping your' "$TMP_DIR/pi.log" || fail "says it kept theirs: $(cat "$TMP_DIR/pi.log")"
+  printf 'PASS: Pi deploy leaves a template without the marker alone\n'
+}
+
+test_pi_off_and_switch_back() {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="anthropic"
+  deploy_bstack >/dev/null 2>&1
+  mkdir -p "$(PI_TEMPLATES)"
+  printf 'mine\n' >"$(PI_TEMPLATES)/reviewer.md"
+  bstack_off >/dev/null 2>&1
+  [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "off removes the profile"
+  [[ -f "$(PI_TEMPLATES)/reviewer.md" ]] || fail "off keeps the person's templates"
+
+  write_pi_config
+  deploy_bstack >/dev/null 2>&1
+  _bstack_toml_set bstack harness '"opencode"'
+  FAKE_CONNECTED="claude-agent" deploy_bstack >/dev/null 2>&1
+  [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "back on opencode: the Pi profile goes"
+  [[ -f "$OPENCODE_CONFIG_DIR/agents/bstack.md" ]] || fail "back on opencode: agents render"
+  unset FAKE_PI_READY
+  printf 'PASS: off and a switch back to opencode remove only the Pi profile\n'
+}
+
+test_pi_status_doctor() {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="anthropic xai"
+  deploy_bstack >/dev/null 2>&1
+  local out
+  out="$(bstack_status)"
+  grep -q 'harness: pi' <<<"$out" || fail "status names the harness: $out"
+  grep -q 'lead = anthropic/claude-opus-5-5:high' <<<"$out" || fail "lead: $out"
+  grep -q 'build = xai/grok-4.7:high' <<<"$out" || fail "build: $out"
+  grep -q 'judge = anthropic/claude-opus-5-5:high' <<<"$out" || fail "judge: $out"
+  grep -q 'council (grok) = xai/grok-4.7:high' <<<"$out" || fail "council: $out"
+  grep -q 'gpt.*/login openai' <<<"$out" || fail "missing login hint: $out"
+  grep -q 'opencode' <<<"$out" && fail "status on Pi does not talk about opencode: $out"
+  # shellcheck source=lib/harness.sh
+  source "$ROOT/lib/harness.sh"
+  assert_eq '["anthropic/claude-opus-5-5:high"]' "$(harness_pi_models_json)" "bercail harness hints the lead on Pi"
+  assert_eq '[]' "$(harness_opencode_models_json)" "and no Pi id for opencode"
+  out="$(doctor_bstack)" || fail "doctor ok: $out"
+  grep -q 'ok  bstack on pi' <<<"$out" || fail "doctor: $out"
+  out="$(FAKE_PI_READY="anthropic xai openai" doctor_bstack)" && fail "doctor: a new login is a due update"
+  grep -q 'stale  bstack models' <<<"$out" || fail "doctor stale: $out"
+  out="$(FAKE_PI_READY="" doctor_bstack)" && fail "doctor: no login"
+  grep -q 'none of anthropic, openai, xai' <<<"$out" || fail "doctor no login: $out"
+  rm -f "$(PI_DIR)/instructions.md"
+  out="$(doctor_bstack)" && fail "doctor: a missing file"
+  grep -q 'missing  bstack .*instructions.md' <<<"$out" || fail "doctor missing: $out"
+  deploy_bstack >/dev/null 2>&1
+  _bstack_toml_set bstack claude '"claude-agent/opus#high"'
+  out="$(doctor_bstack)" && fail "doctor: a pin Pi cannot run"
+  grep -q 'claude-agent/opus#high is not in pi --list-models' <<<"$out" || fail "doctor pin: $out"
+  grep -q 'not in pi --list-models' <<<"$(bstack_status)" || fail "status flags the pin"
+  _bstack_toml_set bstack claude '"anthropic/claude-opus-5-5:high"'
+  deploy_bstack >/dev/null 2>&1
+  out="$(doctor_bstack)" || fail "doctor: a pin in Pi's own :level form is known: $out"
+  grep -q 'not in pi --list-models' <<<"$(bstack_status)" && fail "status knows a :level pin"
+  unset FAKE_PI_READY
+  printf 'PASS: status and doctor report the harness, roles, and missing logins on Pi\n'
+}
+
+test_pi_setup() {
+  reset_home
+  write_pi_config
+  FAKE_PI_READY="anthropic" bstack_setup >"$TMP_DIR/setup.log" 2>&1 || fail "setup: $(cat "$TMP_DIR/setup.log")"
+  [[ -f "$(PI_DIR)/instructions.md" ]] || fail "setup deploys"
+  grep -q '/login xai' "$TMP_DIR/setup.log" || fail "setup hints: $(cat "$TMP_DIR/setup.log")"
+  assert_eq "" "$(_bstack_toml_get agent command)" "setup leaves the desk agent to the desk issue"
+  write_config <<'EOF'
+[bstack]
+harness = "pi"
+
+[agent]
+command = "cursor-agent"
+EOF
+  FAKE_PI_READY="anthropic" bstack_on >/dev/null 2>&1
+  assert_eq "cursor-agent" "$(_bstack_toml_get agent command)" "on with harness pi does not move the desk to opencode"
+  printf 'PASS: setup on Pi deploys and prints the logins to run\n'
+}
+
+test_harness_defaults_to_opencode() {
+  reset_home
+  write_config <<'EOF'
+[bstack]
+enabled = true
+EOF
+  assert_eq "opencode" "$(bstack_harness)" "unset is opencode"
+  _bstack_toml_set bstack harness '"opencode"'
+  FAKE_CONNECTED="claude-agent" deploy_bstack >/dev/null 2>&1
+  [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "opencode renders no Pi profile"
+  grep -qx 'model: claude-agent/opus#high' "$OPENCODE_CONFIG_DIR/agents/bstack.md" || fail "opencode rendering is unchanged"
+  grep -q 'harness' <<<"$(FAKE_CONNECTED="claude-agent" bstack_status)" && fail "opencode status is unchanged"
+  printf 'PASS: opencode stays the default harness\n'
+}
+
 test_toml_get_set
 test_pick_model
 test_pick_effort
@@ -475,3 +729,10 @@ test_on_switches_stock_desk_agent
 test_setup_auto_models
 test_handoff_bstack_stage
 test_doctor
+test_harness_defaults_to_opencode
+test_pi_models
+test_pi_deploy
+test_pi_keeps_their_template
+test_pi_off_and_switch_back
+test_pi_status_doctor
+test_pi_setup

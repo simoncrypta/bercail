@@ -12,6 +12,12 @@ bercail bstack status    # what is connected, which model each role uses
 dev                      # the desk starts opencode as the bstack agent
 ```
 
+## On Pi
+
+New configs set `harness = "pi"` under `[bstack]`. Set it in an existing `config.toml` and run `bercail update` to render the [Pi](https://pi.dev) profile with your own logins (`/login anthropic`, `/login openai`, `/login xai` inside `pi`). Pi's Anthropic login bills extra usage per token. Existing configs without `harness` keep using opencode; `harness = "opencode"` selects it explicitly. Automatic Pi desk launching is a separate follow-up.
+
+bercail renders the profile to `~/.local/share/bercail/pi/` and never edits `~/.pi/agent/`; each launch names the profile with flags. No bercail extensions are installed or loaded. Role boundaries and git rules are instructions, not enforced tool restrictions. The builder, judge, council, and autopilot run as interactive `hc` sibling agents from templates in `~/.config/herdr-core/templates/`. Pi handoffs use desks or interactive siblings, not one-shot runs.
+
 ## Where to find what
 
 [The bstack guide](bstack/README.md) is the full story, with prompts to copy. Each fact lives on one page:

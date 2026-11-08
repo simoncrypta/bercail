@@ -14,8 +14,9 @@ Pick the playbook that matches the task. Copy its steps into your todo list
 before you start, then work through them in order. Roles and finishing rules are
 in bstack's instructions (`~/.config/opencode/bstack/instructions.md`).
 
-Outside opencode (Claude Code, Codex, cursor-agent) there are no `bstack-*`
-subagents: do the role's work yourself in this session and say so once.
+On Pi, `bstack-*` subagents are `hc` sibling agents; your instructions show how
+to start one. Outside opencode and Pi (Claude Code, Codex, cursor-agent) there are
+no `bstack-*` subagents: do the role's work yourself in this session and say so once.
 
 ## Pick a playbook
 

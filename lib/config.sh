@@ -19,11 +19,13 @@ EOF
   cat <<'EOF'
 
 [bstack]
-# opencode with your own subscriptions. `bercail bstack setup` connects them;
+# Pi with your own logins. `bercail bstack setup` shows what's missing;
 # `bercail bstack off` turns bstack off.
 enabled = true
+# Which harness runs bstack: pi, or opencode to keep the older harness.
+harness = "pi"
 # A model per provider. Empty: auto, the newest model of each connected plan
-# (re-picked on bercail update). Set an opencode id (#variant allowed) to pin one.
+# (re-picked on bercail update). Set a provider/model id (#variant allowed) to pin one.
 claude = ""
 gpt = ""
 grok = ""

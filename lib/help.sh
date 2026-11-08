@@ -23,8 +23,8 @@ Post-install CLI (bercail):
   help          This help
   install       Full install from the release mise or packslip unpacked
   doctor        Check dependencies and integration
-  harness       JSON: claude, codex, cursor-agent, opencode on PATH (missing is not fatal)
-  bstack        opencode with your own subscriptions: status | setup | on | off
+  harness       JSON: claude, codex, cursor-agent, opencode, pi on PATH (missing is not fatal)
+  bstack        opencode or Pi with your own subscriptions: status | setup | on | off
   desk          Bring back the desk agents a reboot took: desk restore [--dry-run]
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills from config.toml (not a full redeploy)
@@ -84,6 +84,10 @@ bstack (opencode, bring your own Claude / GPT / Grok subscription):
   /ready, /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
   pushes, never merges), /pr-review (bercail review-pr's read-only decisions pass).
   Settings: [bstack] in config.toml.
+  [bstack] harness = "pi" runs bstack on Pi with your own logins (/login anthropic,
+  /login openai, /login xai inside pi): bercail update renders ~/.local/share/bercail/pi/
+  and herdr-core templates, and the lead starts roles as hc siblings. opencode stays
+  the fallback for existing configs without a harness setting. New configs select Pi.
 
 Config:
   ~/.config/bercail/config.toml               desk agent default, review, [bstack]
@@ -99,6 +103,8 @@ Config:
   ~/.agents/skills/desk-restore/              put a desk with no record back by hand
   ~/.local/state/bercail/desk-sessions/       which session runs in which desk
   ~/.config/opencode/opencode.jsonc           bstack's opencode config (agents/, commands/ beside it)
+  ~/.local/share/bercail/pi/                  bstack's Pi profile (harness = "pi")
+  ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates (harness = "pi")
   ~/.config/fcitx5/conf/keyboard.conf         Linux fcitx5 hint trigger override
 
 Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`):
