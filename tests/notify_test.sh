@@ -185,7 +185,7 @@ printf '%s' "$out" | grep -q 'secret-key\|example.invalid' && fail "status leaks
 printf 'PASS: a rejected key is recorded and status prints no url or key\n'
 
 out="$(notify_test work-shep)" || fail "test send: $out"
-[[ "$out" == "work-shep HTTP 200" ]] || fail "test output: $out"
+[[ "$out" == "work-shep HTTP 200 event test:"[0-9]* ]] || fail "test output: $out"
 jq -e 'select(.kind == "test") | .desk.issue_title == null and .text == "Test from bercail (sink work-shep)."' \
   "$TMP_DIR/bodies.jsonl" >/dev/null || fail "test payload: $(jq -c 'select(.kind == "test")' "$TMP_DIR/bodies.jsonl")"
 printf 'PASS: notify test sends a kind=test payload\n'

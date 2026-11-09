@@ -162,7 +162,7 @@ Commands:
   harness       JSON: which of claude, codex, cursor-agent, opencode, pi are on PATH
   bstack        Pi (opencode only with harness = "opencode"): status | setup | on | off
   desk          Bring back the desk agents a reboot took: desk restore [--dry-run]
-  notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
+  notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | openclaw | run
   review-pr     Review someone else's PR by intent and decisions: review-pr <PR url> | run | card | ui | open
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills/integrations from config.toml (not a full redeploy)
