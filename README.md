@@ -48,7 +48,7 @@ Found bercail on [herdr.dev](https://herdr.dev/layouts/)? Its recipe walks your 
 dev          # this directory's space, with its desk agent
 ```
 
-The layout opens on Shep, your orchestrator (on Pi, or on OpenClaw if you pick it), with your spaces beside it: click one to work in it, `Ctrl+Shift+H` to come back. `Ctrl+Shift+A` focuses the desk, `Ctrl+Shift+R` opens Review, and `bercail doctor` tells you if anything is missing. Something else? `bercail help`.
+The layout opens on Shep, your orchestrator (on Pi, or on OpenClaw if you pick it), with your spaces beside it: click one to work in it (or find it with `Ctrl+Space`), `Ctrl+Shift+H` to come back. `Ctrl+Shift+A` focuses the desk, `Ctrl+Shift+R` opens Review, and `bercail doctor` tells you if anything is missing. Something else? `bercail help`.
 
 ## Docs
 

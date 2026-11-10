@@ -51,6 +51,8 @@ Herdr app layout "bercail" (switch with Ctrl+Shift+L):
   Right: files / changes
 
 Keys in the bercail layout:
+  Ctrl+Shift+H         Shep view / space view
+  Ctrl+Space           Go to a space, tab or agent (Herdr's search)
   Ctrl+Shift+A         Focus the desk agent (start it if there is none)
   Ctrl+Shift+R         Review
   Ctrl+Shift+S         Shell tab
@@ -60,6 +62,8 @@ Keys in the bercail layout:
   Ctrl+Alt+Up/Down     Previous/next worktree space of this repo (main checkout too)
   Alt+Shift+Up/Down    Previous/next agent (desks too)
   Ctrl+Shift+Q         Close this space
+  From the Shep view, Ctrl+Space through Alt+Shift+Up/Down show the space view
+  first, then act there.
   Herdr's own keys: Ctrl+Shift+T/W tab, Ctrl+Shift+O/E split, Ctrl+Shift+X close
   pane, Alt+1-9 tabs, Alt+H/J/K/L panes, Ctrl+Shift+? all keys
 

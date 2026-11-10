@@ -33,6 +33,7 @@ In the bercail layout (`~/.config/herdr-app/keys.json`, section `layout:bercail`
 | Key | Action |
 |-----|--------|
 | `Ctrl+Shift+H` | Shep view / space view |
+| `Ctrl+Space` | Go to…: Herdr's search for a space, tab or agent |
 | `Ctrl+Shift+A` | Focus the desk agent, or start it |
 | `Ctrl+Shift+R` | Review |
 | `Ctrl+Shift+S` | Shell tab |
@@ -43,7 +44,9 @@ In the bercail layout (`~/.config/herdr-app/keys.json`, section `layout:bercail`
 | `Alt+Shift+Up` / `Down` | Previous/next agent, desks included, in sidebar order |
 | `Ctrl+Shift+Q` | Close this space |
 
-The space and agent keys act in the space view.
+The keys from `Ctrl+Space` to `Alt+Shift+Up`/`Down` act in the space view. Pressed in the Shep view, they show the space view first, with the keyboard where you left it, and act from there: `Alt+Down` from Shep opens the space after the last one you were in, and what you pick in Go to… shows. `Ctrl+Shift+H` goes back to Shep.
+
+These keys go to the layout, never to the program in Shep or the desk. If your input method switches on `Ctrl+Space` (fcitx5's default, macOS's input sources), rebind it in that section. `Ctrl+Up`/`Down` and `Ctrl+Shift+Up`/`Down` are not bercail's: they reach Shep or the desk, and Pi jumps between prompts with them.
 
 `bercail update` keeps the keys you changed or removed in that section and warns about each one, and about any `terminal` key that takes one of bercail's. `bercail doctor` lists them too.
 

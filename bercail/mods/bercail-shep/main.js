@@ -210,19 +210,32 @@ export default class BercailShep extends View {
     });
   }
 
-  async command(c) {
+  async command(raw) {
     const view = viewOf(layout());
+    const [c, arg] = raw.split(/:(.*)/s);
     switch (c) {
       case "toggle": if (view) this.show(view === "shep" ? "space" : "shep"); break;
       case "show": if (view) this.show("shep"); break;
       case "space": if (view) this.show("space"); break;
       case "start": await startShep(); break;
       case "setup": await startShep(true); break;
+      // Ctrl+Space: Herdr's own Go to… search, over the space view so a pick shows.
+      case "goto": this.inSpace(view, ["mod.open", { name: "picker" }]); break;
+      // A bercail-desk key pressed in the Shep view (its `keys` copy sends it here).
+      case "desk": if (arg) this.inSpace(view, [`bercail-desk.${arg}`]); break;
     }
   }
 
-  show(view) {
-    this.pending = { view, at: Date.now() };
+  // Runs a command in the space view: from the Shep view, once that shows and the
+  // keyboard is back in the space, so a command that moves it (an agent, a pick) wins.
+  inSpace(view, cmd) {
+    if (view === "shep") this.show("space", cmd);
+    else run(...cmd);
+  }
+
+  // then: [name, args] to run once the view shows.
+  show(view, then = null) {
+    this.pending = { view, at: Date.now(), then };
     setView(view);
   }
 
@@ -235,6 +248,7 @@ export default class BercailShep extends View {
       this.launch = false;
       if (view === "space") this.show("shep");
     }
+    const then = this.pending?.view === view ? this.pending.then : null;
     if (this.pending?.view === view || Date.now() - (this.pending?.at ?? 0) > 2000) this.pending = null;
     // Start Shep once the core has listed its terminals (it lists them after the
     // layout): before that, terminals() can't tell whether Shep runs already.
@@ -268,6 +282,7 @@ export default class BercailShep extends View {
     const space = spaces().find((s) => s.id === f?.space);
     const to = focusPlan(view, was, f, shep, ready, this.back[f?.space], ps, space);
     if (to) run("pane.focus", to);
+    if (then) run(...then);
     return view;
   }
 

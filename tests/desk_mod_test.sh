@@ -38,13 +38,14 @@ export const panes = () => h().panes ?? [];
 export const agents = () => h().agents ?? [];
 export const notify = (n) => (h().notes ??= []).push(n);
 export const theme = () => ({});
-export const props = () => ({});
+export const props = () => h().props ?? {};
 export const shared = () => null;
 export const setShared = () => {};
 export const home = () => "/nonexistent";
 export const exec = async (cmd, args, opts) => h().exec?.(cmd, args, opts) ?? { code: 1, stdout: "", stderr: "" };
 export const knownAgents = async () => [];
-export const nextCommand = () => new Promise(() => {});
+// The keys the test queues in h().keys, then none.
+export const nextCommand = () => h().keys?.length ? Promise.resolve(h().keys.shift()) : new Promise(() => {});
 export const readTextFile = async () => "";
 EOF
 printf 'export class View {}\nexport const div = () => ({});\n' >"$TMP_DIR/gpui-kit.mjs"
@@ -368,6 +369,25 @@ console.log("PASS: agent next/prev walk agents in sidebar space order, wrapping"
   if (starts().length !== 2) fail("a space with no Shell must not start a desk");
   if (globalThis.herdr.notes[0]?.level !== "warning") fail("no Shell: the person is told why");
   console.log("PASS: with bstack on, a shown space gets its desk once, under its Shell (no tab of its own); a quit desk stays quit");
+}
+
+// The `keys` copy (in the Shep column, shown only in the Shep view) sends each key to
+// bercail-shep to replay in the space view; a command for a named terminal's space acts
+// at once, without a view change.
+{
+  const d = setup({ terminals: [D("t5", "s2")] });
+  globalThis.herdr.spaces[1].tabs = [{ id: "tab-r", name: "Review" }];
+  globalThis.herdr.props = { role: "keys" };
+  globalThis.herdr.keys = ["space-next", "agent-prev", "close-review:t5"];
+  globalThis.herdr.exec = (cmd, args) => { (globalThis.herdr.execs ??= []).push([cmd, ...args]); return { code: 0, stdout: "", stderr: "" }; };
+  const cx = { spawn: (f) => f(cx), notify: () => {}, timer: { every: () => {} } };
+  d.init({}, cx);
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+  const sent = globalThis.herdr.calls.map(([n, a]) => (a ? `${n} ${JSON.stringify(a)}` : n));
+  const want = ["bercail-shep.desk:space-next", "bercail-shep.desk:agent-prev", 'tab.close {"id":"tab-r"}'];
+  if (JSON.stringify(sent) !== JSON.stringify(want)) fail(`keys copy ran ${JSON.stringify(sent)}`);
+  if (globalThis.herdr.execs?.length) fail("the keys copy must not start the webhook follower");
+  console.log("PASS: in the Shep view the desk keys go to bercail-shep; a command for a named terminal acts in place");
 }
 EOF
 
