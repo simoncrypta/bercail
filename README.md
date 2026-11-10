@@ -14,7 +14,8 @@ Agents stage their changes and leave them uncommitted. When the desk agent goes 
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
-<img width="2133" height="1386" alt="bercail" src="https://github.com/user-attachments/assets/9760e643-b0da-45c1-88bc-d69f0d9c04c2" />
+<img width="2150" height="1410" alt="screenshot-2026-11-09_19-40-33-herdr-app" src="https://github.com/user-attachments/assets/32613335-3b96-43ee-9bd2-f24143a01d32" />
+<img width="2150" height="1410" alt="screenshot-2026-11-09_19-40-37-herdr-app" src="https://github.com/user-attachments/assets/756efe57-4310-4382-900b-a131ce985a12" />
 
 ## What you get
 
@@ -30,6 +31,7 @@ The easy way: add [Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF), our Grok Bot t
 ### Or install it yourself
 
 Current release: [v0.13.0](https://github.com/simoncrypta/bercail/releases/tag/v0.13.0).
+
 
 ```bash
 mise use -g packslip:github.com/simoncrypta/bercail   # mise 2026.9.2+
