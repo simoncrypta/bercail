@@ -8,7 +8,7 @@ One git worktree, one Herdr space. Each space has a desk: one agent that stays o
 
 Agents stage their changes and leave them uncommitted. When the desk agent goes `done`, [tuicr](https://github.com/agavra/tuicr) opens that work and watches further edits. You review in the terminal, comments stay human vs AI, and nothing goes to GitHub until you ask.
 
-**Built to be herded by a Grok bot.** Bercail is French for the sheepfold, so of course there's a shepherd. [Shep](docs/shep.md) is a public Grok bot that runs bercail for you. It writes the job as a [beads](https://beads.gascity.com/) issue, hands it to an agent, and tells you when a desk is ready. Bercail does the local work; Shep decides what happens next. You can also do Shep's part by hand.
+**Built to be herded.** Bercail is French for the sheepfold, so of course there's a shepherd. [Shep](docs/shep.md) is the orchestrator that ships with bercail: it runs on Pi out of the box, or on your OpenClaw agent. It writes the job as a [beads](https://beads.gascity.com/) issue, hands it to an agent, and tells you when a desk is ready. Bercail does the local work; Shep decides what happens next. You can also do Shep's part by hand.
 
 **New installs run [bstack](docs/bstack.md):** one harness, [opencode](https://github.com/anomalyco/opencode), on your own Claude, ChatGPT, and X subscriptions. Claude Code, Codex CLI, and cursor-agent stay equal harnesses beside it. A handoff's whole prompt is one line pointing at its beads issue.
 
@@ -48,7 +48,7 @@ Found bercail on [herdr.dev](https://herdr.dev/layouts/)? Its recipe walks your 
 dev          # this directory's space, with its desk agent
 ```
 
-The layout opens on Shep, OpenClaw's terminal UI, with your spaces beside it: click one to work in it, `Ctrl+Shift+H` to come back. `Ctrl+Shift+A` focuses the desk, `Ctrl+Shift+R` opens Review, and `bercail doctor` tells you if anything is missing. Something else? `bercail help`.
+The layout opens on Shep, your orchestrator (on Pi, or on OpenClaw if you pick it), with your spaces beside it: click one to work in it, `Ctrl+Shift+H` to come back. `Ctrl+Shift+A` focuses the desk, `Ctrl+Shift+R` opens Review, and `bercail doctor` tells you if anything is missing. Something else? `bercail help`.
 
 ## Docs
 
@@ -59,7 +59,7 @@ The layout opens on Shep, OpenClaw's terminal UI, with your spaces beside it: cl
 - [review](docs/review.md): tuicr, and how Review opens and closes.
 - [handoff](docs/handoff.md): stages, headless runs, result files.
 - [bstack](docs/bstack.md): opencode on your own plans, roles, autopilot. Then [the bstack guide](docs/bstack/README.md).
-- [Shep](docs/shep.md): the Grok bot, the Shep view, and agent status webhooks.
+- [Shep](docs/shep.md): the orchestrator on Pi or OpenClaw, the Shep view, and agent status webhooks.
 - [development](docs/development.md): tests, dependencies, platforms.
 - [Herdr agents and subagents](docs/herdr-agents-subagents.md): a proposal for Herdr's agents list.
 

@@ -1,6 +1,6 @@
 # bercail
 
-Built for Shep: the window opens on Shep (OpenClaw's terminal UI) beside your spaces and agents. Hand off the jobs, let agents work side by side in their own worktrees, and review each one as it lands.
+Built for Shep: the window opens on Shep, the orchestrator (on Pi or OpenClaw), beside your spaces and agents. Hand off the jobs, let agents work side by side in their own worktrees, and review each one as it lands.
 
 ![bercail](preview.png)
 
@@ -57,9 +57,8 @@ Second choice, the layout on its own, when the person says no:
   `[agent] command` from `~/.config/bercail/config.toml` if they write one,
   and that program must be on PATH; there is no bstack. Review needs
   [tuicr](https://github.com/agavra/tuicr) (≥ 0.20) installed separately,
-  and the Shep view needs [OpenClaw](https://docs.openclaw.ai) with a
-  Gateway (`openclaw tui`) and an agent (`[shep] session`, else the default
-  agent's main session).
+  and the Shep view needs bercail (`bercail shep run` starts Shep); without
+  it the view says so and the spaces work.
   There are no worktree spaces (`dev`, `wtc`, `wtd`), no handoff, skills or
   webhooks, and Shep can't run it. Installing bercail later adds all of that.
 
@@ -74,13 +73,15 @@ is which of `shep` and `work` is hidden.
 - **Shep**, weight 1 (min 320), 8px padding: a card like the desk's
   (`background` fill, 1px `border`, radius 10, `accent` border on focus). A
   32px `chrome` header (draggable: `window_drag`): a 7px dot (`ansi2` while
-  Shep runs, `blocked` without OpenClaw, else `dim`), "Shep" semibold, the
-  TUI's title or "OpenClaw TUI, the orchestrator for every desk" in `dim`,
-  the state word (running, starting, stopped, OpenClaw missing), and
+  Shep runs, `blocked` without bercail, else `dim`), "Shep" semibold, the
+  terminal's title or "the orchestrator for every desk" in `dim`, what it
+  runs on ("Pi", or the OpenClaw session key, from the terminal's labels),
+  the state word (running, starting, stopped, bercail missing), and
   "Ctrl+Shift+H spaces" at 11px. Below it, Shep's terminal with 6px padding.
   Without one: "Shep is not running", a "Start Shep" button filled with
-  `solid`, and a hint; without OpenClaw: "OpenClaw is not installed", what to
-  do, a "Check again" button, and "Your spaces work without it".
+  `solid`, a bordered "Change runtime" button, and what a start runs (from
+  `[shep]`); without bercail: "bercail is not installed", what to do, a
+  "Check again" button, and "Your spaces work without it".
 - **Sidebar**, 268px wide (min 44, max 480, not resizable), `chrome`
   background. Herdr's own brand row (46px); the **Shep row** (44px): in the
   Shep view a selected (`selected`) row with an 18px `solid` tile "S",
@@ -114,17 +115,15 @@ is which of `shep` and `work` is hidden.
   the Shep view again. Hidden columns keep their terminals and mods running:
   switching starts and stops nothing.
 - **Shep** is one hc terminal, `bercail-shep` (label `bercail.role=shep`),
-  in no space, running `openclaw tui --session <key>` with no other flags
-  (OpenClaw's own config picks the Gateway and auth). The key is always
-  agent-scoped: `[shep] session` from `~/.config/bercail/config.toml`, else
-  `agent:<id>:main` of the agent `openclaw agents list --json` marks
-  `isDefault`; anything else keeps Shep stopped with a notification saying
-  what to set. The terminal carries it as label `bercail.shep_session` and
-  the header shows it. It starts on its
+  in no space, running `bercail shep run`. That picks the runtime from
+  `[shep]` in `~/.config/bercail/config.toml` (asking on the first start, or
+  with "Change runtime"), runs Pi or `openclaw tui --session <key>` in the
+  terminal, and labels it `bercail.shep_backend` (and
+  `bercail.shep_session` on OpenClaw); the header shows it. It starts on its
   own once per app session, after the core lists its terminals; a running
   one is shown again, never a second. One the person quits stays quit until
-  "Start Shep". When the TUI exits with an error, its message stays until
-  Enter.
+  "Start Shep". When the runtime exits with an error, its message stays
+  until Enter.
 - **The keyboard** goes into Shep when the Shep view shows, and back where it
   was in the space (a pane, or the desk) when the space view returns.
 - **Agents.** Clicking an agent, a desk or a sub-agent in the agents list
@@ -202,13 +201,12 @@ is which of `shep` and `work` is hidden.
   - `nav` (default): the Shep row. It is always shown, so it holds the logic:
     on its first render of the app session (a flag on `globalThis`, which a
     mod reload keeps) it shows the Shep view; once `terminals()` lists
-    anything it starts Shep: `hc exec bash -lc 'command -v openclaw'`, the
-    session key (above), then `hc run --bg --json --no-parent --no-notify
-    --rm --name bercail-shep --cwd <home> --label bercail.role=shep --label
-    bercail.shep_session=<key> bash -lc <PATH fallback; openclaw tui
-    --session "$1"; on a nonzero exit, its code and wait for Enter> bash
-    <key>` (the key is an argument, never spliced into the script; hc refuses a
-    second live `bercail-shep`: `name_taken` is no error). On every render it
+    anything it starts Shep: `hc exec bash -lc 'command -v bercail'`, then
+    `hc run --bg --json --no-parent --no-notify --rm --name bercail-shep
+    --cwd <home> --label bercail.role=shep bash -lc <PATH fallback; exec
+    bercail shep run "$@"> bash [--setup]` ("Change runtime" passes
+    `--setup` as an argument; hc refuses a second live `bercail-shep`:
+    `name_taken` is no error). On every render it
     adds Shep's block to `shep-stack` with `layout.set` (once per terminal,
     already active), selects it, or drops it when Shep ends, and moves the
     keyboard: `pane.focus {terminal: <Shep>}` in the Shep view when it is in
@@ -347,8 +345,8 @@ is which of `shep` and `work` is hidden.
 - `herdr-app check` passes on `mods/bercail-desk`, `mods/bercail-shep`,
   `mods/bercail-spaces` and `mods/bercail-agents`, and `layout.switch
   {"name":"bercail"}` shows the Shep view: Shep's terminal running
-  `openclaw tui --session <key>` (one hc terminal `bercail-shep`, label
-  `bercail.shep_session=<key>`) and the sidebar on the right.
+  `bercail shep run` (one hc terminal `bercail-shep`, label
+  `bercail.shep_backend`) and the sidebar on the right.
 - Restarting the app from the space view opens the Shep view again, on the
   same `bercail-shep` terminal; `hc ls` shows one.
 - Clicking a space shows the space view with that space; "Back to Shep" (or
@@ -358,7 +356,7 @@ is which of `shep` and `work` is hidden.
 - Clicking an agent in the agents list, from either view, opens its terminal
   in a dialog; typing reaches that agent; ✕ closes it with the keyboard back
   where it was.
-- With no `openclaw` on herdr-core's PATH, the Shep view says "OpenClaw is
+- With no `bercail` on herdr-core's PATH, the Shep view says "bercail is
   not installed" and the spaces work.
 - In the space view, in a space with no desk agent, clicking "Start the agent" starts
   `bercail-desk-agent` as an hc sub-agent of the space's Shell, labelled
@@ -380,16 +378,16 @@ is which of `shep` and `work` is hidden.
 
 Tell the person, briefly:
 
-- **Let Shep run it.** [Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF) is the
-  Grok bot bercail is built for. It writes each job as a beads issue, hands it
-  to a desk, and pings them when the desk is ready to review.
+- **Let Shep run it.** Shep is the orchestrator bercail is built for. It
+  writes each job as a beads issue, hands it to a desk, and reports when the
+  desk finishes or blocks.
 - **Connect a plan.** Open a new terminal so the shell helpers load, then run
   `bercail bstack setup`, which asks before each sign-in. `bercail bstack
   status` shows what is connected and the login command for each plan that
   isn't. `bercail doctor` checks everything else.
-- **Shep first.** The window opens on Shep (OpenClaw's terminal UI, so
-  OpenClaw needs a Gateway). Click a space to work in it; "Back to Shep"
-  returns. Click an agent to open its terminal over either view.
+- **Shep first.** The window opens on Shep. Its first start asks where it
+  runs: Pi (recommended) or an OpenClaw agent. Click a space to work in it;
+  "Back to Shep" returns. Click an agent to open its terminal over either view.
 - **Keys** in the bercail layout:
   - `Ctrl+Shift+H`: Shep view / space view.
   - `Ctrl+Shift+A`: the desk agent (starts it if there is none);

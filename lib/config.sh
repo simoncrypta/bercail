@@ -380,7 +380,7 @@ deploy_lib() {
     deploy_tree "$src/lib" "${AGENTIC_DEV_SHARE_DIR}/lib"
   else
     local libfile
-    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh harness.sh bstack.sh desk.sh review.sh review-desk.sh stack.sh; do
+    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh harness.sh bstack.sh desk.sh shep.sh review.sh review-desk.sh stack.sh; do
       deploy_install_file "lib/$libfile" "${AGENTIC_DEV_SHARE_DIR}/lib/$libfile"
     done
   fi
@@ -664,6 +664,13 @@ deploy_configs() {
   deploy_skills
   if declare -F deploy_bstack >/dev/null; then
     deploy_bstack || true
+  fi
+  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/shep.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${AGENTIC_DEV_SHARE_DIR}/lib/shep.sh"
+  fi
+  if declare -F deploy_shep >/dev/null; then
+    deploy_shep
   fi
   if [[ ! -f "$WORKTRUNK_CONFIG_DIR/config.toml" ]] || [[ "$FORCE" -eq 1 ]]; then
     deploy_install_file "config/worktrunk/config.toml" "$WORKTRUNK_CONFIG_DIR/config.toml"

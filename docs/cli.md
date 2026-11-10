@@ -22,7 +22,8 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 | `bercail reconfigure` | Re-read `config.toml`, refresh skills |
 | `bercail dry-run` | Show what install would do, without doing it |
 | `bercail uninstall` | Remove managed files and the shell marker |
-| `bercail notify status` / `add NAME` / `repo add NAME [REPO]` / `repo remove NAME REPO` / `check [PATH]` / `test NAME` / `openclaw [NAME]` / `run` | [Agent status webhooks](shep.md#agent-status-webhooks). No subcommand = `status`; `openclaw` points a sink at [a local OpenClaw Gateway](shep.md#openclaw); `run` is the follower the desk mod keeps alive |
+| `bercail notify status` / `add NAME` / `repo add NAME [REPO]` / `repo remove NAME REPO` / `check [PATH]` / `test NAME` / `openclaw [NAME]` / `run` | [Agent status webhooks](shep.md#agent-status-webhooks). No subcommand = `status`; `openclaw` points a sink at [a local OpenClaw Gateway](shep.md#openclaw-webhooks); `run` is the follower the desk mod keeps alive |
+| `bercail shep status` / `setup` / `use pi` / `use openclaw [--agent ID \| --create [ID]] [--session KEY]` / `handoff --to pi\|openclaw` / `run` | [Shep](shep.md#choose-sheps-runtime): which runtime Shep runs on, and the handoff between them. No subcommand = `status`; `run` is what the Shep view starts |
 
 ## shell
 

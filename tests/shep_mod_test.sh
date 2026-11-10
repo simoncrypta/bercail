@@ -77,7 +77,7 @@ cp "$ROOT/bercail/layouts/bercail.json" "$TMP_DIR/layout.json"
 
 cat >"$TMP_DIR/test.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
-import Shep, { find, viewOf, stackPlan, focusPlan, withView, configSession } from "./bercail-shep.mjs";
+import Shep, { find, viewOf, stackPlan, focusPlan, withView, configShep, plannedRun } from "./bercail-shep.mjs";
 import Spaces from "./bercail-spaces.mjs";
 import { els } from "./gpui.mjs";
 
@@ -91,9 +91,8 @@ const SPACES = [{ id: "s1", tabs: [{ id: "tab1", active: true }] }, { id: "s2", 
 const PANES = [{ pane: "p1", tab: "tab1", terminal: "t1" }, { pane: "p2", tab: "tab2", terminal: "t2" }];
 globalThis.localStorage = { getItem: () => null, setItem: () => {} };
 
-// OpenClaw's agents: `sheep` is the default.
-const AGENTS = JSON.stringify([{ id: "other", isDefault: false }, { id: "sheep", isDefault: true }]);
-const ocExec = (_c, a) => ({ code: 0, stdout: /openclaw agents list --json/.test(a.at(-1)) ? AGENTS : "", stderr: "" });
+// hc exec finds bercail; hc run starts.
+const ocExec = () => ({ code: 0, stdout: "", stderr: "" });
 function setup(state = {}) {
   globalThis.herdr = {
     layout: structuredClone(shipped), calls: [], execs: [], spaces: SPACES, panes: PANES,
@@ -138,6 +137,8 @@ for (const a of ["--bg", "--no-parent", "--rm", "--name", "bercail-shep", "--lab
   if (!argv.includes(a)) fail(`hc run lacks ${a}: ${argv}`);
 }
 if (/--token|--password|--url/.test(argv.join(" "))) fail(`Shep passes credentials: ${argv}`);
+const script = argv[argv.indexOf("-lc") + 1];
+if (!/exec bercail shep run "\$@"$/.test(script) || argv.at(-1) !== "bash") fail(`Shep does not run bercail shep run: ${argv}`);
 globalThis.herdr.layout = withView(globalThis.herdr.layout, "space");
 globalThis.herdr.execs = [];
 v = nav();
@@ -148,7 +149,7 @@ if (viewOf(globalThis.herdr.layout) !== "space" || runs().length) fail("a second
 console.log("PASS: launch shows the Shep view and starts Shep once, after the core lists terminals");
 
 // A live Shep is found by its label: no second start. A start that races one the list
-// doesn't show yet (hc: name_taken) is no error. Missing OpenClaw starts nothing.
+// doesn't show yet (hc: name_taken) is no error. Missing bercail starts nothing.
 for (const [label, state, wantRun, wantNote] of [
   ["live", { terminals: [SHEP("t9")] }, false, false],
   ["name_taken", { exec: (c, a) => a[0] === "run" ? { code: 1, stdout: "", stderr: '{"error":{"kind":"name_taken"}}' } : ocExec(c, a) }, true, false],
@@ -162,43 +163,31 @@ for (const [label, state, wantRun, wantNote] of [
   if (Boolean(runs().length) !== wantRun) fail(`${label}: hc run ${JSON.stringify(globalThis.herdr.execs)}`);
   if (Boolean(globalThis.herdr.notes?.length) !== wantNote) fail(`${label}: notes ${JSON.stringify(globalThis.herdr.notes)}`);
 }
-console.log("PASS: one Shep: a live one is reused, a racing start is quiet, no OpenClaw starts nothing");
+console.log("PASS: one Shep: a live one is reused, a racing start is quiet, no bercail starts nothing");
 
-// Shep opens an agent-scoped session, never bare `openclaw tui` (which picks the agent
-// from its folder): [shep] session from config.toml, else OpenClaw's default agent's
-// main session. The key goes in as an argument, not into the script.
-async function started(state) {
+// The runtime is bercail's to pick (`bercail shep run`); the mod only words it from
+// [shep]. "Change runtime" starts the same command with --setup, as an argument.
+async function started(state, command) {
   delete globalThis.bercailShep;
   setup({ terminals: [{ address: "t1", state: "live", labels: {} }], ...state });
   v = nav();
-  v.sync();
+  if (command) await v.command(command);
+  else v.sync();
   await tick();
   await tick();
   return runs()[0] ?? null;
 }
-function routes(argv, key, label) {
-  const script = argv?.[argv.indexOf("-lc") + 1] ?? "";
-  if (!/openclaw tui --session "\$1"/.test(script) || /openclaw tui(;|\s*$)/m.test(script)) fail(`${label}: script ${script}`);
-  if (argv.at(-1) !== key || argv.at(-2) !== "bash" || script.includes(key)) fail(`${label}: argv ${argv}`);
-  if (!argv.includes(`bercail.shep_session=${key}`)) fail(`${label}: no session label: ${argv}`);
-}
-routes(await started({}), "agent:sheep:main", "default agent");
+const eqj = (a, b, label) => { if (JSON.stringify(a) !== JSON.stringify(b)) fail(`${label}: ${JSON.stringify(a)}`); };
+eqj(configShep('[layout]\nsession = "x"\n'), { backend: "", session: "" }, "no [shep]");
+eqj(configShep('[shep]\n# the orchestrator\nsession = "agent:sheep:main" # mine\n'), { backend: "openclaw", session: "agent:sheep:main" }, "a session alone is OpenClaw");
+eqj(configShep('[shep]\nbackend = "pi"\nsession = "agent:sheep:main"\n'), { backend: "pi", session: "agent:sheep:main" }, "backend wins");
+if (!/first start asks/.test(plannedRun(configShep("")))) fail("unset: " + plannedRun(configShep("")));
+if (!/on Pi/.test(plannedRun({ backend: "pi" })) || !/--session agent:sheep:main/.test(plannedRun({ backend: "openclaw", session: "agent:sheep:main" }))) fail("plannedRun");
+let argv2 = await started({ config: '[shep]\nsession = "agent:sheep:main"\n' }, "setup");
+if (argv2.at(-1) !== "--setup" || argv2.at(-2) !== "bash") fail(`setup argv: ${argv2}`);
 if (!globalThis.herdr.reads?.includes("/home/me/.config/bercail/config.toml")) fail("the config was not read");
-const config = '[layout]\nsession = "agent:no:main"\n\n[shep]\n# the orchestrator\nsession = "agent:sheep:main" # Simon\n';
-if (configSession(config) !== "agent:sheep:main" || configSession("[layout]\nsession = \"x\"\n") !== "") fail("configSession");
-let argv2 = await started({ config: config.replace("agent:sheep:main", "agent:ops:work") });
-routes(argv2, "agent:ops:work", "[shep] session");
-if (globalThis.herdr.execs.some((e) => /agents list/.test(e.at(-1)))) fail("a set [shep] session must not ask OpenClaw for its default");
-for (const [label, state] of [
-  ["not agent-scoped", { config: '[shep]\nsession = "main"\n' }],
-  ["injection", { config: '[shep]\nsession = "agent:a:b; rm -rf ~"\n' }],
-  ["no default agent", { exec: (c, a) => /agents list/.test(a.at(-1)) ? { code: 0, stdout: "[]", stderr: "" } : ocExec(c, a) }],
-]) {
-  if (await started(state)) fail(`${label}: Shep started`);
-  const note = globalThis.herdr.notes?.[0]?.body ?? "";
-  if (!/\[shep\] session = "agent:<agent id>:main"/.test(note)) fail(`${label}: note ${note}`);
-}
-console.log("PASS: Shep opens [shep] session or the default agent's main session, explicitly, else says how to set it");
+if (globalThis.herdr.execs.some((e) => /openclaw/.test(e.join(" ")))) fail("the mod asked OpenClaw itself");
+console.log("PASS: Shep runs bercail shep run (or --setup); the view words the [shep] choice");
 
 // Shep's block: added once (already shown), selected after, dropped when Shep ends,
 // never added again for the same terminal.

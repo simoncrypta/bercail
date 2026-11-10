@@ -2,7 +2,7 @@
 
 Handoff is parallel, not a chat fork: one beads issue per job, run headless or in a sibling worktree with its own desk.
 
-The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), the Grok bot, creates the issue (`bd create`), then runs `handoff-spawn` with the issue id and a stage. `--stage` and `--issue` are both required; bercail has no default harness and no fallthrough.
+The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), bercail's orchestrator, creates the issue (`bd create`), then runs `handoff-spawn` with the issue id and a stage. `--stage` and `--issue` are both required; bercail has no default harness and no fallthrough.
 
 | Stage | Binary | Headless argv (the last word is the prompt) |
 |-------|--------|-----------------------------------------------|
@@ -13,7 +13,7 @@ The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), t
 | `autopilot` | opencode | `opencode run --format json --agent bstack-autopilot [--model <lead>] …` (commits and pushes a PR's fixes; headless only) |
 
 ```bash
-bd create "Fix the login timeout" --description "..."     # Shep (the Grok bot) writes the issue
+bd create "Fix the login timeout" --description "..."     # Shep writes the issue
 ~/.agents/skills/handoff/scripts/handoff-spawn --info      # facts as JSON, incl. beads
 
 # headless: nothing opens in the Herdr app; result is <worktree>/.bercail/handoff-result.json

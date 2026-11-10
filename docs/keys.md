@@ -2,12 +2,12 @@
 
 Keyboard and mouse both work: `Ctrl+Shift` keys like the rest of the Herdr app, a file tree you can click, and `j`/`k` in tuicr.
 
-The window has two views. It opens on the **Shep view**: Shep, OpenClaw's terminal UI, on the left, and the navigator (Shep, spaces, agents) on the right.
+The window has two views. It opens on the **Shep view**: Shep's terminal (Pi, or OpenClaw's TUI) on the left, and the navigator (Shep, spaces, agents) on the right.
 
 ```
 ┌──────────────────────────────────────────┬─────────────┐
-│ Shep: openclaw tui --session <key>       │ ● Shep      │
-│ ([shep] session or agent:<default>:main) │ spaces      │
+│ Shep: bercail shep run                   │ ● Shep      │
+│ (Pi, or openclaw tui --session <key>)    │ spaces      │
 │                                          │ agents      │
 └──────────────────────────────────────────┴─────────────┘
 ```
@@ -24,7 +24,7 @@ Click a space and the **space view** shows it: the navigator moves to the left, 
 └─────────────┴──────────────┴────────────────────────┴─────────────┘
 ```
 
-Switching views starts and stops nothing. Shep, the desks and every shell keep running while hidden, and each view comes back as you left it, the keyboard included. Shep is one terminal for every desk, not part of any space; it is found again after a restart, so no second TUI starts. It starts on its own once per app session; quit it and it stays quit until **Start Shep**. Without OpenClaw the Shep view says how to install it, and the spaces work as before. See [Shep](shep.md#the-shep-view).
+Switching views starts and stops nothing. Shep, the desks and every shell keep running while hidden, and each view comes back as you left it, the keyboard included. Shep is one terminal for every desk, not part of any space; it is found again after a restart, so no second one starts. It starts on its own once per app session; quit it and it stays quit until **Start Shep**. The first start asks whether Shep runs on Pi or OpenClaw; **Change runtime** asks again. See [Shep](shep.md#the-shep-view).
 
 The desk (bstack when it is on, else your `[agent] command`) sits under the tab bar, beside the current tab's panes. It is an hc terminal, so it keeps running when the window closes or the Shell's program ends. Supported sessions [come back after a reboot](config.md#desks-after-a-reboot). The agents list (bercail's `bercail-agents` mod) has a row for each desk. Click any agent, desk or not, to open its own terminal in a dialog over either view: while it is open, what you type goes to that agent. ✕ or a click beside the dialog closes it and puts the keyboard back; **Show in space** goes to its space instead.
 

@@ -31,6 +31,7 @@ Post-install CLI (bercail):
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | openclaw | run
+  shep          Shep's runtime, Pi or OpenClaw: status | setup | use pi|openclaw | handoff --to RUNTIME | run
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
                 gathers every PR, with one detached sibling worktree and a Stack tab.
                 Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,
@@ -95,7 +96,7 @@ Config:
   ~/.config/bercail/config.toml               desk agent default, review, [bstack]
   ~/.config/herdr-app/layouts/bercail.json    the layout
   ~/.config/herdr-app/mods/bercail-desk/      the desk mod
-  ~/.config/herdr-app/mods/bercail-shep/      the Shep view (openclaw tui) and Back to Shep
+  ~/.config/herdr-app/mods/bercail-shep/      the Shep view (bercail shep run) and Back to Shep
   ~/.config/herdr-app/keys.json               its "layout:bercail" keys (update keeps yours)
   ~/.config/worktrunk/herdr-layout.sh
   ~/.config/worktrunk/config.toml             worktrunk hooks
