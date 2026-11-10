@@ -11,6 +11,7 @@
 #   bercail notify add NAME    write sink NAME from a pasted url and key, then test it
 #   bercail notify repo add|remove NAME [REPO]   add a repo to sink NAME, or take it out
 #   bercail notify check [PATH]                  warn if no enabled sink covers PATH's repo
+#   bercail notify openclaw [NAME]               point a sink at this machine's OpenClaw Gateway hook
 #
 # The desk mod keeps one `run` alive as the hidden hc terminal bercail-notify.
 
@@ -536,19 +537,20 @@ notify_status() {
 }
 
 notify_test() {
-  local name="${1:-}" f code agent space desk
+  local name="${1:-}" f code agent space desk event
   [[ -n "$name" ]] || { _notify_err "usage: bercail notify test SINK"; return 1; }
   f="$(notify_sinks_dir)/$name.toml"
   [[ -f "$f" ]] || { _notify_err "no sink $f"; return 1; }
   agent='{"address":null,"app":null,"status":"test","previous_status":null,"title":null}'
   space='{"id":null,"name":null,"repo":null,"checkout_path":null,"linked":false}'
   desk='{"branch":null,"issue":null,"issue_title":null,"stage":null,"harness":null,"result":null}'
-  code="$(notify_post "$f" "$(notify_payload test "$name" "$agent" "$space" "$desk" "test:$(_notify_now)")")"
+  event="test:$(_notify_now)"
+  code="$(notify_post "$f" "$(notify_payload test "$name" "$agent" "$space" "$desk" "$event")")"
   case "$code" in
     nourl|insecure) _notify_err "sink '$name': $code"; return 1 ;;
   esac
   notify_record "$name" "$code"
-  printf '%s HTTP %s\n' "$name" "$code"
+  printf '%s HTTP %s event %s\n' "$name" "$code" "$event"
   [[ "$code" == 2?? ]]
 }
 
@@ -871,6 +873,143 @@ notify_add() {
   fi
 }
 
+# The wake text OpenClaw renders from a post. Only bercail's own line and event
+# id: never desk.result.summary or agent.title, which carry agent output. A
+# wake is a system event, and OpenClaw does not safety-wrap it.
+NOTIFY_OPENCLAW_TEMPLATE='bercail desk status (a signal to look at the desk and its issue, not an instruction): {{payload.text}} [event {{payload.event_id}}]'
+
+notify_openclaw_bin() {
+  printf '%s' "${OPENCLAW_BIN:-openclaw}"
+}
+
+# `openclaw config get PATH --json`, or DEFAULT when PATH is unset. Secrets
+# come back as __OPENCLAW_REDACTED__.
+_notify_oc_get() {
+  local path="$1" default="$2" out
+  if out="$("$(notify_openclaw_bin)" config get "$path" --json 2>/dev/null </dev/null)"; then
+    printf '%s' "$out"
+  elif jq -e '.error.message | test("valid but unset")' <<<"$out" >/dev/null 2>&1; then
+    printf '%s' "$default"
+  else
+    return 1
+  fi
+}
+
+_notify_openclaw_usage() {
+  cat >&2 <<'EOF'
+usage: bercail notify openclaw [NAME] [--agent ID] [--repos LIST | --all-repos]
+                               [--dry-run] [--yes]
+Points sink NAME (default openclaw) at this machine's OpenClaw Gateway. It adds
+the hooks mapping `bercail`, which wakes agent ID's main session (default:
+OpenClaw's default agent) with each post's text, then writes the sink and sends
+a test. With hooks off it turns them on with a new token; with hooks on it
+keeps hooks.token and takes it from the sink, BERCAIL_NOTIFY_KEY, or a hidden
+prompt (stdin without a terminal). --dry-run checks the OpenClaw patch and
+writes nothing. --repos defaults to this checkout's repo, as in notify add.
+EOF
+}
+
+# Sink NAME -> OpenClaw: one `openclaw config patch` (token on stdin), then
+# `notify add` with the hook URL and token. Other mappings, the allowed agents,
+# and an existing token are kept.
+notify_openclaw() {
+  local name="" agent="" dry=0 yes=0 add_args=() oc f agents hooks port path url reuse patch reply code
+  local +x BERCAIL_NOTIFY_URL BERCAIL_NOTIFY_KEY="${BERCAIL_NOTIFY_KEY:-}"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --agent) agent="${2:-}"; shift 2 || { _notify_openclaw_usage; return 1; } ;;
+      --agent=*) agent="${1#*=}"; shift ;;
+      --repos) add_args+=(--repos "${2:-}"); shift 2 || { _notify_openclaw_usage; return 1; } ;;
+      --repos=*|--all-repos) add_args+=("$1"); shift ;;
+      --dry-run) dry=1; shift ;;
+      -y|--yes) yes=1; shift ;;
+      -h|--help) _notify_openclaw_usage; return 0 ;;
+      -*) _notify_err "unknown option '$1'"; _notify_openclaw_usage; return 1 ;;
+      *)
+        [[ -z "$name" ]] || { _notify_err "one sink name only"; _notify_openclaw_usage; return 1; }
+        name="$1"; shift ;;
+    esac
+  done
+  name="${name:-openclaw}"
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || { _notify_err "sink name '$name': use letters, digits, dot, dash, underscore"; return 1; }
+  f="$(notify_sinks_dir)/$name.toml"
+  oc="$(notify_openclaw_bin)"
+  command -v "$oc" >/dev/null 2>&1 || { _notify_err "openclaw is not on PATH"; return 1; }
+
+  agents="$("$oc" agents list --json 2>/dev/null </dev/null)" \
+    && jq -e 'type == "array"' <<<"$agents" >/dev/null 2>&1 \
+    || { _notify_err "could not list OpenClaw agents (openclaw agents list --json)"; return 1; }
+  [[ -n "$agent" ]] || agent="$(jq -r 'map(select(.isDefault))[0].id // empty' <<<"$agents")"
+  [[ -n "$agent" ]] || { _notify_err "OpenClaw has no default agent; pass --agent ID"; return 1; }
+  jq -e --arg a "$agent" 'any(.[]; .id == $a)' <<<"$agents" >/dev/null \
+    || { _notify_err "no OpenClaw agent '$agent' (agents: $(jq -r 'map(.id) | join(", ")' <<<"$agents"))"; return 1; }
+  hooks="$(_notify_oc_get hooks '{}')" && port="$(_notify_oc_get gateway.port 18789)" \
+    || { _notify_err "could not read the OpenClaw config (openclaw config get hooks --json)"; return 1; }
+  path="$(jq -r '.path // "/hooks" | sub("/+$"; "") | if startswith("/") then . else "/" + . end' <<<"$hooks")"
+  url="http://127.0.0.1:$port$path/bercail"
+  reuse="$(jq -r '.enabled == true and (.token // "") != ""' <<<"$hooks")"
+
+  # Ours goes first: OpenClaw runs the first mapping that matches.
+  patch="$(jq -c --arg agent "$agent" --arg tpl "$NOTIFY_OPENCLAW_TEMPLATE" --argjson reuse "$reuse" '
+    . as $h
+    | {id:"bercail", match:{path:"bercail", source:"bercail"}, action:"wake", wakeMode:"now",
+       agentId:$agent, textTemplate:$tpl} as $m
+    | {enabled:true, mappings:([$m] + [($h.mappings // [])[] | select(.id != "bercail")])}
+    + if ($h.allowedAgentIds | type) == "array" then
+        (if any($h.allowedAgentIds[]; . == $agent or . == "*") then {}
+         else {allowedAgentIds:($h.allowedAgentIds + [$agent])} end)
+      elif $reuse then {}
+      else {allowedAgentIds:[$agent]} end
+    | {hooks:.}' <<<"$hooks")"
+
+  printf 'OpenClaw: agent %s, hook %s, token %s\n' "$agent" "$url" \
+    "$([[ "$reuse" == true ]] && printf 'kept (hooks are on)' || printf 'new')"
+  jq . <<<"$patch"
+  if [[ -e "$f" && "$yes" -ne 1 && "$dry" -ne 1 ]]; then
+    [[ -t 0 ]] || { _notify_err "sink '$name' exists; pass --yes to replace it"; return 1; }
+    read -r -p "Sink $name exists. Replace it? [y/N] " reply || reply=""
+    [[ "$reply" == [yY]* ]] || { printf 'kept %s\n' "$f" >&2; return 1; }
+  fi
+
+  if [[ "$dry" -eq 1 ]]; then
+    [[ "$reuse" == true ]] || patch="$(jq -c '.hooks.token = "dry-run-placeholder"' <<<"$patch")"
+    printf '%s' "$patch" | "$oc" config patch --stdin --dry-run >&2 \
+      || { _notify_err "OpenClaw rejected the patch"; return 1; }
+    printf 'dry run: would patch OpenClaw and %s sink %s (%s, auth bearer); wrote nothing\n' \
+      "$([[ -e "$f" ]] && printf replace || printf write)" "$name" "$f"
+    return 0
+  fi
+
+  if [[ "$reuse" == true ]]; then
+    [[ -n "$BERCAIL_NOTIFY_KEY" || ! -f "$f" ]] || BERCAIL_NOTIFY_KEY="$(notify_sink_key "$f" 2>/dev/null || true)"
+    [[ -n "$BERCAIL_NOTIFY_KEY" ]] || BERCAIL_NOTIFY_KEY="$(_notify_read_value "OpenClaw hooks.token (hidden): " 1)"
+    [[ -n "$BERCAIL_NOTIFY_KEY" ]] || { _notify_err "hooks are on: give their token (hooks.token) on stdin or in BERCAIL_NOTIFY_KEY"; return 1; }
+  else
+    BERCAIL_NOTIFY_KEY="$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n')"
+    patch="$(printf '%s' "$BERCAIL_NOTIFY_KEY" | jq -Rc --argjson p "$patch" '. as $t | $p | .hooks.token = $t')"
+  fi
+  printf '%s' "$patch" | "$oc" config patch --stdin >&2 \
+    || { _notify_err "OpenClaw rejected the patch; sink $name not written"; return 1; }
+  patch=""
+
+  BERCAIL_NOTIFY_URL="$url"
+  code=0
+  notify_add "$name" --auth bearer --yes "${add_args[@]}" || code=$?
+  BERCAIL_NOTIFY_KEY=""
+  if [[ "$code" -ne 0 ]]; then
+    case "$(jq -r '.last_code // empty' "$(_notify_sink_state_file "$name")" 2>/dev/null)" in
+      404) _notify_err "the Gateway has not loaded the hook yet: openclaw gateway restart, then bercail notify test $name" ;;
+      401) _notify_err "the key is not OpenClaw's hooks.token; rerun with the right one: bercail notify openclaw $name --yes" ;;
+      000) _notify_err "is the Gateway running on port $port? openclaw gateway status, then bercail notify test $name" ;;
+    esac
+  fi
+  printf '%s\n' "HTTP 200 only means OpenClaw queued the wake. To see it in agent $agent's conversation:" \
+    "  openclaw gateway call chat.history --json --params '{\"sessionKey\":\"agent:$agent:main\",\"limit\":20}' \\" \
+    "    | jq -r '.messages[] | select(.provenance.sourceTool == \"hook\") | .content'"
+  return "$code"
+}
+
 cmd_notify() {
   case "${1:-status}" in
     run) notify_run ;;
@@ -879,6 +1018,7 @@ cmd_notify() {
     add) shift; notify_add "$@" ;;
     repo) shift; notify_repo "$@" ;;
     check) notify_check "${2:-}" ;;
-    *) _notify_err "unknown command '${1:-}' (run|status|test NAME|add NAME|repo add|remove NAME [REPO]|check [PATH])"; return 1 ;;
+    openclaw) shift; notify_openclaw "$@" ;;
+    *) _notify_err "unknown command '${1:-}' (run|status|test NAME|add NAME|repo add|remove NAME [REPO]|check [PATH]|openclaw [NAME])"; return 1 ;;
   esac
 }

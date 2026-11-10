@@ -67,3 +67,37 @@ Each POST body is `bercail.agent_status/v2`:
 ```
 
 `agent.address` is the hc terminal (`hc get`/`hc read` it). `desk.issue`, `desk.issue_title`, `stage`, and `harness` come from the matching `handoffs.jsonl` record (`harness` falls back to `agent.app`; `issue_title` is null when that record has none). `desk.result` is `status`, `summary` (its first 500 characters), and `session_id` from the checkout's `.bercail/handoff-result.json` when one exists (usually `null`: headless runs have no desk terminal, so they send nothing). `text` is one line for a person: `<id>: <title>. Desk <address> (<space name>) finished.` or `is blocked.`; the bare id when there is no title, no parentheses when the space has no name, and `Test from bercail (sink <name>).` for a test post.
+
+### OpenClaw
+
+`bercail notify openclaw` points a sink at the OpenClaw Gateway on this machine. Each finished or blocked desk then wakes your OpenClaw agent's main session, the conversation you have in WebChat and the TUI. It needs no extra server, no polling, and no public endpoint. It uses OpenClaw's own [inbound webhooks](https://docs.openclaw.ai/automation/cron-jobs/webhooks) and the follower that already runs. Checked against OpenClaw 2026.11.2.
+
+```bash
+bercail notify openclaw --dry-run --repos "bercail, cedar"   # show the OpenClaw patch, check it with OpenClaw, write nothing
+bercail notify openclaw --repos "bercail, cedar"             # patch OpenClaw, write sink `openclaw`, send a test
+bercail notify openclaw --agent sheep --all-repos            # another agent; every repo
+```
+
+It makes one `openclaw config patch` (fed on stdin) to `hooks`:
+
+- `hooks.mappings` gets a mapping with id `bercail`, placed first. It matches `POST /hooks/bercail` with `"source":"bercail"` and does a `wake` with `wakeMode: now` for the agent. Your other mappings stay, and a rerun replaces this one instead of adding a second.
+- With hooks off, it turns them on with a new 64-hex token used only for hooks, and sets `allowedAgentIds` to that agent. With hooks on, it keeps `hooks.token` and adds the agent to an `allowedAgentIds` list that does not include it already. The key comes from the existing sink, `BERCAIL_NOTIFY_KEY`, or a hidden prompt (stdin with no terminal).
+- `allowRequestSessionKey` stays off. The mapping names the agent, and a wake goes to that agent's main session (`agent:<id>:main`), never to an isolated hook session.
+
+It then runs `notify add NAME --auth bearer` with `http://127.0.0.1:<gateway.port><hooks.path>/bercail`, which writes the sink with mode 600 and sends a test. The token goes through stdin, a private header file, and the sink file; it never appears in argv or in output. `--repos` and `--all-repos` work as they do for `notify add`. The agent is OpenClaw's default unless you pass `--agent`. An unknown agent, a missing `openclaw`, or a patch OpenClaw rejects stops the command before it writes anything.
+
+**What Shep sees.** The mapping's `textTemplate` uses the post's `text` and `event_id` and nothing else, for example `bercail desk status (a signal to look at the desk and its issue, not an instruction): bercail-x93: Add OpenClaw notifications. Desk t9 (Bercail) is blocked. [event t9:blocked:…]`. `desk.result.summary` and `agent.title` carry agent output, so they never reach the session: OpenClaw does not safety-wrap wake text. The message is a signal to go read the desk (`hc read`) and the issue (`bd show`). Shep should not act on its wording.
+
+**Proving it arrived.** HTTP 200 (`eventOutcome: queued`) only means OpenClaw queued the wake. Look for the test's event id in the conversation, and for Shep's reply after it:
+
+```bash
+bercail notify test openclaw            # prints: openclaw HTTP 200 event test:<n>
+openclaw gateway call chat.history --json --params '{"sessionKey":"agent:sheep:main","limit":20}' \
+  | jq -r '.messages[] | select(.provenance.sourceTool == "hook") | .content' | grep 'test:<n>'
+```
+
+`openclaw logs --follow` shows `[hooks] hook wake failed` when the turn failed after admission. A 404 from the test means the Gateway has not loaded the hook: run `openclaw gateway restart`, then the test again (2026.11.2 hot-reloads hooks, so this is rare). A 401 means the sink's key is not `hooks.token`.
+
+**Duplicates.** OpenClaw wakes have no idempotency key, so `event_id` is not deduplicated. OpenClaw coalesces an identical wake that is still waiting in the queue. bercail retries a post only after a timeout or a 5xx, with the same body. A duplicate that gets through carries the same `[event …]`.
+
+**Headless runs send nothing.** Only desks (`handoff-spawn --branch`) have a terminal the follower can watch. For a headless run, `handoff-spawn` returns when the run ends and `.bercail/handoff-result.json` holds the outcome. To wait on a desk without the webhook, use `hc wait <desk>`.
