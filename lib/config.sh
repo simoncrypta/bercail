@@ -82,12 +82,15 @@ read_layout_review() {
 # shellcheck disable=SC2034 # Read by the installer that sources this library.
 RECONFIGURE=0
 
-# The Herdr app half of bercail: the bercail layout, its mods (the desk, and the
-# agents list, which also lists each desk), and its keys.
+# The Herdr app half of bercail: the bercail layout, its mods (the desk, Shep's
+# view, the spaces list that switches to a space, and the agents list, which also
+# lists each desk and opens agents in a dialog), and its keys.
 # Paths are relative to bercail/ (the shared layout folder) in the source and to the app's home.
 HERDR_APP_LAYOUT="layouts/bercail.json"
-HERDR_APP_MODS=(bercail-desk bercail-agents bercail-review)
+HERDR_APP_MODS=(bercail-desk bercail-shep bercail-spaces bercail-agents bercail-review)
 HERDR_APP_MOD_FILES=(mods/bercail-desk/main.js mods/bercail-desk/mod.json
+  mods/bercail-shep/main.js mods/bercail-shep/mod.json
+  mods/bercail-spaces/main.js mods/bercail-spaces/mod.json
   mods/bercail-agents/main.js mods/bercail-agents/mod.json
   mods/bercail-review/main.js mods/bercail-review/mod.json)
 HERDR_APP_KEYS_SECTION="layout:bercail"
@@ -99,12 +102,15 @@ _herdr_app_shipped_layout() {
   printf '%s/herdr-app/%s' "$AGENTIC_DEV_SHARE_DIR" "$HERDR_APP_LAYOUT"
 }
 
-# The layout without what the app changes at run time: the desks' blocks (and the
-# shared agent block of older layouts), which stack child shows, and column weights.
+# The layout without what the app changes at run time: the desks' and Shep's blocks
+# (and the shared agent block of older layouts), which stack child shows, which view
+# shows, and column weights.
 _herdr_app_layout_shape() {
   jq -S 'walk(if type == "object" then
       del(.active)
+      | if .id == "shep" or .id == "work" then del(.hidden) else . end
       | if .id == "agent-stack" then .children |= map(select(.id != "agent" and (.id | startswith("desk-") | not))) else . end
+      | if .id == "shep-stack" then .children |= map(select(.id == "shep-empty")) else . end
       | if (.size | type) == "object" then del(.size.weight) else . end
     else . end)' "$1" 2>/dev/null
 }

@@ -1,6 +1,6 @@
 # bercail
 
-Built for the Shep Grok bot: hand off the jobs, let agents work side by side in their own worktrees, and review each one as it lands.
+Built for Shep: the window opens on Shep (OpenClaw's terminal UI) beside your spaces and agents. Hand off the jobs, let agents work side by side in their own worktrees, and review each one as it lands.
 
 ![bercail](preview.png)
 
@@ -16,7 +16,7 @@ these files.
 1. Tell the person what the install does, and ask before you run it. It runs
    an installer that adds programs (the Herdr app if missing, git, worktrunk,
    beads, fzf, jq, tuicr, and opencode for bstack), a block in their shell rc,
-   and this layout with its two mods and its `layout:bercail` keys.
+   and this layout with its mods and its `layout:bercail` keys.
 2. With their yes, install with one of these:
 
    ```bash
@@ -31,8 +31,8 @@ these files.
 3. bercail copies the layout and the mods, and merges the keys, itself. Skip
    the copy and merge steps of the Herdr app's guide: copying again would
    add a renamed second copy. Run `herdr-app check` on
-   `~/.config/herdr-app/mods/bercail-desk`, `.../bercail-agents` and
-   `.../bercail-review`, then
+   `~/.config/herdr-app/mods/bercail-desk`, `.../bercail-shep`,
+   `.../bercail-spaces`, `.../bercail-agents` and `.../bercail-review`, then
    `herdr-app do layout.switch --name bercail`.
 4. Tell the person what [After the install](#after-the-install) says.
 
@@ -46,28 +46,49 @@ Second choice, the layout on its own, when the person says no:
 - Not the `herdr` terminal (`~/.config/herdr`, `herdr plugin install`,
   `herdr-plugin.toml`): it has no layouts or mods, and this layout does not
   run in it.
-- Copy `layouts/bercail.json`, `mods/bercail-desk/` and
-  `mods/bercail-agents/` into `~/.config/herdr-app/`, merge the
-  `layout:bercail` section of `keys.json` into
-  `~/.config/herdr-app/keys.json`, run `herdr-app check` on both mods
-  (`~/.config/herdr-app/mods/bercail-desk`, `.../bercail-agents`), then
-  switch with `ctrl-shift-l`.
+- Copy `layouts/bercail.json`, `mods/bercail-desk/`, `mods/bercail-shep/`,
+  `mods/bercail-spaces/` and `mods/bercail-agents/` into
+  `~/.config/herdr-app/`, merge the `layout:bercail` section of `keys.json`
+  into `~/.config/herdr-app/keys.json`, run `herdr-app check` on each mod
+  (`~/.config/herdr-app/mods/bercail-desk`, `.../bercail-shep`,
+  `.../bercail-spaces`, `.../bercail-agents`), then switch with
+  `ctrl-shift-l`.
 - Tell the person what they won't have. The desk runs `cursor-agent`, or
   `[agent] command` from `~/.config/bercail/config.toml` if they write one,
   and that program must be on PATH; there is no bstack. Review needs
-  [tuicr](https://github.com/agavra/tuicr) (≥ 0.20) installed separately.
+  [tuicr](https://github.com/agavra/tuicr) (≥ 0.20) installed separately,
+  and the Shep view needs [OpenClaw](https://docs.openclaw.ai) with a
+  Gateway (`openclaw tui`) and an agent (`[shep] session`, else the default
+  agent's main session).
   There are no worktree spaces (`dev`, `wtc`, `wtd`), no handoff, skills or
   webhooks, and Shep can't run it. Installing bercail later adds all of that.
 
 ## What you see
 
-Left to right, under no system title bar (`titlebar: "none"`, macOS traffic
-lights at 12,16):
+Two views of one window, under no system title bar (`titlebar: "none"`,
+macOS traffic lights at 12,16). The **Shep view** (what the app opens on):
+Shep, then the sidebar on the right. The **space view**: the sidebar on the
+left, then the work column. The root row is `shep`, `sidebar`, `work`; a view
+is which of `shep` and `work` is hidden.
 
+- **Shep**, weight 1 (min 320), 8px padding: a card like the desk's
+  (`background` fill, 1px `border`, radius 10, `accent` border on focus). A
+  32px `chrome` header (draggable: `window_drag`): a 7px dot (`ansi2` while
+  Shep runs, `blocked` without OpenClaw, else `dim`), "Shep" semibold, the
+  TUI's title or "OpenClaw TUI, the orchestrator for every desk" in `dim`,
+  the state word (running, starting, stopped, OpenClaw missing), and
+  "Ctrl+Shift+H spaces" at 11px. Below it, Shep's terminal with 6px padding.
+  Without one: "Shep is not running", a "Start Shep" button filled with
+  `solid`, and a hint; without OpenClaw: "OpenClaw is not installed", what to
+  do, a "Check again" button, and "Your spaces work without it".
 - **Sidebar**, 268px wide (min 44, max 480, not resizable), `chrome`
-  background. Herdr's own brand row (46px), then the spaces list and the
-  agents list sharing the rest equally (min 90px each), then the footer
-  (69px, Settings / Add machine).
+  background. Herdr's own brand row (46px); the **Shep row** (44px): in the
+  Shep view a selected (`selected`) row with an 18px `solid` tile "S",
+  "Shep" and the dot; in the space view a chevron, "Back to Shep",
+  "Ctrl+Shift+H" in `dim` and the dot. On the rail (narrower than 160px)
+  only the tile. Then the spaces list and the agents list sharing the rest
+  equally (min 90px each), then the footer (69px, Settings / Add machine).
+  While Shep shows, no space reads as selected.
 - **Work column**: the tab bar (42px), the work body, and the status bar
   (28px). The work body has 8px padding and 8px gaps between its three parts:
   - **The desk**, weight 1 (min 320px): a card with `background` fill, 1px
@@ -87,6 +108,32 @@ lights at 12,16):
 
 ## How it behaves
 
+- **Views.** The app opens on the Shep view once per app session, whatever
+  view was shown when it closed. Clicking a space (or making one with +)
+  selects it and shows the space view; the Shep row or `ctrl-shift-h` shows
+  the Shep view again. Hidden columns keep their terminals and mods running:
+  switching starts and stops nothing.
+- **Shep** is one hc terminal, `bercail-shep` (label `bercail.role=shep`),
+  in no space, running `openclaw tui --session <key>` with no other flags
+  (OpenClaw's own config picks the Gateway and auth). The key is always
+  agent-scoped: `[shep] session` from `~/.config/bercail/config.toml`, else
+  `agent:<id>:main` of the agent `openclaw agents list --json` marks
+  `isDefault`; anything else keeps Shep stopped with a notification saying
+  what to set. The terminal carries it as label `bercail.shep_session` and
+  the header shows it. It starts on its
+  own once per app session, after the core lists its terminals; a running
+  one is shown again, never a second. One the person quits stays quit until
+  "Start Shep". When the TUI exits with an error, its message stays until
+  Enter.
+- **The keyboard** goes into Shep when the Shep view shows, and back where it
+  was in the space (a pane, or the desk) when the space view returns.
+- **Agents.** Clicking an agent, a desk or a sub-agent in the agents list
+  opens its own terminal in a dialog (86% of the window) over either view,
+  with a 34px bar: status dot, icon, name ("Desk" for a desk), space, title,
+  status, "Show in space" and ✕. Keys go to that terminal while it is open;
+  Esc is the program's. ✕ or a click beside it closes it and puts the
+  keyboard back where it was; "Show in space" selects the space, shows the
+  space view and, for a pane agent, focuses it.
 - **The desk agent** belongs to the shown space. Switching spaces points the
   desk at that space's agent, or shows the empty desk.
 - **Statuses** show in the header dot and word: working `working`, blocked
@@ -100,6 +147,7 @@ lights at 12,16):
   is replaced. At most one automatic open per space every 15s; a space that
   isn't shown opens it the next time it is.
 - **Keys** (keys.json section `layout:bercail`):
+  - `ctrl-shift-h` switches between the Shep view and the space view.
   - `ctrl-shift-a` focuses the desk agent, or starts one: bstack when
     `[bstack] enabled = true` in `~/.config/bercail/config.toml`, else
     `[agent] command` (`cursor-agent` when there is none).
@@ -121,32 +169,68 @@ lights at 12,16):
     each space's desk first, then its pane agents. A desk is focused in its
     space's desk column.
   - `ctrl-shift-q` closes the space.
-- **Clicks**: the empty desk's "Start the agent" button starts the desk agent.
-  Everything else is Herdr's own (sidebar, tabs, panes, panels).
+- **Clicks**: the empty desk's "Start the agent" button starts the desk agent;
+  "Start Shep" and "Check again" in the Shep view; the Shep row; spaces and
+  agents as above. Everything else is Herdr's own (tabs, panes, panels).
 - When a desk starts, an unnamed first tab is renamed Shell.
 
 ## Built from
 
 - `layouts/bercail.json`, cloned from Herdr's `main` (0.1.6). Node tree:
-  `root` row → `sidebar` column (`brand` workspace-chrome, `sidebar-lists`
-  column of `spaces` and `agents`, `sidebar-footer` workspace-chrome with
-  `props: {footer: true}`) and `work` column (`tabs` mod, `work-body` row,
-  `status` workspace-status). `work-body`: `desk` column (`desk-header`
+  `root` row → `shep` column (padding 8; `shep-card` column: `shep-header`
+  block = `bercail-shep` with `props: {role: "header"}`, `window_drag`;
+  `shep-stack` stack of `shep-empty`, `bercail-shep` with
+  `props: {role: "empty"}`, plus the `{terminal: …}` block `shep-<address>`
+  the mod adds), `sidebar` column (`brand` workspace-chrome, `shep-nav`
+  block = `bercail-shep` with `props: {role: "nav"}`, `sidebar-lists` column
+  of `spaces` (`bercail-spaces`) and `agents`, `sidebar-footer`
+  workspace-chrome with `props: {footer: true}`) and `work` column (shipped
+  `hidden: true`; `tabs` mod, `work-body` row, `status` workspace-status). `work-body`: `desk` column (`desk-header`
   block = `bercail-desk` mod; `agent-stack` stack of `empty`, the
   `bercail-desk` mod with `props: {role: "empty"}`, plus one
   `{terminal: …}` block per desk, `desk-<address>`, that the mod adds), `main` block `{tab: "active", pane: {...}}`,
   `panel` column holding the `panel-body` stack of `files` and `changes`
   (the ids Herdr's `tabs` mod shows and hides).
-- Shipped mods used: `workspace-chrome`, `spaces`, `tabs`, `pane`,
-  `files`, `changes`, `workspace-status`.
+- Shipped mods used: `workspace-chrome`, `tabs`, `pane`, `files`,
+  `changes`, `workspace-status`.
+- `mods/bercail-spaces`: Herdr's `spaces` mod (0.1.14) copied with
+  `mod.clone {"name":"spaces","as":"bercail-spaces"}`. Changed only so a
+  click on a space, + or a machine's + also runs `layout.hide {id: "shep"}`
+  and `layout.show {id: "work"}` (in a layout with both), and so no space
+  reads as selected while `shep` shows.
+- `mods/bercail-shep` (`place: "none"`), one script, four roles:
+  - `nav` (default): the Shep row. It is always shown, so it holds the logic:
+    on its first render of the app session (a flag on `globalThis`, which a
+    mod reload keeps) it shows the Shep view; once `terminals()` lists
+    anything it starts Shep: `hc exec bash -lc 'command -v openclaw'`, the
+    session key (above), then `hc run --bg --json --no-parent --no-notify
+    --rm --name bercail-shep --cwd <home> --label bercail.role=shep --label
+    bercail.shep_session=<key> bash -lc <PATH fallback; openclaw tui
+    --session "$1"; on a nonzero exit, its code and wait for Enter> bash
+    <key>` (the key is an argument, never spliced into the script; hc refuses a
+    second live `bercail-shep`: `name_taken` is no error). On every render it
+    adds Shep's block to `shep-stack` with `layout.set` (once per terminal,
+    already active), selects it, or drops it when Shep ends, and moves the
+    keyboard: `pane.focus {terminal: <Shep>}` in the Shep view when it is in
+    a pane; on return to the space view, `pane.focus` to where it was in that
+    space (kept per space while the space view shows). Its commands
+    (`bercail-shep.toggle`, `.show`, `.space`, `.start`) switch views or
+    start Shep.
+  - `header`, `empty`: the Shep column's bar and placeholder.
+  - `modal`: the bar of an agent dialog, `props: {terminal, back}`.
+- Agent dialogs: `openOverlay({kind: "dialog", width: 0.86, height: 0.86,
+  layout: {type: "column", children: [{size: {px: 34}, content: {mod:
+  "bercail-shep", props: {role: "modal", terminal, back: {pane,
+  terminal}}}}, {content: {terminal}, padding: [6, 6]}]}})`. Its `close()`
+  runs `pane.focus` back to `back`.
 - `mods/bercail-agents`: Herdr's `agents` mod (0.1.11) copied with
   `mod.clone {"name":"agents","as":"bercail-agents"}`, in the `agents`
   block. Changed only so it lists desks: a live terminal labelled
   `bercail.role=agent` that is not in `agents()` and whose parent is not
   either (a desk under a bash Shell) gets a top-level row in its space,
   before that space's agents, with its `terminals()` status (done reads
-  idle, error blocked, as for sub-agents). A click runs
-  `bercail-desk.agent:<desk>`, which selects the desk's space and desk.
+  idle, error blocked, as for sub-agents). A click on any row (desk, agent,
+  sub-agent) opens the agent dialog above instead of switching spaces.
 - `mods/bercail-desk` (`place: "none"`), one script, two roles:
   - `header` (default): draws the header row, takes the key commands
     (`nextCommand()`), and on every render shows the space's desk: the first
@@ -215,6 +299,20 @@ lights at 12,16):
 
 ## Watch out
 
+- `layout.set` writes the whole tree: a `layout.show`/`layout.hide` sent in the
+  same moment is undone. The Shep row writes a view it has just asked for
+  into the tree it sets.
+- At a mod's `init`, `layout()` is null and `terminals()` empty; right after,
+  the layout arrives before the core's terminals. Starting Shep before
+  `terminals()` lists anything would start a second one.
+- `pane.focus {terminal}` on a terminal shown in a dialog focuses its model
+  pane, switching spaces: never use it to put the keyboard in a dialog. The
+  dialog takes the keyboard when it opens.
+- A hidden column's panes get no keys, but the keyboard stays there: move it
+  (into Shep, or back to the space) when the view changes.
+- Hidden mods don't render, and `<mod>.<command>` reaches shown copies only:
+  the `bercail-desk` keys do nothing in the Shep view.
+
 - An agent block can't take the keyboard from a command, and `agent.focus`
   moves focus to the parent pane. The desk is a **terminal** block, not
   `{agent: "focused"}`: one per desk, never repointed. A single block
@@ -246,10 +344,23 @@ lights at 12,16):
 
 ## Done when
 
-- `herdr-app check mods/bercail-desk` and `herdr-app check
-  mods/bercail-agents` pass, and `layout.switch
-  {"name":"bercail"}` shows the sidebar, the desk, the tabs and Files.
-- In a space with no desk agent, clicking "Start the agent" starts
+- `herdr-app check` passes on `mods/bercail-desk`, `mods/bercail-shep`,
+  `mods/bercail-spaces` and `mods/bercail-agents`, and `layout.switch
+  {"name":"bercail"}` shows the Shep view: Shep's terminal running
+  `openclaw tui --session <key>` (one hc terminal `bercail-shep`, label
+  `bercail.shep_session=<key>`) and the sidebar on the right.
+- Restarting the app from the space view opens the Shep view again, on the
+  same `bercail-shep` terminal; `hc ls` shows one.
+- Clicking a space shows the space view with that space; "Back to Shep" (or
+  `ctrl-shift-h`) shows the same Shep session with its history, the keyboard
+  in it; going back to the space puts the keyboard where it was (the desk
+  too). The desks and shells are untouched.
+- Clicking an agent in the agents list, from either view, opens its terminal
+  in a dialog; typing reaches that agent; ✕ closes it with the keyboard back
+  where it was.
+- With no `openclaw` on herdr-core's PATH, the Shep view says "OpenClaw is
+  not installed" and the spaces work.
+- In the space view, in a space with no desk agent, clicking "Start the agent" starts
   `bercail-desk-agent` as an hc sub-agent of the space's Shell, labelled
   `bercail.role=agent` and `bercail.space=<id>`; the desk shows it with its
   status, the agents list has a row for it, and the space gets no tab for it.
@@ -276,7 +387,11 @@ Tell the person, briefly:
   `bercail bstack setup`, which asks before each sign-in. `bercail bstack
   status` shows what is connected and the login command for each plan that
   isn't. `bercail doctor` checks everything else.
+- **Shep first.** The window opens on Shep (OpenClaw's terminal UI, so
+  OpenClaw needs a Gateway). Click a space to work in it; "Back to Shep"
+  returns. Click an agent to open its terminal over either view.
 - **Keys** in the bercail layout:
+  - `Ctrl+Shift+H`: Shep view / space view.
   - `Ctrl+Shift+A`: the desk agent (starts it if there is none);
     `Ctrl+Alt+Right` goes back to the pane.
   - `Ctrl+Shift+R`: Review. `Ctrl+Shift+G`: show or hide Changes.
