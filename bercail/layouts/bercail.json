@@ -7,6 +7,66 @@
   "type": "row",
   "children": [
     {
+      "id": "shep",
+      "type": "column",
+      "children": [
+        {
+          "id": "shep-card",
+          "type": "column",
+          "children": [
+            {
+              "id": "shep-header",
+              "type": "block",
+              "content": {
+                "mod": "bercail-shep",
+                "props": {
+                  "role": "header"
+                }
+              },
+              "size": {
+                "px": 32
+              },
+              "window_drag": true
+            },
+            {
+              "id": "shep-stack",
+              "type": "stack",
+              "children": [
+                {
+                  "id": "shep-empty",
+                  "type": "block",
+                  "content": {
+                    "mod": "bercail-shep",
+                    "props": {
+                      "role": "empty"
+                    }
+                  }
+                }
+              ],
+              "active": "shep-empty"
+            }
+          ],
+          "background": "background",
+          "border": {
+            "width": 1,
+            "color": "border"
+          },
+          "radius": 10,
+          "focus": {
+            "border": {
+              "width": 1,
+              "color": "accent"
+            }
+          }
+        }
+      ],
+      "size": {
+        "weight": 1
+      },
+      "min": 320,
+      "padding": 8
+    },
+    {
       "id": "sidebar",
       "type": "column",
       "children": [
@@ -22,6 +82,19 @@
           "window_drag": true
         },
         {
+          "id": "shep-nav",
+          "type": "block",
+          "content": {
+            "mod": "bercail-shep",
+            "props": {
+              "role": "nav"
+            }
+          },
+          "size": {
+            "px": 44
+          }
+        },
+        {
           "id": "sidebar-lists",
           "type": "column",
           "children": [
@@ -29,7 +102,7 @@
               "id": "spaces",
               "type": "block",
               "content": {
-                "mod": "spaces"
+                "mod": "bercail-spaces"
               },
               "size": {
                 "weight": 1
@@ -218,7 +291,8 @@
           }
         }
       ],
-      "resizable": false
+      "resizable": false,
+      "hidden": true
     }
   ],
   "background": "canvas",

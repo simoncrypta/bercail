@@ -13,6 +13,7 @@
     "ctrl-alt-down": "bercail-desk.subspace-next",
     "alt-shift-up": "bercail-desk.agent-prev",
     "alt-shift-down": "bercail-desk.agent-next",
-    "ctrl-shift-q": "space.close"
+    "ctrl-shift-q": "space.close",
+    "ctrl-shift-h": "bercail-shep.toggle"
   }
 }

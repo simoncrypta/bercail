@@ -38,6 +38,11 @@ judge = "claude"
 # works when off: the lead reviews alone.
 council = false
 
+# [shep]
+# The OpenClaw session the Shep view opens, by its full agent:<id>:<session> key.
+# Unset: the main session of OpenClaw's default agent (openclaw agents list).
+# session = "agent:main:main"
+
 # [git]
 # Git backend per repo: gh (git + GitHub CLI), gt (Graphite), or origin (Cursor
 # Origin). Keys are main-checkout paths; linked worktrees share that choice.

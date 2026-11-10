@@ -5,6 +5,8 @@
 ```bash
 shellcheck install.sh lib/*.sh bin/bercail bin/bercail-desk-agent bin/bercail-desk-claude-hook config/shell/bercail.inc.sh config/worktrunk/herdr-layout.sh
 herdr-app check bercail/mods/bercail-desk
+herdr-app check bercail/mods/bercail-shep
+herdr-app check bercail/mods/bercail-spaces
 herdr-app check bercail/mods/bercail-agents
 herdr-app check bercail/mods/bercail-review
 for t in tests/*_test.sh; do bash "$t" || break; done

@@ -21,6 +21,28 @@ To review someone else's PR there is no issue and no stage: Shep runs `bercail r
 
 Bercail works without Shep, but Shep is the intended orchestrator. To do Shep's part by hand, write the issue with `bd create`, then run the same `handoff-spawn` command.
 
+## The Shep view
+
+The bercail layout opens on Shep: OpenClaw's terminal UI (`openclaw tui --session <key>`) fills the window, with the spaces and agents on the right. It is the control room for every desk; the desks stay in their spaces.
+
+- **Start.** The app starts Shep once per session as one hc terminal, `bercail-shep` (label `bercail.role=shep`), outside every space. A Shep that is already running, after a window restart for example, is shown again rather than started twice. Quit the TUI and it stays quit until you click **Start Shep**.
+- **Spaces.** Click a space to see it: the navigator moves left and the space's desk, tabs and panels fill the rest. **Back to Shep** at the top of the navigator, or `Ctrl+Shift+H`, returns to the same Shep session. Nothing is started or stopped by switching, and the keyboard goes back where it was in each view.
+- **Agents.** Click an agent or a desk in the agents list to open its own terminal in a dialog over either view. While it is open, what you type goes to that agent; nothing is sent for you. ✕ or a click beside the dialog closes it and puts the keyboard back where it was; **Show in space** goes to its space.
+- **Authority.** The view only shows things. Shep's tools, approvals and channels are OpenClaw's, the same as in any other terminal, and the desks' rules don't change.
+
+It needs:
+
+- **OpenClaw** on the PATH that herdr-core gives its terminals (`~/.local/bin` and mise shims are added). Without it, the Shep view says so and has a **Check again** button; the spaces work as usual.
+- **A Gateway** that `openclaw tui` reaches with its own settings (`openclaw onboard`, then `openclaw gateway status`). bercail passes no URL, token or password. When the TUI exits with an error, its message stays on screen until you press Enter.
+- **An agent session.** Shep always opens one session by its full key, so it joins the conversation you already have with that agent (the same one as its WebChat) instead of whatever agent `openclaw tui` would pick from its folder. Set it in `~/.config/bercail/config.toml`:
+
+  ```toml
+  [shep]
+  session = "agent:sheep:main"   # agent:<agent id>:<session>
+  ```
+
+  Without it, Shep opens the main session of OpenClaw's default agent (`openclaw agents list` marks it), `agent:<id>:main`. `openclaw sessions --agent <id>` lists an agent's sessions. A key that is not `agent:<id>:…`, or no default agent, keeps Shep stopped and the Shep view says what to set. The header shows the key Shep runs on. A Shep that is already running keeps its session: to switch, quit it and click **Start Shep**.
+
 ## agent status webhooks
 
 `bercail notify run` follows the desk agents (hc terminals labelled `bercail.role=agent`) with `hc events` and posts their status changes to webhooks, one sink per bot. The desk mod keeps it running as the hidden hc terminal `bercail-notify`. It sends only these:

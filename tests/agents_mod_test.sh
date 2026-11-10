@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# The bercail-agents mod: a desk under a bash Shell gets its own row in the agents list.
+# The bercail-agents mod: a desk under a bash Shell gets its own row in the agents list,
+# and a click opens the agent's terminal in a dialog.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,7 +26,7 @@ export const theme = () => new Proxy({}, { get: (_t, k) => String(k) });
 export const shared = () => null;
 export const setShared = () => {};
 export const setAgentOrder = (order) => { h().order = order; };
-export const openOverlay = () => {};
+export const openOverlay = (spec) => { h().overlays.push(spec); return "o1"; };
 export const closeOverlay = () => {};
 export const props = () => ({});
 export const window = () => ({ platform: "linux" });
@@ -72,7 +73,7 @@ const agent = (address, space, status = "idle") => ({
 });
 
 function render(state) {
-  globalThis.herdr = { calls: [], focused: { space: "s1" }, spaces, ...state };
+  globalThis.herdr = { calls: [], overlays: [], focused: { space: "s1" }, spaces, ...state };
   els.length = 0;
   const v = new Agents();
   v.init({}, { timer: { every: () => {} } });
@@ -95,12 +96,21 @@ if (!row("t2")) fail("a Shell sub-agent desk has no row");
 if (!row("t9")) fail("a pane agent lost its row");
 const order = globalThis.herdr.order;
 if (order.indexOf("t2") < 0) fail(`the desk is not in the list order: ${order}`);
+console.log("PASS: a Shell sub-agent desk gets a row");
+
+// A click opens the agent's own terminal in a dialog, with bercail-shep's bar, and
+// switches nothing: no space, pane or desk command runs.
+globalThis.herdr.focused = { space: "s1", pane: "p7", terminal: "t7" };
 row("t2").click();
-const [name, args] = globalThis.herdr.calls.at(-1);
-if (name !== "bercail-desk.agent:t2") fail(`clicking a desk row runs ${name} ${JSON.stringify(args)}`);
 row("t9").click();
-if (globalThis.herdr.calls.at(-1)[0] !== "pane.focus") fail("clicking a pane agent must still focus its pane");
-console.log("PASS: a Shell sub-agent desk gets a row; clicking it shows the desk");
+const terms = globalThis.herdr.overlays.map((o) => o.layout.children[1].content.terminal);
+if (terms.join() !== "t2,t9") fail(`clicks opened ${JSON.stringify(globalThis.herdr.overlays)}`);
+const [o] = globalThis.herdr.overlays;
+const bar = o.layout.children[0].content;
+if (o.kind !== "dialog" || bar.mod !== "bercail-shep" || bar.props.role !== "modal" || bar.props.terminal !== "t2"
+  || bar.props.back.pane !== "p7" || bar.props.back.terminal !== "t7") fail(`dialog: ${JSON.stringify(o)}`);
+if (globalThis.herdr.calls.length) fail(`a click ran ${JSON.stringify(globalThis.herdr.calls)}`);
+console.log("PASS: clicking a desk or an agent opens its terminal in a dialog and switches nothing");
 
 // Its status follows terminals(): working, then idle (done reads idle, error blocked).
 const st = (s) => deskRows([], [desk("t2", "s1", "t1", s)], spaces, null)[0].status;
@@ -125,6 +135,8 @@ if (!row("t5") || !row("t6")) fail("pane agents must keep their rows");
 if (row("t7") || !sub("t7")) fail("a desk under an agent stays that agent's sub-agent row");
 if (row("t8") || row("t3")) fail("only live bercail desks get rows");
 if (els.filter((e) => e.id === "ag-t5").length !== 1) fail("a desk with a pane got two rows");
+sub("t7").click();
+if (globalThis.herdr.overlays.at(-1)?.layout.children[1].content.terminal !== "t7") fail("a sub-agent row must open its dialog");
 console.log("PASS: pane agents, agents' sub-agents and old desks keep their rows, once");
 
 // In spaces() order (what grouped-by-space draws): the desk sits with its space's agents, before them.

@@ -2,6 +2,8 @@
 // A viewed done agent stays in Done until left.
 // bercail's copy of Herdr's agents mod (mod.clone): it also lists each space's desk,
 // a sub-agent of the space's Shell, which agents() leaves out when the Shell isn't an agent.
+// A click opens the agent's own terminal in a dialog over the Shep or space view
+// (bercail-shep draws its bar) instead of switching spaces.
 
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -80,8 +82,23 @@ export function withDesks(list, desks, spaceList) {
   return [...desks, ...list].sort((x, y) => rank(x) - rank(y));
 }
 
-// A desk has no pane to focus: bercail-desk selects its space and its desk block.
-const open = (a) => (a.desk ? run(`bercail-desk.agent:${a.address}`) : run("pane.focus", { pane: a.pane }));
+// The agent's terminal itself, in a dialog: its pane, desk and space stay as they are,
+// and closing the dialog puts the keyboard back (`back`).
+export function agentDialog(address, f) {
+  return {
+    kind: "dialog",
+    width: 0.86,
+    height: 0.86,
+    layout: {
+      type: "column",
+      children: [
+        { type: "block", size: { px: 34 }, content: { mod: "bercail-shep", props: { role: "modal", terminal: address, back: { pane: f?.pane ?? null, terminal: f?.terminal ?? null } } } },
+        { type: "block", content: { terminal: address }, padding: [6, 6] },
+      ],
+    },
+  };
+}
+const open = (a) => openOverlay(agentDialog(a.address, focused()));
 
 const SORTS = [
   { id: "priority", label: "Priority", icon: "clock" },
@@ -191,10 +208,6 @@ export default class Agents extends View {
         .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))));
   }
 
-  peek(addr) {
-    run("terminal.peek", { terminal: addr });
-  }
-
   // Live sub-agents of `addr`, depth first, each with the tree lines in front of it.
   tree(all, addr, lead = []) {
     const kids = all.filter((k) => k.parent === addr && k.state === "live");
@@ -224,7 +237,7 @@ export default class Agents extends View {
       .text_size(12.5)
       .when(on, (el) => el.bg(t.raised))
       .hover((s) => s.bg(t.hover))
-      .on_click(() => this.peek(k.address))
+      .on_click(() => open(k))
       .children(s.lines.map(l => div().self_start().mt(-4).w(9).h(17).mr(4).flex_none()
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))

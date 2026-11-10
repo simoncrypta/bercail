@@ -22,15 +22,18 @@ lead = "claude"
 build = "grok"
 judge = "claude"
 
+[shep]                               # optional
+session = "agent:sheep:main"         # the OpenClaw session the Shep view opens
+
 [git]                                # optional, one line per main checkout
 "~/Work/some-repo" = "gh"              # gh | gt | origin
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs the desk agent and review tool if they are missing. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend). Legacy `[graphite]` booleans still work (`true` → `gt`, `false` → `gh`), but `[git]` takes precedence.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs the desk agent and review tool if they are missing. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[shep] session` in [Shep](shep.md#the-shep-view) (unset: your default OpenClaw agent's `main` session); `[git]` in [handoff](handoff.md#git-backend). Legacy `[graphite]` booleans still work (`true` → `gt`, `false` → `gh`), but `[git]` takes precedence.
 
 ## Files bercail manages
 
-- `~/.config/herdr-app/layouts/bercail.json`, `mods/bercail-desk/`, `mods/bercail-agents/` and `mods/bercail-review/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), and the `layout:bercail` section of `keys.json` (see [keys](keys.md)).
+- `~/.config/herdr-app/layouts/bercail.json`, `mods/bercail-desk/`, `mods/bercail-shep/`, `mods/bercail-spaces/`, `mods/bercail-agents/` and `mods/bercail-review/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), and the `layout:bercail` section of `keys.json` (see [keys](keys.md)).
 - `~/.config/bercail/` (`config.toml`, `shell/`, `config-reader.sh`, `config.toml.example`, `notify.d/`), and the marker block in your `~/.bashrc` or `~/.zshrc` that sources the shell helpers.
 - worktrunk hooks (`~/.config/worktrunk/config.toml`, `herdr-layout.sh`).
 - `~/.local/bin/{bercail,agentic-dev,bercail-desk-agent,bercail-desk-claude-hook}` (a mise or packslip install keeps its own `bercail`), and `~/.local/share/bercail/`.

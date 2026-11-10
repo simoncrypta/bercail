@@ -95,6 +95,7 @@ Config:
   ~/.config/bercail/config.toml               desk agent default, review, [bstack]
   ~/.config/herdr-app/layouts/bercail.json    the layout
   ~/.config/herdr-app/mods/bercail-desk/      the desk mod
+  ~/.config/herdr-app/mods/bercail-shep/      the Shep view (openclaw tui) and Back to Shep
   ~/.config/herdr-app/keys.json               its "layout:bercail" keys (update keeps yours)
   ~/.config/worktrunk/herdr-layout.sh
   ~/.config/worktrunk/config.toml             worktrunk hooks

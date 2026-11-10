@@ -48,7 +48,7 @@ Found bercail on [herdr.dev](https://herdr.dev/layouts/)? Its recipe walks your 
 dev          # this directory's space, with its desk agent
 ```
 
-`Ctrl+Shift+A` focuses the desk, `Ctrl+Shift+R` opens Review, and `bercail doctor` tells you if anything is missing. Something else? `bercail help`.
+The layout opens on Shep, OpenClaw's terminal UI, with your spaces beside it: click one to work in it, `Ctrl+Shift+H` to come back. `Ctrl+Shift+A` focuses the desk, `Ctrl+Shift+R` opens Review, and `bercail doctor` tells you if anything is missing. Something else? `bercail help`.
 
 ## Docs
 
@@ -59,7 +59,7 @@ dev          # this directory's space, with its desk agent
 - [review](docs/review.md): tuicr, and how Review opens and closes.
 - [handoff](docs/handoff.md): stages, headless runs, result files.
 - [bstack](docs/bstack.md): opencode on your own plans, roles, autopilot. Then [the bstack guide](docs/bstack/README.md).
-- [Shep](docs/shep.md): the Grok bot, and agent status webhooks.
+- [Shep](docs/shep.md): the Grok bot, the Shep view, and agent status webhooks.
 - [development](docs/development.md): tests, dependencies, platforms.
 - [Herdr agents and subagents](docs/herdr-agents-subagents.md): a proposal for Herdr's agents list.
 

@@ -54,6 +54,8 @@ cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail 
 cmp -s "$ROOT/bercail/mods/bercail-desk/main.js" "$APP/mods/bercail-desk/main.js" || fail "mod not installed"
 cmp -s "$ROOT/bercail/mods/bercail-agents/main.js" "$APP/mods/bercail-agents/main.js" || fail "agents mod not installed"
 cmp -s "$ROOT/bercail/mods/bercail-review/main.js" "$APP/mods/bercail-review/main.js" || fail "review mod not installed"
+cmp -s "$ROOT/bercail/mods/bercail-shep/main.js" "$APP/mods/bercail-shep/main.js" || fail "Shep mod not installed"
+cmp -s "$ROOT/bercail/mods/bercail-spaces/main.js" "$APP/mods/bercail-spaces/main.js" || fail "spaces mod not installed"
 jq -e '.global["ctrl-shift-t"] == "tab.new"' "$APP/keys.json" >/dev/null || fail "the person's keys must stay"
 jq -e --slurpfile ours "$ROOT/bercail/keys.json" '.["layout:bercail"] == ($ours[0]["layout:bercail"] + {"x":"y"})' \
   "$APP/keys.json" >/dev/null || fail "layout:bercail must get bercail's keys and keep the person's: $(cat "$APP/keys.json")"
@@ -138,9 +140,12 @@ deploy_herdr_app >/dev/null
 jq -e '.. | objects | select(.id == "desk-t5p")' "$APP/layouts/bercail.json" >/dev/null || fail "a second update must keep the desks"
 printf 'PASS: a new shipped layout keeps the live desk blocks\n'
 
-# bercail's layout as the app left it (desk blocks added, columns resized) is adopted.
+# bercail's layout as the app left it (desk and Shep blocks added, the space view
+# shown, columns resized) is adopted.
 rm -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
 jq '(.. | objects | select(.id == "agent-stack")) |= (.children += [{id: "desk-t9z", type: "block", content: {terminal: "t9z"}}] | .active = "desk-t9z")
+  | (.. | objects | select(.id == "shep-stack")) |= (.children += [{id: "shep-t3", type: "block", content: {terminal: "t3"}}] | .active = "shep-t3")
+  | (.. | objects | select(.id == "shep") | .hidden) = true | (.. | objects | select(.id == "work") | .hidden) = false
   | (.. | objects | select(.id == "desk") | .size.weight) = 4.2' \
   "$ROOT/bercail/layouts/bercail.json" >"$APP/layouts/bercail.json"
 out="$(deploy_herdr_app)"
@@ -188,7 +193,8 @@ printf 'PASS: no Herdr app skips the step\n'
 deploy_herdr_app >/dev/null
 jq '.global = {"ctrl-shift-t":"tab.new"}' "$APP/keys.json" >"$TMP_DIR/k" && mv "$TMP_DIR/k" "$APP/keys.json"
 uninstall_agentic_dev >/dev/null 2>&1
-[[ ! -e "$APP/layouts/bercail.json" && ! -e "$APP/mods/bercail-desk" && ! -e "$APP/mods/bercail-agents" && ! -e "$APP/mods/bercail-review" ]] \
+[[ ! -e "$APP/layouts/bercail.json" && ! -e "$APP/mods/bercail-desk" && ! -e "$APP/mods/bercail-agents" && ! -e "$APP/mods/bercail-review"
+  && ! -e "$APP/mods/bercail-shep" && ! -e "$APP/mods/bercail-spaces" ]] \
   || fail "uninstall leaves layout or mods"
 jq -e 'has("layout:bercail") | not' "$APP/keys.json" >/dev/null || fail "uninstall leaves layout:bercail keys"
 jq -e '.global["ctrl-shift-t"] == "tab.new"' "$APP/keys.json" >/dev/null || fail "uninstall must keep the person's keys"
