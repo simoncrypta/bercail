@@ -336,7 +336,36 @@ notify_desk_changed() {
   space_json="$(notify_space_info "$space" "$cwd")"
   desk_json="$(notify_desk_info "$cwd" "$app")"
   # Same id for every sink and retry, so receivers can dedupe.
-  notify_deliver_all "$kind" "$agent_json" "$space_json" "$desk_json" "$address:$kind:$(_notify_now):$$"
+  local event_id
+  event_id="$address:$kind:$(_notify_now):$$"
+  notify_deliver_all "$kind" "$agent_json" "$space_json" "$desk_json" "$event_id"
+  notify_shep_enqueue "$kind" "$agent_json" "$space_json" "$desk_json" "$event_id"
+}
+
+# Where Shep on Pi reads desk events (lib/shep.sh), or nothing.
+notify_shep_inbox() {
+  declare -F shep_inbox_dir >/dev/null || return 0
+  shep_inbox_dir
+}
+
+# Shep on Pi gets desk events as files, not posts: its extension hands them to
+# the running session, and they wait there while Shep is not running. The name
+# leaves out the follower's pid, so two followers that see the same change in
+# the same second write one file. Written whole (tmp, then mv), never read half done.
+notify_shep_enqueue() {
+  local kind="$1" agent_json="$2" space_json="$3" desk_json="$4" event_id="$5" inbox name tmp
+  inbox="$(notify_shep_inbox)"
+  [[ -n "$inbox" ]] || return 0
+  name="$(printf '%s' "${event_id%:*}" | tr -c 'A-Za-z0-9._-' '_').json"
+  [[ -e "$inbox/$name" || -e "$inbox/../delivered/$name" ]] && return 0
+  mkdir -p "$inbox"
+  tmp="$(umask 077 && mktemp "$inbox/.event.XXXXXX")" || return 0
+  if notify_payload "$kind" shep "$agent_json" "$space_json" "$desk_json" "$event_id" >"$tmp"; then
+    mv -f "$tmp" "$inbox/$name"
+  else
+    rm -f "$tmp"
+    _notify_err "could not queue the desk event for Shep in $inbox"
+  fi
 }
 
 # The follower's own record, for `bercail doctor`: when it started and the
@@ -476,11 +505,11 @@ notify_drop_stale_keys() {
   fi
 }
 
-# Follow desks while there are sinks. With none, wait for one to appear.
+# Follow desks while there are sinks or Shep runs on Pi. With neither, wait.
 notify_run() {
   local f
   rm -f "$(notify_restart_file)"
-  while [[ -z "$(notify_sink_files)" ]]; do
+  while [[ -z "$(notify_sink_files)" && -z "$(notify_shep_inbox)" ]]; do
     sleep "${NOTIFY_IDLE_SLEEP:-60}"
   done
   while IFS= read -r f; do

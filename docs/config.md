@@ -22,14 +22,15 @@ lead = "claude"
 build = "grok"
 judge = "claude"
 
-[shep]                               # optional
-session = "agent:sheep:main"         # the OpenClaw session the Shep view opens
+[shep]                               # optional; bercail shep setup writes it
+backend = "pi"                       # pi | openclaw; unset: the first start asks
+session = "agent:sheep:main"         # on openclaw, the session Shep opens
 
 [git]                                # optional, one line per main checkout
 "~/Work/some-repo" = "gh"              # gh | gt | origin
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs the desk agent and review tool if they are missing. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[shep] session` in [Shep](shep.md#the-shep-view) (unset: your default OpenClaw agent's `main` session); `[git]` in [handoff](handoff.md#git-backend). Legacy `[graphite]` booleans still work (`true` → `gt`, `false` → `gh`), but `[git]` takes precedence.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs the desk agent and review tool if they are missing. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[shep]` in [Shep](shep.md#choose-sheps-runtime) (a `session` with no `backend` means OpenClaw; on OpenClaw with no `session`, your default agent's `main` session); `[git]` in [handoff](handoff.md#git-backend). Legacy `[graphite]` booleans still work (`true` → `gt`, `false` → `gh`), but `[git]` takes precedence.
 
 ## Files bercail manages
 

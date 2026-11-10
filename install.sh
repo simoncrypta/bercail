@@ -64,6 +64,8 @@ source "$ROOT/lib/harness.sh"
 source "$ROOT/lib/bstack.sh"
 # shellcheck source=lib/desk.sh
 source "$ROOT/lib/desk.sh"
+# shellcheck source=lib/shep.sh
+source "$ROOT/lib/shep.sh"
 
 parse_install_args() {
   while [[ $# -gt 0 ]]; do

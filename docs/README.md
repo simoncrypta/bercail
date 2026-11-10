@@ -10,6 +10,6 @@ The [README](../README.md) is the tour. These pages are the reference.
 - [handoff](handoff.md): one beads issue per job, headless or in a sibling desk.
 - [bstack](bstack.md): opencode on your own Claude, ChatGPT, and X plans.
   - [the bstack guide](bstack/README.md): a walk-through, with prompts to copy.
-- [Shep](shep.md): the Grok bot that runs bercail, the Shep view, and agent status webhooks.
+- [Shep](shep.md): the orchestrator (Pi or OpenClaw), the Shep view, desk events, and agent status webhooks.
 - [development](development.md): hacking on bercail, dependencies, platforms.
 - [Herdr agents and subagents](herdr-agents-subagents.md): a proposal for Herdr, so desks get their own row in the agents list.

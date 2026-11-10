@@ -39,7 +39,9 @@ judge = "claude"
 council = false
 
 # [shep]
-# The OpenClaw session the Shep view opens, by its full agent:<id>:<session> key.
+# Where Shep runs: pi or openclaw. Unset: the first start asks (bercail shep setup).
+# backend = "pi"
+# On openclaw, the session Shep opens, by its full agent:<id>:<session> key.
 # Unset: the main session of OpenClaw's default agent (openclaw agents list).
 # session = "agent:main:main"
 

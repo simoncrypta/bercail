@@ -1,7 +1,7 @@
 // bercail Shep: the bercail layout's control room. Two views share one window:
 //
-// - Shep view: Shep (OpenClaw's TUI, `openclaw tui`) on the left, the navigator
-//   (spaces and agents) on the right. The `work` column is hidden.
+// - Shep view: Shep's terminal on the left, the navigator (spaces and agents) on
+//   the right. The `work` column is hidden.
 // - Space view: the navigator on the left, the shown space's desk, tabs and panels
 //   on the right. The `shep` column is hidden.
 //
@@ -12,11 +12,10 @@
 //
 // Shep is one hc terminal, `bercail-shep` (label bercail.role=shep), not in any space.
 // It is found again by its label, so the same session shows after a restart and no
-// second TUI starts. It starts on its own once per app session; one the person quit
-// stays quit until "Start Shep". Without OpenClaw the Shep view says how to get it.
-// It always opens an agent-scoped session (`openclaw tui --session agent:<id>:<key>`):
-// `[shep] session` in bercail's config.toml, else the main session of OpenClaw's
-// default agent. A bare `openclaw tui` would pick the agent from its folder.
+// second one starts. It starts on its own once per app session; one the person quit
+// stays quit until "Start Shep". The terminal runs `bercail shep run`, which picks
+// the runtime ([shep] backend: Pi, or an OpenClaw agent), asks on the first start,
+// and labels the terminal with what it runs (bercail.shep_backend, .shep_session).
 //
 // props.role:
 // - "nav" (default): the navigator's Shep row. Always shown, so it runs the logic: the
@@ -35,44 +34,39 @@ import {
 const NAME = "bercail-shep";
 const ROLE = "shep";
 // Asked of and run in herdr-core's environment (hc exec, hc run), which may lack the
-// login shell's PATH (mise, ~/.local/bin). When the TUI fails (no Gateway, say) its
-// message stays on screen until Enter; quitting it normally closes the terminal.
-const OC_PATH = 'command -v openclaw >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"';
-// The session key comes in as $1, never spliced into the script.
-const OC_RUN = `${OC_PATH}; openclaw tui --session "$1"; code=$?; [ "$code" = 0 ] && exit 0
-printf '\nShep (openclaw tui) exited with code %s. Press Enter to close.\n' "$code"; read -r _`;
+// login shell's PATH (mise, ~/.local/bin). `bercail shep run` keeps a failed
+// runtime's message on screen until Enter; quitting normally closes the terminal.
+const BERCAIL_PATH = 'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"';
+// "--setup" comes in as $1, never spliced into the script.
+const SHEP_RUN = `${BERCAIL_PATH}; exec bercail shep run "$@"`;
 const KEY = "Ctrl+Shift+H";
 const CONFIG = "/.config/bercail/config.toml";
-const SESSION = /^agent:[A-Za-z0-9_-]+:[^\s]+$/;
-const SESSION_FIX = 'set [shep] session = "agent:<agent id>:main" in ~/.config/bercail/config.toml';
 
-// `[shep] session` from config.toml text, or "".
-export function configSession(text) {
+// `[shep]` from config.toml text: { backend, session }, "" when unset. bercail
+// reads the same keys; this only words the Shep view.
+export function configShep(text) {
+  const out = { backend: "", session: "" };
   let section = "";
   for (const raw of text.split("\n")) {
     const line = raw.replace(/#.*$/, "").trim();
     const sec = line.match(/^\[(.+)\]$/);
     if (sec) { section = sec[1].trim(); continue; }
-    const kv = line.match(/^session\s*=\s*(.+)$/);
-    if (section === "shep" && kv) return kv[1].trim().replace(/^"(.*)"$/, "$1");
+    const kv = line.match(/^(backend|session)\s*=\s*(.+)$/);
+    if (section === "shep" && kv && !out[kv[1]]) out[kv[1]] = kv[2].trim().replace(/^"(.*)"$/, "$1");
   }
-  return "";
+  if (!out.backend && out.session) out.backend = "openclaw";
+  return out;
 }
 
-// The agent-scoped session Shep opens, or throws with the fix.
-async function shepSession() {
-  let text = "";
-  try { text = await readTextFile(home() + CONFIG); } catch { /* no config: the default */ }
-  let key = configSession(text);
-  if (key && !SESSION.test(key)) throw new Error(`[shep] session "${key}" is not an agent:<id>:<key> session key; ${SESSION_FIX}`);
-  if (!key) {
-    const r = await exec("hc", ["exec", "bash", "-lc", `${OC_PATH}; openclaw agents list --json 2>/dev/null`]);
-    let id = null;
-    try { id = JSON.parse(r.stdout).find((a) => a.isDefault)?.id ?? null; } catch { /* below */ }
-    key = id ? `agent:${id}:main` : "";
-    if (!SESSION.test(key)) throw new Error(`OpenClaw has no default agent (openclaw agents list --json); ${SESSION_FIX}`);
-  }
-  return key;
+// What the Shep view says a start will run.
+export function plannedRun({ backend, session }) {
+  if (backend === "pi") return "Runs Shep on Pi, in its own session.";
+  if (backend === "openclaw") return `Runs openclaw tui --session ${session || "<your default agent>:main"}.`;
+  return "The first start asks where Shep runs: Pi (recommended) or OpenClaw.";
+}
+
+async function readShep() {
+  try { return configShep(await readTextFile(home() + CONFIG)); } catch { return configShep(""); }
 }
 
 export function find(node, id) {
@@ -153,12 +147,13 @@ export function focusPlan(view, was, f, shep, ready, back, ps, space) {
   return to;
 }
 
-// Shared by every copy: whether OpenClaw is installed, and a start in flight.
-const S = { found: null, check: null, starting: false, error: null, session: null };
+// Shared by every copy: whether bercail is installed, the [shep] config, and a
+// start in flight.
+const S = { found: null, check: null, starting: false, error: null, shep: configShep("") };
 
-function checkOpenclaw() {
-  S.check ??= exec("hc", ["exec", "bash", "-lc", `${OC_PATH}; command -v openclaw`])
-    .then((r) => { S.found = r.code === 0; })
+function checkBercail() {
+  S.check ??= Promise.all([exec("hc", ["exec", "bash", "-lc", `${BERCAIL_PATH}; command -v bercail`]), readShep()])
+    .then(([r, shep]) => { S.found = r.code === 0; S.shep = shep; })
     .catch(() => { S.found = false; })
     .finally(() => { S.check = null; });
   return S.check;
@@ -166,17 +161,17 @@ function checkOpenclaw() {
 
 // One Shep: none while one is live or starting. hc names are unique among live
 // terminals, so a start that races one the list doesn't show yet is refused: fine.
-async function startShep() {
+// `setup`: ask where Shep runs before starting it.
+async function startShep(setup = false) {
   if (S.starting || shepTerminal()) return;
   S.starting = true;
   S.error = null;
   try {
-    await checkOpenclaw();
+    await checkBercail();
     if (!S.found) return;
-    S.session = await shepSession();
     const r = await exec("hc", ["run", "--bg", "--json", "--no-parent", "--no-notify", "--rm", "--name", NAME,
-      "--cwd", home(), "--label", `bercail.role=${ROLE}`, "--label", `bercail.shep_session=${S.session}`,
-      "bash", "-lc", OC_RUN, "bash", S.session]);
+      "--cwd", home(), "--label", `bercail.role=${ROLE}`,
+      "bash", "-lc", SHEP_RUN, "bash", ...(setup ? ["--setup"] : [])]);
     if (r.code !== 0 && !/"name_taken"/.test(r.stderr + r.stdout)) throw new Error((r.stderr || r.stdout).trim());
   } catch (e) {
     S.error = String(e?.message ?? e);
@@ -195,7 +190,7 @@ export default class BercailShep extends View {
   init(_props, cx) {
     this.role = props()?.role ?? "nav";
     if (this.role === "modal") return;
-    cx.spawn(async (cx) => { await checkOpenclaw(); cx.notify(); });
+    cx.spawn(async (cx) => { await checkBercail(); cx.notify(); });
     if (this.role !== "nav") return;
     this.added = new Set(); // Shep block ids this copy added
     this.back = {};         // space id -> { pane } or { terminal }: where the keyboard was
@@ -222,6 +217,7 @@ export default class BercailShep extends View {
       case "show": if (view) this.show("shep"); break;
       case "space": if (view) this.show("space"); break;
       case "start": await startShep(); break;
+      case "setup": await startShep(true); break;
     }
   }
 
@@ -308,14 +304,15 @@ export default class BercailShep extends View {
 
   header(t) {
     const shep = shepTerminal();
-    const word = shep ? "running" : S.found === false ? "OpenClaw missing" : S.starting ? "starting" : "stopped";
+    const word = shep ? "running" : S.found === false ? "bercail missing" : S.starting ? "starting" : "stopped";
     const color = shep ? t.ansi2 : S.found === false ? t.blocked : t.dim;
+    const backend = shep?.labels?.["bercail.shep_backend"];
+    const on = shep?.labels?.["bercail.shep_session"] || (backend === "pi" ? "Pi" : backend === "openclaw" ? "OpenClaw" : "");
     return h_flex().size_full().px(12).gap(8).items_center().bg(t.chrome).text_size(12.5).text_color(t.muted)
       .child(div().size(7).rounded(4).bg(color))
       .child(div().text_color(t.foreground).font_semibold().child("Shep"))
-      .child(div().flex_1().truncate().text_color(t.dim).child(shep?.title || "OpenClaw TUI, the orchestrator for every desk"))
-      .when(Boolean(shep?.labels?.["bercail.shep_session"]), (el) => el
-        .child(div().flex_none().text_color(t.dim).child(shep.labels["bercail.shep_session"])))
+      .child(div().flex_1().truncate().text_color(t.dim).child(shep?.title || "the orchestrator for every desk"))
+      .when(Boolean(on), (el) => el.child(div().flex_none().text_color(t.dim).child(on)))
       .child(div().text_color(color).child(word))
       .child(div().text_size(11).text_color(t.dim).child(`${KEY} spaces`));
   }
@@ -323,27 +320,27 @@ export default class BercailShep extends View {
   empty(t) {
     const missing = S.found === false;
     const busy = S.starting || S.found === null;
-    const act = missing
-      ? (cx) => cx.spawn(async (cx) => { await checkOpenclaw(); cx.notify(); })
-      : (cx) => cx.spawn(async (cx) => { await startShep(); cx.notify(); });
-    const button = (id, label) => div().id(id).px(14).py(6).rounded(6).bg(t.solid).text_color(t.solid_foreground)
-      .hover((s) => s.opacity(0.85)).on_click((_e, cx) => act(cx)).child(label);
+    const act = (cx, f) => cx.spawn(async (cx) => { await f(); cx.notify(); });
+    const button = (id, label, f, solid = true) => div().id(id).px(14).py(6).rounded(6)
+      .when(solid, (el) => el.bg(t.solid).text_color(t.solid_foreground))
+      .when(!solid, (el) => el.border(1).border_color(t.border).text_color(t.foreground))
+      .hover((s) => s.opacity(0.85)).on_click((_e, cx) => act(cx, f)).child(label);
     const body = v_flex().size_full().items_center().justify_center().gap(10).px(24).bg(t.background)
       .text_color(t.muted).text_size(13);
     if (missing) {
       return body
-        .child(div().text_color(t.foreground).font_semibold().child("OpenClaw is not installed"))
-        .child(div().max_w(460).text_center().child("Shep runs in OpenClaw's terminal UI (openclaw tui). Install OpenClaw, set it up with openclaw onboard, then check again."))
-        .child(button("shep-check", "Check again"))
+        .child(div().text_color(t.foreground).font_semibold().child("bercail is not installed"))
+        .child(div().max_w(460).text_center().child("Shep starts with bercail shep run. Install bercail (bercail.dev), then check again."))
+        .child(button("shep-check", "Check again", checkBercail))
         .child(div().text_color(t.dim).text_size(12).child("Your spaces work without it: pick one on the right."));
     }
     if (busy) return body.child("Starting Shep…");
     return body
       .child(div().text_color(t.foreground).font_semibold().child("Shep is not running"))
-      .child(button("shep-start", "Start Shep"))
-      .child(div().text_color(t.dim).text_size(12).child(S.session
-        ? `Runs openclaw tui --session ${S.session}.`
-        : "Runs openclaw tui on [shep] session, else your default agent's main session."))
+      .child(h_flex().gap(8)
+        .child(button("shep-start", "Start Shep", () => startShep()))
+        .child(button("shep-setup", "Change runtime", () => startShep(true), false)))
+      .child(div().text_color(t.dim).text_size(12).child(plannedRun(S.shep)))
       .when(Boolean(S.error), (el) => el.child(div().max_w(460).text_center().text_color(t.blocked).text_size(12).child(S.error)));
   }
 
