@@ -12,7 +12,9 @@
 // an agent the person quit stays quit until Ctrl+Shift+A.
 //
 // props.role: "header" (default) runs the logic and takes key commands;
-// "empty" is the placeholder shown in the agent column when the space has no desk.
+// "empty" is the placeholder shown in the agent column when the space has no desk;
+// "keys" sits in the Shep column, so it is the copy that gets the keys in the Shep view.
+// Its keys go to bercail-shep, which shows the space view and replays them to the header.
 //
 // Space keys go by the sidebar's order (Herdr's spaces mod): spaces in order, this
 // computer's first and then each machine's, a linked worktree's space nested under the
@@ -193,6 +195,17 @@ export default class BercailDesk extends View {
       try { this.cfg = readConfig(await readTextFile(home() + CONFIG)); } catch { /* defaults */ }
       cx.notify();
     });
+    if (this.role === "keys") {
+      // A command for a named terminal's space doesn't need the space view.
+      cx.spawn(async () => {
+        for (;;) {
+          const c = await nextCommand();
+          if (c.includes(":")) await this.command(c);
+          else run(`bercail-shep.desk:${c}`);
+        }
+      });
+      return;
+    }
     if (this.role !== "header") return;
     // On a timer, not on render: an idle window doesn't render, and the follower
     // must come back after it exits.
@@ -469,6 +482,7 @@ export default class BercailDesk extends View {
   }
 
   render(cx) {
+    if (this.role === "keys") return div();
     const t = theme();
     if (this.role === "empty") {
       return v_flex().size_full().items_center().justify_center().gap(12).bg(t.background).text_color(t.muted).text_size(13)

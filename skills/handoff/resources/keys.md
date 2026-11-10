@@ -7,6 +7,8 @@ In the bercail layout:
 
 | Key | Action |
 |-----|--------|
+| `Ctrl+Shift+H` | Shep view / space view |
+| `Ctrl+Space` | Go to a space, tab or agent (Herdr's search) |
 | `Ctrl+Shift+A` | Focus the desk agent, or start it (bstack when it is on, else `[agent] command`) |
 | `Ctrl+Shift+R` | Open or select Review (`tuicr`) |
 | `Ctrl+Shift+S` | Shell tab |
@@ -16,6 +18,8 @@ In the bercail layout:
 | `Ctrl+Alt+Up/Down` | Previous/next space of this repo (main checkout and worktrees) |
 | `Alt+Shift+Up/Down` | Previous/next agent, desks included |
 | `Ctrl+Shift+Q` | Close this space |
+
+From the Shep view, `Ctrl+Space` through `Alt+Shift+Up/Down` show the space view, then act there.
 
 Herdr app keys:
 

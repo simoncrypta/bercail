@@ -59,6 +59,7 @@ const el = () => {
     get: (t, k) => k in t ? t[k] : (...a) => {
       if (k === "id") t.id = a[0];
       if (k === "on_click") t.click = a[0];
+      if (k === "child" && typeof a[0] === "string") (t.text ??= []).push(a[0]);
       if (k === "on_mouse_down" || k === "on_mouse_up") t[`${k}:${a[0]}`] = a[1];
       if (k === "when" && a[0]) a[1](p);
       return p;
@@ -74,6 +75,7 @@ for mod in bercail-shep bercail-spaces; do
     -e 's|from "gpui-base"|from "./gpui.mjs"|' "$ROOT/bercail/mods/$mod/main.js" >"$TMP_DIR/$mod.mjs"
 done
 cp "$ROOT/bercail/layouts/bercail.json" "$TMP_DIR/layout.json"
+cp "$ROOT/bercail/keys.json" "$TMP_DIR/keys.json"
 
 cat >"$TMP_DIR/test.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
@@ -82,6 +84,7 @@ import Spaces from "./bercail-spaces.mjs";
 import { els } from "./gpui.mjs";
 
 const shipped = JSON.parse(readFileSync(new URL("./layout.json", import.meta.url)));
+const keys = JSON.parse(readFileSync(new URL("./keys.json", import.meta.url)))["layout:bercail"];
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exit(1); };
 const calls = (name) => globalThis.herdr.calls.filter(([n]) => n === name);
 const tick = () => new Promise((r) => setImmediate(r));
@@ -264,7 +267,87 @@ els.length = 0;
 v.render(cx);
 els.find((e) => e.id === "shep-row").click();
 if (viewOf(globalThis.herdr.layout) !== "shep") fail("the Shep row must show Shep");
+if (!els.some((e) => e.text?.includes("Ctrl+Shift+H"))) fail("the Back to Shep row must hint Ctrl+Shift+H");
+if (keys["ctrl-shift-h"] !== "bercail-shep.toggle") fail("Ctrl+Shift+H must toggle the views");
 console.log("PASS: Ctrl+Shift+H toggles the views; the Shep row comes back to Shep");
+
+// Every mod key reaches exactly one shown copy that takes commands, in both views: a
+// hidden copy gets no keys (the desk's header is in the hidden work column in the Shep
+// view; its `keys` copy in the Shep column takes them there).
+const shown = (n, out = []) => {
+  if (!n || n.hidden) return out;
+  if (n.content?.mod) out.push(n.content);
+  for (const c of n.children ?? []) if (n.type !== "stack" || c.id === n.active) shown(c, out);
+  return out;
+};
+const TAKES = { "bercail-desk": ["header", "keys"], "bercail-shep": ["nav"], "bercail-review": [] };
+for (const view of ["shep", "space"]) {
+  const copies = shown(withView(structuredClone(shipped), view));
+  for (const [key, action] of Object.entries(keys)) {
+    const mod = action.split(".")[0];
+    if (!(mod in TAKES)) continue;
+    const n = copies.filter((c) => c.mod === mod && TAKES[mod].includes(c.props?.role ?? (mod === "bercail-shep" ? "nav" : "header"))).length;
+    if (n !== 1) fail(`${view} view: ${key} (${action}) reaches ${n} copies of ${mod}`);
+  }
+}
+// Ctrl(+Shift)+Up/Down stay the program's: Pi jumps between prompts with them.
+for (const k of ["ctrl-up", "ctrl-down", "ctrl-shift-up", "ctrl-shift-down"]) if (keys[k]) fail(`${k} is bound: ${keys[k]}`);
+console.log("PASS: every bercail key reaches one shown mod copy in the Shep view and in the space view");
+
+// A desk key from the Shep view shows the space view, then replays to the desk once the
+// keyboard is back in the space, so a key that moves it (an agent) has the last word.
+setup({ terminals: [shep], focused: f({ terminal: "t9" }) });
+globalThis.herdr.layout = withView(globalThis.herdr.layout, "shep");
+v = nav();
+v.sync();
+v.view = "shep";
+v.back.s1 = { pane: "p1" };
+globalThis.herdr.calls = [];
+await v.command("desk:agent-next");
+if (viewOf(globalThis.herdr.layout) !== "space") fail("a desk key must show the space view");
+if (calls("bercail-desk.agent-next").length) fail("the desk key went out before the space view showed");
+v.sync();
+const order = globalThis.herdr.calls.map(([n]) => n).filter((n) => n === "pane.focus" || n.startsWith("bercail-desk."));
+eq(order, ["pane.focus", "bercail-desk.agent-next"], "keyboard back, then the key");
+v.sync();
+if (calls("bercail-desk.agent-next").length !== 1) fail("the key was replayed twice");
+// In the space view the key goes straight on; a switch that never showed drops it.
+globalThis.herdr.calls = [];
+await v.command("desk:space-prev");
+eq(globalThis.herdr.calls.map(([n]) => n), ["bercail-desk.space-prev"], "space view: straight to the desk");
+globalThis.herdr.layout = withView(globalThis.herdr.layout, "shep");
+v.sync();
+await v.command("desk:review");
+globalThis.herdr.layout = withView(globalThis.herdr.layout, "shep"); // the switch never landed
+v.pending.at -= 3000;
+v.sync();
+globalThis.herdr.layout = withView(globalThis.herdr.layout, "space");
+v.sync();
+if (calls("bercail-desk.review").length) fail("a key whose view switch never showed must not replay later");
+console.log("PASS: a desk key in the Shep view shows the space view, then reaches the desk after the keyboard");
+
+// Ctrl+Space opens Herdr's own Go to… search (the picker mod), never Shep. In the space
+// view at once; from the Shep view over the space view, after the keyboard is back,
+// so the space picked there is the one that shows.
+if (keys["ctrl-space"] !== "bercail-shep.goto") fail(`Ctrl+Space is ${keys["ctrl-space"]}`);
+setup({ terminals: [shep], focused: f({ pane: "p1" }) });
+globalThis.herdr.layout = withView(globalThis.herdr.layout, "space");
+v = nav();
+v.sync();
+globalThis.herdr.calls = [];
+await v.command("goto");
+eq(globalThis.herdr.calls, [["mod.open", { name: "picker" }]], "space view: the picker at once");
+globalThis.herdr.layout = withView(globalThis.herdr.layout, "shep");
+globalThis.herdr.focused = f({ terminal: "t9" });
+v.sync();
+globalThis.herdr.calls = [];
+await v.command("goto");
+if (viewOf(globalThis.herdr.layout) !== "space") fail("Ctrl+Space from Shep must leave the Shep view");
+if (calls("mod.open").length) fail("the picker opened before the space view showed");
+v.sync();
+eq(globalThis.herdr.calls.map(([n]) => n).filter((n) => n === "pane.focus" || n === "mod.open"), ["pane.focus", "mod.open"], "keyboard back, then the picker");
+eq(calls("mod.open")[0][1], { name: "picker" }, "the native picker");
+console.log("PASS: Ctrl+Space opens Herdr's Go to… search; from Shep, over the space view");
 
 // The agent dialog's bar: close puts the keyboard back; "Show in space" goes there.
 setup({ terminals: [{ address: "t6", state: "live", labels: {} }], spaces: [{ id: "s2", name: "two", tabs: [] }],

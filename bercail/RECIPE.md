@@ -147,6 +147,7 @@ is which of `shep` and `work` is hidden.
   isn't shown opens it the next time it is.
 - **Keys** (keys.json section `layout:bercail`):
   - `ctrl-shift-h` switches between the Shep view and the space view.
+  - `ctrl-space` opens Herdr's Go to… search (`mod.open {name: "picker"}`).
   - `ctrl-shift-a` focuses the desk agent, or starts one: bstack when
     `[bstack] enabled = true` in `~/.config/bercail/config.toml`, else
     `[agent] command` (`cursor-agent` when there is none).
@@ -167,6 +168,9 @@ is which of `shep` and `work` is hidden.
   - `alt-shift-up/down` step through the agents: spaces in sidebar order,
     each space's desk first, then its pane agents. A desk is focused in its
     space's desk column.
+  - In the Shep view these keys (and `ctrl-space`, `ctrl-shift-a`, `-r`, `-s`,
+    `-f`, `-g`, `ctrl-alt-left/right`) show the space view first, with the
+    keyboard back where it was in the space, then act from there.
   - `ctrl-shift-q` closes the space.
 - **Clicks**: the empty desk's "Start the agent" button starts the desk agent;
   "Start Shep" and "Check again" in the Shep view; the Shep row; spaces and
@@ -180,7 +184,8 @@ is which of `shep` and `work` is hidden.
   block = `bercail-shep` with `props: {role: "header"}`, `window_drag`;
   `shep-stack` stack of `shep-empty`, `bercail-shep` with
   `props: {role: "empty"}`, plus the `{terminal: …}` block `shep-<address>`
-  the mod adds), `sidebar` column (`brand` workspace-chrome, `shep-nav`
+  the mod adds; `shep-keys` block, 0px = `bercail-desk` with
+  `props: {role: "keys"}`), `sidebar` column (`brand` workspace-chrome, `shep-nav`
   block = `bercail-shep` with `props: {role: "nav"}`, `sidebar-lists` column
   of `spaces` (`bercail-spaces`) and `agents`, `sidebar-footer`
   workspace-chrome with `props: {footer: true}`) and `work` column (shipped
@@ -213,7 +218,9 @@ is which of `shep` and `work` is hidden.
     a pane; on return to the space view, `pane.focus` to where it was in that
     space (kept per space while the space view shows). Its commands
     (`bercail-shep.toggle`, `.show`, `.space`, `.start`) switch views or
-    start Shep.
+    start Shep. `.goto` opens the picker, and `.desk:<command>` runs
+    `bercail-desk.<command>`: from the Shep view, once the space view shows
+    and the keyboard is back in the space.
   - `header`, `empty`: the Shep column's bar and placeholder.
   - `modal`: the bar of an agent dialog, `props: {terminal, back}`.
 - Agent dialogs: `openOverlay({kind: "dialog", width: 0.86, height: 0.86,
@@ -229,12 +236,15 @@ is which of `shep` and `work` is hidden.
   before that space's agents, with its `terminals()` status (done reads
   idle, error blocked, as for sub-agents). A click on any row (desk, agent,
   sub-agent) opens the agent dialog above instead of switching spaces.
-- `mods/bercail-desk` (`place: "none"`), one script, two roles:
+- `mods/bercail-desk` (`place: "none"`), one script, three roles:
   - `header` (default): draws the header row, takes the key commands
     (`nextCommand()`), and on every render shows the space's desk: the first
     time, it adds the desk's block with `layout.set` (already selected);
     after that, it only picks the stack child with `layout.select`.
   - `empty`: the empty desk, with one button that starts the agent.
+  - `keys`: draws nothing. In the Shep column, so it is the copy shown in
+    the Shep view: it sends each key to `bercail-shep.desk:<command>`, and
+    runs a `<command>:<terminal>` itself (it names its space).
 - A desk agent is an hc terminal: `hc run --bg --json --keep
   --outlive-parent --no-notify --parent <first pane of the first tab> --cwd
   <the folder of the space's first terminal, else the space's folder> --label bercail.role=agent --label
@@ -309,7 +319,8 @@ is which of `shep` and `work` is hidden.
 - A hidden column's panes get no keys, but the keyboard stays there: move it
   (into Shep, or back to the space) when the view changes.
 - Hidden mods don't render, and `<mod>.<command>` reaches shown copies only:
-  the `bercail-desk` keys do nothing in the Shep view.
+  in the Shep view the `header` is hidden, so the `keys` copy takes the
+  `bercail-desk` keys there. Exactly one of the two shows in each view.
 
 - An agent block can't take the keyboard from a command, and `agent.focus`
   moves focus to the parent pane. The desk is a **terminal** block, not
@@ -373,6 +384,9 @@ is which of `shep` and `work` is hidden.
 - With a repo space and two of its worktree spaces, `alt-down` skips the
   worktrees, `ctrl-alt-down` cycles the three, and `alt-shift-down` from a
   pane reaches the next desk with the keyboard in it.
+- In the Shep view, `alt-down`, `ctrl-alt-down` and `alt-shift-down` show the
+  space view and act there, and `ctrl-space` opens Go to… over the space view;
+  none of them reaches Shep's terminal. `ctrl-shift-up` still does.
 
 ## After the install
 
@@ -389,7 +403,7 @@ Tell the person, briefly:
   runs: Pi (recommended) or an OpenClaw agent. Click a space to work in it;
   "Back to Shep" returns. Click an agent to open its terminal over either view.
 - **Keys** in the bercail layout:
-  - `Ctrl+Shift+H`: Shep view / space view.
+  - `Ctrl+Shift+H`: Shep view / space view. `Ctrl+Space`: go to a space.
   - `Ctrl+Shift+A`: the desk agent (starts it if there is none);
     `Ctrl+Alt+Right` goes back to the pane.
   - `Ctrl+Shift+R`: Review. `Ctrl+Shift+G`: show or hide Changes.

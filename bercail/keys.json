@@ -14,6 +14,7 @@
     "alt-shift-up": "bercail-desk.agent-prev",
     "alt-shift-down": "bercail-desk.agent-next",
     "ctrl-shift-q": "space.close",
-    "ctrl-shift-h": "bercail-shep.toggle"
+    "ctrl-shift-h": "bercail-shep.toggle",
+    "ctrl-space": "bercail-shep.goto"
   }
 }

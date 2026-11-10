@@ -58,6 +58,19 @@
               "color": "accent"
             }
           }
+        },
+        {
+          "id": "shep-keys",
+          "type": "block",
+          "content": {
+            "mod": "bercail-desk",
+            "props": {
+              "role": "keys"
+            }
+          },
+          "size": {
+            "px": 0
+          }
         }
       ],
       "size": {
