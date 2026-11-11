@@ -1,35 +1,69 @@
-// bercail's Pi guard. The decision functions are pure; the default export wires tool_call.
-import { isAbsolute, resolve } from "node:path";
+// bercail's Pi guard. The decision functions are pure; the default export wires
+// tool_call, the repo's git policy (bercail policy show), and the approval log.
+import { appendFileSync, mkdirSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
+/** The part of a repo's effective policy (lib/policy.sh) the guard enforces. */
+export type Policy = {
+  commit: "ask" | "allow";
+  push: "ask" | "branch" | "main";
+  agentMayRelease: boolean;
+  /** A temp-dir repo with no remote: commits go through. */
+  scratch: boolean;
+  /** For the log: the main checkout, and where each value came from. */
+  repo: string;
+  from: Record<string, string>;
+};
+
+export const defaultPolicy: Policy = { commit: "ask", push: "ask", agentMayRelease: false, scratch: false, repo: "", from: {} };
 
 export type GuardInput = {
   role: string;
   hasUI: boolean;
-  cwd: string;
-  /** undefined: not looked up. "": lookup failed. */
-  branch?: string;
+  /** undefined: after a cd the guard could not follow. */
+  cwd: string | undefined;
+  /** Current branch per git dir. Missing: not looked up. "": lookup failed. */
+  branches?: Record<string, string>;
+  /** Effective policy per git dir. Missing: not looked up. */
+  policies?: Record<string, Policy>;
+  /** Files that decide what the guard lets through: the person edits them. */
+  protectedFiles?: string[];
+  home?: string;
+  /** Within one command: a GIT_* variable now points git somewhere the guard cannot place. */
+  gitEnv?: boolean;
+  /** Within one command: an earlier part may have switched the branch. */
+  branchMoved?: boolean;
 };
 
 export type GuardDecision =
-  | { action: "allow" }
+  | { action: "allow"; approved?: string[] }
   | { action: "block"; reason: string }
   | { action: "ask"; reason: string }
-  | { action: "need-branch"; dir: string };
+  | { action: "need-branch"; dir: string }
+  | { action: "need-policy"; dir: string };
 
 const force = "Force-push is blocked. Push without --force, or ask the person.";
 const plusRef = "A refspec starting with + is a force-push. Push the branch without +.";
 const mirror = "git push --mirror is blocked.";
 const deleteMain = "Deleting main or master is blocked.";
 const noVerify = "Skipping git hooks with --no-verify is blocked. Run the command so the hooks run.";
+const hooksPath = "Skipping git hooks with core.hooksPath is blocked. Run the command so the hooks run.";
+const configKey = (key: string) => `Setting ${key} changes what a later git push or commit does without the guard seeing it. Leave it as it is.`;
 const prMerge = "gh pr merge is blocked. Do not merge the pull request.";
 const toMain = "A push to main or master is blocked. Push the pull request branch instead.";
 const headless = "A headless run stages its changes and leaves commit and push to the person.";
+const headlessRelease = "A headless run does not tag or release. Leave the release to the person.";
+const autopilotRelease = "Autopilot does not tag or release. Leave the release to the person.";
 const readOnly = "This role is read-only. Do not edit files or change the git tree.";
 const readOnlyTool = "This role is read-only. Do not edit or write files.";
 const unknownBranch = "Could not read the current branch, so this push is blocked. Push the branch by name.";
+const trustCommand = "Trusting a repo's policy is the person's call. Ask them to run bercail policy trust in their own shell.";
+const protectedFile = "This file decides what bercail's guard lets through. Ask the person to edit it.";
 
 const allow: GuardDecision = { action: "allow" };
 const block = (reason: string): GuardDecision => ({ action: "block", reason });
+const approve = (reason: string): GuardDecision => ({ action: "allow", approved: [reason] });
 
 function readOnlyRole(role: string): boolean {
   return role === "judge" || role === "council";
@@ -46,7 +80,27 @@ function refDest(spec: string): string {
   return colon >= 0 ? bare.slice(colon + 1) : bare;
 }
 
-type Token = { kind: "word"; value: string } | { kind: "op" } | { kind: "sub"; value: string };
+// Config that changes what a later push or commit does: its refspecs, mirroring,
+// hooks, aliases, and included files.
+const riskyConfig = /^(remote\..+\.(push|mirror)|push\..+|core\.hookspath|alias\..+|include\..+|includeif\..+)$/i;
+
+function configBlock(key: string): GuardDecision {
+  return block(/^core\.hookspath$/i.test(key) ? hooksPath : configKey(key));
+}
+
+// A tag by its ref, or by a version-shaped name such as v1.2.3.
+const versionTag = /^v?\d+(\.\d+)+([-+.][0-9A-Za-z.-]*)?$/;
+
+function isTagRef(ref: string): boolean {
+  const bare = ref.replace(/^\+/, "");
+  return bare.startsWith("refs/tags/") || versionTag.test(bare);
+}
+
+function specIsTag(spec: string): boolean {
+  const bare = spec.replace(/^\+/, "");
+  const colon = bare.lastIndexOf(":");
+  return isTagRef(colon >= 0 ? bare.slice(0, colon) : bare) || isTagRef(refDest(bare));
+}
 
 function readBalanced(text: string, open: number): { body: string; end: number } | undefined {
   let depth = 1;
@@ -324,10 +378,14 @@ function commandWords(words: string[]): string[] {
 
 const gitValue = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--exec-path", "--shallow-file"]);
 
-function parseGit(words: string[], cwd: string): { sub: string; args: string[]; dir: string } | undefined {
+type GitCall = { sub: string; args: string[]; dir: string | undefined; config: string[] };
+
+// dir is undefined when --git-dir or --work-tree point git somewhere the guard cannot place.
+function parseGit(words: string[], cwd: string | undefined): GitCall | undefined {
   if (words[0] !== "git") return undefined;
   let i = 1;
   let dir = cwd;
+  const config: string[] = [];
   while (i < words.length && words[i].startsWith("-")) {
     const word = words[i];
     if (word === "--") {
@@ -336,17 +394,19 @@ function parseGit(words: string[], cwd: string): { sub: string; args: string[]; 
     }
     const eq = word.indexOf("=");
     const name = eq > 0 ? word.slice(0, eq) : word;
+    const value = eq > 0 ? word.slice(eq + 1) : words[i + 1];
     if (name === "-C") {
-      const value = eq > 0 ? word.slice(eq + 1) : words[i + 1];
       if (eq < 0) i++;
-      if (value) dir = isAbsolute(value) ? value : resolve(dir, value);
+      if (value) dir = isAbsolute(value) ? resolve(value) : dir === undefined ? undefined : resolve(dir, value);
       i++;
       continue;
     }
+    if (name === "--git-dir" || name === "--work-tree") dir = undefined;
+    if (name === "-c" || name === "--config-env") config.push((value ?? "").split("=")[0]);
     if (gitValue.has(name) && eq < 0) i++;
     i++;
   }
-  return { sub: words[i] ?? "", args: words.slice(i + 1), dir };
+  return { sub: words[i] ?? "", args: words.slice(i + 1), dir, config };
 }
 
 function shortCluster(word: string): string | undefined {
@@ -364,12 +424,27 @@ function hasNoVerify(sub: string, args: string[]): boolean {
   });
 }
 
-function pushFacts(args: string[]): { force: boolean; mirror: boolean; deleteMain: boolean; plus: boolean; refspecs: string[]; hasRefspec: boolean } {
+type PushFacts = {
+  force: boolean;
+  mirror: boolean;
+  deleteMain: boolean;
+  plus: boolean;
+  refspecs: string[];
+  deleted: string[];
+  tags: boolean;
+  /** --all, --branches, or a glob refspec: main may be among what it pushes. */
+  every: boolean;
+};
+
+function pushFacts(args: string[]): PushFacts {
   let forceFlag = false;
   let mirrorFlag = false;
   let deleting = false;
   let deleteMainFlag = false;
   let plus = false;
+  let tags = false;
+  let every = false;
+  const deleted: string[] = [];
   const positionals: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -379,15 +454,20 @@ function pushFacts(args: string[]): { force: boolean; mirror: boolean; deleteMai
     }
     if (deleting && !arg.startsWith("-")) {
       if (isMainRef(arg)) deleteMainFlag = true;
+      deleted.push(arg);
       deleting = false;
       continue;
     }
     if (arg.startsWith("-")) {
       if (arg === "--force" || arg === "-f" || arg.startsWith("--force")) forceFlag = true;
       if (arg === "--mirror") mirrorFlag = true;
+      if (arg === "--tags" || arg === "--follow-tags") tags = true;
+      if (arg === "--all" || arg === "--branches") every = true;
       if (arg === "--delete" || arg === "-d") deleting = true;
       if (arg.startsWith("--delete=")) {
-        if (isMainRef(arg.slice("--delete=".length))) deleteMainFlag = true;
+        const ref = arg.slice("--delete=".length);
+        if (isMainRef(ref)) deleteMainFlag = true;
+        deleted.push(ref);
       }
       const cluster = shortCluster(arg);
       if (cluster?.includes("f")) forceFlag = true;
@@ -402,8 +482,15 @@ function pushFacts(args: string[]): { force: boolean; mirror: boolean; deleteMai
   const refspecs = first === undefined ? [] : firstIsRef ? positionals : positionals.slice(1);
   for (const spec of refspecs) {
     if (spec.startsWith("+")) plus = true;
+    if (spec.includes("*")) every = true;
+    // :<ref> pushes nothing to <ref>: a delete.
+    const bare = spec.replace(/^\+/, "");
+    if (bare.startsWith(":")) {
+      deleted.push(bare.slice(1));
+      if (isMainRef(bare.slice(1))) deleteMainFlag = true;
+    }
   }
-  return { force: forceFlag, mirror: mirrorFlag, deleteMain: deleteMainFlag, plus, refspecs, hasRefspec: refspecs.length > 0 };
+  return { force: forceFlag, mirror: mirrorFlag, deleteMain: deleteMainFlag, plus, refspecs, deleted, tags, every };
 }
 
 function shellScript(words: string[]): string | undefined {
@@ -420,10 +507,104 @@ function shellScript(words: string[]): string | undefined {
   return undefined;
 }
 
+function plainWords(words: string[]): string[] {
+  return words.filter((word) => !word.startsWith("-"));
+}
+
 function isGhPrMerge(words: string[]): boolean {
   if (words[0] !== "gh") return false;
-  const plain = words.filter((word) => !word.startsWith("-"));
+  const plain = plainWords(words);
   return plain[1] === "pr" && plain[2] === "merge";
+}
+
+function isGhRelease(words: string[]): boolean {
+  if (words[0] !== "gh") return false;
+  const plain = plainWords(words);
+  return plain[1] === "release" && ["create", "edit", "delete", "upload", "delete-asset"].includes(plain[2]);
+}
+
+// gh api writing a release or a tag ref. With fields and no method, gh posts.
+function isGhApiRelease(words: string[]): boolean {
+  if (words[0] !== "gh" || plainWords(words)[1] !== "api") return false;
+  if (!words.some((word) => /(^|\/)(releases|git\/refs\/tags|git\/tags)(\/|$|\?)/.test(word))) return false;
+  const method = words.find((word, i) => i > 0 && (words[i - 1] === "-X" || words[i - 1] === "--method")) ?? words.find((word) => word.startsWith("--method="))?.slice(9);
+  if (method) return method.toUpperCase() !== "GET";
+  return words.some((word) => ["-f", "-F", "--field", "--raw-field", "--input"].includes(word.split("=")[0]));
+}
+
+function isPolicyTrust(words: string[]): boolean {
+  const plain = plainWords(words);
+  return plain.some((word, i) => word === "policy" && plain[i + 1] === "trust");
+}
+
+// A shell write to a file that decides the guard's answers: a redirect, or a
+// command that writes files, naming it. A seatbelt, not a sandbox.
+const fileWriters = new Set(["tee", "cp", "mv", "rm", "ln", "install", "truncate", "sed", "perl", "dd", "chmod", "touch"]);
+
+function writesProtected(words: string[], raw: string[], files: string[] | undefined): boolean {
+  if (!files?.length) return false;
+  const tails = files.map((file) => file.split("/").slice(-2).join("/"));
+  if (!raw.some((word) => tails.some((tail) => word.includes(tail)))) return false;
+  return fileWriters.has(words[0]) || raw.some((word) => /^\d*>|^&>/.test(word));
+}
+
+// git commands that leave HEAD on its branch. Anything else, an alias included,
+// may move it.
+const keepsBranch = new Set([
+  "status", "diff", "log", "show", "add", "commit", "push", "fetch", "pull", "merge", "cherry-pick", "revert",
+  "stash", "tag", "config", "remote", "rev-parse", "ls-files", "ls-remote", "blame", "grep", "describe",
+  "shortlog", "restore", "rm", "mv", "notes", "format-patch", "apply", "am", "clean", "gc", "fsck",
+  "for-each-ref", "show-ref", "cat-file", "rev-list", "reflog", "help", "version", "var", "count-objects", "",
+]);
+
+function movesBranch(git: GitCall): boolean {
+  if (git.sub === "branch") return git.args.some((arg) => ["-m", "-M", "--move"].includes(arg));
+  return !keepsBranch.has(git.sub);
+}
+
+// GIT_* variables that point git at another repo, index, or config.
+const gitPlace = /^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CONFIG\w*)(=|$)/;
+
+// Config keys set through GIT_CONFIG_KEY_<n> or GIT_CONFIG_PARAMETERS.
+function envConfigKeys(word: string): string[] {
+  const key = /^GIT_CONFIG_KEY_\d+=(.*)$/s.exec(word);
+  if (key) return [key[1]];
+  const params = /^GIT_CONFIG_PARAMETERS=(.*)$/s.exec(word);
+  if (!params) return [];
+  return params[1].split(/\s+/).map((part) => part.replace(/['"]/g, "").split("=")[0]).filter(Boolean);
+}
+
+// git tag with a name creates or deletes a tag; -l, -v, and no name only read.
+const tagListValue = new Set(["--contains", "--no-contains", "--points-at", "--merged", "--no-merged", "--sort", "--format", "--color", "--column"]);
+
+function tagWrites(args: string[]): boolean {
+  let names = 0;
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const name = arg.split("=")[0];
+    if (["--delete", "--annotate", "--sign", "--local-user", "--force", "--message", "--file", "--edit"].includes(name)) return true;
+    if (arg === "--list" || arg === "--verify") return false;
+    const cluster = shortCluster(arg);
+    if (cluster !== undefined) {
+      if (/^n\d*$/.test(cluster)) continue;
+      if (cluster.includes("l") || cluster.includes("v")) return false;
+      if (/[adsufmFe]/.test(cluster)) return true;
+      continue;
+    }
+    if (arg.startsWith("--")) {
+      if (tagListValue.has(arg)) i++;
+      continue;
+    }
+    names++;
+  }
+  return names > 0;
+}
+
+// The risky key a git config command writes, if any. Reads are fine.
+function configWrite(args: string[]): string | undefined {
+  const reads = ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l", "get", "list"];
+  if (args.some((arg) => reads.includes(arg))) return undefined;
+  return args.find((arg) => !arg.startsWith("-") && riskyConfig.test(arg));
 }
 
 function gitWrite(sub: string, args: string[]): boolean {
@@ -433,15 +614,45 @@ function gitWrite(sub: string, args: string[]): boolean {
   return false;
 }
 
-function publish(kind: "commit" | "push", input: GuardInput): GuardDecision {
+function publish(kind: "commit" | "push" | "release", input: GuardInput): GuardDecision {
   if (input.hasUI) {
-    const verb = kind === "commit" ? "commit" : "push";
-    return { action: "ask", reason: `Allow this git ${verb}? No leaves the changes staged for the person.` };
+    if (kind === "release") return { action: "ask", reason: "Allow this tag or release? This repo's policy leaves releases to the person." };
+    return { action: "ask", reason: `Allow this git ${kind}? No leaves the changes staged for the person.` };
   }
-  return block(headless);
+  return block(kind === "release" ? headlessRelease : headless);
 }
 
-function decidePush(args: string[], dir: string, input: GuardInput): GuardDecision {
+// The policy for a git dir: need-policy until the wrapper has looked it up. A dir
+// the guard cannot place gets the default, which loosens nothing.
+function policyFor(dir: string | undefined, input: GuardInput): Policy | GuardDecision {
+  if (dir === undefined) return defaultPolicy;
+  return input.policies?.[dir] ?? { action: "need-policy", dir };
+}
+
+function isPolicy(value: Policy | GuardDecision): value is Policy {
+  return !("action" in value);
+}
+
+function because(policy: Policy, key: string, value: string): string {
+  return `${policy.repo}: ${key} = ${value} (${policy.from[key] ?? "repo"})`;
+}
+
+// "" in dests is the current branch.
+function branchOf(dir: string | undefined, input: GuardInput): string | GuardDecision {
+  if (dir === undefined || input.branchMoved) return "";
+  return input.branches?.[dir] ?? { action: "need-branch", dir };
+}
+
+function decideRelease(dir: string | undefined, input: GuardInput): GuardDecision {
+  if (readOnlyRole(input.role)) return block(readOnly);
+  const policy = policyFor(dir, input);
+  if (!isPolicy(policy)) return policy;
+  if (policy.agentMayRelease) return approve(because(policy, "agent_may_release", "true"));
+  if (input.role === "autopilot") return block(autopilotRelease);
+  return publish("release", input);
+}
+
+function decidePush(args: string[], dir: string | undefined, input: GuardInput): GuardDecision {
   const facts = pushFacts(args);
   if (facts.force) return block(force);
   if (facts.plus) return block(plusRef);
@@ -449,66 +660,144 @@ function decidePush(args: string[], dir: string, input: GuardInput): GuardDecisi
   if (facts.deleteMain) return block(deleteMain);
   if (hasNoVerify("push", args)) return block(noVerify);
   if (readOnlyRole(input.role)) return block(readOnly);
+
+  let decision: GuardDecision = allow;
+  const release = facts.tags || facts.refspecs.some(specIsTag) || facts.deleted.some(isTagRef);
+  if (release) decision = worse(decision, decideRelease(dir, input));
+  const dests = [
+    ...facts.refspecs.filter((spec) => !specIsTag(spec)).map((spec) => (refDest(spec) === "HEAD" ? "" : refDest(spec))),
+    ...facts.deleted.filter((ref) => !isTagRef(ref)),
+  ];
+  // A bare push sends the current branch; a push of tags alone sends no branch.
+  if (facts.refspecs.length === 0 && facts.deleted.length === 0 && !args.includes("--tags") && !facts.every) dests.push("");
+  if (facts.every) dests.push("*");
+  if (dests.length === 0 || decision.action === "block") return decision;
+  const hitsMain = (dest: string) => dest.includes("*") || (dest !== "" && isMainRef(dest));
+
   if (input.role === "autopilot") {
-    for (const spec of facts.refspecs) {
-      const dest = refDest(spec);
-      if (dest !== "HEAD" && dest !== "" && isMainRef(dest)) return block(toMain);
+    if (dests.some(hitsMain)) return block(toMain);
+    if (dests.includes("")) {
+      const branch = branchOf(dir, input);
+      if (typeof branch !== "string") return branch;
+      if (branch === "") return block(unknownBranch);
+      if (isMainRef(branch)) return block(toMain);
     }
-    const needsBranch = !facts.hasRefspec || facts.refspecs.some((spec) => {
-      const dest = refDest(spec);
-      return dest === "HEAD" || dest === "";
-    });
-    if (needsBranch) {
-      if (input.branch === undefined) return { action: "need-branch", dir };
-      if (input.branch === "") return block(unknownBranch);
-      if (input.branch === "main" || input.branch === "master") return block(toMain);
-    }
-    return allow;
+    return worse(decision, approve("autopilot pushes its pull request branch"));
   }
-  return publish("push", input);
+
+  const policy = policyFor(dir, input);
+  if (!isPolicy(policy)) return policy;
+  if (policy.push === "main") return worse(decision, approve(because(policy, "push", "main")));
+  if (policy.push === "branch") {
+    let toMainRef = dests.some(hitsMain);
+    if (!toMainRef && dests.includes("")) {
+      const branch = branchOf(dir, input);
+      if (typeof branch !== "string") return branch;
+      toMainRef = branch === "" || isMainRef(branch);
+    }
+    if (!toMainRef) return worse(decision, approve(because(policy, "push", "branch")));
+  }
+  return worse(decision, publish("push", input));
 }
 
-function decideGit(parsed: { sub: string; args: string[]; dir: string }, input: GuardInput): GuardDecision {
-  const { sub, args } = parsed;
+function decideCommit(dir: string | undefined, input: GuardInput): GuardDecision {
+  if (readOnlyRole(input.role)) return block(readOnly);
+  if (input.role === "autopilot") return approve("autopilot commits to its pull request branch");
+  const policy = policyFor(dir, input);
+  if (!isPolicy(policy)) return policy;
+  if (policy.commit === "allow") return approve(because(policy, "commit", "allow"));
+  if (policy.scratch) return approve(`${policy.repo}: scratch repo (temp dir, no remote)`);
+  return publish("commit", input);
+}
+
+function decideGit(git: GitCall, input: GuardInput): GuardDecision {
+  const { sub, args } = git;
   if (hasNoVerify(sub, args) && ["commit", "push", "merge", "rebase"].includes(sub)) return block(noVerify);
-  if (sub === "push") return decidePush(args, parsed.dir, input);
+  const risky = git.config.find((key) => riskyConfig.test(key)) ?? (sub === "config" ? configWrite(args) : undefined);
+  if (risky) return configBlock(risky);
+  if (sub === "push") return decidePush(args, git.dir, input);
+  if (sub === "tag" && tagWrites(args)) return decideRelease(git.dir, input);
   if (readOnlyRole(input.role) && gitWrite(sub, args)) return block(readOnly);
-  if (sub === "commit") {
-    if (input.role === "autopilot") return allow;
-    if (readOnlyRole(input.role)) return block(readOnly);
-    return publish("commit", input);
-  }
+  if (sub === "commit") return decideCommit(git.dir, input);
   return allow;
 }
 
 function worse(current: GuardDecision, next: GuardDecision): GuardDecision {
   if (next.action === "block" || current.action === "block") return next.action === "block" ? next : current;
-  if (next.action === "need-branch") return next;
-  if (current.action === "need-branch") return current;
+  if (next.action === "need-branch" || next.action === "need-policy") return next;
+  if (current.action === "need-branch" || current.action === "need-policy") return current;
   if (next.action === "ask") return next;
   if (current.action === "ask") return current;
-  return allow;
+  const approved = [...(current.approved ?? []), ...(next.approved ?? [])];
+  return approved.length ? { action: "allow", approved } : allow;
+}
+
+// Where a cd or pushd leaves the shell, or undefined when the guard cannot tell.
+function cdTarget(words: string[], cwd: string | undefined, home: string | undefined): string | undefined {
+  const args = words.slice(1).filter((word) => !/^-[LPe@]+$/.test(word));
+  let target = args[0] ?? home;
+  if (target === undefined || target === "-" || /[$`*?]/.test(target)) return undefined;
+  if (target === "~" || target.startsWith("~/")) {
+    if (home === undefined) return undefined;
+    target = home + target.slice(1);
+  }
+  if (target.startsWith("~")) return undefined;
+  if (isAbsolute(target)) return resolve(target);
+  return cwd === undefined ? undefined : resolve(cwd, target);
 }
 
 export function decideBash(command: string, input: GuardInput, depth = 0): GuardDecision {
   if (depth > 4) return block("This command is nested too deep to check. Split it into a simpler command.");
   let decision: GuardDecision = allow;
+  let cwd = input.cwd;
+  let gitEnv = input.gitEnv ?? false;
+  let branchMoved = input.branchMoved ?? false;
   for (const segment of segmentsOf(command)) {
-    for (const sub of segment.subs) decision = worse(decision, decideBash(sub, input, depth + 1));
-    const words = commandWords(segment.words);
+    // export GIT_DIR=... holds for the rest of the command, so it counts from here on.
+    if (segment.words.some((word) => gitPlace.test(word))) gitEnv = true;
+    const envKey = segment.words.flatMap(envConfigKeys).find((key) => riskyConfig.test(key));
+    if (envKey) return configBlock(envKey);
+    const here = { ...input, cwd, gitEnv, branchMoved };
+    for (const sub of segment.subs) decision = worse(decision, decideBash(sub, here, depth + 1));
+    // A ( subshell's cd ends at its ); from there on the guard cannot place the shell.
+    const raw = segment.words.map((word, i) => (i === 0 ? word.replace(/^\(+/, "") : word));
+    const subshell = raw[0] !== segment.words[0];
+    const words = commandWords(raw);
     if (words.length === 0) continue;
+    // /usr/bin/git is git.
+    if (words[0].includes("/")) words[0] = basename(words[0]);
+    if (words[0] === "cd" || words[0] === "pushd") cwd = cdTarget(words, cwd, input.home);
+    else if (words[0] === "popd" || subshell) cwd = undefined;
+    if (segment.words.some((word) => word.endsWith(")"))) cwd = undefined;
     const script = shellScript(words);
-    if (script) decision = worse(decision, decideBash(script, input, depth + 1));
+    if (script) decision = worse(decision, decideBash(script, here, depth + 1));
+    // What eval or source sets stays set, and the guard cannot see what that is.
+    if (words[0] === "eval" || words[0] === "source" || words[0] === ".") gitEnv = branchMoved = true;
     if (isGhPrMerge(words)) decision = worse(decision, block(prMerge));
-    const git = parseGit(words, input.cwd);
-    if (git) decision = worse(decision, decideGit(git, input));
+    if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
+    if (writesProtected(words, raw, input.protectedFiles)) decision = worse(decision, block(protectedFile));
+    if (words[0] === "gt" || (words[0] === "gh" && plainWords(words)[1] === "pr" && plainWords(words)[2] === "checkout")) branchMoved = true;
+    if (isGhRelease(words) || isGhApiRelease(words)) {
+      const elsewhere = words.some((word) => word === "-R" || word.startsWith("--repo"));
+      decision = worse(decision, decideRelease(elsewhere ? undefined : here.cwd, here));
+    }
+    const git = parseGit(words, here.cwd);
+    if (git) {
+      if (gitEnv) git.dir = undefined;
+      decision = worse(decision, decideGit(git, here));
+      if (movesBranch(git)) branchMoved = true;
+    }
     if (decision.action === "block") return decision;
   }
   return decision;
 }
 
-export function decideTool(tool: string, command: string | undefined, input: GuardInput): GuardDecision {
-  if ((tool === "edit" || tool === "write") && readOnlyRole(input.role)) return block(readOnlyTool);
+export function decideTool(tool: string, command: string | undefined, input: GuardInput, path?: string): GuardDecision {
+  if (tool === "edit" || tool === "write") {
+    if (readOnlyRole(input.role)) return block(readOnlyTool);
+    const full = path?.startsWith("~/") && input.home ? join(input.home, path.slice(2)) : path;
+    if (full && input.cwd !== undefined && input.protectedFiles?.includes(resolve(input.cwd, full))) return block(protectedFile);
+  }
   if (tool === "bash") return decideBash(command ?? "", input);
   return allow;
 }
@@ -522,15 +811,96 @@ async function branchAt(pi: ExtensionAPI, dir: string, signal: AbortSignal | und
   }
 }
 
+type PolicyJson = {
+  repo: string;
+  scratch: boolean;
+  prompt: string;
+  policy: { commit: Policy["commit"]; push: Policy["push"]; agent_may_release: boolean };
+  sources: Record<string, string>;
+};
+
+// bercail policy show --json, or undefined outside a git checkout or without bercail.
+async function policyJson(pi: ExtensionAPI, dir: string, signal: AbortSignal | undefined): Promise<PolicyJson | undefined> {
+  try {
+    const result = await pi.exec(process.env.BERCAIL_BIN || "bercail", ["policy", "show", "--json", dir], { timeout: 10000, signal });
+    return result.code === 0 ? (JSON.parse(result.stdout) as PolicyJson) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// What the guard enforces of bercail policy show --json. No JSON: the default.
+export function policyFromJson(json: PolicyJson | undefined): Policy {
+  if (!json) return defaultPolicy;
+  return {
+    commit: json.policy.commit === "allow" ? "allow" : "ask",
+    push: json.policy.push === "main" || json.policy.push === "branch" ? json.policy.push : "ask",
+    agentMayRelease: json.policy.agent_may_release === true,
+    scratch: json.scratch === true,
+    repo: json.repo,
+    from: json.sources ?? {},
+  };
+}
+
+function stateDir(): string {
+  return join(process.env.XDG_STATE_HOME || join(process.env.HOME ?? "", ".local/state"), "bercail");
+}
+
+// URL credentials never reach the log.
+export function redact(command: string): string {
+  const clean = command.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1***@");
+  return clean.length > 500 ? `${clean.slice(0, 500)}…` : clean;
+}
+
+function logApproval(command: string, approved: string[], input: GuardInput): void {
+  try {
+    const file = join(stateDir(), "guard-approvals.jsonl");
+    mkdirSync(dirname(file), { recursive: true });
+    const entry = { at: new Date().toISOString(), terminal: process.env.HC_TERMINAL_ID ?? "", role: input.role || "lead", cwd: input.cwd, command: redact(command), approved };
+    appendFileSync(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
+  } catch {
+    // The log is for the person's audit; a full disk must not stop the agent.
+  }
+}
+
+const policySection = "bercail_git_policy";
+
 export default function (pi: ExtensionAPI) {
+  const home = process.env.HOME;
+  const protectedFiles = [
+    join(stateDir(), "policy-trust.json"),
+    process.env.BERCAIL_CONFIG || join(process.env.XDG_CONFIG_HOME || join(home ?? "", ".config"), "bercail/config.toml"),
+  ];
+
+  // Each run starts with the policy of the repo this agent works in.
+  pi.on("before_agent_start", async (event, ctx) => {
+    const sections = event.systemPromptOptions?.sections;
+    if (!sections) return;
+    const json = await policyJson(pi, ctx.cwd, ctx.signal);
+    if (json?.prompt) sections[policySection] = json.prompt;
+    else delete sections[policySection];
+  });
+
   pi.on("tool_call", async (event, ctx) => {
-    const command = event.toolName === "bash" ? String((event.input as { command?: string }).command ?? "") : undefined;
-    const base: GuardInput = { role: process.env.BERCAIL_ROLE ?? "", hasUI: ctx.hasUI, cwd: ctx.cwd };
-    let decision = decideTool(event.toolName, command, base);
-    if (decision.action === "need-branch") {
-      decision = decideTool(event.toolName, command, { ...base, branch: await branchAt(pi, decision.dir, ctx.signal) });
+    const input = event.input as { command?: string; path?: string };
+    const command = event.toolName === "bash" ? String(input.command ?? "") : undefined;
+    let guardInput: GuardInput = { role: process.env.BERCAIL_ROLE ?? "", hasUI: ctx.hasUI, cwd: ctx.cwd, home, protectedFiles };
+    let decision = decideTool(event.toolName, command, guardInput, input.path);
+    for (let i = 0; i < 8 && (decision.action === "need-branch" || decision.action === "need-policy"); i++) {
+      if (decision.action === "need-branch") {
+        guardInput = { ...guardInput, branches: { ...guardInput.branches, [decision.dir]: await branchAt(pi, decision.dir, ctx.signal) } };
+      } else {
+        guardInput = { ...guardInput, policies: { ...guardInput.policies, [decision.dir]: policyFromJson(await policyJson(pi, decision.dir, ctx.signal)) } };
+      }
+      decision = decideTool(event.toolName, command, guardInput, input.path);
     }
-    if (decision.action === "allow" || decision.action === "need-branch") return;
+    if (decision.action === "allow") {
+      if (decision.approved?.length) logApproval(command ?? "", decision.approved, guardInput);
+      return;
+    }
+    if (decision.action === "need-branch" || decision.action === "need-policy") {
+      return { block: true, reason: "This command touches too many repos to check. Split it into one command per repo." };
+    }
     if (decision.action === "ask") {
       if (ctx.hasUI && (await ctx.ui.confirm("Allow this git command?", decision.reason))) return;
       return { block: true, reason: ctx.hasUI ? "The person said no. Leave the changes staged." : headless };

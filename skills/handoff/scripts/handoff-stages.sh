@@ -125,6 +125,17 @@ handoff_issue_title() {
   printf '%s' "$title"
 }
 
+# How the agent commits, pushes, and releases, for the handoff comment: only
+# when asked, then as the repo's git policy says. Its prompt carries the whole
+# policy; the comment names it in one line. No bercail: no summary.
+handoff_policy_line() {
+  local bercail="${BERCAIL_BIN:-bercail}" brief=""
+  if command -v "$bercail" >/dev/null 2>&1; then
+    brief="$("$bercail" policy show --json "$1" 2>/dev/null </dev/null | jq -r '.brief // empty' 2>/dev/null || true)"
+  fi
+  printf "Commit, push, or release only when asked, and then the way this repo's git policy says (bercail policy show%s)." "${brief:+: $brief}"
+}
+
 # The whole agent prompt: one line pointing at the beads issue. TITLE, when
 # set, is named after the id; its own "." or a truncation's "…" ends the
 # clause. A bare id stays the old sentence.
@@ -404,8 +415,8 @@ handoff_headless_comment_text() {
   if [[ "$resumed" -eq 1 ]]; then
     session_line="Re-handoff of the same session. ${session_line}"
   fi
-  printf 'bercail handoff: stage %s, headless %s, worktree %s.\nWork only in that checkout. Do not open a terminal UI or start another agent.\nWhen you stop, write %s as JSON: status ready|blocked|failed, summary, session_id, and post the same summary on this issue as a bd comment. %s If this issue is too thin to act on, write status blocked and say what is missing.' \
-    "$stage" "$binary" "$worktree" "$result" "$session_line"
+  printf 'bercail handoff: stage %s, headless %s, worktree %s.\nWork only in that checkout. Do not open a terminal UI or start another agent. %s\nWhen you stop, write %s as JSON: status ready|blocked|failed, summary, session_id, and post the same summary on this issue as a bd comment. %s If this issue is too thin to act on, write status blocked and say what is missing.' \
+    "$stage" "$binary" "$worktree" "$(handoff_policy_line "$worktree")" "$result" "$session_line"
 }
 
 handoff_run_headless() {

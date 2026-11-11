@@ -43,6 +43,9 @@ is busy; rerun it on its own.
   stand-ins in `$TMP_DIR/bin`, never the real HOME, Herdr core, or network.
 - Docs speak plainly and match the code; update `docs/` and the help text in
   `bin/bercail` and `lib/help.sh` together.
+- `.bercail/policy.toml` is this repo's git and release policy (`bin/bercail policy show`);
+  Pi desks get it in their prompt and the guard enforces it once trusted. It is
+  the one versioned file under `.bercail/`.
 - master is unreleased trunk; a `v*` tag is the release. Only a tag deploys bercail.dev,
   and the curl install and its `bercail update` read the latest release's tag, never
   master (`docs/development.md#releasing`).

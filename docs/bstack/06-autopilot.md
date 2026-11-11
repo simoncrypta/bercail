@@ -48,7 +48,9 @@ at, and:
 Asking for autopilot is asking it to commit and push to the PR's branch. It
 runs as `bstack-autopilot`, a sibling agent that may commit and push without
 asking. It may not force-push, push to `main` or `master`, pass `--no-verify`,
-or merge: bstack's guard extension blocks each of those for every role.
+or merge: bstack's guard extension blocks each of those for every role. It
+does not tag or release unless the repo's trusted
+[git policy](../config.md#git-policy-per-repo) sets `agent_may_release`.
 
 It stops when the PR is green, when the same check fails after two real fixes,
 when a fix needs a change outside the PR, when every open thread needs a person,

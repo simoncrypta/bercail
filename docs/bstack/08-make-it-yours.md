@@ -55,9 +55,11 @@ shows the order and `bercail doctor` flags stale profile data. See
   bercail's skills.
 - **The roles as `hc` templates** in `~/.config/herdr-core/templates/`, each with
   its own model and brief.
-- **A guard** that blocks force-push, `--no-verify`, `gh pr merge`, and a push
-  to `main` or `master` for every role, asks before other commits and pushes on
-  a desk, and blocks them in a headless run.
+- **A guard** that blocks force-push, `--no-verify`, and `gh pr merge` for every
+  role, and autopilot's push to `main` or `master`. Other commits, pushes, and
+  tags follow the repo's trusted [git policy](../config.md#git-policy-per-repo):
+  what it allows goes through and is logged; the rest asks on a desk and is
+  blocked in a headless run. Each agent gets that policy in its prompt.
 - **The rate-limit fallback** above.
 - **review-pr's reviewer** (`pi/review.json`): the lead's model with only Pi's
   read tools, kept inside the review's stack dir.

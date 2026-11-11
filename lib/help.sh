@@ -33,6 +33,8 @@ Post-install CLI (bercail):
   uninstall     Remove marker block and managed files
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
   shep          Shep, the orchestrator on Pi: status | run
+  policy        A repo's git policy (.bercail/policy.toml): show [--json] [repo] |
+                trust [repo] (its looser values count until the file changes) | untrust [repo]
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
                 gathers every PR, with one detached sibling worktree and a Stack tab.
                 Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,
@@ -93,12 +95,15 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   Pi >=1.2 with pi-claude-bridge@0.11.0. Claude uses claude auth login; GPT and
   Grok use /login openai and /login xai in pi. bercail update renders
   ~/.local/share/bercail/pi/ and herdr-core templates. Every role loads the
-  bridge, the rate-limit fallback, and bercail's guard. [bstack] fallback sets
+  bridge, the rate-limit fallback, and bercail's guard, which follows each repo's
+  trusted git policy (bercail policy show). [bstack] fallback sets
   candidate order (default ["claude", "gpt", "grok"]). The lead starts roles as
   hc siblings.
 
 Config:
-  ~/.config/bercail/config.toml               review, [bstack]
+  ~/.config/bercail/config.toml               review, [bstack], [git], [policy."<repo>"]
+  ~/.local/state/bercail/policy-trust.json    repos whose git policy you trusted
+  ~/.local/state/bercail/guard-approvals.jsonl  what the guard let through, and why
   ~/.config/herdr-app/layouts/bercail.json    the layout
   ~/.config/herdr-app/mods/bercail-desk/      the desk mod
   ~/.config/herdr-app/mods/bercail-shep/      the Shep view (bercail shep run) and Back to Shep

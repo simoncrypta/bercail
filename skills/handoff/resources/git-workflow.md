@@ -21,6 +21,8 @@ another PR's branch. Keep the parent relation in the selected backend. Never
 run `gt` in a `gh` or `origin` repo. For an independent `gh` branch, plain
 `git` and `gh pr` remain appropriate.
 
-Do not commit/submit unless the user asked. Autopilot may commit and push to
-its PR branch, but never merges. Stop if updating a stack would rewrite a
-branch you do not own or require a force-push.
+Do not commit/submit unless the user asked. When asked, follow the repo's git
+policy (`bercail policy show`): a PR or straight to main, drafts, how a release
+is cut. Autopilot may commit and push to its PR branch, but never merges. Stop
+if updating a stack would rewrite a branch you do not own or require a
+force-push.

@@ -1,13 +1,15 @@
 // Decision table for bercail's Pi guard. No Pi process.
 import assert from "node:assert/strict";
 
-const { decideBash, decideTool } = await import(new URL("../bstack/pi/extensions/guard.ts", import.meta.url).href);
+const { decideBash, decideTool, defaultPolicy, redact } = await import(new URL("../bstack/pi/extensions/guard.ts", import.meta.url).href);
 
-const headless = { role: "", hasUI: false, cwd: "/work" };
-const tui = { role: "", hasUI: true, cwd: "/work" };
-const auto = { role: "autopilot", hasUI: false, cwd: "/work", branch: "feature" };
-const judge = { role: "judge", hasUI: true, cwd: "/work" };
-const council = { role: "council", hasUI: false, cwd: "/work" };
+// No policy file: the defaults, looked up for every dir the tests use.
+const none = { "/work": defaultPolicy, "/tmp/repo": defaultPolicy, "/other": defaultPolicy, "/repo/sub": defaultPolicy };
+const headless = { role: "", hasUI: false, cwd: "/work", policies: none };
+const tui = { role: "", hasUI: true, cwd: "/work", policies: none };
+const auto = { role: "autopilot", hasUI: false, cwd: "/work", branches: { "/work": "feature" }, policies: none };
+const judge = { role: "judge", hasUI: true, cwd: "/work", policies: none };
+const council = { role: "council", hasUI: false, cwd: "/work", policies: none };
 
 function decision(command, input) {
   return decideBash(command, input);
@@ -53,14 +55,14 @@ blocked("bash -c 'git push --force'", auto, /Force-push/);
 blocked('echo "$(git push --force)"', auto, /Force-push/);
 blocked("git commit -m 'leave it'", headless, /headless run stages/);
 blocked("git push origin feature", headless, /headless run stages/);
-blocked("git push", { ...auto, branch: "main" }, /main or master/);
-blocked("git push origin", { ...auto, branch: "master" }, /main or master/);
+blocked("git push", { ...auto, branches: { "/work": "main" } }, /main or master/);
+blocked("git push origin", { ...auto, branches: { "/work": "master" } }, /main or master/);
 blocked("git push origin main", auto, /main or master/);
 blocked("git push main", auto, /main or master/);
 blocked("git push origin HEAD:main", auto, /main or master/);
 blocked("git push origin feature:refs/heads/master", auto, /main or master/);
 blocked("git push origin refs/heads/main", auto, /main or master/);
-blocked("git push", { ...auto, branch: "" }, /Could not read the current branch/);
+blocked("git push", { ...auto, branches: { "/work": "" } }, /Could not read the current branch/);
 blocked("git add .", judge, /read-only/);
 blocked("git commit -m x", council, /read-only/);
 blocked("git reset --hard", judge, /read-only/);
@@ -68,7 +70,7 @@ blocked("git checkout -- .", council, /read-only/);
 blocked("git restore --staged .", judge, /read-only/);
 
 asked("git commit -m 'ship'", tui);
-asked("git push origin feature", { role: "builder", hasUI: true, cwd: "/work" });
+asked("git push origin feature", { ...tui, role: "builder" });
 
 allowed("git status", headless);
 allowed("git diff", judge);
@@ -79,11 +81,11 @@ allowed("git push --delete feature", auto);
 allowed('echo "git push --force"', headless);
 allowed("git -C /tmp/repo push origin feature", auto);
 
-const nested = decision("git -C ../other push", { role: "autopilot", hasUI: false, cwd: "/work" });
+const nested = decision("git -C ../other push", { ...auto, branches: {} });
 assert.equal(nested.action, "need-branch", JSON.stringify(nested));
 assert.equal(nested.dir, "/other");
 
-const abs = decision("git -C /repo/sub push", { ...auto, branch: undefined });
+const abs = decision("git -C /repo/sub push", { ...auto, branches: {} });
 assert.equal(abs.action, "need-branch");
 assert.equal(abs.dir, "/repo/sub");
 
@@ -98,5 +100,209 @@ assert.equal(decideTool("write", undefined, council).action, "block");
 assert.equal(decideTool("edit", undefined, headless).action, "allow");
 assert.equal(decideTool("write", undefined, auto).action, "allow");
 assert.equal(decideTool("read", undefined, judge).action, "allow");
+
+// A repo's policy, as lib/policy.sh hands it over (untrusted loosening already
+// back to the defaults). Each policy value × role × command.
+const policy = (fields) => ({ ...defaultPolicy, repo: "/work", from: {}, ...fields });
+const roles = {
+  desk: { role: "", hasUI: true, cwd: "/work" },
+  shep: { role: "shep", hasUI: true, cwd: "/work" },
+  headless: { role: "", hasUI: false, cwd: "/work" },
+  autopilot: { role: "autopilot", hasUI: false, cwd: "/work" },
+  judge: { role: "judge", hasUI: true, cwd: "/work" },
+  council: { role: "council", hasUI: false, cwd: "/work" },
+};
+const at = (role, fields, branch = "feature") => ({ ...roles[role], policies: { "/work": policy(fields) }, branches: { "/work": branch } });
+const policies = {
+  default: {},
+  commit: { commit: "allow" },
+  branch: { push: "branch" },
+  main: { push: "main" },
+  release: { agentMayRelease: true },
+  loosest: { commit: "allow", push: "main", agentMayRelease: true },
+};
+// [command, branch, desk's answer under each policy in the order above]
+const commands = [
+  ["git commit -m x", "feature", ["ask", "allow", "ask", "ask", "ask", "allow"]],
+  ["git push origin feature", "feature", ["ask", "ask", "allow", "allow", "ask", "allow"]],
+  ["git push", "feature", ["ask", "ask", "allow", "allow", "ask", "allow"]],
+  ["git push origin main", "feature", ["ask", "ask", "ask", "allow", "ask", "allow"]],
+  ["git push", "main", ["ask", "ask", "ask", "allow", "ask", "allow"]],
+  ["git push", "", ["ask", "ask", "ask", "allow", "ask", "allow"]],
+  ["git tag v1.2.0", "feature", ["ask", "ask", "ask", "ask", "allow", "allow"]],
+  ["git tag -a v1.2.0 -m release", "feature", ["ask", "ask", "ask", "ask", "allow", "allow"]],
+  ["git push origin v1.2.0", "feature", ["ask", "ask", "ask", "ask", "allow", "allow"]],
+  ["git push origin refs/tags/v1.2.0", "feature", ["ask", "ask", "ask", "ask", "allow", "allow"]],
+  ["git push --tags", "feature", ["ask", "ask", "ask", "ask", "allow", "allow"]],
+  ["git push --follow-tags origin feature", "feature", ["ask", "ask", "ask", "ask", "ask", "allow"]],
+  ["gh release create v1.2.0", "feature", ["ask", "ask", "ask", "ask", "allow", "allow"]],
+];
+// Autopilot keeps its own rules: commit, push its branch, never main, no release unless allowed.
+const autopilotAnswer = (command, branch, name) => {
+  if (/tag|release|v1\.2\.0/.test(command)) return policies[name].agentMayRelease ? "allow" : "block";
+  if (/main/.test(command) || branch === "main") return "block";
+  if (branch === "") return /push$/.test(command) ? "block" : "allow";
+  return "allow";
+};
+for (const [command, branch, answers] of commands) {
+  Object.keys(policies).forEach((name, i) => {
+    const want = {
+      desk: answers[i],
+      shep: answers[i],
+      headless: answers[i] === "ask" ? "block" : answers[i],
+      autopilot: autopilotAnswer(command, branch, name),
+      judge: "block",
+      council: "block",
+    };
+    for (const role of Object.keys(roles)) {
+      const got = decision(command, at(role, policies[name], branch));
+      assert.equal(got.action, want[role], `${role} / ${name} / ${command} on ${JSON.stringify(branch)} → ${JSON.stringify(got)}`);
+    }
+  });
+}
+
+// Under the loosest policy the hard blocks still hold, for every role.
+for (const role of Object.keys(roles)) {
+  const input = at(role, policies.loosest);
+  blocked("git push --force origin feature", input, /Force-push/);
+  blocked("git push origin +feature", input, /starting with \+/);
+  blocked("git push --mirror", input, /mirror/);
+  blocked("git push origin --delete main", input, /Deleting main/);
+  blocked("git commit --no-verify -m x", input, /--no-verify/);
+  blocked("git -c core.hooksPath=/dev/null commit -m x", input, /core.hooksPath/);
+  blocked("gh pr merge 3 --squash", input, /gh pr merge/);
+  blocked("bercail policy trust .", input, /person's call/);
+  blocked("~/.local/bin/bercail policy trust", input, /person's call/);
+}
+
+// An auto-approval says why, for the log.
+const why = decision("git commit -m x", { ...at("desk", { commit: "allow" }), policies: { "/work": policy({ commit: "allow", from: { commit: "repo" } }) } });
+assert.deepEqual(why.approved, ["/work: commit = allow (repo)"]);
+const two = decision("git commit -m x && git push origin feature", at("desk", policies.loosest));
+assert.equal(two.approved.length, 2, JSON.stringify(two));
+assert.equal(decision("git commit -m x && git push origin feature", at("desk", policies.commit)).action, "ask");
+assert.equal(decision("git status", at("desk", policies.loosest)).approved, undefined);
+
+// The policy is looked up per git dir; a dir the guard cannot place gets the default.
+assert.deepEqual(decision("git commit -m x", { ...tui, policies: {} }), { action: "need-policy", dir: "/work" });
+assert.deepEqual(decision("git -C /other commit -m x", { ...tui, policies: {} }), { action: "need-policy", dir: "/other" });
+const split = { ...roles.desk, home: "/home/me", policies: { "/work": policy({ commit: "allow" }), "/other": defaultPolicy, "/home/me/w": policy({ commit: "allow" }) } };
+allowed("git commit -m x", split);
+asked("git -C /other commit -m x", split);
+asked("git -C ../other commit -m x", split);
+asked("cd /other && git commit -m x", split);
+asked("cd ../other; git commit -m x", split);
+allowed("cd /other && cd /work && git commit -m x", split);
+allowed("cd ~/w && git commit -m x", split);
+asked('cd "$REPO" && git commit -m x', split);
+asked("cd - && git commit -m x", split);
+asked("pushd /tmp && popd && git commit -m x", split);
+allowed("(git status) && echo ok", split);
+asked("(cd /work && git status); git commit -m x", { ...split, cwd: "/other" });
+allowed("(cd /work && git commit -m x)", { ...split, cwd: "/other" });
+asked("git --git-dir=/other/.git commit -m x", split);
+asked("git --work-tree /other commit -m x", split);
+asked("GIT_DIR=/other/.git git commit -m x", split);
+asked("env GIT_WORK_TREE=/other git commit -m x", split);
+asked("gh release create v1 -R someone/else", { ...split, policies: { "/work": policy({ agentMayRelease: true }) } });
+allowed("bash -c 'cd /work && git commit -m x'", { ...split, cwd: "/other" });
+asked("bash -c 'cd /other && git commit -m x'", split);
+
+// A scratch repo (temp dir, no remote, no policy): commits go through, pushes still ask.
+const scratch = (role) => ({ ...roles[role], cwd: "/tmp/s", policies: { "/tmp/s": policy({ scratch: true, repo: "/tmp/s" }) } });
+allowed("git commit -m x", scratch("desk"));
+allowed("git commit -m x", scratch("headless"));
+assert.match(decision("git commit -m x", scratch("desk")).approved[0], /scratch/);
+asked("git push /tmp/bare.git HEAD:feature", scratch("desk"));
+blocked("git commit -m x", scratch("judge"), /read-only/);
+blocked("git commit --no-verify -m x", scratch("desk"), /--no-verify/);
+
+// Reading tags is not a release.
+allowed("git tag", tui);
+allowed("git tag -l 'v*'", tui);
+allowed("git tag --list", tui);
+allowed("git tag --contains abc123", tui);
+allowed("git tag -n5", tui);
+asked("git tag -d v1.0.0", tui);
+asked("git push origin --delete v1.0.0", tui);
+allowed("gh release list", tui);
+blocked("git tag v1.0.0", judge, /read-only/);
+
+// The files that decide the guard's answers are the person's to edit.
+const guarded = { ...tui, home: "/h", protectedFiles: ["/h/.local/state/bercail/policy-trust.json", "/h/.config/bercail/config.toml"] };
+assert.equal(decideTool("write", undefined, guarded, "~/.local/state/bercail/policy-trust.json").action, "block");
+assert.equal(decideTool("edit", undefined, guarded, "/h/.config/bercail/config.toml").action, "block");
+assert.equal(decideTool("edit", undefined, guarded, "/work/.bercail/policy.toml").action, "allow");
+
+assert.equal(redact("git push https://bot:ghp_secret@github.com/o/r.git main"), "git push https://***@github.com/o/r.git main");
+
+// Ways around a policy the judge found. A delete is a delete however it is spelled.
+for (const role of ["desk", "headless", "shep"]) {
+  blocked("git push origin :main", at(role, policies.loosest), /Deleting main/);
+  blocked("git push origin :refs/heads/master", at(role, policies.loosest), /Deleting main/);
+}
+allowed("git push origin :old-feature", at("desk", policies.branch));
+// --all, --branches, and globs may push main: not a branch push.
+for (const command of ["git push --all origin", "git push --branches origin", "git push origin 'refs/heads/*'", "git push origin 'refs/heads/*:refs/heads/*'"]) {
+  asked(command, at("desk", policies.branch));
+  blocked(command, at("autopilot", policies.default), /main or master/);
+  allowed(command, at("desk", policies.main));
+}
+// The branch read before the command runs is stale once a part of it switches.
+for (const command of ["git checkout main && git push", "git switch main; git push origin HEAD", "git rebase main && git push", "gh pr checkout 3 && git push", "gt checkout main && git push"]) {
+  asked(command, at("desk", policies.branch));
+  blocked(command, at("autopilot", policies.default), /Could not read the current branch/);
+}
+allowed("git status && git push", at("desk", policies.branch));
+// Config that changes what a later push or commit does is blocked under any policy.
+for (const command of [
+  "git config remote.origin.push '+HEAD:refs/heads/main' && git push",
+  "git config remote.origin.mirror true && git push",
+  "git config set push.default matching",
+  "git config core.hooksPath /dev/null && git commit -m x",
+  "git config --global alias.ci 'commit --no-verify'",
+  "git config include.path /tmp/evil",
+  "git -c alias.ci=commit ci -m x",
+  "git -c remote.origin.push=+HEAD:main push",
+  "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x",
+  "GIT_CONFIG_PARAMETERS=\"'remote.origin.push'='+HEAD:main'\" git push",
+]) {
+  for (const role of ["desk", "headless", "autopilot"]) blocked(command, at(role, policies.loosest), /core.hooksPath|without the guard seeing it/);
+}
+allowed("git config --get remote.origin.push", at("desk", policies.default));
+allowed("git config user.name me", at("desk", policies.default));
+// A GIT_DIR set or exported anywhere in the command: the guard cannot place git.
+for (const command of ["export GIT_DIR=/other/.git; git commit -m x", "GIT_DIR=/other/.git; git commit -m x", "declare -x GIT_WORK_TREE=/other && git commit -m x", "export GIT_INDEX_FILE=/tmp/i && git commit -m x"]) {
+  asked(command, at("desk", policies.commit));
+}
+asked("cd /tmp/s && export GIT_DIR=/work/.git && git commit -m x", scratch("desk"));
+asked("export GIT_DIR=/work/.git; echo $(git commit -m x)", at("desk", policies.commit));
+// Trust and the files behind the guard, through bash too. A seatbelt, not a sandbox.
+blocked("b=bercail; $b policy trust .", at("desk", policies.default), /person's call/);
+const files = { ...at("desk", policies.default), home: "/h", protectedFiles: ["/h/.local/state/bercail/policy-trust.json", "/h/.config/bercail/config.toml"] };
+blocked(`printf '[policy."/work"]\ncommit = "allow"\n' >> ~/.config/bercail/config.toml`, files, /decides what bercail's guard/);
+blocked("echo '{}' >~/.local/state/bercail/policy-trust.json", files, /decides what bercail's guard/);
+blocked("sed -i s/ask/allow/ ~/.config/bercail/config.toml", files, /decides what bercail's guard/);
+blocked("cp /tmp/x ~/.local/state/bercail/policy-trust.json", files, /decides what bercail's guard/);
+allowed("cat ~/.config/bercail/config.toml", files);
+// A release through the API is a release.
+asked("gh api -X POST repos/o/r/releases -f tag_name=v1", at("desk", policies.main));
+asked("gh api repos/o/r/git/refs/tags -f ref=refs/tags/v1 -f sha=abc", at("desk", policies.main));
+allowed("gh api repos/o/r/releases/latest", at("desk", policies.default));
+allowed("gh api -X POST repos/o/r/releases -f tag_name=v1", at("desk", policies.release));
+
+// The judge's recheck: what eval and source set carries on; aliases may move the branch; git by path is git.
+asked("eval 'export GIT_DIR=/other/.git'; git commit -m x", at("desk", policies.commit));
+asked("cd /tmp/s && eval 'export GIT_DIR=/work/.git' && git commit -m x", scratch("desk"));
+asked("source /tmp/env.sh && git commit -m x", at("desk", policies.commit));
+asked(". /tmp/env.sh; git commit -m x", at("desk", policies.commit));
+asked("read GIT_DIR <<< /work/.git && export GIT_DIR && git commit -m x", scratch("desk"));
+asked("eval 'git checkout main'; git push", at("desk", policies.branch));
+asked("git co main && git push", at("desk", policies.branch));
+blocked("git co main && git push", at("autopilot", policies.default), /Could not read the current branch/);
+blocked("/usr/bin/git push --force origin main", at("desk", policies.loosest), /Force-push/);
+blocked("/usr/bin/gh pr merge 3", at("desk", policies.loosest), /gh pr merge/);
+blocked("/bin/bash -c 'git push --force'", at("desk", policies.loosest), /Force-push/);
+allowed("git fetch && git pull && git push", at("desk", policies.branch));
 
 console.log("PASS: pi guard decision table");

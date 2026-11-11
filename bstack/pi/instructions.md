@@ -83,9 +83,14 @@ exception: its system prompt says so, and that prompt wins.
 ## Finishing (bercail's review loop)
 
 - Stage your changes with `git add` and leave them uncommitted. The human reviews
-  the staged tree in tuicr when your desk goes `done`. Commit, push, or open a PR
-  only when asked. Asking for `autopilot` is asking to commit and push to that
-  PR's branch, never to force-push or merge.
+  the staged tree in tuicr when your desk goes `done`. Commit, push, open a PR, or
+  release only when asked. Asking for `autopilot` is asking to commit and push to
+  that PR's branch, never to force-push or merge.
+- When you are asked, do it the way the repo's git policy says: the
+  `bercail_git_policy` section of your prompt, or `bercail policy show <repo>`
+  for another repo. It says whether changes go through a PR or straight to main,
+  how a release is cut, and the team's rules. The guard lets through, without
+  asking, only what that policy allows.
 - End with a short report: what changed, what you ran to prove it, what is left.
   No inventory of every file. When a beads issue names the job, also post that
   report on it (`bd comment <id>`), so it outlives the desk's screen.

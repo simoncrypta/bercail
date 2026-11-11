@@ -1,0 +1,13 @@
+# bercail's git and release policy. `bercail policy show` prints what applies;
+# the loosened values count once you run `bercail policy trust` on this checkout.
+commit = "allow"
+push = "main"
+integrate = "direct"
+release = "Bump the version in lib/common.sh, manifest.json, and the README's release link and pin, commit that on master, then tag it v<version> and push the tag (docs/development.md#releasing)."
+agent_may_release = false
+rules = """
+master is unreleased trunk: a finished branch merges straight to master, no pull request.
+Desks stage their changes and leave them uncommitted for review in tuicr; Shep merges the branch to master once the person has reviewed it.
+Use gh and gh stack for git hosting; never gt.
+A behavior change comes with a test in tests/ that fails without it.
+"""

@@ -43,6 +43,7 @@ higher is a crash.
 | `handoff-spawn --info` | prints JSON |
 | `bercail bstack status` | says `bstack: on` |
 | deployed files | the lead's `lead.json` loads the guard, review-pr's `review.json` has only read tools, `/council` is there |
+| `bercail policy show --json` on this checkout | reads `.bercail/policy.toml`, and a fresh HOME has not trusted it, so commit stays `ask` |
 | the pinned Claude model | a `bstack-council-claude` seat, and none for a provider with no model |
 
 ## Evidence

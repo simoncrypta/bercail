@@ -552,6 +552,28 @@ test_intro_does_not_invoke_review_skill() {
 
 test_intro_does_not_invoke_review_skill
 
+test_policy_line_follows_the_repo_policy() {
+  local bin="$TMP_DIR/policy-bin" line
+  mkdir -p "$bin"
+  cat >"$bin/bercail" <<'EOF'
+#!/bin/sh
+[ "$1 $2 $3 $4" = "policy show --json /repo" ] && printf '{"brief":"commit allow, push main"}\n'
+EOF
+  chmod +x "$bin/bercail"
+  line="$(BERCAIL_BIN="$bin/bercail" handoff_policy_line /repo)"
+  [[ "$line" == "Commit, push, or release only when asked, and then the way this repo's git policy says (bercail policy show: commit allow, push main)." ]] \
+    || fail "policy line: $line"
+  line="$(BERCAIL_BIN="$TMP_DIR/no-bercail" handoff_policy_line /repo)"
+  [[ "$line" == *"(bercail policy show)." ]] || fail "policy line without bercail: $line"
+  grep -q 'never commit unless asked' "$ROOT/skills/handoff/scripts/handoff-spawn" \
+    && fail "the handoff intro must follow the repo's policy, not hardcode it"
+  [[ "$(BERCAIL_BIN="$TMP_DIR/no-bercail" handoff_headless_comment_text bstack pi /w /w/r.json s1 0)" == *"git policy says"* ]] \
+    || fail "the headless comment does not name the policy"
+  printf 'PASS: the handoff text follows the repo git policy\n'
+}
+
+test_policy_line_follows_the_repo_policy
+
 test_stage_table_is_pi_only() {
   declare -F handoff_stage_poteto >/dev/null && fail "the poteto mode must be gone"
   declare -F handoff_has_pstack >/dev/null && fail "pstack detection must be gone"
@@ -1178,6 +1200,7 @@ test_spawn_in_a_plain_repo_with_a_stray_config() {
   [[ ! -s "$log" ]] || fail "gt must not run in a plain repo: $(cat "$log")"
   grep -q 'Use gt' "$BD_COMMENTS" && fail "no gt intro in a plain repo: $(cat "$BD_COMMENTS")"
   grep -q 'bercail handoff: stage bstack' "$BD_COMMENTS" || fail "intro missing: $(cat "$BD_COMMENTS")"
+  grep -q "git policy says (bercail policy show)" "$BD_COMMENTS" || fail "intro does not name the policy: $(cat "$BD_COMMENTS")"
   printf 'PASS: a plain repo with a stray config spawns with no gt and no gt intro\n'
 }
 

@@ -9,7 +9,9 @@ bercail/mods/*/gpui-kit.d.ts
 bercail/mods/*/jsconfig.json
 
 # Headless handoff runtime (job brief, result, logs). Do not commit a session.
-.bercail/
+# The repo's git policy is the one file in it that is versioned.
+.bercail/*
+!.bercail/policy.toml
 
 # Beads / Dolt files (added by bd init)
 .dolt/

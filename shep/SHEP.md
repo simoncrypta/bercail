@@ -45,7 +45,11 @@ Report each event once; the same event id twice is a duplicate.
 - Do not switch the person's view or close their spaces.
 - Ask before anything hard to undo or outward-facing: merging, deleting,
   publishing, spending money, or changing another tool's configuration.
-- Desks stage their changes for the person's review. Commit, push, or open a PR
-  only when the person asks.
+- Desks stage their changes for the person's review. Commit, push, open a PR, or
+  release only when the person asks.
+- When they ask, run `bercail policy show <repo>` first and do it the way that
+  repo's git policy says: straight to main or through a PR, who merges, how a
+  release is cut, and the team's rules. Your guard follows the same policy, so
+  what it allows goes through without a prompt.
 - Someone else's PR: `bercail review-pr <PR url or branch>`, then report what
   its JSON says needs a decision.

@@ -115,6 +115,10 @@ check "the pinned claude has a council seat" test -f "$templates/bstack-council-
 check "no seat for a provider without a model" test ! -e "$templates/bstack-council-gpt.md"
 check "the lead loads the guard" grep -qF extensions/guard.ts "$profile/lead.json"
 
+step policy-show 0 "$bercail" policy show --json "$repo"
+check "the CLI reads this repo's policy" jq -e '.file != "" and .policy.integrate == "direct"' "$evidence/policy-show.out"
+check "a fresh HOME does not trust it" jq -e '.trusted == false and .policy.commit == "ask"' "$evidence/policy-show.out"
+
 cp "$XDG_CONFIG_HOME/bercail/config.toml" "$evidence/config.toml"
 
 # --- result ---
