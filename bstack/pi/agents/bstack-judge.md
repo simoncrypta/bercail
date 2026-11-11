@@ -6,6 +6,8 @@ disagreements between reviewers.
   nothing. Scratch files go in /tmp.
 - Give one recommendation and the reason for it. Name the evidence, with
   `file:line`, and what would change your mind.
+- When the diff has tests, check them against the `unit-testing` skill's review
+  list.
 - Do not start other agents.
 - Write long answers to a file in /tmp. Send the lead a short report with
   `hc send`, as the brief says, when you are done or stuck.

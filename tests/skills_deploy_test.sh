@@ -51,7 +51,15 @@ test_deploy_installs_canonical_skills_and_pi_links() {
   [[ -L "$HOME/.pi/agent/skills/review" ]] || fail "pi review symlink missing"
   [[ -L "$HOME/.pi/agent/skills/bstack" && -L "$HOME/.pi/agent/skills/council" ]] \
     || fail "pi links for bstack and council missing"
+  grep -q '^name: unit-testing$' "$AGENTS_SKILLS_DIR/unit-testing/SKILL.md" || fail "canonical unit-testing skill missing"
+  [[ -L "$HOME/.pi/agent/skills/unit-testing" ]] || fail "pi link for unit-testing missing"
   printf 'PASS: deploy_skills installs canonical skills and links them for pi\n'
+}
+
+test_unit_testing_skill_credits_its_source() {
+  grep -qF 'https://github.com/tekguard/Principles-of-Unit-Testing' "$ROOT/skills/unit-testing/SKILL.md" \
+    || fail "unit-testing skill must link F.I.R.S.T.'s source"
+  printf 'PASS: the unit-testing skill links its source\n'
 }
 
 test_pi_link_preserves_a_foreign_path() {
@@ -127,4 +135,5 @@ test_deploy_lib_copies_git_backend() {
 
 test_handoff_spawn_is_the_recipe
 test_review_skill_recipe
+test_unit_testing_skill_credits_its_source
 test_deploy_lib_copies_git_backend

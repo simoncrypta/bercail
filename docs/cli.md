@@ -51,6 +51,7 @@ Call by name. Skills install to `~/.agents/skills`, with a link to each in `~/.p
 | `unslop` | Clean machine-writing tells out of prose and a diff |
 | `autopilot` | Drive an open PR to green: CI, review threads, conflicts. Pushes; never merges |
 | `desk-restore` | Put a desk with no record back on its session by hand, matched by folder and content |
+| `unit-testing` | F.I.R.S.T. rules for writing and reviewing tests: a temp HOME, fakes on PATH, a run that fails without the change |
 
 autopilot's PR snapshot, `pr-state.sh`, is in [Ship with autopilot](bstack/06-autopilot.md#what-it-does). The review helpers:
 

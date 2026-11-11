@@ -500,10 +500,12 @@ deploy_finalize_permissions() {
     OMARCHY_POST_BOOT_HOOK="${OMARCHY_POST_BOOT_HOOK:-$HOME/.config/omarchy/hooks/post-boot.d/bercail-desk-restore.hook}"
     deploy_desk_restore
   fi
-  if ! _skill_ids | grep -qx desk-restore; then
-    deploy_skill_tree desk-restore
-    ensure_skill_symlink "$PI_SKILLS_DIR" desk-restore
-  fi
+  local skill_id
+  for skill_id in desk-restore unit-testing; do
+    _skill_ids | grep -qx "$skill_id" && continue
+    deploy_skill_tree "$skill_id"
+    ensure_skill_symlink "$PI_SKILLS_DIR" "$skill_id"
+  done
   run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/agentic-dev" "$LOCAL_BIN/bercail-desk-agent" \
     "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.sh" \

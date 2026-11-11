@@ -39,4 +39,6 @@ legacy_update >"$TMP_DIR/update.log"
 [[ -f "$AGENTIC_DEV_SHARE_DIR/pi-extensions/bercail-desk.ts" ]] || { cat "$TMP_DIR/update.log"; exit 1; }
 [[ -f "$AGENTS_SKILLS_DIR/desk-restore/SKILL.md" ]] || exit 1
 [[ -L "$HOME/.pi/agent/skills/desk-restore" ]] || { cat "$TMP_DIR/update.log"; exit 1; }
-printf 'PASS: the previous updater installs desk restore and the pi skill link on the first update\n'
+[[ -f "$AGENTS_SKILLS_DIR/unit-testing/SKILL.md" ]] || exit 1
+[[ -L "$HOME/.pi/agent/skills/unit-testing" ]] || { cat "$TMP_DIR/update.log"; exit 1; }
+printf 'PASS: the previous updater installs desk restore, unit-testing, and their pi skill links on the first update\n'

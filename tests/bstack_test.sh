@@ -205,6 +205,15 @@ yourself' "$skill" || fail "skill: says what to do with no seats"
   printf 'PASS: the council reports only findings a run proved and a rerun confirmed\n'
 }
 
+test_testing_rules_reach_the_roles() {
+  local f
+  for f in skills/bstack/SKILL.md bstack/pi/instructions.md bstack/pi/agents/bstack-builder.md \
+    bstack/pi/agents/bstack-judge.md bstack/pi/agents/bstack-council.md bstack/pi/prompts/ready.md; do
+    grep -qF '`unit-testing`' "$ROOT/$f" || fail "$f must point at the unit-testing skill"
+  done
+  printf 'PASS: the playbooks, roles, and /ready point at the unit-testing skill\n'
+}
+
 test_verify_skill_shape() {
   local dir="$ROOT/.agents/skills/verify-bercail" run step
   head -2 "$dir/SKILL.md" | grep -qx 'name: verify-bercail' || fail "verify skill frontmatter"
@@ -648,6 +657,7 @@ test_new_install_defaults
 test_roles_resolve
 test_ready_verifies_without_the_council
 test_council_keeps_only_rerun_findings
+test_testing_rules_reach_the_roles
 test_verify_skill_shape
 test_handoff_bstack_stage
 test_doctor

@@ -73,7 +73,7 @@ uninstall_agentic_dev() {
     remove_bstack
   fi
 
-  if confirm "Remove managed skills (~/.agents/skills/handoff, review, bstack, council, autopilot, how, why, unslop, desk-restore)?"; then
+  if confirm "Remove managed skills (~/.agents/skills/handoff, review, bstack, council, autopilot, how, why, unslop, desk-restore, unit-testing)?"; then
     remove_managed_skills
   fi
 

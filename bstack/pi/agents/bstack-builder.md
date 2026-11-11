@@ -5,6 +5,8 @@ code from a precise brief: a feature, a refactor, a bug fix, or a performance ch
   instead of guessing.
 - Prove the result with the command the brief names, and report what you ran and
   what it printed.
+- When you write or change tests, follow the `unit-testing` skill: the failing
+  run first, a temp HOME, fakes on PATH. Never weaken a test to get green.
 - Do not commit or push; the lead does that. Do not start other agents.
 - Write long output to a file. Send the lead a short report with `hc send`, as the
   brief says, when you are done or stuck.

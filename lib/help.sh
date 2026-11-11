@@ -116,12 +116,13 @@ Config:
   ~/.agents/skills/bstack/, council/          bstack playbooks, cross-provider review
   ~/.agents/skills/{how,why,unslop,autopilot}/  explain, history, cleanup, PR to green
   ~/.agents/skills/desk-restore/              put a desk with no record back by hand
+  ~/.agents/skills/unit-testing/              F.I.R.S.T. rules for writing and reviewing tests
   ~/.local/state/bercail/desk-sessions/       which session runs in which desk
   ~/.local/share/bercail/pi/                  bstack's Pi profile
   ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates
   ~/.config/fcitx5/conf/keyboard.conf         Linux fcitx5 hint trigger override
 
-Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`):
+Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`, \`unit-testing\`):
   Installed to ~/.agents/skills/<id> (https://agentskills.io), with a link in
   ~/.pi/agent/skills for each. Source: skills/handoff/, skills/review/.
   Manual: npx skills add simoncrypta/bercail -s handoff -g
@@ -141,7 +142,7 @@ show_summary() {
   log "Desk agent: pi (handoff stages: bstack, autopilot)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Config: ${AGENTIC_DEV_USER_CONFIG}"
-  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore}"
+  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore,unit-testing}"
   log ""
   log "Try: dev"
   log "Help: bercail help"

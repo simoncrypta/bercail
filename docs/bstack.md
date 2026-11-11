@@ -36,4 +36,4 @@ After Pi exhausts its own rate-limit retries, the extension tries the next model
 | Pinning models, effort, role fallback, the files bstack writes, `bercail bstack off` | [Make it yours](bstack/08-make-it-yours.md) |
 | Prompts and pitfalls | [Recipes and pitfalls](bstack/09-recipes-and-pitfalls.md) |
 
-The skills (`bstack`, `how`, `why`, `unslop`, `council`, `autopilot`) are listed in [commands](cli.md#skills), the `[bstack]` defaults in [config](config.md), and the headless stages in [handoff](handoff.md).
+The skills (`bstack`, `how`, `why`, `unslop`, `unit-testing`, `council`, `autopilot`) are listed in [commands](cli.md#skills), the `[bstack]` defaults in [config](config.md), and the headless stages in [handoff](handoff.md).

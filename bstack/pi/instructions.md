@@ -15,8 +15,9 @@ at it. These rules apply to every bstack agent.
 - Load the `bstack` skill for anything beyond a one-line change. It holds the
   playbooks (bug fix, feature, refactor, investigation, review, ship, handoff).
 - Other bercail skills: `how` (how code works now), `why` (why it is that way,
-  from the record), `unslop` (clean prose and diffs), `council` (cross-provider
-  review), `autopilot` (drive a PR to green).
+  from the record), `unslop` (clean prose and diffs), `unit-testing` (writing
+  and reviewing tests), `council` (cross-provider review), `autopilot` (drive a
+  PR to green).
 
 ## How to work
 

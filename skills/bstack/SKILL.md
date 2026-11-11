@@ -47,7 +47,8 @@ each step ending in something you can check.
 1. Reproduce it. Write the exact command, input, and output. No repro: say so
    and stop at a diagnosis.
 2. Find the first place the state goes wrong, not where it surfaces.
-3. When there is a cheap test path, write the failing test first.
+3. When there is a cheap test path, write the failing test first, following the
+   `unit-testing` skill.
 4. Fix at the root (`bstack-builder` for a mechanical fix, `bstack-judge` when the
    cause is subtle).
 5. Rerun the repro and the tests. Both must change for the right reason.
@@ -59,6 +60,7 @@ each step ending in something you can check.
 2. Settle the interface from the caller's side before the inside. On a hard
    design fork, ask `bstack-judge`, or sketch two versions and compare.
 3. Build it in small steps that each end green (`bstack-builder`, with a brief per step).
+   New behavior gets tests that follow the `unit-testing` skill.
 4. Drive the real path the user takes: the CLI, the app, the endpoint.
 5. Finish with `/ready`.
 
@@ -75,7 +77,8 @@ each step ending in something you can check.
 
 1. Get the target: the uncommitted diff, `git diff <base>...HEAD`, or `gh pr diff <n>`.
 2. Prove it: run the tests that cover the diff, then the repo's `verify-<repo>`
-   skill when `.agents/skills/` has one. Run the `council` skill only when the
+   skill when `.agents/skills/` has one. Check the diff's tests against the
+   `unit-testing` skill's review list. Run the `council` skill only when the
    person asks for `/council`.
 3. Report only findings a run shows, worst first, with `file:line` and the command.
 4. Post to GitHub only when asked (the `review` skill's `publish-github.sh`).
