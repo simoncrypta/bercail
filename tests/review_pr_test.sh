@@ -9,7 +9,15 @@ export __MISE_BASH_ENV_LOADED=1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
-trap '[[ ! -f "$TMP_DIR/log/desk.pid" ]] || kill "$(cat "$TMP_DIR/log/desk.pid")" 2>/dev/null; rm -rf "$TMP_DIR"' EXIT
+# Every desk and detached pass the CLI started, so none outlives the test.
+cleanup() {
+  local pid
+  while read -r pid; do
+    kill "$pid" 2>/dev/null || true
+  done < <(cat "$TMP_DIR/log/desks" "$TMP_DIR/log/spawned" 2>/dev/null)
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3: expected '$1' got '$2'"; }
@@ -25,11 +33,12 @@ PY="$(type -ap python3 | grep -v '/mise/shims/' | head -1)"
 export HOME="$TMP_DIR/home"
 export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_STATE_HOME="$TMP_DIR/state"
+export TMPDIR="$TMP_DIR/tmp"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
 FIX="$TMP_DIR/fix"
 LOG="$TMP_DIR/log"
 FAKE_BIN="$TMP_DIR/bin"
-mkdir -p "$HOME" "$FIX" "$LOG" "$FAKE_BIN" "$XDG_CONFIG_HOME/bercail"
+mkdir -p "$HOME" "$TMPDIR" "$FIX" "$LOG" "$FAKE_BIN" "$XDG_CONFIG_HOME/bercail"
 export FIX LOG
 printf '[bstack]\nenabled = true\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
 # bstack's reviewer argv, as bercail update writes it.
@@ -122,7 +131,7 @@ case "$1 $2" in
   "pr checks") [[ -n "${FAKE_NO_CHECKS:-}" ]] && { echo "no checks reported" >&2; exit 1; }
     if [[ -n "${FAKE_GH_HOLD:-}" ]]; then
       touch "$LOG/gh.held"
-      while [[ ! -f "$LOG/gh.release" ]]; do sleep 0.05; done
+      while [[ -d "$LOG" && ! -f "$LOG/gh.release" ]]; do sleep 0.05; done
     fi
     cat "$FIX/checks.json"; exit 8 ;;
   "issue view") cat "$FIX/issue-12.json" ;;
@@ -168,7 +177,7 @@ turn() { # mode hold prompt
   if [[ -n "$hold" ]]; then
     trap 'exit 143' TERM
     echo "${BASHPID}" >"$LOG/pi.child"
-    while [[ ! -f "$LOG/pi.release" && ! -f "$OUT.cancel" ]]; do sleep 0.05; done
+    while [[ -d "$LOG" && ! -f "$LOG/pi.release" && ! -f "$OUT.cancel" ]]; do sleep 0.05; done
   fi
   case "$mode" in
     ok) if [[ "$prompt" == *"Stack summary mode"* ]]; then
@@ -198,13 +207,15 @@ printf '%s\n' "$PWD" >"$LOG/desk.pwd"
 printf '%s\n' "$@" >"$LOG/desk.argv"
 mkdir -p desk/inbox
 jq -n --argjson pid "$$" --arg s "$sid" '{pid: $pid, session: $s}' >desk/pi.json
-while :; do
+# Until the test's temp dir goes, so a desk the test missed still ends.
+while [[ -d "$LOG" ]]; do
   for req in desk/inbox/*.json; do
     [[ -f "$req" ]] || continue
     mv "$req" "$req.taken" || continue
     caller="$(jq -r .pid "$req.taken")" OUT="$(jq -r .out "$req.taken")" prompt="$(jq -r .prompt "$req.taken")"
     rm -f "$req.taken"
     kill -0 "$caller" 2>/dev/null || continue
+    printf '%s\n' "$caller" >"$LOG/pi.caller"
     env="$(tr '\0' '\n' <"/proc/$caller/environ")"
     mode="$(sed -n 's/^FAKE_PI=//p' <<<"$env")" hold="$(sed -n 's/^FAKE_HOLD=//p' <<<"$env")"
     printf '%s\n' "$prompt" >>"$LOG/pi.runs"
@@ -233,7 +244,7 @@ case "$1 $2" in
     printf '%s\n' "$payload" >>"$LOG/tuicr.add"
     if [[ -n "${FAKE_TUICR_HOLD:-}" ]]; then
       touch "$LOG/tuicr.held"
-      while [[ ! -f "$LOG/tuicr.release" ]]; do sleep 0.05; done
+      while [[ -d "$LOG" && ! -f "$LOG/tuicr.release" ]]; do sleep 0.05; done
     fi
     jq -c --arg id "c$(wc -l <"$LOG/tuicr.add" | tr -d ' ')" '{id: $id} + .' <<<"$payload" ;;
   *) echo "fake tuicr: $*" >&2; exit 2 ;;
@@ -309,7 +320,8 @@ case "$1" in
     done
     jq -n --arg space "$space" --arg session "$session" '{address:"t-desk",state:"live",status:{state:"idle"},labels:{"bercail.role":"agent","bercail.space":$space,"bercail.review.session":$session}}' >"$LOG/desk.json"
     (cd "$cwd" && exec "$@") </dev/null >/dev/null 2>&1 &
-    echo "$!" >"$LOG/desk.pid" ;;
+    echo "$!" >"$LOG/desk.pid"
+    echo "$!" >>"$LOG/desks" ;;
   kill|rm)
     [[ ! -f "$LOG/desk.pid" ]] || kill "$(cat "$LOG/desk.pid")" 2>/dev/null || true
     rm -f "$LOG/desk.json" "$LOG/desk.pid" ;;
@@ -341,6 +353,14 @@ case "$1" in
   *) echo "fake gt: $*" >&2; exit 2 ;;
 esac
 SH
+# setsid -f: the passes and summaries the CLI detaches. Logged, so the test
+# can wait for them (settle) and none races the next case.
+cat >"$FAKE_BIN/setsid" <<'SH'
+#!/usr/bin/env bash
+[[ "$1" == -f ]] && shift
+"$@" &
+printf '%s\n' "$!" >>"$LOG/spawned"
+SH
 chmod +x "$FAKE_BIN"/*
 export PATH="$FAKE_BIN:$PATH"
 export HERDR_APP_BIN="$FAKE_BIN/herdr-app" HC_BIN="$FAKE_BIN/hc"
@@ -352,10 +372,57 @@ mkdir -p "$MOD" && : >"$MOD/main.js"
 # A PR's pass status as the Stack tab gets it.
 status_of() { "$BERCAIL" review-pr state --stack "$1" | jq -r --argjson n "$2" '.prs[] | select(.number == $n) | .status'; }
 
-wait_for() {
+# Every wait below ends by WAIT_S: generous under load, short of the CI limit.
+WAIT_S=30
+
+# True once PATH exists (a lock is a link to a pid, so -L too).
+appears() {
   local i
-  for ((i = 0; i < 100; i++)); do [[ -e "$1" ]] && return 0; sleep 0.1; done
-  fail "timed out waiting for $1"
+  for ((i = 0; i < WAIT_S * 10; i++)); do [[ -e "$1" || -L "$1" ]] && return 0; sleep 0.1; done
+  return 1
+}
+
+# True once PATH is gone.
+vanishes() {
+  local i
+  for ((i = 0; i < WAIT_S * 10; i++)); do [[ -e "$1" || -L "$1" ]] || return 0; sleep 0.1; done
+  return 1
+}
+
+wait_for() { appears "$1" || fail "timed out waiting for $1"; }
+
+# A background job's exit status. One still running at WAIT_S fails the test.
+wait_exit() {
+  local i
+  for ((i = 0; i < WAIT_S * 10; i++)); do
+    kill -0 "$1" 2>/dev/null || { wait "$1"; return; }
+    sleep 0.1
+  done
+  kill "$1" 2>/dev/null
+  fail "$2 did not exit within ${WAIT_S}s"
+}
+
+wait_gone() {
+  local i
+  for ((i = 0; i < WAIT_S * 10; i++)); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.1; done
+  fail "$2 did not exit within ${WAIT_S}s"
+}
+
+# Wait for every pass and summary the CLI detached, and any they detached.
+settle() {
+  local i pid live
+  for ((i = 0; i < WAIT_S * 10; i++)); do
+    live=""
+    while read -r pid; do
+      kill -0 "$pid" 2>/dev/null && live+=" $pid"
+    done < <(cat "$LOG/spawned" 2>/dev/null)
+    if [[ -z "$live" ]]; then
+      : >"$LOG/spawned"
+      return 0
+    fi
+    sleep 0.1
+  done
+  fail "detached work still running after ${WAIT_S}s:$(for pid in $live; do printf '\n  %s' "$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null)"; done)"
 }
 
 # --- thin rules -------------------------------------------------------------------
@@ -619,7 +686,7 @@ test_concurrency() {
   assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 2>&1 || true)" \
     "review stack is busy" "gather cannot change a running pass's inputs"
   kill -TERM "$runner"
-  wait "$runner" && fail "a terminated pass succeeds"
+  wait_exit "$runner" "the terminated pass" && fail "a terminated pass succeeds"
   kill -0 "$child" 2>/dev/null && fail "pi outlived its wrapper"
   assert_eq failed "$(jq -r .status "$dir/run.json")" "termination records failure"
   [[ ! -L "$dir/pass.lock" && ! -L "$REVIEWS/stack-7/context.lock" ]] || fail "termination kept locks"
@@ -643,11 +710,11 @@ test_concurrency() {
   wait_for "$LOG/pi.child"
   # Keep the winner running until all contenders have attempted the lock.
   for pid in "${pids[@]}"; do
-    [[ "$(readlink "$dir/pass.lock")" == "$pid" ]] || wait "$pid" || true
+    [[ "$(readlink "$dir/pass.lock")" == "$pid" ]] || wait_exit "$pid" "a stale-lock contender" || true
   done
   touch "$LOG/pi.release"
   for pid in "${pids[@]}"; do
-    if wait "$pid"; then winners=$((winners + 1)); fi
+    if wait_exit "$pid" "a stale-lock contender"; then winners=$((winners + 1)); fi
   done
   assert_eq 1 "$winners" "only one stale-lock contender ran"
   printf 'PASS: concurrent passes and gathers refused, termination kills pi, dead locks have one successor\n'
@@ -788,11 +855,10 @@ test_checkout() {
 }
 
 test_desk_summary() {
-  local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" session before out i
+  local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" session before out
   session="$(jq -r .session_id "$stack/desk.json")"
   assert_eq "$session" "$(jq -r .session_id "$dir/review.json")" "the desk session produced the card"
-  wait_for "$stack/stack-summary.json"
-  for ((i = 0; i < 100; i++)); do [[ ! -L "$stack/summary.lock" ]] && break; sleep 0.05; done
+  settle
   assert_eq "ready $session" "$(jq -r '"\(.status) \(.session_id)"' "$stack/stack-summary.json")" "same desk produced the stack summary"
   assert_has "$(jq -r '.order[]' "$stack/stack-summary.json")" 'Best guess: make uploads resilient' "stack summary reads the inferred purpose"
   before="$(grep -c 'Stack summary mode' "$LOG/pi.runs")"
@@ -844,7 +910,7 @@ test_desk_summary() {
 }
 
 test_desk_preflight() {
-  local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" out session fresh
+  local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" out session
   cp "$dir/run.json" "$LOG/preflight-run.json"
   cp "$dir/review.json" "$LOG/preflight-review.json"
   cp "$LOG/desk.json" "$LOG/preflight-desk.json"
@@ -879,13 +945,15 @@ test_desk_preflight() {
   assert_eq "$session" "$(jq -r .session_id "$stack/desk.json")" "a restarted desk keeps its session"
   assert_has "$(<"$LOG/hc")" "--session-id $session" "the new desk resumes the review session"
   kill -0 "$(jq -r .pid "$stack/desk/pi.json")" || fail "the new desk's Pi runs"
+  # ui asked the desk for a stack summary; let it finish before the next turn.
+  settle
   # A desk that quits mid-turn fails the pass instead of waiting forever.
   rm -f "$LOG/pi.child" "$LOG/pi.release"
   FAKE_HOLD=1 "$BERCAIL" review-pr run 7 --stack "$stack" >/dev/null 2>&1 &
   local runner=$!
   wait_for "$LOG/pi.child"
   kill "$(jq -r .pid "$stack/desk/pi.json")"
-  wait "$runner" && fail "a pass whose desk quit succeeded"
+  wait_exit "$runner" "the pass whose desk quit" && fail "a pass whose desk quit succeeded"
   assert_has "$(jq -r .reason "$dir/run.json")" "the review desk exited" "the pass says the desk quit"
   rm -f "$LOG/pi.child"
   cp "$LOG/preflight-run.json" "$dir/run.json"
@@ -893,6 +961,32 @@ test_desk_preflight() {
   "$BERCAIL" review-pr ui --stack "$stack"
   [[ ! -L "$dir/pass.lock" && ! -L "$stack/desk-pass.lock" ]] || fail "preflight failure leaked a lock"
   printf 'PASS: desk preflight preserves cards, busy gathers wait, a quit desk comes back on its session, a desk that quits fails its pass\n'
+}
+
+# A desk started in place of the one running the turn never saw the request:
+# the pass fails instead of waiting on it forever.
+test_desk_replaced() {
+  local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" runner caller desk
+  cp "$dir/run.json" "$LOG/replaced-run.json"
+  cp "$dir/review.json" "$LOG/replaced-review.json"
+  rm -f "$LOG/pi.child" "$LOG/pi.release" "$LOG/pi.caller"
+  FAKE_HOLD=1 "$BERCAIL" review-pr run 7 --stack "$stack" >/dev/null 2>&1 &
+  runner=$!
+  wait_for "$LOG/pi.child"
+  caller="$(cat "$LOG/pi.caller")" desk="$(jq -r .pid "$stack/desk/pi.json")"
+  # Hold the waiting turn still, so the new desk is up before it looks again.
+  kill -STOP "$caller"
+  kill "$desk"
+  wait_gone "$desk" "the killed desk"
+  "$BERCAIL" review-pr ui --stack "$stack"
+  [[ "$(jq -r .pid "$stack/desk/pi.json")" != "$desk" ]] || fail "ui did not start a new desk"
+  kill -CONT "$caller"
+  wait_exit "$runner" "the pass whose desk was replaced" && fail "a pass whose desk was replaced succeeded"
+  assert_has "$(jq -r .reason "$dir/run.json")" "the review desk exited" "the pass says its desk is gone"
+  settle
+  cp "$LOG/replaced-run.json" "$dir/run.json"
+  cp "$LOG/replaced-review.json" "$dir/review.json"
+  printf 'PASS: a pass whose desk was replaced mid-turn fails instead of waiting forever\n'
 }
 
 # --- open: tuicr pr N directly, seeded with [AI Agent] questions ------------------
@@ -905,7 +999,7 @@ test_open() {
   wait_for "$LOG/tuicr.held"
   assert_has "$("$BERCAIL" review-pr open --stack "$REVIEWS/stack-7" 2>&1 || true)" "already being opened" "a second open cannot duplicate drafts"
   touch "$LOG/tuicr.release"
-  wait "$opener"
+  wait_exit "$opener" "the held open"
   out="$(cat "$LOG/open-result")"
   assert_eq '{"space":"s1","name":"Review #7","folder":"'"$TMP_DIR/work/widgets.review-7"'","argv":["tuicr","pr","7","--no-update-check"]}' \
     "$(sed -n 's/^do tab.new //p' "$LOG/herdr" | grep '"Review #7"')" "a Review #7 tab on tuicr pr 7, in the review space"
@@ -1146,23 +1240,23 @@ test_stacks() {
   rm -f "$LOG/pi.child" "$LOG/pi.release"
   FAKE_HOLD=1 "$BERCAIL" review-pr run --stack "$stack" >"$LOG/multi-run" 2>"$LOG/multi-err" &
   local launcher=$!
-  sleep 1
-  [[ -L "$stack/pr-21/$sha21/pass.lock" ]] || {
+  appears "$stack/pr-21/$sha21/pass.lock" || {
     echo "MULTI out=$(cat "$LOG/multi-run" 2>/dev/null) err=$(cat "$LOG/multi-err" 2>/dev/null)" >&2
     find "$stack" -name 'pass.lock' -o -name 'pass.err' -o -name 'run.json' >&2
     fail "parallel run did not lock PR 21"
   }
-  sleep 0.5
-  [[ -L "$stack/pr-23/$sha23/pass.lock" ]] || {
+  appears "$stack/pr-23/$sha23/pass.lock" || {
     echo "23 missing sha=$sha23" >&2
     find "$stack/pr-23" -maxdepth 2 -type d -o -name 'pass.*' -o -name 'run.json' >&2
     echo "err23=$(cat "$stack"/pr-23/*/pass.err 2>/dev/null)" >&2
     fail "parallel run did not lock PR 23"
   }
   [[ ! -L "$stack/pr-22/$sha22/pass.lock" ]] || fail "a thin PR is not started by run without N"
-  [[ ! -L "$stack/context.lock" ]] || fail "passes must not hold the stack lock"
+  # A pass drops the stack lock once it holds its own, and still runs.
+  vanishes "$stack/context.lock" || fail "passes must not hold the stack lock"
+  [[ -L "$stack/pr-21/$sha21/pass.lock" && -L "$stack/pr-23/$sha23/pass.lock" ]] || fail "the passes still run"
   touch "$LOG/pi.release"
-  wait "$launcher"
+  wait_exit "$launcher" "the parallel run"
   assert_eq ready "$(jq -r .status "$stack/pr-21/$sha21/run.json")" "parallel pass 21"
   assert_eq ready "$(jq -r .status "$stack/pr-23/$sha23/run.json")" "parallel pass 23"
   [[ ! -e "$stack/pr-22/$sha22/run.json" ]] || fail "thin PR still waiting"
@@ -1283,7 +1377,7 @@ test_stacks() {
   assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/21 --no-run 2>&1 || true)" \
     "review stack is busy" "a second gather waits"
   touch "$LOG/gh.release"
-  wait "$holder"
+  wait_exit "$holder" "the held gather"
   unset FAKE_GH_HOLD
 
   # Graphite: five PRs, entered from the middle. gt runs only in a private clone.
@@ -1384,22 +1478,11 @@ EOF
   printf 'PASS: no-source fallback is ~/Work/<repo>, or ~/Work/<owner>-<repo> if that path is taken\n'
 }
 
-test_thin_rules
-test_intent_sources
-test_thin_pr_stops
-test_pass
-test_card
-test_infer_without_issue
-test_run_outcomes
-test_concurrency
-test_ui
-test_space
-test_open
-test_ui_mod
-test_checkout
-test_desk_summary
-test_desk_preflight
-test_clone_and_no_checks
-test_stacks
-test_help
-test_agent_rules
+# Each case starts with no detached work left from the one before.
+for t in test_thin_rules test_intent_sources test_thin_pr_stops test_pass test_card \
+  test_infer_without_issue test_run_outcomes test_concurrency test_ui test_space test_open \
+  test_ui_mod test_checkout test_desk_summary test_desk_preflight test_desk_replaced \
+  test_clone_and_no_checks test_stacks test_help test_agent_rules; do
+  "$t"
+  settle
+done

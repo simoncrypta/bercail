@@ -84,7 +84,7 @@ _review_desk_session() (
 # stack dir, in a new session. Run it in the background (&): headless, it execs
 # Pi in place, so killing the job kills Pi.
 _review_turn() {
-  local out="$1" err="$2" prompt="$3" desk="${4:-}" req
+  local out="$1" err="$2" prompt="$3" desk="${4:-}" req pid
   : >"$out"
   : >"$err"
   if [[ -z "$desk" ]]; then
@@ -94,12 +94,15 @@ _review_turn() {
       "${R_PI[@]}" -p --mode json --session-dir "$R_STACK/sessions" -- "$prompt" >"$out" 2>"$err"
   fi
   rm -f "$out.cancel"
+  pid="$(_review_desk_pid)" || { printf 'the review desk is not running\n' >>"$err"; return 1; }
   mkdir -p "$R_STACK/desk/inbox"
   req="$R_STACK/desk/inbox/$(date +%s%N)-$BASHPID.json"
   jq -n --arg prompt "$prompt" --arg out "$out" --argjson pid "$BASHPID" \
     '{prompt: $prompt, out: $out, pid: $pid}' >"$req.tmp" && mv "$req.tmp" "$req"
   until grep -q '"type":"agent_settled"' "$out"; do
-    if ! _review_desk_pid >/dev/null; then
+    # Only this desk can finish the turn: a desk started in its place never
+    # saw the request, and waiting on it would never end.
+    if [[ "$(_review_desk_pid)" != "$pid" ]]; then
       rm -f "$req"
       printf 'the review desk exited before the turn finished\n' >>"$err"
       return 1

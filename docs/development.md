@@ -16,7 +16,7 @@ npm ci && npm run deploy   # deploy the setup.simoncrypta.dev Worker and the sit
 npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the bercail.dev site locally
 ```
 
-CI runs every `tests/*.sh` on each push and PR. It deploys the site and the Workers only for a `v*` tag, when `CLOUDFLARE_API_TOKEN` is set.
+CI runs every `tests/*.sh` on each push and PR, each under a 5-minute `timeout`, so one hung test fails its file instead of the whole job. It deploys the site and the Workers only for a `v*` tag, when `CLOUDFLARE_API_TOKEN` is set.
 
 Use Node 26 for the Pi extension unit tests. When Pi is installed, `tests/desk_session_pi_test.sh`, `tests/review_pi_test.sh`, and the other `*_pi_test.sh` also run the extension in a real Pi, offline, with a stand-in model, without sending a model prompt or changing your sessions.
 

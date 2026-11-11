@@ -30,7 +30,13 @@ jobs:
           failed=0
           for t in tests/*.sh; do
             echo "=== $t ==="
-            bash "$t" || failed=1
+            # A hung test fails its file, not the whole job.
+            rc=0
+            timeout -k 10 300 bash "$t" || rc=$?
+            if [[ "$rc" -eq 124 || "$rc" -eq 137 ]]; then
+              echo "::error::$t ran past 300s and was stopped"
+            fi
+            [[ "$rc" -eq 0 ]] || failed=1
           done
           exit "$failed"
 
