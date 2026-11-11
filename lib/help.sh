@@ -32,7 +32,8 @@ Post-install CLI (bercail):
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
-  shep          Shep, the orchestrator on Pi: status | run
+  shep          Shep, the orchestrator on Pi: status | run |
+                bg --issue ID [--cwd DIR] (a background Shep waits on the issue's job)
   policy        A repo's git policy (.bercail/policy.toml): show [--json] [repo] |
                 trust [repo] (its looser values count until the file changes) | untrust [repo]
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>

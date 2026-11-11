@@ -173,8 +173,11 @@ notify_space_info() {
 }
 
 # Branch, beads issue, stage, harness, and headless result for a checkout.
+# The terminal's bercail.issue labels name its job: a handoff record or result
+# for another issue in the same folder (a background Shep in a main checkout)
+# is not this desk's.
 notify_desk_info() {
-  local path="$1" agent="$2" branch="" handoff='{}' result='null' file
+  local path="$1" agent="$2" issue="${3:-}" issue_title="${4:-}" branch="" handoff='{}' result='null' file
   if [[ -n "$path" && -d "$path" ]]; then
     branch="$(git -C "$path" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
     file="$(notify_handoffs_file)"
@@ -183,13 +186,18 @@ notify_desk_info() {
       [[ -n "$handoff" ]] || handoff='{}'
     fi
     if [[ -r "$path/.bercail/handoff-result.json" ]]; then
-      result="$(jq -c '{status, summary:((.summary // "") | .[0:500]), session_id}' \
+      result="$(jq -c '{status, summary:((.summary // "") | .[0:500]), session_id, issue}' \
         "$path/.bercail/handoff-result.json" 2>/dev/null || printf 'null')"
     fi
   fi
-  jq -nc --arg branch "$branch" --arg agent "$agent" --argjson h "$handoff" --argjson r "$result" '
-    {branch:(if $branch == "" then ($h.branch // null) else $branch end),
-     issue:($h.issue // null), issue_title:($h.issue_title // null), stage:($h.stage // null),
+  jq -nc --arg branch "$branch" --arg agent "$agent" --arg li "$issue" --arg lt "$issue_title" \
+    --argjson h "$handoff" --argjson r "$result" '
+    def mine: $li == "" or (.issue // "") == $li;
+    (if $h | mine then $h else {} end) as $h
+    | (if $r != null and ($r | mine) then $r | del(.issue) else null end) as $r
+    | {branch:(if $branch == "" then ($h.branch // null) else $branch end),
+     issue:(if $li == "" then ($h.issue // null) else $li end),
+     issue_title:(if $lt == "" then ($h.issue_title // null) else $lt end), stage:($h.stage // null),
      harness:($h.harness // (if $agent == "" then null else $agent end)),
      result:$r}'
 }
@@ -290,7 +298,7 @@ notify_payload() {
     --argjson agent "$agent_json" --argjson space "$space_json" --argjson desk "$desk_json" '
     def titled: if type == "string" and endswith(".") then .[:-1] else . end;
     def where:
-      "Desk " + ($agent.address // "")
+      (if $agent.role == "shep-bg" then "Background Shep " else "Desk " end) + ($agent.address // "")
       + (if ($space.name // "") == "" then "" else " (" + $space.name + ")" end);
     def line:
       (($desk.issue_title // "") | titled) as $title
@@ -322,18 +330,21 @@ notify_deliver_all() {
   done < <(notify_sink_files)
 }
 
-# One desk changed status: classify it and deliver.
+# One desk changed status: classify it and deliver. ISSUE, ISSUE_TITLE and SHEP
+# are its bercail.issue, bercail.issue_title and bercail.shep labels.
 notify_desk_changed() {
   local address="$1" prev="$2" status="$3" app="$4" space="$5" cwd="$6" title="$7"
+  local issue="${8:-}" issue_title="${9:-}" shep="${10:-}"
   local kind agent_json space_json desk_json
   kind="$(notify_classify "$prev" "$status")"
   [[ "$kind" != "none" ]] || return 0
   agent_json="$(jq -nc --arg address "$address" --arg app "$app" --arg status "$status" \
-    --arg prev "$prev" --arg title "$title" '
+    --arg prev "$prev" --arg title "$title" --arg shep "$shep" '
     def n: if . == "" then null else . end;
-    {address:$address, app:($app|n), status:$status, previous_status:($prev|n), title:($title|n)}')"
+    {address:$address, app:($app|n), status:$status, previous_status:($prev|n), title:($title|n),
+     role:(if $shep == "bg" then "shep-bg" else "desk" end)}')"
   space_json="$(notify_space_info "$space" "$cwd")"
-  desk_json="$(notify_desk_info "$cwd" "$app")"
+  desk_json="$(notify_desk_info "$cwd" "$app" "$issue" "$issue_title")"
   # Same id for every sink and retry, so receivers can dedupe.
   local event_id
   event_id="$address:$kind:$(_notify_now):$$"
@@ -388,7 +399,9 @@ _notify_follower_write() {
 # runs of whitespace separators, so an empty field would shift the ones after it):
 #   S                                        a snapshot starts (top level, or under
 #                                            params for `missed` and other notifications)
-#   T address status app space cwd title     a live desk in that snapshot
+#   T address status app space cwd title issue issue_title shep
+#                                            a live desk in that snapshot, with its
+#                                            bercail.issue, .issue_title and .shep labels
 #   E type address status app title          an `event` notification: one fact changed
 # Heartbeats and anything else give nothing.
 _NOTIFY_FOLLOW_JQ='
@@ -397,7 +410,9 @@ _NOTIFY_FOLLOW_JQ='
   def snap: "S", (.terminals[]
     | select(.labels["bercail.role"] == "agent" and .state == "live")
     | ["T", .address, (.status.state // ""), (.status.app // .foreground.name // ""),
-       (.labels["bercail.space"] // ""), (.cwd // ""), (.title // "")] | row);
+       (.labels["bercail.space"] // ""), (.cwd // ""), (.title // ""),
+       (.labels["bercail.issue"] // ""), (.labels["bercail.issue_title"] // ""),
+       (.labels["bercail.shep"] // "")] | row);
   if (.terminals | type) == "array" then snap
   elif (.params.terminals? | type) == "array" then .params | snap
   elif .method? == "event" and (.params.terminal? | type) == "string" then
@@ -418,7 +433,8 @@ _notify_follow_changed() {
   _notify_follower_write --argjson at "$(_notify_now)" --arg a "$address" --arg k "$kind" \
     --slurpfile old "$f" '($old[0] // {}) + {last_transition_at:$at, last_transition:{address:$a, kind:$k}}'
   notify_desk_changed "$address" "$before" "$now" "${appof[$address]:-}" "${spaceof[$address]:-}" \
-    "${cwdof[$address]:-}" "${titleof[$address]:-}" || true
+    "${cwdof[$address]:-}" "${titleof[$address]:-}" "${issueof[$address]:-}" \
+    "${issuetitleof[$address]:-}" "${shepof[$address]:-}" || true
 }
 
 # Read `hc events` lines on stdin; deliver each desk's status changes.
@@ -428,19 +444,20 @@ _notify_follow_changed() {
 # a desk seen for the first time has no previous status, so a turn already
 # running when this starts is not reported.
 notify_follow() {
-  local line kind a b c d e g snapped address info
-  local -A prev=() spaceof=() cwdof=() titleof=() appof=() seen=()
+  local line kind a b c d e g h i j snapped address info
+  local -A prev=() spaceof=() cwdof=() titleof=() appof=() issueof=() issuetitleof=() shepof=() seen=()
   _notify_follower_write --argjson at "$(_notify_now)" --argjson pid "$$" '{pid:$pid, started_at:$at}'
   while IFS= read -r line; do
     snapped=0
     seen=()
-    while IFS=$'\x1f' read -r kind a b c d e g; do
+    while IFS=$'\x1f' read -r kind a b c d e g h i j; do
       case "$kind" in
         S) snapped=1 ;;
-        T) # address status app space cwd title
+        T) # address status app space cwd title issue issue_title shep
           [[ -n "$a" ]] || continue
           seen[$a]=1
           appof[$a]="$c"; spaceof[$a]="$d"; cwdof[$a]="$e"; titleof[$a]="$g"
+          issueof[$a]="$h"; issuetitleof[$a]="$i"; shepof[$a]="$j"
           if [[ -n "${prev[$a]+x}" && "${prev[$a]}" != "$b" ]]; then
             _notify_follow_changed "$a" "${prev[$a]}" "$b"
           fi
@@ -452,7 +469,8 @@ notify_follow() {
           case "$a" in
             finished|removed|lost)
               # Forget it, so a reused address starts fresh.
-              unset "prev[$address]" "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]"
+              unset "prev[$address]" "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]" \
+                "issueof[$address]" "issuetitleof[$address]" "shepof[$address]"
               continue
               ;;
             restarted) unset "prev[$address]" ;;
@@ -463,13 +481,15 @@ notify_follow() {
             info="$("$(notify_hc)" get "$address" --json 2>/dev/null </dev/null | jq -r '
               select(.labels["bercail.role"] == "agent" and .state == "live")
               | [(.labels["bercail.space"] // ""), (.cwd // ""), (.title // ""),
-                 (.status.app // .foreground.name // "")]
+                 (.status.app // .foreground.name // ""), (.labels["bercail.issue"] // ""),
+                 (.labels["bercail.issue_title"] // ""), (.labels["bercail.shep"] // "")]
               | map(tostring | gsub("[\t\n\u001f]"; " ")) | join("\u001f")' 2>/dev/null)" || info=""
             if [[ -z "$info" ]]; then
               unset "prev[$address]" "spaceof[$address]"
               continue
             fi
-            IFS=$'\x1f' read -r "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]" <<<"$info"
+            IFS=$'\x1f' read -r "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]" \
+              "issueof[$address]" "issuetitleof[$address]" "shepof[$address]" <<<"$info"
           fi
           [[ -n "$e" ]] && titleof[$address]="$e"
           [[ "$a" == status ]] || continue

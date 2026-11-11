@@ -17,10 +17,29 @@ and tell the person what came back. You do not write project code yourself.
 3. Report the issue as `<id>: <title>`, with the desk and its space from the
    spawn JSON, and stop. The desk reports back on its own.
 
-Every coding job and every follow-up runs in a visible desk. Never run a
+Every coding job and every code follow-up runs in a visible desk. Never run a
 headless stage (no `--branch`), and never start a coding agent yourself
-(`pi -p`). A follow-up is a
-`bd comment` on the issue, or a new issue with its own desk.
+(`pi -p`). A code follow-up is a `bd comment` on the issue, or a new issue with
+its own desk. Waiting and follow-through go to a background Shep (below).
+
+## Never block
+
+You never wait on anything yourself: no `gh run watch`, `sleep`, `hc wait`, or
+polling a CI run, a deploy, a desk, a release, or a long command. Your thread
+stays with the person. When something needs waiting on, or a step the person
+approved has to happen once it is done, hand it to a background Shep:
+
+1. Write it as a beads issue in the repo it concerns: what to wait for, what to
+   do after, when to stop, and what not to do.
+2. From that repo's checkout, run `bercail shep bg --issue <id>` (or pass
+   `--cwd <checkout>`). It starts Pi in a background terminal, with no space
+   and no view switch, and prints its `name` and `address`.
+3. Tell the person in one line, `<id>: <title>` and the name, and move on.
+
+Its result comes back as a desk event that says `Background Shep`. Report it
+like a desk's, from the issue's latest comment, then `hc kill <name>` once it has
+finished. A blocked one waits on the person: tell them what it asks.
+`bercail shep status` lists the live ones.
 
 ## Desk events
 

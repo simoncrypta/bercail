@@ -17,7 +17,7 @@ Bercail's workflow (beads issues, named stages, result files, review when a desk
 3. bercail checks `bd` and the issue, adds a `bd comment` with the worktree, and starts Pi in a new desk with a one-line prompt pointing at the issue.
 4. When the desk finishes or blocks, Shep hears about it [as a message in its session](#desk-events). It reads the issue (`bd show`) and the desk (`hc get`, `hc read`), and reports to you. `hc wait <desk>` also works (`desk` and `space` are in the spawn JSON).
 
-The Shep that ships with bercail never runs headless stages: a coding job or a follow-up is always a desk you can see. `handoff-spawn` still has them for other callers; a headless run opens nothing in the app, returns when it ends, and leaves `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`).
+The Shep that ships with bercail never runs headless stages: a coding job or a code follow-up is always a desk you can see. Waiting is different: Shep never blocks its own thread on CI, a deploy, a desk, or a release, and hands that to a [background Shep](#background-sheps). `handoff-spawn` still has headless stages for other callers; a headless run opens nothing in the app, returns when it ends, and leaves `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`).
 
 To review someone else's PR there is no issue and no stage: Shep runs `bercail review-pr <PR url-or-branch>` and reads the printed JSON for the whole stack. Shep states each PR's intent and CI. Non-thin decisions passes are queued in the review space's visible desk session (parallel headless passes without Herdr), and each PR's `run.json` says when it is `ready`. Read `prs[].thin` and `prs[].pass`: only flagged PRs wait for a decision. For each flagged PR, ask whether to review anyway (`bercail review-pr run N --stack DIR`) or ask the author. A thin PR must not hold up the rest of the stack. When all cards are ready, the desk writes the stack summary shown above the picker. See [review](review.md#someone-elses-pr-bercail-review-pr).
 
@@ -39,10 +39,25 @@ When Pi exits with an error, its message stays on screen until you press Enter.
 Shep on Pi runs in `~/.local/state/bercail/shep/workspace` with its sessions in `pi-sessions/` beside it, whatever folder you are in, and continues the same session each time it starts (`pi --continue`). It uses bstack's lead model and Pi extensions (from `~/.local/share/bercail/pi/lead.json`) when bstack is on, else Pi's own default model; the same logins as your desks. Its rules are passed with `--append-system-prompt`, and it loads no context files, so your global Pi `AGENTS.md` (your Pi persona) is neither changed nor read by Shep. It gets the `handoff`, `review`, `desk-restore`, `how`, `why`, and `unslop` skills, and Pi's own tools. It needs `pi` on the PATH (`bercail bstack on` installs it).
 
 ```bash
-bercail shep status      # Pi's session folder, desk events waiting and delivered
+bercail shep status      # Pi's session folder, desk events waiting and delivered, live background Sheps
 ```
 
 An older `~/.config/bercail/config.toml` may still have a `[shep]` section with `backend` and `session`. bercail no longer reads them; delete them whenever you like.
+
+## Background Sheps
+
+Shep never watches, waits, polls, or sleeps on anything itself. When something needs waiting on (a CI run, a deploy, a desk, a release), or a step you approved has to happen once it is done, Shep writes it as a beads issue (what to wait for, what to do after, when to stop, what not to do), starts a background Shep on it, tells you in one line, and goes back to you.
+
+```bash
+bercail shep bg --issue bercail-ow2                    # from the issue's repo
+bercail shep bg --issue bercail-ow2 --cwd ~/Work/bercail
+```
+
+It prints `{address, name, cwd, issue, issue_title}`. The background Shep is one hc terminal named `shep-bg-<id>`, started in the background with no space, so nothing in the app moves or takes focus; the agents list shows it. It runs `bercail-desk-agent` on the same Pi setup as a desk (bstack's lead from `lead.json` when bstack is on, with the guard, so the repo's [git policy](config.md#git-policy-per-repo) applies), plus a brief of its own, [`shep/BACKGROUND.md`](../shep/BACKGROUND.md): do only what the issue says, never ask in its terminal (post on the issue with `bd comment` and stop instead), post the result as a `bd comment`, and close the issue only when it says to. Its first message is one line pointing at the issue. A second `bg` for an issue whose background Shep is still live is refused.
+
+Its labels are `bercail.role=agent`, `bercail.shep=bg`, `bercail.issue`, and `bercail.issue_title`, with no `bercail.space`. The notify follower treats it like a desk, so its finish or block reaches Shep as a [desk event](#desk-events) whose text says `Background Shep <address>` and whose `agent.role` is `shep-bg`. It is started with `--no-notify`, so hc types nothing into Shep's prompt, `--outlive-parent`, so restarting Shep does not end the wait, and `--rm`. Once Shep has reported a finished one, `hc kill <name>` ends and removes it; killing it sends no second event.
+
+It runs with `BERCAIL_ROLE=shep-bg`. The guard treats that role like a desk's lead: the repo's policy decides, and a step the policy leaves to you stops at the guard's question. Nobody watches that terminal, so the question turns it blocked, Shep tells you, and you answer it there: click it in the agents list. The role is how the guard's approval log (`guard-approvals.jsonl`) tells it apart.
 
 ## Desk events
 
@@ -92,13 +107,13 @@ Each POST body is `bercail.agent_status/v2`:
 ```json
 {"source":"bercail","schema":"bercail.agent_status/v2","kind":"finished","sink":"work-shep",
  "at":"2026-10-29T22:42:00Z","event_id":"t9:finished:1793312520:4242",
- "agent":{"address":"t9","app":"pi","status":"done","previous_status":"working","title":"..."},
+ "agent":{"address":"t9","app":"pi","status":"done","previous_status":"working","title":"...","role":"desk"},
  "space":{"id":"sp98de","name":"Render-preview_Leftlane_app","repo":"leftlane_app","checkout_path":"/path/desk","linked":true},
  "desk":{"branch":"feat/render","issue":"lef2745-2vs","issue_title":"Fix the login timeout","stage":"bstack","harness":"pi",
          "result":{"status":"ready","summary":"...","session_id":"..."}},
  "text":"lef2745-2vs: Fix the login timeout. Desk t9 (Render-preview_Leftlane_app) finished."}
 ```
 
-`agent.address` is the hc terminal (`hc get`/`hc read` it). `desk.issue`, `desk.issue_title`, `stage`, and `harness` come from the matching `handoffs.jsonl` record (`harness` falls back to `agent.app`; `issue_title` is null when that record has none). `desk.result` is `status`, `summary` (its first 500 characters), and `session_id` from the checkout's `.bercail/handoff-result.json` when one exists (usually `null`: headless runs have no desk terminal, so they send nothing). `text` is one line for a person: `<id>: <title>. Desk <address> (<space name>) finished.` or `is blocked.`; the bare id when there is no title, no parentheses when the space has no name, and `Test from bercail (sink <name>).` for a test post.
+`agent.address` is the hc terminal (`hc get`/`hc read` it). `agent.role` is `desk`, or `shep-bg` for a [background Shep](#background-sheps). `desk.issue` and `desk.issue_title` are the terminal's `bercail.issue` and `bercail.issue_title` labels when it has them. `desk.issue`, `desk.issue_title`, `stage`, and `harness` otherwise come from the matching `handoffs.jsonl` record (`harness` falls back to `agent.app`; `issue_title` is null when that record has none); a record or result for another issue than the labels name is left out. `desk.result` is `status`, `summary` (its first 500 characters), and `session_id` from the checkout's `.bercail/handoff-result.json` when one exists (usually `null`: headless runs have no desk terminal, so they send nothing). `text` is one line for a person: `<id>: <title>. Desk <address> (<space name>) finished.` or `is blocked.` (`Background Shep <address>` for a background Shep); the bare id when there is no title, no parentheses when the space has no name, and `Test from bercail (sink <name>).` for a test post.
 
 **Headless runs send nothing.** Only desks (`handoff-spawn --branch`) have a terminal the follower can watch. For a headless run, `handoff-spawn` returns when the run ends and `.bercail/handoff-result.json` holds the outcome. To wait on a desk without the webhook, use `hc wait <desk>`.

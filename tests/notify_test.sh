@@ -149,16 +149,19 @@ cat >"$TMP_DIR/bin/hc-get" <<EOF
 #!/usr/bin/env bash
 [[ "\$1 \$2" == "get t12" ]] || exit 1
 jq -nc --arg cwd "$desk" '{address:"t12", state:"live", cwd:\$cwd, title:"New desk",
-  labels:{"bercail.role":"agent","bercail.space":"sp2"}, status:{app:"pi", state:"idle"}}'
+  labels:{"bercail.role":"agent","bercail.space":"sp2","bercail.issue":"bg-1","bercail.issue_title":"Wait for CI",
+    "bercail.shep":"bg"}, status:{app:"pi", state:"idle"}}'
 EOF
 chmod +x "$TMP_DIR/bin/hc-get"
 : >"$TMP_DIR/bodies.jsonl"
 { event working; status_event working t12; status_event done t12;
   printf '{"jsonrpc":"2.0","method":"event","params":{"seq":5,"terminal":"t9","type":"finished","data":{}}}\n'
   status_event done; } | HC_BIN="$TMP_DIR/bin/hc-get" notify_follow
-jq -se 'length == 1 and .[0].agent.address == "t12" and .[0].space.id == "sp2" and .[0].agent.title == "New desk"' \
+jq -se 'length == 1 and .[0].agent.address == "t12" and .[0].space.id == "sp2" and .[0].agent.title == "New desk"
+  and .[0].agent.role == "shep-bg" and .[0].desk.issue == "bg-1" and .[0].desk.issue_title == "Wait for CI"
+  and .[0].desk.stage == null' \
   "$TMP_DIR/bodies.jsonl" >/dev/null || fail "new desk / finished desk: $(cat "$TMP_DIR/bodies.jsonl")"
-printf 'PASS: a desk started later is looked up; a finished terminal is forgotten\n'
+printf 'PASS: a desk started later is looked up, labels and all; a finished terminal is forgotten\n'
 
 # Filters: another repo is not sent.
 sed -i 's/^repos = myapp/repos = other/' "$sink"

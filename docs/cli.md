@@ -23,7 +23,7 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 | `bercail uninstall` | Remove managed files and the shell marker |
 | `bercail notify status` / `add NAME` / `repo add NAME [REPO]` / `repo remove NAME REPO` / `check [PATH]` / `test NAME` / `run` | [Agent status webhooks](shep.md#agent-status-webhooks). No subcommand = `status`; `run` is the follower the desk mod keeps alive |
 | `bercail policy show [--json] [repo]` / `trust [repo]` / `untrust [repo]` | A repo's [git policy](config.md#git-policy-per-repo): each value and where it came from; trust the repo's `.bercail/policy.toml` so its looser values count, or forget it |
-| `bercail shep status` / `run` | [Shep on Pi](shep.md#shep-on-pi): its session folder and desk events. No subcommand = `status`; `run` is what the Shep view starts |
+| `bercail shep status` / `run` / `bg --issue ID [--cwd DIR]` | [Shep on Pi](shep.md#shep-on-pi): its session folder, desk events, and live background Sheps. No subcommand = `status`; `run` is what the Shep view starts; `bg` starts a [background Shep](shep.md#background-sheps) |
 
 ## shell
 
