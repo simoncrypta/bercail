@@ -3,7 +3,8 @@ name: Release
 # A v* tag publishes bercail.tar.gz and a signed packslip.sigstore.json, so
 # `mise use -g packslip:github.com/simoncrypta/bercail` and
 # `packslip install github.com/simoncrypta/bercail` can install it.
-# The curl installer does not depend on this; it reads the repo tip.
+# The GitHub release it creates is also what the curl installer reads: bercail.dev
+# serves install.sh, and install.sh every file, from the latest release's tag.
 
 on:
   push:

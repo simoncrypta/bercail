@@ -12,15 +12,26 @@ herdr-app check bercail/mods/bercail-review
 for t in tests/*_test.sh; do bash "$t" || break; done
 ./install.sh --help
 bin/bercail dry-run   # this checkout's CLI; a bare `bercail` runs the installed copy
-npm ci && npm run deploy   # deploy the setup.simoncrypta.dev Worker and the site
+npm ci && npm run deploy   # deploy the setup.simoncrypta.dev Worker and the site (CI does this for a v* tag)
 npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the bercail.dev site locally
 ```
 
-CI runs every `tests/*.sh` on each push and PR, and deploys from master when `CLOUDFLARE_API_TOKEN` is set.
+CI runs every `tests/*.sh` on each push and PR. It deploys the site and the Workers only for a `v*` tag, when `CLOUDFLARE_API_TOKEN` is set.
 
 Use Node 26 for the plugin unit tests. When opencode is installed, `tests/desk_session_plugin_test.sh` also checks the plugin in disposable TUIs against a private server, without sending a model prompt or changing your sessions. When Pi is installed, `tests/desk_session_pi_test.sh` does the same for the Pi desk extension, offline, with a stand-in model.
 
-`site/` is bercail.dev: an Astro site served by the `bercail-site` Worker, which also serves `/install.sh` from master. `workers/setup-domain` keeps the legacy setup.simoncrypta.dev host alive for older installs. Both share `workers/setup-domain/src/github.js`.
+`site/` is bercail.dev: an Astro site served by the `bercail-site` Worker, which also serves `/install.sh` from the latest release's tag. `workers/setup-domain` keeps the legacy setup.simoncrypta.dev host alive for older installs. Both share `workers/setup-domain/src/github.js`.
+
+## releasing
+
+master is unreleased trunk: merge to it freely. A `v*` tag is the release.
+
+1. Bump the version in `lib/common.sh`, `manifest.json`, and the README's release link and pin.
+2. Tag the commit `v<version>` and push the tag.
+
+The tag runs `release.yml`, which publishes `bercail.tar.gz` and its signed packslip bundle as a GitHub release, and CI, which tests the tag and deploys bercail.dev. Within a minute of the release, bercail.dev serves `/install.sh` from the new tag, pinned to it (`BERCAIL_RELEASE`), so a curl install reads every file from that tag. A curl install's `bercail update` reads the latest release the same way. Neither reads master. If github.com is down, the Worker keeps the last tag it saw, or answers 503; it never falls back to master.
+
+To try unreleased work through the curl path, take `install.sh` and the files from the same ref: `curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/master/install.sh | BERCAIL_REF=master bash`. `BERCAIL_REF` takes a tag, branch, or sha, and works for `bercail update` too; `GITHUB_RAW_BASE` overrides the whole raw URL.
 
 ## dependencies
 

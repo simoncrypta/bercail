@@ -122,7 +122,7 @@ install_src_dir() {
     return 0
   fi
   # The installed CLI (~/.local/share/bercail/lib) is not a tree: use the clone or
-  # release it was installed from, so files it added are found before they reach master.
+  # release it was installed from, so files it added are found before a release has them.
   if [[ -f "$AGENTIC_DEV_SOURCE_PATH_FILE" ]]; then
     dir="$(<"$AGENTIC_DEV_SOURCE_PATH_FILE")"
     if [[ -n "$dir" && -f "$dir/install.sh" && -d "$dir/config" ]]; then
@@ -133,10 +133,23 @@ install_src_dir() {
   printf '%s' "https://bercail.dev"
 }
 
-# Remote install assets (config/, bin/, skills/) come from GitHub raw.
-# The CDN only hosts install.sh + lib/ for bootstrap.
-github_raw_base() {
-  printf '%s' "${GITHUB_RAW_BASE:-https://raw.githubusercontent.com/simoncrypta/bercail/master}"
+# Remote install assets (config/, bin/, skills/) come from GitHub raw, all from
+# one commit: GITHUB_RAW_BASE, else BERCAIL_REF (a tag, branch, or sha), else the
+# latest release. Never master by default: master is unreleased trunk. Sets
+# GITHUB_RAW_BASE, so call it outside $(...) to resolve once per run.
+resolve_github_raw_base() {
+  [[ -z "${GITHUB_RAW_BASE:-}" ]] || return 0
+  local ref="${BERCAIL_REF:-}" url
+  if [[ -z "$ref" ]]; then
+    # github.com redirects /releases/latest to the tag: no API token, no jq.
+    url="$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/simoncrypta/bercail/releases/latest 2>/dev/null)" || url=""
+    ref="${url##*/releases/tag/}"
+    if [[ "$ref" != v* || "$ref" == */* ]]; then
+      warn "cannot find the latest bercail release on github.com; retry, or pick one with BERCAIL_REF=<tag>"
+      return 1
+    fi
+  fi
+  GITHUB_RAW_BASE="https://raw.githubusercontent.com/simoncrypta/bercail/$ref"
 }
 
 fetch_file() {
@@ -148,8 +161,9 @@ fetch_file() {
     return 0
   fi
   ensure_dir "$(dirname "$dest")"
+  resolve_github_raw_base || return 1
   local url
-  url="$(github_raw_base)/$rel"
+  url="${GITHUB_RAW_BASE%/}/$rel"
   info "download: $url"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0

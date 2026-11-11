@@ -46,5 +46,8 @@ Ctrl-C check when the machine is busy; rerun it on its own.
   stand-ins in `$TMP_DIR/bin`, never the real HOME, Herdr core, or network.
 - Docs speak plainly and match the code; update `docs/` and the help text in
   `bin/bercail` and `lib/help.sh` together.
+- master is unreleased trunk; a `v*` tag is the release. Only a tag deploys bercail.dev,
+  and the curl install and its `bercail update` read the latest release's tag, never
+  master (`docs/development.md#releasing`).
 - Leave changes staged and uncommitted for review in tuicr. Use `gh` and `gh stack`
   for git hosting; never `gt`.

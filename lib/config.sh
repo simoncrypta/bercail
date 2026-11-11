@@ -446,7 +446,8 @@ describe_install_source() {
   local src branch sha tag
   src="$(install_src_dir)"
   if [[ ! -d "$src" ]]; then
-    info "source: $src (GitHub $(github_raw_base | awk -F/ '{ print $NF }'))"
+    resolve_github_raw_base || return 1
+    info "source: $src (GitHub ${GITHUB_RAW_BASE##*/})"
     return 0
   fi
   if ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then

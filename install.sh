@@ -1,32 +1,52 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bootstrap libs from GitHub raw so curl|bash always gets the repo tip.
-# INSTALL_SRC may still point at the CDN for legacy callers; asset fetches
-# use github_raw_base() in lib/common.sh.
+# bercail.dev pins this to the release tag it serves install.sh from.
+BERCAIL_RELEASE=""
+
+# A piped install reads every file from one commit: GITHUB_RAW_BASE, else
+# BERCAIL_REF (a tag, branch, or sha), else the release pinned above, else the
+# latest release. Never master by default: master is unreleased trunk.
+remote_raw_base() {
+  local ref="${BERCAIL_REF:-$BERCAIL_RELEASE}" url
+  if [[ -n "${GITHUB_RAW_BASE:-}" ]]; then
+    printf '%s' "${GITHUB_RAW_BASE%/}"
+    return 0
+  fi
+  if [[ -z "$ref" ]]; then
+    url="$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/simoncrypta/bercail/releases/latest)" || return 1
+    ref="${url##*/releases/tag/}"
+    [[ "$ref" == v* && "$ref" != */* ]] || return 1
+  fi
+  printf 'https://raw.githubusercontent.com/simoncrypta/bercail/%s' "$ref"
+}
+
 bootstrap_remote_libs() {
-  local base="${GITHUB_RAW_BASE:-https://raw.githubusercontent.com/simoncrypta/bercail/master}"
   local tmp lib
   tmp="$(mktemp -d)"
   mkdir -p "$tmp/lib"
-  for lib in common detect deps config skills shell-rc uninstall help omarchy notify doctor harness bstack desk; do
-    curl -fsSL "${base%/}/lib/${lib}.sh" -o "$tmp/lib/${lib}.sh"
+  for lib in common detect deps config skills shell-rc uninstall help omarchy notify doctor harness bstack desk shep; do
+    curl -fsSL "$GITHUB_RAW_BASE/lib/${lib}.sh" -o "$tmp/lib/${lib}.sh"
   done
   printf '%s' "$tmp"
 }
 
-resolve_root() {
+local_root() {
   local self="${BASH_SOURCE[0]:-${0:-}}"
-  if [[ -n "$self" && "$self" != bash && "$self" != -bash && -f "$(dirname "$self")/lib/common.sh" ]]; then
-    cd "$(dirname "$self")" && pwd
-    return 0
-  fi
-  # Mark remote install so install_src_dir() is not treated as a local tree.
-  INSTALL_SRC="${INSTALL_SRC:-https://bercail.dev}"
-  bootstrap_remote_libs
+  [[ -n "$self" && "$self" != bash && "$self" != -bash && -f "$(dirname "$self")/lib/common.sh" ]] || return 1
+  cd "$(dirname "$self")" && pwd
 }
 
-ROOT="$(resolve_root)"
+if ! ROOT="$(local_root)"; then
+  # Mark remote install so install_src_dir() is not treated as a local tree.
+  INSTALL_SRC="${INSTALL_SRC:-https://bercail.dev}"
+  if ! GITHUB_RAW_BASE="$(remote_raw_base)"; then
+    printf 'error: cannot find the latest bercail release on github.com; retry, or pick one with BERCAIL_REF=<tag>\n' >&2
+    exit 1
+  fi
+  printf 'bercail: installing from %s\n' "$GITHUB_RAW_BASE"
+  ROOT="$(bootstrap_remote_libs)"
+fi
 if [[ ! -f "$ROOT/lib/common.sh" ]]; then
   printf 'error: failed to load installer libraries\n' >&2
   exit 1

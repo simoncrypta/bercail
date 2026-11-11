@@ -12,6 +12,8 @@ Install (recommended: mise + packslip, signed release):
 Install (curl, still supported):
   curl -fsSL https://bercail.dev/install.sh | bash
   curl -fsSL https://bercail.dev/install.sh | bash -s -- --yes
+  curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/master/install.sh | BERCAIL_REF=master bash
+                 (unreleased trunk; BERCAIL_REF takes a tag, branch, or sha, for bercail update too)
 
 install.sh options:
   -h, --help   Show this help

@@ -1,8 +1,11 @@
 name: CI
 
+# Tests run on every push to master and every PR. The Cloudflare deploy runs
+# only for a v* tag: master is unreleased trunk, and a tag is the release.
 on:
   push:
     branches: [master]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -32,7 +35,7 @@ jobs:
           exit "$failed"
 
   deploy:
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -50,7 +53,7 @@ jobs:
         run: |
           if [[ -z "${CLOUDFLARE_API_TOKEN}" ]]; then
             echo '::notice::CLOUDFLARE_API_TOKEN is not set; skipping Cloudflare deploy.'
-            echo 'bercail.dev already tracks master via the Worker GitHub proxy.'
+            echo 'bercail.dev /install.sh still follows the latest release via the Worker GitHub proxy.'
             exit 0
           fi
           export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-0911918246a46bfced4610f39e6b7eb5}"

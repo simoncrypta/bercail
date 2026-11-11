@@ -1,5 +1,5 @@
 {
-  // bercail.dev: the Astro site (dist/), plus /install.sh from the repo's master.
+  // bercail.dev: the Astro site (dist/), plus /install.sh from the latest release's tag.
   "name": "bercail-site",
   "main": "worker.js",
   "compatibility_date": "2026-07-01",

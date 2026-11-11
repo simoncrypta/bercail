@@ -30,13 +30,15 @@ The first install trusts the repository's signer, and later installs must match 
 
 ## curl
 
-curl is still supported. It reads the repository tip and does not need a release:
+curl is still supported. It installs the latest release: bercail.dev serves `install.sh` from that release's tag, and the installer reads every file from that tag:
 
 ```bash
 curl -fsSL https://bercail.dev/install.sh | bash
 ```
 
 `--yes` is non-interactive (`bercail install --yes` too; through curl, `| bash -s -- --yes`). From a clone: `./install.sh`. The installer's flags are in [cli](cli.md#install--cli).
+
+master is unreleased trunk; neither the curl install nor its `bercail update` reads it. To install another tag, a branch, or a commit, set `BERCAIL_REF` and take `install.sh` from the same ref (`curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/master/install.sh | BERCAIL_REF=master bash`, or `BERCAIL_REF=v0.13.0 bercail update`).
 
 ## What the installer does
 
