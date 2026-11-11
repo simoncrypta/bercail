@@ -13,9 +13,7 @@
 // Shep is one hc terminal, `bercail-shep` (label bercail.role=shep), not in any space.
 // It is found again by its label, so the same session shows after a restart and no
 // second one starts. It starts on its own once per app session; one the person quit
-// stays quit until "Start Shep". The terminal runs `bercail shep run`, which picks
-// the runtime ([shep] backend: Pi, or an OpenClaw agent), asks on the first start,
-// and labels the terminal with what it runs (bercail.shep_backend, .shep_session).
+// stays quit until "Start Shep". The terminal runs `bercail shep run`: Shep on Pi.
 //
 // props.role:
 // - "nav" (default): the navigator's Shep row. Always shown, so it runs the logic: the
@@ -28,46 +26,17 @@ import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import {
   agents, closeOverlay, exec, focused, home, layout, nextCommand, notify, panes, props,
-  readTextFile, run, spaces, terminals, theme,
+  run, spaces, terminals, theme,
 } from "herdr";
 
 const NAME = "bercail-shep";
 const ROLE = "shep";
 // Asked of and run in herdr-core's environment (hc exec, hc run), which may lack the
-// login shell's PATH (mise, ~/.local/bin). `bercail shep run` keeps a failed
-// runtime's message on screen until Enter; quitting normally closes the terminal.
+// login shell's PATH (mise, ~/.local/bin). `bercail shep run` keeps the message
+// of a Pi that fails on screen until Enter; quitting normally closes the terminal.
 const BERCAIL_PATH = 'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"';
-// "--setup" comes in as $1, never spliced into the script.
-const SHEP_RUN = `${BERCAIL_PATH}; exec bercail shep run "$@"`;
+const SHEP_RUN = `${BERCAIL_PATH}; exec bercail shep run`;
 const KEY = "Ctrl+Shift+H";
-const CONFIG = "/.config/bercail/config.toml";
-
-// `[shep]` from config.toml text: { backend, session }, "" when unset. bercail
-// reads the same keys; this only words the Shep view.
-export function configShep(text) {
-  const out = { backend: "", session: "" };
-  let section = "";
-  for (const raw of text.split("\n")) {
-    const line = raw.replace(/#.*$/, "").trim();
-    const sec = line.match(/^\[(.+)\]$/);
-    if (sec) { section = sec[1].trim(); continue; }
-    const kv = line.match(/^(backend|session)\s*=\s*(.+)$/);
-    if (section === "shep" && kv && !out[kv[1]]) out[kv[1]] = kv[2].trim().replace(/^"(.*)"$/, "$1");
-  }
-  if (!out.backend && out.session) out.backend = "openclaw";
-  return out;
-}
-
-// What the Shep view says a start will run.
-export function plannedRun({ backend, session }) {
-  if (backend === "pi") return "Runs Shep on Pi, in its own session.";
-  if (backend === "openclaw") return `Runs openclaw tui --session ${session || "<your default agent>:main"}.`;
-  return "The first start asks where Shep runs: Pi (recommended) or OpenClaw.";
-}
-
-async function readShep() {
-  try { return configShep(await readTextFile(home() + CONFIG)); } catch { return configShep(""); }
-}
 
 export function find(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -147,13 +116,12 @@ export function focusPlan(view, was, f, shep, ready, back, ps, space) {
   return to;
 }
 
-// Shared by every copy: whether bercail is installed, the [shep] config, and a
-// start in flight.
-const S = { found: null, check: null, starting: false, error: null, shep: configShep("") };
+// Shared by every copy: whether bercail is installed, and a start in flight.
+const S = { found: null, check: null, starting: false, error: null };
 
 function checkBercail() {
-  S.check ??= Promise.all([exec("hc", ["exec", "bash", "-lc", `${BERCAIL_PATH}; command -v bercail`]), readShep()])
-    .then(([r, shep]) => { S.found = r.code === 0; S.shep = shep; })
+  S.check ??= exec("hc", ["exec", "bash", "-lc", `${BERCAIL_PATH}; command -v bercail`])
+    .then((r) => { S.found = r.code === 0; })
     .catch(() => { S.found = false; })
     .finally(() => { S.check = null; });
   return S.check;
@@ -161,8 +129,7 @@ function checkBercail() {
 
 // One Shep: none while one is live or starting. hc names are unique among live
 // terminals, so a start that races one the list doesn't show yet is refused: fine.
-// `setup`: ask where Shep runs before starting it.
-async function startShep(setup = false) {
+async function startShep() {
   if (S.starting || shepTerminal()) return;
   S.starting = true;
   S.error = null;
@@ -171,7 +138,7 @@ async function startShep(setup = false) {
     if (!S.found) return;
     const r = await exec("hc", ["run", "--bg", "--json", "--no-parent", "--no-notify", "--rm", "--name", NAME,
       "--cwd", home(), "--label", `bercail.role=${ROLE}`,
-      "bash", "-lc", SHEP_RUN, "bash", ...(setup ? ["--setup"] : [])]);
+      "bash", "-lc", SHEP_RUN]);
     if (r.code !== 0 && !/"name_taken"/.test(r.stderr + r.stdout)) throw new Error((r.stderr || r.stdout).trim());
   } catch (e) {
     S.error = String(e?.message ?? e);
@@ -218,7 +185,6 @@ export default class BercailShep extends View {
       case "show": if (view) this.show("shep"); break;
       case "space": if (view) this.show("space"); break;
       case "start": await startShep(); break;
-      case "setup": await startShep(true); break;
       // Ctrl+Space: Herdr's own Go to… search, over the space view so a pick shows.
       case "goto": this.inSpace(view, ["mod.open", { name: "picker" }]); break;
       // A bercail-desk key pressed in the Shep view (its `keys` copy sends it here).
@@ -321,13 +287,10 @@ export default class BercailShep extends View {
     const shep = shepTerminal();
     const word = shep ? "running" : S.found === false ? "bercail missing" : S.starting ? "starting" : "stopped";
     const color = shep ? t.ansi2 : S.found === false ? t.blocked : t.dim;
-    const backend = shep?.labels?.["bercail.shep_backend"];
-    const on = shep?.labels?.["bercail.shep_session"] || (backend === "pi" ? "Pi" : backend === "openclaw" ? "OpenClaw" : "");
     return h_flex().size_full().px(12).gap(8).items_center().bg(t.chrome).text_size(12.5).text_color(t.muted)
       .child(div().size(7).rounded(4).bg(color))
       .child(div().text_color(t.foreground).font_semibold().child("Shep"))
       .child(div().flex_1().truncate().text_color(t.dim).child(shep?.title || "the orchestrator for every desk"))
-      .when(Boolean(on), (el) => el.child(div().flex_none().text_color(t.dim).child(on)))
       .child(div().text_color(color).child(word))
       .child(div().text_size(11).text_color(t.dim).child(`${KEY} spaces`));
   }
@@ -336,9 +299,7 @@ export default class BercailShep extends View {
     const missing = S.found === false;
     const busy = S.starting || S.found === null;
     const act = (cx, f) => cx.spawn(async (cx) => { await f(); cx.notify(); });
-    const button = (id, label, f, solid = true) => div().id(id).px(14).py(6).rounded(6)
-      .when(solid, (el) => el.bg(t.solid).text_color(t.solid_foreground))
-      .when(!solid, (el) => el.border(1).border_color(t.border).text_color(t.foreground))
+    const button = (id, label, f) => div().id(id).px(14).py(6).rounded(6).bg(t.solid).text_color(t.solid_foreground)
       .hover((s) => s.opacity(0.85)).on_click((_e, cx) => act(cx, f)).child(label);
     const body = v_flex().size_full().items_center().justify_center().gap(10).px(24).bg(t.background)
       .text_color(t.muted).text_size(13);
@@ -352,10 +313,8 @@ export default class BercailShep extends View {
     if (busy) return body.child("Starting Shep…");
     return body
       .child(div().text_color(t.foreground).font_semibold().child("Shep is not running"))
-      .child(h_flex().gap(8)
-        .child(button("shep-start", "Start Shep", () => startShep()))
-        .child(button("shep-setup", "Change runtime", () => startShep(true), false)))
-      .child(div().text_color(t.dim).text_size(12).child(plannedRun(S.shep)))
+      .child(button("shep-start", "Start Shep", startShep))
+      .child(div().text_color(t.dim).text_size(12).child("Runs Shep on Pi, in its own session."))
       .when(Boolean(S.error), (el) => el.child(div().max_w(460).text_center().text_color(t.blocked).text_size(12).child(S.error)));
   }
 

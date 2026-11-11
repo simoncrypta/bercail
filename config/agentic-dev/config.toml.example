@@ -38,13 +38,6 @@ judge = "claude"
 # works when off: the lead reviews alone.
 council = false
 
-# [shep]
-# Where Shep runs: pi or openclaw. Unset: the first start asks (bercail shep setup).
-# backend = "pi"
-# On openclaw, the session Shep opens, by its full agent:<id>:<session> key.
-# Unset: the main session of OpenClaw's default agent (openclaw agents list).
-# session = "agent:main:main"
-
 # [git]
 # Git backend per repo: gh (git + GitHub CLI), gt (Graphite), or origin (Cursor
 # Origin). Keys are main-checkout paths; linked worktrees share that choice.

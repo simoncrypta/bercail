@@ -42,11 +42,6 @@ export const hc = async () => ({ code: 0, stdout: "", stderr: "" });
 export const watchFolder = () => new Promise(() => {});
 export const window = () => ({ platform: "linux", active: true });
 export const home = () => "/home/me";
-export const readTextFile = async (path) => {
-  h().reads = [...(h().reads ?? []), path];
-  if (h().config === undefined) throw new Error("ENOENT");
-  return h().config;
-};
 export const nextCommand = () => new Promise(() => {});
 EOF
 cat >"$TMP_DIR/gpui.mjs" <<'EOF'
@@ -79,7 +74,7 @@ cp "$ROOT/bercail/keys.json" "$TMP_DIR/keys.json"
 
 cat >"$TMP_DIR/test.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
-import Shep, { find, viewOf, stackPlan, focusPlan, withView, configShep, plannedRun } from "./bercail-shep.mjs";
+import Shep, { find, viewOf, stackPlan, focusPlan, withView } from "./bercail-shep.mjs";
 import Spaces from "./bercail-spaces.mjs";
 import { els } from "./gpui.mjs";
 
@@ -95,12 +90,12 @@ const PANES = [{ pane: "p1", tab: "tab1", terminal: "t1" }, { pane: "p2", tab: "
 globalThis.localStorage = { getItem: () => null, setItem: () => {} };
 
 // hc exec finds bercail; hc run starts.
-const ocExec = () => ({ code: 0, stdout: "", stderr: "" });
+const okExec = () => ({ code: 0, stdout: "", stderr: "" });
 function setup(state = {}) {
   globalThis.herdr = {
     layout: structuredClone(shipped), calls: [], execs: [], spaces: SPACES, panes: PANES,
     focused: { space: "s1", pane: "p1", terminal: "t1" }, terminals: [],
-    exec: ocExec, ...state,
+    exec: okExec, ...state,
   };
 }
 const cx = { spawn: (f) => f(cx), notify: () => {}, timer: { every: () => {} } };
@@ -141,7 +136,7 @@ for (const a of ["--bg", "--no-parent", "--rm", "--name", "bercail-shep", "--lab
 }
 if (/--token|--password|--url/.test(argv.join(" "))) fail(`Shep passes credentials: ${argv}`);
 const script = argv[argv.indexOf("-lc") + 1];
-if (!/exec bercail shep run "\$@"$/.test(script) || argv.at(-1) !== "bash") fail(`Shep does not run bercail shep run: ${argv}`);
+if (!/exec bercail shep run$/.test(script) || argv.at(-1) !== script) fail(`Shep does not run bercail shep run: ${argv}`);
 globalThis.herdr.layout = withView(globalThis.herdr.layout, "space");
 globalThis.herdr.execs = [];
 v = nav();
@@ -155,7 +150,7 @@ console.log("PASS: launch shows the Shep view and starts Shep once, after the co
 // doesn't show yet (hc: name_taken) is no error. Missing bercail starts nothing.
 for (const [label, state, wantRun, wantNote] of [
   ["live", { terminals: [SHEP("t9")] }, false, false],
-  ["name_taken", { exec: (c, a) => a[0] === "run" ? { code: 1, stdout: "", stderr: '{"error":{"kind":"name_taken"}}' } : ocExec(c, a) }, true, false],
+  ["name_taken", { exec: (c, a) => a[0] === "run" ? { code: 1, stdout: "", stderr: '{"error":{"kind":"name_taken"}}' } : okExec(c, a) }, true, false],
   ["missing", { exec: (_c, a) => ({ code: a[0] === "exec" ? 1 : 0, stdout: "", stderr: "" }) }, false, false],
 ]) {
   delete globalThis.bercailShep;
@@ -168,29 +163,22 @@ for (const [label, state, wantRun, wantNote] of [
 }
 console.log("PASS: one Shep: a live one is reused, a racing start is quiet, no bercail starts nothing");
 
-// The runtime is bercail's to pick (`bercail shep run`); the mod only words it from
-// [shep]. "Change runtime" starts the same command with --setup, as an argument.
-async function started(state, command) {
-  delete globalThis.bercailShep;
-  setup({ terminals: [{ address: "t1", state: "live", labels: {} }], ...state });
-  v = nav();
-  if (command) await v.command(command);
-  else v.sync();
-  await tick();
-  await tick();
-  return runs()[0] ?? null;
+// Stopped, the view offers Start Shep alone and says it runs on Pi; it reads no
+// config and passes nothing to bercail shep run.
+delete globalThis.bercailShep;
+setup({ terminals: [{ address: "t1", state: "live", labels: {} }], props: { role: "empty" } });
+const empty = new Shep();
+empty.init({}, cx);
+await tick();
+els.length = 0;
+empty.render(cx);
+if (els.some((e) => e.id === "shep-setup") || !els.some((e) => e.text?.includes("Runs Shep on Pi, in its own session."))) {
+  fail(`stopped view: ${JSON.stringify(els.filter((e) => e.id || e.text))}`);
 }
-const eqj = (a, b, label) => { if (JSON.stringify(a) !== JSON.stringify(b)) fail(`${label}: ${JSON.stringify(a)}`); };
-eqj(configShep('[layout]\nsession = "x"\n'), { backend: "", session: "" }, "no [shep]");
-eqj(configShep('[shep]\n# the orchestrator\nsession = "agent:sheep:main" # mine\n'), { backend: "openclaw", session: "agent:sheep:main" }, "a session alone is OpenClaw");
-eqj(configShep('[shep]\nbackend = "pi"\nsession = "agent:sheep:main"\n'), { backend: "pi", session: "agent:sheep:main" }, "backend wins");
-if (!/first start asks/.test(plannedRun(configShep("")))) fail("unset: " + plannedRun(configShep("")));
-if (!/on Pi/.test(plannedRun({ backend: "pi" })) || !/--session agent:sheep:main/.test(plannedRun({ backend: "openclaw", session: "agent:sheep:main" }))) fail("plannedRun");
-let argv2 = await started({ config: '[shep]\nsession = "agent:sheep:main"\n' }, "setup");
-if (argv2.at(-1) !== "--setup" || argv2.at(-2) !== "bash") fail(`setup argv: ${argv2}`);
-if (!globalThis.herdr.reads?.includes("/home/me/.config/bercail/config.toml")) fail("the config was not read");
-if (globalThis.herdr.execs.some((e) => /openclaw/.test(e.join(" ")))) fail("the mod asked OpenClaw itself");
-console.log("PASS: Shep runs bercail shep run (or --setup); the view words the [shep] choice");
+els.find((e) => e.id === "shep-start").click(null, cx);
+await tick();
+if (runs().at(-1)?.at(-1) !== script) fail(`Start Shep ran ${JSON.stringify(runs())}`);
+console.log("PASS: Start Shep runs bercail shep run (Pi), with no runtime choice");
 
 // Shep's block: added once (already shown), selected after, dropped when Shep ends,
 // never added again for the same terminal.

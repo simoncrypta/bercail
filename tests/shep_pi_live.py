@@ -147,12 +147,10 @@ def body(run):
     (binp / "pi").symlink_to(PI)
     share = home / ".local/share/bercail/shep"
     shutil.copy(ROOT / "shep/SHEP.md", share)
-    shutil.copy(ROOT / "shep/IDENTITY.md", share)
     shutil.copy(ROOT / "shep/pi/inbox.ts", share / "pi")
     # bstack's lead: the fake model, as lead.json names a model and its extensions.
     (home / ".local/share/bercail/pi/lead.json").write_text(json.dumps(
         ["pi", "--model", "fake/model", "-e", str(ROOT / "tests/shep_pi_provider.ts")]))
-    (home / ".config/bercail/config.toml").write_text('[shep]\nbackend = "pi"\n')
     # A desk checkout with a handoff record, and a result whose summary must not reach Shep.
     desk = run / "app.login"
     subprocess.run(["git", "init", "-q", str(desk)], check=True)

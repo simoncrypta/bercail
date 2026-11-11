@@ -50,13 +50,3 @@ Report each event once; the same event id twice is a duplicate.
   only when the person asks.
 - Someone else's PR: `bercail review-pr <PR url or branch>`, then report what
   its JSON says needs a decision.
-
-## Switching runtime
-
-You run on Pi or on an OpenClaw agent, and each keeps its own history. When the
-person moves you to the other one, write a short handoff first: the open jobs
-(`<id>: <title>`, desk, state), decisions waiting on the person, and
-preferences they asked you to carry. No transcript and no secrets. Pipe it to
-`bercail shep handoff --to <pi|openclaw>`, run `bercail shep use <pi|openclaw>`,
-and tell the person to quit you and press Start Shep. The other runtime reads
-the handoff when it starts.

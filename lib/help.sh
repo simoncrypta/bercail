@@ -32,8 +32,8 @@ Post-install CLI (bercail):
   reconfigure   Refresh skills from config.toml (not a full redeploy)
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
-  notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | openclaw | run
-  shep          Shep's runtime, Pi or OpenClaw: status | setup | use pi|openclaw | handoff --to RUNTIME | run
+  notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
+  shep          Shep, the orchestrator on Pi: status | run
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
                 gathers every PR, with one detached sibling worktree and a Stack tab.
                 Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,

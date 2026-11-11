@@ -12,7 +12,7 @@ desk agent per space, review in tuicr. Bash CLI plus Herdr mods, skills, and doc
 - `bercail/`: the Herdr layout and mods (`bercail/mods/*`).
 - `skills/`: skills deployed to `~/.agents/skills`. `bstack/` is the bstack Pi/opencode setup.
 - `tests/*_test.sh`: one bash script per area, each in its own temp HOME with stand-ins
-  (`hc`, `curl`, `openclaw`, …). `.agents/skills/verify-bercail/` drives the CLI end to end.
+  (`hc`, `curl`, `pi`, …). `.agents/skills/verify-bercail/` drives the CLI end to end.
 - `docs/`: the reference (`docs/README.md` is the index). `site/` and `workers/` are
   the bercail.dev site and its Worker.
 
