@@ -8,9 +8,9 @@ desk agent per space, review in tuicr. Bash CLI plus Herdr mods, skills, and doc
 - `bin/bercail`: the CLI entry point. It sources `lib/*.sh`, one file per area
   (`notify.sh`, `doctor.sh`, `desk.sh`, `bstack.sh`, …).
 - `install.sh`: installer and deploy; `manifest.json` holds the version.
-- `config/`: files deployed under `~/.config` (shell, worktrunk, pi, opencode, systemd, …).
+- `config/`: files deployed under `~/.config` (shell, worktrunk, pi, systemd, …).
 - `bercail/`: the Herdr layout and mods (`bercail/mods/*`).
-- `skills/`: skills deployed to `~/.agents/skills`. `bstack/` is the bstack Pi/opencode setup.
+- `skills/`: skills deployed to `~/.agents/skills`. `bstack/` is the bstack Pi setup.
 - `tests/*_test.sh`: one bash script per area, each in its own temp HOME with stand-ins
   (`hc`, `curl`, `pi`, …). `.agents/skills/verify-bercail/` drives the CLI end to end.
 - `docs/`: the reference (`docs/README.md` is the index). `site/` and `workers/` are
@@ -30,11 +30,8 @@ herdr-app check bercail/mods/bercail-desk # each mod you touch
 There is no build step for the CLI. The site build needs `npm ci` first (see
 `docs/development.md`).
 
-Known noise (2026-11, v0.12.0): `verify-bercail` reports four FAIL checks (doctor's bstack
-section, ready.md, council command and seat) on a clean HEAD too. Under `~/Work`,
-mise in its temp HOME tries to install tools, so its `reconfigure` steps fail as well.
-Run it from a copy under `/tmp` to compare. `tests/handoff_spawn_test.sh` can fail its
-Ctrl-C check when the machine is busy; rerun it on its own.
+Known noise: `tests/handoff_spawn_test.sh` can fail its Ctrl-C check when the machine
+is busy; rerun it on its own.
 
 ## Conventions
 

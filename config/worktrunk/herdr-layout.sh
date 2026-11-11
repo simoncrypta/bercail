@@ -116,8 +116,7 @@ _wt_bstack_on() {
 }
 
 # Start the space's desk agent, replacing a live one. $3: its first message
-# (optional). WT_HERDR_AGENT_CMD (handoff) picks the agent; without it,
-# bercail-desk-agent runs bstack or bercail's [agent] command.
+# (optional). bercail-desk-agent runs Pi: bstack's lead when bstack is on.
 _wt_herdr_start_desk() {
   local space="$1" workdir="$2" prompt="${3:-}" shell old
   local -a argv=("$DESK_AGENT")
@@ -132,11 +131,6 @@ _wt_herdr_start_desk() {
     "$HC" rm "$old" >/dev/null 2>&1 || true
   fi
   [[ -z "$prompt" ]] || argv+=(--prompt "$prompt")
-  if [[ -n "${WT_HERDR_AGENT_CMD:-}" ]]; then
-    local -a cmd
-    read -r -a cmd <<<"$WT_HERDR_AGENT_CMD"
-    argv+=("${cmd[@]}")
-  fi
   # Handoff names the issue on the desk. A default start clears those vars.
   local -a issue_labels=()
   if [[ -n "${WT_HERDR_ISSUE:-}" ]]; then
@@ -167,17 +161,17 @@ wt_herdr_layout_create() {
   [[ -n "$(_wt_herdr_space_desk "$space")" ]] || _wt_herdr_start_desk "$space" "$workdir" || true
 }
 
-# Clear session of the configured agent (d / dev / apply). Ignores any
+# Clear session of the desk agent (d / dev / apply). Ignores any
 # inherited handoff prompt or issue labels.
 wt_herdr_start_default_agent() {
   local label="$1" workdir="$2" space
   _wt_herdr_app_running || { echo "Herdr app is not running" >&2; return 1; }
   space="$(_wt_herdr_resolve_space "$label" "$workdir")" || return 1
-  WT_HERDR_AGENT_CMD= WT_HERDR_ISSUE= WT_HERDR_ISSUE_TITLE= _wt_herdr_start_desk "$space" "$workdir"
+  WT_HERDR_ISSUE= WT_HERDR_ISSUE_TITLE= _wt_herdr_start_desk "$space" "$workdir"
 }
 
 # Orchestrator / handoff-spawn: start or replace the desk agent with
-# WT_HERDR_AGENT_CMD and WT_HERDR_AGENT_PROMPT (one line pointing at the beads issue).
+# WT_HERDR_AGENT_PROMPT (one line pointing at the beads issue).
 wt_herdr_handoff_agent() {
   local label="$1" workdir="$2" space
   _wt_herdr_app_running || { echo "Herdr app is not running" >&2; return 1; }

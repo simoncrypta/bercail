@@ -78,7 +78,7 @@ printf 'PASS: wait-comments prints new user comments and exits 0\n'
 
 # Agent comments must not count as human notes
 scenario "$SESSION" - "$OLD" \
-  '[{"id":"user:1","author":"user","content":"old"},{"id":"agent:1","author":"cursor-agent","content":"ai note"}]'
+  '[{"id":"user:1","author":"user","content":"old"},{"id":"agent:1","author":"pi","content":"ai note"}]'
 set +e
 "$SCRIPT" --repo . --timeout 1 >/dev/null
 rc=$?

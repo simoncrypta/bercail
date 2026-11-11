@@ -212,28 +212,23 @@ _doctor_one_skill() {
 }
 
 doctor_skill() {
-  local missing=0 agent_cmd agent_skills_dir link skill_id
+  local missing=0 link skill_id
   while IFS= read -r skill_id; do
     [[ -n "$skill_id" ]] || continue
     _doctor_one_skill "$skill_id" || missing=$((missing + 1))
   done < <(_skill_ids)
 
-  agent_cmd="$(read_agent_command 2>/dev/null || printf '%s' "cursor-agent")"
-  if agent_skills_dir="$(skill_agent_extra_global_dirs "$agent_cmd" 2>/dev/null)"; then
-    while IFS= read -r skill_id; do
-      [[ -n "$skill_id" ]] || continue
-      link="${agent_skills_dir}/${skill_id}"
-      if [[ -L "$link" ]] && _skill_link_is_ours "$link" "$skill_id"; then
-        log "  ok  skill link for agent '$agent_cmd' [$link]"
-      elif [[ -e "$link" ]]; then
-        log "  warning  skill path exists but is not our symlink [$link]"
-      else
-        log "  missing  skill link for agent '$agent_cmd' [$link]"
-        missing=$((missing + 1))
-      fi
-    done < <(_skill_ids)
-  else
-    log "  ok  agent '$agent_cmd' uses ~/.agents/skills (no extra link)"
-  fi
+  while IFS= read -r skill_id; do
+    [[ -n "$skill_id" ]] || continue
+    link="${PI_SKILLS_DIR}/${skill_id}"
+    if [[ -L "$link" ]] && _skill_link_is_ours "$link" "$skill_id"; then
+      log "  ok  skill link for pi [$link]"
+    elif [[ -e "$link" ]]; then
+      log "  warning  skill path exists but is not our symlink [$link]"
+    else
+      log "  missing  skill link for pi [$link]"
+      missing=$((missing + 1))
+    fi
+  done < <(_skill_ids)
   [[ "$missing" -eq 0 ]]
 }

@@ -1,6 +1,6 @@
 # Shep, the orchestrator
 
-**Shep orchestrates coding agents in the Herdr app through bercail.** It writes beads issues, hands each one to a desk, follows the desks, and tells you what came back. It does not write project code: every coding job runs in a visible desk. It hands jobs to bstack (Pi) by default, and runs `start` (Claude Code), `codex`, or `cursor` when you name one.
+**Shep orchestrates coding agents in the Herdr app through bercail.** It writes beads issues, hands each one to a desk, follows the desks, and tells you what came back. It does not write project code: every coding job runs in a visible desk. It hands jobs to bstack, on Pi.
 
 Shep ships with bercail. Its rules are one file, [`shep/SHEP.md`](../shep/SHEP.md), and it runs on Pi: bercail starts Pi in Shep's own folder and session, on the models bstack already uses. Nothing to set up beyond bercail.
 
@@ -14,7 +14,7 @@ Bercail's workflow (beads issues, named stages, result files, review when a desk
 
 1. Shep writes the job as a [beads](https://beads.gascity.com/) issue (`bd create`): the ask, the repo, links, and any "plan only" note.
 2. Shep picks a stage for that issue and runs `handoff-spawn --branch <name> --stage bstack --issue ID` (see [handoff](handoff.md)). bercail never picks the stage and never falls back to another one.
-3. bercail checks `bd` and the issue, adds a `bd comment` with the worktree, and starts that harness in a new desk with a one-line prompt pointing at the issue.
+3. bercail checks `bd` and the issue, adds a `bd comment` with the worktree, and starts Pi in a new desk with a one-line prompt pointing at the issue.
 4. When the desk finishes or blocks, Shep hears about it [as a message in its session](#desk-events). It reads the issue (`bd show`) and the desk (`hc get`, `hc read`), and reports to you. `hc wait <desk>` also works (`desk` and `space` are in the spawn JSON).
 
 The Shep that ships with bercail never runs headless stages: a coding job or a follow-up is always a desk you can see. `handoff-spawn` still has them for other callers; a headless run opens nothing in the app, returns when it ends, and leaves `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`).
@@ -92,9 +92,9 @@ Each POST body is `bercail.agent_status/v2`:
 ```json
 {"source":"bercail","schema":"bercail.agent_status/v2","kind":"finished","sink":"work-shep",
  "at":"2026-10-29T22:42:00Z","event_id":"t9:finished:1793312520:4242",
- "agent":{"address":"t9","app":"claude-code","status":"done","previous_status":"working","title":"..."},
+ "agent":{"address":"t9","app":"pi","status":"done","previous_status":"working","title":"..."},
  "space":{"id":"sp98de","name":"Render-preview_Leftlane_app","repo":"leftlane_app","checkout_path":"/path/desk","linked":true},
- "desk":{"branch":"feat/render","issue":"lef2745-2vs","issue_title":"Fix the login timeout","stage":"start","harness":"claude",
+ "desk":{"branch":"feat/render","issue":"lef2745-2vs","issue_title":"Fix the login timeout","stage":"bstack","harness":"pi",
          "result":{"status":"ready","summary":"...","session_id":"..."}},
  "text":"lef2745-2vs: Fix the login timeout. Desk t9 (Render-preview_Leftlane_app) finished."}
 ```

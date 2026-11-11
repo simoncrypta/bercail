@@ -87,24 +87,25 @@ test_headless_spawn_uses_main_beads() {
   [[ "$(beads_dir_of "$wt")" == "$wt/.beads" ]] \
     || fail "precondition: copied store should shadow the main beads dir"
 
-  stub="$TMP_DIR/bin/claude"
-  mkdir -p "$TMP_DIR/bin"
+  local profile="$TMP_DIR/pi-profile" guard="$TMP_DIR/pi-profile/extensions/guard.ts"
+  mkdir -p "$TMP_DIR/bin" "$profile/extensions" "$profile/agents"
+  printf '// guard\n' >"$guard"
+  jq -n --arg guard "$guard" --arg model "claude-bridge/lead-model:high" \
+    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard]' >"$profile/lead.json"
+  stub="$TMP_DIR/bin/pi"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 jq -nc --arg sid "${BERCAIL_SESSION_ID:-none}" \
   '{status:"ready", summary:"ok", session_id:$sid}' >"$BERCAIL_RESULT_PATH"
 STUB
   chmod +x "$stub"
-  cat >"$TMP_DIR/catalog.json" <<'JSON'
-{"catalog":{"config":{"models":[{"id":"claude-opus-5-5","name":"Opus 5.5"}]}}}
-JSON
 
-  (cd "$main" && HANDOFF_CLAUDE_BIN="$stub" BERCAIL_CLAUDE_MODEL_CATALOG="$TMP_DIR/catalog.json" \
+  (cd "$main" && HANDOFF_PI_BIN="$stub" HANDOFF_PI_PROFILE="$profile" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    --stage start --issue "$id" --worktree "$wt" >/dev/null)
+    --stage bstack --issue "$id" --worktree "$wt" >/dev/null)
 
   assert_shared "$main" "$wt" "$id" "$marker"
-  comment_has "$main" "$id" "headless claude"
+  comment_has "$main" "$id" "headless pi"
   printf 'PASS: headless spawn writes to the main checkout beads dir\n'
 }
 
@@ -151,19 +152,23 @@ wt_herdr_handoff_agent() { return 0; }
 _wt_herdr_space_by_folder() { printf 'sp1'; }
 _wt_herdr_space_desk() { printf 'desk1'; }
 HELPER
-  printf '#!/bin/sh\nexit 0\n' >"$bin/claude"
-  chmod +x "$bin/claude"
+  mkdir -p "$home/.config/bercail" "$home/.local/share/bercail/pi/extensions"
+  printf '[bstack]\nenabled = true\n' >"$home/.config/bercail/config.toml"
+  printf '// guard\n' >"$home/.local/share/bercail/pi/extensions/guard.ts"
+  jq -n --arg guard "$home/.local/share/bercail/pi/extensions/guard.ts" --arg model "claude-bridge/lead-model:high" \
+    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard]' \
+    >"$home/.local/share/bercail/pi/lead.json"
 
   (
     cd "$main"
     HOME="$home" PATH="$bin:$PATH" HERDR_APP_BIN="$fake_herdr" \
       "$ROOT/skills/handoff/scripts/handoff-spawn" \
-      --branch feat --stage start --issue "$id" --clean >/dev/null
+      --branch feat --stage bstack --issue "$id" --clean >/dev/null
   )
 
   [[ -d "$wt" ]] || fail "spawn did not create $wt"
   assert_shared "$main" "$wt" "$id" "$marker"
-  comment_has "$main" "$id" "desk agent claude"
+  comment_has "$main" "$id" "desk agent pi"
   printf 'PASS: --branch spawn writes to the main checkout beads dir\n'
 }
 

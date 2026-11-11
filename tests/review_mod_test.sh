@@ -58,7 +58,7 @@ cat >"$D7/ci.json" <<'EOF'
 EOF
 cat >"$D7/bots.json" <<'EOF'
 {"threads": [{"path": "lib/upload.sh", "line": 12, "isResolved": false, "author": {"login": "coderabbitai[bot]"}},
-             {"path": "README", "line": 1, "isResolved": true, "author": {"login": "cursor[bot]"}}],
+             {"path": "README", "line": 1, "isResolved": true, "author": {"login": "bugbot"}}],
  "reviews": [{"author": {"login": "coderabbitai[bot]"}}], "comments": []}
 EOF
 echo '[]' >"$D8/ci.json"
@@ -476,7 +476,7 @@ Should this ship behind a flag?
 Bots
 2 threads, 1 unresolved (1 on a decision's file)
 1 reviews, 0 comments
-coderabbitai[bot], cursor[bot]
+bugbot, coderabbitai[bot]
 CI
 1 fail · 1 pass
 fail: lint

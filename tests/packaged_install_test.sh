@@ -34,8 +34,9 @@ test_symlinked_bercail_finds_its_lib() {
   mkdir -p "$home/.local/bin"
   : >"$STAGE/.bercail-package"
   ln -s "$STAGE/bin/bercail" "$home/.local/bin/bercail"
-  out="$(run_bercail "$home" harness)"
-  printf '%s' "$out" | jq -e '.ok == true' >/dev/null || fail "harness via symlink: $out"
+  out="$(run_bercail "$home" doctor 2>&1 || true)"
+  printf '%s' "$out" | grep -q 'bercail doctor' || fail "doctor via symlink did not load lib: $out"
+  printf '%s' "$out" | grep -q 'cannot find bercail lib' && fail "symlink did not find lib: $out"
   printf 'PASS: bercail behind a PATH symlink loads lib/ from the release tree\n'
 }
 
@@ -77,6 +78,19 @@ test_install_command_needs_install_sh() {
   printf 'PASS: bercail install without a release tree points at the curl installer\n'
 }
 
+# install.sh sources lib/ from its tree, and a curl install fetches its list
+# from GitHub first. Each lib it names must ship.
+test_install_sh_names_only_shipped_libs() {
+  local lib out
+  out="$(HOME="$TMP_DIR/home-help" PATH="/usr/bin:/bin" bash "$STAGE/install.sh" --help 2>&1)" \
+    || fail "install.sh --help from a release tree: $out"
+  for lib in $(sed -n 's/^  for lib in \(.*\); do$/\1/p' "$STAGE/install.sh"); do
+    [[ -f "$STAGE/lib/$lib.sh" ]] || fail "install.sh fetches lib/$lib.sh, which does not ship"
+  done
+  printf 'PASS: install.sh sources and fetches only libs that ship\n'
+}
+
+test_install_sh_names_only_shipped_libs
 test_symlinked_bercail_finds_its_lib
 test_packaged_dry_run_keeps_the_managed_command
 test_unpackaged_tree_still_copies_bercail

@@ -181,38 +181,20 @@ test_doctor_herdr_app_binding() {
 }
 
 test_sync_omarchy_default_agent() {
-  mkdir -p "$HOME/.local/share/omarchy" "$HOME/.config/agentic-dev"
-  cat >"$HOME/.config/agentic-dev/config.toml" <<'EOF'
-[agent]
-command = "grok"
-EOF
-  read_agent_command() { printf 'grok'; }
+  mkdir -p "$HOME/.local/share/omarchy"
   RECONFIGURE=1
   sync_omarchy_default_agent
-  assert_eq "grok" "$(tr -d '\n' <"$HOME/.config/omarchy/defaults/agent")" \
-    "reconfigure writes omarchy default agent grok"
-  unset -f read_agent_command
-  rm -rf "$HOME/.local/share/omarchy" "$HOME/.config/omarchy" "$HOME/.config/agentic-dev"
-}
-
-test_sync_omarchy_rewrites_old_opencode_default() {
-  mkdir -p "$HOME/.local/share/omarchy" "$HOME/.config/omarchy/defaults"
-  printf 'opencode\n' >"$HOME/.config/omarchy/defaults/agent"
-  read_agent_command() { printf 'pi'; }
+  assert_eq "pi" "$(tr -d '\n' <"$HOME/.config/omarchy/defaults/agent")" \
+    "reconfigure writes omarchy default agent pi"
   RECONFIGURE=0
+  printf 'custom\n' >"$HOME/.config/omarchy/defaults/agent"
+  sync_omarchy_default_agent
+  assert_eq "custom" "$(tr -d '\n' <"$HOME/.config/omarchy/defaults/agent")" \
+    "a choice already there stays"
+  rm -f "$HOME/.config/omarchy/defaults/agent"
   sync_omarchy_default_agent
   assert_eq "pi" "$(tr -d '\n' <"$HOME/.config/omarchy/defaults/agent")" \
-    "old opencode default follows the desk command to pi"
-  printf 'claude\n' >"$HOME/.config/omarchy/defaults/agent"
-  sync_omarchy_default_agent
-  assert_eq "claude" "$(tr -d '\n' <"$HOME/.config/omarchy/defaults/agent")" \
-    "a chosen omarchy agent stays"
-  printf 'opencode\n' >"$HOME/.config/omarchy/defaults/agent"
-  read_agent_command() { printf 'opencode'; }
-  sync_omarchy_default_agent
-  assert_eq "opencode" "$(tr -d '\n' <"$HOME/.config/omarchy/defaults/agent")" \
-    "pinned opencode desk keeps the omarchy default"
-  unset -f read_agent_command
+    "a missing file is written as pi"
   rm -rf "$HOME/.local/share/omarchy" "$HOME/.config/omarchy"
 }
 
@@ -227,7 +209,6 @@ test_lua_binding_generic
 test_patch_lua_bindings
 test_doctor_herdr_app_binding
 test_sync_omarchy_default_agent
-test_sync_omarchy_rewrites_old_opencode_default
 
 printf '%s passed, %s failed\n' "$pass" "$fail"
 ((fail == 0))

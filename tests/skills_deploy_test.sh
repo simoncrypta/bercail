@@ -35,20 +35,8 @@ export AGENTIC_DEV_SKILL_DIR="$AGENTS_SKILLS_DIR/handoff"
 YES=1
 DRY_RUN=0
 
-write_agent_config() {
-  local cmd="$1"
-  mkdir -p "$AGENTIC_DEV_CONFIG_DIR"
-  cat >"$AGENTIC_DEV_USER_CONFIG" <<EOF
-[agent]
-command = "$cmd"
-
-[layout]
-editor = "nvim"
-EOF
-}
-
-test_deploy_agents_path_for_cursor() {
-  write_agent_config cursor-agent
+test_deploy_installs_canonical_skills_and_pi_links() {
+  rm -rf "$HOME/.agents" "$HOME/.pi"
   deploy_skills >/dev/null
   [[ -f "$AGENTIC_DEV_SKILL_DIR/SKILL.md" ]] || fail "canonical skill missing"
   grep -q '^name: handoff$' "$AGENTIC_DEV_SKILL_DIR/SKILL.md" || fail "skill frontmatter missing"
@@ -59,83 +47,34 @@ test_deploy_agents_path_for_cursor() {
   grep -q '^name: review$' "$AGENTS_SKILLS_DIR/review/SKILL.md" || fail "review frontmatter missing"
   [[ -f "$AGENTS_SKILLS_DIR/review/scripts/wait-comments.sh" ]] || fail "wait-comments helper missing"
   [[ -x "$AGENTS_SKILLS_DIR/review/scripts/publish-github.sh" ]] || fail "publish-github helper missing or not executable"
-  [[ ! -e "$HOME/.cursor/skills/handoff" ]] || fail "cursor should use ~/.agents/skills only"
-  printf 'PASS: deploy_skills installs ~/.agents/handoff and review for cursor-agent\n'
+  [[ -L "$HOME/.pi/agent/skills/handoff" ]] || fail "pi skill symlink missing"
+  [[ -L "$HOME/.pi/agent/skills/review" ]] || fail "pi review symlink missing"
+  [[ -L "$HOME/.pi/agent/skills/bstack" && -L "$HOME/.pi/agent/skills/council" ]] \
+    || fail "pi links for bstack and council missing"
+  printf 'PASS: deploy_skills installs canonical skills and links them for pi\n'
 }
 
-test_reconfigure_scrubs_orphan_extra_link() {
-  write_agent_config codex
-  deploy_skills >/dev/null
-  [[ -L "$HOME/.codex/skills/handoff" ]] || fail "codex skill symlink missing"
-  write_agent_config cursor-agent
-  deploy_skills >/dev/null
-  [[ ! -e "$HOME/.codex/skills/handoff" ]] || fail "codex orphan link should be scrubbed on reconfigure to cursor-agent"
-  [[ -f "$AGENTIC_DEV_SKILL_DIR/SKILL.md" ]] || fail "canonical skill missing after scrub"
-  printf 'PASS: deploy_skills scrubs orphan extra links on agent switch\n'
-}
-
-test_preserve_foreign_skill_path() {
-  write_agent_config claude
-  mkdir -p "$HOME/.claude/skills/handoff"
-  printf 'foreign\n' >"$HOME/.claude/skills/handoff/SKILL.md"
+test_pi_link_preserves_a_foreign_path() {
+  rm -rf "$HOME/.agents" "$HOME/.pi"
+  mkdir -p "$HOME/.pi/agent/skills/handoff"
+  printf 'foreign\n' >"$HOME/.pi/agent/skills/handoff/SKILL.md"
   local output
   output="$(deploy_skills 2>&1)"
   printf '%s\n' "$output" | grep -q 'preserving pre-existing skill path' \
-    || fail "expected preserve warning for foreign skill dir"
-  grep -qx 'foreign' "$HOME/.claude/skills/handoff/SKILL.md" \
+    || fail "expected preserve warning for foreign skill dir: $output"
+  grep -qx 'foreign' "$HOME/.pi/agent/skills/handoff/SKILL.md" \
     || fail "foreign skill contents changed"
-  printf 'PASS: deploy_skills preserves foreign agent skill paths\n'
+  printf 'PASS: deploy_skills preserves a foreign path in the pi skills dir\n'
 }
 
-test_opencode_reads_agents_skills() {
-  rm -rf "$HOME/.agents" "$HOME/.config/opencode" "$HOME/.claude"
-  write_agent_config cursor-agent
+test_uninstall_scrubs_pi_links() {
+  rm -rf "$HOME/.agents" "$HOME/.pi"
   deploy_skills >/dev/null
-  mkdir -p "$HOME/.config/opencode/skills"
-  ln -s "$AGENTIC_DEV_SKILL_DIR" "$HOME/.config/opencode/skills/handoff"
-  write_agent_config opencode
-  deploy_skills >/dev/null
-  [[ ! -e "$HOME/.config/opencode/skills/handoff" ]] || fail "opencode v2 reads ~/.agents/skills; the old link must go"
-  [[ -f "$AGENTS_SKILLS_DIR/bstack/SKILL.md" && -f "$AGENTS_SKILLS_DIR/council/SKILL.md" ]] \
-    || fail "bstack and council skills missing"
-  printf 'PASS: opencode uses ~/.agents/skills (old link scrubbed) with bstack and council\n'
-}
-
-test_custom_agent_canonical_only() {
-  rm -rf "$HOME/.agents" "$HOME/.cursor" "$HOME/.codex" "$HOME/.config/opencode" "$HOME/.claude"
-  write_agent_config my-custom-agent
-  deploy_skills >/dev/null
-  [[ -f "$AGENTIC_DEV_SKILL_DIR/SKILL.md" ]] || fail "canonical skill missing for custom agent"
-  [[ ! -e "$HOME/.codex/skills/handoff" ]] || fail "custom agent should not create codex link"
-  printf 'PASS: custom agent installs canonical skill only\n'
-}
-
-test_grok_gets_extra_skill_link() {
-  rm -rf "$HOME/.agents" "$HOME/.grok" "$HOME/.codex" "$HOME/.claude"
-  write_agent_config grok
-  deploy_skills >/dev/null
-  [[ -f "$AGENTIC_DEV_SKILL_DIR/SKILL.md" ]] || fail "canonical skill missing for grok"
-  [[ -L "$HOME/.grok/skills/handoff" ]] || fail "grok skill symlink missing"
-  [[ -L "$HOME/.grok/skills/review" ]] || fail "grok review symlink missing"
-  [[ ! -e "$HOME/.codex/skills/handoff" ]] || fail "grok should not create a codex link"
-  write_agent_config cursor-agent
-  deploy_skills >/dev/null
-  [[ ! -e "$HOME/.grok/skills/handoff" ]] || fail "grok orphan link should be scrubbed on reconfigure"
-  [[ ! -e "$HOME/.grok/skills/review" ]] || fail "grok review orphan link should be scrubbed on reconfigure"
-  printf 'PASS: deploy_skills links ~/.grok/skills/handoff for grok\n'
-}
-
-test_pi_gets_extra_skill_link() {
-  rm -rf "$HOME/.agents" "$HOME/.pi" "$HOME/.codex"
-  write_agent_config pi
-  deploy_skills >/dev/null
-  [[ -f "$AGENTIC_DEV_SKILL_DIR/SKILL.md" ]] || fail "canonical skill missing for pi"
-  [[ -L "$HOME/.pi/agent/skills/handoff" ]] || fail "pi skill symlink missing"
-  [[ -L "$HOME/.pi/agent/skills/review" ]] || fail "pi review symlink missing"
-  write_agent_config cursor-agent
-  deploy_skills >/dev/null
-  [[ ! -e "$HOME/.pi/agent/skills/handoff" ]] || fail "pi orphan link should be scrubbed on reconfigure"
-  printf 'PASS: deploy_skills links ~/.pi/agent/skills/handoff for pi\n'
+  [[ -L "$HOME/.pi/agent/skills/handoff" ]] || fail "pi link missing before scrub"
+  remove_managed_skills >/dev/null
+  [[ ! -e "$HOME/.pi/agent/skills/handoff" ]] || fail "pi link should be scrubbed on uninstall"
+  [[ ! -d "$AGENTIC_DEV_SKILL_DIR" ]] || fail "canonical skill should be removed"
+  printf 'PASS: uninstall scrubs the pi skill links\n'
 }
 
 test_review_skill_recipe() {
@@ -170,17 +109,13 @@ test_handoff_spawn_is_the_recipe() {
   grep -q 'scripts/git-backend.sh' "$ROOT/skills/handoff/MANIFEST" \
     || fail "MANIFEST must list git-backend.sh"
   grep -qi 'poteto\|pstack' "$ROOT/skills/handoff/SKILL.md" \
-    && fail "SKILL.md must not keep a cursor-only poteto/pstack mode"
+    && fail "SKILL.md must not keep a poteto or pstack mode"
   printf 'PASS: handoff skill recipe is the spawn script\n'
 }
 
-test_deploy_agents_path_for_cursor
-test_reconfigure_scrubs_orphan_extra_link
-test_preserve_foreign_skill_path
-test_opencode_reads_agents_skills
-test_custom_agent_canonical_only
-test_grok_gets_extra_skill_link
-test_pi_gets_extra_skill_link
+test_deploy_installs_canonical_skills_and_pi_links
+test_pi_link_preserves_a_foreign_path
+test_uninstall_scrubs_pi_links
 test_deploy_lib_copies_git_backend() {
   deploy_lib >/dev/null
   cmp -s "$ROOT/skills/handoff/scripts/git-backend.sh" "$AGENTIC_DEV_SHARE_DIR/lib/git-backend.sh" \

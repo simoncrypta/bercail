@@ -9,8 +9,7 @@ TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 export HOME="$TMP_DIR/home" XDG_CONFIG_HOME="$TMP_DIR/home/.config"
 export INSTALL_SRC="$ROOT"
-mkdir -p "$HOME/.claude"
-printf '{}\n' >"$HOME/.claude/settings.json"
+mkdir -p "$HOME"
 
 source "$ROOT/lib/common.sh"
 source "$ROOT/lib/detect.sh"
@@ -36,10 +35,8 @@ legacy_update() {
 }
 
 legacy_update >"$TMP_DIR/update.log"
-[[ -x "$LOCAL_BIN/bercail-desk-claude-hook" ]] || { cat "$TMP_DIR/update.log"; exit 1; }
-[[ -f "$AGENTIC_DEV_SHARE_DIR/lib/desk.sh" ]] || exit 1
-[[ -f "$XDG_CONFIG_HOME/opencode/plugins/bercail-desk/tui.ts" ]] || exit 1
+[[ -f "$AGENTIC_DEV_SHARE_DIR/lib/desk.sh" ]] || { cat "$TMP_DIR/update.log"; exit 1; }
+[[ -f "$AGENTIC_DEV_SHARE_DIR/pi-extensions/bercail-desk.ts" ]] || { cat "$TMP_DIR/update.log"; exit 1; }
 [[ -f "$AGENTS_SKILLS_DIR/desk-restore/SKILL.md" ]] || exit 1
-jq -e --arg c "$LOCAL_BIN/bercail-desk-claude-hook" \
-  '[.hooks.SessionStart[].hooks[].command] | index($c)' "$HOME/.claude/settings.json" >/dev/null
-printf 'PASS: the previous updater installs desk restore and its hook/skill on the first update\n'
+[[ -L "$HOME/.pi/agent/skills/desk-restore" ]] || { cat "$TMP_DIR/update.log"; exit 1; }
+printf 'PASS: the previous updater installs desk restore and the pi skill link on the first update\n'

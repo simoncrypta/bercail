@@ -23,13 +23,12 @@ run `--info` then spawn — not assemble these steps.
    Keep the parent relation in that backend; publishing uses its stack commands.
 5. Add the intro (worktree; stage, don't commit; Review opens on agent done;
    selected git backend and stack commands) to the beads issue as a `bd comment`. The prompt is one line
-   pointing at the issue (`<id>: <title>`, or the id alone when bd has no title), the same for every binary. No prompt file and no
-   per-harness mode.
-6. `WT_HERDR_AGENT_CMD` is the stage table's binary and `WT_HERDR_AGENT_PROMPT`
-   that one-line prompt. `WT_HERDR_ISSUE` and `WT_HERDR_ISSUE_TITLE` name the issue.
-   `wt_herdr_handoff_agent` starts the space's desk:
-   `hc run --bg --keep --outlive-parent --parent <space's first terminal>` of
-   `bercail-desk-agent --prompt <prompt> <binary>` with labels
+   pointing at the issue (`<id>: <title>`, or the id alone when bd has no title). No prompt file and no
+   per-stage mode.
+6. `WT_HERDR_AGENT_PROMPT` is that one-line prompt. `WT_HERDR_ISSUE` and
+   `WT_HERDR_ISSUE_TITLE` name the issue. `wt_herdr_handoff_agent` starts the
+   space's desk: `hc run --bg --keep --outlive-parent --parent <space's first terminal>` of
+   `bercail-desk-agent --prompt <prompt>` (Pi's lead) with labels
    `bercail.role=agent`, `bercail.space=<space id>`, and, when set, `bercail.issue`
    and `bercail.issue_title`, replacing a live desk
    in that space. A failed start does **not** discard the worktree.
@@ -46,46 +45,24 @@ The ask is in the beads issue, so nothing but the id reaches argv.
 ## Stage router
 
 `scripts/handoff-stages.sh` is the table: name, binary, mode (`headless`),
-model. `handoff-spawn --stage` reads it.
+model. `handoff-spawn --stage` reads it. The only rows are `bstack` and
+`autopilot`. Both are headless Pi.
 
-- `cursor`: headless. One `cursor-agent --print --output-format json` in the
-  worktree. Resume is `--resume <session_id>` (the flag `cursor-agent --help`
-  lists). `--model` is passed only when the table model is set (not `-`).
-  `--trust --force` are the non-interactive write flags from that help.
-  `--branch` on this stage still starts a desk agent (not this argv).
-- `start`: headless. One `claude --print` in the worktree. Nothing opens in the Herdr app.
-  Model spec `opus-5.5` resolves from the claude catalog (full id, never the
-  `*-max` slug).
-- `codex`: headless. One `codex exec --json` in the worktree. Resume is
-  `codex exec --json --sandbox workspace-write resume [-m MODEL] <session_id>`.
-  `-m` is passed only when the table model is set (not `-` and not the claude
-  `opus-5.5` spec). `--sandbox workspace-write` is required because `codex
-  exec` defaults to read-only; `codex exec resume` has no `--sandbox`, so it
-  stays before the subcommand. `codex exec` has no `--ask-for-approval`.
-`--binary claude|codex|cursor-agent|opencode|pi` overrides the table binary on a
-headless stage, so `--stage start --binary cursor-agent` picks cursor-agent
-without renaming the job. Bercail never picks or skips a harness on its own.
-`bercail harness` reports which of claude, codex, and cursor-agent are on PATH,
-with a local model hint. It does not choose one.
-A missing requested harness writes status `blocked` and exits nonzero. It does
-not fall through to another binary.
+`bstack` and `autopilot` run `pi -p --mode json --session-id <uuid>` on the
+lead profile. Pi resume reuses that uuid; `--resume` refuses anything that is
+not a uuid. Pi gets no `--add-dir`. With `--branch`, the desk runs the lead from
+lead.json, so it needs bstack on. Autopilot sets
+`BERCAIL_ROLE=autopilot` and cannot take `--branch`.
 
-`bstack` and `autopilot` run headless Pi (`pi -p --mode json --session-id
-<uuid>`, the lead profile) unless `[bstack] harness = "opencode"`, which keeps
-`opencode run`. `--binary pi` and `--binary opencode` still select that harness.
-Pi resume reuses the uuid; an opencode `ses_` id cannot be resumed on Pi. Pi
-gets no `--add-dir`. `--branch` with Pi passes an empty agent command so the
-desk runs the lead from lead.json. Autopilot sets `BERCAIL_ROLE=autopilot`.
+A missing `pi`, bd, or issue writes status `blocked` and exits nonzero. It does
+not fall through to another stage.
 
 Every headless stage gets that one-line prompt and writes
 `<worktree>/.bercail/handoff-result.json`. Before the run, bercail checks bd
 and the issue (`bd show <id>`) and adds a `bd comment` with the worktree,
-result path, and session id. claude gets `--tools Read,Edit,Write,Bash
---allowedTools "Bash(bd *)"`. When bd's `.beads` is outside the worktree,
-claude, codex, and cursor-agent get `--add-dir` for it (codex: before `resume`,
-which has no `--add-dir`). bercail fills `session_id` in the result after the run.
-Re-handoff is `--resume <session_id>`. For Codex that id is the JSONL
-`thread.started` thread id. For cursor-agent it is the print JSON `session_id`.
+result path, and session id. bercail fills `session_id` in the result after the run.
+Re-handoff is `--resume <uuid>`. That id is the uuid bercail passed, or the
+session header's id when Pi reports a different one.
 
 Intake is the beads issue Shep writes (a Linear issue, a direct ask, or a
 note all become one issue). It is not a row and not a file bercail writes.
@@ -133,7 +110,7 @@ For example:
 [git]
 "~/Work/github-repo" = "gh"
 "~/Work/graphite-repo" = "gt"
-"~/Work/cursor-repo" = "origin"
+"~/Work/origin-repo" = "origin"
 ```
 
 `graphite` stays in `--info` for one release, derived from `git == "gt"`.

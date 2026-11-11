@@ -18,15 +18,14 @@ Install (curl, still supported):
 install.sh options:
   -h, --help   Show this help
   -y, --yes    Non-interactive (existing/default config)
-  --no-bstack  New install without bstack: the desk default stays cursor-agent
-  --bstack     New install with bstack (the default): Pi on the desk
+  --no-bstack  New install without bstack: the desk runs plain Pi
+  --bstack     New install with bstack (the default): bstack's Pi lead on the desk
 
 Post-install CLI (bercail):
   help          This help
   install       Full install from the release mise or packslip unpacked
   doctor        Check dependencies and integration
-  harness       JSON: claude, codex, cursor-agent, opencode, pi on PATH (missing is not fatal)
-  bstack        Pi (opencode only with harness = "opencode"): status | setup | on | off
+  bstack        bercail's Pi setup: status | setup | on | off
   desk          Bring back the desk agents a reboot took: desk restore [--dry-run]
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills from config.toml (not a full redeploy)
@@ -47,7 +46,7 @@ Shell commands:
   t             Open the Herdr app
 
 Herdr app layout "bercail" (switch with Ctrl+Shift+L):
-  Left: the desk, one agent per space (bstack when it is on, else [agent] command)
+  Left: the desk, one Pi agent per space (bstack when it is on, else plain pi)
   Center: the space's tabs (Shell; Review runs \`tuicr -w\`, uncommitted only,
           watching, and opens itself when the desk agent finishes)
   Right: files / changes
@@ -83,23 +82,23 @@ Ubuntu / Debian:
   Uses apt for git, fzf, jq, curl when mise is unavailable
   Downloads worktrunk, beads and tuicr from upstream when needed
 
-bstack (Pi by default, bring your own Claude / GPT / Grok subscription):
-  bercail bstack setup   install Pi, connect plans (models are picked for you)
-  bercail bstack status  what is connected, each model (auto or pinned), each role
+bstack (Pi, bring your own Claude / GPT / Grok subscription):
+  bercail bstack setup   install Pi and the Claude bridge (models are picked for you)
+  bercail bstack status  what is logged in, each model (auto or pinned), each role
   Roles: lead (the bstack agent), build (bstack-builder), judge (bstack-judge);
-  council ([bstack] council = true): one read-only reviewer per provider. In opencode: /council,
-  /ready, /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
-  pushes, never merges), /pr-review (bercail review-pr's read-only decisions pass).
+  council: one read-only reviewer per provider. In Pi: /council, /ready, /handoff,
+  /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green; pushes, never
+  merges), /pr-review (bercail review-pr's read-only decisions pass).
   Settings: [bstack] in config.toml.
-  Pi is the default (>=1.2, pi-claude-bridge@0.11.0). opencode only with
-  harness = "opencode". Claude uses claude auth login; GPT and Grok use /login
-  openai and /login xai in pi. bercail update renders ~/.local/share/bercail/pi/
-  and herdr-core templates. Every role loads the bridge, the rate-limit fallback,
-  and bercail's guard. [bstack] fallback sets candidate order (default
-  ["claude", "gpt", "grok"]). The lead starts roles as hc siblings.
+  Pi >=1.2 with pi-claude-bridge@0.11.0. Claude uses claude auth login; GPT and
+  Grok use /login openai and /login xai in pi. bercail update renders
+  ~/.local/share/bercail/pi/ and herdr-core templates. Every role loads the
+  bridge, the rate-limit fallback, and bercail's guard. [bstack] fallback sets
+  candidate order (default ["claude", "gpt", "grok"]). The lead starts roles as
+  hc siblings.
 
 Config:
-  ~/.config/bercail/config.toml               desk agent default, review, [bstack]
+  ~/.config/bercail/config.toml               review, [bstack]
   ~/.config/herdr-app/layouts/bercail.json    the layout
   ~/.config/herdr-app/mods/bercail-desk/      the desk mod
   ~/.config/herdr-app/mods/bercail-shep/      the Shep view (bercail shep run) and Back to Shep
@@ -112,46 +111,28 @@ Config:
   ~/.agents/skills/{how,why,unslop,autopilot}/  explain, history, cleanup, PR to green
   ~/.agents/skills/desk-restore/              put a desk with no record back by hand
   ~/.local/state/bercail/desk-sessions/       which session runs in which desk
-  ~/.config/opencode/opencode.jsonc           bstack's opencode config (agents/, commands/ beside it)
-  ~/.local/share/bercail/pi/                  bstack's Pi profile (default harness)
-  ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates (default harness)
+  ~/.local/share/bercail/pi/                  bstack's Pi profile
+  ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates
   ~/.config/fcitx5/conf/keyboard.conf         Linux fcitx5 hint trigger override
 
 Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`):
-  Installed to ~/.agents/skills/<id> (https://agentskills.io). cursor-agent
-  reads that dir. Extra symlink only if you set another [agent] command.
-  Source: skills/handoff/, skills/review/.
+  Installed to ~/.agents/skills/<id> (https://agentskills.io), with a link in
+  ~/.pi/agent/skills for each. Source: skills/handoff/, skills/review/.
   Manual: npx skills add simoncrypta/bercail -s handoff -g
-  Handoff stages: start is claude, codex is Codex CLI (codex exec --json),
-  cursor is cursor-agent (--print --output-format json). Each works a beads
-  issue; the prompt is one line pointing at it. Headless runs write
-  .bercail/handoff-result.json; --branch starts a desk agent for any stage.
-  bstack and autopilot run \`pi -p\` headless. harness = "opencode" keeps
-  opencode run --agent bstack; --binary opencode runs start (Claude) or codex
-  (GPT) through those subscriptions.
-  claude, codex, cursor-agent, opencode, and pi are optional; bercail does not
-  pick one. Shep owns the workflow. bercail harness reports which are on PATH
-  plus a local model hint.
+  Handoff stages: bstack and autopilot, both Pi. Each works a beads issue; the
+  prompt is one line pointing at it. Headless runs (\`pi -p\`) write
+  .bercail/handoff-result.json; --branch starts a Pi desk instead.
 EOF
 }
 
 show_summary() {
-  local harness=pi stages
-  if declare -F bstack_harness >/dev/null && [[ "$(bstack_harness)" == opencode ]]; then
-    harness=opencode
-  fi
-  if [[ "$harness" == opencode ]]; then
-    stages="bstack=opencode, autopilot=opencode bstack-autopilot"
-  else
-    stages="bstack=pi, autopilot=pi (BERCAIL_ROLE=autopilot)"
-  fi
   log ""
   log "bercail installed (v${AGENTIC_DEV_VERSION})"
   log ""
   if declare -F bstack_enabled >/dev/null && bstack_enabled; then
-    log "bstack: on (${harness}). Connect your Claude, ChatGPT, or X subscription: bercail bstack setup"
+    log "bstack: on. Log in to Claude, ChatGPT, or xAI: bercail bstack setup"
   fi
-  log "Agent command: $(read_agent_command 2>/dev/null || echo cursor-agent) (handoff stages: start=claude, codex=Codex CLI, cursor=cursor-agent, ${stages}; equal, no default)"
+  log "Desk agent: pi (handoff stages: bstack, autopilot)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Config: ${AGENTIC_DEV_USER_CONFIG}"
   log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore}"

@@ -39,7 +39,7 @@ SHUTDOWN=1000000
 bare='{"state":"live","reason":null,"reported":false,"pid":7,"argv":["/usr/bin/bash"],
   "foreground":{"name":"bash","pid":7},"labels":{"bercail.role":"agent","bercail.space":"sp1"}}'
 record() { # session [harness] [space]
-  jq -cn --arg s "$1" --arg h "${2:-opencode}" --arg sp "${3:-sp1}" \
+  jq -cn --arg s "$1" --arg h "${2:-pi}" --arg sp "${3:-sp1}" \
     '{session: $s, harness: $h, space: $sp, cwd: "/w", issue: "x-1", args: []}'
 }
 # fact address record mtime terminal [cwd_exists] [in_ps] [open_sessions]
@@ -64,7 +64,7 @@ expect "$(one "$(record ses_a)" $((SHUTDOWN + 5000)) "$bare")" "t1 resume " "thi
 printf 'PASS: only a record written in the ten minutes before the shutdown comes back\n'
 
 running='{"state":"live","reason":null,"reported":true,"pid":9,"argv":["bercail-desk-agent"],
-  "foreground":{"name":"opencode.exe","pid":9},"labels":{"bercail.role":"agent","bercail.space":"sp1"}}'
+  "foreground":{"name":"pi","pid":9},"labels":{"bercail.role":"agent","bercail.space":"sp1"}}'
 busy="$(jq -c '.foreground = {name: "vim", pid: 11}' <<<"$bare")"
 inner="$(jq -c '.reported = true' <<<"$bare")"
 parked="$(jq -c '.reason = "stopped_by_restart" | .foreground = null | .pid = null' <<<"$bare")"
@@ -83,24 +83,23 @@ printf 'PASS: nothing is typed unless the desk sits at a bare shell\n'
 
 expect "$(one null 0 "$bare")" "t1 skip no record: see the desk-restore skill" "no record"
 expect "$(one "$(record '')" "$fresh" "$bare")" "t1 skip no session yet" "never reached a turn"
-expect "$(one "$(record ses_a opencode sp2)" "$fresh" "$bare")" "t1 skip record is for another space" "wrong space"
-expect "$(one "$(record ses_a codex)" "$fresh" "$bare")" "t1 skip cannot resume codex" "harness without a resume"
+expect "$(one "$(record ses_a pi sp2)" "$fresh" "$bare")" "t1 skip record is for another space" "wrong space"
+expect "$(one "$(record ses_a other)" "$fresh" "$bare")" "t1 skip cannot resume other" "a non-Pi record is not resumed"
 expect "$(one "$(record ses_a)" "$fresh" "$bare" false)" "t1 skip folder is gone: /w" "worktree removed"
 expect "$(one "$(record ses_a)" "$fresh" "$bare" true true)" "t1 skip session is open elsewhere" "a process has it"
 got="$(verdict "$(fact t1 "$(record ses_a)" "$fresh" "$bare")" "$(fact t2 "$(record ses_a)" "$fresh" "$running")")"
 expect "$got" $'t1 skip session is open elsewhere\nt2 skip already running' "another desk runs it"
 got="$(verdict "$(fact t1 "$(record ses_a)" "$fresh" "$bare")" "$(fact t2 "$(record ses_a)" "$fresh" "$bare")")"
 expect "$got" $'t1 resume \nt2 skip session is open elsewhere' "two records, one session: one desk"
-held="$(jq -c '.labels = {} | .records = {"ses_a": {"app": "opencode", "state": "idle"}}' <<<"$running")"
+held="$(jq -c '.labels = {} | .records = {"ses_a": {"app": "pi", "state": "idle"}}' <<<"$running")"
 got="$(verdict "$(fact t1 "$(record ses_a)" "$fresh" "$bare")" "$(fact t9 null 0 "$held")")"
 expect "$got" "t1 skip session is open elsewhere" "ordinary terminal records hold the session"
 expect "$(one "$(record ses_a)" "$fresh" "$bare" true false '["ses_a"]')" \
   "t1 skip session is open elsewhere" "a live claim holds the session"
 printf 'PASS: a desk without a session, folder or free session stays a shell\n'
 
-expect "$(jq -r '.[0].action' <<<"$(fact t1 "$(record ses_a claude)" "$fresh" "$bare" | jq -s . | desk_restore_plan "$SHUTDOWN")")" resume "claude resumes"
 expect "$(one "$(record 0199-pi pi)" "$fresh" "$bare")" "t1 resume " "pi resumes"
-printf 'PASS: claude and pi desks resume too\n'
+printf 'PASS: a Pi desk resumes\n'
 
 # The lead's hc siblings (bstack-builder, judge, council...) are not desks. After
 # a reboot they are bare or still recovering; neither is acted on or waited for.
@@ -115,18 +114,16 @@ printf 'PASS: hc siblings are left alone and do not block their desk\n'
 
 # --- what gets typed ---
 
-rec="$(jq -cn '{session: "ses_a", harness: "opencode", cwd: "/w/a b", args: ["/w/stack dir"], issue: "x-1"}')"
+rec="$(jq -cn '{session: "ses_a", harness: "pi", cwd: "/w/a b", args: ["/w/stack dir"], issue: "x-1"}')"
 cmd="$(desk_resume_command "$rec")"
 [[ "$cmd" == "cd /w/a\\ b && TERM=xterm-256color COLORTERM=truecolor exec "* ]] || fail "resume runs in the folder, replacing the shell: $cmd"
-[[ "$cmd" == *"bercail-desk-agent opencode --session ses_a /w/stack\\ dir" ]] || fail "resume keeps the flags, session first: $cmd"
+[[ "$cmd" == *"bercail-desk-agent pi --session-id ses_a /w/stack\\ dir" ]] || fail "resume keeps the flags, session first: $cmd"
 [[ "$cmd" != *--prompt* && "$cmd" != *x-1* ]] || fail "the issue prompt is not resent: $cmd"
-cmd="$(desk_resume_command "$(jq -c '.harness = "claude" | .args = ["--verbose"]' <<<"$rec")")"
-[[ "$cmd" == *"claude --resume ses_a --verbose" ]] || fail "claude resumes with --resume: $cmd"
-cmd="$(desk_resume_command "$(jq -c '.harness = "pi" | .session = "0199-a" | .args = ["--model", "m:high"]' <<<"$rec")")"
+cmd="$(desk_resume_command "$(jq -c '.session = "0199-a" | .args = ["--model", "m:high"]' <<<"$rec")")"
 [[ "$cmd" == *"bercail-desk-agent pi --session-id 0199-a --model m:high" ]] \
   || fail "pi resumes with --session-id, which also opens a session never written: $cmd"
 nl="$(printf 'line1\nline2')"
-cmd="$(desk_resume_command "$(jq -cn --arg a "$nl" '{session: "ses_a", harness: "opencode", cwd: "/w", args: [$a]}')")"
+cmd="$(desk_resume_command "$(jq -cn --arg a "$nl" '{session: "ses_a", harness: "pi", cwd: "/w", args: [$a]}')")"
 [[ "$cmd" == *"\$'line1\\nline2'" ]] || fail "a newline in a flag stays one argument: $cmd"
 [[ "$cmd" != *$'\n'* ]] || fail "a newline in a flag was not quoted: $cmd"
 printf 'PASS: the resume line quotes its parts and leaves the prompt out\n'
@@ -201,7 +198,7 @@ terminal() { # address json
 }
 put_record() { # address session age-before-shutdown [harness]
   mkdir -p "$RECORDS"
-  jq -n --arg a "$1" --arg s "$2" --arg cwd "$TMP_DIR" --arg h "${4:-opencode}" \
+  jq -n --arg a "$1" --arg s "$2" --arg cwd "$TMP_DIR" --arg h "${4:-pi}" \
     '{address: $a, session: $s, harness: $h, cwd: $cwd, issue: "x-1", space: "sp1", args: []}' >"$RECORDS/$1.json"
   touch -d "@$(($(cat "$TMP_DIR/shutdown") - $3))" "$RECORDS/$1.json"
 }
@@ -231,23 +228,24 @@ printf 'PASS: --dry-run lists the right desks and changes nothing\n'
 
 out="$(cmd_desk restore)"
 expect "$(wc -l <"$SENT" | tr -d ' ')" 1 "only the fresh desk is typed into"
-[[ "$(cat "$SENT")" == "t1 cd "*"opencode --session ses_fresh" ]] || fail "typed: $(cat "$SENT")"
+[[ "$(cat "$SENT")" == "t1 cd "*"pi --session-id ses_fresh" ]] || fail "typed: $(cat "$SENT")"
 [[ ! -e "$RECORDS/t5.json" ]] || fail "a record whose terminal ended is cleaned up"
 [[ -f "$RECORDS/t2.json" ]] || fail "a stale record of a live terminal stays"
 [[ "$out" == *"1 came back"* ]] || fail "restore counts: $out"
 printf 'PASS: restore types into the fresh desk only and drops dead records\n'
 
-# A reboot with one Pi desk, one opencode desk from before Pi, and the Pi lead's
-# sibling still recovering: both desks come back in one pass.
+# A reboot with one Pi desk, one record from another agent, and the Pi lead's
+# sibling still recovering: only the Pi desk comes back.
 reset_pass
 terminal t1 "$bare"; put_record t1 0199-pi 60 pi
-terminal t2 "$bare"; put_record t2 ses_old 60
+terminal t2 "$bare"; put_record t2 ses_old 60 other
 terminal t3 "$(jq -c '.reason = "stopped_by_restart" | .foreground = null' <<<"$sibling")"
 out="$(cmd_desk restore)"
-expect "$(sort "$SENT" | sed 's/^\(t[0-9]*\) .*exec [^ ]* /\1 /')" $'t1 pi --session-id 0199-pi\nt2 opencode --session ses_old' \
-  "the Pi desk and the opencode desk are typed into"
-[[ "$out" == *"2 came back"* && "$out" != *t3* ]] || fail "siblings are not counted or waited for: $out"
-printf 'PASS: a Pi desk and an opencode desk come back together\n'
+expect "$(sed 's/^\(t[0-9]*\) .*exec [^ ]* /\1 /' "$SENT")" $'t1 pi --session-id 0199-pi' \
+  "only the Pi desk is typed into"
+[[ "$out" == *"1 came back"* && "$out" == *"cannot resume other"* && "$out" != *t3* ]] \
+  || fail "a non-Pi record is skipped and siblings are not counted: $out"
+printf 'PASS: only a Pi desk comes back\n'
 
 reset_pass
 terminal t1 "$bare"
@@ -257,7 +255,7 @@ mv "$RECORDS/t1.json.new" "$RECORDS/t1.json"
 out="$(cmd_desk restore --dry-run)"
 [[ "$out" == *"t1     would resume  x-1: Fix login  ses_titled  $TMP_DIR"* ]] \
   || fail "resume line should name the title: $out"
-terminal t1 "$(jq -c '.foreground = {name: "opencode", pid: 99}' <<<"$bare")"
+terminal t1 "$(jq -c '.foreground = {name: "pi", pid: 99}' <<<"$bare")"
 out="$(cmd_desk restore --dry-run)"
 [[ "$out" == *"t1     skip: already running  (x-1: Fix login)"* ]] \
   || fail "skip line should name the issue: $out"
@@ -273,7 +271,7 @@ printf 'PASS: hc down leaves the records alone\n'
 # does not. Restore must not type, and must not act on that terminal.
 reset_pass
 terminal t1 "$bare"; put_record t1 ses_held 60
-terminal t9 "$(jq -c '.labels = {} | .records = {"ses_held": {"app": "opencode", "state": "idle"}}' <<<"$running")"
+terminal t9 "$(jq -c '.labels = {} | .records = {"ses_held": {"app": "pi", "state": "idle"}}' <<<"$running")"
 out="$(cmd_desk restore)"
 [[ ! -e "$SENT" ]] || fail "resumed a session an ordinary terminal already holds: $(cat "$SENT")"
 [[ "$out" == *"t1     skip: session is open elsewhere"* ]] || fail "records duplicate: $out"
@@ -503,7 +501,7 @@ fi
 grep -q '%h/.local/share/mise/shims' "$DESK_RESTORE_UNIT" \
   || fail "unit PATH drops mise shims: $(cat "$DESK_RESTORE_UNIT")"
 rm -f "$DESK_RESTORE_UNIT"
-printf 'PASS: packaged install runs the release CLI and keeps harness tools on PATH\n'
+printf 'PASS: packaged install runs the release CLI and keeps mise shims on PATH\n'
 
 mv "$TMP_DIR/bin/systemctl" "$TMP_DIR/systemctl.off"
 deploy_desk_restore_boot >/dev/null
@@ -539,28 +537,7 @@ rm -f "$TMP_DIR/bin/bercail"
 timeout 5 bash "$OMARCHY_POST_BOOT_HOOK" </dev/null >/dev/null 2>&1 || fail "hook without bercail must not fail"
 printf 'PASS: the hook returns at once and runs the boot restore\n'
 
-# Claude's settings: one entry added, the rest untouched, uninstall takes it back.
-SETTINGS="$HOME/.claude/settings.json"
-deploy_desk_claude_hook >/dev/null
-[[ ! -e "$SETTINGS" ]] || fail "no ~/.claude, no settings created"
-mkdir -p "$HOME/.claude"
-printf '{"model":"x","hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"mine"}]}],"Stop":[{"hooks":[]}]}}\n' >"$SETTINGS"
-deploy_desk_claude_hook >/dev/null
-deploy_desk_claude_hook >/dev/null
-HOOK_CMD="$LOCAL_BIN/bercail-desk-claude-hook"
-expect "$(jq -c '[.hooks.SessionStart[].hooks[].command]' "$SETTINGS")" "[\"mine\",\"$HOOK_CMD\"]" "added once, beside the person's own"
-expect "$(jq -c --arg c "$HOOK_CMD" '[.hooks.SessionStart[].hooks[] | select(.command == $c) | .args]' "$SETTINGS")" '[[]]' "new hook is the exec form"
-expect "$(jq -r .model "$SETTINGS")" x "other settings stay"
 touch "$OMARCHY_POST_BOOT_HOOK"
 remove_desk_restore >/dev/null
 [[ ! -e "$OMARCHY_POST_BOOT_HOOK" ]] || fail "uninstall removes the hook"
-expect "$(jq -c .hooks.SessionStart "$SETTINGS")" '[{"hooks":[{"type":"command","command":"mine"}]}]' "uninstall takes only ours"
-jq -e '.hooks.Stop' "$SETTINGS" >/dev/null || fail "uninstall leaves other hooks"
-printf '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"%s"}]}]}}\n' "$HOOK_CMD" >"$SETTINGS"
-remove_desk_restore >/dev/null
-expect "$(cat "$SETTINGS")" '{}' "uninstall leaves no empty hooks behind"
-printf 'not json' >"$SETTINGS"
-out="$(deploy_desk_claude_hook 2>&1)"
-[[ "$out" == *"not valid JSON"* ]] || fail "broken settings are reported: $out"
-expect "$(cat "$SETTINGS")" 'not json' "broken settings are left alone"
-printf 'PASS: the Claude hook is added once, kept apart, and removed cleanly\n'
+printf 'PASS: uninstall removes the desk restore hook\n'

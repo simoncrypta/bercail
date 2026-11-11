@@ -1,41 +1,29 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# bstack: bercail's agent setup. Pi by default; opencode only with
-# [bstack] harness = "opencode". Your own Claude, GPT, and Grok logins sit behind
-# it, and bercail's workflow on top. [bstack] in config.toml turns it on and maps
-# roles to models.
+# bstack: bercail's agent setup on Pi. Your own Claude, GPT, and Grok logins sit
+# behind it, and bercail's workflow on top. [bstack] in config.toml turns it on
+# and maps roles to models.
 
-OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
 BSTACK_MARKER="managed by bercail (bstack)"
 # Paths below expand at source time. Same default as lib/common.sh: an unset
 # share dir would otherwise become /pi/...
 : "${AGENTIC_DEV_SHARE_DIR:=${HOME}/.local/share/bercail}"
-# The models deploy resolved, family=model per line. handoff-spawn reads it for
-# the families config.toml leaves on auto.
-BSTACK_RESOLVED="${AGENTIC_DEV_SHARE_DIR}/bstack-models"
-# The last variant list opencode's server gave, for when it doesn't answer.
-BSTACK_VARIANTS_CACHE="${AGENTIC_DEV_SHARE_DIR}/bstack-variants"
 BSTACK_FAMILIES=(claude gpt grok)
 BSTACK_ROLES=(lead build judge)
-# Agents and commands bstack renders into the opencode config dir.
-BSTACK_RENDERED=(agents/bstack.md agents/bstack-builder.md agents/bstack-judge.md
-  agents/bstack-autopilot.md agents/bstack-pr-review.md commands/bstack-setup.md
-  commands/council.md commands/handoff.md commands/ready.md commands/autopilot.md
-  commands/how.md commands/why.md commands/unslop.md commands/pr-review.md)
 # The Pi profile lives in bercail's share dir: Pi's own files stay the person's,
 # and every launch names this dir with flags.
 BSTACK_PI_DIR="${AGENTIC_DEV_SHARE_DIR}/pi"
 BSTACK_PI_TEMPLATES="${XDG_CONFIG_HOME:-$HOME/.config}/herdr-core/templates"
 BSTACK_PI_BRIDGE="npm:pi-claude-bridge@0.11.0"
 BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge.md
-  agents/bstack-autopilot.md agents/bstack-headless.md prompts/ready.md prompts/council.md prompts/handoff.md
-  prompts/autopilot.md prompts/how.md prompts/why.md prompts/unslop.md prompts/pr-review.md
-  prompts/bstack-setup.md)
+  agents/bstack-autopilot.md agents/bstack-headless.md agents/bstack-pr-review.md prompts/ready.md
+  prompts/council.md prompts/handoff.md prompts/autopilot.md prompts/how.md prompts/why.md
+  prompts/unslop.md prompts/pr-review.md prompts/bstack-setup.md)
 
 # --- config.toml --------------------------------------------------------------
 
 # Value of KEY in [SECTION], unquoted. A quoted value keeps its '#' (model
-# variants like claude-agent/opus#high); a bare one loses a trailing comment.
+# variants like claude-bridge/claude-opus-5-5#high); a bare one loses a trailing comment.
 _bstack_toml_get() {
   local section="$1" key="$2" file="${3:-$AGENTIC_DEV_USER_CONFIG}"
   [[ -f "$file" ]] || return 0
@@ -85,26 +73,6 @@ bstack_enabled() {
   [[ "$(_bstack_toml_get bstack enabled)" == true ]]
 }
 
-bstack_council_enabled() {
-  [[ "$(_bstack_toml_get bstack council)" == true ]]
-}
-
-# Which harness runs bstack. Unset is pi. Only an explicit "opencode" is
-# opencode; anything else is pi (deploy warns).
-bstack_harness() {
-  local harness
-  harness="$(_bstack_toml_get bstack harness)"
-  if [[ "$harness" == opencode ]]; then
-    printf 'opencode'
-  else
-    printf 'pi'
-  fi
-}
-
-_bstack_on_pi() {
-  [[ "$(bstack_harness)" == pi ]]
-}
-
 _bstack_role_default() {
   case "$1" in
     lead|judge) printf 'claude' ;;
@@ -121,9 +89,9 @@ _bstack_role_order() {
 }
 
 # A family name (claude, gpt, grok) resolves to that family's model: the one set
-# in config.toml (pinned), else bercail's pick from `opencode models` when the
-# plan is connected (auto). Anything else is a full opencode model id. Empty: the
-# agent inherits the session model.
+# in config.toml (pinned), else bercail's pick from Pi's catalog when the login
+# is ready (auto). Anything else is a full Pi model id. Empty: the agent uses
+# Pi's default model.
 bstack_resolve_model() {
   local spec="$1" model
   case "$spec" in
@@ -167,95 +135,49 @@ bstack_role_model() {
   done
 }
 
-# --- opencode -----------------------------------------------------------------
-
-_bstack_integration_id() {
-  case "$1" in
-    claude) printf 'claude-agent' ;;
-    gpt) printf 'openai' ;;
-    grok) printf 'xai' ;;
-  esac
-}
+# --- logins and models --------------------------------------------------------
 
 _bstack_family_label() {
-  if _bstack_on_pi; then
-    case "$1" in
-      claude) printf 'Claude plan (Claude Code via pi-claude-bridge)' ;;
-      gpt) printf 'Sign in with ChatGPT (openai, or openai-codex)' ;;
-      grok) printf 'xAI login' ;;
-    esac
-    return 0
-  fi
   case "$1" in
-    claude) printf 'Claude plan (Claude Agent)' ;;
-    gpt) printf 'ChatGPT plan (OpenAI)' ;;
-    grok) printf 'X subscription (xAI)' ;;
+    claude) printf 'Claude plan (Claude Code via pi-claude-bridge)' ;;
+    gpt) printf 'Sign in with ChatGPT (openai, or openai-codex)' ;;
+    grok) printf 'xAI login' ;;
   esac
 }
 
-# Integration ids with a connection, one per line. Empty when opencode is missing.
-bstack_connected_ids() {
-  if _bstack_on_pi; then
-    _bstack_pi_connected_ids
-    return 0
-  fi
-  dep_present opencode || return 0
-  opencode auth list --format json 2>/dev/null \
-    | jq -r '.[]? | select((.connections | length) > 0) | .id' 2>/dev/null || true
-}
-
-# Ask opencode once what is connected and which models it lists. Callers load
-# this in their own shell, so the many $(...) lookups after it reuse the answer.
+# Ask Pi once what is logged in and which models it lists. Callers load this in
+# their own shell, so the many $(...) lookups after it reuse the answer.
 bstack_load_state() {
   [[ "${1:-}" == reload ]] && BSTACK_STATE_LOADED=0
   [[ "${BSTACK_STATE_LOADED:-0}" -eq 1 ]] && return 0
-  BSTACK_CONNECTED="$(bstack_connected_ids)"
+  BSTACK_CONNECTED="$(_bstack_pi_connected_ids)"
   BSTACK_MODELS=""
   BSTACK_VARIANTS=""
-  if [[ -n "$BSTACK_CONNECTED" ]] && _bstack_on_pi; then
-    _bstack_pi_load_models
-  elif [[ -n "$BSTACK_CONNECTED" ]]; then
-    BSTACK_MODELS="$(opencode models 2>/dev/null || true)"
-    # "provider/model low,medium,high" per line; empty when the server can't say.
-    BSTACK_VARIANTS="$(opencode api get /api/model 2>/dev/null \
-      | jq -r '.data[]? | "\(.providerID)/\(.id) \([.variants[]?.id] | join(","))"' 2>/dev/null || true)"
-    if [[ -n "$BSTACK_VARIANTS" ]]; then
-      { mkdir -p "$(dirname "$BSTACK_VARIANTS_CACHE")" \
-        && printf '%s\n' "$BSTACK_VARIANTS" >"$BSTACK_VARIANTS_CACHE"; } 2>/dev/null || true
-    elif [[ -f "$BSTACK_VARIANTS_CACHE" ]]; then
-      BSTACK_VARIANTS="$(<"$BSTACK_VARIANTS_CACHE")"
-    fi
-  fi
+  [[ -z "$BSTACK_CONNECTED" ]] || _bstack_pi_load_models
   BSTACK_STATE_LOADED=1
 }
 
 bstack_family_connected() {
+  local provider
   bstack_load_state
-  if _bstack_on_pi; then
-    local provider
-    for provider in $(_bstack_pi_providers "$1"); do
-      grep -qxF "$provider" <<<"$BSTACK_CONNECTED" && return 0
-    done
-    return 1
-  fi
-  grep -qxF "$(_bstack_integration_id "$1")" <<<"$BSTACK_CONNECTED"
+  for provider in $(_bstack_pi_providers "$1"); do
+    grep -qxF "$provider" <<<"$BSTACK_CONNECTED" && return 0
+  done
+  return 1
 }
 
 BSTACK_EFFORTS=(low medium high xhigh max)
 
 # The reasoning variant for MODEL: [bstack] effort (default high), or the highest
-# level below it that the model offers (Grok stops at xhigh). Without the server's
-# variant list, only Claude Agent's documented #high is assumed.
+# level below it that the model offers (Grok stops at xhigh). Without a variant
+# list, none.
 _bstack_variant() {
   local model="$1" want offered level best=""
   want="$(_bstack_toml_get bstack effort)"
   want="${want:-high}"
   [[ "$want" == none ]] && return 0
-  offered="$(awk -v m="$model" '$1 == m { print $2 }' <<<"${BSTACK_VARIANTS:-}")"
-  if [[ -z "${BSTACK_VARIANTS:-}" ]]; then
-    [[ "$model" == claude-agent/* ]] && printf 'high'
-    return 0
-  fi
+  [[ -n "${BSTACK_VARIANTS:-}" ]] || return 0
+  offered="$(awk -v m="$model" '$1 == m { print $2 }' <<<"$BSTACK_VARIANTS")"
   for level in "${BSTACK_EFFORTS[@]}"; do
     [[ ",$offered," == *",$level,"* ]] && best="$level"
     [[ "$level" == "$want" ]] && break
@@ -263,46 +185,18 @@ _bstack_variant() {
   printf '%s' "$best"
 }
 
-# The recommended model of a family from `opencode models` (stdin), or nothing:
-# the newest plain release. Version sort alone ranks grok-4.20-multi-agent-0309
-# over grok-4.7, so dated and special builds only count when nothing plain is listed.
+# The recommended model of a family from Pi's catalog (stdin), with its variant.
 _bstack_pick_model() {
-  local list model variant
-  list="$(cat)"
-  if _bstack_on_pi; then
-    model="$(_bstack_pi_pick_model "$1" <<<"$list")"
-    [[ -n "$model" ]] || return 1
-    variant="$(_bstack_variant "$model")"
-    printf '%s%s' "$model" "${variant:+#$variant}"
-    return 0
-  fi
-  case "$1" in
-    claude) model="$(grep -x 'claude-agent/opus' <<<"$list")" ;;
-    gpt)
-      model="$(grep -E '^openai/gpt-[0-9][0-9.]*-sol$' <<<"$list" | sort -V | tail -1 | grep . \
-        || grep -E '^openai/gpt-[0-9][0-9.]*$' <<<"$list" | sort -V | tail -1)"
-      ;;
-    grok)
-      model="$(grep -E '^xai/grok-[0-9]+(\.[0-9]+)?$' <<<"$list" | sort -V | tail -1 | grep . \
-        || grep -E '^xai/grok-[0-9]' <<<"$list" | grep -vE 'mini|image|vision' | sort -V | tail -1)"
-      ;;
-  esac
-  [[ -n "${model:-}" ]] || return 1
+  local model variant
+  model="$(_bstack_pi_pick_model "$1")"
+  [[ -n "$model" ]] || return 1
   variant="$(_bstack_variant "$model")"
   printf '%s%s' "$model" "${variant:+#$variant}"
 }
 
 bstack_login_command() {
-  if _bstack_on_pi; then
-    if [[ "$1" == claude ]]; then printf 'claude auth login'; return 0; fi
-    printf '/login %s (inside pi)' "$(_bstack_pi_providers "$1" | head -1)"
-    return 0
-  fi
-  case "$1" in
-    claude) printf 'opencode auth login claude-agent' ;;
-    gpt) printf 'opencode auth login openai' ;;
-    grok) printf 'opencode auth login xai --method device' ;;
-  esac
+  if [[ "$1" == claude ]]; then printf 'claude auth login'; return 0; fi
+  printf '/login %s (inside pi)' "$(_bstack_pi_providers "$1" | head -1)"
 }
 
 # --- pi -----------------------------------------------------------------------
@@ -416,6 +310,19 @@ _bstack_pi_argv() {
   done
 }
 
+# bercail review-pr's reviewer, into BSTACK_PI_ARGV: the lead's model, the
+# read-only tools, and review.ts, which keeps it in the stack dir. No skills,
+# prompt templates, or context files: the pr-review rules are its whole brief.
+_bstack_pi_review_argv() {
+  local model="$1"
+  BSTACK_PI_ARGV=(pi)
+  [[ -z "$model" ]] || BSTACK_PI_ARGV+=(--model "$(_bstack_pi_model_id "$model")")
+  BSTACK_PI_ARGV+=(-e "$BSTACK_PI_BRIDGE" -e "$BSTACK_PI_DIR/extensions/fallback.ts"
+    -e "$BSTACK_PI_DIR/extensions/review.ts" --tools "read,grep,find,ls"
+    --no-skills --no-prompt-templates --no-context-files
+    --append-system-prompt "$BSTACK_PI_DIR/agents/bstack-pr-review.md")
+}
+
 # The command line a bstack agent starts with. BERCAIL_ROLE identifies its role;
 # empty is the lead.
 bstack_pi_command() {
@@ -439,11 +346,6 @@ _bstack_pi_template() {
   _bstack_place "$work/$name.md" "$BSTACK_PI_TEMPLATES/$name.md" || true
 }
 
-# Text after a file's --- frontmatter.
-_bstack_body() {
-  awk 'NR == 1 && $0 == "---" { fm = 1; next } fm && $0 == "---" { fm = 0; next } !fm' "$1"
-}
-
 _bstack_deploy_pi() {
   local work="$1" rel family model
   [[ ! -d "$BSTACK_PI_DIR" ]] || run rm -rf "$BSTACK_PI_DIR"
@@ -453,15 +355,17 @@ _bstack_deploy_pi() {
   done
   copy_file "$work/src/pi/extensions/fallback.ts" "$BSTACK_PI_DIR/extensions/fallback.ts"
   copy_file "$work/src/pi/extensions/guard.ts" "$BSTACK_PI_DIR/extensions/guard.ts"
+  copy_file "$work/src/pi/extensions/review.ts" "$BSTACK_PI_DIR/extensions/review.ts"
   bstack_pi_fallback >"$work/fallback" || return 1
   copy_file "$work/fallback" "$BSTACK_PI_DIR/fallback"
-  _bstack_body "$work/src/agents/bstack-pr-review.md" >"$work/pr-review.md"
-  copy_file "$work/pr-review.md" "$BSTACK_PI_DIR/agents/bstack-pr-review.md"
   # The desk's lead, as a JSON argv: bercail-desk-agent runs it with the
   # Anthropic env unset.
   _bstack_pi_argv "$(bstack_role_model lead)"
   jq -n '$ARGS.positional' --args -- "${BSTACK_PI_ARGV[@]}" >"$work/lead.json"
   copy_file "$work/lead.json" "$BSTACK_PI_DIR/lead.json"
+  _bstack_pi_review_argv "$(bstack_role_model lead)"
+  jq -n '$ARGS.positional' --args -- "${BSTACK_PI_ARGV[@]}" >"$work/review.json"
+  copy_file "$work/review.json" "$BSTACK_PI_DIR/review.json"
 
   ensure_dir "$BSTACK_PI_TEMPLATES"
   _bstack_pi_template "$work" bstack-builder builder "$(bstack_role_model build)" bstack-builder \
@@ -474,8 +378,7 @@ _bstack_deploy_pi() {
   for family in "${BSTACK_FAMILIES[@]}"; do
     model="$(bstack_resolve_model "$family")"
     if [[ -n "$model" ]]; then
-      _bstack_body "$work/src/agents/bstack-council.md" >"$work/council-$family.md"
-      copy_file "$work/council-$family.md" "$BSTACK_PI_DIR/agents/bstack-council-$family.md"
+      copy_file "$work/src/pi/agents/bstack-council.md" "$BSTACK_PI_DIR/agents/bstack-council-$family.md"
       _bstack_pi_template "$work" "bstack-council-$family" council "$model" "bstack-council-$family" \
         "Read-only council reviewer on $family. Tries to break a change and reports only findings it can show."
     else
@@ -511,15 +414,11 @@ _bstack_remove_pi() {
   [[ ! -d "$BSTACK_PI_DIR" ]] || { info "remove: $BSTACK_PI_DIR"; run rm -rf "$BSTACK_PI_DIR"; }
 }
 
-# Install what the harness needs: Pi, or opencode when that harness is pinned.
-_bstack_install_harness() {
-  if _bstack_on_pi; then
-    maybe_mise_install pi pi || return 1
-    _bstack_pi_version_ok || { warn 'bstack needs Pi >=1.2.0'; return 1; }
-    _bstack_pi_bridge_present || run pi install "$BSTACK_PI_BRIDGE"
-  else
-    install_opencode_binary
-  fi
+# Install Pi and the Claude bridge.
+_bstack_install_pi() {
+  maybe_mise_install pi pi || return 1
+  _bstack_pi_version_ok || { warn 'bstack needs Pi >=1.2.0'; return 1; }
+  _bstack_pi_bridge_present || run pi install "$BSTACK_PI_BRIDGE"
 }
 
 # Is a model in Pi's catalog? It can carry a level either way: model#high or model:high.
@@ -529,12 +428,13 @@ _bstack_pi_known() {
   [[ -z "$BSTACK_MODELS" ]] || grep -qxF "$id" <<<"$BSTACK_MODELS"
 }
 
-_bstack_status_pi() {
+bstack_status() {
   local family role ver model note
+  bstack_load_state reload
   if bstack_enabled; then
-    log "bstack: on (harness: pi)"
+    log "bstack: on"
   else
-    log "bstack: off (harness: pi; bercail bstack on)"
+    log "bstack: off (bercail bstack on)"
   fi
   if dep_present pi; then
     ver="$(pi --version 2>/dev/null || true)"
@@ -583,20 +483,28 @@ _bstack_status_pi() {
   log "  config: [bstack] in $AGENTIC_DEV_USER_CONFIG (auto picks the newest model; set claude/gpt/grok to pin a Pi id)"
 }
 
-_bstack_setup_pi() {
+# Guided: install Pi and the bridge, then render the agents. Models are picked
+# automatically (auto); a model set in config.toml stays.
+bstack_setup() {
+  bstack_load_state reload
   log "bstack setup: Pi, with your own Claude, ChatGPT, and Grok logins."
   bstack_enabled || _bstack_toml_set bstack enabled true
-  _bstack_install_harness || die "bstack on Pi needs pi; install it (mise use -g pi), then run: bercail bstack setup"
+  _bstack_install_pi || die "bstack on Pi needs pi; install it (mise use -g pi), then run: bercail bstack setup"
   deploy_bstack
   bstack_status
   log ""
   log "next: run claude auth login for Claude; type the /login lines above in pi for other missing logins, then run: bercail update"
 }
 
-_bstack_doctor_pi() {
+doctor_bstack() {
   local rel missing=0 path family any_login=0 model
+  bstack_load_state reload
+  if ! bstack_enabled; then
+    log "  off  bstack (bercail bstack on)"
+    return 0
+  fi
   if ! dep_present pi; then
-    log "  missing  pi (bstack harness is pi; bercail bstack setup)"
+    log "  missing  pi (bstack is on; bercail bstack setup)"
     return 1
   fi
   if _bstack_pi_version_ok; then
@@ -616,7 +524,8 @@ _bstack_doctor_pi() {
   else
     log "  --  Claude auth: no subscription login (claude auth login)"
   fi
-  for rel in "${BSTACK_PI_RENDERED[@]}" agents/bstack-pr-review.md extensions/fallback.ts extensions/guard.ts models fallback lead.json; do
+  for rel in "${BSTACK_PI_RENDERED[@]}" extensions/fallback.ts extensions/guard.ts extensions/review.ts \
+    models fallback lead.json review.json; do
     if [[ ! -f "$BSTACK_PI_DIR/$rel" ]]; then
       log "  missing  bstack $BSTACK_PI_DIR/$rel (bercail update)"
       missing=1
@@ -659,38 +568,16 @@ _bstack_doctor_pi() {
     missing=1
   fi
   if [[ "$missing" -eq 0 ]]; then
-    log "  ok  bstack on pi (lead=$(_bstack_pi_model_id "$(bstack_role_model lead)"))"
+    log "  ok  bstack (lead=$(_bstack_pi_model_id "$(bstack_role_model lead)"))"
   fi
   return "$missing"
 }
 
 # --- deploy -------------------------------------------------------------------
 
-# Replace @token@ with its value; drop a line whose token resolves to nothing,
-# so an agent with no model inherits the session's.
+# Replace @pi_dir@ with bstack's Pi profile dir.
 _bstack_render() {
-  local src="$1" dest="$2" family="${3:-}" model="${4:-}" lead
-  lead="$(bstack_role_model lead)"
-  awk -v lead="$lead" -v base="${lead%%#*}" -v build="$(bstack_role_model build)" \
-    -v judge="$(bstack_role_model judge)" -v family="$family" -v model="$model" \
-    -v instructions="$OPENCODE_CONFIG_DIR/bstack/instructions.md" -v pi_dir="$BSTACK_PI_DIR" '
-    function sub_token(tok, val) {
-      if (index($0, tok) == 0) return 1
-      if (val == "") return 0
-      gsub(tok, val)
-      return 1
-    }
-    {
-      if (!sub_token("@lead_base@", base)) next
-      if (!sub_token("@lead@", lead)) next
-      if (!sub_token("@build@", build)) next
-      if (!sub_token("@judge@", judge)) next
-      if (!sub_token("@family@", family)) next
-      if (!sub_token("@model@", model)) next
-      if (!sub_token("@instructions@", instructions)) next
-      if (!sub_token("@pi_dir@", pi_dir)) next
-      print
-    }' "$src" >"$dest"
+  awk -v pi_dir="$BSTACK_PI_DIR" '{ gsub("@pi_dir@", pi_dir); print }' "$1" >"$2"
 }
 
 _bstack_ours() {
@@ -723,23 +610,13 @@ _bstack_resolved_text() {
 }
 
 deploy_bstack() {
-  local work rel family model jsonc raw
+  local work rel result=0
   if ! bstack_enabled; then
     remove_bstack quiet
     return 0
   fi
-  raw="$(_bstack_toml_get bstack harness)"
-  if [[ -n "$raw" && "$raw" != pi && "$raw" != opencode ]]; then
-    warn "[bstack] harness = \"$raw\" is not pi or opencode; using pi"
-  fi
-  # First update from an older bercail sources this file, then calls deploy_bstack.
-  if declare -F migrate_opencode_desk_command >/dev/null; then
-    migrate_opencode_desk_command
-  fi
-  if _bstack_on_pi; then
-    bstack_pi_fallback >/dev/null || return 1
-    _bstack_install_harness || return 1
-  fi
+  bstack_pi_fallback >/dev/null || return 1
+  _bstack_install_pi || return 1
   bstack_load_state reload
   work="$(mktemp -d)"
   if ! DRY_RUN=0 deploy_install_file "bstack/MANIFEST" "$work/MANIFEST" >/dev/null; then
@@ -755,249 +632,46 @@ deploy_bstack() {
       return 1
     }
   done <"$work/MANIFEST"
-
-  if _bstack_on_pi; then
-    local result=0
-    _bstack_deploy_pi "$work" || result=$?
-    rm -rf "$work"
-    return "$result"
-  fi
-  _bstack_remove_pi
-
-  ensure_dir "$OPENCODE_CONFIG_DIR"
-  for rel in "${BSTACK_RENDERED[@]}"; do
-    _bstack_render "$work/src/$rel" "$work/$(basename "$rel")"
-    _bstack_place "$work/$(basename "$rel")" "$OPENCODE_CONFIG_DIR/$rel" || true
-  done
-  # With [bstack] council = true, one read-only reviewer per family with a model.
-  for family in "${BSTACK_FAMILIES[@]}"; do
-    model=""
-    if bstack_council_enabled; then
-      model="$(bstack_resolve_model "$family")"
-    fi
-    if [[ -n "$model" ]]; then
-      _bstack_render "$work/src/agents/bstack-council.md" "$work/council-$family.md" "$family" "$model"
-      _bstack_place "$work/council-$family.md" "$OPENCODE_CONFIG_DIR/agents/bstack-council-$family.md" || true
-    else
-      _bstack_remove_ours "$OPENCODE_CONFIG_DIR/agents/bstack-council-$family.md"
-    fi
-  done
-  copy_file "$work/src/instructions.md" "$OPENCODE_CONFIG_DIR/bstack/instructions.md"
-
-  # opencode merges opencode.json, then opencode.jsonc over it. bstack owns the
-  # .jsonc unless the person already has one of their own.
-  jsonc="$OPENCODE_CONFIG_DIR/opencode.jsonc"
-  _bstack_render "$work/src/opencode.jsonc" "$work/opencode.jsonc"
-  if ! _bstack_place "$work/opencode.jsonc" "$jsonc"; then
-    warn "for bstack, add to $jsonc: \"default_agent\": \"bstack\" and \"instructions\": [\"$OPENCODE_CONFIG_DIR/bstack/instructions.md\"]"
-  fi
-  _bstack_resolved_text >"$work/resolved"
-  copy_file "$work/resolved" "$BSTACK_RESOLVED"
+  _bstack_deploy_pi "$work" || result=$?
   rm -rf "$work"
-  info "bstack: lead=$(bstack_role_model lead || true) build=$(bstack_role_model build || true) judge=$(bstack_role_model judge || true) (empty: the session's model)"
+  return "$result"
 }
 
 # Remove what deploy_bstack wrote, and only files that still carry the marker.
 remove_bstack() {
-  local quiet="${1:-}" rel family any=0
-  for rel in "${BSTACK_RENDERED[@]}" opencode.jsonc; do
-    _bstack_ours "$OPENCODE_CONFIG_DIR/$rel" && any=1
-  done
-  for family in "${BSTACK_FAMILIES[@]}"; do
-    _bstack_ours "$OPENCODE_CONFIG_DIR/agents/bstack-council-$family.md" && any=1
-  done
-  [[ -d "$OPENCODE_CONFIG_DIR/bstack" || -f "$BSTACK_RESOLVED" ]] && any=1
-  _bstack_pi_rendered_any && any=1
-  if [[ "$any" -eq 0 ]]; then
-    [[ -n "$quiet" ]] || info "bstack: nothing to remove in $OPENCODE_CONFIG_DIR"
+  local quiet="${1:-}"
+  if ! _bstack_pi_rendered_any; then
+    [[ -n "$quiet" ]] || info "bstack: nothing to remove in $BSTACK_PI_DIR"
     return 0
   fi
   _bstack_remove_pi
-  for rel in "${BSTACK_RENDERED[@]}" opencode.jsonc; do
-    _bstack_remove_ours "$OPENCODE_CONFIG_DIR/$rel"
-  done
-  for family in "${BSTACK_FAMILIES[@]}"; do
-    _bstack_remove_ours "$OPENCODE_CONFIG_DIR/agents/bstack-council-$family.md"
-  done
-  if [[ -d "$OPENCODE_CONFIG_DIR/bstack" ]]; then
-    info "remove: $OPENCODE_CONFIG_DIR/bstack"
-    run rm -rf "$OPENCODE_CONFIG_DIR/bstack"
-  fi
-  [[ ! -f "$BSTACK_RESOLVED" ]] || run rm -f "$BSTACK_RESOLVED"
-  [[ ! -f "$BSTACK_VARIANTS_CACHE" ]] || run rm -f "$BSTACK_VARIANTS_CACHE"
 }
 
 # --- bercail bstack -----------------------------------------------------------
 
-bstack_status() {
-  local family role ver model
-  bstack_load_state reload
-  if _bstack_on_pi; then
-    _bstack_status_pi
-    return 0
-  fi
-  if bstack_enabled; then
-    log "bstack: on"
-  else
-    log "bstack: off (bercail bstack on)"
-  fi
-  if dep_present opencode; then
-    ver="$(opencode --version 2>/dev/null || true)"
-    log "  opencode: $(command -v opencode) (${ver:-unknown version})"
-  else
-    log "  opencode: missing (bercail bstack setup installs it)"
-  fi
-  log "  subscriptions:"
-  for family in "${BSTACK_FAMILIES[@]}"; do
-    model="$(bstack_resolve_model "$family")"
-    if bstack_family_connected "$family"; then
-      log "    ok  $family  $(_bstack_family_label "$family")  ${model:-no model listed} ($(bstack_model_source "$family"))"
-    elif [[ -n "$model" ]]; then
-      log "    ok  $family  $model (pinned; plan not connected: $(bstack_login_command "$family"))"
-    else
-      log "    --  $family  $(_bstack_family_label "$family")  connect: $(bstack_login_command "$family")"
-    fi
-  done
-  log "  roles:"
-  for role in "${BSTACK_ROLES[@]}"; do
-    log "    $role = $(bstack_role_model "$role" | grep . || printf '(session model)')"
-  done
-  log "  config: [bstack] in $AGENTIC_DEV_USER_CONFIG (auto picks the newest model; set claude/gpt/grok to pin one)"
-}
-
-# On: the desk's old default becomes this harness's agent. Off: remove bstack's
-# files; the agent command stays.
+# On: the desk runs bstack's Pi lead. Off: remove bstack's files; the desk runs
+# plain Pi.
 bstack_on() {
-  local cmd
   _bstack_toml_set bstack enabled true
-  cmd="$(read_agent_command)"
-  if _bstack_on_pi; then
-    if [[ "$cmd" == cursor-agent || "$cmd" == opencode ]]; then
-      _bstack_toml_set agent command '"pi"'
-      info "desk agent default: pi (was $cmd)"
-    fi
-  elif [[ "$cmd" == cursor-agent ]]; then
-    _bstack_toml_set agent command '"opencode"'
-    info "desk agent default: opencode (was cursor-agent)"
-  fi
-  _bstack_install_harness || true
+  _bstack_install_pi || true
   deploy_bstack
 }
 
 bstack_off() {
   _bstack_toml_set bstack enabled false
   remove_bstack
-  info "bstack off; [agent] command is still $(read_agent_command)"
-}
-
-# Guided: install opencode, connect the plans you have, and render the agents.
-# Models are picked automatically (auto); a model set in config.toml stays.
-# --yes connects nothing and uses what is already connected.
-bstack_setup() {
-  local family reply cmd
-  if _bstack_on_pi; then
-    bstack_load_state reload
-    _bstack_setup_pi
-    return 0
-  fi
-  log "bstack setup: one harness (opencode), your own Claude, GPT, and Grok subscriptions."
-  bstack_enabled || _bstack_toml_set bstack enabled true
-  install_opencode_binary || die "bstack needs opencode 2.2.3+; install it, then run: bercail bstack setup"
-  bstack_opencode_version_ok || die "bstack needs opencode 2.2.3+ ($(opencode --version 2>/dev/null)); run: mise use -g opencode@latest"
-
-  bstack_load_state reload
-  for family in "${BSTACK_FAMILIES[@]}"; do
-    if bstack_family_connected "$family"; then
-      info "connected: $(_bstack_family_label "$family")"
-      continue
-    fi
-    [[ "$YES" -eq 1 ]] && continue
-    printf 'Connect your %s? [y/N] ' "$(_bstack_family_label "$family")"
-    read_tty reply
-    [[ "$reply" =~ ^[Yy]$ ]] || continue
-    if [[ "$family" == claude ]] && dep_present claude; then
-      info "Claude Agent uses Claude Code's login; run 'claude auth login' first if it isn't signed in"
-    elif [[ "$family" == claude ]]; then
-      warn "Claude Agent runs Claude Code: install it (https://claude.com/claude-code) and run 'claude auth login', then: $(bstack_login_command claude)"
-      continue
-    fi
-    cmd="$(bstack_login_command "$family")"
-    info "running: $cmd"
-    # shellcheck disable=SC2086
-    $cmd </dev/tty || warn "$cmd did not finish; run it again later"
-  done
-  bstack_load_state reload
-  [[ -n "$BSTACK_CONNECTED" ]] || warn "no subscription connected yet; bstack agents will use the session's model"
-
-  if [[ "$(read_agent_command)" == cursor-agent ]]; then
-    _bstack_toml_set agent command '"opencode"'
-  fi
-  deploy_bstack
-  bstack_status
-  log ""
-  log "next: dev (the desk starts opencode as bstack), or opencode in any repo. Try /how, /ready, /autopilot."
+  info "bstack off; the desk runs plain pi"
 }
 
 cmd_bstack() {
   local sub="${1:-status}"
   shift || true
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --yes|-y) YES=1; shift ;;
-      *) die "unknown option: $1" ;;
-    esac
-  done
+  [[ $# -eq 0 ]] || die "unknown option: $1"
   case "$sub" in
     status) bstack_status ;;
     on) bstack_on ;;
     off) bstack_off ;;
     setup) bstack_setup ;;
-    *) die "usage: bercail bstack status|on|off|setup [--yes]" ;;
+    *) die "usage: bercail bstack status|on|off|setup" ;;
   esac
-}
-
-doctor_bstack() {
-  local rel missing=0 connected
-  bstack_load_state reload
-  if ! bstack_enabled; then
-    log "  off  bstack (bercail bstack on)"
-    return 0
-  fi
-  if _bstack_on_pi; then
-    _bstack_doctor_pi
-    return
-  fi
-  if ! dep_present opencode; then
-    log "  missing  opencode (bstack is on; bercail bstack setup)"
-    return 1
-  fi
-  if bstack_opencode_version_ok; then
-    log "  ok  opencode $(opencode --version 2>/dev/null)"
-  else
-    log "  old  opencode $(opencode --version 2>/dev/null) (bstack needs 2.2.3+)"
-    missing=1
-  fi
-  for rel in "${BSTACK_RENDERED[@]}" opencode.jsonc bstack/instructions.md; do
-    if [[ ! -f "$OPENCODE_CONFIG_DIR/$rel" ]]; then
-      log "  missing  bstack $OPENCODE_CONFIG_DIR/$rel (bercail update)"
-      missing=1
-    elif [[ "$rel" != bstack/* ]] && ! _bstack_ours "$OPENCODE_CONFIG_DIR/$rel"; then
-      log "  yours  $OPENCODE_CONFIG_DIR/$rel (not managed by bstack)"
-    fi
-  done
-  connected="$BSTACK_CONNECTED"
-  if [[ -f "$BSTACK_RESOLVED" ]] && [[ "$(_bstack_resolved_text)" != "$(<"$BSTACK_RESOLVED")" ]]; then
-    log "  stale  bstack models (a plan or model changed since the last deploy; bercail update)"
-    missing=1
-  fi
-  if [[ -z "$connected" ]] || ! grep -qxE 'claude-agent|openai|xai' <<<"$connected"; then
-    log "  missing  bstack subscription: none of Claude, ChatGPT, X is connected (bercail bstack setup)"
-    missing=1
-  else
-    log "  ok  bstack subscriptions: $(grep -xE 'claude-agent|openai|xai' <<<"$connected" | paste -sd, -)"
-  fi
-  if [[ "$missing" -eq 0 ]]; then
-    log "  ok  bstack (lead=$(bstack_role_model lead | grep . || printf 'session'))"
-  fi
-  return "$missing"
 }

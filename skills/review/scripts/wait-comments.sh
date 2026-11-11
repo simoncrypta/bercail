@@ -40,10 +40,8 @@ is_agent_author_jq() {
   cat <<'JQ'
 def is_agent:
   ((.author // .username // "user") | ascii_downcase) as $a
-  | $a == "cursor-agent" or $a == "cursor" or $a == "codex"
-    or $a == "claude" or $a == "claude-code" or $a == "grok"
-    or $a == "gpt" or $a == "copilot" or $a == "agent"
-    or ($a | startswith("cursor-"))
+  | $a == "pi" or $a == "agent"
+    or $a == "claude" or $a == "gpt" or $a == "grok" or $a == "copilot"
     or ($a | startswith("claude"));
 JQ
 }

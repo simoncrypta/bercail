@@ -6,7 +6,7 @@
 #
 # Record: desk-sessions/<address>.json {address, session, cwd, harness, issue,
 # space, args, pid}. Its mtime is a heartbeat while the agent lives.
-# A live opencode TUI or Pi also writes $XDG_RUNTIME_DIR/bercail/open-sessions/<pid>.json
+# A live Pi also writes $XDG_RUNTIME_DIR/bercail/open-sessions/<pid>.json
 # {pid, start_ticks, sessions} so an idle agent (hc records {}) is not started twice.
 
 # A record this close to the shutdown was still running then.
@@ -70,7 +70,7 @@ desk_restore_plan() {
         elif $r == null then ["skip", "no record: see the desk-restore skill"]
         elif $r.space != $t.labels["bercail.space"] then ["skip", "record is for another space"]
         elif ($r.session // "") == "" then ["skip", "no session yet"]
-        elif ($r.harness | IN("opencode", "claude", "pi") | not) then ["skip", "cannot resume \($r.harness)"]
+        elif $r.harness != "pi" then ["skip", "cannot resume \($r.harness)"]
         elif $d.mtime < ($shutdown - $window) then ["skip", "closed before the shutdown"]
         elif ($d.cwd_exists | not) then ["skip", "folder is gone: \($r.cwd)"]
         elif $d.in_ps or ($open | index($r.session)) or ($taken | index($r.session)) then ["skip", "session is open elsewhere"]
@@ -92,19 +92,13 @@ desk_restore_plan() {
 # Pi takes --session-id: it creates the session when it was never written (Pi
 # writes one at its first message), where --session would exit.
 desk_resume_command() {
-  local record="$1" agent harness session cwd flag arg cmd
+  local record="$1" agent session cwd arg cmd
   agent="$LOCAL_BIN/bercail-desk-agent"
   [[ -x "$agent" ]] || agent="bercail-desk-agent"
-  harness="$(jq -r .harness <<<"$record")"
   session="$(jq -r .session <<<"$record")"
   cwd="$(jq -r .cwd <<<"$record")"
-  case "$harness" in
-    claude) flag=--resume ;;
-    pi) flag=--session-id ;;
-    *) flag=--session ;;
-  esac
-  printf -v cmd 'cd %q && TERM=xterm-256color COLORTERM=truecolor exec %q %q %q %q' \
-    "$cwd" "$agent" "$harness" "$flag" "$session"
+  printf -v cmd 'cd %q && TERM=xterm-256color COLORTERM=truecolor exec %q pi --session-id %q' \
+    "$cwd" "$agent" "$session"
   # NUL, not lines: a recorded flag may contain a newline, and a line split would
   # turn one argument into two.
   while IFS= read -r -d '' arg; do
@@ -422,39 +416,11 @@ deploy_desk_restore_boot() {
   fi
 }
 
-# The SessionStart hook that tells a Claude desk's record its session. Adds one
-# entry to the person's settings and touches nothing else.
-deploy_desk_claude_hook() {
-  local settings="$HOME/.claude/settings.json" hook="$LOCAL_BIN/bercail-desk-claude-hook" tmp
-  [[ -d "$HOME/.claude" ]] || return 0
-  [[ -f "$settings" ]] || [[ "$DRY_RUN" -eq 1 ]] || printf '{}\n' >"$settings"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would add the desk SessionStart hook to $settings"
-    return 0
-  fi
-  jq -e . "$settings" >/dev/null 2>&1 || {
-    warn "$settings is not valid JSON; Claude desks will not come back after a reboot"
-    return 0
-  }
-  if jq -e --arg c "$hook" '[.hooks.SessionStart[]?.hooks[]?.command] | index($c)' "$settings" >/dev/null; then
-    info "unchanged: desk SessionStart hook in $settings"
-    return 0
-  fi
-  tmp="$(mktemp)"
-  # args: [] is the exec form: a HOME with spaces is not passed through a shell.
-  jq --arg c "$hook" '.hooks.SessionStart = ((.hooks.SessionStart // []) + [{hooks: [{type: "command", command: $c, args: []}]}])' \
-    "$settings" >"$tmp" && cat "$tmp" >"$settings"
-  rm -f "$tmp"
-  info "added the desk SessionStart hook to $settings"
-}
-
 deploy_desk_restore() {
   deploy_desk_restore_boot || warn "could not set up the desk restore at boot"
-  deploy_desk_claude_hook || warn "could not add the desk SessionStart hook"
 }
 
 remove_desk_restore() {
-  local settings="$HOME/.claude/settings.json" tmp
   if [[ -e "$OMARCHY_POST_BOOT_HOOK" ]]; then
     info "remove: $OMARCHY_POST_BOOT_HOOK"
     run rm -f "$OMARCHY_POST_BOOT_HOOK"
@@ -463,17 +429,6 @@ remove_desk_restore() {
     info "remove: $DESK_RESTORE_UNIT"
     run systemctl --user disable bercail-desk-restore.service || true
     run rm -f "$DESK_RESTORE_UNIT"
-  fi
-  if [[ -f "$settings" ]] && jq -e --arg c "$LOCAL_BIN/bercail-desk-claude-hook" \
-    '[.hooks.SessionStart[]?.hooks[]?.command] | index($c)' "$settings" >/dev/null 2>&1; then
-    info "remove: desk SessionStart hook from $settings"
-    [[ "$DRY_RUN" -eq 1 ]] && return 0
-    tmp="$(mktemp)"
-    jq --arg c "$LOCAL_BIN/bercail-desk-claude-hook" '
-      .hooks.SessionStart |= map(.hooks |= map(select(.command != $c)) | select(.hooks | length > 0))
-      | if .hooks.SessionStart == [] then del(.hooks.SessionStart) else . end
-      | if .hooks == {} then del(.hooks) else . end' "$settings" >"$tmp" && cat "$tmp" >"$settings"
-    rm -f "$tmp"
   fi
 }
 

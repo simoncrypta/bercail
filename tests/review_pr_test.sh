@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# bercail review-pr against fake gh, opencode, tuicr, herdr-app, and hc.
+# bercail review-pr against fake gh, pi, tuicr, herdr-app, and hc.
 # No network: the PR heads come from a local bare repo.
 set -euo pipefail
 
@@ -9,7 +9,7 @@ export __MISE_BASH_ENV_LOADED=1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
-trap 'rm -rf "$TMP_DIR"' EXIT
+trap '[[ ! -f "$TMP_DIR/log/desk.pid" ]] || kill "$(cat "$TMP_DIR/log/desk.pid")" 2>/dev/null; rm -rf "$TMP_DIR"' EXIT
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3: expected '$1' got '$2'"; }
@@ -31,9 +31,13 @@ LOG="$TMP_DIR/log"
 FAKE_BIN="$TMP_DIR/bin"
 mkdir -p "$HOME" "$FIX" "$LOG" "$FAKE_BIN" "$XDG_CONFIG_HOME/bercail"
 export FIX LOG
-# A family name, so the pass has to ask opencode. The checkout hides other
-# providers; the stack dir does not. The pass must not inherit the checkout's list.
-printf '[bstack]\nenabled = true\nlead = "grok"\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+printf '[bstack]\nenabled = true\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+# bstack's reviewer argv, as bercail update writes it.
+PI_PROFILE="$HOME/.local/share/bercail/pi"
+mkdir -p "$PI_PROFILE"
+jq -n --arg d "$PI_PROFILE" '["pi", "--model", "fake/model", "-e", "\($d)/extensions/review.ts", "--tools", "read,grep,find,ls"]' \
+  >"$PI_PROFILE/review.json"
+export BERCAIL_DESK_AGENT="$ROOT/bin/bercail-desk-agent"
 BERCAIL="$ROOT/bin/bercail"
 REVIEWS="$XDG_STATE_HOME/bercail/reviews/github.com/acme/widgets"
 
@@ -57,7 +61,8 @@ export REMOTE
 git clone -q "$REMOTE" "$TMP_DIR/work/widgets"
 WORK="$TMP_DIR/work/widgets"
 export WORK
-printf '%s\n' '{"disabled_providers":["xai","openai"]}' >"$WORK/opencode.json"
+# Project config in the reviewed repo. The pass runs in the stack dir, so Pi never reads it.
+mkdir -p "$WORK/.pi" && printf '%s\n' '{"defaultProvider":"author"}' >"$WORK/.pi/settings.json"
 
 # --- fixtures -------------------------------------------------------------------
 pr_json() { # n sha title body closing
@@ -143,72 +148,71 @@ case "$1 $2" in
   *) echo "fake gh: $*" >&2; exit 2 ;;
 esac
 SH
-cat >"$FAKE_BIN/opencode" <<'SH'
+cat >"$FAKE_BIN/pi" <<'SH'
 #!/usr/bin/env bash
-# Model lookup must not use the checkout's config. A file named opencode.json
-# stands in for a repo that hides providers.
-case "$1" in
-  auth)
-    printf '%s\n' '[{"id":"xai","connections":[{"id":"1"}]}]'
-    exit 0 ;;
-  models)
-    if [[ -f "$PWD/opencode.json" ]]; then
-      printf '%s\n' claude-agent/opus
-    else
-      printf '%s\n' xai/grok-4.7
-    fi
-    exit 0 ;;
-  api)
-    printf '%s\n' "$*" >>"$LOG/opencode.api"
-    if [[ "$2 $3" == "post /api/session" ]]; then
-      body="$5"
-      printf '%s\n' "$body" >"$LOG/session-create.json"
-      count="$(cat "$LOG/session-count" 2>/dev/null || echo 0)"; count=$((count + 1)); echo "$count" >"$LOG/session-count"
-      id="ses_desk_$(jq -r .location.directory <<<"$body" | cksum | awk '{print $1}')_$count"
-      jq -n --arg id "$id" --argjson b "$body" '{data:{id:$id,location:$b.location,agent:$b.agent}}' >"$LOG/session-$id.json"
-    else
-      if [[ "${FAKE_SESSION_LOOKUP:-}" == unavailable ]]; then
-        echo '{"_tag":"ServiceUnavailableError","message":"server unavailable"}'; exit 1
-      fi
-      id="${3##*/}"
-      if [[ ! -f "$LOG/session-$id.json" ]]; then
-        jq -n --arg id "$id" '{_tag:"SessionNotFoundError",sessionID:$id}'; exit 1
-      fi
-    fi
-    cat "$LOG/session-$id.json"
-    exit 0 ;;
-esac
-printf '%s\n' "$PWD" >"$LOG/opencode.pwd"
-printf '%s\n' "$@" >"$LOG/opencode.argv"
-printf '%s\n' "$*" >>"$LOG/opencode.runs"
-sid=ses_fake prev=""
-for arg in "$@"; do [[ "$prev" == --session ]] && sid="$arg"; prev="$arg"; done
-if [[ "$sid" != ses_fake ]]; then
-  mkdir "$LOG/active-$sid" 2>/dev/null || { touch "$LOG/desk-collision"; exit 3; }
-  trap 'rmdir "$LOG/active-$sid"' EXIT
+# Headless (-p --mode json): one turn on stdout. Otherwise the review desk: it
+# stands in for review.ts, taking desk/inbox/ requests one at a time and
+# writing each turn to its out file. A desk turn reads FAKE_* from the
+# waiting CLI's environment, as if the CLI had picked the reply.
+sid="" prompt="" print=0 prev=""
+for arg in "$@"; do
+  [[ "$prev" == --session-id ]] && sid="$arg"
+  [[ "$arg" == -p ]] && print=1
+  prev="$arg"
+done
+prompt="${*: -1}"
+ev() { jq -cn --arg text "$1" '{type: "message_end", message: {role: "assistant", content: [{type: "text", text: $text}], stopReason: "stop"}}'; }
+turn() { # mode hold prompt
+  local mode="$1" hold="$2" prompt="$3" i
+  jq -cn --arg id "$sid" '{type: "session", id: $id}'
+  if [[ -n "$hold" ]]; then
+    trap 'exit 143' TERM
+    echo "${BASHPID}" >"$LOG/pi.child"
+    while [[ ! -f "$LOG/pi.release" && ! -f "$OUT.cancel" ]]; do sleep 0.05; done
+  fi
+  case "$mode" in
+    ok) if [[ "$prompt" == *"Stack summary mode"* ]]; then
+          reply="$(jq -c '{overview:"The stack improves uploads.",order:[.prs[] | "#\(.number) \(.review.why)"],risks:["No backoff"],start_here:["Read retry.sh"]}' summary-input.json)"
+          ev "$(printf '```json\n%s\n```' "$reply")"
+          return 0
+        fi
+        ev "Read intent.md and diff.patch."
+        ev "$(printf 'Three decisions.\n\n```json\n%s\n```' "$(cat "$FIX/reply.json")")" ;;
+    noblock) ev "I looked at it and it seems fine." ;;
+    long) for ((i = 0; i < 3000; i++)); do printf '%s\n' '{"type":"tool_execution_start","toolName":"read"}'; done
+          ev "$(printf '```json\n%s\n```' "$(cat "$FIX/reply.json")")" ;;
+    blocked) ev "$(printf '```json\n{"blocked": "diff.patch is empty"}\n```')" ;;
+    provider) jq -cn '{type: "message_end", message: {role: "assistant", content: [], stopReason: "error", errorMessage: "429 rate limited"}}' ;;
+    crash) echo "provider error" >&2; return 3 ;;
+  esac
+}
+if [[ "$print" -eq 1 ]]; then
+  printf '%s\n' "$PWD" >"$LOG/pi.pwd"
+  printf '%s\n' "$@" >"$LOG/pi.argv"
+  printf '%s\n' "$prompt" >>"$LOG/pi.runs"
+  sid=ses_fake OUT=/dev/null
+  turn "${FAKE_PI:-ok}" "${FAKE_HOLD:-}" "$prompt"
+  exit
 fi
-ev() { jq -cn --arg sid "$sid" --arg type "$1" --arg text "${2:-}" '{type: $type, sessionID: $sid, part: {type: $type, text: $text}}'; }
-ev step_start
-if [[ -n "${FAKE_HOLD:-}" ]]; then
-  trap 'exit 143' TERM
-  echo "$$" >"$LOG/opencode.child"
-  while [[ ! -f "$LOG/opencode.release" ]]; do sleep 0.05; done
-fi
-case "${FAKE_OPENCODE:-ok}" in
-  ok) if [[ "$*" == *"Stack summary mode"* ]]; then
-        reply="$(jq -c '{overview:"The stack improves uploads.",order:[.prs[] | "#\(.number) \(.review.why)"],risks:["No backoff"],start_here:["Read retry.sh"]}' summary-input.json)"
-        ev text "$(printf '```json\n%s\n```' "$reply")"
-        exit 0
-      fi
-      ev text "Read intent.md and diff.patch."
-      ev text "$(printf 'Three decisions.\n\n```json\n%s\n```' "$(cat "$FIX/reply.json")")" ;;
-  noblock) ev text "I looked at it and it seems fine." ;;
-  long) for ((i = 0; i < 3000; i++)); do ev tool_use; done
-        ev text "$(printf '```json\n%s\n```' "$(cat "$FIX/reply.json")")" ;;
-  blocked) ev text "$(printf '```json\n{"blocked": "diff.patch is empty"}\n```')" ;;
-  crash) echo "provider error" >&2; exit 3 ;;
-esac
-ev step_finish
+printf '%s\n' "$PWD" >"$LOG/desk.pwd"
+printf '%s\n' "$@" >"$LOG/desk.argv"
+mkdir -p desk/inbox
+jq -n --argjson pid "$$" --arg s "$sid" '{pid: $pid, session: $s}' >desk/pi.json
+while :; do
+  for req in desk/inbox/*.json; do
+    [[ -f "$req" ]] || continue
+    mv "$req" "$req.taken" || continue
+    caller="$(jq -r .pid "$req.taken")" OUT="$(jq -r .out "$req.taken")" prompt="$(jq -r .prompt "$req.taken")"
+    rm -f "$req.taken"
+    kill -0 "$caller" 2>/dev/null || continue
+    env="$(tr '\0' '\n' <"/proc/$caller/environ")"
+    mode="$(sed -n 's/^FAKE_PI=//p' <<<"$env")" hold="$(sed -n 's/^FAKE_HOLD=//p' <<<"$env")"
+    printf '%s\n' "$prompt" >>"$LOG/pi.runs"
+    turn "${mode:-ok}" "$hold" "$prompt" >>"$OUT" 2>/dev/null || true
+    printf '%s\n' '{"type":"agent_settled","aborted":false}' >>"$OUT"
+  done
+  sleep 0.05
+done
 SH
 cat >"$FAKE_BIN/tuicr" <<'SH'
 #!/usr/bin/env bash
@@ -289,13 +293,26 @@ case "$1" in
   ls) if [[ -f "$LOG/desk.json" ]]; then jq '{terminals:[{address:.address,state:"live"}]}' "$LOG/desk.json"; else echo '{"terminals":[]}'; fi ;;
   get) cat "$LOG/desk.json" ;;
   run)
-    space="" session=""
-    for arg in "$@"; do
-      [[ "$arg" == bercail.space=* ]] && space="${arg#*=}"
-      [[ "$arg" == bercail.review.session=* ]] && session="${arg#*=}"
+    space="" session="" cwd=""
+    shift
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --parent|--name) shift 2 ;;
+        --cwd) cwd="$2"; shift 2 ;;
+        --label)
+          [[ "$2" == bercail.space=* ]] && space="${2#*=}"
+          [[ "$2" == bercail.review.session=* ]] && session="${2#*=}"
+          shift 2 ;;
+        --*) shift ;;
+        *) break ;;
+      esac
     done
-    jq -n --arg space "$space" --arg session "$session" '{address:"t-desk",state:"live",status:{state:"idle"},labels:{"bercail.role":"agent","bercail.space":$space,"bercail.review.session":$session}}' >"$LOG/desk.json" ;;
-  kill|rm) rm -f "$LOG/desk.json" ;;
+    jq -n --arg space "$space" --arg session "$session" '{address:"t-desk",state:"live",status:{state:"idle"},labels:{"bercail.role":"agent","bercail.space":$space,"bercail.review.session":$session}}' >"$LOG/desk.json"
+    (cd "$cwd" && exec "$@") </dev/null >/dev/null 2>&1 &
+    echo "$!" >"$LOG/desk.pid" ;;
+  kill|rm)
+    [[ ! -f "$LOG/desk.pid" ]] || kill "$(cat "$LOG/desk.pid")" 2>/dev/null || true
+    rm -f "$LOG/desk.json" "$LOG/desk.pid" ;;
 esac
 SH
 cat >"$FAKE_BIN/gt" <<'SH'
@@ -401,7 +418,7 @@ PY
   assert_has "$md" 'Detected, not fetched: LEF-42' "Linear ids remain unfetched clues"
   grep -qF 'Intent unknown' <<<"$md" && fail "missing clues produced unknown intent"
 
-  agent="$(<"$ROOT/bstack/agents/bstack-pr-review.md")"
+  agent="$(<"$ROOT/bstack/pi/agents/bstack-pr-review.md")"
   assert_has "$agent" 'The diff is the source of truth.' "agent source priority"
   assert_has "$agent" 'Always infer intent from what the code actually does' "code-based inference is required"
   assert_has "$agent" 'best educated guess' "inference is not claimed as author fact"
@@ -409,7 +426,7 @@ PY
   assert_has "$agent" 'Missing issues mean no issue clues to compare' "agent keeps inferring without issues"
   assert_has "$agent" 'likely stale description' "stale description policy"
   assert_has "$agent" 'not as an author question about the code' "stale descriptions do not seed code questions"
-  "$PY" - "$ROOT/bstack/agents/bstack-pr-review.md" <<'PY'
+  "$PY" - "$ROOT/bstack/pi/agents/bstack-pr-review.md" <<'PY'
 import json, re, sys
 from pathlib import Path
 schema = json.loads(re.findall(r'```json\n(.*?)\n```', Path(sys.argv[1]).read_text(), re.S)[-1])
@@ -434,7 +451,7 @@ test_thin_pr_stops() {
   assert_eq '["empty_body","no_linked_issue"]' "$(jq -c '.prs[0].thin' <<<"$out")" "thin flags in the JSON"
   assert_eq 'true waiting' "$(jq -r '"\(.thin) \(.pass)"' <<<"$out")" "a thin PR waits"
   assert_eq "bercail review-pr run --stack $REVIEWS/stack-8" "$(jq -r '.next' <<<"$out")" "next command"
-  [[ ! -e "$LOG/opencode.argv" ]] || fail "a thin PR must not start the pass"
+  [[ ! -e "$LOG/pi.argv" ]] || fail "a thin PR must not start the pass"
   dir="$REVIEWS/stack-8/pr-8/$SHA8"
   assert_eq "$dir" "$(jq -r '.prs[0].dir' <<<"$out")" "run dir in the JSON"
   for f in intent.md diff.patch ci.json pr.json; do [[ -s "$dir/$f" ]] || fail "missing $dir/$f"; done
@@ -469,12 +486,12 @@ test_pass() {
   jq -e --arg why "$(jq -r .why "$FIX/reply.json")" '.prs[0].summary | . == $why or . == "Awaiting code-based intent inference."' <<<"$out" >/dev/null \
     || fail "gather summary promoted a clue to inferred intent"
   wait_for "$dir/run.json"
-  argv="$(<"$LOG/opencode.argv")"
-  assert_eq $'run\n--format\njson\n--agent\nbstack-pr-review' "$(head -5 <<<"$argv")" "opencode argv"
-  grep -q -- '--model' <<<"$argv" && fail "must not pass --model"
-  assert_has "$argv" "pr-7/$SHA7/source/" "the prompt names the snapshot"
-  assert_eq "$REVIEWS/stack-7" "$(<"$LOG/opencode.pwd")" "the pass runs in the stack dir, not the reviewed repo"
-  [[ ! -e "$REVIEWS/stack-7/opencode.json" ]] || fail "the author's opencode config must not be copied to the launch cwd"
+  argv="$(<"$LOG/pi.argv")"
+  assert_eq "$(jq -r '.[1:][]' "$PI_PROFILE/review.json")"$'\n-p\n--mode\njson\n--session-dir\n'"$REVIEWS/stack-7/sessions"$'\n--' \
+    "$(head -n -1 <<<"$argv")" "the pass is bstack's reviewer argv, headless, with the stack's session dir"
+  assert_has "$(tail -1 <<<"$argv")" "pr-7/$SHA7/source/" "the prompt names the snapshot"
+  assert_eq "$REVIEWS/stack-7" "$(<"$LOG/pi.pwd")" "the pass runs in the stack dir, not the reviewed repo"
+  [[ ! -e "$REVIEWS/stack-7/.pi" ]] || fail "the author's Pi config must not be copied to the launch cwd"
   assert_eq 'ready ses_fake' "$(jq -r '"\(.status) \(.session_id)"' "$dir/run.json")" "run.json"
   assert_eq '3 decisions, 2 undocumented, 1 unmet, 3 questions' "$(jq -r .summary "$dir/run.json")" "run.json summary"
   assert_eq "bercail.review/v1 7 $SHA7 ses_fake 3" \
@@ -492,7 +509,7 @@ test_pass() {
   [[ ! -e "$dir/source/package-lock.json" ]] || fail "lock files are not snapshotted"
   assert_eq '' "$(git -C "$sib7" status --porcelain)" "the review worktree stays clean"
   [[ "$(git -C "$WORK" config --get core.symlinks || true)" != false ]] || fail "source repo's symlink policy changed"
-  printf 'PASS: a PR with intent: the pass runs bstack-pr-review with no --model and writes review.json and run.json\n'
+  printf 'PASS: a PR with intent: the pass runs bstack'"'"'s Pi reviewer and writes review.json and run.json\n'
 }
 
 test_card() {
@@ -544,10 +561,13 @@ test_infer_without_issue() {
 
 test_run_outcomes() {
   local dir="$REVIEWS/stack-7/pr-7/$SHA7"
-  FAKE_OPENCODE=noblock "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null && fail "no JSON block must fail"
+  FAKE_PI=noblock "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null && fail "no JSON block must fail"
   assert_eq 'failed the reply is not a valid decisions JSON block' "$(jq -r '"\(.status) \(.reason)"' "$dir/run.json")" "failed"
-  FAKE_OPENCODE=crash "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null && fail "a crash must fail"
-  assert_eq 'failed opencode exited 3: provider error' "$(jq -r '"\(.status) \(.reason)"' "$dir/run.json")" "crash"
+  FAKE_PI=crash "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null && fail "a crash must fail"
+  assert_eq 'failed pi exited 3: provider error' "$(jq -r '"\(.status) \(.reason)"' "$dir/run.json")" "crash"
+  # Pi exits 0 when the provider fails; its last message says so.
+  FAKE_PI=provider "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null && fail "a provider error must fail"
+  assert_eq 'failed pi failed: 429 rate limited' "$(jq -r '"\(.status) \(.reason)"' "$dir/run.json")" "provider error"
   cp "$FIX/reply.json" "$FIX/good-reply.json"
   local bad
   for bad in 'del(.intent_analysis)' '.why = ""' '.why_source = "issue #12"' \
@@ -563,14 +583,14 @@ test_run_outcomes() {
     assert_has "$("$BERCAIL" review-pr card --stack "$REVIEWS/stack-7")" "not a valid decisions JSON block" "card after invalid reply"
   done
   mv "$FIX/good-reply.json" "$FIX/reply.json"
-  FAKE_OPENCODE=blocked "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null || fail "blocked is not a failure"
+  FAKE_PI=blocked "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null || fail "blocked is not a failure"
   assert_eq 'blocked diff.patch is empty ses_fake' "$(jq -r '"\(.status) \(.reason) \(.session_id)"' "$dir/run.json")" "blocked"
   assert_has "$(status_of "$REVIEWS/stack-7" 7)" "blocked: diff.patch is empty" "a blocked row"
   [[ ! -e "$dir/review.json" ]] || fail "a rerun that blocks drops the last review"
   assert_has "$("$BERCAIL" review-pr card --stack "$REVIEWS/stack-7")" "Decisions pass: blocked: diff.patch is empty" "card after a blocked rerun"
 
   # A long pass (thousands of events) still gets its session id and review.
-  FAKE_OPENCODE=long "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null || fail "a long pass"
+  FAKE_PI=long "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null || fail "a long pass"
   assert_eq 'ready ses_fake' "$(jq -r '"\(.status) \(.session_id)"' "$dir/run.json")" "a long pass is ready"
 
   # One pass at a time. A lock whose process is gone reads as a pass that died.
@@ -590,17 +610,17 @@ test_run_outcomes() {
 
 test_concurrency() {
   local dir="$REVIEWS/stack-7/pr-7/$SHA7" runner child
-  rm -f "$LOG/opencode.child" "$LOG/opencode.release"
+  rm -f "$LOG/pi.child" "$LOG/pi.release"
   FAKE_HOLD=1 "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >"$LOG/held-run" &
   runner=$!
-  wait_for "$LOG/opencode.child"
-  child="$(cat "$LOG/opencode.child")"
+  wait_for "$LOG/pi.child"
+  child="$(cat "$LOG/pi.child")"
   assert_has "$("$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" 2>&1 || true)" "already running" "overlapping passes"
   assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 2>&1 || true)" \
     "review stack is busy" "gather cannot change a running pass's inputs"
   kill -TERM "$runner"
   wait "$runner" && fail "a terminated pass succeeds"
-  kill -0 "$child" 2>/dev/null && fail "opencode outlived its wrapper"
+  kill -0 "$child" 2>/dev/null && fail "pi outlived its wrapper"
   assert_eq failed "$(jq -r .status "$dir/run.json")" "termination records failure"
   [[ ! -L "$dir/pass.lock" && ! -L "$REVIEWS/stack-7/context.lock" ]] || fail "termination kept locks"
 
@@ -613,24 +633,24 @@ test_concurrency() {
 
   # Many callers reclaiming one dead lock must still start only one pass.
   ln -s 999999 "$dir/pass.lock"
-  rm -f "$LOG/opencode.child"
+  rm -f "$LOG/pi.child"
   local i pid winners=0
   local -a pids=()
   for ((i = 0; i < 8; i++)); do
     FAKE_HOLD=1 "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >"$LOG/race-$i" 2>&1 &
     pids+=("$!")
   done
-  wait_for "$LOG/opencode.child"
+  wait_for "$LOG/pi.child"
   # Keep the winner running until all contenders have attempted the lock.
   for pid in "${pids[@]}"; do
     [[ "$(readlink "$dir/pass.lock")" == "$pid" ]] || wait "$pid" || true
   done
-  touch "$LOG/opencode.release"
+  touch "$LOG/pi.release"
   for pid in "${pids[@]}"; do
     if wait "$pid"; then winners=$((winners + 1)); fi
   done
   assert_eq 1 "$winners" "only one stale-lock contender ran"
-  printf 'PASS: concurrent passes and gathers refused, termination kills opencode, dead locks have one successor\n'
+  printf 'PASS: concurrent passes and gathers refused, termination kills pi, dead locks have one successor\n'
 }
 
 test_ui() {
@@ -664,10 +684,10 @@ test_space() {
   local session
   session="$(jq -r .session_id "$REVIEWS/stack-7/desk.json")"
   assert_has "$(<"$LOG/hc")" "--label bercail.review.session=$session" "desk is attached to the review session"
-  assert_has "$(<"$LOG/hc")" "opencode --session $session $REVIEWS/stack-7" "the visible desk uses the safe stack cwd"
-  jq -e '.agent == "bstack-pr-review" and .permissions[0].effect == "deny"
-    and [.permissions[] | select(.effect == "allow") | .action] == ["read","glob","grep"]' "$LOG/session-create.json" >/dev/null \
-    || fail "review session is not read-only"
+  assert_has "$(<"$LOG/hc")" "--cwd $REVIEWS/stack-7 " "the visible desk uses the safe stack cwd"
+  assert_has "$(<"$LOG/hc")" "$BERCAIL_DESK_AGENT $(jq -r 'join(" ")' "$PI_PROFILE/review.json") --session-dir $REVIEWS/stack-7/sessions --session-id $session" \
+    "the desk runs bstack's reviewer on the review session"
+  assert_eq "$REVIEWS/stack-7" "$(<"$LOG/desk.pwd")" "the desk's Pi runs in the stack dir"
   # Again: the same space and tab, no second desk.
   : >"$LOG/hc"
   (cd / && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run) >/dev/null
@@ -759,7 +779,7 @@ test_checkout() {
   # rereview: the stack is gathered again, then #7's pass runs again though it was ready.
   : >"$LOG/gh"
   jq '.finished_at = "old"' "$REVIEWS/stack-7/pr-7/$SHA7/run.json" >"$LOG/run.old" && cp "$LOG/run.old" "$REVIEWS/stack-7/pr-7/$SHA7/run.json"
-  FAKE_OPENCODE=ok "$BERCAIL" review-pr rereview 7 --stack "$REVIEWS/stack-7" >/dev/null 2>"$LOG/rereview.err" \
+  FAKE_PI=ok "$BERCAIL" review-pr rereview 7 --stack "$REVIEWS/stack-7" >/dev/null 2>"$LOG/rereview.err" \
     || fail "rereview: $(cat "$LOG/rereview.err")"
   assert_has "$(<"$LOG/gh")" "pr view 7" "rereview gathers"
   assert_eq ready "$(jq -r 'select(.finished_at != "old") | .status' "$REVIEWS/stack-7/pr-7/$SHA7/run.json")" "rereview runs the pass again"
@@ -775,21 +795,21 @@ test_desk_summary() {
   for ((i = 0; i < 100; i++)); do [[ ! -L "$stack/summary.lock" ]] && break; sleep 0.05; done
   assert_eq "ready $session" "$(jq -r '"\(.status) \(.session_id)"' "$stack/stack-summary.json")" "same desk produced the stack summary"
   assert_has "$(jq -r '.order[]' "$stack/stack-summary.json")" 'Best guess: make uploads resilient' "stack summary reads the inferred purpose"
-  before="$(grep -c 'Stack summary mode' "$LOG/opencode.runs")"
+  before="$(grep -c 'Stack summary mode' "$LOG/pi.runs")"
   "$BERCAIL" review-pr summarize --stack "$stack"
-  assert_eq "$before" "$(grep -c 'Stack summary mode' "$LOG/opencode.runs")" "a matching summary is cached"
+  assert_eq "$before" "$(grep -c 'Stack summary mode' "$LOG/pi.runs")" "a matching summary is cached"
   assert_eq ready "$("$BERCAIL" review-pr state --stack "$stack" | jq -r .summary.status)" "summary reaches the mod"
 
   cp "$dir/run.json" "$LOG/ready-run.json"
   jq '.status = "blocked"' "$LOG/ready-run.json" >"$dir/run.json"
   "$BERCAIL" review-pr summarize --stack "$stack"
-  assert_eq "$before" "$(grep -c 'Stack summary mode' "$LOG/opencode.runs")" "summary waits for every card"
+  assert_eq "$before" "$(grep -c 'Stack summary mode' "$LOG/pi.runs")" "summary waits for every card"
   assert_eq waiting "$("$BERCAIL" review-pr state --stack "$stack" | jq -r .summary.status)" "old summary hidden while a card is not ready"
   cp "$LOG/ready-run.json" "$dir/run.json"
   jq '.decisions[0].statement = "A new decision at the same SHA"' "$dir/review.json" >"$LOG/new-card.json"
   cp "$LOG/new-card.json" "$dir/review.json"
   assert_eq waiting "$("$BERCAIL" review-pr state --stack "$stack" | jq -r .summary.status)" "a changed card invalidates the old summary"
-  FAKE_OPENCODE=noblock "$BERCAIL" review-pr summarize --stack "$stack" && fail "invalid stack summary accepted"
+  FAKE_PI=noblock "$BERCAIL" review-pr summarize --stack "$stack" && fail "invalid stack summary accepted"
   assert_eq failed "$("$BERCAIL" review-pr state --stack "$stack" | jq -r .summary.status)" "summary failure is visible"
   "$BERCAIL" review-pr summarize --stack "$stack"
   assert_eq ready "$("$BERCAIL" review-pr state --stack "$stack" | jq -r .summary.status)" "summary retry succeeds"
@@ -820,7 +840,6 @@ test_desk_summary() {
   assert_has "$out" "is working" "busy desk error"
   grep -qE '^(run|kill|rm) ' "$LOG/hc" && fail "interrupted a working desk"
   cp "$LOG/desk.saved.json" "$LOG/desk.json"
-  [[ ! -f "$LOG/desk-collision" ]] || fail "two passes used the same desk session at once"
   printf 'PASS: one read-only visible desk session, cached ready-stack summary, invalidation, failure, and busy desk protection\n'
 }
 
@@ -852,26 +871,34 @@ test_desk_preflight() {
   cmp -s "$LOG/preflight-review.json" "$dir/review.json" || fail "closed-space preflight deleted the card"
   cp "$LOG/preflight-spaces.json" "$HERDR_STATE"
 
-  # Deleted server sessions are recoverable; a server outage is not a reason to replace one.
+  # A desk whose Pi quit comes back on the same session.
   session="$(jq -r .session_id "$stack/desk.json")"
-  rm -f "$LOG/session-$session.json"
+  kill "$(jq -r .pid "$stack/desk/pi.json")"
+  : >"$LOG/hc"
   "$BERCAIL" review-pr ui --stack "$stack"
-  fresh="$(jq -r .session_id "$stack/desk.json")"
-  [[ "$fresh" != "$session" ]] || fail "a deleted session was not replaced"
-  assert_has "$(<"$LOG/hc")" "bercail.review.session=$fresh" "replacement desk is attached to the new session"
-  out="$(FAKE_SESSION_LOOKUP=unavailable "$BERCAIL" review-pr run 7 --stack "$stack" 2>&1)" && fail "used an unavailable server"
-  assert_has "$out" "could not read" "server outage is reported"
-  assert_eq "$fresh" "$(jq -r .session_id "$stack/desk.json")" "outage did not replace the session"
-  cmp -s "$LOG/preflight-run.json" "$dir/run.json" || fail "outage changed run.json"
-  cmp -s "$LOG/preflight-review.json" "$dir/review.json" || fail "outage changed the card"
+  assert_eq "$session" "$(jq -r .session_id "$stack/desk.json")" "a restarted desk keeps its session"
+  assert_has "$(<"$LOG/hc")" "--session-id $session" "the new desk resumes the review session"
+  kill -0 "$(jq -r .pid "$stack/desk/pi.json")" || fail "the new desk's Pi runs"
+  # A desk that quits mid-turn fails the pass instead of waiting forever.
+  rm -f "$LOG/pi.child" "$LOG/pi.release"
+  FAKE_HOLD=1 "$BERCAIL" review-pr run 7 --stack "$stack" >/dev/null 2>&1 &
+  local runner=$!
+  wait_for "$LOG/pi.child"
+  kill "$(jq -r .pid "$stack/desk/pi.json")"
+  wait "$runner" && fail "a pass whose desk quit succeeded"
+  assert_has "$(jq -r .reason "$dir/run.json")" "the review desk exited" "the pass says the desk quit"
+  rm -f "$LOG/pi.child"
+  cp "$LOG/preflight-run.json" "$dir/run.json"
+  cp "$LOG/preflight-review.json" "$dir/review.json"
+  "$BERCAIL" review-pr ui --stack "$stack"
   [[ ! -L "$dir/pass.lock" && ! -L "$stack/desk-pass.lock" ]] || fail "preflight failure leaked a lock"
-  printf 'PASS: desk preflight preserves cards, busy gathers wait, deleted sessions recover, outages do not reset sessions\n'
+  printf 'PASS: desk preflight preserves cards, busy gathers wait, a quit desk comes back on its session, a desk that quits fails its pass\n'
 }
 
 # --- open: tuicr pr N directly, seeded with [AI Agent] questions ------------------
 test_open() {
   local out dir="$REVIEWS/stack-7/pr-7/$SHA7"
-  FAKE_OPENCODE=ok "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null
+  FAKE_PI=ok "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null
   : >"$LOG/herdr"
   (cd "$TMP_DIR/work/widgets.review-7" && FAKE_TUICR_HOLD=1 HC_TERMINAL_ID=t-elsewhere BERCAIL_REVIEW_OPEN_WAIT=5 "$BERCAIL" review-pr open) >"$LOG/open-result" &
   local opener=$!
@@ -989,22 +1016,30 @@ test_help() {
   assert_has "$("$BERCAIL" nope 2>&1 || true)" "review-pr" "usage lists review-pr"
   assert_has "$("$BERCAIL" review-pr)" "open [N]" "review-pr usage"
   assert_has "$("$BERCAIL" review-pr https://github.com/acme/widgets/issues/1 2>&1 || true)" "not a pull request URL" "bad URL"
-  grep -qx 'agents/bstack-pr-review.md' "$ROOT/bstack/MANIFEST" || fail "MANIFEST ships the agent"
-  grep -qx 'commands/pr-review.md' "$ROOT/bstack/MANIFEST" || fail "MANIFEST ships the command"
+  grep -qx 'pi/agents/bstack-pr-review.md' "$ROOT/bstack/MANIFEST" || fail "MANIFEST ships the reviewer's rules"
+  grep -qx 'pi/extensions/review.ts' "$ROOT/bstack/MANIFEST" || fail "MANIFEST ships the reviewer's extension"
+  grep -qx 'pi/prompts/pr-review.md' "$ROOT/bstack/MANIFEST" || fail "MANIFEST ships the /pr-review prompt"
   printf 'PASS: help and usage list review-pr; bad URLs are refused\n'
 }
 
-test_agent_permissions() {
-  local f="$ROOT/bstack/agents/bstack-pr-review.md" perms
-  perms="$(awk '/^permissions:/ { on = 1; next } on && /^---/ { exit } on' "$f" | paste -sd' ' | tr -s ' ')"
-  assert_has "$perms" '- action: edit resource: "*" effect: deny' "edit denied"
-  assert_has "$perms" '- action: subagent resource: "*" effect: deny' "subagents denied"
-  assert_has "$perms" '- action: shell resource: "*" effect: deny' "shell denied"
-  assert_has "$perms" '- action: external_directory resource: "*" effect: deny' "nothing read outside the stack dir"
-  assert_has "$perms" '- action: "*" resource: "*" effect: deny' "unknown tools and MCP denied"
-  assert_eq 3 "$(grep -c 'effect: allow' "$f")" "only read, glob and grep are allowed"
-  printf 'PASS: bstack-pr-review: edit, subagents, shell, and reads outside the stack dir denied\n'
-}
+# The reviewer is read-only by its argv; review.ts keeps reads in the stack dir
+# (tests/review_pi_test.sh proves that on a real Pi).
+test_agent_rules() (
+  # shellcheck source=lib/common.sh
+  source "$ROOT/lib/common.sh"
+  # shellcheck source=lib/bstack.sh
+  source "$ROOT/lib/bstack.sh"
+  local argv
+  _bstack_pi_review_argv claude-bridge/claude-opus-5-5#high
+  argv="${BSTACK_PI_ARGV[*]}"
+  assert_has "$argv" "--model claude-bridge/claude-opus-5-5:high" "the lead's model"
+  assert_has "$argv" "--tools read,grep,find,ls" "read-only tools"
+  assert_has "$argv" "-e $BSTACK_PI_DIR/extensions/review.ts" "review.ts confines reads"
+  assert_has "$argv" "--no-skills --no-prompt-templates --no-context-files" "nothing but the pr-review rules"
+  assert_has "$argv" "--append-system-prompt $BSTACK_PI_DIR/agents/bstack-pr-review.md" "the pr-review rules"
+  grep -q -- '-e .*guard.ts' <<<"$argv" && fail "no bash, so no guard"
+  printf 'PASS: bstack-pr-review on Pi: read, grep, find and ls only, review.ts, the pr-review rules\n'
+)
 
 test_stacks() {
   local seed="$TMP_DIR/seed" main_sha src_head src_branch src_status src_cfg other
@@ -1108,7 +1143,7 @@ test_stacks() {
   sha21="$(jq -r '.prs[0].head_sha' "$stack/stack.json")"
   sha22="$(jq -r '.prs[1].head_sha' "$stack/stack.json")"
   sha23="$(jq -r '.prs[2].head_sha' "$stack/stack.json")"
-  rm -f "$LOG/opencode.child" "$LOG/opencode.release"
+  rm -f "$LOG/pi.child" "$LOG/pi.release"
   FAKE_HOLD=1 "$BERCAIL" review-pr run --stack "$stack" >"$LOG/multi-run" 2>"$LOG/multi-err" &
   local launcher=$!
   sleep 1
@@ -1126,7 +1161,7 @@ test_stacks() {
   }
   [[ ! -L "$stack/pr-22/$sha22/pass.lock" ]] || fail "a thin PR is not started by run without N"
   [[ ! -L "$stack/context.lock" ]] || fail "passes must not hold the stack lock"
-  touch "$LOG/opencode.release"
+  touch "$LOG/pi.release"
   wait "$launcher"
   assert_eq ready "$(jq -r .status "$stack/pr-21/$sha21/run.json")" "parallel pass 21"
   assert_eq ready "$(jq -r .status "$stack/pr-23/$sha23/run.json")" "parallel pass 23"
@@ -1240,7 +1275,7 @@ test_stacks() {
   assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/51 2>&1 || true)" \
     "cycle" "a cycle is an error"
 
-  rm -f "$LOG/gh.held" "$LOG/gh.release" "$LOG/opencode.release"
+  rm -f "$LOG/gh.held" "$LOG/gh.release" "$LOG/pi.release"
   FAKE_GH_HOLD=1 "$BERCAIL" review-pr https://github.com/acme/widgets/pull/21 --no-run >"$LOG/gather-hold" &
   local holder=$!
   wait_for "$LOG/gh.held"
@@ -1367,5 +1402,4 @@ test_desk_preflight
 test_clone_and_no_checks
 test_stacks
 test_help
-test_agent_permissions
-[[ ! -f "$LOG/desk-collision" ]] || fail "concurrent work reached one desk session"
+test_agent_rules

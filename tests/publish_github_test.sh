@@ -70,7 +70,7 @@ jq -e '.comments[0].body == "rename this"' "$TMP_DIR/posted.json" >/dev/null \
   || fail "posted body $(cat "$TMP_DIR/posted.json")"
 printf 'PASS: publish-github posts a COMMENT review\n'
 
-printf '%s\n' '[{"id":"agent:1","author":"cursor-agent","path":"src/a.rs","start_line":12,"content":"ai note"}]' \
+printf '%s\n' '[{"id":"agent:1","author":"pi","path":"src/a.rs","start_line":12,"content":"ai note"}]' \
   >"$TMP_DIR/tuicr-comments"
 set +e
 "$SCRIPT" --repo "$TMP_DIR" >/dev/null 2>"$TMP_DIR/err"

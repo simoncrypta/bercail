@@ -1,21 +1,14 @@
 #!/usr/bin/env bash
 # The desk agent. Usage: bercail-desk-agent [--prompt TEXT] [COMMAND [ARGS...]]
 #
-# COMMAND defaults to the Pi lead when bstack is on ([bstack] enabled = true)
-# and harness is not "opencode" (unset is Pi). Pinned opencode gets the
-# terminal's palette and runs the full TUI, not `opencode mini`: only the full
-# TUI reports its status (OSC 7501), which the desk column's header and Review's
-# auto-open read. Otherwise the default is [agent] command. The Pi lead is
-# lead.json, which bercail update writes.
+# COMMAND defaults to the Pi lead when bstack is on ([bstack] enabled = true),
+# else plain pi. The Pi lead is lead.json, which bercail update writes.
 set -euo pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml"
 PI_LEAD="$HOME/.local/share/bercail/pi/lead.json"
 # Every Pi desk loads it: it tells the record which session runs there.
 PI_DESK_EXTENSION="$HOME/.local/share/bercail/pi-extensions/bercail-desk.ts"
-# Tabs off: the TUI then reports only its own session, not the other sessions
-# open in this folder.
-CLI_CONFIG='{"theme":{"name":"system","mode":"system"},"highlights":false,"tabs":{"mode":"off"}}'
 
 # Value of KEY in [SECTION] of config.toml, unquoted.
 toml_get() {
@@ -34,13 +27,12 @@ if [[ "${1:-}" == --prompt ]]; then
   shift 2 || shift $#
 fi
 
-bstack=0 on_pi=0
+bstack=0
 [[ "$(toml_get bstack enabled)" == true ]] && bstack=1
-[[ "$bstack" -eq 1 && "$(toml_get bstack harness)" != opencode ]] && on_pi=1
 
 argv=("$@")
 if [[ ${#argv[@]} -eq 0 ]]; then
-  if [[ "$on_pi" -eq 1 ]]; then
+  if [[ "$bstack" -eq 1 ]]; then
     [[ -r "$PI_LEAD" ]] || {
       printf 'bercail-desk-agent: %s is missing; run bercail update\n' "$PI_LEAD" >&2
       exit 1
@@ -48,17 +40,14 @@ if [[ ${#argv[@]} -eq 0 ]]; then
     while IFS= read -r -d '' arg; do
       argv+=("$arg")
     done < <(jq -j '.[] | ., "\u0000"' "$PI_LEAD")
-  elif [[ "$bstack" -eq 1 ]]; then
-    argv=(opencode)
   else
-    read -r -a argv <<<"$(toml_get agent command)"
-    [[ ${#argv[@]} -gt 0 ]] || argv=(cursor-agent)
+    argv=(pi)
   fi
 fi
 
 # An idle harness writes nothing. Heartbeat the record, using hc events to
 # notice its exit without waiting a full minute. Session identity comes from
-# the TUI plugin or Claude hook, not hc's turn-only status reports.
+# the Pi desk extension, not hc's turn-only status reports.
 watch_desk() {
   local pid="$1" record="$2" events
   trap '' INT
@@ -81,35 +70,12 @@ watch_desk() {
 }
 
 # 0 when FLAG takes the next argv word. An equals form already holds its value.
-# Only listed flags do. A value is not a subcommand (`opencode --prompt run`
-# stays a desk); a word after a boolean flag is (`opencode --print-logs run`).
+# Only listed flags do.
 flag_has_value() {
-  case "$1 $2" in
-    "opencode --server" | "opencode --completions" | "opencode --log-level" \
-      | "codex -c" | "codex --config" | "codex --enable" | "codex --disable" \
-      | "codex --remote" | "codex --remote-auth-token-env" | "codex -i" | "codex --image" \
-      | "codex -m" | "codex --model" | "codex --local-provider" | "codex -p" | "codex --profile" \
-      | "codex -s" | "codex --sandbox" | "codex -C" | "codex --cd" | "codex --add-dir" \
-      | "codex -a" | "codex --ask-for-approval" \
-      | "claude --add-dir" | "claude --agent" | "claude --agents" \
-      | "claude --allowedTools" | "claude --allowed-tools" | "claude --append-system-prompt" \
-      | "claude --autocompact" | "claude --betas" | "claude --cloud" | "claude -d" | "claude --debug" \
-      | "claude --debug-file" | "claude --disallowedTools" | "claude --disallowed-tools" \
-      | "claude --effort" | "claude --environment" | "claude --fallback-model" | "claude --file" \
-      | "claude --from-pr" | "claude --input-format" | "claude --json-schema" \
-      | "claude --max-budget-usd" | "claude --mcp-config" | "claude --model" | "claude -n" \
-      | "claude --name" | "claude --output-format" | "claude --permission-mode" \
-      | "claude --permission-prompts" | "claude --plugin-dir" | "claude --plugin-url" \
-      | "claude --prompt-suggestions" | "claude --remote-control" \
-      | "claude --remote-control-session-name-prefix" \
-      | "claude --setting-sources" | "claude --settings" | "claude --system-prompt" \
-      | "claude --system-prompt-snapshot" | "claude --teleport" | "claude --tools" \
-      | "claude -w" | "claude --worktree" \
-      | "pi --provider" | "pi --model" | "pi --api-key" | "pi --system-prompt" \
-      | "pi --append-system-prompt" | "pi --mode" | "pi --session-dir" | "pi --name" | "pi -n" \
-      | "pi --models" | "pi --tools" | "pi -t" | "pi --exclude-tools" | "pi -xt" \
-      | "pi --thinking" | "pi --extension" | "pi -e" | "pi --skill" | "pi --prompt-template" \
-      | "pi --theme" | "pi --use-theme" | "pi --tui-mode")
+  case "$1" in
+    --provider | --model | --api-key | --system-prompt | --append-system-prompt | --mode \
+      | --session-dir | --name | -n | --models | --tools | -t | --exclude-tools | -xt \
+      | --thinking | --extension | -e | --skill | --prompt-template | --theme | --use-theme | --tui-mode)
       return 0 ;;
   esac
   return 1
@@ -123,35 +89,23 @@ remember_desk() {
   local harness session="" issue="" issue_title="" space record tmp flags="[]" arg name hcjson=""
   local dir="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/desk-sessions"
   local -a rest=()
-  local saw_pos=0
   [[ -n "${HC_TERMINAL_ID:-}" ]] && command -v hc >/dev/null && command -v jq >/dev/null || return 0
   harness="$(basename "${argv[0]}")"
+  # Only a Pi session can be resumed.
+  [[ "$harness" == pi ]] || return 0
   set -- "${argv[@]:1}"
   while (($#)); do
     arg="$1"
     shift
-    if [[ "$arg" == -- ]]; then
-      [[ "$harness" == claude || "$harness" == pi ]] || rest+=("$arg" "$@")
-      break
-    fi
-    if [[ "$arg" != -* ]]; then
-      if [[ "$saw_pos" -eq 0 ]]; then
-        saw_pos=1
-        case "$harness $arg" in
-          "opencode run" | "codex exec") return 0 ;;
-        esac
-      fi
-      # Claude's and Pi's free positionals are their first messages, not resume options.
-      [[ "$harness" != claude && "$harness" != pi ]] || continue
-      rest+=("$arg")
-      continue
-    fi
+    [[ "$arg" != -- ]] || break
+    # Free positionals are Pi's first messages, not resume options.
+    [[ "$arg" == -* ]] || continue
     name="$arg"
     [[ "$arg" == *=* ]] && name="${arg%%=*}"
-    case "$harness $name" in
-      "claude -p" | "claude --print" | "cursor-agent -p" | "cursor-agent --print" | "pi -p" | "pi --print")
+    case "$name" in
+      -p | --print)
         return 0 ;;
-      "opencode --session" | "opencode -s" | "pi --session" | "pi --session-id")
+      --session | --session-id)
         if [[ "$arg" == *=* ]]; then
           session="${arg#*=}"
         else
@@ -159,22 +113,13 @@ remember_desk() {
           shift || true
         fi
         continue ;;
-      "claude --resume" | "claude -r" | "claude --session-id")
-        if [[ "$arg" == *=* ]]; then
-          session="${arg#*=}"
-        elif [[ -n "${1:-}" && "${1}" != -* ]]; then
-          session="$1"
-          shift
-        fi
-        continue ;;
-      "opencode --prompt" | "pi --fork")
+      --fork)
         [[ "$arg" == *=* ]] || shift || true
         continue ;;
-      "opencode --continue" | "opencode -c" | "claude --continue" | "claude -c" | "claude --fork-session" \
-        | "pi --continue" | "pi -c" | "pi --resume" | "pi -r")
+      --continue | -c | --resume | -r)
         continue ;;
     esac
-    if [[ "$arg" != *=* && -n "${1:-}" && "${1}" != -* ]] && flag_has_value "$harness" "$name"; then
+    if [[ "$arg" != *=* && -n "${1:-}" && "${1}" != -* ]] && flag_has_value "$name"; then
       rest+=("$arg" "$1")
       shift
       continue
@@ -217,26 +162,14 @@ remember_desk() {
 
 remember_desk || true
 
-case "$(basename "${argv[0]}")" in
-  codex)
-    # hc runs codex without its app-server daemon.
-    [[ " ${argv[*]} " == *" --no-daemon "* ]] || argv+=(--no-daemon)
-    ;;
-  opencode)
-    [[ "$bstack" -eq 0 ]] || export OPENCODE_CLI_CONFIG_CONTENT="$CLI_CONFIG"
-    # opencode's TUI reads a positional argument as a directory.
-    [[ -z "$prompt" ]] || argv+=(--prompt "$prompt")
-    prompt=""
-    ;;
-  pi)
-    # First, so a `--` in the command cannot make it a message.
-    if [[ -f "$PI_DESK_EXTENSION" && " ${argv[*]} " != *" $PI_DESK_EXTENSION "* ]]; then
-      argv=("${argv[0]}" -e "$PI_DESK_EXTENSION" "${argv[@]:1}")
-    fi
-    # bstack reaches Claude through pi-claude-bridge on the plan, not an API key.
-    [[ "$on_pi" -eq 0 ]] || unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
-    ;;
-esac
+if [[ "$(basename "${argv[0]}")" == pi ]]; then
+  # First, so a `--` in the command cannot make it a message.
+  if [[ -f "$PI_DESK_EXTENSION" && " ${argv[*]} " != *" $PI_DESK_EXTENSION "* ]]; then
+    argv=("${argv[0]}" -e "$PI_DESK_EXTENSION" "${argv[@]:1}")
+  fi
+  # bstack reaches Claude through pi-claude-bridge on the plan, not an API key.
+  [[ "$bstack" -eq 0 ]] || unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
+fi
 [[ -z "$prompt" ]] || argv+=("$prompt")
 
 exec "${argv[@]}"

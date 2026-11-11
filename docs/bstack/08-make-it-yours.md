@@ -9,7 +9,7 @@ Everything lives under `[bstack]` in `~/.config/bercail/config.toml`:
 ```toml
 [bstack]
 enabled = true
-# Empty: auto, the newest model of that plan. An opencode id pins one.
+# Empty: auto, the newest model of that plan. A Pi model id pins one.
 claude = ""
 gpt = ""
 grok = "xai/grok-4.7"
@@ -23,67 +23,60 @@ judge = "claude"
 
 Then `bercail bstack setup` or `bercail update`. `bercail bstack status` shows
 each model as `auto` or `pinned`. A pin stays until you clear it, gets a council
-seat (with `council = true`) even when its plan isn't connected, and skips
-every new release; auto picks again on every update.
+seat even when you are not signed in to its plan, and skips every new release;
+auto picks again on every update.
 
-Roles fall back to the next connected plan, so you can set them once and
-connect plans later ([the order](./02-the-bstack-agent.md#the-roles)). Higher
+Roles fall back to the next plan you are signed in to, so you can set them once
+and sign in later ([the order](./02-the-bstack-agent.md#the-roles)). Higher
 effort reasons longer and spends more of each plan; a model without the level
 you ask for gets the next one down.
 
-### Pi rate-limit fallback
+### Rate-limit fallback
 
-On `harness = "pi"`, `fallback = ["claude", "gpt", "grok"]` sets runtime
-candidates after Pi exhausts rate-limit retries. Each switch scans from the
+`fallback = ["claude", "gpt", "grok"]` sets runtime candidates after Pi
+exhausts rate-limit retries. Each switch scans from the
 start, skipping the current and already attempted models. For example,
 `fallback = ["gpt", "grok"]` tries GPT before Grok. Only these three family
 names are valid, duplicates are rejected, and `[]` disables fallback. This does
-not change the initial role model picks above or opencode behavior.
+not change the initial role model picks above.
 
-Pi Claude IDs use `claude-bridge/`, for example
+Claude IDs use `claude-bridge/`, for example
 `claude-bridge/claude-opus-5-5#high`. The bridge uses `claude auth login`, not
 Pi's Anthropic login. Status and doctor count a subscription only when
 `claude auth status` reports `authMethod` `claude.ai` or `oauth_token`.
 Run `bercail update` after changing fallback or model pins. `bercail bstack status`
 shows the order and `bercail doctor` flags stale profile data. See
-[On Pi](../bstack.md#on-pi) for installation and role launches.
+[How it runs](../bstack.md#how-it-runs) for installation and role launches.
 
-## What bstack turns on in opencode
+## What bstack sets up in Pi
 
-- **`bstack` as the default agent**, on the lead's model, with bercail's
-  instructions.
-- **Asks before** `git commit`, `git push`, and `gh pr merge`, so agents stage
-  and stop.
-- **Policies** that block force-push and `--no-verify` for every agent, headless
-  runs included. A permission or an "Allow always" can't lift them.
-- **Web search** on `random`: Exa and TinyFish work without a key, and a rate
-  limit moves the search to another provider. Add a key with `/connect` for
-  higher limits.
-- **The todo tool**, which the playbooks use for their steps.
-- **Background compaction**, so long runs don't stop while the summary is written.
+- **The lead on the desk**, on the lead's model, with bercail's instructions
+  (`pi/instructions.md`), its prompt templates (`/ready`, `/council`, ...), and
+  bercail's skills.
+- **The roles as `hc` templates** in `~/.config/herdr-core/templates/`, each with
+  its own model and brief.
+- **A guard** that blocks force-push, `--no-verify`, `gh pr merge`, and a push
+  to `main` or `master` for every role, asks before other commits and pushes on
+  a desk, and blocks them in a headless run.
+- **The rate-limit fallback** above.
+- **review-pr's reviewer** (`pi/review.json`): the lead's model with only Pi's
+  read tools, kept inside the review's stack dir.
 
-Formatters stay off: a formatter that runs on every edit reformats whole files in
-repos that don't use it. Turn it on per project with `"formatter": true` in that
-repo's `opencode.jsonc`.
+Pi's own settings and logins stay yours: bstack passes everything with flags
+and adds only the bridge package to Pi's settings.
 
 ## Your own files
 
-`opencode.jsonc`, `agents/bstack*.md`, and bstack's eight `commands/*.md`
-under `~/.config/opencode` each carry a `managed by bercail (bstack)` line.
-Delete that line and bercail never touches the file again; `bercail doctor`
-lists it as yours. `bstack/instructions.md` has no line: it belongs to bercail,
-and every update rewrites it.
-
-Your own opencode settings go in `~/.config/opencode/opencode.json`. opencode
-loads it under bstack's `.jsonc`, so yours survive every update.
+The templates in `~/.config/herdr-core/templates/bstack-*.md` each carry a
+`managed by bercail (bstack)` line. Delete that line and bercail never touches
+the file again; `bercail doctor` lists it as yours. `~/.local/share/bercail/pi/`
+has no line: it belongs to bercail, and every update rewrites it.
 
 ## Skills
 
-bstack's skills are in `~/.agents/skills` ([the list](../cli.md#skills)).
-opencode and cursor-agent read them directly. When Claude Code or Codex is your
-`[agent] command`, bercail links them into `~/.claude/skills` or
-`~/.codex/skills`. Outside opencode there are no `bstack-*` subagents, so
-the skill does the role's work in the session and says so.
+bstack's skills are in `~/.agents/skills` ([the list](../cli.md#skills)), with
+a link in `~/.pi/agent/skills` for each. Every bstack role also loads them with
+`--skill`, so Pi's settings cannot filter them out.
 
 Add your own skill next to them. Write one when you have corrected the same
 mistake twice, not before. Better still, when a lint, a test, or a type can
@@ -95,10 +88,8 @@ catch the mistake, add that, so nothing depends on an agent reading a rule.
 bercail bstack off
 ```
 
-It removes bstack's files (the marked ones, the `bstack/` folder, and its
-model cache in `~/.local/share/bercail`) and leaves opencode, your plans, and
-your own config alone. `[agent] command` stays as it is, so after `bstack on`
-moved it to opencode, the desk now runs plain opencode; set it back in
-[config](../config.md) if you want another agent.
+It removes bstack's files (the marked templates and `~/.local/share/bercail/pi/`)
+and leaves Pi, your logins, and your own config alone. The desk then runs plain
+Pi.
 
 Next: [Recipes and pitfalls](./09-recipes-and-pitfalls.md).

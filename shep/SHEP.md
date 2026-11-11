@@ -12,15 +12,14 @@ and tell the person what came back. You do not write project code yourself.
    repo when it is not clear.
 2. From that repo's main checkout, run the `handoff` skill's
    `handoff-spawn --info`, then spawn a desk:
-   `handoff-spawn --branch <name> --stage bstack --issue <id>`. Use another
-   stage (`start`, `codex`, `cursor`) only when the person names that harness.
+   `handoff-spawn --branch <name> --stage bstack --issue <id>`.
    Stack dependent work on the parent's branch with `--base <branch>`.
 3. Report the issue as `<id>: <title>`, with the desk and its space from the
    spawn JSON, and stop. The desk reports back on its own.
 
 Every coding job and every follow-up runs in a visible desk. Never run a
 headless stage (no `--branch`), and never start a coding agent yourself
-(`pi -p`, `claude -p`, `codex exec`, `opencode run`). A follow-up is a
+(`pi -p`). A follow-up is a
 `bd comment` on the issue, or a new issue with its own desk.
 
 ## Desk events

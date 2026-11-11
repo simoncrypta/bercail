@@ -18,31 +18,24 @@ source "$_HANDOFF_SPAWN_DIR/git-backend.sh"
 handoff_usage() {
   cat >&2 <<'EOF'
 usage: handoff-spawn --info
-       handoff-spawn --stage start|codex|cursor|bstack|autopilot --issue ID --worktree PATH
-                     [--binary claude|codex|cursor-agent|opencode|pi] [--resume SESSION] [--dry-run]
-       handoff-spawn --branch <name> --stage start|codex|cursor|bstack --issue ID
+       handoff-spawn --stage bstack|autopilot --issue ID --worktree PATH
+                     [--resume SESSION] [--dry-run]
+       handoff-spawn --branch <name> --stage bstack --issue ID
                      [--dirty|--clean] [--space <id>] [--base <branch>]
 
   --info          print JSON facts and exit
   --issue ID      beads issue to work (bd show ID). It holds the detail. The
-                  agent's whole prompt is the id and its short title, for every harness.
-  --stage NAME    required; named stage (see handoff-stages.sh). start is claude,
-                  codex is Codex CLI, cursor is cursor-agent. bstack and autopilot
-                  are Pi (the lead profile) unless [bstack] harness = "opencode",
-                  which keeps opencode. autopilot may commit and push a PR's fixes;
-                  headless only, --worktree on the PR's checkout. Without --branch
-                  the stage runs headless (same result file). With --branch it opens
-                  a space whose desk agent runs that stage's binary. Bercail has no default.
-  --binary NAME   headless only: claude, codex, cursor-agent, opencode, or pi.
-                  Overrides the stage table binary. opencode and pi keep the stage's
-                  provider (start: claude, codex: gpt, cursor and bstack: lead).
-                  Autopilot accepts only pi or opencode. Bercail never switches it for you.
+                  agent's whole prompt is the id and its short title.
+  --stage NAME    required; bstack or autopilot (see handoff-stages.sh). Both
+                  run Pi (the lead profile). autopilot may commit and push a
+                  PR's fixes; headless only, --worktree on the PR's checkout.
+                  Without --branch the stage runs headless (same result file).
+                  With --branch, bstack opens a space whose desk runs Pi's lead.
+                  Bercail has no default.
   --worktree PATH checkout for a headless stage (default: cwd)
-  --resume ID     re-handoff: claude --resume, cursor-agent --resume,
-                  codex exec resume, opencode run --session, or pi --session-id
-                  (a uuid; an opencode ses_ id cannot be resumed on Pi)
+  --resume ID     re-handoff: pi --session-id (a uuid)
   --dry-run       print the headless command as JSON; no run, no issue check, no comment
-  --branch NAME   feature branch for a new space with a desk agent (any stage)
+  --branch NAME   feature branch for a new space with a desk agent (bstack only)
   --dirty         copy uncommitted main changes into the sibling as a working tree
                   (default when main is dirty)
   --clean         HEAD only; leave uncommitted files on main
@@ -54,7 +47,7 @@ usage: handoff-spawn --info
                   records that parent (gh stack, gt track, or origin stack track).
 
 Shep writes the beads issue first and owns the workflow. There are no prompt
-files and no per-harness modes. Each real handoff adds a bd comment to the
+files and no per-stage modes. Each real handoff adds a bd comment to the
 issue with the worktree (and, headless, the result file).
 EOF
   exit 2
@@ -480,7 +473,7 @@ handoff_spawn_main() {
   local branch="" dirty="auto" issue="" issue_title="" prompt main sibling label intro graphite=0 copied=0 backend=gh
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
-  local stage="" worktree="" resume="" dry=0 mode="" binary="" binary_override="" desk_bin=""
+  local stage="" worktree="" resume="" dry=0 mode="" binary=""
   local base=""
 
   while [[ $# -gt 0 ]]; do
@@ -510,11 +503,6 @@ handoff_spawn_main() {
         shift 2
         ;;
       --dry-run) dry=1; shift ;;
-      --binary)
-        [[ $# -ge 2 ]] || handoff_usage
-        binary_override="$2"
-        shift 2
-        ;;
       --branch)
         [[ $# -ge 2 ]] || handoff_usage
         branch="$2"
@@ -549,7 +537,7 @@ handoff_spawn_main() {
     return 0
   fi
 
-  [[ -n "$stage" ]] || handoff_die "--stage start|codex|cursor|bstack is required; bercail does not pick a harness"
+  [[ -n "$stage" ]] || handoff_die "--stage bstack|autopilot is required; bercail does not pick a stage"
   mode="$(handoff_stage_field "$stage" mode)" || handoff_die "unknown stage: $stage"
   case "$mode" in
     headless) ;;
@@ -563,25 +551,15 @@ handoff_spawn_main() {
   if [[ -n "$branch" ]]; then
     [[ "$stage" != autopilot ]] \
       || handoff_die "stage autopilot is headless: pass --worktree <the PR's checkout> instead of --branch"
-    [[ -z "$binary_override" ]] || handoff_die "stage $stage --branch starts a desk agent; --binary is for headless stages"
     [[ -z "$resume" && "$dry" -eq 0 && -z "$worktree" ]] \
       || handoff_die "stage $stage --branch starts a desk agent; --resume/--dry-run/--worktree are for headless stages"
-    if [[ "$binary" == pi ]]; then
-      [[ "$(_handoff_bstack_get enabled)" == true ]] \
-        || handoff_die "stage $stage on a Pi desk needs bstack on ([bstack] enabled = true). Run bercail bstack on."
-      [[ -f "$(handoff_pi_lead_file)" ]] \
-        || handoff_die "Pi lead profile is missing ($(handoff_pi_lead_file)). Run bercail update."
-      # Empty: bercail-desk-agent runs the lead from lead.json when harness is Pi.
-      desk_bin=""
-    else
-      desk_bin="$(handoff_headless_bin "$binary")"
-      if ! handoff_bin_present "$desk_bin"; then
-        handoff_die "requested harness $binary is not on PATH. Install it, or name another stage yourself (bercail harness lists what is present). Bercail does not switch harnesses."
-      fi
-    fi
+    [[ "$(_handoff_bstack_get enabled)" == true ]] \
+      || handoff_die "stage $stage on a Pi desk needs bstack on ([bstack] enabled = true). Run bercail bstack on."
+    [[ -f "$(handoff_pi_lead_file)" ]] \
+      || handoff_die "Pi lead profile is missing ($(handoff_pi_lead_file)). Run bercail update."
   elif [[ "$mode" == headless ]]; then
     [[ "$dirty" == auto ]] || handoff_die "stage $stage does not copy a dirty tree"
-    handoff_run_headless "$stage" "$worktree" "$issue" "$resume" "$dry" "$binary_override"
+    handoff_run_headless "$stage" "$worktree" "$issue" "$resume" "$dry"
     return 0
   else
     handoff_usage
@@ -679,12 +657,10 @@ handoff_spawn_main() {
 
   prompt="$(handoff_issue_prompt "$issue" "$issue_title")"
 
-  # The desk gets the table binary through WT_HERDR_AGENT_CMD, the one-line
-  # prompt through WT_HERDR_AGENT_PROMPT, and the issue through WT_HERDR_ISSUE
-  # and WT_HERDR_ISSUE_TITLE. No file.
-  # Pi passes an empty command so the desk agent runs the lead from lead.json.
+  # The desk agent runs the lead from lead.json. It gets the one-line prompt
+  # through WT_HERDR_AGENT_PROMPT, and the issue through WT_HERDR_ISSUE and
+  # WT_HERDR_ISSUE_TITLE. No file.
   if WT_HERDR_KEEP_FOCUS="$keep_space" \
-    WT_HERDR_AGENT_CMD="$desk_bin" \
     WT_HERDR_AGENT_PROMPT="$prompt" \
     WT_HERDR_ISSUE="$issue" \
     WT_HERDR_ISSUE_TITLE="$issue_title" \

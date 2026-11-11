@@ -40,9 +40,9 @@ reproduces. Style, naming, YAGNI and anything unproven are dropped, not
 reported. When you ask for fixes, it fixes what it kept and runs again until no
 blocker or major finding is left, three rounds at most.
 
-The seats exist only with `council = true` in `[bstack]`, after `bercail
-update`. With it off (the default), `/council` still works: the lead reviews
-alone by the same rules and says the panel did not run.
+`bercail update` renders one seat per plan with a model. With none, `/council`
+still works: the lead reviews alone by the same rules and says the panel did
+not run.
 
 ## tuicr: your review
 

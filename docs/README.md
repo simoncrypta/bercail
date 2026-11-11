@@ -8,7 +8,7 @@ The [README](../README.md) is the tour. These pages are the reference.
 - [config](config.md): `config.toml` and the other files bercail manages.
 - [review](review.md): tuicr when the desk is done, and `bercail review-pr` for someone else's PR.
 - [handoff](handoff.md): one beads issue per job, headless or in a sibling desk.
-- [bstack](bstack.md): opencode on your own Claude, ChatGPT, and X plans.
+- [bstack](bstack.md): Pi on your own Claude, ChatGPT, and X plans.
   - [the bstack guide](bstack/README.md): a walk-through, with prompts to copy.
 - [Shep](shep.md): the orchestrator on Pi, the Shep view, desk events, and agent status webhooks.
 - [development](development.md): hacking on bercail, dependencies, platforms.

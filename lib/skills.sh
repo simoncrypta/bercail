@@ -1,30 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-# Agent-specific skill dirs (scrubbed on reconfigure/uninstall).
-skill_extra_global_dirs_all() {
-  printf '%s\n' \
-    "${HOME}/.codex/skills" \
-    "${HOME}/.config/opencode/skills" \
-    "${HOME}/.claude/skills" \
-    "${HOME}/.pi/agent/skills" \
-    "${HOME}/.grok/skills"
-}
-
-# Extra link only when the agent does not discover ~/.agents/skills.
-# Grok scans ~/.grok/skills (and ~/.claude/skills), not ~/.agents/skills.
-# opencode v2 reads ~/.agents/skills itself; old links in its dir are scrubbed.
-skill_agent_extra_global_dirs() {
-  local cmd="${1:-}"
-  case "$cmd" in
-    agent|cursor|cursor-agent|opencode) return 1 ;;
-    grok) printf '%s' "${HOME}/.grok/skills" ;;
-    pi) printf '%s' "${HOME}/.pi/agent/skills" ;;
-    codex) printf '%s' "${HOME}/.codex/skills" ;;
-    claude|claude-code) printf '%s' "${HOME}/.claude/skills" ;;
-    *) return 1 ;;
-  esac
-}
+# Pi does not discover ~/.agents/skills: each skill gets a link in Pi's dir.
+PI_SKILLS_DIR="${HOME}/.pi/agent/skills"
 
 _skill_ids() {
   if ((${#AGENTIC_DEV_SKILL_IDS[@]})); then
@@ -79,14 +57,11 @@ remove_managed_skill_symlink() {
 }
 
 scrub_managed_skill_extra_links() {
-  local dir skill_id
-  while IFS= read -r dir; do
-    [[ -n "$dir" ]] || continue
-    while IFS= read -r skill_id; do
-      [[ -n "$skill_id" ]] || continue
-      remove_managed_skill_symlink "$dir" "$skill_id"
-    done < <(_skill_ids)
-  done < <(skill_extra_global_dirs_all)
+  local skill_id
+  while IFS= read -r skill_id; do
+    [[ -n "$skill_id" ]] || continue
+    remove_managed_skill_symlink "$PI_SKILLS_DIR" "$skill_id"
+  done < <(_skill_ids)
 }
 
 deploy_skill_tree() {
@@ -124,23 +99,13 @@ deploy_skill_tree() {
 }
 
 deploy_skills() {
-  local agent_cmd agent_skills_dir skill_id
+  local skill_id
   ensure_dir "$AGENTS_SKILLS_DIR"
   while IFS= read -r skill_id; do
     [[ -n "$skill_id" ]] || continue
     deploy_skill_tree "$skill_id"
+    ensure_skill_symlink "$PI_SKILLS_DIR" "$skill_id"
   done < <(_skill_ids)
-  scrub_managed_skill_extra_links
-
-  agent_cmd="$(read_agent_command 2>/dev/null || printf '%s' "cursor-agent")"
-  if agent_skills_dir="$(skill_agent_extra_global_dirs "$agent_cmd")"; then
-    while IFS= read -r skill_id; do
-      [[ -n "$skill_id" ]] || continue
-      ensure_skill_symlink "$agent_skills_dir" "$skill_id"
-    done < <(_skill_ids)
-  else
-    info "skills at $AGENTS_SKILLS_DIR (no extra link for '$agent_cmd')"
-  fi
 }
 
 remove_managed_handoff_skill() {

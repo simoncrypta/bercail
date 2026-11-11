@@ -57,14 +57,14 @@ git -C "$TMP_DIR/myapp" commit -q --allow-empty -m init
 git -C "$TMP_DIR/myapp" worktree add -q -b feat "$TMP_DIR/myapp.feat"
 desk="$TMP_DIR/myapp.feat"
 mkdir -p "$XDG_STATE_HOME/agentic-dev"
-jq -nc --arg p "$desk" '{path:$p, branch:"feat", issue:"myapp-1", issue_title:"Fix the login", stage:"start", harness:"claude"}' \
+jq -nc --arg p "$desk" '{path:$p, branch:"feat", issue:"myapp-1", issue_title:"Fix the login", stage:"bstack", harness:"pi"}' \
   >"$XDG_STATE_HOME/agentic-dev/handoffs.jsonl"
 
 # One `hc events` line: every terminal, the desk with STATUS.
 event() {
   jq -nc --arg s "$1" --arg cwd "$desk" '{seq:1, terminals:[
-    {address:"t5", state:"live", status:{state:"working", app:"claude-code"}, labels:{"herdr.space":"sp1"}, cwd:"/"},
-    {address:"t9", state:"live", status:(if $s == "" then null else {state:$s, app:"claude-code"} end),
+    {address:"t5", state:"live", status:{state:"working", app:"pi"}, labels:{"herdr.space":"sp1"}, cwd:"/"},
+    {address:"t9", state:"live", status:(if $s == "" then null else {state:$s, app:"pi"} end),
      labels:{"bercail.role":"agent","bercail.space":"sp1"}, cwd:$cwd, title:"Beads\tissue myapp-1"}]}'
 }
 
@@ -79,9 +79,9 @@ first="$(head -n 1 "$TMP_DIR/bodies.jsonl")"
 jq -e --arg p "$desk" '
   .schema == "bercail.agent_status/v2" and .sink == "work-shep"
   and .agent.address == "t9" and .agent.status == "done" and .agent.previous_status == "working"
-  and .agent.app == "claude-code" and .agent.title == "Beads issue myapp-1"
+  and .agent.app == "pi" and .agent.title == "Beads issue myapp-1"
   and .space.id == "sp1" and .space.repo == "myapp" and .space.checkout_path == $p and .space.linked == true
-  and .desk.issue == "myapp-1" and .desk.issue_title == "Fix the login" and .desk.stage == "start" and .desk.branch == "feat"
+  and .desk.issue == "myapp-1" and .desk.issue_title == "Fix the login" and .desk.stage == "bstack" and .desk.branch == "feat"
   and .text == "myapp-1: Fix the login. Desk t9 finished."' <<<"$first" >/dev/null \
   || fail "payload: $first"
 jq -se '.[1].kind == "blocked" and .[1].text == "myapp-1: Fix the login. Desk t9 is blocked." and .[1].desk.issue_title == "Fix the login"' \
@@ -127,7 +127,7 @@ printf 'PASS: a snapshot under params is read like a top-level one\n'
 status_event() {
   jq -nc --arg t "${2:-t9}" --arg s "$1" '{jsonrpc:"2.0", method:"event", params:{seq:9, terminal:$t,
     type:"status", data:{records:{}, reported:true,
-      status:(if $s == "" then null else {app:"claude-code", state:$s, msg:"Reading"} end)}}}'
+      status:(if $s == "" then null else {app:"pi", state:$s, msg:"Reading"} end)}}}'
 }
 : >"$TMP_DIR/bodies.jsonl"
 { event working; heartbeat 4054
@@ -149,7 +149,7 @@ cat >"$TMP_DIR/bin/hc-get" <<EOF
 #!/usr/bin/env bash
 [[ "\$1 \$2" == "get t12" ]] || exit 1
 jq -nc --arg cwd "$desk" '{address:"t12", state:"live", cwd:\$cwd, title:"New desk",
-  labels:{"bercail.role":"agent","bercail.space":"sp2"}, status:{app:"codex", state:"idle"}}'
+  labels:{"bercail.role":"agent","bercail.space":"sp2"}, status:{app:"pi", state:"idle"}}'
 EOF
 chmod +x "$TMP_DIR/bin/hc-get"
 : >"$TMP_DIR/bodies.jsonl"
@@ -190,13 +190,13 @@ jq -e 'select(.kind == "test") | .desk.issue_title == null and .text == "Test fr
   "$TMP_DIR/bodies.jsonl" >/dev/null || fail "test payload: $(jq -c 'select(.kind == "test")' "$TMP_DIR/bodies.jsonl")"
 printf 'PASS: notify test sends a kind=test payload\n'
 
-agent='{"address":"t9","app":"claude","status":"done","previous_status":"working","title":null}'
+agent='{"address":"t9","app":"pi","status":"done","previous_status":"working","title":null}'
 space='{"id":"sp1","name":"Readable-titles_Bercail","repo":"bercail","checkout_path":"/w","linked":true}'
 noname='{"id":"sp1","name":null,"repo":"bercail","checkout_path":"/w","linked":true}'
-desk_t='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":"Show the issue title next to every bd and desk id","stage":"start","harness":"claude","result":null}'
-notitle='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":null,"stage":"start","harness":"claude","result":null}'
+desk_t='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":"Show the issue title next to every bd and desk id","stage":"bstack","harness":"pi","result":null}'
+notitle='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":null,"stage":"bstack","harness":"pi","result":null}'
 noissue='{"branch":null,"issue":null,"issue_title":null,"stage":null,"harness":null,"result":null}'
-dotted='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":"Show the title.","stage":"start","harness":"claude","result":null}'
+dotted='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":"Show the title.","stage":"bstack","harness":"pi","result":null}'
 payload_text() { notify_payload "$1" work-shep "$agent" "$2" "$3" e1 | jq -r .text; }
 [[ "$(payload_text finished "$space" "$desk_t")" == "bercail-wb1: Show the issue title next to every bd and desk id. Desk t9 (Readable-titles_Bercail) finished." ]] \
   || fail "finished text: $(payload_text finished "$space" "$desk_t")"
@@ -210,7 +210,7 @@ payload_text() { notify_payload "$1" work-shep "$agent" "$2" "$3" e1 | jq -r .te
   || fail "no space name: $(payload_text finished "$noname" "$desk_t")"
 [[ "$(payload_text finished "$space" "$dotted")" == "bercail-wb1: Show the title. Desk t9 (Readable-titles_Bercail) finished." ]] \
   || fail "trailing period: $(payload_text finished "$space" "$dotted")"
-cut='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":"Show the issue…","stage":"start","harness":"claude","result":null}'
+cut='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":"Show the issue…","stage":"bstack","harness":"pi","result":null}'
 [[ "$(payload_text finished "$space" "$cut")" == "bercail-wb1: Show the issue… Desk t9 (Readable-titles_Bercail) finished." ]] \
   || fail "truncated title: $(payload_text finished "$space" "$cut")"
 printf 'PASS: payload text names the issue and the desk\n'

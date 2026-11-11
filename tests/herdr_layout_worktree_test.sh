@@ -11,7 +11,7 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
 FAKE_BIN="$TMP_DIR/bin"
 CALL_LOG="$TMP_DIR/calls.log"
 mkdir -p "$FAKE_BIN" "$TMP_DIR/main" "$TMP_DIR/main.feature"
-unset HC_TERMINAL_ID WT_HERDR_AGENT_CMD WT_HERDR_AGENT_PROMPT WT_HERDR_KEEP_FOCUS WT_HERDR_NO_DESK BERCAIL_DESK_AGENT
+unset HC_TERMINAL_ID WT_HERDR_AGENT_PROMPT WT_HERDR_KEEP_FOCUS WT_HERDR_NO_DESK BERCAIL_DESK_AGENT
 export HERDR_APP_BIN="$FAKE_BIN/herdr-app"
 export HC_BIN="$FAKE_BIN/hc"
 export HOME="$TMP_DIR/home"
@@ -19,7 +19,7 @@ export XDG_CONFIG_HOME="$TMP_DIR/xdg-config"
 mkdir -p "$HOME" "$XDG_CONFIG_HOME/bercail"
 export CALL_LOG FAKE_STATE="$TMP_DIR/state"
 mkdir -p "$FAKE_STATE"
-printf '[agent]\ncommand = "claude"\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+printf '[layout]\nreview = "tuicr"\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
 
 MAIN="$(cd "$TMP_DIR/main" && pwd -P)"
 FEATURE="$(cd "$TMP_DIR/main.feature" && pwd -P)"
@@ -99,7 +99,7 @@ wt_herdr_layout_create "Main_Feature" "$TMP_DIR/main.feature"
 grep -q 'space.new' "$CALL_LOG" && fail "an open space must be reused; log=$(cat "$CALL_LOG")"
 printf 'PASS: layout create reuses the space open on that folder\n'
 
-printf '[agent]\ncommand = "claude"\n[bstack]\nenabled = true\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+printf '[bstack]\nenabled = true\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
 : >"$CALL_LOG"
 wt_herdr_layout_create "Main_Feature" "$TMP_DIR/main.feature"
 grep -qx "$RUN" "$CALL_LOG" || fail "with bstack on, post-start starts the desk; log=$(cat "$CALL_LOG")"
@@ -112,39 +112,38 @@ rm -f "$FAKE_STATE/desk"
 : >"$CALL_LOG"
 WT_HERDR_NO_DESK=1 wt_herdr_layout_create "Main_Feature" "$TMP_DIR/main.feature"
 grep -q '^hc run' "$CALL_LOG" && fail "WT_HERDR_NO_DESK (handoff) must skip the desk; log=$(cat "$CALL_LOG")"
-printf '[agent]\ncommand = "claude"\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
 printf 'PASS: with bstack on, post-start starts a desk in a space without one, unless handoff asks not to\n'
 
 : >"$CALL_LOG"
-TERM=dumb WT_HERDR_AGENT_CMD=codex WT_HERDR_AGENT_PROMPT=bercail-0s1 \
+TERM=dumb WT_HERDR_AGENT_PROMPT=bercail-0s1 \
   wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
-grep -qx "$RUN --prompt bercail-0s1 codex" "$CALL_LOG" \
-  || fail "handoff should start the desk under the space's Shell with the stage's binary; log=$(cat "$CALL_LOG")"
+grep -qx "$RUN --prompt bercail-0s1" "$CALL_LOG" \
+  || fail "handoff should start the desk under the space's Shell with no command after it; log=$(cat "$CALL_LOG")"
 grep -qx 'TERM=xterm-256color' "$CALL_LOG" || fail "a headless caller's TERM=dumb must not reach the desk; log=$(cat "$CALL_LOG")"
 printf 'PASS: handoff starts the desk agent under the Shell, no tab of its own, with its prompt (real TERM)\n'
 
 touch "$FAKE_STATE/desk"
 : >"$CALL_LOG"
-WT_HERDR_AGENT_CMD=claude WT_HERDR_AGENT_PROMPT=bercail-0s2 \
+WT_HERDR_AGENT_PROMPT=bercail-0s2 \
   wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
 grep -q '^hc kill t5' "$CALL_LOG" || fail "handoff should replace the live desk; log=$(cat "$CALL_LOG")"
-grep -qx "$RUN --prompt bercail-0s2 claude" "$CALL_LOG" || fail "replacement desk; log=$(cat "$CALL_LOG")"
+grep -qx "$RUN --prompt bercail-0s2" "$CALL_LOG" || fail "replacement desk; log=$(cat "$CALL_LOG")"
 printf 'PASS: handoff replaces a live desk agent\n'
 
 rm -f "$FAKE_STATE/desk"
-if WT_HERDR_AGENT_CMD=claude wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature" 2>/dev/null; then
+if wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature" 2>/dev/null; then
   fail "handoff without WT_HERDR_AGENT_PROMPT must fail"
 fi
 printf 'PASS: handoff requires a prompt\n'
 
 : >"$CALL_LOG"
-WT_HERDR_AGENT_CMD=claude WT_HERDR_AGENT_PROMPT='Your job is beads issue bercail-0s1: Fix login.' \
+WT_HERDR_AGENT_PROMPT='Your job is beads issue bercail-0s1: Fix login.' \
   WT_HERDR_ISSUE=bercail-0s1 WT_HERDR_ISSUE_TITLE='Fix login' \
   wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
 grep -q -- '--label bercail.issue=bercail-0s1' "$CALL_LOG" || fail "issue label missing: $(cat "$CALL_LOG")"
 grep -q -- '--label bercail.issue_title=Fix login' "$CALL_LOG" || fail "title label missing: $(cat "$CALL_LOG")"
 : >"$CALL_LOG"
-WT_HERDR_AGENT_CMD=claude WT_HERDR_AGENT_PROMPT=x \
+WT_HERDR_AGENT_PROMPT=x \
   wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature"
 grep -q 'bercail.issue' "$CALL_LOG" && fail "no issue env, no issue label: $(cat "$CALL_LOG")"
 : >"$CALL_LOG"
@@ -180,7 +179,7 @@ printf 'PASS: layout close closes only the named space\n'
 touch "$FAKE_STATE/down"
 wt_herdr_layout_create "Main_Feature" "$TMP_DIR/main.feature" 2>/dev/null \
   || fail "post-start must not fail wt when the app is closed"
-if WT_HERDR_AGENT_CMD=claude WT_HERDR_AGENT_PROMPT=x wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature" 2>/dev/null; then
+if WT_HERDR_AGENT_PROMPT=x wt_herdr_handoff_agent "Main_Feature" "$TMP_DIR/main.feature" 2>/dev/null; then
   fail "handoff must fail when the app is closed"
 fi
 printf 'PASS: a closed app skips the space on post-start and fails a handoff\n'

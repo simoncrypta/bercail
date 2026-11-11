@@ -1,9 +1,3 @@
-[agent]
-# The desk agent when none was picked on the desk yet (the desk remembers the
-# last pick). Handoff stages do not read this command; each stage names its
-# own binary (claude, codex, cursor-agent, opencode, or pi).
-command = "pi"
-
 [layout]
 # Bare "tuicr" expands to `tuicr -w` (uncommitted changes only, watching;
 # agents stage and do not commit) or `tuicr pr N` for someone else's PR.
@@ -15,8 +9,6 @@ auto_review = true
 # Pi with your own Claude, ChatGPT, and X subscriptions. Setup installs the
 # Claude bridge. Sign in with `claude auth login`, /login openai, /login xai.
 enabled = true
-# pi, or opencode (opt-in).
-harness = "pi"
 # Pi rate-limit fallback candidates, scanned from the start, skipping the current
 # and already attempted models. Only claude/gpt/grok, no duplicates. [] disables it.
 fallback = ["claude", "gpt", "grok"]
@@ -34,9 +26,6 @@ effort = "high"
 lead = "claude"
 build = "grok"
 judge = "claude"
-# Render one bstack-council-<plan> reviewer per plan for /council. /council still
-# works when off: the lead reviews alone.
-council = false
 
 # [git]
 # Git backend per repo: gh (git + GitHub CLI), gt (Graphite), or origin (Cursor

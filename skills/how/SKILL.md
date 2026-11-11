@@ -22,17 +22,15 @@ different question than the one asked, say so.
 
 ## 2. Fan out (wide only)
 
-Launch 2 to 4 `explore` subagents in parallel, one angle each. Pick the angles
-that fit:
+Take 2 to 4 angles, one at a time. Pick the angles that fit:
 
 - the entry points and the path a call takes, in order,
 - the data: the types, where state lives, who writes and who reads it,
 - the edges: config, errors, retries, the I/O and the processes it starts,
 - the tests: what they pin down, what they skip.
 
-Give each one the question, its angle, and "report file:line for every claim,
-no fixes". Then read the files they point at yourself before you trust them.
-Outside opencode there are no subagents: take the angles one at a time.
+For each, keep the question in view and note file:line for every claim, no
+fixes.
 
 ## 3. Answer
 

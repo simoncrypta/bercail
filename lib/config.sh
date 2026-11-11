@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-# A new install runs bstack (Pi) on the desk; --no-bstack keeps cursor-agent.
+# A new install runs bstack on the desk; --no-bstack leaves plain Pi.
 default_user_config() {
-  local agent=cursor-agent
-  [[ "${BSTACK_NEW_INSTALL:-1}" -eq 1 ]] && agent=pi
-  printf '[agent]\ncommand = "%s"\n' "$agent"
   cat <<'EOF'
-
 [layout]
 review = "tuicr"
 # Open Review when the desk agent finishes (`tuicr -w`: uncommitted changes
@@ -22,8 +18,6 @@ EOF
 # Pi with your own logins. `bercail bstack setup` shows what's missing;
 # `bercail bstack off` turns bstack off.
 enabled = true
-# Which harness runs bstack: pi, or opencode (opt-in).
-harness = "pi"
 # A model per provider. Empty: auto, the newest model of each connected plan
 # (re-picked on bercail update). Set a provider/model id (#variant allowed) to pin one.
 claude = ""
@@ -54,20 +48,11 @@ _config_reader_path() {
 }
 
 ensure_config_reader() {
-  declare -F agentic_dev_agent_command >/dev/null 2>&1 && return 0
+  declare -F agentic_dev_layout_review >/dev/null 2>&1 && return 0
   local reader
   reader="$(_config_reader_path)" || return 1
   # shellcheck source=/dev/null
   source "$reader"
-}
-
-read_agent_command() {
-  ensure_config_reader || true
-  if declare -F agentic_dev_agent_command >/dev/null 2>&1; then
-    agentic_dev_agent_command
-  else
-    printf '%s' "cursor-agent"
-  fi
 }
 
 read_layout_review() {
@@ -294,46 +279,19 @@ migrate_agentic_dev_to_bercail() {
   fi
 }
 
-write_user_config() {
-  local cmd="$1"
-  ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would write $AGENTIC_DEV_USER_CONFIG (agent=$cmd review=tuicr)"
-    return 0
-  fi
-  cat >"$AGENTIC_DEV_USER_CONFIG" <<EOF
-[agent]
-command = "$cmd"
-
-[layout]
-review = "tuicr"
-auto_review = true
-EOF
-  info "saved config to $AGENTIC_DEV_USER_CONFIG"
-}
-
-# No install-time agent picker. The desk agent defaults to pi as bstack
-# (cursor-agent with --no-bstack).
-# Override [agent] command in config.toml yourself, then bercail reconfigure.
+# No install-time picker. The desk runs Pi: bstack's lead when bstack is on.
 prompt_user_config() {
   if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
-    info "using existing agent command: $(read_agent_command)"
-    info "review: $(read_layout_review)"
+    info "using existing config: $AGENTIC_DEV_USER_CONFIG (review: $(read_layout_review))"
     return 0
   fi
-  local agent=cursor-agent
-  [[ "${BSTACK_NEW_INSTALL:-1}" -eq 1 ]] && agent="pi (bstack)"
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would write default $AGENTIC_DEV_USER_CONFIG (agent=$agent)"
+    info "[dry-run] would write default $AGENTIC_DEV_USER_CONFIG"
     return 0
   fi
   ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
   default_user_config >"$AGENTIC_DEV_USER_CONFIG"
-  info "saved default config to $AGENTIC_DEV_USER_CONFIG (agent=$agent)"
-}
-
-prompt_agent_command() {
-  prompt_user_config
+  info "saved default config to $AGENTIC_DEV_USER_CONFIG"
 }
 
 deploy_tree() {
@@ -380,7 +338,7 @@ deploy_lib() {
     deploy_tree "$src/lib" "${AGENTIC_DEV_SHARE_DIR}/lib"
   else
     local libfile
-    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh harness.sh bstack.sh desk.sh shep.sh review.sh review-desk.sh stack.sh; do
+    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh bstack.sh desk.sh shep.sh review.sh review-desk.sh stack.sh; do
       deploy_install_file "lib/$libfile" "${AGENTIC_DEV_SHARE_DIR}/lib/$libfile"
     done
   fi
@@ -394,50 +352,6 @@ _recorded_install_source() {
   src="$(<"$AGENTIC_DEV_SOURCE_PATH_FILE")"
   [[ -n "$src" && -d "$src" && -f "$src/install.sh" && -d "$src/config" ]] || return 1
   printf '%s' "$src"
-}
-
-migrate_cursor_cli_command() {
-  local dest="$AGENTIC_DEV_USER_CONFIG" tmp
-  [[ -f "$dest" ]] || return 0
-  grep -Eq '^command[[:space:]]*=[[:space:]]*"agent"[[:space:]]*$' "$dest" || return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would migrate agent command agent → cursor-agent"
-    return 0
-  fi
-  tmp="$(mktemp)"
-  awk '
-    /^command[[:space:]]*=[[:space:]]*"agent"[[:space:]]*$/ {
-      sub(/"agent"/, "\"cursor-agent\"")
-    }
-    { print }
-  ' "$dest" >"$tmp"
-  mv "$tmp" "$dest"
-  info "migrated agent command to cursor-agent"
-}
-
-# bercail's old desk default was opencode. On Pi, that becomes pi. A pinned
-# harness = "opencode" is left alone, and so is any command the person chose.
-migrate_opencode_desk_command() {
-  local dest="$AGENTIC_DEV_USER_CONFIG" tmp
-  [[ -f "$dest" ]] || return 0
-  declare -F bstack_enabled >/dev/null || return 0
-  bstack_enabled || return 0
-  declare -F bstack_harness >/dev/null || return 0
-  [[ "$(bstack_harness)" == pi ]] || return 0
-  grep -Eq '^command[[:space:]]*=[[:space:]]*"opencode"[[:space:]]*$' "$dest" || return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would migrate agent command opencode → pi"
-    return 0
-  fi
-  tmp="$(mktemp)"
-  awk '
-    /^command[[:space:]]*=[[:space:]]*"opencode"[[:space:]]*$/ {
-      sub(/"opencode"/, "\"pi\"")
-    }
-    { print }
-  ' "$dest" >"$tmp"
-  mv "$tmp" "$dest"
-  info "migrated agent command to pi"
 }
 
 # Say what this install or update deploys from. A clone off master (or off a
@@ -575,9 +489,6 @@ migrate_worktrunk_layout_echo() {
 deploy_finalize_permissions() {
   # Older update callers reload this library before finalizing, but their file
   # list and remaining steps still belong to the old release.
-  deploy_install_file "bin/bercail-desk-claude-hook" "$LOCAL_BIN/bercail-desk-claude-hook"
-  deploy_install_file "config/opencode/plugins/bercail-desk/tui.ts" \
-    "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/bercail-desk/tui.ts"
   deploy_install_file "config/pi/extensions/bercail-desk.ts" \
     "${AGENTIC_DEV_SHARE_DIR}/pi-extensions/bercail-desk.ts"
   deploy_install_file "lib/desk.sh" "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh"
@@ -591,13 +502,9 @@ deploy_finalize_permissions() {
   fi
   if ! _skill_ids | grep -qx desk-restore; then
     deploy_skill_tree desk-restore
-    local agent_skills_dir
-    if agent_skills_dir="$(skill_agent_extra_global_dirs "$(read_agent_command)")"; then
-      ensure_skill_symlink "$agent_skills_dir" desk-restore
-    fi
+    ensure_skill_symlink "$PI_SKILLS_DIR" desk-restore
   fi
   run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/agentic-dev" "$LOCAL_BIN/bercail-desk-agent" \
-    "$LOCAL_BIN/bercail-desk-claude-hook" \
     "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.zsh" \
@@ -621,8 +528,6 @@ deploy_configs() {
   describe_install_source
   migrate_agentic_dev_to_bercail
   prompt_user_config
-  migrate_cursor_cli_command
-  migrate_opencode_desk_command
   migrate_hunk_review_to_tuicr
 
   ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
@@ -684,7 +589,7 @@ deploy_configs() {
 
   deploy_finalize_permissions
   record_install_source
-  ensure_selected_agent
+  ensure_pi
   ensure_selected_layout_tools
   if declare -F sync_omarchy_default_agent >/dev/null 2>&1; then
     sync_omarchy_default_agent

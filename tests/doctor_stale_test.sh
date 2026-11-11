@@ -33,11 +33,8 @@ DRY_RUN=0
 mkdir -p "$AGENTIC_DEV_CONFIG_DIR" "$WORKTRUNK_CONFIG_DIR" "$AGENTIC_DEV_SKILL_DIR" \
   "$AGENTS_SKILLS_DIR/review" "$AGENTIC_DEV_SHARE_DIR"
 cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
-[agent]
-command = "agent"
-
 [layout]
-editor = "nvim"
+review = "tuicr"
 EOF
 
 cp "$ROOT/config/worktrunk/herdr-layout.sh" "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh"
@@ -46,6 +43,10 @@ cp "$ROOT/skills/review/SKILL.md" "$AGENTS_SKILLS_DIR/review/SKILL.md"
 for id in bstack council autopilot how why unslop desk-restore; do
   mkdir -p "$AGENTS_SKILLS_DIR/$id"
   cp "$ROOT/skills/$id/SKILL.md" "$AGENTS_SKILLS_DIR/$id/SKILL.md"
+done
+mkdir -p "$HOME/.pi/agent/skills"
+for id in "${AGENTIC_DEV_SKILL_IDS[@]}"; do
+  ln -s "$AGENTS_SKILLS_DIR/$id" "$HOME/.pi/agent/skills/$id"
 done
 
 record_install_source

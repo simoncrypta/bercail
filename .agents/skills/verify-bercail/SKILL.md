@@ -21,12 +21,13 @@ It exits 0 when every step and check passed, and prints the evidence folder.
 
 `run.sh` makes a temp directory and points `HOME`, the `XDG_*` dirs and
 `INSTALL_SRC` at it, with this checkout as the source. It clears the desk's
-`HC_*` and `OPENCODE_CONFIG_DIR` variables, writes a `config.toml` with bstack on
-and one pinned model, and runs `bercail reconfigure` to deploy into that HOME.
+`HC_*` variables, writes a `config.toml` with bstack on and one pinned model,
+and runs `bercail reconfigure` to deploy into that HOME.
 
-`hc` is the one stand-in: a script that answers for one live desk at a bare
-shell and logs every call. The real `hc` would start or reach a Herdr core.
-`opencode` is the real binary, with no plan connected.
+Two stand-ins. `hc` answers for one live desk at a bare shell and logs every
+call; the real `hc` would start or reach a Herdr core. `pi` reports the real
+Pi's version, a catalog with one Claude model and no login, and installs
+nothing, so the deploy fetches no bridge from npm.
 
 ## Doctor
 
@@ -41,8 +42,8 @@ higher is a crash.
 | `bercail desk restore --dry-run` on a seeded record | says `would resume`, sends no `hc send`, leaves the record unchanged |
 | `handoff-spawn --info` | prints JSON |
 | `bercail bstack status` | says `bstack: on` |
-| deployed files | `ready.md` has no council step, `/council` is there, no `bstack-council-*` seats |
-| `council = true`, then `bercail reconfigure` | a `bstack-council-claude` seat appears |
+| deployed files | the lead's `lead.json` loads the guard, review-pr's `review.json` has only read tools, `/council` is there |
+| the pinned Claude model | a `bstack-council-claude` seat, and none for a provider with no model |
 
 ## Evidence
 

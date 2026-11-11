@@ -9,13 +9,12 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 | `bercail install` | Full install from the release mise or packslip unpacked |
 | `./install.sh` | Full install |
 | `./install.sh --yes` (`-y`) | Non-interactive |
-| `./install.sh --no-bstack` | New install without bstack (desk default stays cursor-agent) |
+| `./install.sh --no-bstack` | New install without bstack (the desk runs plain Pi) |
 | `./install.sh --bstack` | New install with bstack (the default) |
 | `./install.sh --help` | Installer help |
 | `bercail help` | This reference |
 | `bercail doctor` | Deps, Herdr layout, mod and keys, skills, webhook sinks and follower |
-| `bercail harness` | JSON: which of claude, codex, cursor-agent, opencode are on PATH (reports, does not choose) |
-| `bercail bstack setup` / `status` / `on` / `off` | [bstack](bstack.md): opencode on your own plans. No subcommand = `status` |
+| `bercail bstack setup` / `status` / `on` / `off` | [bstack](bstack.md): Pi on your own plans. No subcommand = `status` |
 | `bercail desk restore` / `--dry-run` | Bring back the desk agents a reboot or a core restart took, each on its session in its own space. See [desks after a reboot](config.md#desks-after-a-reboot). `--dry-run` lists each desk and what would happen to it |
 | `bercail update` | Re-sync configs, Herdr layout and mods, helper, skills, and bstack; restart the notify follower. `--force` (`-f`) also replaces a changed layout and the worktrunk config, and writes the shell block despite conflicts |
 | `bercail review-pr <PR url-or-branch>` / `run` / `card` / `ui` / `state` / `select` / `checkout` / `rereview` / `open` / `dir` | Review a whole PR stack by intent and decisions: one visible review desk session, cards and a stack summary beside its worktree. See [review](review.md#someone-elses-pr-bercail-review-pr) |
@@ -39,7 +38,7 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 
 ## skills
 
-Call by name. Skills install to `~/.agents/skills`; bercail adds a link where the configured agent looks elsewhere (`~/.claude/skills`, `~/.codex/skills`, …).
+Call by name. Skills install to `~/.agents/skills`, with a link to each in `~/.pi/agent/skills`, where Pi looks.
 
 | Skill | What |
 |-------|------|

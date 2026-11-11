@@ -65,7 +65,7 @@ globalThis.localStorage = { getItem: () => null, setItem: () => {} };
 
 const spaces = [{ id: "s1", name: "one", tabs: [] }, { id: "s2", name: "two", tabs: [] }];
 const desk = (address, space, parent, status = "working") => ({
-  address, parent, state: "live", status, title: "OC | a job", program: { name: "OpenCode" },
+  address, parent, state: "live", status, title: "Pi | a job", program: { name: "Pi" },
   labels: { "bercail.role": "agent", "bercail.space": space },
 });
 const agent = (address, space, status = "idle") => ({

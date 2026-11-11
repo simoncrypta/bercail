@@ -1,10 +1,10 @@
 ---
 name: desk-restore
 description: >-
-  Puts a desk agent back on its session by hand when `bercail desk restore`
-  could not: a desk with no record, a session started before records existed, or
-  a Codex or cursor-agent desk. Finds the sessions written right before the
-  shutdown and matches them by folder and content. Use when a desk came back
+  Puts a desk agent back on its Pi session by hand when `bercail desk restore`
+  could not: a desk with no record, or a session started before records existed.
+  Finds the sessions written right before the shutdown and matches them by
+  folder and content. Use when a desk came back
   after a reboot as a bare shell, or when asked which session belonged to a desk.
 ---
 
@@ -46,24 +46,13 @@ were most likely running, but an idle agent writes nothing, so look further back
 when nothing fits.
 
 ```bash
-# opencode: run in the pane's folder to query its project
-(cd "$FOLDER" && opencode session list --format json --max-count 1000) \
-  | jq --arg d "$FOLDER" --argjson end "$SHUTDOWN" \
-    '[.[] | select(.directory == $d and .updated >= (($end - 600) * 1000)
-      and .updated <= ($end * 1000))] | sort_by(.updated) | reverse'
-# Claude Code: find the folder's transcripts by their recorded cwd
-rg -l --fixed-strings -- "$(jq -cn --arg cwd "$FOLDER" '{cwd:$cwd}' | sed 's/^{//;s/}$//')" \
-  ~/.claude/projects --glob '*.jsonl'
-# Pi: each session file's first line is its header, with its id and cwd
+# Each session file's first line is its header, with its id and cwd
 rg -l --fixed-strings -- "$(jq -cn --arg cwd "$FOLDER" '{cwd:$cwd}' | sed 's/^{//;s/}$//')" \
   ~/.pi/agent/sessions --glob '*.jsonl'
-# Codex
-rg -l --fixed-strings -- "$(jq -cn --arg cwd "$FOLDER" '{cwd:$cwd}' | sed 's/^{//;s/}$//')" \
-  ~/.codex/sessions --glob 'rollout-*.jsonl'
 ```
 
-Set `SHUTDOWN` to the seconds from step 2. For transcripts, check their mtimes
-against the same ten-minute window. Treat a broader search as investigation,
+Set `SHUTDOWN` to the seconds from step 2, and check the files' mtimes against
+a ten-minute window before it. Treat a broader search as investigation,
 not permission to resume an old session.
 
 ## 4. Match by content
@@ -92,12 +81,8 @@ desk as usual. Do not resend the issue prompt: the session has it.
 
 ```bash
 AGENT="$HOME/.local/bin/bercail-desk-agent"
-# Choose ONE harness and use the verified session, address and folder.
-argv=(opencode --session "$SESSION")
-# argv=(claude --resume "$SESSION")
-# argv=(pi --session-id "$SESSION")
-# argv=(codex resume "$SESSION")
-# argv=(cursor-agent --resume "$SESSION")
+# Use the verified session, address and folder.
+argv=(pi --session-id "$SESSION")
 printf -v command 'cd %q && exec %q' "$FOLDER" "$AGENT"
 printf -v args ' %q' "${argv[@]}"
 hc send "$ADDRESS" "$command$args"

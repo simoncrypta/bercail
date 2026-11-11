@@ -2,41 +2,37 @@
 
 Handoff is parallel, not a chat fork: one beads issue per job, run headless or in a sibling worktree with its own desk.
 
-The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), bercail's orchestrator, creates the issue (`bd create`), then runs `handoff-spawn` with the issue id and a stage. `--stage` and `--issue` are both required; bercail has no default harness and no fallthrough.
+The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), bercail's orchestrator, creates the issue (`bd create`), then runs `handoff-spawn` with the issue id and a stage. `--stage` and `--issue` are both required; bercail has no default stage and no fallthrough. Stages are `bstack` and `autopilot`. Both run Pi.
 
 | Stage | Binary | Headless argv (the last word is the prompt) |
 |-------|--------|-----------------------------------------------|
-| `start` | claude | `claude --print --model <opus> --output-format json --permission-mode acceptEdits …` (`<opus>` is the Opus 5.5 id from Claude's local model catalog, else the `opus` alias) |
-| `codex` | codex | `codex exec --json --sandbox workspace-write …` |
-| `cursor` | cursor-agent | `cursor-agent --print --output-format json --trust --force …` |
-| `bstack` | opencode | `opencode run --format json --agent bstack [--model <lead>] …` (asks are rejected: no commit, push, or merge) |
-| `autopilot` | opencode | `opencode run --format json --agent bstack-autopilot [--model <lead>] …` (commits and pushes a PR's fixes; headless only) |
+| `bstack` | pi | `pi -p --mode json --session-id <uuid> …` on the lead profile (asks are rejected: no commit, push, or merge) |
+| `autopilot` | pi | the same argv with `BERCAIL_ROLE=autopilot` (commits and pushes a PR's fixes; headless only) |
 
 ```bash
 bd create "Fix the login timeout" --description "..."     # Shep writes the issue
 ~/.agents/skills/handoff/scripts/handoff-spawn --info      # facts as JSON, incl. beads
 
 # headless: nothing opens in the Herdr app; result is <worktree>/.bercail/handoff-result.json
-~/.agents/skills/handoff/scripts/handoff-spawn --stage codex --issue ID --worktree PATH [--dry-run]
-~/.agents/skills/handoff/scripts/handoff-spawn --stage start --issue ID --worktree PATH --resume SESSION
+~/.agents/skills/handoff/scripts/handoff-spawn --stage bstack --issue ID --worktree PATH [--dry-run]
+~/.agents/skills/handoff/scripts/handoff-spawn --stage bstack --issue ID --worktree PATH --resume SESSION
+~/.agents/skills/handoff/scripts/handoff-spawn --stage autopilot --issue ID --worktree PATH
 
-# sibling worktree with its own space; the desk runs the stage's binary
-~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME --stage cursor --issue ID [--dirty|--clean] [--space ID] [--base BRANCH]
+# sibling worktree with its own space; the desk runs Pi's lead
+~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME --stage bstack --issue ID [--dirty|--clean] [--space ID] [--base BRANCH]
 ```
 
-`--base BRANCH` cuts the desk branch from BRANCH instead of the default branch, so a dependent issue's desk stacks on its parent's branch. The [git backend](#git-backend) registers that parent with `gh stack`, `gt track`, or `origin stack track`. It works only with `--branch`, and stage `autopilot` can't take `--branch`: give it `--worktree` on the PR's checkout.
+`--base BRANCH` cuts the desk branch from BRANCH instead of the default branch, so a dependent issue's desk stacks on its parent's branch. The [git backend](#git-backend) registers that parent with `gh stack`, `gt track`, or `origin stack track`. It works only with `--branch`, and stage `autopilot` can't take `--branch`: give it `--worktree` on the PR's checkout. `--branch` needs bstack on (`[bstack] enabled = true`) and a Pi lead profile.
 
-**Prompt.** One line pointing at the issue, the same for every harness: ``Your job is beads issue <id>: <title>. Run `bd show <id>` (read its comments too) and do the work it describes.`` The title is the issue's, truncated to 60 characters. When bd has none, the sentence keeps the id only: ``Your job is beads issue <id>. Run `bd show <id>` (read its comments too) and do the work it describes.``
+**Prompt.** One line pointing at the issue: ``Your job is beads issue <id>: <title>. Run `bd show <id>` (read its comments too) and do the work it describes.`` The title is the issue's, truncated to 60 characters. When bd has none, the sentence keeps the id only: ``Your job is beads issue <id>. Run `bd show <id>` (read its comments too) and do the work it describes.``
 
 **Context.** Before it starts the agent, bercail adds a `bd comment` to the issue with the worktree and, headless, the result file and session id. A worktree's `.beads/redirect` points `bd` at the main checkout's database, so every comment lands in one store.
 
-**Result.** A headless run leaves its CLI log in `<worktree>/.bercail/start.log` and `{status: ready|blocked|failed, summary, session_id}`, plus `issue` and, when known, `issue_title`, and an optional `verification` array of `{kind: test|verify-skill|statechart, command, exit_code, evidence}` from `/ready` (a malformed array is dropped; the rest of the result stands). A plan usage limit also sets `reason` to `usage-limit`, so Shep can propose another plan. Bercail does not switch or rerun. Read that file, not terminal output. `--resume SESSION` continues the same session (`claude --resume`, `codex exec resume`, `cursor-agent --resume`, `opencode run --session`).
+**Result.** A headless run leaves its CLI log in `<worktree>/.bercail/start.log` and `{status: ready|blocked|failed, summary, session_id}`, plus `issue` and, when known, `issue_title`, and an optional `verification` array of `{kind: test|verify-skill|statechart, command, exit_code, evidence}` from `/ready` (a malformed array is dropped; the rest of the result stands). A plan usage limit also sets `reason` to `usage-limit`, so Shep can propose another plan. Bercail does not switch or rerun. Read that file, not terminal output. `--resume SESSION` continues the same Pi session (`pi --session-id`). The id is a uuid. `session_id` is the uuid bercail passed, or the session header's id when Pi reports a different one.
 
-**Blocked, not switched.** Headless, if the stage's binary, `bd`, or the issue is missing, the result is `blocked` and nothing starts. With `--branch`, `handoff-spawn` exits 1 before it makes a worktree. Bercail never falls through to another harness. `--binary claude|codex|cursor-agent|opencode` runs a headless stage on another CLI only when you ask (with `opencode`, `start` stays on Claude and `codex` on GPT, through your opencode plans; stage `autopilot` takes only `opencode`).
+**Blocked, not switched.** Headless, if `pi`, `bd`, or the issue is missing, the result is `blocked` and nothing starts. With `--branch`, bstack off or a missing lead profile makes `handoff-spawn` exit 1 before it makes a worktree. Bercail never falls through to another stage.
 
-**Dry run.** `--dry-run` prints the exact argv for any stage, even when that binary is not installed.
-
-**Which harnesses?** `bercail harness` reports which of claude, codex, cursor-agent, and opencode are on PATH, with a local model hint. It does not choose.
+**Dry run.** `--dry-run` prints the exact argv even when `pi` is not installed. A missing lead profile fails the dry run and writes no result.
 
 Each `--branch` spawn is logged in `${XDG_STATE_HOME:-~/.local/state}/agentic-dev/handoffs.jsonl`; headless runs are not logged there. Follow a `--branch` desk through [agent status webhooks](shep.md#agent-status-webhooks) or with `hc wait <desk>`; `desk`, `space`, and, when known, `issue_title` (and `base`, when set) are in the spawn JSON.
 
@@ -47,14 +43,14 @@ Use that backend throughout the job. `graphite` remains for one release,
 derived as `git == "gt"`, so existing callers keep working.
 
 Detection order is: a per-repo `[git]` override, a legacy `[graphite]` override,
-real Graphite tracking, a Cursor Origin repo, then `gh`. Keys are main-checkout
+real Graphite tracking, an Origin repo, then `gh`. Keys are main-checkout
 paths; linked worktrees share the choice. New overrides use:
 
 ```toml
 [git]
 "~/Work/bercail" = "gh"
 "~/Work/stacked-repo" = "gt"
-"~/Work/cursor-repo" = "origin"
+"~/Work/origin-repo" = "origin"
 ```
 
 `[git]` takes precedence over `[graphite]`, whose `true`/`false` still maps to

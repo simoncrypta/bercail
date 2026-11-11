@@ -51,20 +51,25 @@ assert_eq "bash" "$(detect_shell_name)" "detect_shell_name follows bash \$SHELL"
 assert_eq "${HOME}/.bashrc" "$(shell_rc_for bash)" "bash rc is ~/.bashrc"
 SHELL="$saved_shell"
 
-assert_contains "$(default_user_config)" 'command = "pi"' \
-  "a new install's desk runs bstack (pi)"
-assert_contains "$(BSTACK_NEW_INSTALL=0 default_user_config)" 'command = "cursor-agent"' \
-  "--no-bstack keeps cursor-agent"
+assert_contains "$(default_user_config)" 'enabled = true' \
+  "a new install turns bstack on"
+assert_contains "$(default_user_config)" 'lead = "claude"' \
+  "a new install names the claude family for the lead"
+cfg="$(BSTACK_NEW_INSTALL=0 default_user_config)"
+[[ "$cfg" != *'[bstack]'* ]] || fail "--no-bstack leaves plain Pi, no [bstack]"
+[[ "$cfg" != *'command = '* ]] || fail "config has no agent command"
 grep -q 'Choice \[1-7\]' "$ROOT/lib/config.sh" \
   && fail "install must not prompt for an agent picker"
 
 YES=1
 prompt_user_config
-assert_eq "pi" "$(read_agent_command)" "prompt_user_config writes pi (bstack) with no picker"
+assert_eq "tuicr" "$(read_layout_review)" "prompt_user_config writes the default review"
+grep -q 'enabled = true' "$AGENTIC_DEV_USER_CONFIG" \
+  || fail "prompt_user_config turns bstack on"
 YES=0
 
 declare -F pstack_plugin_present >/dev/null \
-  && fail "pstack detection is gone; Shep owns the workflow, not a cursor plugin"
+  && fail "pstack detection is gone; Shep owns the workflow"
 assert_contains "$(default_user_config)" 'review = "tuicr"' \
   "default config includes review"
 assert_contains "$(default_user_config)" 'auto_review = true' \
@@ -75,33 +80,17 @@ assert_contains "$(default_user_config)" 'auto_review = true' \
 mkdir -p "$AGENTIC_DEV_CONFIG_DIR"
 cp "$ROOT/config/agentic-dev/config-reader.sh" "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh"
 
-assert_eq "pi" "$(read_agent_command)" "the config reader returns the new-install default"
 assert_eq "tuicr" "$(read_layout_review)" "review defaults to tuicr"
-
-write_user_config grok
-assert_eq "grok" "$(read_agent_command)" "write_user_config stores agent"
-assert_eq "tuicr" "$(read_layout_review)" "write_user_config stores review"
-grep -q 'auto_review = true' "$AGENTIC_DEV_USER_CONFIG" \
-  || fail "write_user_config should enable auto_review"
-grep -q 'editor =' "$AGENTIC_DEV_USER_CONFIG" \
-  && fail "write_user_config has no editor setting"
-
-write_user_config agent
-migrate_cursor_cli_command
-assert_eq "cursor-agent" "$(read_agent_command)" "migrates agent command to cursor-agent"
 
 case_dir="$TMP_DIR/doctor-hunk"
 mkdir -p "$case_dir/bin" "$case_dir/home/.config/agentic-dev"
 cat >"$case_dir/home/.config/agentic-dev/config.toml" <<'EOF'
-[agent]
-command = "agent"
-
 [layout]
 review = "hunk"
 EOF
 cp "$ROOT/config/agentic-dev/config-reader.sh" \
   "$case_dir/home/.config/agentic-dev/config-reader.sh"
-for cmd in herdr-app hc git wt bd fzf jq hunk; do
+for cmd in herdr-app hc git wt bd fzf jq hunk pi; do
   ln -s /bin/true "$case_dir/bin/$cmd"
 done
 

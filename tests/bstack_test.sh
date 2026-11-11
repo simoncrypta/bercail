@@ -31,34 +31,11 @@ source "$ROOT/lib/config.sh"
 source "$ROOT/lib/bstack.sh"
 
 export INSTALL_SRC="$ROOT"
-OPENCODE_CONFIG_DIR="$XDG_CONFIG_HOME/opencode"
 YES=1
 DRY_RUN=0
 
-# A stand-in opencode: v2, with the integrations in $FAKE_CONNECTED connected.
 FAKE_BIN="$TMP_DIR/bin"
 mkdir -p "$FAKE_BIN"
-cat >"$FAKE_BIN/opencode" <<'SH'
-#!/usr/bin/env bash
-case "$1 $2" in
-  "--version "*) echo "opencode v2.2.5" ;;
-  "auth list")
-    printf '['; sep=""
-    for id in ${FAKE_CONNECTED:-}; do printf '%s{"id":"%s","connections":[{"type":"credential"}]}' "$sep" "$id"; sep=","; done
-    printf ']\n' ;;
-  "models "*)
-    printf '%s\n' claude-agent/opus claude-agent/sonnet openai/gpt-6.1-sol openai/gpt-6 openai/gpt-6.1-mini \
-      xai/grok-5 xai/grok-5-mini xai/grok-4.7 xai/grok-4.20-multi-agent-0309 ;;
-  "api get")
-    [[ -z "${FAKE_API_DOWN:-}" ]] || exit 1
-    printf '%s\n' '{"data":[
-      {"providerID":"claude-agent","id":"opus","variants":[{"id":"low"},{"id":"high"},{"id":"max"}]},
-      {"providerID":"xai","id":"grok-5","variants":[{"id":"low"},{"id":"high"},{"id":"xhigh"}]},
-      {"providerID":"xai","id":"grok-5-mini","variants":[]}]}' ;;
-  *) exit 2 ;;
-esac
-SH
-chmod +x "$FAKE_BIN/opencode"
 # A stand-in pi: the logins in $FAKE_PI_READY are ready. Refuses --credentials.
 cat >"$FAKE_BIN/pi" <<'SH'
 #!/usr/bin/env bash
@@ -137,33 +114,28 @@ reset_home() {
   BSTACK_STATE_LOADED=0
 }
 
-# JSONC -> JSON for jq: drop whole-line comments and trailing commas.
-jsonc_to_json() {
-  sed -E 's#^[[:space:]]*//.*$##; s#,[[:space:]]*//.*$#,#' "$1" | tr '\n' ' ' | sed -E 's/,[[:space:]]*([]}])/\1/g'
-}
-
 test_toml_get_set() {
   reset_home
   local f="$TMP_DIR/t.toml"
   cat >"$f" <<'EOF'
-[agent]
-command = "cursor-agent"
+[layout]
+review = "tuicr"
 
 [bstack]
-claude = "claude-agent/opus#high"   # keeps the variant
+claude = "claude-bridge/claude-opus-5-5#high"   # keeps the variant
 enabled = true # bare value
 EOF
-  assert_eq "claude-agent/opus#high" "$(_bstack_toml_get bstack claude "$f")" "quoted value keeps #"
+  assert_eq "claude-bridge/claude-opus-5-5#high" "$(_bstack_toml_get bstack claude "$f")" "quoted value keeps #"
   assert_eq "true" "$(_bstack_toml_get bstack enabled "$f")" "bare value drops comment"
-  assert_eq "" "$(_bstack_toml_get bstack command "$f")" "keys are per section"
+  assert_eq "" "$(_bstack_toml_get bstack review "$f")" "keys are per section"
   _bstack_toml_set bstack enabled false "$f"
   _bstack_toml_set bstack gpt '"openai/gpt-6.1-sol"' "$f"
-  _bstack_toml_set agent command '"opencode"' "$f"
-  _bstack_toml_set layout review '"tuicr"' "$f"
+  _bstack_toml_set layout auto_review false "$f"
+  _bstack_toml_set notify url '"x"' "$f"
   assert_eq "false" "$(_bstack_toml_get bstack enabled "$f")" "set replaces"
   assert_eq "openai/gpt-6.1-sol" "$(_bstack_toml_get bstack gpt "$f")" "set adds to the section"
-  assert_eq "opencode" "$(_bstack_toml_get agent command "$f")" "set in another section"
-  assert_eq "tuicr" "$(_bstack_toml_get layout review "$f")" "set adds a missing section"
+  assert_eq "false" "$(_bstack_toml_get layout auto_review "$f")" "set in another section"
+  assert_eq "x" "$(_bstack_toml_get notify url "$f")" "set adds a missing section"
   assert_eq 1 "$(grep -c '^enabled' "$f")" "no duplicate key"
   assert_eq 1 "$(grep -c '^\[bstack\]' "$f")" "no duplicate section"
   printf 'PASS: [bstack] toml get/set keeps variants, sections, and comments apart\n'
@@ -172,15 +144,13 @@ EOF
 test_new_install_defaults() {
   reset_home
   BSTACK_NEW_INSTALL=1 default_user_config >"$TMP_DIR/on.toml"
-  assert_eq "pi" "$(_bstack_toml_get agent command "$TMP_DIR/on.toml")" "new install desk agent"
   assert_eq "true" "$(_bstack_toml_get bstack enabled "$TMP_DIR/on.toml")" "new install turns bstack on"
-  assert_eq "pi" "$(_bstack_toml_get bstack harness "$TMP_DIR/on.toml")" "new config selects Pi"
   assert_eq "grok" "$(_bstack_toml_get bstack build "$TMP_DIR/on.toml")" "build role default"
+  grep -q -e '^\[agent\]' -e '^harness' "$TMP_DIR/on.toml" && fail "no desk command or harness to pick"
   BSTACK_NEW_INSTALL=0 default_user_config >"$TMP_DIR/off.toml"
-  assert_eq "cursor-agent" "$(_bstack_toml_get agent command "$TMP_DIR/off.toml")" "--no-bstack desk agent"
-  grep -q '^\[bstack\]' "$TMP_DIR/off.toml" && fail "--no-bstack writes no [bstack]"
+  grep -q -e '^\[bstack\]' -e '^\[agent\]' "$TMP_DIR/off.toml" && fail "--no-bstack writes no [bstack] and no [agent]"
   AGENTIC_DEV_USER_CONFIG="$TMP_DIR/off.toml" bstack_enabled && fail "--no-bstack is off"
-  printf 'PASS: new installs default to bstack; --no-bstack keeps cursor-agent\n'
+  printf 'PASS: new installs default to bstack; --no-bstack leaves plain Pi\n'
 }
 
 write_config() {
@@ -193,152 +163,45 @@ test_roles_resolve() {
   write_config <<'EOF'
 [bstack]
 enabled = true
-claude = "claude-agent/opus#high"
+claude = "claude-bridge/claude-opus-5-5#high"
 gpt = "openai/gpt-6.1-sol"
 grok = ""
 build = "grok"
 judge = "xai/grok-5#fast"
 EOF
-  assert_eq "claude-agent/opus#high" "$(bstack_role_model lead)" "lead defaults to claude"
+  assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_role_model lead)" "lead defaults to claude"
   assert_eq "openai/gpt-6.1-sol" "$(bstack_role_model build)" "build on an unset grok falls to gpt"
   _bstack_toml_set bstack claude '""'
   _bstack_toml_set bstack gpt '""'
-  assert_eq "" "$(bstack_role_model lead)" "no family with a model: the session's model"
+  assert_eq "" "$(bstack_role_model lead)" "no family with a model: Pi's default model"
   assert_eq "xai/grok-5#fast" "$(bstack_role_model judge)" "a full id is used as is"
   printf 'PASS: roles resolve through families or full ids\n'
 }
 
-test_deploy_renders_agents() {
-  reset_home
-  write_config <<'EOF'
-[bstack]
-enabled = true
-harness = "opencode"
-claude = "claude-agent/opus#high"
-gpt = "openai/gpt-6.1-sol"
-grok = ""
-lead = "claude"
-build = "grok"
-judge = "gpt"
-council = true
-EOF
-  deploy_bstack >/dev/null 2>&1 || fail "deploy_bstack failed"
-  local oc="$OPENCODE_CONFIG_DIR" rel
-  for rel in "${BSTACK_RENDERED[@]}" opencode.jsonc bstack/instructions.md; do
-    [[ -f "$oc/$rel" ]] || fail "missing $rel"
-  done
-  grep -qx 'model: claude-agent/opus#high' "$oc/agents/bstack.md" || fail "lead model: $(cat "$oc/agents/bstack.md")"
-  grep -qx 'model: claude-agent/opus#high' "$oc/agents/bstack-pr-review.md" || fail "pr-review follows the lead"
-  grep -qx 'model: openai/gpt-6.1-sol' "$oc/agents/bstack-judge.md" || fail "judge model"
-  grep -qx 'model: openai/gpt-6.1-sol' "$oc/agents/bstack-builder.md" || fail "builder with no grok falls to gpt"
-  grep -q '@' "$oc/agents/bstack-builder.md" "$oc/agents/bstack.md" "$oc/opencode.jsonc" && fail "unrendered token"
-  [[ -f "$oc/agents/bstack-council-claude.md" && -f "$oc/agents/bstack-council-gpt.md" ]] || fail "council panel"
-  [[ ! -e "$oc/agents/bstack-council-grok.md" ]] || fail "no council seat without a grok model"
-  grep -q 'on gpt\.' "$oc/agents/bstack-council-gpt.md" || fail "council family"
-  head -1 "$oc/agents/bstack.md" | grep -qx -- '---' || fail "frontmatter starts the agent file"
-  jsonc_to_json "$oc/opencode.jsonc" | jq -e '
-    .default_agent == "bstack" and .model == "claude-agent/opus"
-    and .instructions == [$dir + "/bstack/instructions.md"]
-    and ([.permissions[] | select(.resource == "git commit *")] | length == 1)' --arg dir "$oc" >/dev/null \
-    || fail "opencode.jsonc: $(cat "$oc/opencode.jsonc")"
-  printf 'PASS: deploy renders agents, the council panel, and opencode.jsonc\n'
-}
-
-test_deploy_keeps_their_files() {
-  reset_home
-  write_config <<'EOF'
-[bstack]
-enabled = true
-harness = "opencode"
-EOF
-  mkdir -p "$OPENCODE_CONFIG_DIR/commands"
-  printf '{ "model": "mine/model" }\n' >"$OPENCODE_CONFIG_DIR/opencode.jsonc"
-  printf 'my own council\n' >"$OPENCODE_CONFIG_DIR/commands/council.md"
-  local out
-  out="$(deploy_bstack 2>&1)" || fail "deploy_bstack failed"
-  grep -qx '{ "model": "mine/model" }' "$OPENCODE_CONFIG_DIR/opencode.jsonc" || fail "their opencode.jsonc changed"
-  grep -qx 'my own council' "$OPENCODE_CONFIG_DIR/commands/council.md" || fail "their command changed"
-  grep -q 'default_agent' <<<"$out" || fail "should say what to add: $out"
-  [[ -f "$OPENCODE_CONFIG_DIR/agents/bstack.md" ]] || fail "bstack agents still deploy"
-  grep -q '^model:' "$OPENCODE_CONFIG_DIR/agents/bstack.md" && fail "no model anywhere: the agent inherits (no model line)"
-  printf 'PASS: deploy leaves files without the bstack marker alone\n'
-}
-
-test_off_removes_only_ours() {
-  reset_home
-  write_config <<'EOF'
-[bstack]
-enabled = true
-harness = "opencode"
-claude = "claude-agent/opus"
-council = true
-EOF
-  deploy_bstack >/dev/null 2>&1
-  printf '{}\n' >"$OPENCODE_CONFIG_DIR/opencode.json"
-  printf 'mine\n' >"$OPENCODE_CONFIG_DIR/agents/reviewer.md"
-  bstack_off >/dev/null 2>&1
-  assert_eq "false" "$(_bstack_toml_get bstack enabled)" "off sets enabled"
-  [[ ! -e "$OPENCODE_CONFIG_DIR/agents/bstack.md" && ! -e "$OPENCODE_CONFIG_DIR/opencode.jsonc" ]] \
-    || fail "off removes bstack's files"
-  [[ ! -e "$OPENCODE_CONFIG_DIR/agents/bstack-council-claude.md" && ! -d "$OPENCODE_CONFIG_DIR/bstack" ]] \
-    || fail "off removes the council and instructions"
-  [[ -f "$OPENCODE_CONFIG_DIR/opencode.json" && -f "$OPENCODE_CONFIG_DIR/agents/reviewer.md" ]] \
-    || fail "off keeps the person's opencode files"
-  deploy_bstack >/dev/null 2>&1
-  [[ ! -e "$OPENCODE_CONFIG_DIR/agents/bstack.md" ]] || fail "update with bstack off deploys nothing"
-  printf 'PASS: bstack off removes only what bstack manages\n'
-}
-
-test_council_seats_need_the_setting() {
-  reset_home
-  local oc="$OPENCODE_CONFIG_DIR" config='[bstack]
-enabled = true
-harness = "opencode"
-claude = "claude-agent/opus#high"
-gpt = "openai/gpt-6.1-sol"'
-  write_config <<<"$config"
-  deploy_bstack >/dev/null 2>&1 || fail "deploy without council"
-  [[ ! -e "$oc/agents/bstack-council-claude.md" && ! -e "$oc/agents/bstack-council-gpt.md" ]] \
-    || fail "seats rendered with council unset"
-  [[ -f "$oc/commands/council.md" ]] || fail "/council must stay callable with the seats off"
-
-  write_config <<<"$config"$'\ncouncil = true'
-  deploy_bstack >/dev/null 2>&1 || fail "deploy with council"
-  [[ -f "$oc/agents/bstack-council-claude.md" && -f "$oc/agents/bstack-council-gpt.md" ]] || fail "council = true renders seats"
-
-  # Turning it off takes back bstack's seats and leaves one the person owns.
-  printf 'my own reviewer\n' >"$oc/agents/bstack-council-gpt.md"
-  write_config <<<"$config"$'\ncouncil = false'
-  deploy_bstack >/dev/null 2>&1 || fail "deploy with council = false"
-  [[ ! -e "$oc/agents/bstack-council-claude.md" ]] || fail "council = false removes bstack's seat"
-  grep -qx 'my own reviewer' "$oc/agents/bstack-council-gpt.md" || fail "their seat changed"
-  printf 'PASS: council seats render only with [bstack] council = true; /council stays\n'
-}
-
 test_ready_verifies_without_the_council() {
-  local ready="$ROOT/bstack/commands/ready.md" prev=0 n step
+  local ready="$ROOT/bstack/pi/prompts/ready.md" prev=0 n step
   if grep -qi council "$ready"; then fail "ready.md must not run the council"; fi
-  for step in 'tests that cover the diff' 'verify skill above' 'Run any formal check' 'bstack-judge' '`unslop`' 'git add' 'exit code and evidence path'; do
+  for step in 'tests that cover the diff' 'verify skill, read it' 'Run any formal check' 'bstack-judge' '`unslop`' 'git add' 'exit code and evidence path'; do
     n="$(grep -nF -- "$step" "$ready" | head -1 | cut -d: -f1)"
     ((${n:-0} > prev)) || fail "ready.md: '$step' is missing or out of order"
     prev="$n"
   done
   grep -qF 'does the diff match the issue?' "$ready" || fail "the judge gets the intent question"
-  if grep -q 'settl' "$ROOT/bstack/agents/bstack-judge.md"; then fail "the judge no longer settles disputes"; fi
   if grep -q 'bstack-judge' "$ROOT/skills/council/SKILL.md"; then fail "the council must not call the judge"; fi
   grep -q 'verify-<repo>' "$ROOT/skills/bstack/SKILL.md" || fail "the review playbook proves with the verify skill"
   printf 'PASS: /ready runs tests, verify, formal checks, the judge, unslop, stage, report; no council\n'
 }
 
 test_council_keeps_only_rerun_findings() {
-  local skill="$ROOT/skills/council/SKILL.md" agent="$ROOT/bstack/agents/bstack-council.md"
+  local skill="$ROOT/skills/council/SKILL.md" agent="$ROOT/bstack/pi/agents/bstack-council.md"
   grep -qF 'Prove each finding with a run' "$skill" || fail "skill: a finding needs a run"
   grep -qF 'Prove each finding with a run' "$agent" || fail "agent: a finding needs a run"
   grep -qF 'Run its command yourself' "$skill" || fail "skill: the lead reruns"
   grep -q 'style, naming, or YAGNI' "$skill" || fail "skill: style findings are dropped"
   if grep -qF '`unverified`' "$agent"; then fail "agent: nothing is marked unverified"; fi
   grep -qF 'There is no `unverified` list' "$skill" || fail "skill: unverified findings are dropped"
-  grep -qF '[bstack] council' "$skill" || fail "skill: says what to do with no seats"
+  grep -qF 'review it
+yourself' "$skill" || fail "skill: says what to do with no seats"
   printf 'PASS: the council reports only findings a run proved and a rerun confirmed\n'
 }
 
@@ -354,117 +217,37 @@ test_verify_skill_shape() {
   printf 'PASS: verify-bercail covers temp HOME, doctor, restore, info, status, evidence, cleanup\n'
 }
 
-test_on_switches_stock_desk_agent() {
-  reset_home
-  write_config <<'EOF'
-[agent]
-command = "cursor-agent"
-
-[bstack]
-harness = "opencode"
-EOF
-  bstack_on >/dev/null 2>&1
-  assert_eq "opencode" "$(_bstack_toml_get agent command)" "on moves the stock desk agent to opencode"
-  [[ -f "$OPENCODE_CONFIG_DIR/agents/bstack.md" ]] || fail "on deploys"
-  write_config <<'EOF'
-[agent]
-command = "claude"
-
-[bstack]
-harness = "opencode"
-EOF
-  bstack_on >/dev/null 2>&1
-  assert_eq "claude" "$(_bstack_toml_get agent command)" "on keeps a desk agent the person picked"
-  printf 'PASS: bstack on takes over only the stock desk agent\n'
-}
-
-test_setup_auto_models() {
-  reset_home
-  write_config <<'EOF'
-[agent]
-command = "cursor-agent"
-
-[bstack]
-harness = "opencode"
-council = true
-EOF
-  FAKE_CONNECTED="claude-agent xai" bstack_setup >"$TMP_DIR/setup.log" 2>&1 || fail "setup: $(cat "$TMP_DIR/setup.log")"
-  grep -q 'model' "$TMP_DIR/setup.log" && grep -q 'Pick' "$TMP_DIR/setup.log" && fail "setup must not ask about models"
-  assert_eq "" "$(_bstack_toml_get bstack claude)" "setup pins nothing"
-  assert_eq "" "$(_bstack_toml_get bstack build)" "setup leaves roles to the person"
-  assert_eq "opencode" "$(_bstack_toml_get agent command)" "desk agent"
-  grep -qx 'model: claude-agent/opus#high' "$OPENCODE_CONFIG_DIR/agents/bstack.md" || fail "lead is auto claude"
-  grep -qx 'model: xai/grok-5#high' "$OPENCODE_CONFIG_DIR/agents/bstack-builder.md" || fail "build is auto grok (not mini), at high effort"
-  [[ -f "$OPENCODE_CONFIG_DIR/agents/bstack-council-grok.md" ]] || fail "grok seat"
-  [[ ! -e "$OPENCODE_CONFIG_DIR/agents/bstack-council-gpt.md" ]] || fail "no gpt seat"
-  grep -qx 'grok=xai/grok-5#high' "$BSTACK_RESOLVED" || fail "resolved file for handoff: $(cat "$BSTACK_RESOLVED")"
-  grep -q 'xai/grok-5#high (auto)' "$TMP_DIR/setup.log" || fail "status says auto: $(cat "$TMP_DIR/setup.log")"
-  FAKE_API_DOWN=1 FAKE_CONNECTED="claude-agent xai" bstack_load_state reload
-  assert_eq "xai/grok-5#high" "$(FAKE_CONNECTED="claude-agent xai" bstack_resolve_model grok)" \
-    "a server that doesn't answer keeps the last variants"
-
-  # Connecting ChatGPT later: an update picks it up, and doctor says when it's due.
-  doctor_bstack >/dev/null 2>&1 || true
-  local out
-  out="$(FAKE_CONNECTED="claude-agent xai openai" doctor_bstack)" && fail "doctor: models changed since deploy"
-  grep -q 'stale  bstack models' <<<"$out" || fail "doctor stale: $out"
-  FAKE_CONNECTED="claude-agent xai openai" deploy_bstack >/dev/null 2>&1
-  [[ -f "$OPENCODE_CONFIG_DIR/agents/bstack-council-gpt.md" ]] || fail "gpt seat after update"
-
-  # A pinned model stays, even on a plan that is not connected.
-  _bstack_toml_set bstack grok '"openrouter/x-ai/grok-5"'
-  FAKE_CONNECTED="openai" bstack_setup >"$TMP_DIR/setup.log" 2>&1 || fail "setup: $(cat "$TMP_DIR/setup.log")"
-  assert_eq "openrouter/x-ai/grok-5" "$(_bstack_toml_get bstack grok)" "pinned grok kept"
-  assert_eq "openai/gpt-6.1-sol" "$(bstack_role_model lead)" "lead falls to gpt with claude disconnected"
-  assert_eq "openrouter/x-ai/grok-5" "$(bstack_role_model build)" "build uses the pinned grok"
-  grep -qx 'model: openai/gpt-6.1-sol' "$OPENCODE_CONFIG_DIR/agents/bstack-pr-review.md" \
-    || fail "pr-review follows the lead after setup: $(grep '^model:' "$OPENCODE_CONFIG_DIR/agents/bstack-pr-review.md")"
-  grep -q 'openrouter/x-ai/grok-5 (pinned' "$TMP_DIR/setup.log" || fail "status says pinned: $(cat "$TMP_DIR/setup.log")"
-  printf 'PASS: setup picks models automatically; pinned ones stay; doctor flags a due update\n'
-}
-
 test_handoff_bstack_stage() {
   reset_home
   write_config <<'EOF'
 [bstack]
-harness = "opencode"
-claude = "claude-agent/opus#high"
-gpt = "openai/gpt-6.1-sol"
+enabled = true
+claude = "claude-bridge/claude-opus-5-5#high"
+gpt = "openai/gpt-6.1-sol#high"
 lead = "gpt"
 EOF
-  local spawn="$ROOT/skills/handoff/scripts/handoff-spawn" wt="$TMP_DIR/wt" out
+  FAKE_PI_READY="claude-bridge openai" deploy_bstack >/dev/null 2>&1 || fail "deploy"
+  local spawn="$ROOT/skills/handoff/scripts/handoff-spawn" wt="$TMP_DIR/wt" out uuid=0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
   mkdir -p "$wt"
   out="$(HANDOFF_BD_BIN=/nonexistent "$spawn" --stage bstack --issue bc-1x --worktree "$wt" --dry-run)"
-  jq -e '.binary == "opencode" and .model == "openai/gpt-6.1-sol"
-    and .command[0:6] == ["opencode","run","--format","json","--agent","bstack"]
-    and (.command | index("--auto") | not) and (.command[-1] | startswith("Your job is beads issue bc-1x."))' <<<"$out" >/dev/null \
-    || fail "bstack stage (no --auto: asks are rejected headless): $out"
+  jq -e '.binary == "pi" and (.command | index("-p") != null) and (.command | index("openai/gpt-6.1-sol:high") != null)
+    and (.command | index("BERCAIL_ROLE=autopilot") | not) and (.command[-1] | startswith("Your job is beads issue bc-1x."))' \
+    <<<"$out" >/dev/null || fail "bstack stage runs Pi headless on the lead: $out"
   out="$(HANDOFF_BD_BIN=/nonexistent "$spawn" --stage autopilot --issue bc-1x --worktree "$wt" --dry-run)"
-  jq -e '.command[0:6] == ["opencode","run","--format","json","--agent","bstack-autopilot"]
-    and .model == "openai/gpt-6.1-sol" and (.command | index("--auto") | not)' <<<"$out" >/dev/null \
-    || fail "autopilot stage runs bstack-autopilot on the lead: $out"
+  jq -e '(.command | index("BERCAIL_ROLE=autopilot") != null) and (.command | index("openai/gpt-6.1-sol:high") != null)' \
+    <<<"$out" >/dev/null || fail "autopilot stage is the lead with BERCAIL_ROLE=autopilot: $out"
   if HANDOFF_BD_BIN=/nonexistent "$spawn" --stage autopilot --branch x --issue bc-1x >/dev/null 2>&1; then
     fail "autopilot is headless only"
   fi
-  out="$(HANDOFF_BD_BIN=/nonexistent "$spawn" --stage start --binary opencode --issue bc-1x --worktree "$wt" --dry-run)"
-  jq -e '.model == "claude-agent/opus#high"' <<<"$out" >/dev/null || fail "start through opencode is claude: $out"
-  out="$(HANDOFF_BD_BIN=/nonexistent "$spawn" --stage bstack --issue bc-1x --worktree "$wt" --resume ses_9zX --dry-run)"
-  jq -e '.resume and (.command | index("--session")) and (.command | index("ses_9zX"))' <<<"$out" >/dev/null \
-    || fail "resume: $out"
-  if HANDOFF_BD_BIN=/nonexistent "$spawn" --stage bstack --issue bc-1x --worktree "$wt" --resume 1234 --dry-run >/dev/null 2>&1; then
-    fail "a non-opencode session id must be refused"
+  out="$(HANDOFF_BD_BIN=/nonexistent "$spawn" --stage bstack --issue bc-1x --worktree "$wt" --resume "$uuid" --dry-run)"
+  jq -e --arg u "$uuid" '.resume and (.command | index($u) != null)' <<<"$out" >/dev/null || fail "resume: $out"
+  if HANDOFF_BD_BIN=/nonexistent "$spawn" --stage bstack --issue bc-1x --worktree "$wt" --resume ses_9zX --dry-run >/dev/null 2>&1; then
+    fail "a session id that is not Pi's uuid must be refused"
   fi
-  # shellcheck source=skills/handoff/scripts/handoff-stages.sh
-  source "$ROOT/skills/handoff/scripts/handoff-stages.sh"
-  printf '{"type":"step_start","sessionID":"ses_abc"}\n{"type":"text","sessionID":"ses_abc"}\n' >"$TMP_DIR/oc.log"
-  assert_eq "ses_abc" "$(handoff_opencode_session_id "$TMP_DIR/oc.log")" "session id from run JSON"
-  assert_eq "openai/gpt-6.1-sol" "$(handoff_bstack_model build)" "handoff build falls through like bstack status"
-  assert_eq "" "$(handoff_bstack_model grok)" "a family named directly does not fall through"
-  mkdir -p "$(dirname "$BSTACK_RESOLVED")"
-  printf 'claude=claude-agent/opus#high\ngpt=\ngrok=xai/grok-4.7\n' >"$BSTACK_RESOLVED"
-  assert_eq "xai/grok-4.7" "$(handoff_bstack_model build)" "handoff reads an auto model from the last deploy"
-  assert_eq "xai/grok-4.7" "$(handoff_bstack_model grok)" "auto family named directly"
-  printf 'PASS: handoff stage bstack runs opencode with the configured model and resumes by session\n'
+  if HANDOFF_BD_BIN=/nonexistent "$spawn" --stage start --issue bc-1x --worktree "$wt" --dry-run >/dev/null 2>&1; then
+    fail "stage start is gone"
+  fi
+  printf 'PASS: handoff stages bstack and autopilot run Pi on the lead and resume by its uuid\n'
 }
 
 test_doctor() {
@@ -474,41 +257,7 @@ test_doctor() {
 enabled = false
 EOF
   doctor_bstack | grep -q 'off  bstack' || fail "doctor off"
-  write_config <<'EOF'
-[bstack]
-enabled = true
-harness = "opencode"
-claude = "claude-agent/opus"
-EOF
-  FAKE_CONNECTED="" deploy_bstack >/dev/null 2>&1
-  local out
-  out="$(FAKE_CONNECTED="" doctor_bstack)" && fail "doctor must fail with no subscription: $out"
-  grep -q 'none of Claude, ChatGPT, X' <<<"$out" || fail "doctor says what is missing: $out"
-  out="$(FAKE_CONNECTED="claude-agent exa" doctor_bstack)" || fail "doctor ok: $out"
-  grep -q 'subscriptions: claude-agent$' <<<"$out" || fail "doctor lists only plans: $out"
-  printf 'PASS: doctor reports bstack off, missing subscriptions, and a working setup\n'
-}
-
-test_pick_model() {
-  mkdir -p "$(dirname "$AGENTIC_DEV_USER_CONFIG")"
-  printf '[bstack]\nharness = "opencode"\n' >"$AGENTIC_DEV_USER_CONFIG"
-  local m='xai/grok-4.20-0309-reasoning
-xai/grok-4.20-multi-agent-0309
-xai/grok-4.3
-xai/grok-4.7
-xai/grok-build-0.1
-openai/gpt-6-sol
-openai/gpt-6.1-sol
-openai/gpt-6.1-sol-fast
-claude-agent/opus
-claude-agent/claude-opus-5'
-  assert_eq "xai/grok-4.7" "$(_bstack_pick_model grok <<<"$m")" "a dated 4.20 build is not newer than grok-4.7"
-  assert_eq "openai/gpt-6.1-sol" "$(_bstack_pick_model gpt <<<"$m")" "newest sol"
-  local BSTACK_VARIANTS=""
-  assert_eq "xai/grok-4.7" "$(_bstack_pick_model grok <<<"$m")" "a dated 4.20 build is not newer than grok-4.7"
-  assert_eq "openai/gpt-6.1-sol" "$(_bstack_pick_model gpt <<<"$m")" "newest sol, no variant without the server's list"
-  assert_eq "claude-agent/opus#high" "$(_bstack_pick_model claude <<<"$m")" "the opus alias tracks the newest Opus"
-  printf 'PASS: auto recommends the newest plain release per provider\n'
+  printf 'PASS: doctor reports bstack off\n'
 }
 
 test_pick_effort() {
@@ -516,16 +265,19 @@ test_pick_effort() {
   mkdir -p "$(dirname "$AGENTIC_DEV_USER_CONFIG")"
   local m='xai/grok-4.7
 openai/gpt-6.1-sol
-claude-agent/opus'
+claude-bridge/claude-opus-5-5'
+  local BSTACK_CONNECTED='claude-bridge
+openai
+xai'
   local BSTACK_VARIANTS='xai/grok-4.7 low,medium,high,xhigh
 openai/gpt-6.1-sol low,medium,high,xhigh,max
-claude-agent/opus low,medium,high,xhigh,max'
-  printf '[bstack]\nharness = "opencode"\n' >"$AGENTIC_DEV_USER_CONFIG"
+claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
+  printf '[bstack]\n' >"$AGENTIC_DEV_USER_CONFIG"
   assert_eq "openai/gpt-6.1-sol#high" "$(_bstack_pick_model gpt <<<"$m")" "high by default"
-  printf '[bstack]\nharness = "opencode"\neffort = "max"\n' >"$AGENTIC_DEV_USER_CONFIG"
+  printf '[bstack]\neffort = "max"\n' >"$AGENTIC_DEV_USER_CONFIG"
   assert_eq "xai/grok-4.7#xhigh" "$(_bstack_pick_model grok <<<"$m")" "grok has no max: the next level down"
-  assert_eq "claude-agent/opus#max" "$(_bstack_pick_model claude <<<"$m")" "claude at max"
-  printf '[bstack]\nharness = "opencode"\neffort = "none"\n' >"$AGENTIC_DEV_USER_CONFIG"
+  assert_eq "claude-bridge/claude-opus-5-5#max" "$(_bstack_pick_model claude <<<"$m")" "claude at max"
+  printf '[bstack]\neffort = "none"\n' >"$AGENTIC_DEV_USER_CONFIG"
   assert_eq "openai/gpt-6.1-sol" "$(_bstack_pick_model gpt <<<"$m")" "none: the provider default"
   printf 'PASS: auto adds the [bstack] effort variant each model offers\n'
 }
@@ -552,7 +304,6 @@ write_pi_config() {
   write_config <<'EOF'
 [bstack]
 enabled = true
-harness = "pi"
 EOF
 }
 
@@ -560,7 +311,7 @@ test_pi_models() {
   reset_home
   write_pi_config
   export FAKE_PI_READY="claude-bridge openai xai"
-  _bstack_install_harness >/dev/null
+  _bstack_install_pi >/dev/null
   bstack_load_state reload
   assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_resolve_model claude)" "newest plain opus"
   assert_eq "openai/gpt-6.1-sol#high" "$(bstack_resolve_model gpt)" "newest sol"
@@ -612,7 +363,7 @@ test_pi_deploy() {
   done
   grep -rq '@[a-z_]*@' "$p/prompts" "$p/agents/bstack-builder.md" "$p/instructions.md" && fail "unrendered token"
   grep -q "$p/agents/bstack-pr-review.md" "$p/prompts/pr-review.md" || fail "pr-review names its brief"
-  head -1 "$p/agents/bstack-pr-review.md" | grep -q -- '^---$' && fail "a brief has no opencode frontmatter"
+  head -1 "$p/agents/bstack-pr-review.md" | grep -q -- '^---$' && fail "a brief has no frontmatter"
   grep -q 'You review someone else' "$p/agents/bstack-pr-review.md" || fail "pr-review keeps its body"
   grep -q 'one reviewer on a council' "$p/agents/bstack-council-claude.md" || fail "council keeps its body"
   grep -q 'Desks only' "$p/instructions.md" || fail "instructions require a desk"
@@ -622,6 +373,12 @@ test_pi_deploy() {
   grep -q -- '--branch NAME --stage bstack --issue ID' "$p/prompts/handoff.md" || fail "handoff opens a desk"
   cmp "$ROOT/bstack/pi/extensions/fallback.ts" "$p/extensions/fallback.ts" || fail "managed fallback extension"
   cmp "$ROOT/bstack/pi/extensions/guard.ts" "$p/extensions/guard.ts" || fail "managed guard extension"
+  cmp "$ROOT/bstack/pi/extensions/review.ts" "$p/extensions/review.ts" || fail "managed review-pr extension"
+  jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
+    and (index(["-e", "\($p)/extensions/review.ts"]) != null) and (index(["--tools", "read,grep,find,ls"]) != null)
+    and (index(["--append-system-prompt", "\($p)/agents/bstack-pr-review.md"]) != null)
+    and (index("--skill") == null) and (index("\($p)/extensions/guard.ts") == null)' "$p/review.json" >/dev/null \
+    || fail "review-pr's reviewer: $(cat "$p/review.json")"
   [[ -f "$p/agents/bstack-headless.md" ]] || fail "headless lead brief"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
     and (index(["-e", "npm:pi-claude-bridge@0.11.0"]) != null)
@@ -658,9 +415,6 @@ test_pi_deploy() {
   assert_eq 'mine' "$(jq -r .defaultModel "$HOME/.pi/agent/settings.json")" "unrelated settings preserved"
   jq -e '.packages == ["npm:pi-claude-bridge@0.11.0"]' "$HOME/.pi/agent/settings.json" >/dev/null || fail "bridge installed"
   assert_eq '{"token":"secret"}' "$(cat "$HOME/.pi/agent/auth.json")" "auth.json untouched"
-  [[ ! -e "$OPENCODE_CONFIG_DIR/opencode.jsonc" && ! -e "$OPENCODE_CONFIG_DIR/agents/bstack.md" ]] \
-    || fail "the Pi harness renders no opencode files"
-  [[ ! -e "$BSTACK_RESOLVED" ]] || fail "opencode's resolved models are left for its handoff stages"
 
   grep -qx 'grok=xai/grok-4.7#high' "$p/models" || fail "resolved models: $(cat "$p/models")"
   # A family that lost its login loses its seat.
@@ -671,7 +425,7 @@ test_pi_deploy() {
   [[ ! -e "$t/bstack-council-grok.md" && ! -e "$p/agents/bstack-council-grok.md" ]] || fail "stale council seat"
   grep -q 'BERCAIL_ROLE=builder pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder falls through"
   unset FAKE_PI_READY
-  printf 'PASS: harness = pi installs bridge and renders profile and hc templates, preserving unrelated settings\n'
+  printf 'PASS: deploy installs the bridge and renders the Pi profile and hc templates, preserving unrelated settings\n'
 }
 
 test_pi_keeps_their_template() {
@@ -695,15 +449,19 @@ test_pi_off_and_switch_back() {
   bstack_off >/dev/null 2>&1
   [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "off removes the profile"
   [[ -f "$(PI_TEMPLATES)/reviewer.md" ]] || fail "off keeps the person's templates"
-
-  write_pi_config
   deploy_bstack >/dev/null 2>&1
-  _bstack_toml_set bstack harness '"opencode"'
-  FAKE_CONNECTED="claude-agent" deploy_bstack >/dev/null 2>&1
-  [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "back on opencode: the Pi profile goes"
-  [[ -f "$OPENCODE_CONFIG_DIR/agents/bstack.md" ]] || fail "back on opencode: agents render"
+  [[ ! -d "$(PI_DIR)" ]] || fail "update with bstack off deploys nothing"
+
+  # A harness key left from an older bercail changes nothing: bstack is Pi.
+  write_config <<'EOF'
+[bstack]
+enabled = true
+harness = "old"
+EOF
+  deploy_bstack >/dev/null 2>&1 || fail "a leftover harness key deploys"
+  [[ -f "$(PI_DIR)/lead.json" && -f "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "a leftover harness key still gets Pi"
   unset FAKE_PI_READY
-  printf 'PASS: off and a switch back to opencode remove only the Pi profile\n'
+  printf 'PASS: off removes only the Pi profile; a leftover harness key still deploys Pi\n'
 }
 
 test_pi_status_doctor() {
@@ -713,19 +471,14 @@ test_pi_status_doctor() {
   deploy_bstack >/dev/null 2>&1
   local out
   out="$(bstack_status)"
-  grep -q 'harness: pi' <<<"$out" || fail "status names the harness: $out"
+  grep -q '^bstack: on$' <<<"$out" || fail "status says bstack is on: $out"
   grep -q 'lead = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "lead: $out"
   grep -q 'build = xai/grok-4.7:high' <<<"$out" || fail "build: $out"
   grep -q 'judge = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "judge: $out"
   grep -q 'council (grok) = xai/grok-4.7:high' <<<"$out" || fail "council: $out"
   grep -q 'gpt.*/login openai' <<<"$out" || fail "missing login hint: $out"
-  grep -q 'opencode' <<<"$out" && fail "status on Pi does not talk about opencode: $out"
-  # shellcheck source=lib/harness.sh
-  source "$ROOT/lib/harness.sh"
-  assert_eq '["claude-bridge/claude-opus-5-5:high"]' "$(harness_pi_models_json)" "bercail harness hints the lead on Pi"
-  assert_eq '[]' "$(harness_opencode_models_json)" "and no Pi id for opencode"
   out="$(doctor_bstack)" || fail "doctor ok: $out"
-  grep -q 'ok  bstack on pi' <<<"$out" || fail "doctor: $out"
+  grep -q 'ok  bstack (lead=claude-bridge/claude-opus-5-5:high)' <<<"$out" || fail "doctor: $out"
   out="$(FAKE_PI_READY="claude-bridge xai openai" doctor_bstack)" && fail "doctor: a new login is a due update"
   grep -q 'stale  bstack models' <<<"$out" || fail "doctor stale: $out"
   out="$(FAKE_PI_READY="" doctor_bstack)" && fail "doctor: no login"
@@ -734,16 +487,16 @@ test_pi_status_doctor() {
   out="$(doctor_bstack)" && fail "doctor: a missing file"
   grep -q 'missing  bstack .*instructions.md' <<<"$out" || fail "doctor missing: $out"
   deploy_bstack >/dev/null 2>&1
-  _bstack_toml_set bstack claude '"claude-agent/opus#high"'
+  _bstack_toml_set bstack claude '"anthropic/claude-opus-9#high"'
   out="$(doctor_bstack)" && fail "doctor: a pin Pi cannot run"
-  grep -q 'claude-agent/opus#high is not in pi --list-models' <<<"$out" || fail "doctor pin: $out"
+  grep -q 'anthropic/claude-opus-9#high is not in pi --list-models' <<<"$out" || fail "doctor pin: $out"
   grep -q 'not in pi --list-models' <<<"$(bstack_status)" || fail "status flags the pin"
   _bstack_toml_set bstack claude '"claude-bridge/claude-opus-5-5:high"'
   deploy_bstack >/dev/null 2>&1
   out="$(doctor_bstack)" || fail "doctor: a pin in Pi's own :level form is known: $out"
   grep -q 'not in pi --list-models' <<<"$(bstack_status)" && fail "status knows a :level pin"
   unset FAKE_PI_READY
-  printf 'PASS: status and doctor report the harness, roles, and missing logins on Pi\n'
+  printf 'PASS: status and doctor report roles and missing logins\n'
 }
 
 test_pi_setup() {
@@ -752,35 +505,14 @@ test_pi_setup() {
   FAKE_PI_READY="claude-bridge" bstack_setup >"$TMP_DIR/setup.log" 2>&1 || fail "setup: $(cat "$TMP_DIR/setup.log")"
   [[ -f "$(PI_DIR)/instructions.md" ]] || fail "setup deploys"
   grep -q '/login xai' "$TMP_DIR/setup.log" || fail "setup hints: $(cat "$TMP_DIR/setup.log")"
-  assert_eq "" "$(_bstack_toml_get agent command)" "setup leaves the desk agent to the desk issue"
   write_config <<'EOF'
 [bstack]
-harness = "pi"
-
-[agent]
-command = "cursor-agent"
+enabled = false
 EOF
   FAKE_PI_READY="claude-bridge" bstack_on >/dev/null 2>&1
-  assert_eq "pi" "$(_bstack_toml_get agent command)" "on with harness pi moves the stock desk to pi"
-  write_config <<'EOF'
-[bstack]
-enabled = true
-
-[agent]
-command = "opencode"
-EOF
-  FAKE_PI_READY="claude-bridge" bstack_on >/dev/null 2>&1
-  assert_eq "pi" "$(_bstack_toml_get agent command)" "on moves bercail's old opencode desk to pi"
-  write_config <<'EOF'
-[bstack]
-enabled = true
-
-[agent]
-command = "claude"
-EOF
-  bstack_on >/dev/null 2>&1
-  assert_eq "claude" "$(_bstack_toml_get agent command)" "on keeps a desk agent the person picked"
-  printf 'PASS: setup on Pi deploys and prints the logins to run\n'
+  assert_eq "true" "$(_bstack_toml_get bstack enabled)" "on turns bstack on"
+  [[ -f "$(PI_DIR)/lead.json" ]] || fail "on deploys the Pi lead"
+  printf 'PASS: setup on Pi deploys and prints the logins to run; on deploys\n'
 }
 test_pi_launch_contract() {
   reset_home
@@ -877,7 +609,7 @@ test_pi_bridge_doctor() {
   FAKE_CLAUDE_AUTH_METHOD=oauth_token _bstack_pi_claude_ready || fail "oauth_token is a Claude plan"
   grep -q 'Claude auth: ready' <<<"$(FAKE_CLAUDE_AUTH_METHOD=oauth_token bstack_status)" || fail "status accepts oauth_token"
   unset FAKE_CLAUDE_AUTH_METHOD
-  [[ "$(FAKE_PI_READY=anthropic bstack_connected_ids)" != *claude-bridge* ]] || fail "Pi anthropic login must not imply Claude Code login"
+  [[ "$(FAKE_PI_READY=anthropic _bstack_pi_connected_ids)" != *claude-bridge* ]] || fail "Pi anthropic login must not imply Claude Code login"
   out="$(FAKE_PI_VERSION=1.1.9 doctor_bstack)" && fail "doctor old Pi"
   grep -q 'bstack needs >=1.2.0' <<<"$out" || fail "doctor old version: $out"
   FAKE_PI_VERSION=1.1.9 deploy_bstack >/dev/null 2>&1 && fail "deploy old Pi"
@@ -885,26 +617,18 @@ test_pi_bridge_doctor() {
   printf 'PASS: Pi bridge install is required and idempotent; doctor verifies actual bridge, Claude Code auth and minimum Pi version\n'
 }
 
-test_harness_defaults_to_pi() {
+test_summary_and_help() {
   reset_home
-  write_config <<'EOF'
-[bstack]
-enabled = true
-EOF
-  assert_eq "pi" "$(bstack_harness)" "unset is pi"
-  _bstack_toml_set bstack harness '"nope"'
-  assert_eq "pi" "$(bstack_harness)" "unknown falls back to pi"
+  # shellcheck source=lib/help.sh
+  source "$ROOT/lib/help.sh"
+  write_pi_config
   local out
-  out="$(deploy_bstack 2>&1)" || fail "unknown harness deploys Pi: $out"
-  grep -q 'using pi' <<<"$out" || fail "unknown harness warns: $out"
-  grep -q 'using opencode' <<<"$out" && fail "unknown harness must not fall back to opencode: $out"
-  [[ -f "$(PI_DIR)/lead.json" ]] || fail "unknown harness deploys the Pi profile"
-  _bstack_toml_set bstack harness '"opencode"'
-  FAKE_CONNECTED="claude-agent" deploy_bstack >/dev/null 2>&1
-  [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "pinned opencode renders no Pi profile"
-  grep -qx 'model: claude-agent/opus#high' "$OPENCODE_CONFIG_DIR/agents/bstack.md" || fail "opencode rendering is unchanged"
-  grep -q 'harness' <<<"$(FAKE_CONNECTED="claude-agent" bstack_status)" && fail "opencode status is unchanged"
-  printf 'PASS: Pi is the default harness; opencode only when pinned\n'
+  out="$(show_summary)"
+  grep -q 'bstack: on' <<<"$out" || fail "summary: $out"
+  grep -q 'Desk agent: pi (handoff stages: bstack, autopilot)' <<<"$out" || fail "summary desk and stages: $out"
+  grep -q 'pi -p' "$ROOT/lib/help.sh" || fail "help should say headless stages run pi -p"
+  grep -q "bstack's Pi lead on the desk" "$ROOT/lib/help.sh" || fail "help --bstack should say Pi's lead on the desk"
+  printf 'PASS: the summary and help name Pi as the desk and the handoff stages\n'
 }
 
 test_share_dir_defaults_when_unset() {
@@ -917,75 +641,18 @@ test_share_dir_defaults_when_unset() {
   printf 'PASS: bstack paths default when AGENTIC_DEV_SHARE_DIR is unset\n'
 }
 
-test_migrate_opencode_desk_and_summary() {
-  reset_home
-  # shellcheck source=lib/help.sh
-  source "$ROOT/lib/help.sh"
-  write_config <<'EOF'
-[agent]
-command = "opencode"
-
-[bstack]
-enabled = true
-EOF
-  migrate_opencode_desk_command
-  assert_eq "pi" "$(_bstack_toml_get agent command)" "update migrates the old desk default"
-  local out
-  out="$(show_summary)"
-  grep -q 'bstack: on (pi)' <<<"$out" || fail "summary harness: $out"
-  grep -q 'bstack=pi, autopilot=pi (BERCAIL_ROLE=autopilot)' <<<"$out" || fail "summary stages: $out"
-  grep -q 'Agent command: pi ' <<<"$out" || fail "summary agent: $out"
-  grep -q 'opencode' <<<"$out" && fail "summary on Pi must not say opencode: $out"
-  write_config <<'EOF'
-[agent]
-command = "opencode"
-
-[bstack]
-enabled = true
-harness = "opencode"
-EOF
-  migrate_opencode_desk_command
-  assert_eq "opencode" "$(_bstack_toml_get agent command)" "pinned opencode harness keeps its desk"
-  out="$(show_summary)"
-  grep -q 'bstack: on (opencode)' <<<"$out" || fail "pinned summary: $out"
-  grep -q 'bstack=opencode, autopilot=opencode bstack-autopilot' <<<"$out" || fail "pinned stages: $out"
-  write_config <<'EOF'
-[agent]
-command = "claude"
-
-[bstack]
-enabled = true
-EOF
-  migrate_opencode_desk_command
-  assert_eq "claude" "$(_bstack_toml_get agent command)" "a chosen desk agent stays"
-  grep -q 'Existing configs without harness keep opencode' "$ROOT/lib/help.sh" \
-    && fail "help still says unset harness is opencode"
-  grep -q 'Pi on the desk' "$ROOT/lib/help.sh" || fail "help --bstack should say Pi on the desk"
-  grep -q 'pi -p' "$ROOT/lib/help.sh" || fail "help should say bstack runs pi -p"
-  grep -q 'opencode or Pi' "$ROOT/bin/bercail" && fail "usage still leads with opencode"
-  printf 'PASS: update migrates the old opencode desk default; summary names the harness\n'
-}
-
 test_toml_get_set
-test_pick_model
 test_pick_effort
 test_installed_cli_reads_its_source
 test_new_install_defaults
 test_roles_resolve
-test_deploy_renders_agents
-test_deploy_keeps_their_files
-test_off_removes_only_ours
-test_council_seats_need_the_setting
 test_ready_verifies_without_the_council
 test_council_keeps_only_rerun_findings
 test_verify_skill_shape
-test_on_switches_stock_desk_agent
-test_setup_auto_models
 test_handoff_bstack_stage
 test_doctor
-test_harness_defaults_to_pi
 test_share_dir_defaults_when_unset
-test_migrate_opencode_desk_and_summary
+test_summary_and_help
 test_pi_models
 test_pi_deploy
 test_pi_keeps_their_template

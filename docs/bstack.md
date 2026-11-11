@@ -1,20 +1,20 @@
 # bstack
 
-**bstack is bercail's opinionated opencode.** opencode signs in with a Claude plan (Claude Agent), a ChatGPT plan, and an X subscription, so one harness runs all three, on subscriptions you already pay for. bstack sets opencode up the way bercail works: the job is a beads issue, agents stage and leave changes uncommitted for tuicr, and each kind of work goes to the model that is best at it.
+**bstack is bercail's opinionated Pi.** [Pi](https://pi.dev) signs in with a Claude plan (through Claude Code), a ChatGPT plan, and an X subscription, so one agent runs all three, on subscriptions you already pay for. bstack sets Pi up the way bercail works: the job is a beads issue, agents stage and leave changes uncommitted for tuicr, and each kind of work goes to the model that is best at it.
 
 It borrows from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (rigor, playbooks, roles by model strength, `how`/`why`/`unslop`), [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit) (babysit-pr and CI loops, which became autopilot), [tstack](https://github.com/t3dotgg/tstack) (a council of providers), and [gstack](https://github.com/garrytan/gstack), on top of [Shep](shep.md)'s handoff workflow.
 
-New installs run bstack. Claude Code, Codex CLI, and cursor-agent stay equal harnesses beside it. Bercail does not prefer one for a handoff, pick one, or fall back from one to another.
+New installs run bstack. With it off, the desk runs plain Pi.
 
 ```bash
-bercail bstack setup     # installs opencode, connects your plans; models are picked for you
-bercail bstack status    # what is connected, which model each role uses
-dev                      # the desk starts opencode as the bstack agent
+bercail bstack setup     # installs Pi and the Claude bridge; models are picked for you
+bercail bstack status    # what is logged in, which model each role uses
+dev                      # the desk starts Pi as the bstack lead
 ```
 
-## On Pi
+## How it runs
 
-New configs set `harness = "pi"` under `[bstack]`. Set it in an existing `config.toml` and run `bercail bstack setup` to install [Pi](https://pi.dev) (>=1.2.0) and `npm:pi-claude-bridge@0.11.0`. Claude uses your Claude Code login (`claude auth login`), not Pi's `/login anthropic` or per-token Extra Usage. GPT and Grok use `/login openai` and `/login xai` inside Pi. Existing configs without `harness` keep using opencode; `harness = "opencode"` selects it explicitly. With bstack on Pi, a desk runs Pi as the lead: `bercail update` writes its command line to `pi/lead.json`, and the desk shows its status and [comes back after a reboot](config.md#desks-after-a-reboot) like an opencode desk.
+`bercail bstack setup` installs [Pi](https://pi.dev) (>=1.2.0) and `npm:pi-claude-bridge@0.11.0`. Claude uses your Claude Code login (`claude auth login`), not Pi's `/login anthropic` or per-token Extra Usage. GPT and Grok use `/login openai` and `/login xai` inside Pi. A desk runs Pi as the lead: `bercail update` writes its command line to `pi/lead.json`, and the desk shows its status and [comes back after a reboot](config.md#desks-after-a-reboot).
 
 bercail renders the profile to `~/.local/share/bercail/pi/`. Installing the bridge adds its pinned package to Pi's settings, leaving unrelated settings and auth intact. Every role explicitly loads the bridge and the managed `extensions/fallback.ts` with `-e`, and unsets `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, and `ANTHROPIC_AUTH_TOKEN` so fallback to Claude uses your plan. Role boundaries and git rules remain instructions, not enforced tool restrictions. The builder, judge, council, and autopilot run as interactive `hc` sibling agents from templates in `~/.config/herdr-core/templates/`. Pi handoffs use desks or interactive siblings, not one-shot runs.
 

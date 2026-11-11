@@ -3,7 +3,7 @@
 // The desk agent is an hc terminal started as a sub-agent of the space's Shell
 // terminal, so it belongs to the space without a pane in any tab. It carries
 // labels bercail.role=agent and bercail.space=<space id>, and runs
-// bercail-desk-agent: bstack when it is on, else bercail's [agent] command. Each
+// bercail-desk-agent: Pi, as bstack when it is on. Each
 // desk shows in a terminal block of its own in the layout's `agent-stack`,
 // `desk-<address>` (an agent block can't take the keyboard from a command, and
 // agent.focus moves it to the parent pane).
@@ -40,10 +40,10 @@ function findNode(node, id) {
   return null;
 }
 
-// Tiny TOML reader for the keys bercail needs: [agent] command, [layout] review and
-// auto_review, [bstack] enabled.
+// Tiny TOML reader for the keys bercail needs: [layout] review and auto_review,
+// [bstack] enabled.
 export function readConfig(text) {
-  const cfg = { agent: ["cursor-agent"], review: "tuicr", autoReview: true, bstack: false };
+  const cfg = { review: "tuicr", autoReview: true, bstack: false };
   let section = "";
   for (const raw of text.split("\n")) {
     const line = raw.replace(/#.*$/, "").trim();
@@ -52,7 +52,6 @@ export function readConfig(text) {
     const kv = line.match(/^(\w+)\s*=\s*(.+)$/);
     if (!kv) continue;
     const value = kv[2].trim().replace(/^"(.*)"$/, "$1");
-    if (section === "agent" && kv[1] === "command" && value) cfg.agent = value.split(/\s+/);
     if (section === "layout" && kv[1] === "review" && value) cfg.review = value === "hunk" ? "hunk diff" : value;
     if (section === "layout" && kv[1] === "auto_review") cfg.autoReview = value !== "false";
     if (section === "bstack" && kv[1] === "enabled") cfg.bstack = value === "true";
@@ -353,7 +352,7 @@ export default class BercailDesk extends View {
   }
 
   // The desk agent, a sub-agent of the space's Shell. bercail-desk-agent picks what
-  // it runs; without bercail (the layout on its own), [agent] command.
+  // it runs; without bercail (the layout on its own), plain pi.
   async start(space) {
     if (this.starting[space.id]) return;
     const shell = shellOf(space);
@@ -365,7 +364,7 @@ export default class BercailDesk extends View {
     this.hadDesk.add(space.id);
     try {
       const wrapper = home() + DESK_AGENT;
-      const argv = (await exec("test", ["-x", wrapper])).code === 0 ? [wrapper] : this.cfg.agent;
+      const argv = (await exec("test", ["-x", wrapper])).code === 0 ? [wrapper] : ["pi"];
       const r = await exec("hc", ["run", "--bg", "--json", "--keep", "--outlive-parent", "--no-notify",
         "--parent", shell, "--cwd", placeOf(space, panes()),
         "--label", "bercail.role=agent", "--label", `bercail.space=${space.id}`,

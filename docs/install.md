@@ -50,7 +50,7 @@ It also installs what bercail needs, and does a little extra on Omarchy, Linux, 
 
 The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/layouts/): [`bercail/`](../bercail) holds the layout, its two mods, its keys, and a [RECIPE.md](../bercail/RECIPE.md). When you ask your agent to add it, the recipe tells it to ask you, install bercail with the commands above, switch to the layout, and then tell you the keys and commands to start with.
 
-If you'd rather add only the layout, you get the desk and Review, but the desk runs `cursor-agent` (or your `[agent] command`) instead of bstack, Review needs tuicr installed separately, and there are no worktree spaces, handoff, skills, or webhooks. It needs the Herdr app (`herdr-app`, `~/.config/herdr-app`), not the `herdr` terminal and its `herdr plugin` system.
+If you'd rather add only the layout, you get the desk and Review, but the desk runs plain `pi` instead of bstack, Review needs tuicr installed separately, and there are no worktree spaces, handoff, skills, or webhooks. It needs the Herdr app (`herdr-app`, `~/.config/herdr-app`), not the `herdr` terminal and its `herdr plugin` system.
 
 ## Coming from 0.8
 
@@ -65,4 +65,4 @@ dev          # this directory's space, with its desk agent
 # or: t      # open the Herdr app
 ```
 
-With [bstack](bstack.md) on, a space starts its desk as bstack (opencode with your terminal's colors, or Pi with `harness = "pi"`) on its own, shown in the desk column. Quit it and it stays quit until `Ctrl+Shift+A` or `dev`, even across a reboot; one still running at shutdown [comes back](config.md#desks-after-a-reboot). With bstack off nothing starts on its own; `Ctrl+Shift+A` or `dev` starts `[agent] command` from `~/.config/bercail/config.toml`. Handoff stages do not read either; each stage names its own binary.
+With [bstack](bstack.md) on, a space starts its desk as bstack's Pi lead on its own, shown in the desk column. Quit it and it stays quit until `Ctrl+Shift+A` or `dev`, even across a reboot; one still running at shutdown [comes back](config.md#desks-after-a-reboot). With bstack off nothing starts on its own; `Ctrl+Shift+A` or `dev` starts plain `pi`.

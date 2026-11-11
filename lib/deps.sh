@@ -3,7 +3,6 @@
 
 HUNK_MIN_VERSION=0.20.1
 TUICR_MIN_VERSION=0.20.0
-GROK_MISE_SPEC="npm:@xai-official/grok"
 TUICR_MISE_SPEC="github:agavra/tuicr"
 
 dep_present() {
@@ -36,7 +35,7 @@ mise_can_install() {
   [[ -n "$spec" ]] || return 1
   [[ "$spec" == *:* ]] && return 0
   case "$spec" in
-    worktrunk|fzf|jq|pi|hunk|opencode) return 0 ;;
+    worktrunk|fzf|jq|pi|hunk) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -456,61 +455,9 @@ ensure_selected_layout_tools() {
   esac
 }
 
-install_grok_binary() {
-  if dep_present grok; then
-    info "present: grok"
-    return 0
-  fi
-  if maybe_mise_install grok "$GROK_MISE_SPEC"; then
-    return 0
-  fi
-  warn "missing grok (install with: mise use -g $GROK_MISE_SPEC)"
-  return 1
-}
-
-# opencode v2: the v1 config (opencode.json "agent", "permission") is not what bstack writes.
-bstack_opencode_version_ok() {
-  local v
-  v="$(opencode --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1)"
-  [[ -n "$v" ]] || return 1
-  # 2.2.3: top-level policies (bstack's hard denies).
-  [[ "$(printf '%s\n' 2.2.3 "$v" | sort -V | head -1)" == 2.2.3 ]]
-}
-
-install_opencode_binary() {
-  if dep_present opencode; then
-    info "present: opencode"
-    bstack_opencode_version_ok \
-      || warn "opencode $(opencode --version 2>/dev/null) is older than 2.2.3; bstack needs 2.2.3 or newer (mise use -g opencode@latest)"
-    return 0
-  fi
-  maybe_mise_install opencode opencode && return 0
-  if has_brew; then
-    info "installing via brew: anomalyco/tap/opencode-v2"
-    if run brew install anomalyco/tap/opencode-v2 && dep_present opencode; then
-      return 0
-    fi
-  fi
-  warn "missing opencode (install with: mise use -g opencode, or curl -fsSL https://opencode.ai/v2/install | bash)"
-  return 1
-}
-
-ensure_selected_agent() {
-  local cmd
-  cmd="$(read_agent_command 2>/dev/null || printf '%s' "cursor-agent")"
-  case "$cmd" in
-    grok) install_grok_binary || true ;;
-    pi) maybe_mise_install pi pi || true ;;
-    opencode) install_opencode_binary || true ;;
-  esac
-  # bstack runs on its harness whatever the desk agent is (handoff stage bstack).
-  if declare -F bstack_enabled >/dev/null && bstack_enabled; then
-    if [[ "$(bstack_harness)" == pi ]]; then
-      [[ "$cmd" == pi ]] || maybe_mise_install pi pi || true
-    elif [[ "$cmd" != opencode ]]; then
-      install_opencode_binary || true
-    fi
-  fi
+# The desk runs Pi, bstack or not.
+ensure_pi() {
+  dep_present pi || maybe_mise_install pi pi || warn "missing pi (install with: mise use -g pi)"
 }
 
 install_dependencies() {
@@ -586,28 +533,11 @@ doctor_dependencies() {
       _doctor_configured_bin "$review_bin" review || missing=$((missing + 1))
       ;;
   esac
-  if declare -F read_agent_command >/dev/null; then
-    local agent_cmd agent_bin
-    agent_cmd="$(read_agent_command 2>/dev/null || printf '%s' "cursor-agent")"
-    agent_bin="${agent_cmd%% *}"
-    case "$agent_bin" in
-      agent|"") ;;
-      claude|codex|cursor|cursor-agent|opencode)
-        if dep_present "$agent_bin"; then
-          log "  ok  $agent_bin ($(command -v "$agent_bin"))"
-        else
-          log "  optional  $agent_bin (not on PATH; pick another agent on the desk)"
-        fi
-        ;;
-      *)
-        if dep_present "$agent_bin"; then
-          log "  ok  $agent_bin ($(command -v "$agent_bin"))"
-        else
-          log "  missing  $agent_bin (configured agent command)"
-          missing=$((missing + 1))
-        fi
-        ;;
-    esac
+  if dep_present pi; then
+    log "  ok  pi ($(command -v pi))"
+  else
+    log "  missing  pi (the desk agent; mise use -g pi)"
+    missing=$((missing + 1))
   fi
   return "$missing"
 }

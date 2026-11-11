@@ -184,27 +184,27 @@ EOF
     "Omarchy path calls omarchy pkg add git"
 }
 
-test_install_grok_via_mise() {
-  local case_dir="$tmp/grok-mise" rc
+test_ensure_pi_via_mise() {
+  local case_dir="$tmp/pi-mise" rc
   mkdir -p "$case_dir/bin" "$case_dir/home/.local/bin"
   isolated_sys "$case_dir/sys"
   : >"$case_dir/mise.log"
   cat >"$case_dir/bin/mise" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$MISE_CALL_LOG"
-if [ "$1" = "use" ] && [ "$2" = "-g" ] && [ "$3" = "npm:@xai-official/grok" ]; then
-  printf '%s\n' '#!/bin/sh' 'exit 0' >"$HOME/.local/bin/grok"
-  chmod +x "$HOME/.local/bin/grok"
+if [ "$1" = "use" ] && [ "$2" = "-g" ] && [ "$3" = "pi" ]; then
+  printf '%s\n' '#!/bin/sh' 'exit 0' >"$HOME/.local/bin/pi"
+  chmod +x "$HOME/.local/bin/pi"
   exit 0
 fi
 exit 1
 EOF
   chmod +x "$case_dir/bin/mise"
 
-  if with_isolated_path "$case_dir" install_grok_binary; then rc=0; else rc=$?; fi
-  assert_eq "0" "$rc" "grok installs via mise npm spec"
-  assert_contains "$(<"$case_dir/mise.log")" "use -g npm:@xai-official/grok" \
-    "grok uses Omarchy's npm:@xai-official/grok mise package"
+  if with_isolated_path "$case_dir" ensure_pi; then rc=0; else rc=$?; fi
+  assert_eq "0" "$rc" "ensure_pi installs pi via mise"
+  assert_contains "$(<"$case_dir/mise.log")" "use -g pi" \
+    "ensure_pi calls mise use -g pi"
 }
 
 test_ensure_mise_shims_beats_brew() {
@@ -279,7 +279,7 @@ test_marker_block_prefers_mise_path() {
 test_mise_allowlist
 test_maybe_mise_install_jq
 test_omarchy_pkg_add_when_mise_cannot
-test_install_grok_via_mise
+test_ensure_pi_via_mise
 test_ensure_mise_shims_beats_brew
 test_maybe_mise_install_dry_run_without_binary
 test_marker_block_prefers_mise_path

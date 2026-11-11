@@ -17,8 +17,7 @@ uninstall_agentic_dev() {
   if declare -F remove_desk_restore >/dev/null; then
     remove_desk_restore
   fi
-  run rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/bercail-desk/tui.ts"
-  for bin in agentic-dev bercail-desk-agent bercail-desk-claude-hook; do
+  for bin in agentic-dev bercail-desk-agent; do
     if [[ -e "$LOCAL_BIN/$bin" ]]; then
       info "remove: $LOCAL_BIN/$bin"
       run rm -f "$LOCAL_BIN/$bin"
@@ -70,7 +69,7 @@ uninstall_agentic_dev() {
   fi
 
   if declare -F remove_bstack >/dev/null \
-    && confirm "Remove bstack's opencode agents, commands, and opencode.jsonc (only files bstack manages)?"; then
+    && confirm "Remove bstack's Pi profile and agent templates (only files bstack manages)?"; then
     remove_bstack
   fi
 

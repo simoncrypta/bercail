@@ -10,7 +10,7 @@ Agents stage their changes and leave them uncommitted. When the desk agent goes 
 
 **Built to be herded.** Bercail is French for the sheepfold, so of course there's a shepherd. [Shep](docs/shep.md) is the orchestrator that ships with bercail: it runs on Pi out of the box. It writes the job as a [beads](https://beads.gascity.com/) issue, hands it to an agent, and tells you when a desk is ready. Bercail does the local work; Shep decides what happens next. You can also do Shep's part by hand.
 
-**New installs run [bstack](docs/bstack.md):** one harness, [opencode](https://github.com/anomalyco/opencode), on your own Claude, ChatGPT, and X subscriptions. Claude Code, Codex CLI, and cursor-agent stay equal harnesses beside it. A handoff's whole prompt is one line pointing at its beads issue.
+**Every agent runs on [Pi](https://pi.dev).** New installs run [bstack](docs/bstack.md), bercail's Pi setup, on your own Claude, ChatGPT, and X subscriptions. A handoff's whole prompt is one line pointing at its beads issue.
 
 Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
 
@@ -60,7 +60,7 @@ The layout opens on Shep, your orchestrator (on Pi), with your spaces beside it:
 - [config](docs/config.md): `config.toml` and the files bercail manages.
 - [review](docs/review.md): tuicr, and how Review opens and closes.
 - [handoff](docs/handoff.md): stages, headless runs, result files.
-- [bstack](docs/bstack.md): opencode on your own plans, roles, autopilot. Then [the bstack guide](docs/bstack/README.md).
+- [bstack](docs/bstack.md): Pi on your own plans, roles, autopilot. Then [the bstack guide](docs/bstack/README.md).
 - [Shep](docs/shep.md): the orchestrator on Pi, the Shep view, and agent status webhooks.
 - [development](docs/development.md): tests, dependencies, platforms.
 - [Herdr agents and subagents](docs/herdr-agents-subagents.md): a proposal for Herdr's agents list.

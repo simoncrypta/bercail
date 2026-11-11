@@ -45,11 +45,10 @@ at, and:
 
 ## What it may do
 
-Asking for autopilot is asking it to commit and push to the PR's branch. In
-opencode it runs as `bstack-autopilot`, which may commit and push without asking.
-It may not force-push, push to `main` or `master`, pass `--no-verify`, or merge.
-Force-push and `--no-verify` are opencode policies, which no agent or approval can
-lift; the rest are denied in the agent's permissions.
+Asking for autopilot is asking it to commit and push to the PR's branch. It
+runs as `bstack-autopilot`, a sibling agent that may commit and push without
+asking. It may not force-push, push to `main` or `master`, pass `--no-verify`,
+or merge: bstack's guard extension blocks each of those for every role.
 
 It stops when the PR is green, when the same check fails after two real fixes,
 when a fix needs a change outside the PR, when every open thread needs a person,
@@ -65,7 +64,8 @@ Autopilot can take hours. Hand it off and keep your desk:
 ```
 
 That writes a beads issue naming the PR and runs it headless on the `autopilot`
-[stage](../handoff.md), as `bstack-autopilot`, in the PR's checkout. Other headless stages reject
-every commit, push, and merge, so this is the only one that can push.
+[stage](../handoff.md), with autopilot's rules, in the PR's checkout. The
+`bstack` stage leaves commit and push to you, so this is the only one that can
+push.
 
 Next: [Run jobs in parallel](./07-handoff.md).

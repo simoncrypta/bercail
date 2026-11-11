@@ -161,7 +161,7 @@ def body(run):
     (state / "agentic-dev/handoffs.jsonl").write_text(json.dumps(
         {"path": str(desk), "branch": "login", "issue": "app-1", "issue_title": "Fix the login", "stage": "bstack", "harness": "pi"}) + "\n")
 
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("PI_", "HC_", "OPENCODE")) and k != "BASH_ENV"}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("PI_", "HC_")) and k != "BASH_ENV"}
     env.update(HOME=str(home), XDG_CONFIG_HOME=str(home / ".config"), XDG_STATE_HOME=str(state),
                XDG_DATA_HOME=str(run / "data"), XDG_CACHE_HOME=str(run / "cache"),
                PATH=f"{binp}:/usr/bin:/bin", TERM="xterm-256color", PI_OFFLINE="1",

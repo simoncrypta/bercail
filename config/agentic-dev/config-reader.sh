@@ -13,16 +13,6 @@ _agentic_dev_user_config() {
   return 1
 }
 
-agentic_dev_agent_command() {
-  local config=""
-  config="$(_agentic_dev_user_config)" || config=""
-  local cmd="cursor-agent"
-  if [[ -r "$config" ]]; then
-    cmd="$(awk -F'"' '/^command[[:space:]]*=/ { print $2; exit }' "$config")"
-  fi
-  printf '%s' "${cmd:-cursor-agent}"
-}
-
 agentic_dev_layout_review() {
   local config="" review="tuicr"
   config="$(_agentic_dev_user_config)" || config=""

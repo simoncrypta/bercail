@@ -94,37 +94,24 @@ restart_fcitx5() {
   fi
 }
 
-omarchy_known_agent() {
-  case "$1" in
-    grok|claude|codex|opencode|gemini|copilot|crush|pi|omp) return 0 ;;
-    *) return 1 ;;
-  esac
-}
-
+# Omarchy's default agent starts as pi, the desk's agent. A choice already
+# there stays unless bercail reconfigure runs.
 sync_omarchy_default_agent() {
-  local cmd dest current
+  local dest current
   is_omarchy || return 0
-  cmd="$(read_agent_command 2>/dev/null || true)"
-  omarchy_known_agent "$cmd" || return 0
   dest="$OMARCHY_DEFAULT_AGENT_FILE"
   if [[ -f "$dest" && "$RECONFIGURE" -ne 1 ]]; then
     current="$(tr -d '\n' <"$dest")"
-    # bercail's old default was opencode. When the desk command is now pi, follow it.
-    if [[ "$current" == opencode && "$cmd" == pi ]]; then
-      info "syncing omarchy default agent: pi (was opencode)"
-    else
-      info "keeping omarchy default agent: $current"
-      return 0
-    fi
-  else
-    info "syncing omarchy default agent: $cmd"
+    info "keeping omarchy default agent: $current"
+    return 0
   fi
+  info "syncing omarchy default agent: pi"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     info "[dry-run] would write $dest"
     return 0
   fi
   ensure_dir "$(dirname "$dest")"
-  printf '%s\n' "$cmd" >"$dest"
+  printf '%s\n' pi >"$dest"
 }
 
 reload_hyprland_if_possible() {

@@ -46,8 +46,7 @@ expect(deskNext({ ...base, session: "ses_a" }, { ...gate, session: "ses_a" }) ==
 expect(deskNext({ ...base, pid: 7 }, { ...gate, session: "ses_a" }) === null, "a stale pid is not this process")
 expect(deskNext({ ...base, pid: "42" }, { ...gate, session: "ses_a" }) === null, "a pid that is not the number is stale")
 expect(deskNext({ ...base, address: "t8" }, { ...gate, session: "ses_a" }) === null, "another terminal's record is left alone")
-expect(deskNext({ ...base, harness: "opencode" }, { ...gate, session: "ses_a" }) === null, "an opencode desk is not this Pi")
-expect(deskNext({ ...base, harness: "claude" }, { ...gate, session: "ses_a" }) === null, "a nested claude is not the desk")
+expect(deskNext({ ...base, harness: "other" }, { ...gate, session: "ses_a" }) === null, "a non-Pi desk is not this Pi")
 expect(deskNext(null, { ...gate, session: "ses_a" }) === null, "a missing record is not created")
 expect(deskNext(["nope"], { ...gate, session: "ses_a" }) === null, "a record that is not an object is ignored")
 expect(deskNext({ ...base }, { ...gate, session: 1 }) === null, "a session that is not a string is ignored")
@@ -164,12 +163,12 @@ try {
   }
   expect(!threw, "a session error does not escape")
   expect(JSON.parse(readFileSync(live, "utf8")).session === "", "a session error does not clear a stored empty id twice")
-  writeFileSync(live, `${JSON.stringify({ ...owned, harness: "opencode", session: "keep" })}\n`)
+  writeFileSync(live, `${JSON.stringify({ ...owned, harness: "other", session: "keep" })}\n`)
   const foreign = readFileSync(live, "utf8")
   ctx.sessionManager.getSessionFile = () => "/tmp/ses.jsonl"
   ctx.sessionManager.getSessionId = () => "uuid-3"
   handlers.session_start({}, ctx)
-  expect(readFileSync(live, "utf8") === foreign, "the event leaves an opencode record byte-for-byte")
+  expect(readFileSync(live, "utf8") === foreign, "the event leaves a non-Pi record byte-for-byte")
 } finally {
   for (const key of Object.keys(saved)) {
     if (saved[key] === undefined) delete process.env[key]

@@ -1,34 +1,33 @@
 # Set up bstack
 
 New bercail installs turn bstack on (`./install.sh --no-bstack` to skip). On an
-existing install, `bercail bstack setup` turns it on too; `bercail bstack on`
-does it without the sign-ins. Either one moves the desk default from
-cursor-agent to opencode.
+existing install, `bercail bstack setup` or `bercail bstack on` turns it on.
+With bstack off, the desk runs plain Pi.
 
-## Connect your plans
+## Sign in
 
 ```bash
 bercail bstack setup
 ```
 
-It installs opencode when it is missing (bstack needs 2.2.3 or newer), then
-offers each sign-in:
+It installs [Pi](https://pi.dev) when it is missing (bstack needs 1.2.0 or
+newer) and the Claude bridge (`npm:pi-claude-bridge@0.11.0`), then prints the
+sign-ins that are still missing:
 
-| Plan | What it runs |
-|------|--------------|
-| Claude (Pro or Max) | `opencode auth login claude-agent`. Claude Agent runs Claude Code, so install it and sign in with `claude auth login` first; setup skips Claude without it |
-| ChatGPT (Plus or Pro) | `opencode auth login openai`, choose Sign in with ChatGPT |
-| X subscription | `opencode auth login xai --method device` |
+| Plan | How to sign in |
+|------|----------------|
+| Claude (Pro or Max) | `claude auth login` in a terminal. The bridge runs Claude Code on your plan |
+| ChatGPT (Plus or Pro) | `/login openai` inside Pi, choose Sign in with ChatGPT |
+| X subscription | `/login xai` inside Pi |
 
-Connect the ones you pay for. One is enough to start. bstack spreads the work
-out as you add more. `--yes` connects nothing: it turns bstack on and uses the
-plans already connected.
+Sign in to the ones you pay for. One is enough to start. bstack spreads the
+work out as you add more; run `bercail update` after a new sign-in.
 
-Setup does not ask about models. Each connected plan gets its newest model:
-Claude's `opus` alias, the newest GPT Sol, the newest plain Grok release, each
-at `effort` (default `high`). `bercail update` picks again, so a new release
-reaches bstack without you doing anything. To pin a model or change the effort,
-see [Make it yours](./08-make-it-yours.md).
+Setup does not ask about models. Each plan you are signed in to gets its newest
+model: the newest Claude Opus, the newest GPT Sol, the newest plain Grok
+release, each at `effort` (default `high`). `bercail update` picks again, so a
+new release reaches bstack without you doing anything. To pin a model or change
+the effort, see [Make it yours](./08-make-it-yours.md).
 
 ## Check it
 
@@ -36,11 +35,11 @@ see [Make it yours](./08-make-it-yours.md).
 bercail bstack status
 ```
 
-It shows which plans are connected, the model each one uses (`auto` or
+It shows which sign-ins are ready, the model each one uses (`auto` or
 `pinned`), and which model each role ends up on. `bercail doctor` warns when a
-plan or a model changed since the last update.
+sign-in or a model changed since the last update.
 
-Inside opencode, `/bstack-setup` shows the same thing and tells you what to run.
+Inside Pi, `/bstack-setup` shows the same thing and tells you what to run.
 
 ## Start working
 
@@ -48,7 +47,7 @@ Inside opencode, `/bstack-setup` shows the same thing and tells you what to run.
 dev
 ```
 
-The desk starts opencode as the `bstack` agent. Pick something small and real,
+The desk starts Pi as the bstack lead. Pick something small and real,
 and describe it the way you would to a colleague:
 
 ```text
@@ -63,7 +62,7 @@ uncommitted change. That is your [review](../review.md).
 
 ## Keep the cost in check
 
-Each subagent and each council seat spends tokens from a plan. To spend less:
+Each sibling agent and each council seat spends tokens from a plan. To spend less:
 
 - Save the playbooks for work that needs them. A one-line fix doesn't.
 - Point `build` at your cheapest plan in `[bstack]` (see [Make it yours](./08-make-it-yours.md)).

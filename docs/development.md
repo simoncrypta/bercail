@@ -3,7 +3,7 @@
 ## Hacking on bercail
 
 ```bash
-shellcheck install.sh lib/*.sh bin/bercail bin/bercail-desk-agent bin/bercail-desk-claude-hook config/shell/bercail.inc.sh config/worktrunk/herdr-layout.sh
+shellcheck install.sh lib/*.sh bin/bercail bin/bercail-desk-agent config/shell/bercail.inc.sh config/worktrunk/herdr-layout.sh
 herdr-app check bercail/mods/bercail-desk
 herdr-app check bercail/mods/bercail-shep
 herdr-app check bercail/mods/bercail-spaces
@@ -18,7 +18,7 @@ npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the berc
 
 CI runs every `tests/*.sh` on each push and PR. It deploys the site and the Workers only for a `v*` tag, when `CLOUDFLARE_API_TOKEN` is set.
 
-Use Node 26 for the plugin unit tests. When opencode is installed, `tests/desk_session_plugin_test.sh` also checks the plugin in disposable TUIs against a private server, without sending a model prompt or changing your sessions. When Pi is installed, `tests/desk_session_pi_test.sh` does the same for the Pi desk extension, offline, with a stand-in model.
+Use Node 26 for the Pi extension unit tests. When Pi is installed, `tests/desk_session_pi_test.sh`, `tests/review_pi_test.sh`, and the other `*_pi_test.sh` also run the extension in a real Pi, offline, with a stand-in model, without sending a model prompt or changing your sessions.
 
 `site/` is bercail.dev: an Astro site served by the `bercail-site` Worker, which also serves `/install.sh` from the latest release's tag. `workers/setup-domain` keeps the legacy setup.simoncrypta.dev host alive for older installs. Both share `workers/setup-domain/src/github.js`.
 
@@ -39,9 +39,7 @@ Installed if missing: the [Herdr app](https://herdr.dev) with herdr-core (`herdr
 
 worktrunk and beads install the same way: skip if present, else mise, else Homebrew (`brew install worktrunk` / `brew install beads`), else upstream (worktrunk's GitHub release; the [beads installer](https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh), which puts `bd` in `/usr/local/bin` when writable, else `~/.local/bin`).
 
-With bstack on: [opencode](https://github.com/anomalyco/opencode) 2.2.3+ (mise, else `brew install anomalyco/tap/opencode-v2`). Its Claude Agent sign-in runs [Claude Code](https://docs.anthropic.com/en/docs/claude-code), so a Claude plan needs `claude` too.
-
-[Claude Code](https://docs.anthropic.com/en/docs/claude-code), [Codex CLI](https://github.com/openai/codex), and cursor-agent are optional. Install the ones you want Shep to use; `bercail harness` reports which are on PATH.
+The desk agent: [Pi](https://pi.dev) (mise). With bstack on, Pi 1.2.0+ and `npm:pi-claude-bridge@0.11.0`; the bridge runs `claude` on your Claude plan, so a Claude plan needs `claude` installed and signed in too.
 
 ## platforms
 

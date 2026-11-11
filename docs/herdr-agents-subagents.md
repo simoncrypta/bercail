@@ -14,8 +14,8 @@ blocked, and the list never shows it.
 
 With Herdr's own agents mod, every bercail desk hits this: the desk agent is an hc sub-agent of the
 space's bash Shell (`hc run --parent <shell> --outlive-parent`). Live example:
-`herdr-app ls` showed `RedwoodGQL / Shell: t13 sub_agents ["t2x"]` with t2x
-(codex) idle, and the agents list had no row for it. bercail works around
+`herdr-app ls` showed `RedwoodGQL / Shell: t13 sub_agents ["t2x"]` with the
+desk t2x idle, and the agents list had no row for it. bercail works around
 this with its own clone of the mod (`bercail/mods/bercail-agents`), which
 lists terminals labelled `bercail.role=agent`. The general fix belongs
 upstream.

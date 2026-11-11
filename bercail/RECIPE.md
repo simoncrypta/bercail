@@ -15,7 +15,7 @@ these files.
 
 1. Tell the person what the install does, and ask before you run it. It runs
    an installer that adds programs (the Herdr app if missing, git, worktrunk,
-   beads, fzf, jq, tuicr, and opencode for bstack), a block in their shell rc,
+   beads, fzf, jq, tuicr, and Pi for the desk), a block in their shell rc,
    and this layout with its mods and its `layout:bercail` keys.
 2. With their yes, install with one of these:
 
@@ -53,9 +53,8 @@ Second choice, the layout on its own, when the person says no:
   (`~/.config/herdr-app/mods/bercail-desk`, `.../bercail-shep`,
   `.../bercail-spaces`, `.../bercail-agents`), then switch with
   `ctrl-shift-l`.
-- Tell the person what they won't have. The desk runs `cursor-agent`, or
-  `[agent] command` from `~/.config/bercail/config.toml` if they write one,
-  and that program must be on PATH; there is no bstack. Review needs
+- Tell the person what they won't have. The desk runs plain `pi`, which must
+  be on PATH; there is no bstack. Review needs
   [tuicr](https://github.com/agavra/tuicr) (≥ 0.20) installed separately,
   and the Shep view needs bercail (`bercail shep run` starts Shep); without
   it the view says so and the spaces work.
@@ -141,9 +140,9 @@ is which of `shep` and `work` is hidden.
 - **Keys** (keys.json section `layout:bercail`):
   - `ctrl-shift-h` switches between the Shep view and the space view.
   - `ctrl-space` opens Herdr's Go to… search (`mod.open {name: "picker"}`).
-  - `ctrl-shift-a` focuses the desk agent, or starts one: bstack when
-    `[bstack] enabled = true` in `~/.config/bercail/config.toml`, else
-    `[agent] command` (`cursor-agent` when there is none).
+  - `ctrl-shift-a` focuses the desk agent, or starts one: bstack's Pi lead
+    when `[bstack] enabled = true` in `~/.config/bercail/config.toml`, else
+    plain `pi`.
   - `ctrl-shift-r` Review (opens even on a clean tree); `ctrl-shift-s` the
     first tab (Shell).
   - `ctrl-shift-f` / `ctrl-shift-g` show Files / Changes; the same key again
@@ -245,9 +244,8 @@ is which of `shep` and `work` is hidden.
   place it shows. (Herdr's agents list shows sub-agents only under a parent
   that is an agent; `bercail-agents` lists the desk itself.) With
   no Shell terminal, the mod warns and starts nothing.
-  The wrapper runs bstack
-  (opencode, system theme) when it is on, else `[agent] command` (codex gets
-  `--no-daemon`). The mod finds the desk again by its labels in `terminals()`.
+  The wrapper runs bstack's Pi lead when it is on, else plain `pi`. The mod
+  finds the desk again by its labels in `terminals()`.
   With bstack on, a space shown without a desk gets one, once per app
   session (one the person quit stays quit).
 - Commands it runs: `space.select`, `agent.focus`, `pane.focus`, `pane.go`, `tab.select`, `tab.new` (Review,
@@ -292,7 +290,7 @@ is which of `shep` and `work` is hidden.
   its own file in `~/.cache/bercail/review-jobs/`. While a job is pending a
   1 s timer reads that file, removes it, and shows a failure (or a blocked
   pass) in the bar and a toast. A reload that changes `current` moves the
-  card to it. `lib/review-desk.sh` attaches one read-only opencode session to
+  card to it. `lib/review-desk.sh` starts one read-only Pi session on
   this space's desk. Passes use that session serially. Once all cards are
   ready it synthesizes the stack summary, fingerprinted against the exact
   card inputs. Both the cards and summary are visible in that desk session.

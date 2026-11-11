@@ -65,7 +65,7 @@ def child_env(base, **extra):
         "PI_OFFLINE",
     }
     for key in list(env):
-        if key.startswith("OPENCODE") or key in drop:
+        if key in drop:
             env.pop(key, None)
     env.update(base)
     env.update(extra)
@@ -367,18 +367,18 @@ def main():
         tui.close()
 
     foreign = records / "t-other.json"
-    other = Tui(child_env(base, HC_TERMINAL_ID="t-other"), pi_args(sessions), foreign, "t-other", "opencode")
+    other = Tui(child_env(base, HC_TERMINAL_ID="t-other"), pi_args(sessions), foreign, "t-other", "other")
     other_claim = runtime / "bercail/open-sessions" / f"{other.proc.pid}.json"
-    expected = record_text("t-other", other.proc.pid, "opencode")
+    expected = record_text("t-other", other.proc.pid, "other")
 
     def claimed_only():
         return other_claim.exists() and read_json(other_claim).get("pid") == other.proc.pid
 
     if wait_for("foreign desk still publishes a claim", claimed_only, 30, other.proc):
         if foreign.read_text() != expected:
-            fail(f"an opencode record was overwritten: {foreign.read_text()!r} != {expected!r}")
+            fail(f"a foreign record was overwritten: {foreign.read_text()!r} != {expected!r}")
         else:
-            print("PASS: an opencode record is left byte-for-byte alone")
+            print("PASS: a non-Pi record is left byte-for-byte alone")
     else:
         dump(other)
     other.close()

@@ -16,8 +16,9 @@
 # A clone made here is not Graphite-initialized.
 #
 # Gather is plain gh and git. Diffs are git diff <parent>...<head>, not trunk.
-# The decisions pass is one bstack-pr-review opencode turn per non-thin PR,
-# serially in the visible desk (parallel without Herdr), read-only, with no --model.
+# The decisions pass is one Pi reviewer turn per non-thin PR (bstack's
+# review.json: the lead's model, read-only tools), serially in the visible desk
+# (parallel and headless without Herdr).
 # Each pass reads pr-<n>/<sha>/source/,
 # a snapshot of the changed text files at that sha, and cannot see the worktree.
 # Agents never post to GitHub.
@@ -833,7 +834,7 @@ review_start() {
   for spawn_n in "${to_spawn[@]}"; do
     spawn_sha="$(jq -r --argjson n "$spawn_n" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
     dir="$R_STACK/pr-$spawn_n/$spawn_sha"
-    _review_need opencode
+    _review_need pi
     _review_spawn "$dir/pass.log" "$(_review_self)" review-pr run "$spawn_n" --head "$spawn_sha" --stack "$R_STACK"
     spawned["$spawn_n"]=1
   done
@@ -903,7 +904,7 @@ _review_json_block() {
 _review_run_died() {
   [[ -f "$R_DIR/run.json" ]] && return 0
   local session
-  session="$(jq -rRn 'first(inputs | fromjson? | .sessionID? // empty | select(. != "")) // ""' "$R_DIR/pass.jsonl" 2>/dev/null || true)"
+  session="$(_review_turn_session "$R_DIR/pass.jsonl")"
   jq -n --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg session "$session" \
     '{status: "failed", summary: "", session_id: (if $session == "" then null else $session end), finished_at: $at,
       reason: "the pass stopped before it finished; see pass.err and pass.log"}' \
@@ -912,9 +913,7 @@ _review_run_died() {
 
 _review_run_finish() {
   if [[ -n "${R_CHILD:-}" ]]; then
-    if [[ -n "${R_DESK_SESSION:-}" ]]; then
-      opencode api post "/api/session/$R_DESK_SESSION/interrupt" --data '{}' >/dev/null 2>&1 || true
-    fi
+    _review_turn_cancel "$R_DIR/pass.jsonl"
     kill "$R_CHILD" 2>/dev/null || true
     wait "$R_CHILD" 2>/dev/null || true
   fi
@@ -970,7 +969,8 @@ _review_valid_reply() {
 # One pass. Holds the stack lock only long enough to register this PR's pass lock.
 review_run_one() {
   _review_load "$@"
-  _review_need opencode jq
+  _review_need pi jq
+  _review_pi_argv
   local t0 rc=0 session text block status reason="" summary="" prompt err gathered desk=""
   _review_lock_wait "$R_STACK/context" 15 || die "the review stack is busy gathering; try again"
   if ! _review_lock "$R_DIR/pass"; then
@@ -993,36 +993,36 @@ review_run_one() {
     cat "$R_DIR/run.json"
     return 1
   fi
-  # Cwd is the stack dir, not the worktree and not the reviewed repo, so the
-  # author's opencode config is not loaded. No --model: bercail/opencode picks.
+  # Cwd is the stack dir, not the worktree and not the reviewed repo, so Pi
+  # loads no project config or context files from the author's repo.
   prompt="Review the PR in pr-$R_N/$R_SHA/ (a bercail review-pr run dir). Files at that head that this PR changes are in pr-$R_N/$R_SHA/source/ (text only; a symlink is the link target as text, not a link). Follow your instructions and end with the one JSON block."
-  local -a session_args=()
   if _review_herdr; then
     desk="$(_review_desk_session)" || return 1
     _review_lock_wait "$R_STACK/desk-pass" 3600 || die "the review desk is busy; try again later"
-    R_DESK_SESSION="$desk"
-    session_args=(--session "$desk")
   fi
   t0="$(_review_now)"
   : >"$R_DIR/pass.jsonl"
   : >"$R_DIR/pass.err"
   R_STARTED=1
   rm -f "$R_DIR/run.json" "$R_DIR/review.json"
-  (cd "$R_STACK" && exec opencode run --format json --agent bstack-pr-review "${session_args[@]}" "$prompt") \
-    >"$R_DIR/pass.jsonl" 2>"$R_DIR/pass.err" &
+  _review_turn "$R_DIR/pass.jsonl" "$R_DIR/pass.err" "$prompt" "$desk" &
   R_CHILD=$!
   wait "$R_CHILD" || rc=$?
   R_CHILD=""
   _review_unlock "$R_STACK/desk-pass"
 
-  session="$(jq -rRn 'first(inputs | fromjson? | .sessionID? // empty | select(. != "")) // ""' "$R_DIR/pass.jsonl")"
-  text="$(jq -rR 'fromjson? | select(.type? == "text") | .part.text // empty' "$R_DIR/pass.jsonl")"
+  session="$(_review_turn_session "$R_DIR/pass.jsonl")"
+  text="$(_review_turn_text "$R_DIR/pass.jsonl")"
   block="$(_review_json_block <<<"$text")"
   [[ -n "$block" ]] || block="$text"
+  # Pi exits 0 when the provider failed.
+  if [[ "$rc" -eq 0 ]] && _review_turn_failed "$R_DIR/pass.jsonl"; then
+    rc=failed
+  fi
   if jq -se 'length == 1 and (.[0] | type == "object" and (.blocked | type) == "string")' <<<"$block" >/dev/null 2>&1; then
     status=blocked
     reason="$(jq -r '.blocked' <<<"$block")"
-  elif [[ "$rc" -eq 0 ]] && _review_valid_reply <<<"$block" \
+  elif [[ "$rc" == 0 ]] && _review_valid_reply <<<"$block" \
     && jq -e '.intent_analysis != null' <<<"$block" >/dev/null \
     && { [[ ! -s "$R_DIR/diff.patch" ]] || jq -e '.intent_analysis.evidence | length > 0' <<<"$block" >/dev/null; }; then
     status=ready
@@ -1034,10 +1034,11 @@ review_run_one() {
     summary="$(jq -r '"\(.decisions | length) decisions, \([.decisions[] | select(.stated == null)] | length) undocumented, \(.unmet_intent | length) unmet, \(([.decisions[] | select(.question)] | length) + ([.unmet_intent[] | select(.question)] | length) + (.questions | length)) questions"' "$R_DIR/review.json")"
   else
     status=failed
-    err="$(jq -rR 'fromjson? | select(.type? == "error") | (.error.data.message? // .error.message? // (.error | tostring)) | split("\n")[0]' "$R_DIR/pass.jsonl" | tail -1)"
-    [[ -n "$err" ]] || err="$(tail -1 "$R_DIR/pass.err" 2>/dev/null || true)"
-    if [[ "$rc" -ne 0 ]]; then
-      reason="opencode exited $rc${err:+: $err}"
+    err="$(_review_turn_error "$R_DIR/pass.jsonl" "$R_DIR/pass.err")"
+    if [[ "$rc" == failed ]]; then
+      reason="pi failed${err:+: $err}"
+    elif [[ "$rc" != 0 ]]; then
+      reason="pi exited $rc${err:+: $err}"
     elif [[ -n "$text" ]]; then
       reason="the reply is not a valid decisions JSON block"
     else

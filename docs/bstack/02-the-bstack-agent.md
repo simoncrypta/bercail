@@ -1,6 +1,6 @@
 # Work with the bstack agent
 
-`bstack` is opencode's default agent once bstack is on. It reads your ask,
+The bstack lead is the Pi on your desk once bstack is on. It reads your ask,
 matches a playbook, copies its steps into the todo list, and hands each step to
 the role that fits.
 
@@ -24,23 +24,26 @@ Read it once. It is short.
 
 ## The roles
 
-| Role | Agent | Gets |
-|------|-------|------|
-| lead | `bstack` | your ask; plans, routes, checks, reports |
+Every role but the lead is an `hc` sibling agent the lead starts from a
+template in `~/.config/herdr-core/templates/`.
+
+| Role | Template | Gets |
+|------|----------|------|
+| lead | the desk | your ask; plans, routes, checks, reports |
 | build | `bstack-builder` | code from a precise brief |
 | judge | `bstack-judge` | hard design calls, prose, and the intent check at `/ready` |
-| council | `bstack-council-<plan>` | read-only adversarial review, one per plan with a model, when `[bstack] council = true` |
+| council | `bstack-council-<plan>` | read-only adversarial review, one per plan with a model, on `/council` |
 | autopilot | `bstack-autopilot` | an open PR to get green |
 
 By default the lead and judge run on Claude and the builder on Grok. A role
-names a plan (`claude`, `gpt`, `grok`) or a full opencode model id. When its
-plan isn't connected, it takes the next one that is (build: grok, then gpt,
+names a plan (`claude`, `gpt`, `grok`) or a full Pi model id. When you are not
+signed in to its plan, it takes the next one you are (build: grok, then gpt,
 then claude; lead and judge: claude, then gpt, then grok), so bstack works on
-one plan and spreads out as you connect more. A pinned model is used whether
-or not its plan is connected. With none connected, agents use the session's
-model.
+one plan and spreads out as you sign in to more. A pinned model is used whether
+or not you are signed in to its plan. With no sign-in at all, agents use Pi's
+default model.
 
-A subagent knows nothing you didn't put in its brief. The lead writes the
+A sibling knows nothing you didn't put in its brief. The lead writes the
 brief, then checks the result itself before passing it on.
 
 ## What goes in a prompt

@@ -15,13 +15,12 @@ spec. The agent's prompt is one line that points at it.
 ## A desk or headless
 
 - **`--branch NAME`:** a sibling worktree with its own space in the Herdr app.
-  Its desk runs opencode as `bstack`, stages its work, and goes `done`. You
+  Its desk runs Pi as the bstack lead, stages its work, and goes `done`. You
   review it in that space's tuicr.
-- **No branch:** a headless `opencode run --agent bstack` on the lead's model.
-  It writes `.bercail/handoff-result.json` and nothing opens. It edits and
-  stages but can't commit, push, or merge: a headless run rejects anything that
-  would ask. Stage `autopilot` is the exception (see
-  [Ship with autopilot](./06-autopilot.md)).
+- **No branch:** a headless `pi -p` on the lead's model, single-agent. It
+  writes `.bercail/handoff-result.json` and nothing opens. It edits and stages
+  but can't commit, push, or merge: the guard blocks them in a headless run.
+  Stage `autopilot` is the exception (see [Ship with autopilot](./06-autopilot.md)).
 - **`--base PARENT`** with `--branch`: cut the desk's branch from another
   job's branch, so dependent work stacks.
 

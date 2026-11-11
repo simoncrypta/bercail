@@ -9,7 +9,7 @@ In the bercail layout:
 |-----|--------|
 | `Ctrl+Shift+H` | Shep view / space view |
 | `Ctrl+Space` | Go to a space, tab or agent (Herdr's search) |
-| `Ctrl+Shift+A` | Focus the desk agent, or start it (bstack when it is on, else `[agent] command`) |
+| `Ctrl+Shift+A` | Focus the desk agent, or start it (Pi: bstack's lead when bstack is on, else plain `pi`) |
 | `Ctrl+Shift+R` | Open or select Review (`tuicr`) |
 | `Ctrl+Shift+S` | Shell tab |
 | `Ctrl+Shift+F` / `Ctrl+Shift+G` | Show or hide files / changes |
