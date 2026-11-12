@@ -1366,8 +1366,12 @@ test_stacks() {
     headRefOid:$sha, baseRefOid:$sha, closingIssuesReferences:[], files:[], statusCheckRollup:[]}' >"$FIX/pr-52.json"
   jq -n '[{number:52, baseRefName:"cycle-a", headRefName:"cycle-b", url:"https://github.com/acme/widgets/pull/52"}]' >"$FIX/list-head-cycle-b.json"
   jq -n '[{number:51, baseRefName:"cycle-b", headRefName:"cycle-a", url:"https://github.com/acme/widgets/pull/51"}]' >"$FIX/list-head-cycle-a.json"
+  local tmp_before
+  tmp_before="$(ls -A "$TMPDIR")"
   assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/51 2>&1 || true)" \
     "cycle" "a cycle is an error"
+  # Other processes' temp files may come and go; none may be new.
+  assert_eq '' "$(comm -13 <(sort <<<"$tmp_before") <(ls -A "$TMPDIR" | sort))" "the refused cycle leaves no temp file"
 
   rm -f "$LOG/gh.held" "$LOG/gh.release" "$LOG/pi.release"
   FAKE_GH_HOLD=1 "$BERCAIL" review-pr https://github.com/acme/widgets/pull/21 --no-run >"$LOG/gather-hold" &
@@ -1478,11 +1482,34 @@ EOF
   printf 'PASS: no-source fallback is ~/Work/<repo>, or ~/Work/<owner>-<repo> if that path is taken\n'
 }
 
+# The requested PR first in a stack longer than a pipe buffer: a reader that
+# stops at the first match would leave the rest unwritten, a SIGPIPE under pipefail.
+test_stack_membership() (
+  # shellcheck source=lib/common.sh
+  source "$ROOT/lib/common.sh"
+  # shellcheck source=lib/stack.sh
+  source "$ROOT/lib/stack.sh"
+  # shellcheck disable=SC2329
+  _stack_github() { seq 1 50000; }
+  local out entry="$LOG/pr-1.json"
+  jq '.number = 1' "$FIX/pr-8.json" >"$entry"
+  out="$(stack_discover github.com/acme/widgets "$entry" "" "" gh 2>"$LOG/membership.err")" \
+    || fail "PR first in a long stack: $(<"$LOG/membership.err")"
+  assert_eq '1 50000' "$(jq -r '"\(.numbers[0]) \(.numbers | length)"' <<<"$out")" "the whole stack, root first"
+  # Rooted at #2, which the trunk lookup views.
+  jq '.number = 2' "$FIX/pr-8.json" >"$FIX/pr-2.json"
+  _stack_github() { seq 2 50000; }
+  stack_discover github.com/acme/widgets "$entry" "" "" gh >/dev/null 2>"$LOG/membership.err" \
+    && fail "a stack without the requested PR"
+  assert_has "$(<"$LOG/membership.err")" "native stack omitted requested PR #1" "the missing PR is named"
+  printf 'PASS: stack membership holds for the first PR of a long stack, and a missing PR is refused\n'
+)
+
 # Each case starts with no detached work left from the one before.
 for t in test_thin_rules test_intent_sources test_thin_pr_stops test_pass test_card \
   test_infer_without_issue test_run_outcomes test_concurrency test_ui test_space test_open \
   test_ui_mod test_checkout test_desk_summary test_desk_preflight test_desk_replaced \
-  test_clone_and_no_checks test_stacks test_help test_agent_rules; do
+  test_clone_and_no_checks test_stacks test_stack_membership test_help test_agent_rules; do
   "$t"
   settle
 done

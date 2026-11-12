@@ -280,14 +280,15 @@ _stack_same_repo() {
 # Root-first PR numbers. ENTRY is the requested PR's view JSON. TRUNK is not a PR head.
 _stack_github() {
   local slug="$1" entry="$2" trunk="$3"
-  local n base head count kid listed cur owned="" cross
+  local n base head count kid listed cur cross
   # shellcheck disable=SC2034 # nameref target of _stack_seen_add
   local -A down_seen=()
-  n="$(jq -r '.number' "$entry")"
-  cur="$entry"
+  # The PR being walked, as view JSON text: no temp file to leak on an early return.
+  cur="$(<"$entry")"
+  n="$(jq -r '.number' <<<"$cur")"
   while true; do
     _stack_seen_add down_seen "$n" || return 1
-    base="$(jq -r '.baseRefName' "$cur")"
+    base="$(jq -r '.baseRefName' <<<"$cur")"
     # Trunk is this repo's default branch, not a parent PR. Do not --head it.
     [[ "$base" == "$trunk" ]] && break
     listed="$(_stack_gh_list "$slug" head "$base")" || return 1
@@ -298,17 +299,12 @@ _stack_github() {
     fi
     [[ "$count" -eq 1 ]] || break
     n="$(jq -r '.[0].number' <<<"$listed")"
-    [[ -n "$owned" ]] && rm -f "$cur"
-    cur="$(mktemp)"
-    owned=1
-    gh pr view "$n" -R "$slug" --json number,baseRefName,headRefName,isCrossRepository >"$cur" || return 1
+    cur="$(gh pr view "$n" -R "$slug" --json number,baseRefName,headRefName,isCrossRepository)" || return 1
   done
   # cur is the root. Walk up from here with a fresh seen set so the entry is not a false cycle.
-  n="$(jq -r '.number' "$cur")"
-  head="$(jq -r '.headRefName' "$cur")"
-  cross="$(jq -r '.isCrossRepository // false' "$cur")"
-  [[ -n "$owned" ]] && rm -f "$cur"
-  owned=""
+  n="$(jq -r '.number' <<<"$cur")"
+  head="$(jq -r '.headRefName' <<<"$cur")"
+  cross="$(jq -r '.isCrossRepository // false' <<<"$cur")"
   # shellcheck disable=SC2034
   local -A up_seen=()
   local -a stack=()
@@ -443,7 +439,7 @@ _stack_origin_stack() {
 }
 
 stack_discover() {
-  local slug="$1" entry="$2" source="$3" sync="$4" via trunk text line rc=0 n backend="${5:-}" payload
+  local slug="$1" entry="$2" source="$3" sync="$4" via trunk text line rc=0 n backend="${5:-}" payload found=0
   local -a numbers=()
   n="$(jq -r '.number' "$entry")"
   if [[ -z "$backend" ]]; then
@@ -497,7 +493,12 @@ stack_discover() {
     fi
   fi
   [[ ${#numbers[@]} -gt 0 ]] || return 1
-  printf '%s\n' "${numbers[@]}" | grep -qxF "$n" || {
+  # Not printf | grep -q: grep can exit before printf is done, and under
+  # pipefail the SIGPIPE fails the check even when the PR is in the stack.
+  for line in "${numbers[@]}"; do
+    [[ "$line" == "$n" ]] && found=1
+  done
+  [[ "$found" -eq 1 ]] || {
     printf 'native stack omitted requested PR #%s\n' "$n" >&2
     return 1
   }
