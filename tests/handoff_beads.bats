@@ -60,17 +60,6 @@ STUB
   git -C "$main" commit -qm 'beads'
 }
 
-git_init() {
-  local dir="$1"
-  mkdir -p "$dir"
-  git -C "$dir" init -q
-  git -C "$dir" config user.email test@example.com
-  git -C "$dir" config user.name test
-  printf 'base\n' >"$dir/file.txt"
-  git -C "$dir" add file.txt
-  git -C "$dir" commit -qm base
-}
-
 beads_dir_of() {
   (cd "$1" && bd context --json 2>/dev/null | jq -r '.beads_dir')
 }

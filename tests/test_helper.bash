@@ -24,6 +24,18 @@ fail() {
   return 1
 }
 
+# A repo at DIR with one commit.
+git_init() {
+  local dir="$1"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" config user.email test@example.com
+  git -C "$dir" config user.name test
+  printf 'base\n' >"$dir/file.txt"
+  git -C "$dir" add file.txt
+  git -C "$dir" commit -qm base
+}
+
 # The tools a test cannot run without. CI installs them all, so there a missing
 # one fails the test; anywhere else the test skips and says which.
 need() {
