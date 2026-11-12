@@ -473,6 +473,94 @@ migrate_state_dir() {
 
 # v1 has no agentic-dev command. A v0.14.0 updater still copies the shim by
 # name (bin/agentic-dev stays in the repo for it), so take the installed one out.
+# [graphite] "<repo>" = true|false chose Graphite until v1; [git] names the
+# backend now. Move each entry there once. A repo [git] already names keeps
+# that entry: [git] won when a repo was in both.
+migrate_graphite_config() {
+  local dest="$BERCAIL_USER_CONFIG" tmp
+  [[ -f "$dest" ]] || return 0
+  grep -Eq '^[[:space:]]*\[[[:space:]]*["\047]?graphite["\047]?[[:space:]]*\]' "$dest" || return 0
+  tmp="$(mktemp)"
+  awk '
+    function section(line) {
+      sub(/#.*/, "", line)
+      gsub(/[[:space:]"\047]/, "", line)
+      return line
+    }
+    # "<repo>" = true|false as a [git] line, else "". Sets key to the repo of
+    # any entry.
+    function as_git(line,   q, i, rest, v) {
+      key = ""
+      sub(/^[[:space:]]*/, "", line)
+      q = substr(line, 1, 1)
+      if (q != "\"" && q != "\047") return ""
+      i = index(substr(line, 2), q)
+      if (!i) return ""
+      key = substr(line, 2, i - 1)
+      rest = substr(line, i + 2)
+      v = rest
+      sub(/^[[:space:]]*=[[:space:]]*/, "", v)
+      sub(/[[:space:]]*(#.*)?$/, "", v)
+      if (v != "true" && v != "false") return ""
+      sub(/=[[:space:]]*(true|false)/, (v == "true" ? "= \"gt\"" : "= \"gh\""), rest)
+      return substr(line, 1, i + 1) rest
+    }
+    function flush_git(   i) {
+      for (i = 1; i <= moved; i++) print entries[i]
+      printf "%s", blanks
+      blanks = ""
+      moved = 0
+    }
+    NR == FNR {
+      if ($0 ~ /^[[:space:]]*\[/) { sec = section($0); if (sec == "[git]") has_git = 1; next }
+      line = as_git($0)
+      if (sec == "[git]" && key != "") in_git[key] = 1
+      if (sec != "[graphite]") next
+      if (line != "") { repo[++found] = key; entry[found] = line }
+      else if ($0 !~ /^[[:space:]]*(#.*)?$/) other = 1
+      next
+    }
+    FNR == 1 {
+      for (i = 1; i <= found; i++) if (!(repo[i] in in_git)) entries[++moved] = entry[i]
+      sec = ""
+    }
+    /^[[:space:]]*\[/ {
+      if (sec == "[git]") flush_git()
+      sec = section($0)
+      if (sec == "[graphite]") {
+        if (!has_git) print "[git]"
+        else if (other) print
+        next
+      }
+    }
+    sec == "[graphite]" && as_git($0) != "" {
+      if (!has_git) print as_git($0)
+      next
+    }
+    # Hold the blank lines that end [git], so the moved entries go above them.
+    sec == "[git]" && has_git {
+      if ($0 ~ /^[[:space:]]*$/) { blanks = blanks $0 "\n"; next }
+      printf "%s", blanks
+      blanks = ""
+    }
+    { print }
+    END { if (sec == "[git]" && has_git) flush_git() }
+  ' "$dest" "$dest" >"$tmp"
+  if cmp -s "$tmp" "$dest"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    rm -f "$tmp"
+    info "[dry-run] would move the [graphite] entries of $dest under [git]"
+    return 0
+  fi
+  # Written through, not moved over: the file may be a link into someone's dotfiles.
+  cat "$tmp" >"$dest"
+  rm -f "$tmp"
+  info "moved the [graphite] entries of $dest under [git]"
+}
+
 remove_agentic_dev_shim() {
   local shim="$LOCAL_BIN/agentic-dev"
   grep -qsx '# Compat shim. The CLI is bercail.' "$shim" || return 0
@@ -517,6 +605,8 @@ deploy_configs() {
   migrate_hunk_review_to_tuicr
   migrate_state_dir
   remove_agentic_dev_shim
+  migrate_graphite_config
+  notify_rename_workspaces
 
   ensure_dir "$BERCAIL_CONFIG_DIR"
   ensure_dir "$BERCAIL_SHELL_DIR"

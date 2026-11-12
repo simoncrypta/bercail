@@ -28,7 +28,7 @@ _shep_hc() { "${HC_BIN:-hc}" "$@" 2>/dev/null </dev/null; }
 # --- known repos ----------------------------------------------------------------
 
 # Every folder bercail has seen a repo in, as "source<TAB>path", plus
-# "<TAB>branch" for a handoff: the [git], [graphite] and [policy."<path>"] keys
+# "<TAB>branch" for a handoff: the [git] and [policy."<path>"] keys
 # of config.toml, trusted policies, handoff records, live desks, and Shep's
 # extras file (one path per line).
 _shep_repo_candidates() {
@@ -43,7 +43,7 @@ _shep_repo_candidates() {
         if (h ~ /^policy\.".*"$/ || h ~ /^policy\.\047.*\047$/) print "config\t" substr(h, 9, length(h) - 9)
         next
       }
-      sec == "git" || sec == "graphite" {
+      sec == "git" {
         line = $0; sub(/^[[:space:]]*/, "", line); q = substr(line, 1, 1)
         if (q != "\"" && q != "\047") next
         line = substr(line, 2); i = index(line, q)

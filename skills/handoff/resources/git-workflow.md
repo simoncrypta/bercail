@@ -2,8 +2,7 @@
 
 Read `git` from `scripts/handoff-spawn --info`: `gh`, `gt`, or `origin`.
 Use that backend throughout the job; do not probe with `gt`, because any `gt`
-command auto-initializes a plain repo. `graphite` remains for one release as
-`git == "gt"`; new callers use `git`. Detection and per-repo overrides:
+command auto-initializes a plain repo. Detection and per-repo overrides:
 [handoff.md](handoff.md#git-backend).
 
 Handoff never auto-commits. Agents stage their work (`git add`) and leave it

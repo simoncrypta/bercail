@@ -98,6 +98,13 @@ graphite_auto_init() {
 
 # Current gt stores every branch it has seen. Only tracked branches have a parent.
 
+# Does bercail pick gt for REPO? Warnings stay on stderr.
+uses_gt() {
+  local backend
+  backend="$(git_backend "$1")"
+  [[ "$backend" == gt ]]
+}
+
 graphite_db_row() {
   local parent=null
   [[ -z "${3:-}" ]] || parent="'$3'"
@@ -109,11 +116,11 @@ graphite_db_row() {
 @test "an auto-created Graphite config, even with a trunk ref, is not Graphite" {
   local repo="$BATS_TEST_TMPDIR/plain"
   git_init "$repo"
-  handoff_is_graphite "$repo" && fail "plain repo must not count as Graphite"
+  uses_gt "$repo" && fail "plain repo must not count as Graphite"
   graphite_auto_init "$repo"
-  handoff_is_graphite "$repo" && fail "an auto-created config must not count as Graphite"
+  uses_gt "$repo" && fail "an auto-created config must not count as Graphite"
   git -C "$repo" update-ref refs/branch-metadata/master HEAD
-  if handoff_is_graphite "$repo"; then
+  if uses_gt "$repo"; then
     fail "metadata for trunk alone must not count as Graphite"
   fi
 }
@@ -124,8 +131,8 @@ graphite_db_row() {
   git -C "$repo" worktree add -q -b feat "$sibling"
   graphite_auto_init "$repo"
   git -C "$repo" update-ref refs/branch-metadata/stack/one HEAD
-  handoff_is_graphite "$repo" || fail "a tracked branch ref must count as Graphite"
-  handoff_is_graphite "$sibling" || fail "a linked worktree shares the refs"
+  uses_gt "$repo" || fail "a tracked branch ref must count as Graphite"
+  uses_gt "$sibling" || fail "a linked worktree shares the refs"
 }
 
 @test "metadata refs of any configured trunk do not count" {
@@ -133,7 +140,7 @@ graphite_db_row() {
   git_init "$repo"
   printf '{"trunk":"main","trunks":[{"name":"main"},{"name":"sandbox"}]}\n' >"$(git_dir "$repo")/.graphite_repo_config"
   git -C "$repo" update-ref refs/branch-metadata/sandbox HEAD
-  if handoff_is_graphite "$repo"; then
+  if uses_gt "$repo"; then
     fail "every trunk is excluded, not only the first"
   fi
 }
@@ -144,23 +151,23 @@ graphite_db_row() {
   graphite_auto_init "$repo"
   export HANDOFF_SQLITE3_BIN="$BATS_TEST_TMPDIR/no-sqlite3"
   : >"$(git_dir "$repo")/.graphite_metadata.db"
-  err="$(handoff_is_graphite "$repo" 2>&1)" && fail "an unreadable store is not evidence of Graphite: $err"
-  grep -q '\[graphite\]' <<<"$err" || fail "unreadable store should name the override: $err"
+  err="$(uses_gt "$repo" 2>&1)" && fail "an unreadable store is not evidence of Graphite: $err"
+  grep -q 'under \[git\]' <<<"$err" || fail "unreadable store should name the override: $err"
   unset HANDOFF_SQLITE3_BIN
   need sqlite3
-  err="$(handoff_is_graphite "$repo" 2>&1)" && fail "an unknown schema is not evidence of Graphite: $err"
-  grep -q '\[graphite\]' <<<"$err" || fail "unknown schema should name the override: $err"
+  err="$(uses_gt "$repo" 2>&1)" && fail "an unknown schema is not evidence of Graphite: $err"
+  grep -q 'under \[git\]' <<<"$err" || fail "unknown schema should name the override: $err"
   rm -f "$(git_dir "$repo")/.graphite_metadata.db"
   graphite_db_row "$repo" master
   graphite_db_row "$repo" stray-branch
-  err="$(handoff_is_graphite "$repo" 2>&1)" && fail "rows with no parent are only what auto-init saw: $err"
+  err="$(uses_gt "$repo" 2>&1)" && fail "rows with no parent are only what auto-init saw: $err"
   grep -q 'tracks no branch' <<<"$err" || fail "say why Graphite is off, and how to turn it on: $err"
   grep -q 'cannot read' <<<"$err" && fail "a readable store is not unreadable: $err"
   graphite_db_row "$repo" feat master
-  handoff_is_graphite "$repo" || fail "a branch with a parent is tracked: Graphite"
+  uses_gt "$repo" || fail "a branch with a parent is tracked: Graphite"
 }
 
-@test "[graphite] in config.toml overrides detection for one repo, from any worktree" {
+@test "[git] in config.toml settles the backend for one repo, from any worktree" {
   local plain="$BATS_TEST_TMPDIR/ov-plain" real="$BATS_TEST_TMPDIR/ov-real" sibling="$BATS_TEST_TMPDIR/ov-real.feat" cfg="$BATS_TEST_TMPDIR/ov.toml"
   local home="$BATS_TEST_TMPDIR/ov-home"
   git_init "$plain"
@@ -170,70 +177,44 @@ graphite_db_row() {
   git -C "$real" update-ref refs/branch-metadata/feat HEAD
   export BERCAIL_CONFIG="$cfg"
   cat >"$cfg" <<EOF
-[graphite] # by main checkout
-"$real" = false   # no longer stacks here
-'$plain' = true
+[git] # by main checkout
+"$real" = "gh"   # no longer stacks here
+'$plain' = "gt"
 
 [bstack]
-"$BATS_TEST_TMPDIR/ov-other" = true
+"$BATS_TEST_TMPDIR/ov-other" = "gt"
 EOF
-  handoff_is_graphite "$real" && fail "false wins over refs"
-  handoff_is_graphite "$sibling" && fail "a linked worktree uses its main checkout's entry"
-  handoff_is_graphite "$plain" || fail "true wins over no signal at all"
+  uses_gt "$real" && fail "gh wins over refs"
+  uses_gt "$sibling" && fail "a linked worktree uses its main checkout's entry"
+  uses_gt "$plain" || fail "gt wins over no signal at all"
+  [[ -z "$(git_backend "$plain" 2>&1 >/dev/null)" ]] || fail "a repo that has settled it hears nothing"
   cat >"$cfg" <<EOF
 [bstack]
-"$real" = false
+"$real" = "gh"
 
-[graphite]
-"$BATS_TEST_TMPDIR/ov-other" = false
-"$plain" = maybe
+[git]
+"$BATS_TEST_TMPDIR/ov-other" = "gh"
+"$plain" = "maybe"
 EOF
-  handoff_is_graphite "$real" || fail "a key in another section or for another repo is ignored"
-  handoff_is_graphite "$plain" && fail "a value that is not a boolean is ignored"
-  printf '["graphite"]\n"%s" = true\n' "$plain" >"$cfg"
-  handoff_is_graphite "$plain" || fail "a quoted table name is the same table"
-  [[ -z "$(handoff_is_graphite "$plain" 2>&1)" ]] || fail "a repo that has settled it hears nothing"
+  uses_gt "$real" || fail "a key in another section or for another repo is ignored"
+  [[ "$(git_backend "$plain" 2>/dev/null)" == gh ]] || fail "a value that is not gh, gt or origin is ignored"
+  printf '["git"]\n"%s" = "origin"\n' "$plain" >"$cfg"
+  [[ "$(git_backend "$plain")" == origin ]] || fail "a quoted table name is the same table"
   mkdir -p "$home"
   git_init "$home/repo"
-  printf '[graphite]\n"~/repo" = true\n' >"$cfg"
-  (HOME="$home"; handoff_is_graphite "$home/repo") || fail "home-relative config keys expand to the home directory"
+  printf '[git]\n"~/repo" = "gt"\n' >"$cfg"
+  [[ "$(HOME="$home" git_backend "$home/repo")" == gt ]] || fail "home-relative keys expand to the home directory"
   rm -f "$cfg"
-  handoff_is_graphite "$real" || fail "no config file falls through to detection"
+  uses_gt "$real" || fail "no config file falls through to detection"
   unset BERCAIL_CONFIG
 }
 
-@test "[git] enum overrides [graphite] and detection; bad values are ignored" {
-  local plain="$BATS_TEST_TMPDIR/git-plain" tracked="$BATS_TEST_TMPDIR/git-tracked" cfg="$BATS_TEST_TMPDIR/git.toml" home="$BATS_TEST_TMPDIR/git-home"
+@test "a [graphite] entry no longer chooses the backend" {
+  local plain="$BATS_TEST_TMPDIR/old-plain" cfg="$BATS_TEST_TMPDIR/old.toml"
   git_init "$plain"
-  git_init "$tracked"
-  graphite_auto_init "$tracked"
-  git -C "$tracked" update-ref refs/branch-metadata/feat HEAD
   export BERCAIL_CONFIG="$cfg"
-  cat >"$cfg" <<EOF
-[graphite]
-"$tracked" = true
-"$plain" = false
-
-[git]
-"$tracked" = "gh"
-"$plain" = "origin"
-EOF
-  [[ "$(git_backend "$tracked")" == gh ]] || fail "[git] wins over [graphite] true and over refs: $(git_backend "$tracked")"
-  [[ "$(git_backend "$plain")" == origin ]] || fail "[git] origin wins over [graphite] false"
-  handoff_is_graphite "$tracked" && fail "gh override is not graphite"
-  [[ -z "$(git_backend "$plain" 2>&1 >/dev/null)" ]] || fail "a settled [git] entry is silent"
-  cat >"$cfg" <<EOF
-[git]
-"$plain" = "maybe"
-
-[graphite]
-"$plain" = true
-EOF
-  [[ "$(git_backend "$plain")" == gt ]] || fail "a non-enum [git] value is ignored and [graphite] still maps"
-  printf '[git]\n"~/repo" = "gt"\n' >"$cfg"
-  mkdir -p "$home"
-  git_init "$home/repo"
-  [[ "$(HOME="$home" git_backend "$home/repo")" == gt ]] || fail "home-relative [git] keys expand to the home directory"
+  printf '[graphite]\n"%s" = true\n' "$plain" >"$cfg"
+  [[ "$(git_backend "$plain")" == gh ]] || fail "[graphite] is still read: $(git_backend "$plain")"
   unset BERCAIL_CONFIG
 }
 
@@ -391,12 +372,12 @@ EOF
   mkdir -p "$(dirname "$cfg")"
   printf '{"trunk":"master"}\n' >"$cfg"
   git -C "$repo" update-ref refs/branch-metadata/feat HEAD
-  [[ "$(handoff_graphite_config "$repo")" == "$cfg" ]] \
+  [[ "$(git_backend_graphite_config "$repo")" == "$cfg" ]] \
     || fail "graphite config path should resolve relative git-path"
   (
     cd "$BATS_TEST_TMPDIR"
-    handoff_is_graphite "$repo" || fail "is_graphite from other cwd"
-    got="$(handoff_graphite_config "$repo")"
+    uses_gt "$repo" || fail "gt from another cwd"
+    got="$(git_backend_graphite_config "$repo")"
     [[ "$got" == "$cfg" ]] || fail "track helper must not depend on cwd, got $got"
   )
 }
@@ -420,7 +401,7 @@ EOF
     || fail "new branch should be tracked on trunk; log=$(cat "$BATS_TEST_TMPDIR/gt.log")"
 }
 
-@test "--info reports dirty, graphite, and herdr without agent inspection" {
+@test "--info reports dirty, git, and herdr without agent inspection" {
   local repo="$BATS_TEST_TMPDIR/info-repo" out
   git_init "$repo"
   printf 'dirty\n' >>"$repo/file.txt"
@@ -435,21 +416,22 @@ EOF
   unset HC_TERMINAL_ID HANDOFF_SPACE
   out="$(cd "$repo" && HERDR_APP_BIN="$BATS_TEST_TMPDIR/no-herdr" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
-  printf '%s' "$out" | jq -e '.graphite == false and .git == "gh"' >/dev/null || fail "info with only an auto-created config: $out"
+  printf '%s' "$out" | jq -e '.git == "gh"' >/dev/null || fail "info with only an auto-created config: $out"
   git -C "$repo" update-ref refs/branch-metadata/feat HEAD
   out="$(cd "$repo" && HERDR_APP_BIN="$BATS_TEST_TMPDIR/no-herdr" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
   printf '%s' "$out" | jq -e '.dirty == true' >/dev/null || fail "info dirty: $out"
-  printf '%s' "$out" | jq -e '.graphite == true and .git == "gt"' >/dev/null || fail "info graphite: $out"
+  printf '%s' "$out" | jq -e '.git == "gt"' >/dev/null || fail "info git: $out"
   printf '%s' "$out" | jq -e '.default_copy == "dirty"' >/dev/null || fail "info default_copy: $out"
   printf '%s' "$out" | jq -e '.herdr == false' >/dev/null || fail "info herdr: $out"
   printf '%s' "$out" | jq -e '.herdr_env == false' >/dev/null || fail "info herdr_env: $out"
-  printf '%s' "$out" | jq -e '.socket == false' >/dev/null || fail "info socket: $out"
+  printf '%s' "$out" | jq -e '[has("graphite", "socket", "workspace")] | any | not' >/dev/null \
+    || fail "--info still prints a second name for git, herdr or space: $out"
   printf '%s' "$out" | jq -e '.main_checkout == true' >/dev/null || fail "info main_checkout: $out"
 }
 
 @test "--info treats a live Herdr app as herdr outside an hc terminal" {
-  local repo="$BATS_TEST_TMPDIR/info-socket" out
+  local repo="$BATS_TEST_TMPDIR/info-app" out
   git_init "$repo"
   cat >"$BATS_TEST_TMPDIR/fake-herdr-app" <<'EOF'
 #!/bin/sh
@@ -459,27 +441,26 @@ EOF
   unset HC_TERMINAL_ID HANDOFF_SPACE
   out="$(cd "$repo" && HERDR_APP_BIN="$BATS_TEST_TMPDIR/fake-herdr-app" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
-  printf '%s' "$out" | jq -e '.herdr == true' >/dev/null || fail "socket herdr: $out"
-  printf '%s' "$out" | jq -e '.herdr_env == false' >/dev/null || fail "socket herdr_env: $out"
-  printf '%s' "$out" | jq -e '.socket == true' >/dev/null || fail "socket flag: $out"
-  printf '%s' "$out" | jq -e '.space == "sp26" and .workspace == "sp26"' >/dev/null || fail "socket space: $out"
+  printf '%s' "$out" | jq -e '.herdr == true' >/dev/null || fail "herdr: $out"
+  printf '%s' "$out" | jq -e '.herdr_env == false' >/dev/null || fail "herdr_env: $out"
+  printf '%s' "$out" | jq -e '.space == "sp26"' >/dev/null || fail "space: $out"
 }
 
 @test "result JSON is emitted when agent start is unconfirmed" {
   local got
-  got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 0 0 1)"
+  got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 0 0 gt)"
   printf '%s' "$got" | jq -e '.issue == "bercail-0s1"' >/dev/null || fail "issue: $got"
   printf '%s' "$got" | jq -e '.ok == true' >/dev/null || fail "ok: $got"
   printf '%s' "$got" | jq -e '.agent_started == false' >/dev/null || fail "started: $got"
-  printf '%s' "$got" | jq -e '.graphite == true' >/dev/null || fail "graphite: $got"
+  printf '%s' "$got" | jq -e '.git == "gt" and (has("graphite")|not)' >/dev/null || fail "git: $got"
   printf '%s' "$got" | jq -e '.path == "/tmp/wt"' >/dev/null || fail "path: $got"
   printf '%s' "$got" | jq -e '(has("stage")|not) and (has("harness")|not) and (has("issue_title")|not)' >/dev/null || fail "no stage: $got"
-  got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 1 0 0 bstack pi "" "" "Show the title")"
+  got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 1 0 gh bstack pi "" "" "Show the title")"
   printf '%s' "$got" | jq -e '.issue_title == "Show the title" and .stage == "bstack" and .harness == "pi" and (has("space")|not)' >/dev/null \
     || fail "issue_title: $got"
-  got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 1 0 0 bstack pi)"
+  got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 1 0 gh bstack pi)"
   printf '%s' "$got" | jq -e '.stage == "bstack" and .harness == "pi"' >/dev/null || fail "stage/harness: $got"
-  got="$(handoff_result_json L /p b i 1 0 1 bstack pi sp9 t28)"
+  got="$(handoff_result_json L /p b i 1 0 gt bstack pi sp9 t28)"
   printf '%s' "$got" | jq -e '.space == "sp9" and .desk == "t28" and .ok and .stage == "bstack" and .harness == "pi"' >/dev/null \
     || fail "spawn JSON names the space and desk: $got"
 }
@@ -778,7 +759,7 @@ STUB
   [[ "$rc" -eq 1 ]] || fail "headless without --stage should exit 1, got $rc ($err)"
   rc=0
   err="$(BERCAIL_CONFIG="$BATS_TEST_TMPDIR/no-config.toml" \
-    "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage bstack --issue "$ISSUE" --clean --workspace w1 2>&1)" || rc=$?
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage bstack --issue "$ISSUE" --clean --space w1 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "bstack off should exit 1, got $rc ($err)"
   grep -q 'needs bstack on' <<<"$err" || fail "bstack off message: $err"
   grep -q 'wt ' <<<"$err" && fail "must fail before wt: $err"
@@ -1148,7 +1129,7 @@ HELPER
   graphite_auto_init "$repo"
   _fake_gt "$bin" "$log" 'exit 1'
   out="$(_spawn_branch sp-stray "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-stray-home")" || fail "spawn failed: $out"
-  printf '%s' "$out" | jq -e '.graphite == false and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  printf '%s' "$out" | jq -e '.git == "gh" and .agent_started == true' >/dev/null || fail "spawn json: $out"
   [[ ! -s "$log" ]] || fail "gt must not run in a plain repo: $(cat "$log")"
   grep -q 'Use gt' "$BD_COMMENTS" && fail "no gt intro in a plain repo: $(cat "$BD_COMMENTS")"
   grep -q 'bercail handoff: stage bstack' "$BD_COMMENTS" || fail "intro missing: $(cat "$BD_COMMENTS")"
@@ -1171,7 +1152,7 @@ HELPER
   _fake_gt "$bin" "$log" 'sleep 300 & wait'
   out="$(_spawn_branch sp-hang "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-hang-home" 2>"$BATS_TEST_TMPDIR/sp-hang.err")" \
     || fail "a hung gt must not abort the spawn: $out $(cat "$BATS_TEST_TMPDIR/sp-hang.err")"
-  printf '%s' "$out" | jq -e '.graphite == true and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  printf '%s' "$out" | jq -e '.git == "gt" and .agent_started == true' >/dev/null || fail "spawn json: $out"
   [[ -f "$BATS_TEST_TMPDIR/sp-hang-desk-started" ]] || fail "the desk must still start"
   grep -q 'did not finish' "$BATS_TEST_TMPDIR/sp-hang.err" || fail "warn: $(cat "$BATS_TEST_TMPDIR/sp-hang.err")"
   grep -q 'Use gt' "$BD_COMMENTS" || fail "a real Graphite repo keeps the gt intro: $(cat "$BD_COMMENTS")"
@@ -1186,7 +1167,7 @@ HELPER
   out="$(HANDOFF_SQLITE3_BIN="$BATS_TEST_TMPDIR/no-sqlite3" \
     _spawn_branch sp-nosql "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-nosql-home" 2>"$BATS_TEST_TMPDIR/sp-nosql.err")" \
     || fail "spawn failed: $out"
-  printf '%s' "$out" | jq -e '.graphite == false and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  printf '%s' "$out" | jq -e '.git == "gh" and .agent_started == true' >/dev/null || fail "spawn json: $out"
   [[ ! -s "$log" ]] || fail "gt must not run when detection is inconclusive: $(cat "$log")"
   grep -q 'Use gt' "$BD_COMMENTS" && fail "no gt intro without evidence of Graphite"
   grep -q 'cannot read' "$BATS_TEST_TMPDIR/sp-nosql.err" || fail "warn about sqlite3: $(cat "$BATS_TEST_TMPDIR/sp-nosql.err")"
@@ -1200,7 +1181,7 @@ HELPER
   _fake_gt "$bin" "$log" 'exit 1'
   out="$(_spawn_branch sp-fail "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-fail-home" 2>"$BATS_TEST_TMPDIR/sp-fail.err")" \
     || fail "a failed gt must not abort the spawn: $out"
-  printf '%s' "$out" | jq -e '.graphite == true and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  printf '%s' "$out" | jq -e '.git == "gt" and .agent_started == true' >/dev/null || fail "spawn json: $out"
   [[ -f "$BATS_TEST_TMPDIR/sp-fail-desk-started" ]] || fail "the desk must still start"
   grep -q 'gt failed' "$BATS_TEST_TMPDIR/sp-fail.err" || fail "warn: $(cat "$BATS_TEST_TMPDIR/sp-fail.err")"
 }
@@ -1212,7 +1193,7 @@ HELPER
   git -C "$repo" update-ref refs/branch-metadata/other HEAD
   _fake_gt "$bin" "$log" "case \"\$args\" in *' parent --no-interactive '*) exit 1 ;; esac"
   out="$(_spawn_branch sp-real "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-real-home" 2>/dev/null)" || fail "spawn failed: $out"
-  printf '%s' "$out" | jq -e '.graphite == true and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  printf '%s' "$out" | jq -e '.git == "gt" and .agent_started == true' >/dev/null || fail "spawn json: $out"
   grep -qxF -- "--cwd $repo.feat track --parent master --no-interactive" "$log" \
     || fail "a real stack still gets gt track on trunk; log=$(cat "$log")"
   grep -c ' track ' "$log" | grep -qx 1 || fail "one track call is enough: $(cat "$log")"
@@ -1227,7 +1208,7 @@ HELPER
   git -C "$repo" update-ref refs/branch-metadata/stack-one HEAD
   _fake_gt "$bin" "$log" "case \"\$args\" in *' parent --no-interactive '*) exit 1 ;; esac"
   out="$(_spawn_branch sp-stack "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-stack-home" stack-one 2>/dev/null)" || fail "spawn failed: $out"
-  printf '%s' "$out" | jq -e '.graphite == true and .agent_started == true and .base == "stack-one"' >/dev/null || fail "spawn json: $out"
+  printf '%s' "$out" | jq -e '.git == "gt" and .agent_started == true and .base == "stack-one"' >/dev/null || fail "spawn json: $out"
   [[ "$(grep ' track ' "$log")" == "--cwd $repo.feat track --parent stack-one --no-interactive" ]] \
     || fail "a stack gets exactly one gt track, on its base; log=$(cat "$log")"
   grep -q 'Use gt' "$BD_COMMENTS" || fail "a real Graphite repo keeps the gt intro: $(cat "$BD_COMMENTS")"
@@ -1294,7 +1275,7 @@ EOF
   [[ ! -s "$BATS_TEST_TMPDIR/ori-track-gt.log" ]] || fail "gt must not run for origin"
 }
 
-@test "a gh --base spawn uses gh stack, not gt, and does not change the result JSON" {
+@test "a gh --base spawn uses gh stack, not gt" {
   local repo="$BATS_TEST_TMPDIR/sp-gh" bin="$BATS_TEST_TMPDIR/sp-gh-bin" log="$BATS_TEST_TMPDIR/sp-gh.log" gtlog="$BATS_TEST_TMPDIR/sp-gh-gt.log" out
   git_init "$repo"
   git -C "$repo" branch parent-branch
@@ -1302,8 +1283,8 @@ EOF
   _fake_logger "$bin" gt "$gtlog"
   out="$(_spawn_branch sp-gh "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-gh-home" parent-branch 2>"$BATS_TEST_TMPDIR/sp-gh.err")" \
     || fail "spawn failed: $out $(cat "$BATS_TEST_TMPDIR/sp-gh.err")"
-  printf '%s' "$out" | jq -e '.graphite == false and .agent_started == true and .base == "parent-branch" and (has("git")|not)' >/dev/null \
-    || fail "spawn json keeps the old contract: $out"
+  printf '%s' "$out" | jq -e '.git == "gh" and .agent_started == true and .base == "parent-branch"' >/dev/null \
+    || fail "spawn json: $out"
   grep -q 'stack init' "$log" || fail "spawn --base on gh records a stack; log=$(cat "$log")"
   [[ ! -s "$gtlog" ]] || fail "gt must not run: $(cat "$gtlog")"
   grep -q 'Use gt' "$BD_COMMENTS" && fail "no gt intro on gh: $(cat "$BD_COMMENTS")"

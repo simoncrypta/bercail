@@ -56,7 +56,7 @@ Shep's session is one long conversation, and most of it is tool output. What it 
 
 Shep needs no list of your repos to keep up. bercail works it out each time from what it already knows:
 
-- the `[git]`, `[graphite]` and `[policy."<path>"]` keys of `config.toml`,
+- the `[git]` and `[policy."<path>"]` keys of `config.toml`,
 - trusted policies (`~/.local/state/bercail/policy-trust.json`),
 - handoff records (`~/.local/state/bercail/handoffs.jsonl`); a record whose worktree is gone gives its main checkout, from the `<main>.<branch>` name `handoff-spawn` uses,
 - the folders of live desks,

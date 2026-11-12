@@ -38,25 +38,18 @@ _git_backend_realpath() {
   fi
 }
 
-# This repo's [git] entry (gh|gt|origin), else its legacy [graphite] bool
-# (true → gt, false → gh). Keyed by the main checkout. Status 1 with no entry.
-# A value that is not an enum or a bool is ignored. [git] wins when both match.
+# This repo's [git] entry (gh|gt|origin), keyed by the main checkout. Status 1
+# with no entry. A value that is not one of the three is ignored.
 git_backend_override() {
-  local config main key value section git_val="" graphite_val=""
+  local config main key value
   config="$(_git_backend_config_file)"
   [[ -f "$config" ]] || return 1
   main="$(git_backend_main "$1")" || return 1
-  while IFS=$'\t' read -r section key value; do
+  while IFS=$'\t' read -r key value; do
     [[ "$key" != \~/* ]] || key="$HOME/${key#\~/}"
     [[ "$(_git_backend_realpath "$key")" == "$main" ]] || continue
-    case "$section" in
-      git)
-        [[ -n "$git_val" ]] || git_val="$value"
-        ;;
-      graphite)
-        [[ -n "$graphite_val" ]] || graphite_val="$value"
-        ;;
-    esac
+    printf '%s' "$value"
+    return 0
   done < <(awk '
     /^[[:space:]]*\[/ {
       sec = $0
@@ -64,7 +57,7 @@ git_backend_override() {
       gsub(/[[:space:]"\047]/, "", sec)
       next
     }
-    sec != "[git]" && sec != "[graphite]" { next }
+    sec != "[git]" { next }
     {
       line = $0
       sub(/^[[:space:]]*/, "", line)
@@ -77,24 +70,9 @@ git_backend_override() {
       value = substr(line, i + 1)
       sub(/^[[:space:]]*=[[:space:]]*/, "", value)
       sub(/[[:space:]]*(#.*)?$/, "", value)
-      if (sec == "[graphite]" && (value == "true" || value == "false")) {
-        print "graphite\t" key "\t" value
-        next
-      }
-      if (sec == "[git]") {
-        v = value
-        gsub(/^["\047]|["\047]$/, "", v)
-        if (v == "gh" || v == "gt" || v == "origin") print "git\t" key "\t" v
-      }
+      gsub(/^["\047]|["\047]$/, "", value)
+      if (value == "gh" || value == "gt" || value == "origin") print key "\t" value
     }' "$config")
-  if [[ -n "$git_val" ]]; then
-    printf '%s' "$git_val"
-    return 0
-  fi
-  case "$graphite_val" in
-    true) printf 'gt'; return 0 ;;
-    false) printf 'gh'; return 0 ;;
-  esac
   return 1
 }
 
@@ -114,13 +92,13 @@ git_backend_graphite_tracks() {
   if [[ -f "$db" ]]; then
     if ! rows="$("${HANDOFF_SQLITE3_BIN:-sqlite3}" -readonly "$db" \
       "select 1 from branch_metadata where coalesce(parent_branch_name, '') <> '' limit 1" 2>/dev/null)"; then
-      printf 'handoff-spawn: cannot read %s (sqlite3 missing, database busy, or unknown schema); skipping Graphite. Set "%s" = true or false under [graphite] in bercail config.toml to override.\n' \
+      printf 'handoff-spawn: cannot read %s (sqlite3 missing, database busy, or unknown schema); skipping Graphite. Set "%s" = "gt" or "gh" under [git] in bercail config.toml to override.\n' \
         "$db" "$main" >&2
       return 1
     fi
     [[ -z "$rows" ]] || return 0
   fi
-  printf 'handoff-spawn: gt has a config here but tracks no branch, so not using Graphite. If this repo uses it, set "%s" = true under [graphite] in bercail config.toml.\n' \
+  printf 'handoff-spawn: gt has a config here but tracks no branch, so not using Graphite. If this repo uses it, set "%s" = "gt" under [git] in bercail config.toml.\n' \
     "$main" >&2
   return 1
 }
@@ -242,7 +220,7 @@ git_backend_origin_owns() {
 }
 
 # Print gh, gt, or origin.
-# 1. [git] enum, else legacy [graphite] bool.
+# 1. The repo's [git] entry.
 # 2. Graphite tracking evidence (v0.11). No gt.
 # 3. Origin remote whose mirrorStatus is no-mirror or outbound.
 #    A matched host with unknown ownership stays gh and warns.

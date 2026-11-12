@@ -21,7 +21,7 @@ exit 0
 
   # Every lib deploy_configs calls into, as bin/bercail loads them.
   local lib
-  for lib in common detect deps config skills omarchy bstack desk shep; do
+  for lib in common detect deps config skills omarchy notify bstack desk shep; do
     # shellcheck source=/dev/null
     source "$ROOT/lib/$lib.sh"
   done

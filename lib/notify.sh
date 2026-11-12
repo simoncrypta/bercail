@@ -203,7 +203,7 @@ notify_desk_info() {
 }
 
 # Does SINK want this KIND for this space? Empty filters match all.
-# `spaces` are space name globs (`workspaces` is the old name for it).
+# `spaces` are space name globs.
 notify_sink_wants() {
   local file="$1" kind="$2" space_json="$3" kinds spaces repos name repo
   notify_bool "$(notify_sink_value "$file" enabled true)" || return 1
@@ -211,7 +211,6 @@ notify_sink_wants() {
   kinds="$(notify_sink_value "$file" notify "finished, blocked")"
   notify_list_has "$kinds" "$kind" || return 1
   spaces="$(notify_sink_value "$file" spaces "")"
-  [[ -n "$spaces" ]] || spaces="$(notify_sink_value "$file" workspaces "")"
   repos="$(notify_sink_value "$file" repos "")"
   [[ -z "$spaces" && -z "$repos" ]] && return 0
   name="$(jq -r '.name // empty' <<<"$space_json")"
@@ -509,30 +508,39 @@ notify_follow() {
   done
 }
 
-# Drop keys older sink files carry that nothing reads any more (`panes`:
-# agent_status/v2 has no panes). The reader ignores them either way.
-notify_drop_stale_keys() {
-  local file="$1" tmp mode
-  grep -Eq '^[[:space:]]*panes[[:space:]]*=' "$file" 2>/dev/null || return 0
-  mode="$(_notify_mode "$file")"
-  tmp="$(umask 077 && mktemp "$(dirname "$file")/.$(basename "$file").XXXXXX")" || return 0
-  if grep -Ev '^[[:space:]]*panes[[:space:]]*=' "$file" >"$tmp" && chmod "$mode" "$tmp"; then
-    mv -f "$tmp" "$file"
-  else
+# `workspaces` was the name of `spaces` until v1. Rename it once in each sink
+# file that still has it; `spaces` won when a sink set both.
+notify_rename_workspaces() {
+  local f tmp keep
+  while IFS= read -r f; do
+    grep -Eq '^[[:space:]]*workspaces[[:space:]]*=' "$f" 2>/dev/null || continue
+    if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
+      info "[dry-run] would rename workspaces to spaces in $f"
+      continue
+    fi
+    keep=workspaces
+    [[ -z "$(notify_sink_value "$f" spaces "")" ]] || keep=spaces
+    tmp="$(mktemp)"
+    awk -v keep="$keep" '
+      /^[[:space:]]*spaces[[:space:]]*=/ && keep == "workspaces" { next }
+      /^[[:space:]]*workspaces[[:space:]]*=/ {
+        if (keep == "spaces") next
+        sub(/workspaces/, "spaces")
+      }
+      { print }' "$f" >"$tmp"
+    # Written through, so the sink keeps its mode: it can hold a key.
+    cat "$tmp" >"$f"
     rm -f "$tmp"
-  fi
+    info "renamed workspaces to spaces in $f"
+  done < <(notify_sink_files)
 }
 
 # Follow desks while there are sinks or Shep runs on Pi. With neither, wait.
 notify_run() {
-  local f
   rm -f "$(notify_restart_file)"
   while [[ -z "$(notify_sink_files)" && -z "$(notify_shep_inbox)" ]]; do
     sleep "${NOTIFY_IDLE_SLEEP:-60}"
   done
-  while IFS= read -r f; do
-    notify_drop_stale_keys "$f"
-  done < <(notify_sink_files)
   "$(notify_hc)" events --json --label bercail.role=agent | notify_follow
 }
 
@@ -572,7 +580,7 @@ notify_status() {
       "$([[ -n "$(notify_sink_value "$f" url "")" ]] && printf set || printf MISSING)" \
       "$([[ -n "$(notify_sink_key "$f" 2>/dev/null || true)" ]] && printf set || printf none)" \
       "$(notify_sink_value "$f" notify "finished, blocked")" \
-      "$(notify_sink_value "$f" spaces "$(notify_sink_value "$f" workspaces "")")" \
+      "$(notify_sink_value "$f" spaces "")" \
       "$(notify_sink_value "$f" repos "")"
     if [[ -r "$st" ]]; then
       jq -r '"    last=\(.last_code) auth_failed=\(.auth_failed) failures=\(.failures // 0) last_ok_at=\(.last_ok_at // "never")"' "$st"
@@ -632,7 +640,7 @@ notify_sink_covers() {
   local file="$1" repo="$2" repos spaces
   notify_bool "$(notify_sink_value "$file" enabled true)" || return 1
   repos="$(notify_sink_value "$file" repos "")"
-  spaces="$(notify_sink_value "$file" spaces "$(notify_sink_value "$file" workspaces "")")"
+  spaces="$(notify_sink_value "$file" spaces "")"
   [[ -z "$repos" && -z "$spaces" ]] && return 0
   [[ -n "$repos" ]] && notify_glob_match "$repos" "$repo"
 }
@@ -741,7 +749,7 @@ notify_repo() {
   fi
   [[ "$repo" != *[\"#,[:space:]]* ]] || { _notify_err "repo '$repo' cannot hold a quote, #, comma, or blank"; return 1; }
   repos="$(notify_sink_value "$f" repos "")"
-  spaces="$(notify_sink_value "$f" spaces "$(notify_sink_value "$f" workspaces "")")"
+  spaces="$(notify_sink_value "$f" spaces "")"
   if [[ -z "$repos" && -z "$spaces" ]]; then
     printf 'sink %s covers every repo (--all-repos); nothing to %s\n' "$name" "$action"
     return 0
@@ -868,7 +876,7 @@ notify_add() {
       "$name" "$(_notify_redact_url "$(notify_sink_value "$f" url "")")" \
       "$([[ -n "$(notify_sink_key "$f" 2>/dev/null || true)" ]] && printf set || printf none)" \
       "$(notify_sink_value "$f" auth both)" "$(notify_sink_value "$f" repos "")" \
-      "$(notify_sink_value "$f" spaces "$(notify_sink_value "$f" workspaces "")")" \
+      "$(notify_sink_value "$f" spaces "")" \
       "$(notify_sink_value "$f" notify "finished, blocked")" "$(notify_sink_value "$f" enabled true)" >&2
     if [[ "$yes" -ne 1 ]]; then
       [[ -t 0 ]] || { _notify_err "sink '$name' exists; pass --yes to replace it"; return 1; }

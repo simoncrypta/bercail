@@ -85,6 +85,10 @@ update_from() {
   # A handoff the old release logged, in the state dir it used.
   mkdir -p "$home/.local/state/agentic-dev"
   printf '{"ok":true,"path":"%s","branch":"","issue":"old-1"}\n' "$home" >"$home/.local/state/agentic-dev/handoffs.jsonl"
+  # Names v1 no longer reads: a [graphite] entry and a sink's workspaces.
+  printf '\n[graphite]\n"%s" = true\n' "$box/src" >>"$home/.config/bercail/config.toml"
+  mkdir -p "$home/.config/bercail/notify.d"
+  printf 'url = "https://example.invalid/hook"\nworkspaces = "old_*"\n' >"$home/.config/bercail/notify.d/old.toml"
   # A clone install: the old CLI updates from its recorded source.
   printf '%s\n' "$ROOT" >"$home/.local/share/bercail/source-path"
   log="$box/update.log"
@@ -178,6 +182,15 @@ reload_config() {
   [[ "$(jq -r .issue "$home/.local/state/bercail/handoffs.jsonl")" == old-1 ]] \
     || fail "the handoff log did not move: $(ls -la "$home/.local/state")"
   [[ -L "$home/.local/state/agentic-dev" ]] || fail "the old state dir is not a link"
+}
+
+@test "the first update from v0.14.0 rewrites [graphite] and a sink's workspaces under their v1 names" {
+  need_tag v0.14.0
+  update_from v0.14.0
+  grep -qxF "\"$box/src\" = \"gt\"" "$home/.config/bercail/config.toml" \
+    || fail "the [graphite] entry did not move to [git]: $(cat "$home/.config/bercail/config.toml")"
+  grep -qx 'spaces = "old_\*"' "$home/.config/bercail/notify.d/old.toml" \
+    || fail "the sink still says workspaces: $(cat "$home/.config/bercail/notify.d/old.toml")"
 }
 
 @test "a curl install of v0.14.0 updates to this tree: every file its updater fetches by name still ships" {

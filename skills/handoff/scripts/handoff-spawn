@@ -46,8 +46,7 @@ usage: handoff-spawn --info
   --dirty         copy uncommitted main changes into the sibling as a working tree
                   (default when main is dirty)
   --clean         HEAD only; leave uncommitted files on main
-  --space ID      Herdr app space to keep shown (default: the one shown now;
-                  --workspace is the same flag)
+  --space ID      Herdr app space to keep shown (default: the one shown now)
   --base BRANCH   --branch only: cut the new branch from BRANCH instead of the
                   default branch (wt switch --create --base), so a dependent
                   issue stacks on its parent's branch. The repo's git backend
@@ -82,18 +81,6 @@ handoff_main_is_dirty() {
   [[ -n "$(git -C "$1" status --porcelain --untracked-files=all 2>/dev/null)" ]]
 }
 
-# Wrappers so callers written against the Graphite bool keep working.
-# Detection lives in git-backend.sh (no gt).
-handoff_graphite_config() {
-  git_backend_graphite_config "$1"
-}
-
-handoff_is_graphite() {
-  local name rc=0
-  name="$(git_backend "$1")" || rc=$?
-  [[ "$rc" -ne 130 ]] || exit 130
-  [[ "$name" == gt ]]
-}
 
 # Copy main's uncommitted tracked+untracked files into sibling as a working
 # tree. Never git-add. After this: git diff --cached is empty; git diff HEAD
@@ -196,7 +183,7 @@ handoff_gt_track() {
 handoff_track_graphite() {
   local sibling="$1" parent="${2:-}" cfg trunk rc=0
   # gt would auto-init here, on a trunk it guessed.
-  if ! cfg="$(handoff_graphite_config "$sibling")"; then
+  if ! cfg="$(git_backend_graphite_config "$sibling")"; then
     printf 'handoff-spawn: Graphite is on for this repo but it has no gt config; not tracking %s. Run gt init, then gt track.\n' "$sibling" >&2
     return 0
   fi
@@ -351,7 +338,7 @@ handoff_herdr_app_bin() {
 }
 
 # The Herdr app answers (its window is open).
-handoff_herdr_socket_ok() {
+handoff_herdr_app_ok() {
   "$(handoff_herdr_app_bin)" status >/dev/null 2>&1
 }
 
@@ -380,7 +367,7 @@ handoff_bool_json() {
 }
 
 handoff_result_json() {
-  local label="$1" sibling="$2" branch="$3" issue="$4" started="$5" copied="$6" graphite="$7"
+  local label="$1" sibling="$2" branch="$3" issue="$4" started="$5" copied="$6" backend="$7"
   local stage="${8:-}" harness="${9:-}" space="${10:-}" desk="${11:-}" issue_title="${12:-}"
   # stage/harness: what the desk agent runs; space/desk: where it runs (hc address).
   jq -nc \
@@ -390,13 +377,13 @@ handoff_result_json() {
     --arg issue "$issue" \
     --argjson agent_started "$(handoff_bool_json "$started")" \
     --argjson dirty_copied "$(handoff_bool_json "$copied")" \
-    --argjson graphite "$(handoff_bool_json "$graphite")" \
+    --arg git "$backend" \
     --arg stage "$stage" \
     --arg harness "$harness" \
     --arg space "$space" \
     --arg desk "$desk" \
     --arg issue_title "$issue_title" \
-    '{ok:true,label:$label,path:$path,branch:$branch,issue:$issue,agent_started:$agent_started,dirty_copied:$dirty_copied,graphite:$graphite}
+    '{ok:true,label:$label,path:$path,branch:$branch,issue:$issue,agent_started:$agent_started,dirty_copied:$dirty_copied,git:$git}
      + (if $stage == "" then {} else {stage:$stage} end)
      + (if $harness == "" then {} else {harness:$harness} end)
      + (if $space == "" then {} else {space:$space} end)
@@ -406,13 +393,10 @@ handoff_result_json() {
 
 handoff_info_json() {
   local cwd branch helper default_copy backend=gh
-  local herdr_env=0 socket=0 herdr=0 main_ok=0 dirty=0 graphite=0 helper_present=0 beads=0
+  local herdr_env=0 herdr=0 main_ok=0 dirty=0 helper_present=0 beads=0
   cwd="$(handoff_realpath "$PWD")"
   [[ -n "${HC_TERMINAL_ID:-}" ]] && herdr_env=1
-  if handoff_herdr_socket_ok; then
-    socket=1
-  fi
-  if [[ "$socket" -eq 1 ]]; then
+  if handoff_herdr_app_ok; then
     herdr=1
   fi
   if command -v git >/dev/null 2>&1 && handoff_is_main_checkout "$cwd"; then
@@ -425,7 +409,6 @@ handoff_info_json() {
     local info_rc=0
     backend="$(git_backend "$cwd")" || info_rc=$?
     [[ "$info_rc" -ne 130 ]] || exit 130
-    [[ "$backend" == gt ]] && graphite=1
   fi
   branch="$(git -C "$cwd" branch --show-current 2>/dev/null || true)"
   helper="${HOME}/.config/worktrunk/herdr-layout.sh"
@@ -444,37 +427,32 @@ handoff_info_json() {
     --arg default_copy "$default_copy" \
     --arg helper "$helper" \
     --arg space "$(handoff_shown_space 2>/dev/null || true)" \
-    --argjson herdr "$(handoff_bool_json "$herdr")" \
     --argjson herdr_env "$(handoff_bool_json "$herdr_env")" \
-    --argjson socket "$(handoff_bool_json "$socket")" \
+    --argjson herdr "$(handoff_bool_json "$herdr")" \
     --argjson main_checkout "$(handoff_bool_json "$main_ok")" \
     --argjson dirty "$(handoff_bool_json "$dirty")" \
     --arg git "$backend" \
-    --argjson graphite "$(handoff_bool_json "$graphite")" \
     --argjson helper_present "$(handoff_bool_json "$helper_present")" \
     --argjson beads "$(handoff_bool_json "$beads")" \
     '{
       herdr:$herdr,
       herdr_env:$herdr_env,
-      socket:$socket,
       main_checkout:$main_checkout,
       cwd:$cwd,
       branch:$branch,
       dirty:$dirty,
       git:$git,
-      graphite:$graphite,
       default_copy:$default_copy,
       helper:$helper,
       helper_present:$helper_present,
       space:$space,
-      workspace:$space,
       beads:$beads,
       stages:["bstack","autopilot"]
     }'
 }
 
 handoff_spawn_main() {
-  local branch="" dirty="auto" issue="" issue_title="" prompt main sibling label intro graphite=0 copied=0 backend=gh
+  local branch="" dirty="auto" issue="" issue_title="" prompt main sibling label intro copied=0 backend=gh
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0
@@ -522,7 +500,7 @@ handoff_spawn_main() {
         model="$2"
         shift 2
         ;;
-      --space|--workspace)
+      --space)
         [[ $# -ge 2 ]] || handoff_usage
         HANDOFF_SPACE="$2"
         shift 2
@@ -586,7 +564,7 @@ handoff_spawn_main() {
   handoff_issue_exists "$main" "$issue" || handoff_die "beads issue $issue not found (bd show $issue)"
   issue_title="$(handoff_issue_title "$main" "$issue")"
 
-  handoff_herdr_socket_ok \
+  handoff_herdr_app_ok \
     || handoff_die "cannot reach the Herdr app (herdr-app status failed); open it first"
   keep_space="$(handoff_shown_space || true)"
 
@@ -634,7 +612,6 @@ handoff_spawn_main() {
   [[ "$track_rc" -ne 130 ]] || exit 130
   case "$backend" in
     gt)
-      graphite=1
       handoff_track_graphite "$sibling" "$base"
       ;;
     gh)
@@ -653,7 +630,7 @@ handoff_spawn_main() {
   # The checkout facts used to be a prompt preamble. They go on the issue now.
   intro="$(printf 'bercail handoff: stage %s, desk agent %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr. %s Do not open Review or invoke the review skill; when the desk agent finishes, Review opens itself in this space once the user looks at it. When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
     "$stage" pi "$sibling" "$branch" "$(handoff_policy_line "$sibling")" "$issue")"
-  if [[ "$graphite" -eq 1 ]]; then
+  if [[ "$backend" == gt ]]; then
     intro="$(printf '%s\nUse gt, not raw git commit/push, unless asked.' "$intro")"
   else
     intro="$(printf '%s\nGit backend is %s. Do not run gt.' "$intro" "$backend")"
@@ -683,7 +660,7 @@ handoff_spawn_main() {
 
   space="$(_wt_herdr_space_by_folder "$sibling" 2>/dev/null || true)"
   [[ -z "$space" ]] || desk="$(_wt_herdr_space_desk "$space" 2>/dev/null || true)"
-  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" pi "$space" "$desk" "$issue_title")"
+  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$backend" "$stage" pi "$space" "$desk" "$issue_title")"
   [[ -z "$base" ]] || json="$(jq -c --arg base "$base" '. + {base:$base}' <<<"$json")"
   [[ -z "$model" ]] || json="$(jq -c --arg model "$model" '. + {model:$model}' <<<"$json")"
   handoff_notify_check "$sibling"

@@ -453,15 +453,6 @@ EOF
   [[ ! -e "$XDG_CONFIG_HOME/bercail/notify.d/bot-three.toml" ]] || fail "--key wrote a sink"
 }
 
-@test "the stale panes key is migrated away" {
-  # A stale `panes` line is dropped by the follower, keeping the mode.
-  add_bot_two
-  printf 'panes = agent\n' >>"$added"
-  notify_drop_stale_keys "$added"
-  if grep -q panes "$added"; then fail "panes kept"; fi
-  [[ "$(_notify_mode "$added")" == 600 ]] || fail "migration changed the mode"
-}
-
 @test "notify check warns once for a repo no enabled sink covers, and not without sinks" {
   other_no_sinks
   notify_check "$BATS_TEST_TMPDIR/other" 2>"$BATS_TEST_TMPDIR/err" || fail "no sinks at all must not warn"
@@ -559,10 +550,10 @@ EOF
   done
   cmp -s "$everyone" "$BATS_TEST_TMPDIR/everyone.before" || fail "an all-repos sink was edited"
   rm -f "$everyone"
-  # An old sink filtered only by space (`workspaces`, no repos line) still loads, and gets one.
+  # A sink filtered only by space (no repos line) gets one.
   old="$XDG_CONFIG_HOME/bercail/notify.d/old.toml"
-  printf 'url = "https://example.invalid/old"\nworkspaces = "*_Other"\n' >"$old"
-  notify_repo add old other >/dev/null || fail "repo add to an old sink"
-  [[ "$(notify_sink_value "$old" repos)" == other && "$(notify_sink_value "$old" workspaces)" == "*_Other" ]] \
-    || fail "old sink: $(cat "$old")"
+  printf 'url = "https://example.invalid/old"\nspaces = "*_Other"\n' >"$old"
+  notify_repo add old other >/dev/null || fail "repo add to a sink with no repos line"
+  [[ "$(notify_sink_value "$old" repos)" == other && "$(notify_sink_value "$old" spaces)" == "*_Other" ]] \
+    || fail "sink: $(cat "$old")"
 }

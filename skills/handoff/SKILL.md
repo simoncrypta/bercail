@@ -21,10 +21,9 @@ Do not inspect git, Graphite, the Herdr app, or worktrees yourself. Run `--info`
 ```
 
 That JSON is the only context you need: `herdr` (the Herdr app answers),
-`herdr_env` (this shell is an hc terminal), `socket`, `main_checkout`, `cwd`,
-`branch`, `dirty`, `git` (`gh` | `gt` | `origin`), `graphite` (legacy,
-true only for `gt`), `default_copy`, `helper`, `space` (the
-app space the user is looking at), `beads`.
+`herdr_env` (this shell is an hc terminal), `main_checkout`, `cwd`,
+`branch`, `dirty`, `git` (`gh` | `gt` | `origin`), `default_copy`, `helper`,
+`space` (the app space the user is looking at), `beads`.
 
 - If `herdr` is false and you need `--branch`, report that the Herdr app is not open and stop.
   Headless stages do not need it.
@@ -97,7 +96,7 @@ working directory to `cwd` from `--info`. Flags only.
   --branch <name> --stage bstack --issue <id> --clean --space <id>
 ```
 
-- `--space <id>` is optional (`--workspace` is the same flag): the app space to keep on screen. By
+- `--space <id>` is optional: the app space to keep on screen. By
   default the user stays on whatever space they are looking at.
 - `--dirty` / `--clean` override `default_copy`.
 - `--base <branch>` is optional: dependent issues stack on the parent's branch via `--base` (`wt switch --create --base`), then register the parent with the `git` backend from `--info`: `gh stack`, `gt track`, or `origin stack track`. Without it the branch is cut from the default branch. Publish and update through that backend's stack commands, never a hand-made PR merely based on another PR's branch. See [git-workflow.md](resources/git-workflow.md). Never run `gt` unless `git` is `gt`.
@@ -137,7 +136,7 @@ Without `--model`, every agent runs the lead's.
 ## After a `--branch` spawn
 
 The script prints JSON: `ok`, `label`, `path`, `branch`, `issue`, `issue_title`
-(when known), `agent_started`, `dirty_copied`, `graphite`, `stage`, `harness`, `space` (the
+(when known), `agent_started`, `dirty_copied`, `git`, `stage`, `harness`, `space` (the
 child's Herdr app space), `desk` (the desk agent's hc address), and `model` when `--model` was given. It appends that line to
 `~/.local/state/bercail/handoffs.jsonl` whenever the sibling exists.
 

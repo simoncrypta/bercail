@@ -1,6 +1,7 @@
 #!/usr/bin/env bats
 # What an update does with the names bercail left behind at v1:
-# ~/.local/state/agentic-dev, where the handoff log lived, and the agentic-dev command.
+# ~/.local/state/agentic-dev, where the handoff log lived, the agentic-dev
+# command, [graphite] in config.toml, and workspaces in a notify sink.
 
 # shellcheck disable=SC2034 # DRY_RUN and LOCAL_BIN are read by the sourced libs.
 # The libs define their own run(), so these tests capture output by hand.
@@ -12,7 +13,14 @@ setup() {
   source "$ROOT/lib/common.sh"
   # shellcheck source=/dev/null
   source "$ROOT/lib/config.sh"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/git-backend.sh"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/notify.sh"
   DRY_RUN=0
+  CONFIG="$BERCAIL_USER_CONFIG"
+  SINKS="$XDG_CONFIG_HOME/bercail/notify.d"
+  mkdir -p "$SINKS"
   OLD="$XDG_STATE_HOME/agentic-dev" NEW="$XDG_STATE_HOME/bercail"
   REPO="$BATS_TEST_TMPDIR/repo"
   LOCAL_BIN="$HOME/.local/bin"
@@ -101,4 +109,102 @@ record() {
   printf '#!/bin/sh\necho mine\n' >"$LOCAL_BIN/agentic-dev"
   remove_agentic_dev_shim >/dev/null
   [[ "$(sh "$LOCAL_BIN/agentic-dev")" == mine ]] || fail "someone else's agentic-dev was removed"
+}
+
+@test "an update moves [graphite] true and false to [git] gt and gh" {
+  local stacks="$BATS_TEST_TMPDIR/stacks" plain="$BATS_TEST_TMPDIR/plain"
+  git init -q "$stacks"
+  git init -q "$plain"
+  cat >"$CONFIG" <<EOF
+[layout]
+review = "tuicr"
+
+[graphite] # by main checkout
+"$stacks" = true   # no stack right now
+'$plain' = false
+
+[shep]
+rollover = 1
+EOF
+  migrate_graphite_config >/dev/null
+  [[ "$(git_backend "$stacks")" == gt && "$(git_backend "$plain")" == gh ]] \
+    || fail "the backends changed: $(git_backend "$stacks") $(git_backend "$plain")"
+  grep -q graphite "$CONFIG" && fail "[graphite] is still there: $(cat "$CONFIG")"
+  grep -qF "\"$stacks\" = \"gt\"   # no stack right now" "$CONFIG" || fail "the entry lost its comment: $(cat "$CONFIG")"
+  [[ "$(grep -A1 -e '^\[layout\]' -e '^\[shep\]' "$CONFIG" | grep -v '^--')" == '[layout]
+review = "tuicr"
+[shep]
+rollover = 1' ]] || fail "the other sections changed: $(cat "$CONFIG")"
+}
+
+@test "a repo [git] already names keeps its entry when [graphite] moves" {
+  local both="$BATS_TEST_TMPDIR/both" only="$BATS_TEST_TMPDIR/only"
+  git init -q "$both"
+  git init -q "$only"
+  cat >"$CONFIG" <<EOF
+[graphite]
+"$both" = true
+"$only" = true
+# why these are here
+"$BATS_TEST_TMPDIR/typo" = yes
+
+[git]
+"$both" = "origin"
+
+[shep]
+rollover = 1
+EOF
+  migrate_graphite_config >/dev/null
+  [[ "$(git_backend "$both")" == origin ]] || fail "[git] lost to [graphite]: $(cat "$CONFIG")"
+  [[ "$(git_backend "$only")" == gt ]] || fail "the [graphite] entry did not move: $(cat "$CONFIG")"
+  [[ "$(grep -cF "\"$both\"" "$CONFIG")" == 1 ]] || fail "a repo is named twice: $(cat "$CONFIG")"
+  [[ "$(sed -n '/^\[git\]/,/^\[shep\]/p' "$CONFIG")" == "[git]
+\"$both\" = \"origin\"
+\"$only\" = \"gt\"
+
+[shep]" ]] || fail "the moved entry is not at the end of [git]: $(cat "$CONFIG")"
+  # What the rewrite cannot read as true or false stays where it was.
+  grep -qx '\[graphite\]' "$CONFIG" && grep -qF 'typo" = yes' "$CONFIG" || fail "an entry was lost: $(cat "$CONFIG")"
+}
+
+@test "a second update, a config with no [graphite], and a dry run change nothing" {
+  local repo="$BATS_TEST_TMPDIR/again" dotfiles="$BATS_TEST_TMPDIR/dotfiles.toml" out
+  git init -q "$repo"
+  printf '[graphite]\n"%s" = true\n' "$repo" >"$dotfiles"
+  ln -s "$dotfiles" "$CONFIG"
+  cp "$dotfiles" "$BATS_TEST_TMPDIR/before"
+  out="$(DRY_RUN=1 migrate_graphite_config 2>&1)" || fail "the dry run failed: $out"
+  cmp -s "$dotfiles" "$BATS_TEST_TMPDIR/before" || fail "a dry run rewrote the config"
+  [[ "$out" == *"would move the [graphite] entries"* ]] || fail "the dry run did not say what it would do: $out"
+
+  migrate_graphite_config >/dev/null
+  [[ -L "$CONFIG" ]] || fail "the config was a link into someone's dotfiles and is now a file"
+  cp "$dotfiles" "$BATS_TEST_TMPDIR/after"
+  out="$(migrate_graphite_config 2>&1)"
+  cmp -s "$dotfiles" "$BATS_TEST_TMPDIR/after" || fail "the second run rewrote the config"
+  [[ -z "$out" ]] || fail "the second run reported a move: $out"
+}
+
+@test "an update renames workspaces to spaces in a sink and keeps its mode" {
+  local sink="$SINKS/old.toml"
+  printf 'url = "https://example.invalid/hook"\nkey = "s3cret"\nworkspaces = "*_Other"\n' >"$sink"
+  chmod 600 "$sink"
+  notify_rename_workspaces >/dev/null
+  [[ "$(notify_sink_value "$sink" spaces)" == '*_Other' ]] || fail "the filter was lost: $(cat "$sink")"
+  grep -q workspaces "$sink" && fail "workspaces is still there: $(cat "$sink")"
+  [[ "$(stat -c %a "$sink")" == 600 ]] || fail "a sink that holds a key changed mode"
+  notify_sink_wants "$sink" finished '{"name":"repo_Other"}' || fail "the sink no longer takes the space it filtered for"
+  notify_sink_wants "$sink" finished '{"name":"repo_Mine"}' && fail "the sink takes a space it filtered out"
+  cp "$sink" "$BATS_TEST_TMPDIR/after"
+  notify_rename_workspaces >/dev/null
+  cmp -s "$sink" "$BATS_TEST_TMPDIR/after" || fail "the second run rewrote the sink"
+}
+
+@test "a sink that set both keeps spaces, which was the one read" {
+  local sink="$SINKS/both.toml" empty="$SINKS/empty.toml"
+  printf 'url = "https://example.invalid/a"\nspaces = "new_*"\nworkspaces = "old_*"\n' >"$sink"
+  printf 'url = "https://example.invalid/b"\nspaces = ""\nworkspaces = "old_*"\n' >"$empty"
+  notify_rename_workspaces >/dev/null
+  [[ "$(grep spaces "$sink")" == 'spaces = "new_*"' ]] || fail "both set: $(cat "$sink")"
+  [[ "$(grep spaces "$empty")" == 'spaces = "old_*"' ]] || fail "an empty spaces fell back to workspaces: $(cat "$empty")"
 }

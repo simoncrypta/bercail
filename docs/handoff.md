@@ -44,12 +44,12 @@ Each `--branch` spawn appends one line to `${XDG_STATE_HOME:-~/.local/state}/ber
 ## Git backend
 
 `handoff-spawn --info` reports `"git": "gh"`, `"gt"`, or `"origin"`.
-Use that backend throughout the job. `graphite` remains for one release,
-derived as `git == "gt"`, so existing callers keep working.
+Use that backend throughout the job. The result of a `--branch` spawn carries
+the same `git`.
 
-Detection order is: a per-repo `[git]` override, a legacy `[graphite]` override,
-real Graphite tracking, an Origin repo, then `gh`. Keys are main-checkout
-paths; linked worktrees share the choice. New overrides use:
+Detection order is: a per-repo `[git]` override, real Graphite tracking, an
+Origin repo, then `gh`. Keys are main-checkout paths; linked worktrees share
+the choice:
 
 ```toml
 [git]
@@ -58,8 +58,7 @@ paths; linked worktrees share the choice. New overrides use:
 "~/Work/origin-repo" = "origin"
 ```
 
-`[git]` takes precedence over `[graphite]`, whose `true`/`false` still maps to
-`gt`/`gh`. Detection never runs `gt`.
+Detection never runs `gt`.
 
 Origin detection first checks the remote's exact host and repo path
 (`origin.cursor.com` or `origin-<environment>.cursor.com`). Only those repos
@@ -88,9 +87,9 @@ Any `gt` command initializes the repo it runs in, so a stray one must not turn t
 To decide for a repo yourself, add its main checkout to `~/.config/bercail/config.toml`. Linked worktrees follow it.
 
 ```toml
-[graphite]
-"~/Work/leftlane_app" = true         # a Graphite repo with no stack right now
-"~/Work/bercail" = false             # gt once ran here, but you don't use it
+[git]
+"~/Work/leftlane_app" = "gt"         # a Graphite repo with no stack right now
+"~/Work/bercail" = "gh"              # gt once ran here, but you don't use it
 ```
 
 Tracking can't stop a spawn. Each `gt` call is killed after 30 seconds (`HANDOFF_GT_TIMEOUT`). If `--base` is untracked, bercail tracks it on trunk and retries, then falls back to trunk. On any other failure, such as a locked Graphite database, it changes nothing, so your stack stays as it was. If tracking still fails, or `gt` hangs, the spawn prints a warning with the `gt track` command to run, and the desk still starts.

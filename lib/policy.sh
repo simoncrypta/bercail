@@ -146,7 +146,7 @@ _policy_local() {
   done < <(_policy_toml "$config") | _policy_object "$config [policy.\"$main\"]"
 }
 
-# 0 when MAIN is named under [git], [graphite], or [policy] in config.toml.
+# 0 when MAIN is named under [git] or [policy] in config.toml.
 _policy_configured() {
   local main="$1" table _k _v
   git_backend_override "$main" >/dev/null 2>&1 && return 0

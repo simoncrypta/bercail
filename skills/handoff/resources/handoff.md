@@ -7,8 +7,7 @@ run `--info` then spawn — not assemble these steps.
 ## Sequence
 
 1. `--info` prints JSON facts (`herdr`, `herdr_env`, `main_checkout`, `dirty`,
-   `git` (`gh` | `gt` | `origin`), `graphite` (legacy: `git == "gt"`),
-   `default_copy`, `space`, …). `--branch` itself requires the
+   `git` (`gh` | `gt` | `origin`), `default_copy`, `space`, …). `--branch` itself requires the
    Herdr app to answer (`herdr-app status`) and a **main** git checkout.
 2. `wt switch --create <branch> --no-cd`. Worktrunk `post-start` opens a Herdr
    app space on the sibling (no desk agent yet: handoff-spawn sets
@@ -32,13 +31,13 @@ run `--info` then spawn — not assemble these steps.
    `bercail.role=agent`, `bercail.space=<space id>`, and, when set, `bercail.issue`
    and `bercail.issue_title`, replacing a live desk
    in that space. A failed start does **not** discard the worktree.
-7. Print JSON `{ok,label,path,branch,issue,issue_title,agent_started,dirty_copied,graphite,stage,harness,space,desk}`
+7. Print JSON `{ok,label,path,branch,issue,issue_title,agent_started,dirty_copied,git,stage,harness,space,desk}`
    (`issue_title` omitted when unknown) and append `~/.local/state/bercail/handoffs.jsonl` whenever the sibling
    exists.
 
 Callers in no hc terminal (`HC_TERMINAL_ID` unset) run the **resolved script
 directly** with `--branch` and `--issue` (working directory = `--info` `cwd`);
-`--space` (or `--workspace`) picks the space to keep shown, else the one shown now.
+`--space` picks the space to keep shown, else the one shown now.
 Never `python -c`, never a wrapper `.sh`, never argv after `--`.
 The ask is in the beads issue, so nothing but the id reaches argv.
 
@@ -89,10 +88,8 @@ main checkout's choice. Detection never invokes `gt`:
 
 1. A `[git]` entry in bercail's config.toml, keyed by main-checkout path,
    chooses `"gh"`, `"gt"`, or `"origin"`.
-2. A legacy `[graphite]` entry maps `true` to `gt` and `false` to `gh`.
-   `[git]` wins when both are set.
-3. Real Graphite tracking (below) selects `gt`.
-4. A remote on an exact `origin.cursor.com` or `origin-<environment>.cursor.com`
+2. Real Graphite tracking (below) selects `gt`.
+3. A remote on an exact `origin.cursor.com` or `origin-<environment>.cursor.com`
    host and `/org/repo` or `/git/org/repo` path is an Origin candidate. A bounded
    `origin repo view --json mirrorStatus` selects `origin` only for `no-mirror`
    or `outbound`. Other reported statuses select `gh`. A missing CLI or failed
@@ -108,8 +105,7 @@ For example:
 "~/Work/origin-repo" = "origin"
 ```
 
-`graphite` stays in `--info` for one release, derived from `git == "gt"`.
-Consumers should read `git`, not re-detect. See
+Consumers read `git`, not re-detect. See
 [git-workflow.md](git-workflow.md) for publishing and updating each stack.
 
 ### Graphite tracking
@@ -127,7 +123,7 @@ overrides above, tracking evidence decides:
 
 A config with nothing tracked is off, with a note that names the override: a
 real repo looks the same as a stray one once its last stack is merged. An entry
-in `[git]` (or legacy `[graphite]`) silences both.
+in `[git]` silences both.
 
 `handoff_track_graphite` runs every `gt` call through `handoff_gt`: its own
 process group, no stdin, stdout sent to stderr (stdout is the spawn's JSON), and

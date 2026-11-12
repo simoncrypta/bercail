@@ -34,4 +34,3 @@ judge = "claude"
 # "~/Work/some-repo" = "gh"
 # "~/Work/graphite-repo" = "gt"
 # "~/Work/origin-repo" = "origin"
-# Legacy [graphite] true/false still maps to gt/gh; [git] takes precedence.
