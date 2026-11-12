@@ -2,7 +2,7 @@
 # shellcheck shell=bash
 
 uninstall_agentic_dev() {
-  local keys tmp bin mod
+  local keys tmp bin mod keyboard
   info "uninstalling bercail..."
 
   remove_marker_block "$(shell_rc_for bash)"
@@ -77,8 +77,18 @@ uninstall_agentic_dev() {
     remove_managed_skills
   fi
 
-  if confirm "Remove fcitx5 keyboard.conf override?"; then
-    run rm -f "${FCITX5_CONFIG_DIR}/conf/keyboard.conf"
+  # Older installs wrote this whole file. A customized input-method config is not ours.
+  keyboard="$HOME/.config/fcitx5/conf/keyboard.conf"
+  if [[ -f "$keyboard" ]] && cmp -s "$keyboard" - <<'EOF'
+# Clear spell/hint completion toggles (Ctrl+Alt+H/J) so those chords stay free.
+# See: https://github.com/basecamp/omarchy/discussions/1578
+Hint Trigger=
+One Time Hint Trigger=
+EOF
+  then
+    if confirm "Remove fcitx5 keyboard.conf override?"; then
+      run rm -f "$keyboard"
+    fi
   fi
 
   if confirm "Remove nvim file-tree overlay (~/.config/nvim/lua/plugins/agentic-dev-explorer.lua)?"; then

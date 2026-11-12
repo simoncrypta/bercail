@@ -3,18 +3,8 @@
 # Doctor checks. Source after detect/config/omarchy/skills.
 
 doctor_omarchy_integration() {
-  local missing=0
   if [[ "$(detect_os)" != "linux" ]]; then
     return 0
-  fi
-  if is_omarchy || command -v fcitx5 >/dev/null 2>&1; then
-    if [[ -f "${FCITX5_CONFIG_DIR}/conf/keyboard.conf" ]] \
-      && grep -q '^Hint Trigger=$' "${FCITX5_CONFIG_DIR}/conf/keyboard.conf" 2>/dev/null; then
-      log "  ok  fcitx5 keyboard.conf (hint triggers cleared)"
-    else
-      log "  missing  fcitx5 keyboard.conf hint trigger override"
-      missing=$((missing + 1))
-    fi
   fi
   if is_omarchy || has_hyprland; then
     if hypr_has_herdr_binding; then
@@ -23,7 +13,7 @@ doctor_omarchy_integration() {
       log "  optional  hypr SUPER+ALT+RETURN Herdr app binding (not configured)"
     fi
   fi
-  return "$missing"
+  return 0
 }
 
 # The bercail layout, its desk mod and its keys in the Herdr app's home.

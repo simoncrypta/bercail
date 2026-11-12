@@ -502,6 +502,12 @@ deploy_finalize_permissions() {
   # list, the other libs they loaded, and remaining steps still belong to the
   # old release.
   detach_running_bercail
+  # An older updater resumes its Omarchy step after this returns. Load the new
+  # integration before it can overwrite keyboard.conf with the retired override.
+  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/omarchy.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${AGENTIC_DEV_SHARE_DIR}/lib/omarchy.sh"
+  fi
   deploy_install_file "config/pi/extensions/bercail-desk.ts" \
     "${AGENTIC_DEV_SHARE_DIR}/pi-extensions/bercail-desk.ts"
   deploy_install_file "lib/desk.sh" "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh"

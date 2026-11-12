@@ -48,8 +48,7 @@ patch_lua() {
 
 # Omarchy, with a bindings.conf whose SUPER+ALT+RETURN opens the herdr terminal.
 terminal_herdr_binding() {
-  mkdir -p "$HOME/.local/share/omarchy" "$HOME/.config/fcitx5/conf" "$HOME/.config/hypr"
-  printf '%s\n' 'Hint Trigger=' >"$HOME/.config/fcitx5/conf/keyboard.conf"
+  mkdir -p "$HOME/.local/share/omarchy" "$HOME/.config/hypr"
   printf '%s\n' 'bindd = SUPER ALT, RETURN, Herdr, exec, xdg-terminal-exec herdr' >"$HOME/.config/hypr/bindings.conf"
 }
 

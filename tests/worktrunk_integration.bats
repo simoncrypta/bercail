@@ -31,7 +31,6 @@ exit 0
   export AGENTIC_DEV_SHELL_DIR="$AGENTIC_DEV_CONFIG_DIR/shell"
   export AGENTIC_DEV_USER_CONFIG="$AGENTIC_DEV_CONFIG_DIR/config.toml"
   export WORKTRUNK_CONFIG_DIR="$XDG_CONFIG_HOME/worktrunk"
-  export FCITX5_CONFIG_DIR="$XDG_CONFIG_HOME/fcitx5"
   export LOCAL_BIN="$HOME/.local/bin"
   export YES=1
   export DRY_RUN=0

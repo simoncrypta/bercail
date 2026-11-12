@@ -75,7 +75,6 @@ Keys in the bercail layout:
   pane, Alt+1-9 tabs, Alt+H/J/K/L panes, Ctrl+Shift+? all keys
 
 Omarchy / Linux:
-  Clears fcitx5 Ctrl+Alt+H/J spell-hint hotkeys when fcitx5 is present
   Optionally patches Hyprland SUPER+ALT+RETURN to open (or focus) the Herdr app
 
 Install order:
@@ -125,7 +124,6 @@ Config:
   ~/.local/state/bercail/desk-sessions/       which session runs in which desk
   ~/.local/share/bercail/pi/                  bstack's Pi profile
   ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates
-  ~/.config/fcitx5/conf/keyboard.conf         Linux fcitx5 hint trigger override
 
 Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`, \`unit-testing\`):
   Installed to ~/.agents/skills/<id> (https://agentskills.io), with a link in

@@ -48,52 +48,6 @@ hypr_has_herdr_binding() {
   grep -q 'herdr-app' "$file" 2>/dev/null
 }
 
-omarchy_restart_fcitx5() {
-  if command -v omarchy >/dev/null 2>&1; then
-    info "restarting fcitx5 via omarchy restart xcompose"
-    omarchy restart xcompose 2>/dev/null && return 0
-    omarchy restart app fcitx5 --disable notificationitem 2>/dev/null && return 0
-  fi
-  if command -v omarchy-restart-app >/dev/null 2>&1; then
-    info "restarting fcitx5 via omarchy-restart-app"
-    omarchy-restart-app fcitx5 --disable notificationitem 2>/dev/null && return 0
-  fi
-  return 1
-}
-
-deploy_fcitx5_keyboard_conf() {
-  [[ "$(detect_os)" == "linux" ]] || return 0
-  if ! is_omarchy && ! command -v fcitx5 >/dev/null 2>&1; then
-    info "skipping fcitx5 (not installed)"
-    return 0
-  fi
-
-  deploy_install_file "config/fcitx5/conf/keyboard.conf" "${FCITX5_CONFIG_DIR}/conf/keyboard.conf"
-  restart_fcitx5
-}
-
-restart_fcitx5() {
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] restart fcitx5"
-    return 0
-  fi
-  if omarchy_restart_fcitx5; then
-    return 0
-  fi
-  if command -v fcitx5 >/dev/null 2>&1; then
-    info "restarting fcitx5"
-    pkill -x fcitx5 2>/dev/null || true
-    if command -v uwsm-app >/dev/null 2>&1; then
-      uwsm-app -- fcitx5 --disable notificationitem &
-    elif command -v systemctl >/dev/null 2>&1 \
-      && systemctl --user is-active fcitx5.service >/dev/null 2>&1; then
-      systemctl --user restart fcitx5.service
-    else
-      fcitx5 --disable notificationitem &
-    fi
-  fi
-}
-
 # Omarchy's default agent starts as pi, the desk's agent. A choice already
 # there stays unless bercail reconfigure runs.
 sync_omarchy_default_agent() {
@@ -201,8 +155,6 @@ deploy_omarchy_post_update_hook() {
 }
 
 deploy_omarchy_integration() {
-  deploy_fcitx5_keyboard_conf
-
   if is_omarchy || has_hyprland; then
     patch_hypr_herdr_binding
   fi

@@ -53,11 +53,18 @@ update_from() {
   git -C "$ROOT" archive "$tag" | tar -x -C "$box/src"
   in_home "$home" INSTALL_SRC="$box/src" bash "$box/src/bin/bercail" update >"$box/install.log" 2>&1 \
     || { cat "$box/install.log"; fail "$tag could not install itself"; }
+  # The old caller must pick up the new integration, not rewrite the input
+  # method using the override this tree no longer ships (even off an Omarchy host).
+  mkdir -p "$home/.local/share/omarchy" "$home/.config/fcitx5/conf"
+  printf 'Hint Trigger=Control+Alt+h\nCustom=keep me\n' >"$box/keyboard.conf"
+  cp "$box/keyboard.conf" "$home/.config/fcitx5/conf/keyboard.conf"
   # A clone install: the old CLI updates from its recorded source.
   printf '%s\n' "$ROOT" >"$home/.local/share/bercail/source-path"
   log="$box/update.log"
   in_home "$home" bash "$home/.local/bin/bercail" update >"$log" 2>&1 || rc=$?
   [[ "$rc" -eq 0 ]] || { cat "$log"; fail "$tag's bercail update exited $rc"; }
+  cmp -s "$box/keyboard.conf" "$home/.config/fcitx5/conf/keyboard.conf" \
+    || fail "$tag's updater changed the input-method config"
   if grep -E 'unbound variable|syntax error|command not found' "$log"; then
     fail "$tag's bercail update hit a shell error"
   fi

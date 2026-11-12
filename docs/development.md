@@ -55,8 +55,6 @@ The desk agent: [Pi](https://pi.dev) (mise). With bstack on, Pi 1.2.0+ and `npm:
 
 **Linux with a systemd user manager** (not Omarchy). The `bercail-desk-restore.service` user unit does the same.
 
-**Linux with fcitx5** (Omarchy included). fcitx5 `Ctrl+Alt+H/J` hint keys cleared.
-
 **Ubuntu.** mise first, else Homebrew if present, else apt (`git fzf jq curl`); worktrunk, beads, tuicr from upstream.
 
 **macOS.** mise first; Homebrew stays on PATH as fallback (`brew shellenv`, then mise shims prepended).
