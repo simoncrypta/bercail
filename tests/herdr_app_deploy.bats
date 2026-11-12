@@ -55,7 +55,7 @@ fresh_install() {
 recorded_keys_update() {
   fresh_install
   jq '.["layout:bercail"] += {"ctrl-shift-r": "old.review", "ctrl-shift-f": "old.files", "ctrl-alt-q": "old.dropped"}' \
-    "$ROOT/bercail/keys.json" >"$AGENTIC_DEV_SHARE_DIR/herdr-app/keys.json"
+    "$ROOT/bercail/keys.json" >"$BERCAIL_SHARE_DIR/herdr-app/keys.json"
   jq '.["layout:bercail"] += {"ctrl-shift-r": "old.review", "ctrl-shift-f": "my.files", "ctrl-alt-q": "old.dropped", "ctrl-shift-x": "mine.cmd"}
       | del(.["layout:bercail"]["ctrl-shift-s"])' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
   out="$(deploy_herdr_app 2>&1)"
@@ -91,7 +91,7 @@ app_edits_then_update() {
   jq -e '.["layout:bercail"] | (has("ctrl-shift-s") or has("ctrl-alt-q")) | not' "$APP/keys.json" >/dev/null \
     || fail "a key the person removed stays removed, and a key bercail dropped goes: $(section)"
   grep -q 'key ctrl-shift-f: yours is my.files' <<<"$out" || fail "update should warn about the kept key: $out"
-  cmp -s "$ROOT/bercail/keys.json" "$AGENTIC_DEV_SHARE_DIR/herdr-app/keys.json" || fail "update records the shipped keys"
+  cmp -s "$ROOT/bercail/keys.json" "$BERCAIL_SHARE_DIR/herdr-app/keys.json" || fail "update records the shipped keys"
   before="$(cat "$APP/keys.json")"
   deploy_herdr_app >/dev/null 2>&1
   [[ "$(cat "$APP/keys.json")" == "$before" ]] || fail "a second update must not change keys.json"
@@ -121,7 +121,7 @@ app_edits_then_update() {
 
 @test "a new shipped layout replaces the installed one" {
   app_edits_then_update
-  jq '.background = "old"' "$ROOT/bercail/layouts/bercail.json" >"$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
+  jq '.background = "old"' "$ROOT/bercail/layouts/bercail.json" >"$BERCAIL_SHARE_DIR/herdr-app/layouts/bercail.json"
   deploy_herdr_app >/dev/null
   cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "a new shipped layout must be installed"
 }
@@ -131,11 +131,11 @@ app_edits_then_update() {
 @test "a new shipped layout keeps the live desk blocks" {
   fresh_install
   jq 'walk(if type == "object" and .id == "panel" then .children[0] + {size: {px: 240}} else . end)' \
-    "$ROOT/bercail/layouts/bercail.json" >"$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
+    "$ROOT/bercail/layouts/bercail.json" >"$BERCAIL_SHARE_DIR/herdr-app/layouts/bercail.json"
   jq '(.. | objects | select(.id == "agent-stack")) |= (.children += [
         {id: "desk-t2x", type: "block", content: {terminal: "t2x"}, padding: [6, 6]},
         {id: "desk-t5p", type: "block", content: {terminal: "t5p"}, padding: [6, 6]}] | .active = "desk-t5p")' \
-    "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json" >"$APP/layouts/bercail.json"
+    "$BERCAIL_SHARE_DIR/herdr-app/layouts/bercail.json" >"$APP/layouts/bercail.json"
   deploy_herdr_app >/dev/null
   jq -e '[.. | objects | select(.id == "agent-stack")][0] | [.children[].id] == ["empty", "desk-t2x", "desk-t5p"]
       and .active == "desk-t5p" and .children[2].content.terminal == "t5p"' "$APP/layouts/bercail.json" >/dev/null \
@@ -144,7 +144,7 @@ app_edits_then_update() {
     || fail "the new layout's panel column must be installed"
   [[ "$(_herdr_app_layout_shape "$APP/layouts/bercail.json")" == "$(_herdr_app_layout_shape "$ROOT/bercail/layouts/bercail.json")" ]] \
     || fail "only the desk blocks may differ from the shipped layout"
-  cmp -s "$ROOT/bercail/layouts/bercail.json" "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json" \
+  cmp -s "$ROOT/bercail/layouts/bercail.json" "$BERCAIL_SHARE_DIR/herdr-app/layouts/bercail.json" \
     || fail "the record is the shipped layout, without the desks"
   deploy_herdr_app >/dev/null
   jq -e '.. | objects | select(.id == "desk-t5p")' "$APP/layouts/bercail.json" >/dev/null || fail "a second update must keep the desks"
@@ -154,7 +154,7 @@ app_edits_then_update() {
   fresh_install
   # bercail's layout as the app left it (desk and Shep blocks added, the space view
   # shown, columns resized) is adopted.
-  rm -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
+  rm -f "$BERCAIL_SHARE_DIR/herdr-app/layouts/bercail.json"
   jq '(.. | objects | select(.id == "agent-stack")) |= (.children += [{id: "desk-t9z", type: "block", content: {terminal: "t9z"}}] | .active = "desk-t9z")
     | (.. | objects | select(.id == "shep-stack")) |= (.children += [{id: "shep-t3", type: "block", content: {terminal: "t3"}}] | .active = "shep-t3")
     | (.. | objects | select(.id == "shep") | .hidden) = true | (.. | objects | select(.id == "work") | .hidden) = false
@@ -164,12 +164,12 @@ app_edits_then_update() {
   grep -q 'unchanged: .*bercail.json' <<<"$out" || fail "a runtime-only change should count as bercail's: $out"
   jq -e '.. | objects | select(.id == "desk-t9z") | .content.terminal == "t9z"' "$APP/layouts/bercail.json" >/dev/null \
     || fail "adopting must keep the app's values"
-  [[ -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json" ]] || fail "adopting records the shipped layout"
+  [[ -f "$BERCAIL_SHARE_DIR/herdr-app/layouts/bercail.json" ]] || fail "adopting records the shipped layout"
 }
 
 @test "an existing unowned layout is kept unless --force" {
   fresh_install
-  rm -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json"
+  rm -f "$BERCAIL_SHARE_DIR/herdr-app/layouts/bercail.json"
   printf '{"id":"mine"}\n' >"$APP/layouts/bercail.json"
   deploy_herdr_app >/dev/null
   jq -e '.id == "mine"' "$APP/layouts/bercail.json" >/dev/null || fail "an unowned bercail layout must be kept"
@@ -213,7 +213,7 @@ app_edits_then_update() {
   rm -rf "$APP"
   deploy_herdr_app >/dev/null
   jq '.global = {"ctrl-shift-t":"tab.new"}' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
-  uninstall_agentic_dev >/dev/null 2>&1
+  uninstall_bercail >/dev/null 2>&1
   [[ ! -e "$APP/layouts/bercail.json" && ! -e "$APP/mods/bercail-desk" && ! -e "$APP/mods/bercail-agents" && ! -e "$APP/mods/bercail-review"
     && ! -e "$APP/mods/bercail-shep" && ! -e "$APP/mods/bercail-spaces" ]] \
     || fail "uninstall leaves layout or mods"

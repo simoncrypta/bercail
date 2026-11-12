@@ -399,7 +399,7 @@ _desk_point_restore_unit() {
 
 # One way in per machine: Omarchy's post-boot hook, else a systemd user unit.
 deploy_desk_restore_boot() {
-  local staged="${AGENTIC_DEV_SHARE_DIR}/omarchy/bercail-desk-restore.hook"
+  local staged="${BERCAIL_SHARE_DIR}/omarchy/bercail-desk-restore.hook"
   if _desk_omarchy_hook; then
     deploy_install_file "config/omarchy/bercail-desk-restore.hook" "$staged"
     if [[ -f "$OMARCHY_POST_BOOT_HOOK" ]] && cmp -s "$staged" "$OMARCHY_POST_BOOT_HOOK"; then

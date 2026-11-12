@@ -18,8 +18,8 @@ setup() {
   source "$ROOT/lib/config.sh"
 
   export INSTALL_SRC="$ROOT"
-  export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/bercail"
-  export AGENTIC_DEV_USER_CONFIG="$AGENTIC_DEV_CONFIG_DIR/config.toml"
+  export BERCAIL_CONFIG_DIR="$XDG_CONFIG_HOME/bercail"
+  export BERCAIL_USER_CONFIG="$BERCAIL_CONFIG_DIR/config.toml"
   unset EDITOR
   YES=1
   DRY_RUN=0
@@ -39,8 +39,8 @@ assert_contains() {
 }
 
 install_config_reader() {
-  mkdir -p "$AGENTIC_DEV_CONFIG_DIR"
-  cp "$ROOT/config/agentic-dev/config-reader.sh" "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh"
+  mkdir -p "$BERCAIL_CONFIG_DIR"
+  cp "$ROOT/config/agentic-dev/config-reader.sh" "$BERCAIL_CONFIG_DIR/config-reader.sh"
 }
 
 # doctor_dependencies on a host with every tool but tuicr, and review = "hunk".
@@ -61,8 +61,8 @@ EOF
   out="$(
     HOME="$case_dir/home" \
       XDG_CONFIG_HOME="$case_dir/home/.config" \
-      AGENTIC_DEV_CONFIG_DIR="$case_dir/home/.config/bercail" \
-      AGENTIC_DEV_USER_CONFIG="$case_dir/home/.config/bercail/config.toml" \
+      BERCAIL_CONFIG_DIR="$case_dir/home/.config/bercail" \
+      BERCAIL_USER_CONFIG="$case_dir/home/.config/bercail/config.toml" \
       PATH="$case_dir/bin:/usr/bin:/bin" \
       doctor_dependencies 2>&1
   )" || rc=$?
@@ -92,7 +92,7 @@ EOF
   YES=1
   prompt_user_config
   assert_eq "tuicr" "$(read_layout_review)" "prompt_user_config writes the default review"
-  grep -q 'enabled = true' "$AGENTIC_DEV_USER_CONFIG" \
+  grep -q 'enabled = true' "$BERCAIL_USER_CONFIG" \
     || fail "prompt_user_config turns bstack on"
 }
 
@@ -127,14 +127,14 @@ EOF
 
 @test "migrate_hunk_review_to_tuicr rewrites hunk diff to tuicr" {
   install_config_reader
-  cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
+  cat >"$BERCAIL_USER_CONFIG" <<'EOF'
 [layout]
 review = "hunk diff"
 auto_review = false
 EOF
   migrate_hunk_review_to_tuicr
   assert_eq "tuicr" "$(read_layout_review)" "migrate_hunk_review_to_tuicr rewrites hunk diff"
-  grep -q 'review = "tuicr"' "$AGENTIC_DEV_USER_CONFIG" \
+  grep -q 'review = "tuicr"' "$BERCAIL_USER_CONFIG" \
     || fail "migrate_hunk_review_to_tuicr writes review = tuicr"
 }
 

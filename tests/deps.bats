@@ -74,7 +74,7 @@ top_level_doctor() {
     ln -s /bin/true "$case_dir/bin/$cmd"
   done
   if out="$(HOME="$case_dir/home" SHELL=/bin/bash \
-    PATH="$case_dir/bin:/usr/bin:/bin" AGENTIC_DEV_LIB="$ROOT/lib" \
+    PATH="$case_dir/bin:/usr/bin:/bin" \
     "$ROOT/bin/bercail" doctor 2>&1)"; then
     rc=0
   else

@@ -19,7 +19,7 @@ setup() {
   upsert_marker_block "$rc" bash >/dev/null
   upsert_marker_block "$rc" bash >/dev/null
   [[ "$(<"$rc")" == "$first" ]] || fail "amending must not change the file: $(cat -A "$rc")"
-  [[ "$(grep -c "$AGENTIC_DEV_MARKER_START" "$rc")" == 1 ]] || fail "one marker block"
+  [[ "$(grep -c "$BERCAIL_MARKER_START" "$rc")" == 1 ]] || fail "one marker block"
   head -1 "$rc" | grep -qx 'alias ll="ls -l"' || fail "the person's lines stay"
 }
 
@@ -30,5 +30,5 @@ setup() {
   if install_shell_integration >/dev/null; then rc_code=0; else rc_code=$?; fi
   [[ "$rc_code" -eq 0 ]] || fail "shell integration skipped a person's worktree-dev (rc=$rc_code)"
   grep -qx 'worktree-dev() { echo mine; }' "$rc" || fail "the person's worktree-dev was changed: $(<"$rc")"
-  grep -qF "$AGENTIC_DEV_MARKER_START" "$rc" || fail "the marker was not installed"
+  grep -qF "$BERCAIL_MARKER_START" "$rc" || fail "the marker was not installed"
 }

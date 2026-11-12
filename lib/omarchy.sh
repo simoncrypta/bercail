@@ -140,7 +140,7 @@ patch_hypr_herdr_binding() {
 # recorded clone and runs bercail update. Installed the supported way, under
 # one fixed name, so each update replaces it rather than adding another.
 deploy_omarchy_post_update_hook() {
-  local staged="${AGENTIC_DEV_SHARE_DIR}/omarchy/bercail.hook"
+  local staged="${BERCAIL_SHARE_DIR}/omarchy/bercail.hook"
   is_omarchy || return 0
   deploy_install_file "config/omarchy/bercail.hook" "$staged"
   if [[ -f "$OMARCHY_POST_UPDATE_HOOK" ]] && cmp -s "$staged" "$OMARCHY_POST_UPDATE_HOOK"; then

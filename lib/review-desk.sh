@@ -7,7 +7,7 @@
 
 # The reviewer's argv, into R_PI.
 _review_pi_argv() {
-  local file="${BSTACK_PI_DIR:-$AGENTIC_DEV_SHARE_DIR/pi}/review.json" arg
+  local file="${BSTACK_PI_DIR:-$BERCAIL_SHARE_DIR/pi}/review.json" arg
   [[ -r "$file" ]] || die "review-pr needs bstack's Pi profile ($file); run bercail bstack on"
   R_PI=()
   while IFS= read -r -d '' arg; do

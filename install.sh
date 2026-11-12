@@ -114,7 +114,7 @@ parse_install_args() {
 main() {
   parse_install_args "$@"
 
-  log "bercail v${AGENTIC_DEV_VERSION}"
+  log "bercail v${BERCAIL_VERSION}"
   info "platform: $(detect_platform) shell: $(detect_shell_name)"
   is_omarchy && info "omarchy detected"
   is_ubuntu && info "ubuntu detected"

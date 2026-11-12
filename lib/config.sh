@@ -61,15 +61,15 @@ _config_reader_path() {
     printf '%s' "$src/config/agentic-dev/config-reader.sh"
     return 0
   fi
-  if [[ -f "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh" ]]; then
-    printf '%s' "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh"
+  if [[ -f "$BERCAIL_CONFIG_DIR/config-reader.sh" ]]; then
+    printf '%s' "$BERCAIL_CONFIG_DIR/config-reader.sh"
     return 0
   fi
   return 1
 }
 
 ensure_config_reader() {
-  declare -F agentic_dev_layout_review >/dev/null 2>&1 && return 0
+  declare -F bercail_layout_review >/dev/null 2>&1 && return 0
   local reader
   reader="$(_config_reader_path)" || return 1
   # shellcheck source=/dev/null
@@ -78,8 +78,8 @@ ensure_config_reader() {
 
 read_layout_review() {
   ensure_config_reader || true
-  if declare -F agentic_dev_layout_review >/dev/null 2>&1; then
-    agentic_dev_layout_review
+  if declare -F bercail_layout_review >/dev/null 2>&1; then
+    bercail_layout_review
   else
     printf '%s' "tuicr"
   fi
@@ -105,7 +105,7 @@ HERDR_APP_KEYS_SECTION="layout:bercail"
 # layout.set), so the layout is copied only when missing or when bercail ships
 # a new one. The last shipped copy is kept to tell the two apart.
 _herdr_app_shipped_layout() {
-  printf '%s/herdr-app/%s' "$AGENTIC_DEV_SHARE_DIR" "$HERDR_APP_LAYOUT"
+  printf '%s/herdr-app/%s' "$BERCAIL_SHARE_DIR" "$HERDR_APP_LAYOUT"
 }
 
 # The layout without what the app changes at run time: the desks' and Shep's blocks
@@ -175,7 +175,7 @@ deploy_herdr_app_layout() {
 # only the keys still as bercail last shipped them. The last shipped section is kept
 # to tell the two apart; with none kept, the section is the person's own.
 _herdr_app_shipped_keys() {
-  printf '%s/herdr-app/keys.json' "$AGENTIC_DEV_SHARE_DIR"
+  printf '%s/herdr-app/keys.json' "$BERCAIL_SHARE_DIR"
 }
 
 # The section bercail ships now and the one it shipped last, compact, one per line.
@@ -274,17 +274,17 @@ deploy_herdr_app() {
 
 # No install-time picker. The desk runs Pi: bstack's lead when bstack is on.
 prompt_user_config() {
-  if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
-    info "using existing config: $AGENTIC_DEV_USER_CONFIG (review: $(read_layout_review))"
+  if [[ -f "$BERCAIL_USER_CONFIG" ]]; then
+    info "using existing config: $BERCAIL_USER_CONFIG (review: $(read_layout_review))"
     return 0
   fi
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would write default $AGENTIC_DEV_USER_CONFIG"
+    info "[dry-run] would write default $BERCAIL_USER_CONFIG"
     return 0
   fi
-  ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
-  default_user_config >"$AGENTIC_DEV_USER_CONFIG"
-  info "saved default config to $AGENTIC_DEV_USER_CONFIG"
+  ensure_dir "$BERCAIL_CONFIG_DIR"
+  default_user_config >"$BERCAIL_USER_CONFIG"
+  info "saved default config to $BERCAIL_USER_CONFIG"
 }
 
 deploy_tree() {
@@ -309,18 +309,18 @@ deploy_install_file() {
   fi
 }
 
-deploy_agentic_dev_config() {
+deploy_bercail_config() {
   local src file sub
   src="$(install_src_dir)"
   if [[ -d "$src" ]]; then
     while IFS= read -r -d '' file; do
       sub="${file#"$src/config/agentic-dev"/}"
       [[ "$sub" == "config.toml" ]] && continue
-      copy_file "$file" "$AGENTIC_DEV_CONFIG_DIR/$sub"
+      copy_file "$file" "$BERCAIL_CONFIG_DIR/$sub"
     done < <(find "$src/config/agentic-dev" -type f -print0 2>/dev/null)
   else
-    deploy_install_file "config/agentic-dev/config-reader.sh" "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh"
-    deploy_install_file "config/agentic-dev/config.toml.example" "$AGENTIC_DEV_CONFIG_DIR/config.toml.example"
+    deploy_install_file "config/agentic-dev/config-reader.sh" "$BERCAIL_CONFIG_DIR/config-reader.sh"
+    deploy_install_file "config/agentic-dev/config.toml.example" "$BERCAIL_CONFIG_DIR/config.toml.example"
   fi
 }
 
@@ -328,21 +328,21 @@ deploy_lib() {
   local src
   src="$(install_src_dir)"
   if [[ -d "$src" ]]; then
-    deploy_tree "$src/lib" "${AGENTIC_DEV_SHARE_DIR}/lib"
+    deploy_tree "$src/lib" "${BERCAIL_SHARE_DIR}/lib"
   else
     local libfile
     for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh bstack.sh desk.sh shep.sh shep-context.sh review.sh review-desk.sh stack.sh policy.sh; do
-      deploy_install_file "lib/$libfile" "${AGENTIC_DEV_SHARE_DIR}/lib/$libfile"
+      deploy_install_file "lib/$libfile" "${BERCAIL_SHARE_DIR}/lib/$libfile"
     done
   fi
   # Installed lib/ has no adjacent skills tree.
-  deploy_install_file "skills/handoff/scripts/git-backend.sh" "${AGENTIC_DEV_SHARE_DIR}/lib/git-backend.sh"
+  deploy_install_file "skills/handoff/scripts/git-backend.sh" "${BERCAIL_SHARE_DIR}/lib/git-backend.sh"
 }
 
 _recorded_install_source() {
   local src
-  [[ -f "$AGENTIC_DEV_SOURCE_PATH_FILE" ]] || return 1
-  src="$(<"$AGENTIC_DEV_SOURCE_PATH_FILE")"
+  [[ -f "$BERCAIL_SOURCE_PATH_FILE" ]] || return 1
+  src="$(<"$BERCAIL_SOURCE_PATH_FILE")"
   [[ -n "$src" && -d "$src" && -f "$src/install.sh" && -d "$src/config" ]] || return 1
   printf '%s' "$src"
 }
@@ -358,7 +358,7 @@ describe_install_source() {
     return 0
   fi
   if ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
-    info "source: $src (v${AGENTIC_DEV_VERSION})"
+    info "source: $src (v${BERCAIL_VERSION})"
     return 0
   fi
   branch="$(git -C "$src" symbolic-ref --quiet --short HEAD 2>/dev/null || printf 'detached')"
@@ -366,7 +366,7 @@ describe_install_source() {
   tag="$(git -C "$src" describe --tags --exact-match HEAD 2>/dev/null || true)"
   info "source: $src ($branch @ $sha${tag:+, $tag})"
   if [[ -z "$tag" && "$branch" != master && "$branch" != main ]]; then
-    warn "installing from branch '$branch', not master or a release tag: this is a dev build of v${AGENTIC_DEV_VERSION} (git -C $src switch master to go back)"
+    warn "installing from branch '$branch', not master or a release tag: this is a dev build of v${BERCAIL_VERSION} (git -C $src switch master to go back)"
   fi
 }
 
@@ -374,18 +374,18 @@ record_install_source() {
   local src
   src="$(install_src_dir)"
   [[ -d "$src" && -f "$src/install.sh" && -d "$src/config" ]] || return 0
-  ensure_dir "$AGENTIC_DEV_SHARE_DIR"
+  ensure_dir "$BERCAIL_SHARE_DIR"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     info "[dry-run] would record install source $src"
     return 0
   fi
-  printf '%s\n' "$src" >"$AGENTIC_DEV_SOURCE_PATH_FILE"
+  printf '%s\n' "$src" >"$BERCAIL_SOURCE_PATH_FILE"
   info "recorded install source: $src"
 }
 
 # Default review tool is tuicr. Leave a custom hunk command (extra flags) alone.
 migrate_hunk_review_to_tuicr() {
-  local dest="$AGENTIC_DEV_USER_CONFIG" tmp
+  local dest="$BERCAIL_USER_CONFIG" tmp
   [[ -f "$dest" ]] || return 0
   grep -qE '^[[:space:]]*review[[:space:]]*=[[:space:]]*"(hunk|hunk diff)"[[:space:]]*$' "$dest" || return 0
   if [[ "$DRY_RUN" -eq 1 ]]; then
@@ -483,29 +483,29 @@ remove_agentic_dev_shim() {
 # A checksum of the installed CLI when it is the one running, else nothing: a
 # clone's bin/bercail and install.sh run the tree they deploy.
 _running_install_sum() {
-  [[ "$(script_dir)" -ef "${AGENTIC_DEV_SHARE_DIR}/lib" ]] || return 0
-  { cat "$LOCAL_BIN/bercail" "${AGENTIC_DEV_SHARE_DIR}/lib"/*.sh 2>/dev/null || true; } | cksum
+  [[ "$(script_dir)" -ef "${BERCAIL_SHARE_DIR}/lib" ]] || return 0
+  { cat "$LOCAL_BIN/bercail" "${BERCAIL_SHARE_DIR}/lib"/*.sh 2>/dev/null || true; } | cksum
 }
 
 deploy_finalize_permissions() {
   detach_running_bercail
   deploy_install_file "config/pi/extensions/bercail-desk.ts" \
-    "${AGENTIC_DEV_SHARE_DIR}/pi-extensions/bercail-desk.ts"
+    "${BERCAIL_SHARE_DIR}/pi-extensions/bercail-desk.ts"
   deploy_desk_restore
   run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/bercail-desk-agent" \
     "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
-    "$AGENTIC_DEV_SHELL_DIR/bercail.sh" \
-    "$AGENTIC_DEV_SHELL_DIR/bercail.zsh" \
-    "$AGENTIC_DEV_SHELL_DIR/bercail.inc.sh" \
-    "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh" 2>/dev/null || true
-  find "${AGENTIC_DEV_SHARE_DIR}/lib" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+    "$BERCAIL_SHELL_DIR/bercail.sh" \
+    "$BERCAIL_SHELL_DIR/bercail.zsh" \
+    "$BERCAIL_SHELL_DIR/bercail.inc.sh" \
+    "$BERCAIL_CONFIG_DIR/config-reader.sh" 2>/dev/null || true
+  find "${BERCAIL_SHARE_DIR}/lib" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 }
 
 deploy_configs() {
   local -a files=(
-    "config/shell/bercail.inc.sh|${AGENTIC_DEV_SHELL_DIR}/bercail.inc.sh"
-    "config/bash/bercail.sh|${AGENTIC_DEV_SHELL_DIR}/bercail.sh"
-    "config/zsh/bercail.zsh|${AGENTIC_DEV_SHELL_DIR}/bercail.zsh"
+    "config/shell/bercail.inc.sh|${BERCAIL_SHELL_DIR}/bercail.inc.sh"
+    "config/bash/bercail.sh|${BERCAIL_SHELL_DIR}/bercail.sh"
+    "config/zsh/bercail.zsh|${BERCAIL_SHELL_DIR}/bercail.zsh"
     "config/worktrunk/herdr-layout.sh|${WORKTRUNK_CONFIG_DIR}/herdr-layout.sh"
     "bin/bercail|${LOCAL_BIN}/bercail"
     "bin/bercail-desk-agent|${LOCAL_BIN}/bercail-desk-agent"
@@ -518,10 +518,10 @@ deploy_configs() {
   migrate_state_dir
   remove_agentic_dev_shim
 
-  ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
-  ensure_dir "$AGENTIC_DEV_SHELL_DIR"
+  ensure_dir "$BERCAIL_CONFIG_DIR"
+  ensure_dir "$BERCAIL_SHELL_DIR"
   ensure_dir "$WORKTRUNK_CONFIG_DIR"
-  ensure_dir "$AGENTIC_DEV_SHARE_DIR"
+  ensure_dir "$BERCAIL_SHARE_DIR"
 
   running="$(_running_install_sum)"
   for entry in "${files[@]}"; do
@@ -539,13 +539,13 @@ deploy_configs() {
     fi
   done
 
-  deploy_agentic_dev_config
+  deploy_bercail_config
   deploy_lib
   # This update replaced the CLI that is running it: the new lib/config.sh
   # takes over as it loads (restart_update, at its top).
   if [[ "$(_running_install_sum)" != "$running" ]]; then
     # shellcheck source=/dev/null
-    source "${AGENTIC_DEV_SHARE_DIR}/lib/config.sh"
+    source "${BERCAIL_SHARE_DIR}/lib/config.sh"
   fi
   deploy_herdr_app
   deploy_skills

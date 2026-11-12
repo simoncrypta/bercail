@@ -3,7 +3,7 @@
 
 show_help() {
   cat <<EOF
-bercail v${AGENTIC_DEV_VERSION}
+bercail v${BERCAIL_VERSION}
 
 Install (recommended: mise + packslip, signed release):
   mise use -g packslip:github.com/simoncrypta/bercail && bercail install
@@ -139,14 +139,14 @@ EOF
 
 show_summary() {
   log ""
-  log "bercail installed (v${AGENTIC_DEV_VERSION})"
+  log "bercail installed (v${BERCAIL_VERSION})"
   log ""
   if declare -F bstack_enabled >/dev/null && bstack_enabled; then
     log "bstack: on. Log in to Claude, ChatGPT, or xAI: bercail bstack setup"
   fi
   log "Desk agent: pi (handoff stages: bstack, autopilot)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
-  log "Config: ${AGENTIC_DEV_USER_CONFIG}"
+  log "Config: ${BERCAIL_USER_CONFIG}"
   log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore,unit-testing}"
   log ""
   log "Try: dev"

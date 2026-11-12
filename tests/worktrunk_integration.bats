@@ -27,9 +27,9 @@ exit 0
   done
 
   export HERDR_APP_CONFIG_DIR="$XDG_CONFIG_HOME/herdr-app"
-  export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/bercail"
-  export AGENTIC_DEV_SHELL_DIR="$AGENTIC_DEV_CONFIG_DIR/shell"
-  export AGENTIC_DEV_USER_CONFIG="$AGENTIC_DEV_CONFIG_DIR/config.toml"
+  export BERCAIL_CONFIG_DIR="$XDG_CONFIG_HOME/bercail"
+  export BERCAIL_SHELL_DIR="$BERCAIL_CONFIG_DIR/shell"
+  export BERCAIL_USER_CONFIG="$BERCAIL_CONFIG_DIR/config.toml"
   export WORKTRUNK_CONFIG_DIR="$XDG_CONFIG_HOME/worktrunk"
   export LOCAL_BIN="$HOME/.local/bin"
   export YES=1

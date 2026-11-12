@@ -5,7 +5,7 @@
 PI_SKILLS_DIR="${HOME}/.pi/agent/skills"
 
 _skill_ids() {
-  printf '%s\n' "${AGENTIC_DEV_SKILL_IDS[@]}"
+  printf '%s\n' "${BERCAIL_SKILL_IDS[@]}"
 }
 
 _skill_link_is_ours() {

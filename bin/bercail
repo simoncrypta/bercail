@@ -25,13 +25,11 @@ bercail_mark_packaged() {
 }
 
 find_lib_dir() {
-  local bin dir
-  for dir in "${BERCAIL_LIB:-}" "${AGENTIC_DEV_LIB:-}"; do
-    if [[ -n "$dir" && -d "$dir" ]]; then
-      printf '%s' "$dir"
-      return 0
-    fi
-  done
+  local bin dir="${BERCAIL_LIB:-}"
+  if [[ -n "$dir" && -d "$dir" ]]; then
+    printf '%s' "$dir"
+    return 0
+  fi
   bin="$(bercail_bin_dir)"
   if [[ -f "$bin/../lib/common.sh" ]]; then
     printf '%s' "$(cd "$bin/../lib" && pwd)"
@@ -80,7 +78,7 @@ load_libs() {
 
 cmd_doctor() {
   local failures=0 shell_rc
-  log "bercail doctor (v${AGENTIC_DEV_VERSION})"
+  log "bercail doctor (v${BERCAIL_VERSION})"
   log ""
   log "Platform: $(detect_platform)"
   log ""
@@ -95,10 +93,10 @@ cmd_doctor() {
     log "  missing  marker block in $shell_rc"
     failures=1
   fi
-  if [[ -f "$AGENTIC_DEV_USER_CONFIG" ]]; then
-    log "  ok  $AGENTIC_DEV_USER_CONFIG (review=$(read_layout_review))"
+  if [[ -f "$BERCAIL_USER_CONFIG" ]]; then
+    log "  ok  $BERCAIL_USER_CONFIG (review=$(read_layout_review))"
   else
-    log "  missing  $AGENTIC_DEV_USER_CONFIG"
+    log "  missing  $BERCAIL_USER_CONFIG"
     failures=1
   fi
   doctor_helper || failures=1
@@ -262,7 +260,7 @@ main() {
       ;;
     uninstall)
       load_libs
-      uninstall_agentic_dev
+      uninstall_bercail
       ;;
     *)
       usage

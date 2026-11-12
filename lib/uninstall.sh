@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-uninstall_agentic_dev() {
+uninstall_bercail() {
   local keys tmp mod keyboard
   info "uninstalling bercail..."
 
   remove_marker_block "$(shell_rc_for bash)"
   remove_marker_block "$(shell_rc_for zsh)"
 
-  if [[ -L "$LOCAL_BIN/bercail" && "$(readlink "$LOCAL_BIN/bercail")" != "$AGENTIC_DEV_SHARE_DIR"* ]]; then
+  if [[ -L "$LOCAL_BIN/bercail" && "$(readlink "$LOCAL_BIN/bercail")" != "$BERCAIL_SHARE_DIR"* ]]; then
     info "keeping $LOCAL_BIN/bercail (link from mise/packslip; remove it with that tool)"
   elif [[ -e "$LOCAL_BIN/bercail" ]]; then
     info "remove: $LOCAL_BIN/bercail"
@@ -26,20 +26,20 @@ uninstall_agentic_dev() {
     info "remove: $OMARCHY_POST_UPDATE_HOOK"
     run rm -f "$OMARCHY_POST_UPDATE_HOOK"
   fi
-  if [[ -d "$AGENTIC_DEV_SHARE_DIR" ]]; then
-    info "remove: $AGENTIC_DEV_SHARE_DIR"
-    run rm -rf "$AGENTIC_DEV_SHARE_DIR"
+  if [[ -d "$BERCAIL_SHARE_DIR" ]]; then
+    info "remove: $BERCAIL_SHARE_DIR"
+    run rm -rf "$BERCAIL_SHARE_DIR"
   fi
 
   if confirm "Remove ~/.config/bercail (includes config.toml)?"; then
-    if [[ -e "$AGENTIC_DEV_CONFIG_DIR" ]]; then
-      info "remove: $AGENTIC_DEV_CONFIG_DIR"
-      run rm -rf "$AGENTIC_DEV_CONFIG_DIR"
+    if [[ -e "$BERCAIL_CONFIG_DIR" ]]; then
+      info "remove: $BERCAIL_CONFIG_DIR"
+      run rm -rf "$BERCAIL_CONFIG_DIR"
     fi
   else
-    info "keeping user config: $AGENTIC_DEV_USER_CONFIG"
-    run rm -rf "$AGENTIC_DEV_SHELL_DIR"
-    run rm -f "$AGENTIC_DEV_CONFIG_DIR/config-reader.sh"
+    info "keeping user config: $BERCAIL_USER_CONFIG"
+    run rm -rf "$BERCAIL_SHELL_DIR"
+    run rm -f "$BERCAIL_CONFIG_DIR/config-reader.sh"
   fi
 
   if confirm "Remove the bercail Herdr layout, mods and keys?"; then

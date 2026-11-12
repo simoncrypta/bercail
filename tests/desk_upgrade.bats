@@ -21,9 +21,10 @@ setup() {
   printf '#!/bin/sh\nexit 0\n' >"$TOOLS/tuicr"
   chmod +x "$TOOLS/curl" "$TOOLS/tuicr"
 
-  new_version="$(sed -n 's/^AGENTIC_DEV_VERSION="${AGENTIC_DEV_VERSION:-\(.*\)}"$/\1/p' "$ROOT/lib/common.sh")"
-  mapfile -t new_skills < <(sed -n 's/^AGENTIC_DEV_SKILL_IDS=(\(.*\))$/\1/p' "$ROOT/lib/common.sh" | tr ' ' '\n')
-  ((${#new_skills[@]} > 1)) || fail "could not read AGENTIC_DEV_SKILL_IDS from lib/common.sh"
+  new_version="$(sed -n 's/^BERCAIL_VERSION="\(.*\)"$/\1/p' "$ROOT/lib/common.sh")"
+  [[ -n "$new_version" ]] || fail "could not read BERCAIL_VERSION from lib/common.sh"
+  mapfile -t new_skills < <(sed -n 's/^BERCAIL_SKILL_IDS=(\(.*\))$/\1/p' "$ROOT/lib/common.sh" | tr ' ' '\n')
+  ((${#new_skills[@]} > 1)) || fail "could not read BERCAIL_SKILL_IDS from lib/common.sh"
 }
 
 # The newest v* tag: the updater most users run next.
@@ -127,7 +128,7 @@ EOF
 
 assert_this_tree() {
   local tag="$1" skill
-  grep -qF "AGENTIC_DEV_VERSION:-$new_version}" "$home/.local/share/bercail/lib/common.sh" \
+  grep -qx "BERCAIL_VERSION=\"$new_version\"" "$home/.local/share/bercail/lib/common.sh" \
     || fail "$tag: the installed libs are not this tree's"
   cmp -s "$ROOT/bin/bercail" "$home/.local/bin/bercail" || fail "$tag: bin/bercail is not this tree's"
   [[ -x "$home/.local/bin/bercail" ]] || fail "$tag: bin/bercail is not executable"

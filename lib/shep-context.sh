@@ -389,7 +389,7 @@ shep_context_write() {
 
 # The model id Shep runs on, from bstack's lead (provider/id, no thinking level).
 _shep_lead_model() {
-  local lead="${BSTACK_PI_DIR:-${AGENTIC_DEV_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json" model
+  local lead="${BSTACK_PI_DIR:-${BERCAIL_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json" model
   [[ -r "$lead" ]] || return 0
   model="$(jq -r 'index("--model") as $i | if $i then .[$i + 1] else empty end' "$lead" 2>/dev/null || true)"
   printf '%s' "$model" | sed -E 's/:(off|minimal|low|medium|high|xhigh|max)$//'
@@ -406,7 +406,7 @@ _shep_model_window() {
   while IFS= read -r ext; do
     [[ -n "$ext" ]] && argv+=(-e "$ext")
   done < <(jq -r '. as $a | range(0; length) | select($a[.] == "-e") | $a[. + 1]' \
-    "${BSTACK_PI_DIR:-${AGENTIC_DEV_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json" 2>/dev/null || true)
+    "${BSTACK_PI_DIR:-${BERCAIL_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json" 2>/dev/null || true)
   (cd "$(shep_state_dir)" 2>/dev/null || cd /; env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN \
     "${argv[@]}" </dev/null 2>/dev/null) | awk -v p="$provider" -v m="$id" '
     $1 == p && $2 == m {

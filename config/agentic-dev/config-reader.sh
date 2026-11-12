@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # Read ~/.config/bercail/config.toml.
 
-agentic_dev_layout_review() {
+bercail_layout_review() {
   local config="${HOME}/.config/bercail/config.toml" review="tuicr"
   if [[ -r "$config" ]]; then
     local from_config

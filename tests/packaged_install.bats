@@ -18,7 +18,7 @@ run_bercail() {
   local home="$1"
   shift
   HOME="$home" PATH="$home/.local/bin:/usr/bin:/bin" \
-    BERCAIL_LIB="" AGENTIC_DEV_LIB="" BERCAIL_PACKAGED="" \
+    BERCAIL_LIB="" BERCAIL_PACKAGED="" \
     bercail "$@"
 }
 
@@ -62,7 +62,7 @@ run_bercail() {
   local home="$BATS_TEST_TMPDIR/home-clone" out
   mkdir -p "$home/.local/bin"
   rm -f "$STAGE/.bercail-package"
-  out="$(HOME="$home" PATH="/usr/bin:/bin" BERCAIL_LIB="" AGENTIC_DEV_LIB="" BERCAIL_PACKAGED="" \
+  out="$(HOME="$home" PATH="/usr/bin:/bin" BERCAIL_LIB="" BERCAIL_PACKAGED="" \
     "$STAGE/bin/bercail" dry-run 2>&1 || true)"
   grep -qF "cp $STAGE/bin/bercail -> $home/.local/bin/bercail" <<<"$out" \
     || fail "a clone or curl install should still copy bercail: $out"

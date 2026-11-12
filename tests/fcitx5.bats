@@ -39,7 +39,7 @@ uninstall_yes() {
     bash -c 'source "$ROOT/lib/common.sh"; source "$ROOT/lib/detect.sh";
       source "$ROOT/lib/config.sh"; source "$ROOT/lib/shell-rc.sh";
       source "$ROOT/lib/skills.sh"; source "$ROOT/lib/uninstall.sh";
-      YES=1; uninstall_agentic_dev'
+      YES=1; uninstall_bercail'
 }
 
 @test "update preserves the keyboard config and never restarts the input method" {

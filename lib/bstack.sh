@@ -7,12 +7,12 @@
 BSTACK_MARKER="managed by bercail (bstack)"
 # Paths below expand at source time. Same default as lib/common.sh: an unset
 # share dir would otherwise become /pi/...
-: "${AGENTIC_DEV_SHARE_DIR:=${HOME}/.local/share/bercail}"
+: "${BERCAIL_SHARE_DIR:=${HOME}/.local/share/bercail}"
 BSTACK_FAMILIES=(claude gpt grok)
 BSTACK_ROLES=(lead build judge)
 # The Pi profile lives in bercail's share dir: Pi's own files stay the person's,
 # and every launch names this dir with flags.
-BSTACK_PI_DIR="${AGENTIC_DEV_SHARE_DIR}/pi"
+BSTACK_PI_DIR="${BERCAIL_SHARE_DIR}/pi"
 BSTACK_PI_TEMPLATES="${XDG_CONFIG_HOME:-$HOME/.config}/herdr-core/templates"
 BSTACK_PI_BRIDGE="npm:pi-claude-bridge@0.11.0"
 # Claude Code refuses a prompt within min(max output, 20k) + 3k tokens of the
@@ -29,7 +29,7 @@ BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge
 # Value of KEY in [SECTION], unquoted. A quoted value keeps its '#' (model
 # variants like claude-bridge/claude-opus-5-5#high); a bare one loses a trailing comment.
 _bstack_toml_get() {
-  local section="$1" key="$2" file="${3:-$AGENTIC_DEV_USER_CONFIG}"
+  local section="$1" key="$2" file="${3:-$BERCAIL_USER_CONFIG}"
   [[ -f "$file" ]] || return 0
   awk -v want="[$section]" -v key="$key" '
     /^[[:space:]]*\[/ { sec = $0; gsub(/[[:space:]]/, "", sec); next }
@@ -48,7 +48,7 @@ _bstack_toml_get() {
 # Set KEY in [SECTION] to RAW (written as is: quote strings yourself). Adds the
 # key at the end of the section, or the section at the end of the file.
 _bstack_toml_set() {
-  local section="$1" key="$2" raw="$3" file="${4:-$AGENTIC_DEV_USER_CONFIG}" tmp
+  local section="$1" key="$2" raw="$3" file="${4:-$BERCAIL_USER_CONFIG}" tmp
   if [[ "$DRY_RUN" -eq 1 ]]; then
     info "[dry-run] would set [$section] $key = $raw in $file"
     return 0
@@ -309,7 +309,7 @@ _bstack_pi_argv() {
   BSTACK_PI_ARGV+=(--prompt-template "$BSTACK_PI_DIR/prompts"
     --append-system-prompt "$BSTACK_PI_DIR/instructions.md")
   [[ -z "$brief" ]] || BSTACK_PI_ARGV+=(--append-system-prompt "$BSTACK_PI_DIR/agents/$brief.md")
-  for id in "${AGENTIC_DEV_SKILL_IDS[@]}"; do
+  for id in "${BERCAIL_SKILL_IDS[@]}"; do
     BSTACK_PI_ARGV+=(--skill "$(skill_canonical_dir "$id")")
   done
 }
@@ -504,7 +504,7 @@ bstack_status() {
     model="$(bstack_resolve_model "$family")"
     [[ -z "$model" ]] || log "    council ($family) = $(_bstack_pi_model_id "$model")"
   done
-  log "  config: [bstack] in $AGENTIC_DEV_USER_CONFIG (auto picks the newest model; set claude/gpt/grok to pin a Pi id)"
+  log "  config: [bstack] in $BERCAIL_USER_CONFIG (auto picks the newest model; set claude/gpt/grok to pin a Pi id)"
 }
 
 # Guided: install Pi and the bridge, then render the agents. Models are picked

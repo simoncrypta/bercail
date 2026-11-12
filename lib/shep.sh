@@ -19,7 +19,7 @@ shep_state_dir() {
 }
 
 shep_share_dir() {
-  printf '%s/shep' "${AGENTIC_DEV_SHARE_DIR:-$HOME/.local/share/bercail}"
+  printf '%s/shep' "${BERCAIL_SHARE_DIR:-$HOME/.local/share/bercail}"
 }
 
 _shep_err() {
@@ -42,7 +42,7 @@ shep_inbox_dir() {
 # trusts the workspace, a folder only bercail writes, so Pi loads its
 # .pi/settings.json (Shep's compaction) without asking.
 shep_pi_argv() {
-  local lead="${BSTACK_PI_DIR:-${AGENTIC_DEV_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json"
+  local lead="${BSTACK_PI_DIR:-${BERCAIL_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json"
   local share state id model ext rollover=0
   share="$(shep_share_dir)"
   state="$(shep_state_dir)"
@@ -174,7 +174,7 @@ shep_bg() {
   [[ "$title" != *… ]] || stop=""
   prompt="Your job is beads issue $issue: $title$stop Run \`bd show $issue\` (read its comments too) and do exactly what it describes, then stop."
   cmd+=("$agent" --prompt "$prompt")
-  lead="${BSTACK_PI_DIR:-${AGENTIC_DEV_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json"
+  lead="${BSTACK_PI_DIR:-${BERCAIL_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json"
   if [[ -r "$lead" ]]; then
     while IFS= read -r -d '' out; do
       cmd+=("$out")

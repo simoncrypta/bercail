@@ -3,13 +3,13 @@
 # shellcheck disable=SC2034 # the constants below are read by the libs sourced after this file
 set -euo pipefail
 
-AGENTIC_DEV_VERSION="${AGENTIC_DEV_VERSION:-0.14.0}"
-AGENTIC_DEV_MARKER_START="# >>> bercail"
-AGENTIC_DEV_MARKER_END="# <<< bercail"
+BERCAIL_VERSION="0.14.0"
+BERCAIL_MARKER_START="# >>> bercail"
+BERCAIL_MARKER_END="# <<< bercail"
 
-AGENTIC_DEV_CONFIG_DIR="${HOME}/.config/bercail"
-AGENTIC_DEV_SHELL_DIR="${AGENTIC_DEV_CONFIG_DIR}/shell"
-AGENTIC_DEV_USER_CONFIG="${AGENTIC_DEV_CONFIG_DIR}/config.toml"
+BERCAIL_CONFIG_DIR="${HOME}/.config/bercail"
+BERCAIL_SHELL_DIR="${BERCAIL_CONFIG_DIR}/shell"
+BERCAIL_USER_CONFIG="${BERCAIL_CONFIG_DIR}/config.toml"
 HERDR_APP_CONFIG_DIR="${HERDR_APP_CONFIG_DIR:-${HOME}/.config/herdr-app}"
 WORKTRUNK_CONFIG_DIR="${HOME}/.config/worktrunk"
 OMARCHY_POST_UPDATE_HOOK="${HOME}/.config/omarchy/hooks/post-update.d/bercail.hook"
@@ -17,13 +17,13 @@ OMARCHY_POST_BOOT_HOOK="${HOME}/.config/omarchy/hooks/post-boot.d/bercail-desk-r
 LOCAL_BIN="${HOME}/.local/bin"
 # Canonical skill install per Agent Skills (https://agentskills.io): ~/.agents/skills.
 AGENTS_SKILLS_DIR="${HOME}/.agents/skills"
-AGENTIC_DEV_SKILL_IDS=(handoff review bstack council autopilot how why unslop desk-restore unit-testing)
+BERCAIL_SKILL_IDS=(handoff review bstack council autopilot how why unslop desk-restore unit-testing)
 
 skill_canonical_dir() {
   printf '%s/%s' "$AGENTS_SKILLS_DIR" "$1"
 }
-AGENTIC_DEV_SHARE_DIR="${HOME}/.local/share/bercail"
-AGENTIC_DEV_SOURCE_PATH_FILE="${AGENTIC_DEV_SHARE_DIR}/source-path"
+BERCAIL_SHARE_DIR="${HOME}/.local/share/bercail"
+BERCAIL_SOURCE_PATH_FILE="${BERCAIL_SHARE_DIR}/source-path"
 
 DRY_RUN=0
 YES=0
@@ -116,8 +116,8 @@ install_src_dir() {
   fi
   # The installed CLI (~/.local/share/bercail/lib) is not a tree: use the clone or
   # release it was installed from, so files it added are found before a release has them.
-  if [[ -f "$AGENTIC_DEV_SOURCE_PATH_FILE" ]]; then
-    dir="$(<"$AGENTIC_DEV_SOURCE_PATH_FILE")"
+  if [[ -f "$BERCAIL_SOURCE_PATH_FILE" ]]; then
+    dir="$(<"$BERCAIL_SOURCE_PATH_FILE")"
     if [[ -n "$dir" && -f "$dir/install.sh" && -d "$dir/config" ]]; then
       printf '%s' "$dir"
       return 0

@@ -110,8 +110,8 @@ reset_home() {
 }
 
 write_config() {
-  mkdir -p "$(dirname "$AGENTIC_DEV_USER_CONFIG")"
-  cat >"$AGENTIC_DEV_USER_CONFIG"
+  mkdir -p "$(dirname "$BERCAIL_USER_CONFIG")"
+  cat >"$BERCAIL_USER_CONFIG"
 }
 
 PI_DIR() { printf '%s' "$HOME/.local/share/bercail/pi"; }
@@ -162,7 +162,7 @@ EOF
   if grep -q -e '^\[bstack\]' -e '^\[agent\]' "$BATS_TEST_TMPDIR/off.toml"; then
     fail "--no-bstack writes no [bstack] and no [agent]"
   fi
-  if AGENTIC_DEV_USER_CONFIG="$BATS_TEST_TMPDIR/off.toml" bstack_enabled; then
+  if BERCAIL_USER_CONFIG="$BATS_TEST_TMPDIR/off.toml" bstack_enabled; then
     fail "--no-bstack is off"
   fi
 }
@@ -226,7 +226,7 @@ EOF
 
 @test "auto adds the [bstack] effort variant each model offers" {
   reset_home
-  mkdir -p "$(dirname "$AGENTIC_DEV_USER_CONFIG")"
+  mkdir -p "$(dirname "$BERCAIL_USER_CONFIG")"
   local m='xai/grok-4.7
 openai/gpt-6.1-sol
 claude-bridge/claude-opus-5-5'
@@ -236,25 +236,25 @@ xai'
   local BSTACK_VARIANTS='xai/grok-4.7 low,medium,high,xhigh
 openai/gpt-6.1-sol low,medium,high,xhigh,max
 claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
-  printf '[bstack]\n' >"$AGENTIC_DEV_USER_CONFIG"
+  printf '[bstack]\n' >"$BERCAIL_USER_CONFIG"
   assert_eq "openai/gpt-6.1-sol#high" "$(_bstack_pick_model gpt <<<"$m")" "high by default"
-  printf '[bstack]\neffort = "max"\n' >"$AGENTIC_DEV_USER_CONFIG"
+  printf '[bstack]\neffort = "max"\n' >"$BERCAIL_USER_CONFIG"
   assert_eq "xai/grok-4.7#xhigh" "$(_bstack_pick_model grok <<<"$m")" "grok has no max: the next level down"
   assert_eq "claude-bridge/claude-opus-5-5#max" "$(_bstack_pick_model claude <<<"$m")" "claude at max"
-  printf '[bstack]\neffort = "none"\n' >"$AGENTIC_DEV_USER_CONFIG"
+  printf '[bstack]\neffort = "none"\n' >"$BERCAIL_USER_CONFIG"
   assert_eq "openai/gpt-6.1-sol" "$(_bstack_pick_model gpt <<<"$m")" "none: the provider default"
 }
 
 @test "the installed CLI reads files from the tree it was installed from" {
   reset_home
   local clone="$BATS_TEST_TMPDIR/clone"
-  mkdir -p "$clone/config" "$(dirname "$AGENTIC_DEV_SOURCE_PATH_FILE")"
+  mkdir -p "$clone/config" "$(dirname "$BERCAIL_SOURCE_PATH_FILE")"
   touch "$clone/install.sh"
   mkdir -p "$BATS_TEST_TMPDIR/nowhere/lib"
-  printf '%s\n' "$clone" >"$AGENTIC_DEV_SOURCE_PATH_FILE"
+  printf '%s\n' "$clone" >"$BERCAIL_SOURCE_PATH_FILE"
   assert_eq "$clone" "$(script_dir() { printf '%s' "$BATS_TEST_TMPDIR/nowhere/lib"; }; INSTALL_SRC='' install_src_dir)" \
     "the installed CLI uses the recorded clone, not master"
-  rm -f "$AGENTIC_DEV_SOURCE_PATH_FILE"
+  rm -f "$BERCAIL_SOURCE_PATH_FILE"
   assert_eq "https://bercail.dev" "$(script_dir() { printf '%s' "$BATS_TEST_TMPDIR/nowhere/lib"; }; INSTALL_SRC='' install_src_dir)" \
     "no recorded source: remote"
 }
@@ -616,10 +616,10 @@ EOF
   grep -q 'Desk agent: pi (handoff stages: bstack, autopilot)' <<<"$out" || fail "summary desk and stages: $out"
 }
 
-@test "bstack paths default when AGENTIC_DEV_SHARE_DIR is unset" {
+@test "bstack paths default when BERCAIL_SHARE_DIR is unset" {
   local dir
   dir="$(
-    env -u AGENTIC_DEV_SHARE_DIR HOME="$HOME" bash --noprofile --norc -c \
+    env -u BERCAIL_SHARE_DIR HOME="$HOME" bash --noprofile --norc -c \
       'source "$1"; printf "%s" "$BSTACK_PI_DIR"' _ "$ROOT/lib/bstack.sh"
   )"
   assert_eq "$HOME/.local/share/bercail/pi" "$dir" "unset share dir is ~/.local/share/bercail/pi"

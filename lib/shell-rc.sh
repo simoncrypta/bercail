@@ -12,18 +12,18 @@ marker_block_content() {
   case "$shell_name" in
     zsh)
       cat <<EOF
-${AGENTIC_DEV_MARKER_START} v${AGENTIC_DEV_VERSION}
+${BERCAIL_MARKER_START} v${BERCAIL_VERSION}
 ${brew_env}export PATH="\$HOME/.local/share/mise/shims:\$HOME/.local/bin:\$PATH"
 source "\$HOME/.config/bercail/shell/bercail.zsh"
-${AGENTIC_DEV_MARKER_END}
+${BERCAIL_MARKER_END}
 EOF
       ;;
     bash|*)
       cat <<EOF
-${AGENTIC_DEV_MARKER_START} v${AGENTIC_DEV_VERSION}
+${BERCAIL_MARKER_START} v${BERCAIL_VERSION}
 ${brew_env}export PATH="\$HOME/.local/share/mise/shims:\$HOME/.local/bin:\$PATH"
 source "\$HOME/.config/bercail/shell/bercail.sh"
-${AGENTIC_DEV_MARKER_END}
+${BERCAIL_MARKER_END}
 EOF
       ;;
   esac
@@ -42,7 +42,7 @@ upsert_marker_block() {
       return 0
     fi
     tmp="$(mktemp)"
-    awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" '
+    awk -v start="$BERCAIL_MARKER_START" -v end="$BERCAIL_MARKER_END" '
       $0 ~ start { skip=1 }
       # Hold blank lines until more text follows, so the blank line written
       # before the block is not kept again on every amend.
@@ -73,7 +73,7 @@ remove_marker_block() {
   fi
   local tmp
   tmp="$(mktemp)"
-  awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" '
+  awk -v start="$BERCAIL_MARKER_START" -v end="$BERCAIL_MARKER_END" '
     $0 ~ start { skip=1; next }
     $0 ~ end { skip=0; next }
     !skip { print }

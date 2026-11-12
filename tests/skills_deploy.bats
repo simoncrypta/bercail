@@ -15,8 +15,8 @@ setup() {
   source "$ROOT/lib/skills.sh"
 
   export INSTALL_SRC="$ROOT"
-  export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/bercail"
-  export AGENTIC_DEV_USER_CONFIG="$AGENTIC_DEV_CONFIG_DIR/config.toml"
+  export BERCAIL_CONFIG_DIR="$XDG_CONFIG_HOME/bercail"
+  export BERCAIL_USER_CONFIG="$BERCAIL_CONFIG_DIR/config.toml"
   export AGENTS_SKILLS_DIR="$HOME/.agents/skills"
   YES=1
   DRY_RUN=0
@@ -65,7 +65,7 @@ setup() {
 
 @test "deploy_lib copies git-backend.sh next to the other libs" {
   deploy_lib >/dev/null
-  cmp -s "$ROOT/skills/handoff/scripts/git-backend.sh" "$AGENTIC_DEV_SHARE_DIR/lib/git-backend.sh" \
+  cmp -s "$ROOT/skills/handoff/scripts/git-backend.sh" "$BERCAIL_SHARE_DIR/lib/git-backend.sh" \
     || fail "installed lib/git-backend.sh must match the skill script"
   cmp -s "$ROOT/skills/handoff/scripts/git-backend.sh" "$ROOT/lib/git-backend.sh" \
     || fail "repo lib/git-backend.sh must be the skill script"

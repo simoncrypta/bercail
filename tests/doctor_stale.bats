@@ -21,9 +21,9 @@ setup() {
   YES=1
   DRY_RUN=0
 
-  mkdir -p "$AGENTIC_DEV_CONFIG_DIR" "$WORKTRUNK_CONFIG_DIR" "$AGENTS_SKILLS_DIR/handoff" \
-    "$AGENTS_SKILLS_DIR/review" "$AGENTIC_DEV_SHARE_DIR"
-  cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
+  mkdir -p "$BERCAIL_CONFIG_DIR" "$WORKTRUNK_CONFIG_DIR" "$AGENTS_SKILLS_DIR/handoff" \
+    "$AGENTS_SKILLS_DIR/review" "$BERCAIL_SHARE_DIR"
+  cat >"$BERCAIL_USER_CONFIG" <<'EOF'
 [layout]
 review = "tuicr"
 EOF
@@ -37,7 +37,7 @@ EOF
     cp "$ROOT/skills/$id/SKILL.md" "$AGENTS_SKILLS_DIR/$id/SKILL.md"
   done
   mkdir -p "$HOME/.pi/agent/skills"
-  for id in "${AGENTIC_DEV_SKILL_IDS[@]}"; do
+  for id in "${BERCAIL_SKILL_IDS[@]}"; do
     ln -s "$AGENTS_SKILLS_DIR/$id" "$HOME/.pi/agent/skills/$id"
   done
 
@@ -46,8 +46,8 @@ EOF
 
 @test "record_install_source writes the clone's path to source-path" {
   local assert_src
-  [[ -f "$AGENTIC_DEV_SOURCE_PATH_FILE" ]] || fail "source-path was not recorded"
-  assert_src="$(<"$AGENTIC_DEV_SOURCE_PATH_FILE")"
+  [[ -f "$BERCAIL_SOURCE_PATH_FILE" ]] || fail "source-path was not recorded"
+  assert_src="$(<"$BERCAIL_SOURCE_PATH_FILE")"
   [[ "$assert_src" == "$ROOT" ]] || fail "source-path: expected $ROOT got $assert_src"
 }
 
@@ -83,7 +83,7 @@ EOF
 
 @test "doctor checks installed files without requiring a recorded source" {
   local helper_out skill_out
-  rm -f "$AGENTIC_DEV_SOURCE_PATH_FILE"
+  rm -f "$BERCAIL_SOURCE_PATH_FILE"
   helper_out="$(doctor_helper)"
   [[ "$helper_out" == *'ok  herdr-layout.sh (not compared: installed from a release)'* ]] \
     || fail "release helper: $helper_out"
@@ -106,18 +106,18 @@ EOF
   done
   printf '#!/bin/sh\nexit 1\n' >"$tools/curl"
   chmod +x "$tools/curl"
-  printf '[bstack]\nenabled = false\n' >>"$AGENTIC_DEV_USER_CONFIG"
+  printf '[bstack]\nenabled = false\n' >>"$BERCAIL_USER_CONFIG"
   : >"$HOME/.config/hypr/bindings.conf"
   output="$(env -i HOME="$HOME" PATH="$tools" SHELL=/bin/bash INSTALL_SRC="$ROOT" \
     BERCAIL_NO_PROMPT=1 "$ROOT/bin/bercail" update 2>&1)" || fail "deploy: $output"
-  rm "$AGENTIC_DEV_SOURCE_PATH_FILE"
+  rm "$BERCAIL_SOURCE_PATH_FILE"
   output="$(env -i HOME="$HOME" PATH="$tools" SHELL=/bin/bash "$HOME/.local/bin/bercail" doctor 2>&1)" || rc=$?
   [[ "$rc" -eq 0 ]] || fail "doctor: $output"
   [[ "$output" == *'not compared: installed from a release'* ]] || fail "$output"
 }
 
 @test "doctor still fails missing files without a recorded source" {
-  rm -f "$AGENTIC_DEV_SOURCE_PATH_FILE" "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
+  rm -f "$BERCAIL_SOURCE_PATH_FILE" "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
     "$AGENTS_SKILLS_DIR/handoff/SKILL.md"
   local output rc=0
   output="$(doctor_helper)" || rc=$?

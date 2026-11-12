@@ -110,7 +110,7 @@ brew_shellenv_snippet() {
 has_marker_block() {
   local file="$1"
   [[ -f "$file" ]] || return 1
-  grep -qF "$AGENTIC_DEV_MARKER_START" "$file"
+  grep -qF "$BERCAIL_MARKER_START" "$file"
 }
 
 shell_rc_for() {
@@ -127,7 +127,7 @@ detect_conflicts() {
   [[ -f "$rc" ]] || return 0
   local conflicts=()
   if grep -q 'source.*herdr-layout\.sh' "$rc" \
-    && ! grep -qF "$AGENTIC_DEV_MARKER_START" "$rc"; then
+    && ! grep -qF "$BERCAIL_MARKER_START" "$rc"; then
     conflicts+=("existing herdr-layout.sh source outside the bercail marker block")
   fi
   if ((${#conflicts[@]} > 0)); then
