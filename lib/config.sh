@@ -450,12 +450,22 @@ migrate_state_dir() {
   fi
 }
 
+# v1 has no agentic-dev command. A v0.14.0 updater still copies the shim by
+# name (bin/agentic-dev stays in the repo for it), so take the installed one out.
+remove_agentic_dev_shim() {
+  local shim="$LOCAL_BIN/agentic-dev"
+  grep -qsx '# Compat shim. The CLI is bercail.' "$shim" || return 0
+  info "remove: $shim (the command is bercail)"
+  run rm -f "$shim"
+}
+
 deploy_finalize_permissions() {
   # Older update callers reload this library before finalizing, but their file
   # list, the other libs they loaded, and remaining steps still belong to the
   # old release.
   detach_running_bercail
   migrate_state_dir
+  remove_agentic_dev_shim
   # An older updater resumes its Omarchy step after this returns. Load the new
   # integration before it can overwrite keyboard.conf with the retired override.
   if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/omarchy.sh" ]]; then
@@ -478,7 +488,7 @@ deploy_finalize_permissions() {
     deploy_skill_tree unit-testing
     ensure_skill_symlink "$PI_SKILLS_DIR" unit-testing
   fi
-  run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/agentic-dev" "$LOCAL_BIN/bercail-desk-agent" \
+  run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/bercail-desk-agent" \
     "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.zsh" \
@@ -494,7 +504,6 @@ deploy_configs() {
     "config/zsh/bercail.zsh|${AGENTIC_DEV_SHELL_DIR}/bercail.zsh"
     "config/worktrunk/herdr-layout.sh|${WORKTRUNK_CONFIG_DIR}/herdr-layout.sh"
     "bin/bercail|${LOCAL_BIN}/bercail"
-    "bin/agentic-dev|${LOCAL_BIN}/agentic-dev"
     "bin/bercail-desk-agent|${LOCAL_BIN}/bercail-desk-agent"
   )
   local entry rel dest

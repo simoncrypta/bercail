@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 
 const installSh = await readFile(new URL("../install.sh", import.meta.url), "utf8");
-const github = new URL("../workers/setup-domain/src/github.js", import.meta.url).href;
+const github = new URL("../site/github.js", import.meta.url).href;
 let fresh = 0;
 const load = () => import(`${github}?${fresh++}`);
 
@@ -47,10 +47,10 @@ function noMaster(seen) {
   console.log("PASS: /install.sh comes from the latest release's tag, pinned to it");
 
   standIn("v0.13.0");
-  const lib = await fromGitHub(new URL("https://setup.simoncrypta.dev/lib/common.sh"));
+  const lib = await fromGitHub(new URL("https://bercail.dev/lib/common.sh"));
   assert.equal(await lib.text(), "# lib at v0.13.0\n");
   assert.equal(lib.headers.get("Content-Type"), "text/plain; charset=utf-8");
-  console.log("PASS: other paths (the legacy host) come from the same tag, unchanged");
+  console.log("PASS: other paths come from the same tag, unchanged");
 
   // A newer release replaces the tag; GitHub failing after that keeps the last one.
   standIn("v0.14.0");

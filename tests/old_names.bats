@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
-# migrate_state_dir: what an update does with ~/.local/state/agentic-dev, where
-# the handoff log lived before v1.
+# What an update does with the names bercail left behind at v1:
+# ~/.local/state/agentic-dev, where the handoff log lived, and the agentic-dev command.
 
-# shellcheck disable=SC2034 # DRY_RUN is read by the sourced libs.
+# shellcheck disable=SC2034 # DRY_RUN and LOCAL_BIN are read by the sourced libs.
 # The libs define their own run(), so these tests capture output by hand.
 
 setup() {
@@ -15,7 +15,8 @@ setup() {
   DRY_RUN=0
   OLD="$XDG_STATE_HOME/agentic-dev" NEW="$XDG_STATE_HOME/bercail"
   REPO="$BATS_TEST_TMPDIR/repo"
-  mkdir -p "$OLD" "$REPO" "$REPO.feat"
+  LOCAL_BIN="$HOME/.local/bin"
+  mkdir -p "$OLD" "$REPO" "$REPO.feat" "$LOCAL_BIN"
 }
 
 # A handoff record for PATH on BRANCH, as releases before v1 wrote it.
@@ -88,4 +89,16 @@ record() {
   record "$REPO.feat" feat a-1 >"$OLD/handoffs.jsonl"
   out="$(DRY_RUN=1 migrate_state_dir 2>&1)" || fail "the dry run failed: $out"
   [[ -f "$OLD/handoffs.jsonl" && ! -L "$OLD" && ! -e "$NEW/handoffs.jsonl" ]] || fail "a dry run changed the state dirs: $out"
+}
+
+@test "an update removes the agentic-dev command an older release installed" {
+  cp "$ROOT/bin/agentic-dev" "$LOCAL_BIN/agentic-dev"
+  remove_agentic_dev_shim >/dev/null
+  [[ ! -e "$LOCAL_BIN/agentic-dev" ]] || fail "the shim is still there"
+}
+
+@test "an update leaves a file named agentic-dev that is not bercail's" {
+  printf '#!/bin/sh\necho mine\n' >"$LOCAL_BIN/agentic-dev"
+  remove_agentic_dev_shim >/dev/null
+  [[ "$(sh "$LOCAL_BIN/agentic-dev")" == mine ]] || fail "someone else's agentic-dev was removed"
 }

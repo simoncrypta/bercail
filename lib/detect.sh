@@ -128,7 +128,7 @@ detect_conflicts() {
   local conflicts=()
   if grep -q 'source.*herdr-layout\.sh' "$rc" \
     && ! grep -qF "$AGENTIC_DEV_MARKER_START" "$rc"; then
-    conflicts+=("existing herdr-layout.sh source outside agentic-dev marker")
+    conflicts+=("existing herdr-layout.sh source outside the bercail marker block")
   fi
   if ((${#conflicts[@]} > 0)); then
     printf '%s\n' "${conflicts[@]}"

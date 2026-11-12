@@ -79,6 +79,7 @@ assert_this_tree() {
     || fail "$tag: the installed libs are not this tree's"
   cmp -s "$ROOT/bin/bercail" "$home/.local/bin/bercail" || fail "$tag: bin/bercail is not this tree's"
   [[ -x "$home/.local/bin/bercail" ]] || fail "$tag: bin/bercail is not executable"
+  [[ ! -e "$home/.local/bin/agentic-dev" ]] || fail "$tag: the agentic-dev command is still installed"
   [[ -f "$home/.local/share/bercail/lib/desk.sh" ]] || fail "$tag: lib/desk.sh missing"
   [[ -f "$home/.local/share/bercail/pi-extensions/bercail-desk.ts" ]] \
     || fail "$tag: the Pi desk extension is missing"

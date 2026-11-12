@@ -75,7 +75,7 @@ top_level_doctor() {
   done
   if out="$(HOME="$case_dir/home" SHELL=/bin/bash \
     PATH="$case_dir/bin:/usr/bin:/bin" AGENTIC_DEV_LIB="$ROOT/lib" \
-    "$ROOT/bin/agentic-dev" doctor 2>&1)"; then
+    "$ROOT/bin/bercail" doctor 2>&1)"; then
     rc=0
   else
     rc=$?

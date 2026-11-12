@@ -14,7 +14,7 @@ bash tests/run.sh --live      # the live proofs: real Pi, offline, with a stand-
 node_modules/.bin/bats -f 'regex' tests/x.bats   # the tests whose names match
 ./install.sh --help
 bin/bercail dry-run   # this checkout's CLI; a bare `bercail` runs the installed copy
-npm ci && npm run deploy   # deploy the setup.simoncrypta.dev Worker and the site (CI does this for a v* tag)
+npm ci && npm run deploy   # build and deploy bercail.dev (CI does this for a v* tag)
 npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the bercail.dev site locally
 ```
 
@@ -28,7 +28,7 @@ The tests are [bats-core](https://github.com/bats-core/bats-core) (pinned in `pa
 
 Use Node 26 for the Pi extension unit tests. The live proofs (`desk_session_pi`, `pi_guard`, `pi_fallback`, `review_pi`, `shep_pi`) run the extension in the installed Pi, offline, with a stand-in model, without sending a model prompt or changing your sessions. They are tagged `live`: `tests/run.sh` leaves them out and `tests/run.sh --live` runs only them. `real_pi` fails a test that is not tagged `live`.
 
-`site/` is bercail.dev: an Astro site served by the `bercail-site` Worker, which also serves `/install.sh` from the latest release's tag. `workers/setup-domain` keeps the legacy setup.simoncrypta.dev host alive for older installs. Both share `workers/setup-domain/src/github.js`.
+`site/` is bercail.dev: an Astro site served by the `bercail-site` Worker, which also serves `/install.sh` from the latest release's tag. The proxy is `site/github.js`.
 
 ## releasing
 

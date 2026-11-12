@@ -2,10 +2,8 @@
   "name": "bercail",
   "private": true,
   "scripts": {
-    "deploy": "npm run deploy:domain && npm run deploy:site",
-    "deploy:domain": "wrangler deploy --config workers/setup-domain/wrangler.jsonc",
     "build:site": "astro build --root site",
-    "deploy:site": "npm run build:site && wrangler deploy --config site/wrangler.jsonc"
+    "deploy": "npm run build:site && wrangler deploy --config site/wrangler.jsonc"
   },
   "devDependencies": {
     "astro": "^7.4.4",

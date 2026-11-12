@@ -61,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/v0.14.0/install
 bercail update
 ```
 
-The first update to v1 moves `~/.local/state/agentic-dev` (the handoff log) into `~/.local/state/bercail` and leaves a link at the old path, which you can delete once nothing of yours reads it. Handoff records whose worktree and repo are both gone are dropped in the move.
+The first update to v1 removes the `agentic-dev` command (it is `bercail`), moves `~/.local/state/agentic-dev` (the handoff log) into `~/.local/state/bercail`, and leaves a link at the old path, which you can delete once nothing of yours reads it. Handoff records whose worktree and repo are both gone are dropped in the move.
 
 Nothing stops an older release's `bercail update` from going straight to this one: it copies the new files with its own code. That path is not tested, and the steps that carried older installs forward (the `agentic-dev` directories and shell markers, the 0.9 keys, old worktrunk config lines) are gone. From 0.8 (the Herdr terminal and its layout plugin), the full install above also adds the Herdr app. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them.
 

@@ -1,4 +1,4 @@
-import { fromGitHub } from "../workers/setup-domain/src/github.js";
+import { fromGitHub } from "./github.js";
 
 export default {
   async fetch(request, env) {

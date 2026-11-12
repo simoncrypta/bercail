@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # Compat shim. The CLI is bercail.
+# v1 does not install this. It stays in the repo because a v0.14.0 `bercail
+# update` copies it by name and stops if it is missing; the new tree then
+# removes the installed copy (remove_agentic_dev_shim). Delete it once the
+# oldest release that can update here no longer lists it.
 set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -x "$here/bercail" ]]; then
