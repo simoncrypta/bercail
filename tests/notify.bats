@@ -255,8 +255,8 @@ EOF
   local out
   { event working; event done; } | CURL_CODE=401 notify_follow 2>/dev/null
   out="$(notify_status)"
-  printf '%s' "$out" | grep -q 'auth_failed=true' || fail "status: $out"
-  if printf '%s' "$out" | grep -q 'secret-key\|example.invalid'; then fail "status leaks: $out"; fi
+  grep -q 'auth_failed=true' <<<"$out" || fail "status: $out"
+  if grep -q 'secret-key\|example.invalid' <<<"$out"; then fail "status leaks: $out"; fi
 }
 
 @test "notify test sends a kind=test payload" {
@@ -304,11 +304,11 @@ EOF
   jq -c '.last_ok_at = 1793314928 | .auth_failed = false' "$st" >"$st.new" && mv "$st.new" "$st"
   out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc" doctor_notify)" || fail "doctor_notify: $out"
   want="last post $(date -d @1793314928 '+%Y-%m-%d %H:%M' 2>/dev/null || date -r 1793314928 '+%Y-%m-%d %H:%M')"
-  printf '%s' "$out" | grep -q "ok  notify follower (hc terminal bercail-notify; $want)" || fail "doctor: $out"
-  if printf '%s' "$out" | grep -q 'secret-key\|example.invalid'; then fail "doctor leaks: $out"; fi
+  grep -q "ok  notify follower (hc terminal bercail-notify; $want)" <<<"$out" || fail "doctor: $out"
+  if grep -q 'secret-key\|example.invalid' <<<"$out"; then fail "doctor leaks: $out"; fi
   rm -f "$st"
   out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc" doctor_notify)" || fail "doctor_notify without state: $out"
-  printf '%s' "$out" | grep -q 'last post never' || fail "doctor never: $out"
+  grep -q 'last post never' <<<"$out" || fail "doctor never: $out"
 }
 
 @test "doctor flags a live follower that missed a desk finishing, or runs older code" {
@@ -326,7 +326,7 @@ EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/hc-desk"
   printf '{"pid":1,"started_at":%s}\n' "$((now - 600))" >"$(notify_follower_file)"
   if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-desk" doctor_notify)"; then fail "a deaf follower passed doctor: $out"; fi
-  printf '%s' "$out" | grep -q 'deaf  notify follower is live but missed desk t3s finishing or blocking' || fail "deaf: $out"
+  grep -q 'deaf  notify follower is live but missed desk t3s finishing or blocking' <<<"$out" || fail "deaf: $out"
   cat >"$BATS_TEST_TMPDIR/bin/hc-titled" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
@@ -346,18 +346,18 @@ EOF
   if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-titled" HC_STATUS_MS="$(( (now - 30) * 1000 ))" HC_ISSUE_TITLE='Show the title' doctor_notify)"; then
     fail "titled miss passed: $out"
   fi
-  printf '%s' "$out" | grep -q 'missed desk t3s (bercail-wb1: Show the title) finishing or blocking' || fail "titled deaf: $out"
+  grep -q 'missed desk t3s (bercail-wb1: Show the title) finishing or blocking' <<<"$out" || fail "titled deaf: $out"
   if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-titled" HC_STATUS_MS="$(( (now - 30) * 1000 ))" HC_ISSUE_TITLE='' doctor_notify)"; then
     fail "bare id miss passed: $out"
   fi
-  printf '%s' "$out" | grep -q 'missed desk t3s (bercail-wb1) finishing or blocking' || fail "bare id deaf: $out"
+  grep -q 'missed desk t3s (bercail-wb1) finishing or blocking' <<<"$out" || fail "bare id deaf: $out"
   printf '{"pid":1,"started_at":%s,"last_transition_at":%s}\n' "$((now - 600))" "$((now - 29))" >"$(notify_follower_file)"
   out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-desk" doctor_notify)" || fail "a follower that saw it: $out"
   printf '{"pid":1,"started_at":%s}\n' "$((now - 10))" >"$(notify_follower_file)"
   out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-desk" doctor_notify)" || fail "a finish before the follower started: $out"
   rm -f "$(notify_follower_file)"
   if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-desk" doctor_notify)"; then fail "an old follower passed doctor"; fi
-  printf '%s' "$out" | grep -q 'runs an older bercail' || fail "old follower: $out"
+  grep -q 'runs an older bercail' <<<"$out" || fail "old follower: $out"
 }
 
 @test "update restarts the live follower" {
@@ -372,11 +372,11 @@ EOF
   restarted_follower
   [[ "$(cat "$(notify_restart_file)")" =~ ^[0-9]+$ ]] || fail "restart not recorded"
   out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" doctor_notify)" || fail "doctor failed during the restart: $out"
-  printf '%s' "$out" | grep -q 'restarting  notify follower' || fail "restarting: $out"
-  if printf '%s' "$out" | grep -q 'missing  notify follower'; then fail "missing during the restart: $out"; fi
+  grep -q 'restarting  notify follower' <<<"$out" || fail "restarting: $out"
+  if grep -q 'missing  notify follower' <<<"$out"; then fail "missing during the restart: $out"; fi
   printf '%s\n' "$(( $(date +%s) - DOCTOR_NOTIFY_RESTART_WINDOW - 1 ))" >"$(notify_restart_file)"
   if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" doctor_notify)"; then fail "a gone follower passed doctor: $out"; fi
-  printf '%s' "$out" | grep -q 'missing  notify follower' || fail "missing after the window: $out"
+  grep -q 'missing  notify follower' <<<"$out" || fail "missing after the window: $out"
 }
 
 @test "invalid, future, and absent restart stamps do not hide a missing follower" {
@@ -421,8 +421,8 @@ EOF
   [[ "$(notify_sink_value "$added" notify)" == "finished, blocked" ]] || fail "notify default"
   grep -q 'Authorization: Bearer pasted-key' "$BATS_TEST_TMPDIR/headers.txt" || fail "add did not test with the key"
   if grep -q 'X-Automation-Key' "$BATS_TEST_TMPDIR/headers.txt"; then fail "--auth bearer sent the automation header"; fi
-  printf '%s' "$ADD_OUT" | grep -q 'bot-two HTTP 200' || fail "add output: $ADD_OUT"
-  if printf '%s' "$ADD_OUT" | grep -q pasted-key; then fail "add printed the key: $ADD_OUT"; fi
+  grep -q 'bot-two HTTP 200' <<<"$ADD_OUT" || fail "add output: $ADD_OUT"
+  if grep -q pasted-key <<<"$ADD_OUT"; then fail "add printed the key: $ADD_OUT"; fi
   notify_status | grep -q '^- bot-two ' || fail "status does not list bot-two"
   if ls -A "$XDG_CONFIG_HOME/bercail/notify.d" | grep -q '^\.'; then fail "temp file left behind"; fi
 }
@@ -434,15 +434,15 @@ EOF
   if out="$(cd "$BATS_TEST_TMPDIR" && printf 'https://example.invalid/other\nother-key\n' | notify_add bot-two 2>&1)"; then
     fail "replaced without --yes"
   fi
-  printf '%s' "$out" | grep -q 'url=https://example.invalid/\.\.\. key=set' || fail "redacted show: $out"
-  if printf '%s' "$out" | grep -q 'pasted-key\|/new'; then fail "existing values leaked: $out"; fi
+  grep -q 'url=https://example.invalid/\.\.\. key=set' <<<"$out" || fail "redacted show: $out"
+  if grep -q 'pasted-key\|/new' <<<"$out"; then fail "existing values leaked: $out"; fi
   [[ "$(notify_sink_value "$added" url)" == https://example.invalid/new ]] || fail "kept sink changed"
   if out="$(cd "$BATS_TEST_TMPDIR" && BERCAIL_NOTIFY_URL=https://example.invalid/env BERCAIL_NOTIFY_KEY=env-key \
     CURL_CODE=401 notify_add bot-two --yes </dev/null 2>&1)"; then
     fail "a 401 must fail add"
   fi
-  printf '%s' "$out" | grep -q 'key or auth mode is wrong' || fail "401 hint: $out"
-  if printf '%s' "$out" | grep -q 'env-key'; then fail "401 output leaked the key: $out"; fi
+  grep -q 'key or auth mode is wrong' <<<"$out" || fail "401 hint: $out"
+  if grep -q 'env-key' <<<"$out"; then fail "401 output leaked the key: $out"; fi
   [[ "$(notify_sink_value "$added" repos)" == "" ]] || fail "outside a checkout repos should be all"
 }
 

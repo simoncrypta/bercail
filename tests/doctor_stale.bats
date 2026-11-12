@@ -54,10 +54,10 @@ EOF
 @test "doctor reports ok when helper and skill match the clone" {
   local helper_out skill_out
   helper_out="$(doctor_helper)"
-  printf '%s\n' "$helper_out" | grep -q 'ok  herdr-layout.sh' \
+  grep -q 'ok  herdr-layout.sh' <<<"$helper_out" \
     || fail "matching helper should be ok: $helper_out"
   skill_out="$(doctor_skill)"
-  printf '%s\n' "$skill_out" | grep -q "ok  skill handoff" \
+  grep -q "ok  skill handoff" <<<"$skill_out" \
     || fail "matching skill should be ok: $skill_out"
 }
 
@@ -65,9 +65,9 @@ EOF
   local skill_out
   printf 'stale-skill\n' >"$AGENTIC_DEV_SKILL_DIR/SKILL.md"
   skill_out="$(doctor_skill)" || true
-  printf '%s\n' "$skill_out" | grep -q "stale  skill handoff" \
+  grep -q "stale  skill handoff" <<<"$skill_out" \
     || fail "mismatched skill should be stale: $skill_out"
-  printf '%s\n' "$skill_out" | grep -q "run ./install.sh from $ROOT" \
+  grep -q "run ./install.sh from $ROOT" <<<"$skill_out" \
     || fail "stale skill should name the clone: $skill_out"
 }
 
@@ -75,9 +75,9 @@ EOF
   local helper_out
   printf 'stale-helper\n' >"$WORKTRUNK_CONFIG_DIR/herdr-layout.sh"
   helper_out="$(doctor_helper)" || true
-  printf '%s\n' "$helper_out" | grep -q "stale  herdr-layout.sh" \
+  grep -q "stale  herdr-layout.sh" <<<"$helper_out" \
     || fail "mismatched helper should be stale: $helper_out"
-  printf '%s\n' "$helper_out" | grep -q "run ./install.sh from $ROOT" \
+  grep -q "run ./install.sh from $ROOT" <<<"$helper_out" \
     || fail "stale helper should name the clone: $helper_out"
 }
 
@@ -85,9 +85,9 @@ EOF
   local helper_out skill_out
   rm -f "$AGENTIC_DEV_SOURCE_PATH_FILE"
   helper_out="$(doctor_helper)" || true
-  printf '%s\n' "$helper_out" | grep -q 'unverified  herdr-layout.sh' \
+  grep -q 'unverified  herdr-layout.sh' <<<"$helper_out" \
     || fail "missing source-path should be unverified: $helper_out"
   skill_out="$(doctor_skill)" || true
-  printf '%s\n' "$skill_out" | grep -q 'unverified  skill handoff' \
+  grep -q 'unverified  skill handoff' <<<"$skill_out" \
     || fail "missing source-path should unverified skill: $skill_out"
 }

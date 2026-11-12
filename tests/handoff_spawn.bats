@@ -145,17 +145,17 @@ graphite_db_row() {
   export HANDOFF_SQLITE3_BIN="$BATS_TEST_TMPDIR/no-sqlite3"
   : >"$(git_dir "$repo")/.graphite_metadata.db"
   err="$(handoff_is_graphite "$repo" 2>&1)" && fail "an unreadable store is not evidence of Graphite: $err"
-  printf '%s' "$err" | grep -q '\[graphite\]' || fail "unreadable store should name the override: $err"
+  grep -q '\[graphite\]' <<<"$err" || fail "unreadable store should name the override: $err"
   unset HANDOFF_SQLITE3_BIN
   command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 not found; the store rows are untested"
   err="$(handoff_is_graphite "$repo" 2>&1)" && fail "an unknown schema is not evidence of Graphite: $err"
-  printf '%s' "$err" | grep -q '\[graphite\]' || fail "unknown schema should name the override: $err"
+  grep -q '\[graphite\]' <<<"$err" || fail "unknown schema should name the override: $err"
   rm -f "$(git_dir "$repo")/.graphite_metadata.db"
   graphite_db_row "$repo" master
   graphite_db_row "$repo" stray-branch
   err="$(handoff_is_graphite "$repo" 2>&1)" && fail "rows with no parent are only what auto-init saw: $err"
-  printf '%s' "$err" | grep -q 'tracks no branch' || fail "say why Graphite is off, and how to turn it on: $err"
-  printf '%s' "$err" | grep -q 'cannot read' && fail "a readable store is not unreadable: $err"
+  grep -q 'tracks no branch' <<<"$err" || fail "say why Graphite is off, and how to turn it on: $err"
+  grep -q 'cannot read' <<<"$err" && fail "a readable store is not unreadable: $err"
   graphite_db_row "$repo" feat master
   handoff_is_graphite "$repo" || fail "a branch with a parent is tracked: Graphite"
 }
@@ -501,11 +501,11 @@ EOF
   local rc=0 err flag out
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --branch foo --stage bstack 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "missing --issue should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q -- '--issue' || fail "missing --issue message: $err"
+  grep -q -- '--issue' <<<"$err" || fail "missing --issue message: $err"
   rc=0
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue '../etc' --dry-run 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "bad issue id should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q 'not a beads issue id' || fail "bad id message: $err"
+  grep -q 'not a beads issue id' <<<"$err" || fail "bad id message: $err"
   for flag in --stash-prompt --take-pending --plan; do
     rc=0
     "$ROOT/skills/handoff/scripts/handoff-spawn" --branch foo --stage bstack --issue bercail-0s1 "$flag" >/dev/null 2>&1 || rc=$?
@@ -528,7 +528,7 @@ EOF
   local rc=0 err
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --branch foo --stage bstack --issue bercail-0s1 --clean -- 'QA cedar-pg' 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "-- prompt should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q 'there is no prompt argument' \
+  grep -q 'there is no prompt argument' <<<"$err" \
     || fail "double-dash message: $err"
 }
 
@@ -555,9 +555,9 @@ EOF
   local rc=0 err
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue bercail-0s1 --base foo --dry-run 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "--base without --branch should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q -- '--base needs --branch' || fail "--base message: $err"
+  grep -q -- '--base needs --branch' <<<"$err" || fail "--base message: $err"
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --help 2>&1)" || true
-  printf '%s' "$err" | grep -q -- '--base BRANCH' || fail "--help should document --base"
+  grep -q -- '--base BRANCH' <<<"$err" || fail "--help should document --base"
 }
 
 @test "handoff intro does not open review via the review skill" {
@@ -813,7 +813,7 @@ STUB
   local rc=0 err
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --branch foo --issue "$ISSUE" 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "missing --stage should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q 'does not pick a stage' || fail "missing --stage message: $err"
+  grep -q 'does not pick a stage' <<<"$err" || fail "missing --stage message: $err"
   rc=0
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --issue "$ISSUE" --dry-run 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "headless without --stage should exit 1, got $rc ($err)"
@@ -821,20 +821,20 @@ STUB
   err="$(BERCAIL_CONFIG="$BATS_TEST_TMPDIR/no-config.toml" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage bstack --issue "$ISSUE" --clean --workspace w1 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "bstack off should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q 'needs bstack on' || fail "bstack off message: $err"
-  printf '%s' "$err" | grep -q 'wt ' && fail "must fail before wt: $err"
+  grep -q 'needs bstack on' <<<"$err" || fail "bstack off message: $err"
+  grep -q 'wt ' <<<"$err" && fail "must fail before wt: $err"
   rc=0
   printf '[bstack]\nenabled = true\n' >"$BATS_TEST_TMPDIR/bstack-on.toml"
   err="$(BERCAIL_CONFIG="$BATS_TEST_TMPDIR/bstack-on.toml" HANDOFF_PI_PROFILE="$BATS_TEST_TMPDIR/no-pi-profile" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage bstack --issue "$ISSUE" --clean 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "missing lead profile should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q 'lead profile is missing' || fail "missing profile message: $err"
-  printf '%s' "$err" | grep -q 'wt ' && fail "must fail before wt: $err"
+  grep -q 'lead profile is missing' <<<"$err" || fail "missing profile message: $err"
+  grep -q 'wt ' <<<"$err" && fail "must fail before wt: $err"
   rc=0
   err="$(BERCAIL_CONFIG="$BATS_TEST_TMPDIR/bstack-on.toml" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage autopilot --issue "$ISSUE" --clean 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "autopilot --branch should exit 1, got $rc ($err)"
-  printf '%s' "$err" | grep -q 'headless' || fail "autopilot --branch message: $err"
+  grep -q 'headless' <<<"$err" || fail "autopilot --branch message: $err"
   rc=0
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --binary pi --dry-run 2>&1)" || rc=$?
   [[ "$rc" -eq 2 ]] || fail "--binary should be gone (usage), got $rc ($err)"
@@ -860,7 +860,7 @@ STUB
   rc=0
   err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --resume ses_abc --dry-run 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "non-uuid resume should exit 1, got $rc"
-  printf '%s' "$err" | grep -q 'must be a uuid' || fail "resume message: $err"
+  grep -q 'must be a uuid' <<<"$err" || fail "resume message: $err"
   unset HANDOFF_PI_BIN
 }
 
@@ -930,8 +930,8 @@ esac"
     || fail "fallback must not fail: $err"
   [[ "$(tail -1 "$log")" == "--cwd $repo.feat track --parent master --no-interactive" ]] \
     || fail "should end on trunk; log=$(cat "$log")"
-  printf '%s' "$err" | grep -q 'parent-branch' || fail "warn that the parent was not used: $err"
-  printf '%s' "$err" | grep -qE '\[[0-9]+\]' && fail "job notices on stderr: $err"
+  grep -q 'parent-branch' <<<"$err" || fail "warn that the parent was not used: $err"
+  grep -qE '\[[0-9]+\]' <<<"$err" && fail "job notices on stderr: $err"
   if grep -q -- '--force' "$log"; then
     fail "--force must never run: $(cat "$log")"
   fi
@@ -949,7 +949,7 @@ esac"
   err="$(PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" parent-branch 2>&1)" || fail "must not fail: $err"
   grep -q ' track parent-branch ' "$log" && fail "re-tracking a tracked parent cuts it out of its stack: $(cat "$log")"
   grep -q ' track --parent master ' "$log" && fail "a stacked branch must not silently move to trunk: $(cat "$log")"
-  printf '%s' "$err" | grep -q 'gt track --parent parent-branch' || fail "warn with the real parent: $err"
+  grep -q 'gt track --parent parent-branch' <<<"$err" || fail "warn with the real parent: $err"
 }
 
 # A locked store fails every gt call, then clears: the repair must not run on that.
@@ -966,7 +966,7 @@ esac"
   err="$(PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" parent-branch 2>&1)" || fail "must not fail: $err"
   grep -q ' track parent-branch ' "$log" && fail "a failure that is not 'untracked' re-parented the base: $(cat "$log")"
   grep -q ' track --parent master ' "$log" && fail "a failure that is not 'untracked' moved the branch to trunk: $(cat "$log")"
-  printf '%s' "$err" | grep -q 'gt track --parent parent-branch' || fail "warn with the real parent: $err"
+  grep -q 'gt track --parent parent-branch' <<<"$err" || fail "warn with the real parent: $err"
 }
 
 @test "a child gt leaves behind cannot hold the pipes of the caller" {
@@ -990,7 +990,7 @@ esac"
     _fake_gt "$bin" "$log" "case \"\$args\" in *' parent --no-interactive '*) exit 1 ;; esac"
     err="$( (set -e; PATH="$bin:$PATH" HANDOFF_GT_TIMEOUT="$value" handoff_track_graphite "$repo.feat"; printf 'still-here\n') 2>&1)" \
       || fail "HANDOFF_GT_TIMEOUT=$value aborted: $err"
-    printf '%s' "$err" | grep -q 'still-here' || fail "HANDOFF_GT_TIMEOUT=$value: $err"
+    grep -q 'still-here' <<<"$err" || fail "HANDOFF_GT_TIMEOUT=$value: $err"
     grep -q ' track --parent master ' "$log" || fail "HANDOFF_GT_TIMEOUT=$value skipped gt: $(cat "$log")"
   done
 }
@@ -1001,8 +1001,8 @@ esac"
   _fake_gt "$bin" "$log" 'exit 1'
   err="$( (set -e; PATH="$bin:$PATH" handoff_track_graphite "$repo.feat" parent-branch; printf 'still-here\n') 2>&1)" || rc=$?
   [[ "$rc" -eq 0 ]] || fail "a failed gt must not abort: rc=$rc $err"
-  printf '%s' "$err" | grep -q 'still-here' || fail "must keep going: $err"
-  printf '%s' "$err" | grep -q 'gt track' || fail "must warn with what to run: $err"
+  grep -q 'still-here' <<<"$err" || fail "must keep going: $err"
+  grep -q 'gt track' <<<"$err" || fail "must warn with what to run: $err"
   if grep -q -- '--force' "$log"; then
     fail "--force must never run: $(cat "$log")"
   fi
@@ -1021,8 +1021,8 @@ esac"
     err="$(PATH="$bin:$PATH" HANDOFF_GT_TIMEOUT=1 handoff_track_graphite "$repo.feat" parent-branch 2>&1)" \
       || fail "a hung gt must not abort: $err"
     [[ $((SECONDS - start)) -lt 15 ]] || fail "hung gt held the spawn for $((SECONDS - start))s: $body"
-    printf '%s' "$err" | grep -q 'did not finish' || fail "must warn that gt hung: $err"
-    printf '%s' "$err" | grep -qE '\[[0-9]+\]' && fail "job notices on stderr: $err"
+    grep -q 'did not finish' <<<"$err" || fail "must warn that gt hung: $err"
+    grep -qE '\[[0-9]+\]' <<<"$err" && fail "job notices on stderr: $err"
     [[ "$(grep -c ' track ' "$log")" -le 1 ]] || fail "no more gt once one has hung: $(cat "$log")"
   done
 }
@@ -1044,9 +1044,9 @@ EOF
   # handoff_bounded: a regression here is a hang, so the suite must not wait on it.
   out="$(handoff_bounded 20 script -qec "bash $run" /dev/null </dev/null)" || rc=$?
   [[ "$rc" -eq 0 ]] || fail "a hung gt under a terminal held the spawn: rc=$rc $out"
-  printf '%s' "$out" | grep -q 'returned rc=0' || fail "should return 0: $out"
-  printf '%s' "$out" | grep -q 'did not finish' || fail "should warn: $out"
-  if printf '%s' "$out" | grep -qE '\[[0-9]+\]\+?[[:space:]]+(Done|Exit|Terminated|Killed)'; then
+  grep -q 'returned rc=0' <<<"$out" || fail "should return 0: $out"
+  grep -q 'did not finish' <<<"$out" || fail "should warn: $out"
+  if grep -qE '\[[0-9]+\]\+?[[:space:]]+(Done|Exit|Terminated|Killed)' <<<"$out"; then
     fail "job notices on stderr: $out"
   fi
 }
@@ -1143,7 +1143,7 @@ EOF
   _fake_gt "$bin" "$log" 'exit 0'
   err="$(PATH="$bin:$PATH" handoff_track_graphite "$repo" 2>&1)" || fail "must not fail: $err"
   [[ ! -s "$log" ]] || fail "gt auto-inits on any command; never run it here: $(cat "$log")"
-  printf '%s' "$err" | grep -q 'gt init' || fail "should say to run gt init: $err"
+  grep -q 'gt init' <<<"$err" || fail "should say to run gt init: $err"
 }
 
 # A whole --branch spawn with stubs for everything but git and the gt under test.
@@ -1305,7 +1305,7 @@ EOF
   local err
   err="$(PATH="$bin:$PATH" handoff_track_gh "$repo.feat" feat parent-branch 2>&1)" || fail "a middle parent must not fail the spawn: $err"
   [[ ! -s "$log" ]] || fail "a middle parent must not call gh stack: $(cat "$log")"
-  printf '%s' "$err" | grep -q 'not the top' || fail "say why it was not attached: $err"
+  grep -q 'not the top' <<<"$err" || fail "say why it was not attached: $err"
 }
 
 @test "gh stack add uses the parent worktree and does not switch main" {
@@ -1364,7 +1364,7 @@ EOF
   messy="$(printf 'say "hi" \\ path\n\tand')"
   got="$(BD_TITLE="$messy" handoff_issue_title "$wt" "$ISSUE")" || fail "messy title lookup failed"
   [[ "$got" == 'say "hi" \ path and' ]] || fail "normalised title: [$got]"
-  if printf '%s' "$got" | grep -q '[[:cntrl:]]'; then fail "title must be one line: [$got]"; fi
+  if grep -q '[[:cntrl:]]' <<<"$got"; then fail "title must be one line: [$got]"; fi
 
   err="$(HANDOFF_BD_BIN="$BATS_TEST_TMPDIR/no-such-bd" handoff_issue_title "$wt" "$ISSUE" 2>&1)" || fail "missing bd must not fail the lookup"
   [[ -z "$err" ]] || fail "missing bd should print nothing: $err"
@@ -1591,7 +1591,7 @@ _pi_profile() {
   rc=0
   err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --resume ses_abc --dry-run 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "ses_ resume should fail"
-  printf '%s' "$err" | grep -q 'must be a uuid' || fail "non-uuid resume message: $err"
+  grep -q 'must be a uuid' <<<"$err" || fail "non-uuid resume message: $err"
 
   export HANDOFF_PI_PROFILE="$BATS_TEST_TMPDIR/no-pi-profile"
   mkdir -p "$HANDOFF_PI_PROFILE"
@@ -1599,7 +1599,7 @@ _pi_profile() {
   rc=0
   err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --dry-run 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "missing lead.json should fail a dry run"
-  printf '%s' "$err" | grep -q 'bercail update' || fail "missing lead.json dry-run message: $err"
+  grep -q 'bercail update' <<<"$err" || fail "missing lead.json dry-run message: $err"
   [[ ! -e "$wt/.bercail/handoff-result.json" ]] || fail "a dry run writes no result file"
   rc=0
   err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" 2>&1)" || rc=$?

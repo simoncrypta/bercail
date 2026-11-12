@@ -22,3 +22,30 @@ setup() {
   leaked="$(compgen -e | grep -E '^(HC|HERDR|BERCAIL|BEADS|BD|HANDOFF)_' || true)"
   [[ -z "$leaked" ]] || fail "desk variables reached the test: $leaked"
 }
+
+# bats loses the watchdog's pid before a failed test's exit trap reads it;
+# isolate keeps it. Without that, under set -u (lib/common.sh) the failure
+# prints nothing, and a serial run waits out the whole BATS_TEST_TIMEOUT.
+@test "a failed test under set -u and a timeout still reports, and does not wait it out" {
+  local dir="$BATS_TEST_TMPDIR/nested" out mode start
+  mkdir -p "$dir"
+  cat >"$dir/fails.bats" <<FIXTURE
+setup() {
+  load "$ROOT/tests/test_helper"
+  isolate
+  set -u
+}
+@test "fails" {
+  false
+}
+FIXTURE
+  # Serial, then tests side by side (no GNU parallel needed within a file).
+  for mode in "" "--jobs 2 --no-parallelize-across-files"; do
+    start=$SECONDS
+    # shellcheck disable=SC2086 # mode is the flags, split on purpose
+    out="$(BATS_TEST_TIMEOUT=20 "$ROOT/node_modules/.bin/bats" $mode "$dir/fails.bats" 2>&1)" \
+      && fail "[$mode]: the failing test passed: $out"
+    grep -qx 'not ok 1 fails' <<<"$out" || fail "[$mode]: no failure reported: $out"
+    [[ $((SECONDS - start)) -lt 15 ]] || fail "[$mode]: waited out the timeout ($((SECONDS - start))s)"
+  done
+}

@@ -55,7 +55,7 @@ setup() {
   mkdir -p "$HOME/.pi/agent/skills/handoff"
   printf 'foreign\n' >"$HOME/.pi/agent/skills/handoff/SKILL.md"
   output="$(deploy_skills 2>&1)"
-  printf '%s\n' "$output" | grep -q 'preserving pre-existing skill path' \
+  grep -q 'preserving pre-existing skill path' <<<"$output" \
     || fail "expected preserve warning for foreign skill dir: $output"
   grep -qx 'foreign' "$HOME/.pi/agent/skills/handoff/SKILL.md" \
     || fail "foreign skill contents changed"

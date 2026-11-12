@@ -65,7 +65,7 @@ FAKE
 @test "publish-github posts a COMMENT review" {
   local out
   out="$("$SCRIPT" --repo "$BATS_TEST_TMPDIR")"
-  printf '%s' "$out" | grep -q 'published 1 user comment' || fail "post summary: $out"
+  grep -q 'published 1 user comment' <<<"$out" || fail "post summary: $out"
   jq -e '.event == "COMMENT"' "$BATS_TEST_TMPDIR/posted.json" >/dev/null || fail "posted event"
   jq -e '.comments[0].body == "rename this"' "$BATS_TEST_TMPDIR/posted.json" >/dev/null \
     || fail "posted body $(cat "$BATS_TEST_TMPDIR/posted.json")"

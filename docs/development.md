@@ -18,11 +18,13 @@ npm ci && npm run deploy   # deploy the setup.simoncrypta.dev Worker and the sit
 npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the bercail.dev site locally
 ```
 
-CI runs `tests/run.sh` on each push and PR. Each test runs under a 5-minute `BATS_TEST_TIMEOUT`, so one hung test fails itself instead of the whole job. It deploys the site and the Workers only for a `v*` tag, when `CLOUDFLARE_API_TOKEN` is set.
+CI runs `tests/run.sh` on each push and PR. Each test runs under a 5-minute `BATS_TEST_TIMEOUT`, so one hung test fails itself instead of the whole job. With [GNU parallel](https://www.gnu.org/software/parallel/) installed, `tests/run.sh` runs files and tests side by side, two jobs per core (`BATS_JOBS=N` sets the count); without it, one at a time. The live proofs always run one at a time. It deploys the site and the Workers only for a `v*` tag, when `CLOUDFLARE_API_TOKEN` is set.
 
 The first `bercail update` after a release still runs the previous release's code, which loads only some of the new libs. `tests/desk_upgrade.bats` installs v0.13.0 and the latest `v*` tag into a throwaway HOME and updates each from this tree, so it needs the release tags (`git fetch --tags`; CI checks out with full history).
 
 The tests are [bats-core](https://github.com/bats-core/bats-core) (pinned in `package.json`), one `@test` per case, each runnable alone; `skills/unit-testing` has the rules. A test file's `setup` calls `isolate` (`tests/test_helper.bash`), which gives every test its own `HOME`, with the `XDG_*` dirs and `TMPDIR` under it. `tests/setup_suite.bash` drops the desk's `HC_*`, Herdr, bercail and beads variables, sets `TZ=UTC` and `LC_ALL=C.UTF-8`, and shadows the desktop commands (`omarchy`, `hyprctl`, `fcitx5`, `notify-send`, ...) with stubs; the run fails if a test calls one. `tests/suite.bats` fails if a test file skips `isolate` or a desk variable reaches a test. `verify-bercail` also checks that the suite leaves the real `handoffs.jsonl` byte-identical.
+
+`tests/handoff_beads.bats` checks that a handoff worktree writes to the main checkout's beads store in two ways. The tests on the real `bd` prove that bd follows the redirect bercail writes; they skip when bd is missing, except under `CI`, where they fail. CI installs bd with mise, as `bercail update` does, at the version pinned in `.github/workflows/ci.yml` (`BD_VERSION`). The tests on a fake bd check what bercail hands bd from the worktree and run everywhere.
 
 Use Node 26 for the Pi extension unit tests. The live proofs (`desk_session_pi`, `pi_guard`, `pi_fallback`, `review_pi`, `shep_pi`) run the extension in the installed Pi, offline, with a stand-in model, without sending a model prompt or changing your sessions. They are tagged `live`: `tests/run.sh` leaves them out and `tests/run.sh --live` runs only them. `real_pi` fails a test that is not tagged `live`.
 

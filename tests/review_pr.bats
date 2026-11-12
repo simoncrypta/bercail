@@ -1569,20 +1569,22 @@ EOF
 # stops at the first match would leave the rest unwritten, a SIGPIPE under pipefail.
 @test "stack membership holds for the first PR of a long stack, and a missing PR is refused" {
   local out entry="$LOG/pr-1.json"
-  # shellcheck source=lib/common.sh
-  source "$ROOT/lib/common.sh"
-  # shellcheck source=lib/stack.sh
-  source "$ROOT/lib/stack.sh"
-  # shellcheck disable=SC2329
-  _stack_github() { seq 1 50000; }
+  # A child bash under bin/bercail's options: bats traces each command it runs
+  # itself, which turns the 50000-PR walk into a minute.
+  discover() {
+    STACK_FIRST="$1" bash -c 'set -euo pipefail
+      source "$ROOT/lib/common.sh"
+      source "$ROOT/lib/stack.sh"
+      _stack_github() { seq "$STACK_FIRST" 50000; }
+      stack_discover github.com/acme/widgets "$1" "" "" gh' _ "$entry"
+  }
   jq '.number = 1' "$FIX/pr-8.json" >"$entry"
-  out="$(stack_discover github.com/acme/widgets "$entry" "" "" gh 2>"$LOG/membership.err")" \
+  out="$(discover 1 2>"$LOG/membership.err")" \
     || fail "PR first in a long stack: $(<"$LOG/membership.err")"
   assert_eq '1 50000' "$(jq -r '"\(.numbers[0]) \(.numbers | length)"' <<<"$out")" "the whole stack, root first"
   # Rooted at #2, which the trunk lookup views.
   jq '.number = 2' "$FIX/pr-8.json" >"$FIX/pr-2.json"
-  _stack_github() { seq 2 50000; }
-  if stack_discover github.com/acme/widgets "$entry" "" "" gh >/dev/null 2>"$LOG/membership.err"; then
+  if discover 2 >/dev/null 2>"$LOG/membership.err"; then
     fail "a stack without the requested PR"
   fi
   assert_has "$(<"$LOG/membership.err")" "native stack omitted requested PR #1" "the missing PR is named"

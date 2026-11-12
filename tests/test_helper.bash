@@ -13,6 +13,10 @@ isolate() {
   mkdir -p "$HOME" "$TMPDIR"
   mkdir -m 700 "$XDG_RUNTIME_DIR"
   export DESKTOP_TEST="${BATS_TEST_FILENAME##*/}: $BATS_TEST_DESCRIPTION"
+  # bats keeps its BATS_TEST_TIMEOUT watchdog's pid in a local, gone by the time
+  # a failed test's exit trap reads it: the watchdog outlives the test, and under
+  # set -u (lib/common.sh) the trap dies before it prints the failure.
+  [[ -z "${BATS_killer_pid:-}" ]] || declare -g BATS_killer_pid="$BATS_killer_pid"
 }
 
 fail() {

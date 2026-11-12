@@ -100,7 +100,7 @@ app_edits_then_update() {
       and (has("ctrl-shift-s") | not)' "$APP/keys.json" >/dev/null || fail "the person's key changes must stay: $(section)"
   jq -e '[.["layout:bercail"][] | select(. == "bercail-desk.go-up" or . == "bercail-desk.go-down")] == []' "$APP/keys.json" >/dev/null \
     || fail "keys bercail dropped must go: $(section)"
-  printf '%s' "$out" | grep -q 'key ctrl-alt-down: yours is pane.go:down' || fail "update should warn about the kept key: $out"
+  grep -q 'key ctrl-alt-down: yours is pane.go:down' <<<"$out" || fail "update should warn about the kept key: $out"
   cmp -s "$ROOT/bercail/keys.json" "$AGENTIC_DEV_SHARE_DIR/herdr-app/keys.json" || fail "update records the shipped keys"
 }
 
@@ -119,13 +119,13 @@ app_edits_then_update() {
   deploy_herdr_app >/dev/null 2>&1
   jq '.terminal = {"alt-shift-up": "send:x"}' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
   out="$(doctor_herdr_app 2>&1)"
-  printf '%s' "$out" | grep -q 'conflict  Herdr key ctrl-shift-f: yours is my.files' || fail "doctor: own key: $out"
-  printf '%s' "$out" | grep -q 'conflict  Herdr key alt-shift-up: the terminal section binds it' || fail "doctor: terminal key: $out"
-  printf '%s' "$out" | grep -q 'conflict  Herdr key ctrl-shift-s: not in layout:bercail' || fail "doctor: missing key: $out"
+  grep -q 'conflict  Herdr key ctrl-shift-f: yours is my.files' <<<"$out" || fail "doctor: own key: $out"
+  grep -q 'conflict  Herdr key alt-shift-up: the terminal section binds it' <<<"$out" || fail "doctor: terminal key: $out"
+  grep -q 'conflict  Herdr key ctrl-shift-s: not in layout:bercail' <<<"$out" || fail "doctor: missing key: $out"
   jq 'del(.terminal) | .["layout:bercail"] = $ours[0]["layout:bercail"]' --slurpfile ours "$ROOT/bercail/keys.json" \
     "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
   out="$(doctor_herdr_app 2>&1)"
-  if printf '%s' "$out" | grep -q conflict; then
+  if grep -q conflict <<<"$out"; then
     fail "doctor: no conflicts expected: $out"
   fi
 }
@@ -178,7 +178,7 @@ app_edits_then_update() {
     | (.. | objects | select(.id == "desk") | .size.weight) = 4.2' \
     "$ROOT/bercail/layouts/bercail.json" >"$APP/layouts/bercail.json"
   out="$(deploy_herdr_app)"
-  printf '%s' "$out" | grep -q 'unchanged: .*bercail.json' || fail "a runtime-only change should count as bercail's: $out"
+  grep -q 'unchanged: .*bercail.json' <<<"$out" || fail "a runtime-only change should count as bercail's: $out"
   jq -e '.. | objects | select(.id == "desk-t9z") | .content.terminal == "t9z"' "$APP/layouts/bercail.json" >/dev/null \
     || fail "adopting must keep the app's values"
   [[ -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/layouts/bercail.json" ]] || fail "adopting records the shipped layout"
@@ -202,13 +202,13 @@ app_edits_then_update() {
   if out="$(doctor_herdr_app)"; then
     fail "doctor should flag a stale mod: $out"
   fi
-  printf '%s' "$out" | grep -q 'stale  Herdr mod file' || fail "stale mod message: $out"
+  grep -q 'stale  Herdr mod file' <<<"$out" || fail "stale mod message: $out"
   deploy_herdr_app >/dev/null
   jq 'del(.["layout:bercail"])' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
   if out="$(doctor_herdr_app)"; then
     fail "doctor should flag missing keys: $out"
   fi
-  printf '%s' "$out" | grep -q 'missing  Herdr keys' || fail "missing keys message: $out"
+  grep -q 'missing  Herdr keys' <<<"$out" || fail "missing keys message: $out"
 }
 
 @test "a missing keys.json gets only the layout:bercail section" {

@@ -173,8 +173,10 @@ _git_backend_bounded() {
   local ticks=$(($1 * 10)) pid rc
   shift
   (
+    # Job notices go to this shell's stderr: /dev/null. The command gets the caller's.
+    exec 3>&2 2>/dev/null
     set -m
-    "$@" &
+    "$@" 2>&3 3>&- &
     pid=$!
     set +m
     trap 'kill -KILL -- "-$pid" 2>/dev/null; exit 130' INT

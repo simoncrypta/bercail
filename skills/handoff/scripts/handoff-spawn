@@ -116,9 +116,12 @@ handoff_bounded() {
   shift
   (
     # Job control only for the fork: it is what gives the command its own group.
-    # Left on, bash also prints a notice ("[1]+ Done") when the command ends.
+    # Left on, bash also prints a notice ("[1]+ Done") when the command ends,
+    # and a command that ends before set +m gets one anyway. Notices go to this
+    # shell's stderr, so that is /dev/null; the command gets the caller's.
+    exec 3>&2 2>/dev/null
     set -m
-    "$@" &
+    "$@" 2>&3 3>&- &
     pid=$!
     set +m
     # gt left the terminal's group with set -m, so Ctrl-C only reaches it from here.
