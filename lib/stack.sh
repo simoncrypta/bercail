@@ -38,6 +38,18 @@ _stack_strip_ansi() {
 # shellcheck source=lib/git-backend.sh
 source "$(dirname "${BASH_SOURCE[0]}")/git-backend.sh"
 
+STACK_GH_TIMEOUT=60
+STACK_GH_TRANSFER_TIMEOUT=300
+
+# Catalog reads should be quick; cloning and checking out a remote stack can
+# transfer a whole repo. Neither may hold a review open forever.
+_stack_gh() {
+  local seconds="$STACK_GH_TIMEOUT"
+  case "$1 ${2:-}" in
+    "repo clone"|"stack checkout") seconds="$STACK_GH_TRANSFER_TIMEOUT" ;;
+  esac
+  _git_backend_bounded "$seconds" gh "$@"
+}
 
 _stack_trunk_name() {
   jq -r '.trunk // .trunks[0].name // "main"' "$1"
@@ -174,7 +186,7 @@ _stack_trunk() {
       return 0
     fi
   fi
-  name="$(gh repo view "$slug" --json defaultBranchRef | jq -r '.defaultBranchRef.name // empty')" || return 1
+  name="$(_stack_gh repo view "$slug" --json defaultBranchRef | jq -r '.defaultBranchRef.name // empty')" || return 1
   [[ -n "$name" && "$name" != null ]] || return 1
   printf '%s' "$name"
 }
@@ -268,7 +280,7 @@ _stack_graphite() {
 
 _stack_gh_list() {
   local slug="$1" flag="$2" value="$3"
-  gh pr list --"$flag" "$value" --state open --limit 50 -R "$slug" \
+  _stack_gh pr list --"$flag" "$value" --state open --limit 50 -R "$slug" \
     --json number,baseRefName,headRefName,isCrossRepository,url
 }
 
@@ -299,7 +311,7 @@ _stack_github() {
     fi
     [[ "$count" -eq 1 ]] || break
     n="$(jq -r '.[0].number' <<<"$listed")"
-    cur="$(gh pr view "$n" -R "$slug" --json number,baseRefName,headRefName,isCrossRepository)" || return 1
+    cur="$(_stack_gh pr view "$n" -R "$slug" --json number,baseRefName,headRefName,isCrossRepository)" || return 1
   done
   # cur is the root. Walk up from here with a fresh seen set so the entry is not a false cycle.
   n="$(jq -r '.number' <<<"$cur")"
@@ -381,7 +393,7 @@ _stack_gh_stack() {
        if length == 0 then null elif length == 1 then .[0] else error("ambiguous stack membership") end' "$catalog")" || return 1
   fi
   err="$(mktemp)"
-  payload="$(gh api --hostname "${slug%%/*}" "repos/${slug#*/}/stacks?pull_request=$(jq '.number' "$entry")" 2>"$err")" || rc=$?
+  payload="$(_stack_gh api --hostname "${slug%%/*}" "repos/${slug#*/}/stacks?pull_request=$(jq '.number' "$entry")" 2>"$err")" || rc=$?
   if [[ "$rc" -ne 0 ]]; then
     if grep -q 'HTTP 404' "$err"; then
       payload='[]'
@@ -411,7 +423,7 @@ _stack_gh_stack() {
     # checkout prefers local membership. Discard only this private catalog so
     # a previous review cannot hide newly added remote stack members.
     rm -f "$sync/.git/gh-stack"
-    (cd "$sync" && gh stack checkout "$(jq -r '.url' "$entry")" </dev/null >&2) || return 1
+    (cd "$sync" && _stack_gh stack checkout "$(jq -r '.url' "$entry")" </dev/null >&2) || return 1
   else
     cp "$catalog" "$sync/.git/gh-stack" || return 1
     git -C "$sync" fetch --quiet origin >&2 || return 1
@@ -423,7 +435,7 @@ _stack_gh_stack() {
     branch="$(jq -r '.headRefName' "$entry")"
     git -C "$sync" checkout --quiet -B "$branch" "$(jq -r '.headRefOid' "$entry")" >&2 || return 1
   fi
-  payload="$(cd "$sync" && gh stack view --json </dev/null)" || return 1
+  payload="$(cd "$sync" && _stack_gh stack view --json </dev/null)" || return 1
   jq -c '. as $s | {trunk, members: [.branches | to_entries[] |
     {branch: .value.name, parent: (if .key == 0 then $s.trunk else $s.branches[.key - 1].name end), number: .value.pr.number}]}' <<<"$payload"
 }
@@ -489,7 +501,7 @@ stack_discover() {
     if [[ "${numbers[0]}" == "$n" ]]; then
       trunk="$(jq -r '.baseRefName' "$entry")"
     else
-      trunk="$(gh pr view "${numbers[0]}" -R "$slug" --json baseRefName | jq -r .baseRefName)" || return 1
+      trunk="$(_stack_gh pr view "${numbers[0]}" -R "$slug" --json baseRefName | jq -r .baseRefName)" || return 1
     fi
   fi
   [[ ${#numbers[@]} -gt 0 ]] || return 1

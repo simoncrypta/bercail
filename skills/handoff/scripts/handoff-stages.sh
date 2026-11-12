@@ -10,14 +10,11 @@ if ! declare -F handoff_die >/dev/null 2>&1; then
   }
 fi
 
-handoff_abspath() {
-  local path="$1"
-  if [[ -d "$path" ]]; then
-    (cd "$path" && pwd -P)
-  else
-    printf '%s' "$path"
-  fi
-}
+_HANDOFF_STAGES_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=skills/handoff/scripts/git-backend.sh
+source "$_HANDOFF_STAGES_DIR/git-backend.sh"
+# shellcheck source=skills/handoff/scripts/pi-log.sh
+source "$_HANDOFF_STAGES_DIR/pi-log.sh"
 
 handoff_result_path() {
   printf '%s/.bercail/handoff-result.json' "$1"
@@ -54,16 +51,15 @@ handoff_beads_dir() {
 # back. The copy stays; existing worktree databases are not removed.
 handoff_share_main_beads() {
   local worktree="$1" main target current
-  main="$(handoff_git_main "$worktree" 2>/dev/null || true)"
-  [[ -n "$main" && -d "$main" ]] || return 0
-  main="$(handoff_abspath "$main")"
-  worktree="$(handoff_abspath "$worktree")"
+  main="$(git_backend_main "$worktree" 2>/dev/null || true)"
+  [[ -n "$main" ]] || return 0
+  worktree="$(_git_backend_realpath "$worktree")"
   [[ "$worktree" != "$main" ]] || return 0
   [[ -d "$main/.beads" ]] || return 0
-  target="$(handoff_abspath "$main/.beads")"
+  target="$(_git_backend_realpath "$main/.beads")"
   current="$(handoff_beads_dir "$worktree" 2>/dev/null || true)"
   if [[ -n "$current" && -d "$current" ]]; then
-    current="$(handoff_abspath "$current")"
+    current="$(_git_backend_realpath "$current")"
     [[ "$current" == "$target" ]] && return 0
   fi
   mkdir -p "$worktree/.beads"
@@ -172,14 +168,6 @@ handoff_is_uuid() {
 # session_id when there is no resumable session. Not a uuid, so --resume refuses it.
 HANDOFF_NO_SESSION="none"
 
-handoff_new_session_id() {
-  if [[ -r /proc/sys/kernel/random/uuid ]]; then
-    tr -d '[:space:]' </proc/sys/kernel/random/uuid
-    return 0
-  fi
-  python3 -c 'import uuid; print(uuid.uuid4())'
-}
-
 handoff_bin_present() {
   local bin="$1"
   [[ -n "$bin" ]] || return 1
@@ -210,16 +198,6 @@ handoff_pi_usage_limit_reason() {
   ' "$log" >/dev/null 2>&1; then
     printf 'usage-limit'
   fi
-}
-
-# Pi exits 0 when the provider failed. The last assistant message_end says so.
-handoff_pi_provider_failed() {
-  local log="$1"
-  [[ -f "$log" ]] || return 1
-  jq -e -s -R '
-    [ split("\n")[] | fromjson? | select(type == "object" and .type == "message_end" and (.message.role == "assistant")) ]
-    | last | .message.stopReason == "error"
-  ' "$log" >/dev/null 2>&1
 }
 
 handoff_pi_session_id() {
@@ -380,7 +358,7 @@ handoff_headless_comment_text() {
 handoff_run_headless() {
   local stage="$1" worktree="$2" issue="$3" resume="$4" dry="$5" want="${6:-}"
   local model session="" resumed=0 prompt bd
-  local result log bin="${HANDOFF_PI_BIN:-pi}" cmd_json out rc=0 tid present=false bd_present=false reason="" issue_title=""
+  local result log bin="${HANDOFF_PI_BIN:-pi}" cmd_json out rc=0 tid present=false bd_present=false reason="" issue_title="" turn_failed=false
 
   command -v jq >/dev/null 2>&1 || handoff_die "jq is required"
 
@@ -388,7 +366,7 @@ handoff_run_headless() {
   handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id: $issue"
   [[ -n "$worktree" ]] || worktree="$PWD"
   [[ -d "$worktree" ]] || handoff_die "worktree not found: $worktree"
-  worktree="$(handoff_abspath "$worktree")"
+  worktree="$(_git_backend_realpath "$worktree")"
   result="$(handoff_result_path "$worktree")"
 
   if [[ -n "$resume" ]]; then
@@ -396,7 +374,7 @@ handoff_run_headless() {
     session="$resume"
     resumed=1
   else
-    session="$(handoff_new_session_id)"
+    session="$(</proc/sys/kernel/random/uuid)"
     handoff_is_uuid "$session" || handoff_die "could not mint a session uuid"
   fi
 
@@ -491,8 +469,9 @@ handoff_run_headless() {
     session="$tid"
     out="$(jq --arg session_id "$session" '.session_id = $session_id' <<<"$out")"
   fi
-  if handoff_pi_provider_failed "$log"; then
+  if pi_turn_failed "$log"; then
     rc=1
+    turn_failed=true
   fi
   # The exhausted plan cannot be trusted to name its own limit. Classify the CLI
   # log and stamp reason; do not start another command.
@@ -504,9 +483,9 @@ handoff_run_headless() {
   # made-up id would look resumable. Say so in the summary instead.
   if [[ -f "$result" ]] && jq -e 'type == "object"' "$result" >/dev/null 2>&1; then
     local filled
-    filled="$(jq --arg session_id "$session" --arg none "$HANDOFF_NO_SESSION" --arg reason "$reason" "$HANDOFF_VERIFICATION_DEF"'
+    filled="$(jq --arg session_id "$session" --arg none "$HANDOFF_NO_SESSION" --arg reason "$reason" --argjson turn_failed "$turn_failed" "$HANDOFF_VERIFICATION_DEF"'
       (.session_id | type == "string" and test("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")) as $own
-      | .status = (if (.status == "ready" or .status == "blocked" or .status == "failed") then .status else "failed" end)
+      | .status = (if $turn_failed then "failed" elif (.status == "ready" or .status == "blocked" or .status == "failed") then .status else "failed" end)
       | .summary = (if (.summary | type == "string" and length > 0) then .summary else "headless stage finished without a usable summary" end)
       | if ($session_id | length) > 0 then .session_id = $session_id
         elif $own then .

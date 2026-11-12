@@ -3,6 +3,7 @@ MANIFEST
 scripts/handoff-spawn
 scripts/handoff-stages.sh
 scripts/git-backend.sh
+scripts/pi-log.sh
 resources/handoff.md
 resources/babysit.md
 resources/herdr-control.md

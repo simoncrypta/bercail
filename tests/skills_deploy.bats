@@ -70,3 +70,12 @@ setup() {
   cmp -s "$ROOT/skills/handoff/scripts/git-backend.sh" "$ROOT/lib/git-backend.sh" \
     || fail "repo lib/git-backend.sh must be the skill script"
 }
+
+@test "deploy_lib copies pi-log.sh next to the other libs" {
+  deploy_lib >/dev/null
+  cmp -s "$ROOT/skills/handoff/scripts/pi-log.sh" "$BERCAIL_SHARE_DIR/lib/pi-log.sh" \
+    || fail "installed lib/pi-log.sh must match the skill script"
+  cmp -s "$ROOT/skills/handoff/scripts/pi-log.sh" "$ROOT/lib/pi-log.sh" \
+    || fail "repo lib/pi-log.sh must be the skill script"
+  [[ ! -L "$BERCAIL_SHARE_DIR/lib/pi-log.sh" ]] || fail "installed pi-log.sh must be a file, not a skills-tree symlink"
+}

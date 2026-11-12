@@ -204,7 +204,7 @@ _review_fallback_checkout() {
     if [[ "${R_BACKEND:-gh}" == origin ]]; then
       origin repo clone "$owner/$repo" "$dest" >&2 || die "could not clone $slug to $dest"
     else
-      gh repo clone "$slug" "$dest" -- --quiet >&2 || die "could not clone $slug to $dest"
+      _stack_gh repo clone "$slug" "$dest" -- --quiet >&2 || die "could not clone $slug to $dest"
     fi
     printf '%s\n' "$slug" > "$(git -C "$dest" rev-parse --path-format=absolute --git-common-dir)/bercail-review-repo"
   fi
@@ -314,14 +314,8 @@ _review_read_marker() {
 
 # --- snapshot -----------------------------------------------------------------
 
-_review_lockish() {
-  local p="$1"
-  [[ "$p" =~ (^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|mix\.lock|Podfile\.lock|flake\.lock)$ ]] && return 0
-  [[ "$p" =~ (^|/)(dist|vendor|node_modules)/ ]] && return 0
-  [[ "$p" =~ \.(min\.js|map|snap)$ ]] && return 0
-  [[ "$p" =~ [._-]generated[._-] ]] && return 0
-  return 1
-}
+# One ERE for the shell predicate and the jq test, so the two call sites cannot drift.
+REVIEW_LOCKISH='(^|/)(package-lock\.json|npm-shrinkwrap\.json|yarn\.lock|pnpm-lock\.yaml|bun\.lockb?|Cargo\.lock|Gemfile\.lock|poetry\.lock|uv\.lock|composer\.lock|go\.sum|mix\.lock|Podfile\.lock|flake\.lock)$|(^|/)(dist|vendor|node_modules)/|\.(min\.js|map|snap)$|[._-]generated[._-]'
 
 _review_safe_path() {
   local p="$1" part
@@ -343,7 +337,7 @@ _review_snapshot() {
   mb="$(git -C "$main" merge-base "$base" "$sha")" || return 1
   while IFS= read -r -d '' path; do
     _review_safe_path "$path" || { printf 'skipping unsafe path %s\n' "$path" >&2; continue; }
-    _review_lockish "$path" && continue
+    [[ "$path" =~ $REVIEW_LOCKISH ]] && continue
     entry="$(git --literal-pathspecs -C "$main" ls-tree "$sha" -- "$path")" || return 1
     # A gitlink points into another repository, not a text file at this head.
     [[ "$entry" == "160000 "* ]] && continue
@@ -374,7 +368,7 @@ _review_pr_view() {
                    else {login:(.author // "")} end)
       | .files = [.files[]? | . + {changeType:(.changeKind // "modified")} ]' <<<"$raw"
   else
-    gh pr view "$n" -R "$slug" --json "$REVIEW_PR_FIELDS"
+    _stack_gh pr view "$n" -R "$slug" --json "$REVIEW_PR_FIELDS"
   fi
 }
 
@@ -392,7 +386,7 @@ _review_ci() {
          elif $s == "CANCELLED" then "cancel" elif ($s | IN("SKIPPED","NEUTRAL")) then "skipping" else "pending" end)}]' <<<"$raw" | _review_write "$dir/ci.json"
     return
   fi
-  raw="$(gh pr checks "$n" -R "$slug" --json name,bucket,state,workflow,link 2>/dev/null)" || true
+  raw="$(_stack_gh pr checks "$n" -R "$slug" --json name,bucket,state,workflow,link 2>/dev/null)" || true
   if jq -e 'type == "array"' <<<"$raw" >/dev/null 2>&1; then
     printf '%s\n' "$raw" | _review_write "$dir/ci.json"
     return 0
@@ -412,7 +406,7 @@ _review_ci() {
 _review_issues() {
   local url
   jq -r '.closingIssuesReferences[]?.url // empty' "$1" | while IFS= read -r url; do
-    gh issue view "$url" --json number,title,body,url 2>/dev/null | jq -c . || true
+    _stack_gh issue view "$url" --json number,title,body,url 2>/dev/null | jq -c . || true
   done
 }
 
@@ -445,9 +439,8 @@ _review_thin() {
 _review_intent_md() {
   local pr="$1" issues="$2" linear="$3" thin="$4" commits="$5"
   jq -r --slurpfile issues "$issues" --argjson linear "$linear" --argjson thin "$thin" \
-    --rawfile commits "$commits" '
-    def lockish: test("(^|/)(package-lock\\.json|npm-shrinkwrap\\.json|yarn\\.lock|pnpm-lock\\.yaml|bun\\.lockb?|Cargo\\.lock|Gemfile\\.lock|poetry\\.lock|uv\\.lock|composer\\.lock|go\\.sum|mix\\.lock|Podfile\\.lock|flake\\.lock)$")
-      or test("(^|/)(dist|vendor|node_modules)/") or test("\\.(min\\.js|map|snap)$") or test("[._-]generated[._-]");
+    --rawfile commits "$commits" --arg lockish "$REVIEW_LOCKISH" '
+    def lockish: test($lockish);
     "# PR #\(.number): \(.title)",
     "",
     "- url: \(.url)",
@@ -646,7 +639,7 @@ review_start() {
       || die "pass a PR url, or run review-pr from a checkout of the repo"
     local listed count
     R_BACKEND="$(git_backend "$PWD")"
-    local pr_cli=gh
+    local pr_cli=_stack_gh
     [[ "$R_BACKEND" != origin ]] || pr_cli=origin
     listed="$("$pr_cli" pr list --head "$branch" --state open --limit 20 --json number,url)" \
       || die "gh pr list --head $branch failed"
@@ -1015,7 +1008,7 @@ review_run_one() {
   block="$(_review_json_block <<<"$text")"
   [[ -n "$block" ]] || block="$text"
   # Pi exits 0 when the provider failed.
-  if [[ "$rc" -eq 0 ]] && _review_turn_failed "$R_DIR/pass.jsonl"; then
+  if [[ "$rc" -eq 0 ]] && pi_turn_failed "$R_DIR/pass.jsonl"; then
     rc=failed
   fi
   if jq -se 'length == 1 and (.[0] | type == "object" and (.blocked | type) == "string")' <<<"$block" >/dev/null 2>&1; then

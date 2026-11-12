@@ -329,8 +329,10 @@ deploy_lib() {
       deploy_install_file "lib/$libfile" "${BERCAIL_SHARE_DIR}/lib/$libfile"
     done
   fi
-  # Installed lib/ has no adjacent skills tree.
+  # Installed lib/ has no adjacent skills tree. The curl update restarts onto
+  # this deploy_lib, so a file added here is fetched with the new release.
   deploy_install_file "skills/handoff/scripts/git-backend.sh" "${BERCAIL_SHARE_DIR}/lib/git-backend.sh"
+  deploy_install_file "skills/handoff/scripts/pi-log.sh" "${BERCAIL_SHARE_DIR}/lib/pi-log.sh"
 }
 
 _recorded_install_source() {

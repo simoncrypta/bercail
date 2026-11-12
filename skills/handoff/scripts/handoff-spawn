@@ -12,8 +12,6 @@ handoff_die() {
 _HANDOFF_SPAWN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=skills/handoff/scripts/handoff-stages.sh
 source "$_HANDOFF_SPAWN_DIR/handoff-stages.sh"
-# shellcheck source=skills/handoff/scripts/git-backend.sh
-source "$_HANDOFF_SPAWN_DIR/git-backend.sh"
 
 handoff_usage() {
   cat >&2 <<'EOF'
@@ -59,22 +57,11 @@ EOF
   exit 2
 }
 
-handoff_realpath() {
-  local path="$1"
-  (cd "$path" 2>/dev/null && pwd -P) || printf '%s' "$path"
-}
-
-handoff_git_main() {
-  git -C "$1" worktree list --porcelain 2>/dev/null \
-    | awk '/^worktree / { print substr($0, 10); exit }'
-}
-
 handoff_is_main_checkout() {
   local cwd main
-  cwd="$(handoff_realpath "$1")"
-  main="$(handoff_git_main "$1")"
-  [[ -n "$main" ]] || return 1
-  [[ "$cwd" == "$(handoff_realpath "$main")" ]]
+  cwd="$(_git_backend_realpath "$1")"
+  main="$(git_backend_main "$1")" || return 1
+  [[ "$cwd" == "$main" ]]
 }
 
 handoff_main_is_dirty() {
@@ -103,44 +90,6 @@ handoff_copy_dirty() {
   done < <(git -C "$main" ls-files --others --exclude-standard)
 }
 
-# Run a command in its own process group, so its children die with it. Status
-# 124 when it outlives $1 seconds. Not timeout(1): macOS has none.
-handoff_bounded() {
-  local ticks=$(($1 * 10)) pid rc
-  shift
-  (
-    # Job control only for the fork: it is what gives the command its own group.
-    # Left on, bash also prints a notice ("[1]+ Done") when the command ends,
-    # and a command that ends before set +m gets one anyway. Notices go to this
-    # shell's stderr, so that is /dev/null; the command gets the caller's.
-    exec 3>&2 2>/dev/null
-    set -m
-    "$@" 2>&3 3>&- &
-    pid=$!
-    set +m
-    # gt left the terminal's group with set -m, so Ctrl-C only reaches it from here.
-    # Die by the signal: on a plain exit 130 the caller would carry on to the next gt.
-    trap 'kill -KILL -- "-$pid" 2>/dev/null; trap - INT; kill -INT 0' INT
-    trap 'kill -KILL -- "-$pid" 2>/dev/null; exit 143' TERM
-    while kill -0 "$pid" 2>/dev/null; do
-      if [[ "$ticks" -le 0 ]]; then
-        kill -TERM -- "-$pid" 2>/dev/null || true
-        sleep 1
-        kill -KILL -- "-$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
-        exit 124
-      fi
-      ticks=$((ticks - 1))
-      sleep 0.1
-    done
-    rc=0
-    wait "$pid" || rc=$?
-    # A child left behind would hold the caller's pipes open.
-    kill -KILL -- "-$pid" 2>/dev/null || true
-    exit "$rc"
-  )
-}
-
 handoff_gt_timeout() {
   local secs="${HANDOFF_GT_TIMEOUT:-30}"
   [[ "$secs" =~ ^[1-9][0-9]*$ ]] || secs=30
@@ -151,7 +100,7 @@ handoff_gt_timeout() {
 handoff_gt() {
   local sibling="$1"
   shift
-  handoff_bounded "$(handoff_gt_timeout)" gt --cwd "$sibling" "$@" --no-interactive </dev/null >&2
+  _git_backend_bounded "$(handoff_gt_timeout)" gt --cwd "$sibling" "$@" --no-interactive </dev/null >&2
 }
 
 # Repair only when gt says the parent is untracked or unknown. Other errors
@@ -274,7 +223,7 @@ handoff_track_gh() {
     fi
     (
       cd "$wt" || exit 1
-      handoff_bounded "$(handoff_gt_timeout)" gh stack add "$branch" </dev/null >&2
+      _git_backend_bounded "$(handoff_gt_timeout)" gh stack add "$branch" </dev/null >&2
     ) || rc=$?
     if [[ -n "$tmp" ]]; then
       git -C "$main" worktree remove --force "$tmp" >&2 || true
@@ -283,12 +232,12 @@ handoff_track_gh() {
   elif [[ "$parent" == "$trunk" ]]; then
     (
       cd "$sibling" || exit 1
-      handoff_bounded "$(handoff_gt_timeout)" gh stack init --base "$trunk" "$branch" </dev/null >&2
+      _git_backend_bounded "$(handoff_gt_timeout)" gh stack init --base "$trunk" "$branch" </dev/null >&2
     ) || rc=$?
   else
     (
       cd "$sibling" || exit 1
-      handoff_bounded "$(handoff_gt_timeout)" gh stack init --base "$trunk" "$parent" "$branch" </dev/null >&2
+      _git_backend_bounded "$(handoff_gt_timeout)" gh stack init --base "$trunk" "$parent" "$branch" </dev/null >&2
     ) || rc=$?
   fi
   [[ "$rc" -eq 0 ]] || printf 'handoff-spawn: gh stack did not record %s on %s; the desk starts anyway.\n' \
@@ -305,7 +254,7 @@ handoff_track_origin() {
   }
   (
     cd "$sibling" || exit 1
-    handoff_bounded "$(handoff_gt_timeout)" origin stack track "$branch" --onto "$parent" --json </dev/null >&2
+    _git_backend_bounded "$(handoff_gt_timeout)" origin stack track "$branch" --onto "$parent" --json </dev/null >&2
   ) || rc=$?
   [[ "$rc" -eq 0 ]] || printf 'handoff-spawn: origin stack track did not record %s on %s; the desk starts anyway. In %s run: origin stack track %s --onto %s\n' \
     "$branch" "$parent" "$sibling" "$branch" "$parent" >&2
@@ -394,7 +343,7 @@ handoff_result_json() {
 handoff_info_json() {
   local cwd branch helper default_copy backend=gh
   local herdr_env=0 herdr=0 main_ok=0 dirty=0 helper_present=0 beads=0
-  cwd="$(handoff_realpath "$PWD")"
+  cwd="$(_git_backend_realpath "$PWD")"
   [[ -n "${HC_TERMINAL_ID:-}" ]] && herdr_env=1
   if handoff_herdr_app_ok; then
     herdr=1
@@ -558,7 +507,7 @@ handoff_spawn_main() {
     || handoff_die "bd (beads) is not on PATH; the job is a beads issue (bercail update installs beads)"
   [[ -f "$helper" ]] || handoff_die "missing $helper"
 
-  main="$(handoff_realpath "$PWD")"
+  main="$(_git_backend_realpath "$PWD")"
   handoff_issue_exists "$main" "$issue" || handoff_die "beads issue $issue not found (bd show $issue)"
   issue_title="$(handoff_issue_title "$main" "$issue")"
 
@@ -596,7 +545,7 @@ handoff_spawn_main() {
   _wt_herdr_keep_user_focus "$keep_space"
   sibling="$(handoff_sibling_path "$main" "$branch")" \
     || handoff_die "could not resolve sibling worktree for $branch"
-  sibling="$(handoff_realpath "$sibling")"
+  sibling="$(_git_backend_realpath "$sibling")"
 
   if [[ "$dirty" == 1 ]]; then
     if handoff_main_is_dirty "$main"; then

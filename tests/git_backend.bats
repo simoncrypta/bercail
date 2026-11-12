@@ -240,6 +240,34 @@ EOF
   unset BERCAIL_ORIGIN_LOG ORIGIN_STATUS
 }
 
+@test "the shared bounder cleans up children on success and preserves command streams and exit status" {
+  need timeout
+  local code rc out child state
+  for code in 0 42; do
+    rc=0
+    out="$(timeout 8 bash -c '
+      source "$1"
+      capture="$(_git_backend_bounded 2 bash -c '\''
+        sleep 60 &
+        printf "%s\n" "$!" >"$1/child"
+        printf "out\n"
+        printf "err\n" >&2
+        exit "$2"
+      '\'' _ "$2" "$3" 2>"$2/err")"
+      rc=$?
+      printf "%s\n" "$capture"
+      exit "$rc"
+    ' _ "$ROOT/lib/git-backend.sh" "$BATS_TEST_TMPDIR" "$code")" || rc=$?
+    child="$(cat "$BATS_TEST_TMPDIR/child")"
+    state="$(ps -o stat= -p "$child" 2>/dev/null || true)"
+    # Reap a broken fixture without leaving a process outside the test HOME.
+    kill "$child" 2>/dev/null || true
+    [[ "$rc" == "$code" && "$out" == out && "$(cat "$BATS_TEST_TMPDIR/err")" == err ]] \
+      || fail "bounded command changed its result: $rc / $out / $(cat "$BATS_TEST_TMPDIR/err")"
+    [[ -z "$state" || "$state" == Z* ]] || fail "a successful command left a running child ($child: $state)"
+  done
+}
+
 @test "graphite config path is resolved against the repo root" {
   local repo="$BATS_TEST_TMPDIR/gt-rel"
   git_init "$repo"

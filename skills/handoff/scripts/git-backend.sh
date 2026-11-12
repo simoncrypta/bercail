@@ -143,10 +143,9 @@ git_backend_origin_remote() {
   [[ ${#kept[@]} -eq 2 && "${kept[0],,}" != git ]]
 }
 
-# Kill a command that outlives $1 seconds. Status 124 on timeout. The command
-# gets its own process group; only that group is signaled. Not timeout(1):
-# macOS has none. Do not kill -INT 0: this file is sourced by the desk, and
-# process group 0 is the lead.
+# Status 124 on timeout. Kill leftover children even after a successful command:
+# otherwise they can hold the caller's pipes open.
+# Signal only the worker group, never the desk or its sibling terminals.
 _git_backend_bounded() {
   local ticks=$(($1 * 10)) pid rc
   shift
@@ -157,8 +156,9 @@ _git_backend_bounded() {
     "$@" 2>&3 3>&- &
     pid=$!
     set +m
-    trap 'kill -KILL -- "-$pid" 2>/dev/null; exit 130' INT
-    trap 'kill -KILL -- "-$pid" 2>/dev/null; exit 143' TERM
+    # Signal death stops a foreground caller too; plain exit 130 can carry on.
+    trap 'kill -KILL -- "-$pid" 2>/dev/null || true; trap - INT; kill -INT "$BASHPID"' INT
+    trap 'kill -KILL -- "-$pid" 2>/dev/null || true; exit 143' TERM
     while kill -0 "$pid" 2>/dev/null; do
       if [[ "$ticks" -le 0 ]]; then
         kill -TERM -- "-$pid" 2>/dev/null || true

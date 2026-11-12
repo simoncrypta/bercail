@@ -724,8 +724,8 @@ source "$ROOT/skills/handoff/scripts/handoff-spawn"
 PATH="$bin:\$PATH" HANDOFF_GT_TIMEOUT=1 handoff_track_graphite "$repo.feat" parent-branch
 echo "returned rc=\$?"
 EOF
-  # handoff_bounded: a regression here is a hang, so the suite must not wait on it.
-  out="$(handoff_bounded 20 script -qec "bash $run" /dev/null </dev/null)" || rc=$?
+  # A regression here is a hang, so the suite must not wait on it.
+  out="$(_git_backend_bounded 20 script -qec "bash $run" /dev/null </dev/null)" || rc=$?
   [[ "$rc" -eq 0 ]] || fail "a hung gt under a terminal held the spawn: rc=$rc $out"
   grep -q 'returned rc=0' <<<"$out" || fail "should return 0: $out"
   grep -q 'did not finish' <<<"$out" || fail "should warn: $out"
@@ -1444,4 +1444,31 @@ STUB
 
   if [[ -n "$saved_profile" ]]; then export HANDOFF_PI_PROFILE="$saved_profile"; else unset HANDOFF_PI_PROFILE; fi
   unset HANDOFF_PI_BIN
+}
+
+@test "an aborted Pi turn fails the handoff" {
+  local profile wt rc=0 err stub
+  profile="$(_pi_profile)"
+  export HANDOFF_PI_PROFILE="$profile"
+  _bd_stub
+  stub="$BATS_TEST_TMPDIR/bin/pi"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' '{"type":"session","version":3,"id":"cccccccc-dddd-4eee-8fff-000000000000"}'
+printf '%s\n' '{"type":"message_end","message":{"role":"assistant","stopReason":"aborted","errorMessage":"turn aborted"}}'
+jq -nc '{status:"ready", summary:"wrote the fix"}' >"$BERCAIL_RESULT_PATH"
+exit 0
+STUB
+  chmod +x "$stub"
+  export HANDOFF_PI_BIN="$stub"
+  wt="$BATS_TEST_TMPDIR/pi-abort"
+  mkdir -p "$wt"
+  err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" 2>&1)" || rc=$?
+  [[ "$rc" -ne 0 ]] || fail "an aborted turn must not succeed: $err $(cat "$wt/.bercail/handoff-result.json" 2>/dev/null)"
+  jq -e '.status == "failed" and .session_id == "cccccccc-dddd-4eee-8fff-000000000000" and (has("reason") | not)' \
+    "$wt/.bercail/handoff-result.json" >/dev/null \
+    || fail "aborted turn result: $(cat "$wt/.bercail/handoff-result.json" 2>/dev/null) $err"
+  unset HANDOFF_PI_BIN HANDOFF_PI_PROFILE
 }

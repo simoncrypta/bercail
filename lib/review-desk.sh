@@ -5,6 +5,9 @@
 # tools, the pr-review rules, and review.ts, which keeps reads in the stack dir
 # and, in the desk, takes the CLI's turns from desk/inbox/.
 
+# shellcheck source=lib/pi-log.sh
+source "$(dirname "${BASH_SOURCE[0]}")/pi-log.sh"
+
 # The reviewer's argv, into R_PI.
 _review_pi_argv() {
   local file="${BSTACK_PI_DIR:-$BERCAIL_SHARE_DIR/pi}/review.json" arg
@@ -13,14 +16,6 @@ _review_pi_argv() {
   while IFS= read -r -d '' arg; do
     R_PI+=("$arg")
   done < <(jq -j '.[] | ., "\u0000"' "$file")
-}
-
-_review_uuid() {
-  if [[ -r /proc/sys/kernel/random/uuid ]]; then
-    tr -d '[:space:]' </proc/sys/kernel/random/uuid
-  else
-    python3 -c 'import uuid; print(uuid.uuid4())'
-  fi
 }
 
 # The desk's Pi, when it runs: review.ts writes desk/pi.json at its start.
@@ -40,7 +35,7 @@ _review_desk_session() (
   [[ -n "$space" ]] || die "no Herdr space on $R_WT; run bercail review-pr <url> again"
   session="$(jq -r '.session_id // empty' "$R_STACK/desk.json" 2>/dev/null || true)"
   if [[ -z "$session" ]]; then
-    session="$(_review_uuid)"
+    session="$(</proc/sys/kernel/random/uuid)"
     jq -n --arg id "$session" '{session_id: $id}' | _review_write "$R_STACK/desk.json"
   fi
   old="$(_wt_herdr_space_desk "$space")"
@@ -138,12 +133,6 @@ _review_turn_error() {
   printf '%s' "${msg%%$'\n'*}"
 }
 
-# Pi exits 0 when the provider failed: the last assistant message says so.
-_review_turn_failed() {
-  jq -e -s -R '[split("\n")[] | fromjson? | select(type == "object" and .type == "message_end" and .message.role == "assistant")]
-    | last | . != null and (.message.stopReason | IN("error", "aborted"))' "$1" >/dev/null 2>&1
-}
-
 # An immutable input snapshot and its hash tie a summary to these exact cards,
 # not just their head SHAs (a re-review can change the decisions at the same SHA).
 _review_summary_input() {
@@ -214,7 +203,7 @@ review_summarize() (
   child=$!
   wait "$child" || rc=$?
   child=""
-  _review_turn_failed "$R_STACK/summary.jsonl" && rc=1
+  pi_turn_failed "$R_STACK/summary.jsonl" && rc=1
   text="$(_review_turn_text "$R_STACK/summary.jsonl")"
   block="$(_review_json_block <<<"$text")"
   [[ -n "$block" ]] || block="$text"
