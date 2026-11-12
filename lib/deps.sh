@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-HUNK_MIN_VERSION=0.20.1
 TUICR_MIN_VERSION=0.20.0
 # `wt list --format=json` is {schema, items: [...]} from 0.80.0 on; the shell block reads that shape.
 WORKTRUNK_MIN_VERSION=0.80.0
@@ -37,7 +36,7 @@ mise_can_install() {
   [[ -n "$spec" ]] || return 1
   [[ "$spec" == *:* ]] && return 0
   case "$spec" in
-    worktrunk|fzf|jq|pi|hunk) return 0 ;;
+    worktrunk|fzf|jq|pi) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -322,37 +321,6 @@ install_beads_binary() {
   dep_present bd
 }
 
-install_hunk_binary() {
-  if dep_present hunk; then
-    info "present: hunk"
-    return 0
-  fi
-  if maybe_mise_install hunk hunk; then
-    return 0
-  fi
-  if has_brew; then
-    info "installing via brew: hunk"
-    if run brew install hunk && dep_present hunk; then
-      return 0
-    fi
-    warn "brew install hunk failed — trying hunk.dev installer"
-  fi
-  dep_present curl || maybe_omarchy_pkg_install curl curl \
-    || maybe_apt_install curl curl || maybe_pacman_install curl curl || true
-  info "installing via https://hunk.dev/install.sh"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    return 0
-  fi
-  curl -fsSL https://hunk.dev/install.sh | sh
-  ensure_mise_shims
-  hash -r 2>/dev/null || true
-  if dep_present hunk; then
-    return 0
-  fi
-  warn "hunk install may have succeeded but hunk is not on PATH"
-  return 1
-}
-
 install_tuicr_binary() {
   if dep_present tuicr; then
     info "present: tuicr"
@@ -431,18 +399,10 @@ _layout_review_bin() {
   printf '%s' "${cmd%% *}"
 }
 
-ensure_selected_layout_tools() {
-  local review_bin
-  review_bin="$(_layout_review_bin)"
-  case "$review_bin" in
-    hunk)
-      install_hunk_binary || warn "missing hunk (review tab needs it)"
-      ;;
-    *)
-      install_tuicr_binary || warn "missing tuicr (review tab needs it)"
-      ensure_tuicr_watch_config || true
-      ;;
-  esac
+# tuicr whatever [layout] review names: review-pr opens a PR in it.
+ensure_tuicr() {
+  install_tuicr_binary || warn "missing tuicr (review tab needs it)"
+  ensure_tuicr_watch_config || true
 }
 
 # The desk runs Pi, bstack or not.
@@ -516,9 +476,6 @@ doctor_dependencies() {
   local review_bin
   review_bin="$(_layout_review_bin)"
   case "$review_bin" in
-    hunk)
-      _doctor_versioned_bin hunk "$HUNK_MIN_VERSION" review || missing=$((missing + 1))
-      ;;
     tuicr|"")
       _doctor_versioned_bin tuicr "$TUICR_MIN_VERSION" review || missing=$((missing + 1))
       ;;

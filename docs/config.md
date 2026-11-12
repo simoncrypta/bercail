@@ -4,7 +4,7 @@
 
 ```toml
 [layout]
-review = "tuicr"                     # or "hunk"
+review = "tuicr"                     # or a command of yours
 auto_review = true
 
 [bstack]                             # --no-bstack installs: none, and the desk runs plain Pi

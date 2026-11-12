@@ -130,10 +130,6 @@ marker_block() {
   assert_eq "0" "$(mise_can_install_rc pi)" "mise_can_install allows pi"
 }
 
-@test "mise_can_install allows hunk" {
-  assert_eq "0" "$(mise_can_install_rc hunk)" "mise_can_install allows hunk"
-}
-
 @test "mise_can_install allows tuicr github spec" {
   assert_eq "0" "$(mise_can_install_rc github:agavra/tuicr)" "mise_can_install allows tuicr github spec"
 }

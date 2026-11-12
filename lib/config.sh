@@ -383,29 +383,6 @@ record_install_source() {
   info "recorded install source: $src"
 }
 
-# Default review tool is tuicr. Leave a custom hunk command (extra flags) alone.
-migrate_hunk_review_to_tuicr() {
-  local dest="$BERCAIL_USER_CONFIG" tmp
-  [[ -f "$dest" ]] || return 0
-  grep -qE '^[[:space:]]*review[[:space:]]*=[[:space:]]*"(hunk|hunk diff)"[[:space:]]*$' "$dest" || return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would migrate layout review hunk → tuicr in $dest"
-    return 0
-  fi
-  tmp="$(mktemp)"
-  awk '
-    BEGIN { in_layout = 0 }
-    /^\[layout\]/ { in_layout = 1 }
-    /^\[/ && $0 != "[layout]" { in_layout = 0 }
-    in_layout && /^[[:space:]]*review[[:space:]]*=[[:space:]]*"(hunk|hunk diff)"[[:space:]]*$/ {
-      sub(/"(hunk|hunk diff)"/, "\"tuicr\"")
-    }
-    { print }
-  ' "$dest" >"$tmp"
-  mv "$tmp" "$dest"
-  info "migrated layout review to tuicr in $dest"
-}
-
 # The update copies bin/bercail over the running script in place, and once
 # main returns bash reads on from its old offset into the new file. Put a
 # fresh copy at the path and empty the old inode so that read hits EOF.
@@ -602,7 +579,6 @@ deploy_configs() {
 
   describe_install_source
   prompt_user_config
-  migrate_hunk_review_to_tuicr
   migrate_state_dir
   remove_agentic_dev_shim
   migrate_graphite_config
@@ -650,6 +626,6 @@ deploy_configs() {
   deploy_finalize_permissions
   record_install_source
   ensure_pi
-  ensure_selected_layout_tools
+  ensure_tuicr
   sync_omarchy_default_agent
 }

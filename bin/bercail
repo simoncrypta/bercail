@@ -137,7 +137,7 @@ cmd_reconfigure() {
   prompt_user_config
   deploy_skills
   ensure_pi
-  ensure_selected_layout_tools
+  ensure_tuicr
   deploy_bstack
   sync_omarchy_default_agent
   info "the desk runs Pi: bstack's lead when bstack is on, else plain pi  review=$(read_layout_review)"

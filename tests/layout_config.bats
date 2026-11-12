@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# Layout config: defaults, write, migration, and doctor follow the review command.
+# Layout config: defaults, write, and doctor follow the review command.
 
 # shellcheck disable=SC2034 # YES, DRY_RUN and friends are read by the sourced libs.
 # shellcheck disable=SC2329 # stubs replace lib functions the libs call.
@@ -43,8 +43,8 @@ install_config_reader() {
   cp "$ROOT/config/agentic-dev/config-reader.sh" "$BERCAIL_CONFIG_DIR/config-reader.sh"
 }
 
-# doctor_dependencies on a host with every tool but tuicr, and review = "hunk".
-# Sets out and rc.
+# doctor_dependencies on a host with every tool but tuicr, and review = "hunk",
+# a tool bercail once installed and held to 0.20.1. Sets out and rc.
 doctor_with_hunk_review() {
   local case_dir="$BATS_TEST_TMPDIR/doctor-hunk" cmd
   mkdir -p "$case_dir/bin" "$case_dir/home/.config/bercail"
@@ -54,9 +54,11 @@ review = "hunk"
 EOF
   cp "$ROOT/config/agentic-dev/config-reader.sh" \
     "$case_dir/home/.config/bercail/config-reader.sh"
-  for cmd in herdr-app hc git wt bd fzf jq hunk pi; do
+  for cmd in herdr-app hc git wt bd fzf jq pi; do
     ln -s /bin/true "$case_dir/bin/$cmd"
   done
+  printf '#!/bin/sh\necho hunk 0.1.0\n' >"$case_dir/bin/hunk"
+  chmod +x "$case_dir/bin/hunk"
   rc=0
   out="$(
     HOME="$case_dir/home" \
@@ -112,30 +114,18 @@ EOF
   assert_eq "tuicr" "$(read_layout_review)" "review defaults to tuicr"
 }
 
-@test "doctor accepts hunk review without requiring tuicr" {
+@test "doctor takes the configured review command as it is: no tuicr, no minimum version" {
   doctor_with_hunk_review
-  assert_eq "0" "$rc" "doctor exits 0 for hunk review"
-  assert_contains "$out" "ok  hunk" "doctor accepts configured hunk"
-  [[ "$out" != *"missing  tuicr"* ]] || fail "doctor should not require tuicr when review is hunk"
+  assert_eq "0" "$rc" "doctor exits 0 for a review command on PATH: $out"
+  assert_contains "$out" "ok  hunk" "doctor accepts the configured command"
+  [[ "$out" != *"missing  tuicr"* ]] || fail "doctor should not require tuicr when review names another command"
+  [[ "$out" != *"required >="* ]] || fail "doctor holds a command bercail does not install to a version: $out"
 }
 
 @test "doctor checks the Herdr app and herdr-core" {
   doctor_with_hunk_review
   assert_contains "$out" "ok  herdr-app" "doctor checks the Herdr app"
   assert_contains "$out" "ok  hc" "doctor checks herdr-core"
-}
-
-@test "migrate_hunk_review_to_tuicr rewrites hunk diff to tuicr" {
-  install_config_reader
-  cat >"$BERCAIL_USER_CONFIG" <<'EOF'
-[layout]
-review = "hunk diff"
-auto_review = false
-EOF
-  migrate_hunk_review_to_tuicr
-  assert_eq "tuicr" "$(read_layout_review)" "migrate_hunk_review_to_tuicr rewrites hunk diff"
-  grep -q 'review = "tuicr"' "$BERCAIL_USER_CONFIG" \
-    || fail "migrate_hunk_review_to_tuicr writes review = tuicr"
 }
 
 @test "ensure_tuicr_watch_config adds diff watch and keeps an existing theme" {
