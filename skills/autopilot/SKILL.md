@@ -59,6 +59,7 @@ Run `pr-state.sh`, do what `next` says, push, then run it again.
 | `wait-ci` | `pr-state.sh --wait 900`. It returns when a check finishes, a thread arrives, or the head moves (exit 124 on timeout: run it again). |
 | `green` | Stop. Section 3. |
 | `merged`, `closed` | Stop and say so. |
+| Exit 3 (no snapshot) | GitHub could not be read; run it again. Stop and report the error after three consecutive exit-3 runs. |
 
 One failure per commit. Re-run `pr-state.sh` after every push: a new head
 starts new checks, and a fix can fail a different job.

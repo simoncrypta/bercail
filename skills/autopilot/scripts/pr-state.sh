@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # One snapshot of a PR for autopilot: checks, unanswered review threads, merge
 # state, and the next thing to do. --wait polls until that changes.
-# Exit 0: snapshot printed. Exit 2: usage / gh missing / no PR. Exit 124: wait timed out (snapshot printed).
+# Exit 0: snapshot. Exit 2: usage / gh missing / no PR. Exit 3: unreadable GitHub state (no stdout).
+# Exit 124: wait timed out with a readable pending snapshot.
 set -euo pipefail
 
 GH_BIN="${GH_BIN:-gh}"
@@ -45,6 +46,9 @@ if ! command -v "$GH_BIN" >/dev/null 2>&1; then
   exit 2
 fi
 
+checks_error="$(mktemp)"
+trap 'rm -f "$checks_error"' EXIT
+
 THREADS_QUERY='query($owner: String!, $name: String!, $n: Int!) {
   viewer { login }
   repository(owner: $owner, name: $name) {
@@ -60,7 +64,7 @@ THREADS_QUERY='query($owner: String!, $name: String!, $n: Int!) {
 }'
 
 snapshot() {
-  local pr_json checks_json threads_json owner name number
+  local pr_json checks_json threads_json owner name number checks_rc=0
   pr_json="$("$GH_BIN" pr view ${PR:+"$PR"} \
     --json number,url,state,isDraft,headRefName,headRefOid,baseRefName,mergeable,mergeStateStatus,reviewDecision \
     2>/dev/null)" || return 2
@@ -71,12 +75,28 @@ snapshot() {
   name="$(jq -r '.url | split("/")[4]' <<<"$pr_json")"
 
   # gh pr checks exits 8 while checks are pending and 1 when one failed; the JSON is still printed.
-  checks_json="$("$GH_BIN" pr checks "$number" --json name,bucket,state,workflow,link 2>/dev/null || true)"
-  jq -e 'type == "array"' <<<"$checks_json" >/dev/null 2>&1 || checks_json='[]'
+  checks_json="$("$GH_BIN" pr checks "$number" --json name,bucket,state,workflow,link 2>"$checks_error")" || checks_rc=$?
+  if [[ "$checks_rc" -eq 1 && -z "$checks_json" && "$(<"$checks_error")" == "no checks reported on the '$(jq -r .headRefName <<<"$pr_json")' branch" ]]; then
+    checks_json='[]'
+  elif [[ "$checks_rc" != 0 && "$checks_rc" != 1 && "$checks_rc" != 8 ]] \
+    || ! jq -e 'type == "array"' <<<"$checks_json" >/dev/null 2>&1; then
+    cat "$checks_error" >&2
+    printf 'pr-state: could not read checks\n' >&2
+    return 3
+  fi
 
   threads_json="$("$GH_BIN" api graphql -f query="$THREADS_QUERY" \
-    -F owner="$owner" -F name="$name" -F n="$number" 2>/dev/null || true)"
-  jq -e '.data' <<<"$threads_json" >/dev/null 2>&1 || threads_json='{"data":{}}'
+    -F owner="$owner" -F name="$name" -F n="$number")" || {
+    printf 'pr-state: could not read review threads\n' >&2
+    return 3
+  }
+  if ! jq -e '((.errors // []) | length == 0)
+    and (.data.viewer.login | type == "string")
+    and (.data.repository.pullRequest.reviewThreads.nodes | type == "array")' \
+    <<<"$threads_json" >/dev/null 2>&1; then
+    printf 'pr-state: could not read review threads\n' >&2
+    return 3
+  fi
 
   jq -n --argjson pr "$pr_json" --argjson checks "$checks_json" --argjson t "$threads_json" '
     def bucket($b): [$checks[] | select(.bucket == $b)];
@@ -121,7 +141,7 @@ snapshot() {
           else "green"
           end
         )
-      }'
+      }' || return 3
 }
 
 # What --wait compares: a new head, a check that finished, a thread that came or went.
@@ -129,23 +149,39 @@ fingerprint() {
   jq -c '[.head, .next, .checks, [.threads[].id], .mergeable]' <<<"$1"
 }
 
-if ! state="$(snapshot)"; then
-  printf 'pr-state: no pull request for %s\n' "${PR:-this branch}" >&2
-  exit 2
-fi
-
-if [[ "$WAIT" -gt 0 && "$(jq -r .next <<<"$state")" == "wait-ci" ]]; then
-  start="$(fingerprint "$state")"
-  deadline=$((SECONDS + WAIT))
-  while :; do
-    if [[ "$SECONDS" -ge "$deadline" ]]; then
-      printf '%s\n' "$state"
-      exit 124
-    fi
-    sleep "$INTERVAL"
-    state="$(snapshot)" || exit 2
-    [[ "$(fingerprint "$state")" == "$start" ]] || break
-  done
-fi
-
-printf '%s\n' "$state"
+deadline=$((SECONDS + WAIT))
+start=""
+rc=-1
+while :; do
+  if [[ "$rc" -ne -1 && "$SECONDS" -ge "$deadline" ]]; then
+    [[ "$rc" -eq 0 ]] || exit 3
+    printf '%s\n' "$state"
+    exit 124
+  fi
+  rc=0
+  state="$(snapshot)" || rc=$?
+  case "$rc" in
+    2)
+      printf 'pr-state: no pull request for %s\n' "${PR:-this branch}" >&2
+      exit 2
+      ;;
+    3)
+      [[ "$WAIT" -gt 0 ]] || exit 3
+      ;;
+    0)
+      if [[ "$WAIT" -eq 0 || "$(jq -r .next <<<"$state")" != "wait-ci" ]]; then
+        printf '%s\n' "$state"
+        exit 0
+      fi
+      current="$(fingerprint "$state")"
+      if [[ -n "$start" && "$current" != "$start" ]]; then
+        printf '%s\n' "$state"
+        exit 0
+      fi
+      start="$current"
+      ;;
+  esac
+  remaining=$((deadline - SECONDS))
+  [[ "$remaining" -gt 0 ]] || continue
+  sleep "$(awk -v interval="$INTERVAL" -v remaining="$remaining" 'BEGIN { print (interval < remaining ? interval : remaining) }')"
+done

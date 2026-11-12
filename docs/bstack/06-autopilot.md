@@ -29,6 +29,12 @@ review threads where the last word isn't yours, the merge state, and `next`:
 | `green` | stops and says "ready to merge" |
 | `merged`, `closed` | stops and says so |
 
+If checks or review threads cannot be read, the helper exits 3 with a diagnostic
+on stderr and no snapshot. Autopilot retries and stops after three consecutive
+exit-3 runs. A PR with no checks is still a readable, empty result. `--wait`
+retries read failures until its deadline: it exits 3 without a snapshot if the
+latest read failed, or 124 with a snapshot if readable checks are still pending.
+
 A failure counts as a flake only when the log shows it and the same check passed
 recently. It gets one rerun. A second failure is real.
 
