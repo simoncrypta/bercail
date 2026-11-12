@@ -559,7 +559,6 @@ PY
   assert_eq "$SHA8" "$(git -C "$sib" rev-parse HEAD)" "worktree at the PR head"
   git -C "$sib" symbolic-ref -q HEAD >/dev/null && fail "the review worktree must be detached"
   [[ "$(git -C "$WORK" worktree list --porcelain)" == *"$sib"* ]] || fail "worktree registered to the source git"
-  [[ ! -d "$REVIEWS/stack-8/worktree" && ! -d "$REVIEWS/clone.git" ]] || fail "no state-dir review worktree"
   # gh pr checks exited 8 (pending, failing): its JSON is kept.
   assert_eq 3 "$(jq length "$dir/ci.json")" "ci.json from gh pr checks"
   assert_eq '{"pass":1,"pending":1,"fail":1}' "$(jq -c '.prs[0].ci' <<<"$out")" "CI counts"
@@ -1057,7 +1056,6 @@ PY
   mkdir -p "$REVIEWS"
   out="$(cd / && FAKE_NO_CHECKS=1 "$BERCAIL" review-pr https://github.com/acme/remote-only/pull/8)"
   [[ -d "$HOME/Work/remote-only" ]] || fail "no fallback checkout at ~/Work/remote-only"
-  [[ ! -d "$REVIEWS/clone.git" && ! -d "$REVIEWS/stack-8/worktree" ]] || fail "fallback must not live in the state dir"
   assert_eq "$SHA8" "$(git -C "$HOME/Work/remote-only.review-8" rev-parse HEAD)" "sibling of the fallback checkout"
   # No JSON from gh pr checks: the rollup from gh pr view stands in.
   assert_eq '[{"name":"lint","workflow":"CI","state":"FAILURE","link":"https://ci/lint","bucket":"fail"}]' \

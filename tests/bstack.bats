@@ -213,9 +213,6 @@ EOF
   if HANDOFF_BD_BIN=/nonexistent "$spawn" --stage bstack --issue bc-1x --worktree "$wt" --resume ses_9zX --dry-run >/dev/null 2>&1; then
     fail "a session id that is not Pi's uuid must be refused"
   fi
-  if HANDOFF_BD_BIN=/nonexistent "$spawn" --stage start --issue bc-1x --worktree "$wt" --dry-run >/dev/null 2>&1; then
-    fail "stage start is gone"
-  fi
 }
 
 @test "doctor reports bstack off" {

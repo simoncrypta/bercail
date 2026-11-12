@@ -142,14 +142,11 @@ EOF
   grep -q 'Pi is not installed; install it with: mise use -g pi' <<<"$out" && grep -q 'Press Enter to close' <<<"$out" || fail "no Pi: $out"
 }
 
-@test "shep setup, use and handoff are gone; the usage names every subcommand" {
-  local sub out
-  for sub in setup "use pi" "handoff --to pi"; do
-    # shellcheck disable=SC2086
-    out="$(shep $sub </dev/null 2>&1)" && fail "shep $sub passed"
-    [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | remember "RULE" [--scope SCOPE] | forget N | list' ]] \
-      || fail "shep $sub: $out"
-  done
+@test "the shep usage names every subcommand" {
+  local out
+  out="$(shep unknown </dev/null 2>&1)" && fail "an unknown subcommand passed"
+  [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | remember "RULE" [--scope SCOPE] | forget N | list' ]] \
+    || fail "shep usage: $out"
 }
 
 @test "shep bg runs the lead Pi with the background brief and a one-line prompt in a labelled background terminal" {

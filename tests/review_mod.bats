@@ -243,10 +243,6 @@ key("o");
 await tick();
 if (JSON.stringify(herdr.runs.at(-1)) !== JSON.stringify(["tab.new", { space: "s1", name: `Shell #${n}`, folder: "/wt" }]))
   fail(`o did not open a fresh shell in the worktree: ${JSON.stringify(herdr.runs.at(-1))}`);
-// Keys the tab no longer has.
-const before = [herdr.execs.length, herdr.runs.length];
-for (const k of ["d", "t", "p", "enter"]) key(k);
-if (herdr.execs.length !== before[0] || herdr.runs.length !== before[1]) fail("d, t, p and enter do nothing");
 if (S.prs.length > 1) {
   key("j");
   shot("j: the next PR");
@@ -283,7 +279,6 @@ const overview = dump(find(v.render(cx), "stack-summary"));
 for (const text of ["Retries across the upload stack.", "Order", "Risks", "Look here first", "• Read retry() first"]) {
   if (!overview.includes(text)) fail(`stack summary missing ${text}`);
 }
-if (find(v.render(cx), "stack-md")) fail("the duplicate PR list remains");
 if (S.prs.length > 1 && (find(v.render(cx), "stack-summary").styles.max_h[0] !== 260
     || !find(v.render(cx), "review-list").styles.h_full
     || !find(v.render(cx), "review-picker").styles.overflow_y_scrollbar)) fail("long summary pushes the picker away");

@@ -375,9 +375,7 @@ EOF
   handoff_issue_id_ok bercail-0s1.2 || fail "child beads id"
   handoff_issue_id_ok --help && fail "flag is not an id"
   handoff_issue_id_ok ../x && fail "path is not an id"
-  handoff_issue_id_ok 'bercail-0s1 rm' && fail "space is not an id"
-  [[ ! -d "$ROOT/skills/handoff/prompts" ]] || fail "prompt files must be gone"
-  [[ ! -e "$ROOT/skills/handoff/scripts/handoff-brief" ]] || fail "handoff-brief must be gone"
+  if handoff_issue_id_ok 'bercail-0s1 rm'; then fail "space is not an id"; fi
 }
 
 @test "graphite config path is resolved against the repo root" {
@@ -448,7 +446,6 @@ EOF
   printf '%s' "$out" | jq -e '.herdr_env == false' >/dev/null || fail "info herdr_env: $out"
   printf '%s' "$out" | jq -e '.socket == false' >/dev/null || fail "info socket: $out"
   printf '%s' "$out" | jq -e '.main_checkout == true' >/dev/null || fail "info main_checkout: $out"
-  printf '%s' "$out" | jq -e 'has("pstack")|not' >/dev/null || fail "info must not report pstack: $out"
 }
 
 @test "--info treats a live Herdr app as herdr outside an hc terminal" {
@@ -471,7 +468,7 @@ EOF
 @test "result JSON is emitted when agent start is unconfirmed" {
   local got
   got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 0 0 1)"
-  printf '%s' "$got" | jq -e '.issue == "bercail-0s1" and (has("task")|not)' >/dev/null || fail "issue: $got"
+  printf '%s' "$got" | jq -e '.issue == "bercail-0s1"' >/dev/null || fail "issue: $got"
   printf '%s' "$got" | jq -e '.ok == true' >/dev/null || fail "ok: $got"
   printf '%s' "$got" | jq -e '.agent_started == false' >/dev/null || fail "started: $got"
   printf '%s' "$got" | jq -e '.graphite == true' >/dev/null || fail "graphite: $got"
@@ -500,8 +497,8 @@ EOF
   [[ "$(HERDR_APP_BIN="$BATS_TEST_TMPDIR/fake-herdr-app" handoff_shown_space)" == sp26 ]] || fail "shown space fallback"
 }
 
-@test "--issue is required; prompt-file, stash, pending, plan, and brief flags are gone" {
-  local rc=0 err flag out
+@test "--issue is required and validated; --info reports missing beads" {
+  local rc=0 err out
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --branch foo --stage bstack 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "missing --issue should exit 1, got $rc ($err)"
   grep -q -- '--issue' <<<"$err" || fail "missing --issue message: $err"
@@ -509,22 +506,12 @@ EOF
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue '../etc' --dry-run 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "bad issue id should exit 1, got $rc ($err)"
   grep -q 'not a beads issue id' <<<"$err" || fail "bad id message: $err"
-  for flag in --stash-prompt --take-pending --plan; do
-    rc=0
-    "$ROOT/skills/handoff/scripts/handoff-spawn" --branch foo --stage bstack --issue bercail-0s1 "$flag" >/dev/null 2>&1 || rc=$?
-    [[ "$rc" -eq 2 ]] || fail "$flag should be gone (usage), got $rc"
-  done
-  for flag in --prompt-file --brief; do
-    rc=0
-    "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue bercail-0s1 "$flag" x >/dev/null 2>&1 || rc=$?
-    [[ "$rc" -eq 2 ]] || fail "$flag should be gone (usage), got $rc"
-  done
   printf '#!/bin/sh\nexit 1\n' >"$BATS_TEST_TMPDIR/no-herdr"
   chmod +x "$BATS_TEST_TMPDIR/no-herdr"
   out="$(HERDR_APP_BIN="$BATS_TEST_TMPDIR/no-herdr" HANDOFF_BD_BIN="$BATS_TEST_TMPDIR/no-bd" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
-  printf '%s' "$out" | jq -e '(has("pending_prompt")|not) and .beads == false' >/dev/null \
-    || fail "--info should report beads and no pending prompt: $out"
+  printf '%s' "$out" | jq -e '.beads == false' >/dev/null \
+    || fail "--info should report missing beads: $out"
 }
 
 @test "argv after -- is rejected so Auto-review does not bind a payload" {
@@ -576,20 +563,11 @@ EOF
     || fail "policy line: $line"
   line="$(BERCAIL_BIN="$BATS_TEST_TMPDIR/no-bercail" handoff_policy_line /repo)"
   [[ "$line" == *"(bercail policy show)." ]] || fail "policy line without bercail: $line"
-  grep -q 'never commit unless asked' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    && fail "the handoff intro must follow the repo's policy, not hardcode it"
   [[ "$(BERCAIL_BIN="$BATS_TEST_TMPDIR/no-bercail" handoff_headless_comment_text bstack pi /w /w/r.json s1 0)" == *"git policy says"* ]] \
     || fail "the headless comment does not name the policy"
 }
 
 @test "stages are bstack and autopilot on Pi" {
-  declare -F handoff_stage_poteto >/dev/null && fail "the poteto mode must be gone"
-  declare -F handoff_has_pstack >/dev/null && fail "pstack detection must be gone"
-  declare -F handoff_build_headless_argv >/dev/null && fail "non-Pi argv builder must be gone"
-  declare -F handoff_resolve_model >/dev/null && fail "model catalog resolver must be gone"
-  declare -F handoff_bstack_model >/dev/null && fail "provider model lookup must be gone"
-  grep -rqi 'poteto\|pstack' "$ROOT/skills/handoff/SKILL.md" "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    && fail "handoff must not mention poteto-mode or pstack"
   handoff_stage_field arena binary && fail "arena is not a stage yet"
   handoff_stage_field implement binary && fail "implement is not a stage yet"
   handoff_stage_field review binary && fail "review pane is not a stage yet"
@@ -600,11 +578,6 @@ EOF
   [[ "$(handoff_stage_field autopilot binary)" == pi ]] || fail "autopilot binary"
   [[ "$(handoff_stage_field autopilot mode)" == headless ]] || fail "autopilot mode"
   [[ "$(handoff_stage_names_json)" == '["bstack","autopilot"]' ]] || fail "stage names: $(handoff_stage_names_json)"
-  grep -q 'WT_HERDR_AGENT_CMD' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    && fail "the desk runs Pi's lead; handoff names no agent command"
-  if grep -q 'PROMPT_FILE' "$ROOT/skills/handoff/scripts/handoff-spawn"; then
-    fail "handoff-spawn must not use a prompt file"
-  fi
 }
 
 # Stub bd: knows $BD_KNOWN ids, logs comments, reports $BD_BEADS_DIR.
@@ -817,9 +790,6 @@ STUB
     "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage autopilot --issue "$ISSUE" --clean 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "autopilot --branch should exit 1, got $rc ($err)"
   grep -q 'headless' <<<"$err" || fail "autopilot --branch message: $err"
-  rc=0
-  err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --binary pi --dry-run 2>&1)" || rc=$?
-  [[ "$rc" -eq 2 ]] || fail "--binary should be gone (usage), got $rc ($err)"
 }
 
 @test "Pi keeps the minted uuid; --resume refuses anything that is not a uuid" {

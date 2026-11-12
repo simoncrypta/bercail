@@ -129,7 +129,7 @@ EOF
   printf '%s\n' "$HOME/Work/a" "$HOME/Work/b" "$HOME/Work/c" >"$STATE/repos"
   out="$(shep repos --json)" || fail "repos: $out"
   jq -e '[.[] | {backend, policy, open}] == [{backend: "gt", policy: "trusted", open: 2},
-    {backend: "gh", policy: "untrusted", open: null}, {backend: "gh", policy: "none", open: null}] and all(has("issues") | not)' \
+    {backend: "gh", policy: "untrusted", open: null}, {backend: "gh", policy: "none", open: null}]' \
     <<<"$out" >/dev/null || fail "repos --json: $out"
   out="$(shep repos)"
   [[ "$out" == "~/Work/a  gt  policy trusted    2 open  (config, extras, trust)

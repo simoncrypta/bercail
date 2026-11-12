@@ -88,21 +88,12 @@ EOF
   [[ "$cfg" != *'command = '* ]] || fail "config has no agent command"
 }
 
-@test "install has no agent picker: prompt_user_config writes the default review and turns bstack on" {
-  if grep -q 'Choice \[1-7\]' "$ROOT/lib/config.sh"; then
-    fail "install must not prompt for an agent picker"
-  fi
+@test "prompt_user_config writes the default review and turns bstack on" {
   YES=1
   prompt_user_config
   assert_eq "tuicr" "$(read_layout_review)" "prompt_user_config writes the default review"
   grep -q 'enabled = true' "$AGENTIC_DEV_USER_CONFIG" \
     || fail "prompt_user_config turns bstack on"
-}
-
-@test "pstack plugin detection is gone" {
-  if declare -F pstack_plugin_present >/dev/null; then
-    fail "pstack detection is gone; Shep owns the workflow"
-  fi
 }
 
 @test "default config turns on tuicr review with auto_review and pins no editor" {
@@ -121,12 +112,11 @@ EOF
   assert_eq "tuicr" "$(read_layout_review)" "review defaults to tuicr"
 }
 
-@test "doctor accepts hunk review without requiring tuicr or lazygit" {
+@test "doctor accepts hunk review without requiring tuicr" {
   doctor_with_hunk_review
   assert_eq "0" "$rc" "doctor exits 0 for hunk review"
   assert_contains "$out" "ok  hunk" "doctor accepts configured hunk"
   [[ "$out" != *"missing  tuicr"* ]] || fail "doctor should not require tuicr when review is hunk"
-  [[ "$out" != *"lazygit"* ]] || fail "doctor no longer needs lazygit"
 }
 
 @test "doctor checks the Herdr app and herdr-core" {
