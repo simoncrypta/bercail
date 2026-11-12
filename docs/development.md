@@ -18,6 +18,8 @@ npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the berc
 
 CI runs every `tests/*.sh` on each push and PR, each under a 5-minute `timeout`, so one hung test fails its file instead of the whole job. It deploys the site and the Workers only for a `v*` tag, when `CLOUDFLARE_API_TOKEN` is set.
 
+The first `bercail update` after a release still runs the previous release's code, which loads only some of the new libs. `tests/desk_upgrade_test.sh` installs v0.13.0 and the latest `v*` tag into a throwaway HOME and updates each from this tree, so it needs the release tags (`git fetch --tags`; CI checks out with full history).
+
 Use Node 26 for the Pi extension unit tests. When Pi is installed, `tests/desk_session_pi_test.sh`, `tests/review_pi_test.sh`, and the other `*_pi_test.sh` also run the extension in a real Pi, offline, with a stand-in model, without sending a model prompt or changing your sessions.
 
 `site/` is bercail.dev: an Astro site served by the `bercail-site` Worker, which also serves `/install.sh` from the latest release's tag. `workers/setup-domain` keeps the legacy setup.simoncrypta.dev host alive for older installs. Both share `workers/setup-domain/src/github.js`.

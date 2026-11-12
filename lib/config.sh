@@ -486,9 +486,22 @@ migrate_worktrunk_layout_echo() {
   info "migrated worktrunk post-start echo in $dest"
 }
 
+# The update copies bin/bercail over the running script in place, and once
+# main returns bash reads on from its old offset into the new file. Put a
+# fresh copy at the path and empty the old inode so that read hits EOF.
+detach_running_bercail() {
+  local bin="$LOCAL_BIN/bercail"
+  [[ -f "$bin" && ! -L "$bin" && "$DRY_RUN" -ne 1 ]] || return 0
+  cp -p "$bin" "$bin.new" && ln -f "$bin" "$bin.old" && mv -f "$bin.new" "$bin" \
+    && : >"$bin.old"
+  rm -f "$bin.new" "$bin.old"
+}
+
 deploy_finalize_permissions() {
   # Older update callers reload this library before finalizing, but their file
-  # list and remaining steps still belong to the old release.
+  # list, the other libs they loaded, and remaining steps still belong to the
+  # old release.
+  detach_running_bercail
   deploy_install_file "config/pi/extensions/bercail-desk.ts" \
     "${AGENTIC_DEV_SHARE_DIR}/pi-extensions/bercail-desk.ts"
   deploy_install_file "lib/desk.sh" "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh"
@@ -500,10 +513,19 @@ deploy_finalize_permissions() {
     OMARCHY_POST_BOOT_HOOK="${OMARCHY_POST_BOOT_HOOK:-$HOME/.config/omarchy/hooks/post-boot.d/bercail-desk-restore.hook}"
     deploy_desk_restore
   fi
+  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/skills.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "${AGENTIC_DEV_SHARE_DIR}/lib/skills.sh"
+  fi
   local skill_id
   for skill_id in desk-restore unit-testing; do
     _skill_ids | grep -qx "$skill_id" && continue
     deploy_skill_tree "$skill_id"
+  done
+  # v0.13's deploy_skills unlinks Pi's skills: it reads the agent from a config
+  # key the new reader no longer has.
+  for skill_id in $(_skill_ids) desk-restore unit-testing; do
+    [[ -e "$PI_SKILLS_DIR/$skill_id" || -L "$PI_SKILLS_DIR/$skill_id" ]] && continue
     ensure_skill_symlink "$PI_SKILLS_DIR" "$skill_id"
   done
   run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/agentic-dev" "$LOCAL_BIN/bercail-desk-agent" \
