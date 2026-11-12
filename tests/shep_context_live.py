@@ -182,8 +182,9 @@ def body(run):
 
     def start(n):
         term = Term([bercail, "shep", "run"], env, str(run), run / f"term{n}.log")
-        # The footer's context meter: drawn on a fresh start and on --continue.
-        wait_for("Pi's TUI", lambda: b"/64k" in (run / f"term{n}.log").read_bytes())
+        # A resumed session can initially draw history without its footer. Wait
+        # for terminal input mode, not a context meter that needs another redraw.
+        wait_for("Pi's terminal input", lambda: b"\x1b[?2004h" in (run / f"term{n}.log").read_bytes())
         time.sleep(1)
         return term
 
