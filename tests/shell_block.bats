@@ -30,3 +30,12 @@ WT
   run wts gone
   [[ "$status" -eq 1 && "$output" == "Worktree not found: gone" ]] || fail "wts gone: exit $status: $output"
 }
+
+@test "the shell block leaves a person's t and d alone and defines none of its own" {
+  local out
+  out="$(bash -c 'alias t="echo my t"; d() { echo my d; }
+    source "$1"; alias t; d; alias d 2>/dev/null; alias dev' _ "$ROOT/config/shell/bercail.inc.sh" 2>&1)"
+  [[ "$out" == "alias t='echo my t'
+my d
+alias dev='worktree-dev'" ]] || fail "after the block: $out"
+}

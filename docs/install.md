@@ -65,6 +65,8 @@ The first update to v1 removes the `agentic-dev` command (it is `bercail`), move
 
 `handoff-spawn` prints one name for each fact from v1 on. If a script of yours reads its JSON: `graphite` is gone (read `git`: `gh`, `gt` or `origin`), `socket` is gone (read `herdr`), `workspace` is gone (read `space`), and `--workspace` is `--space`.
 
+The shell block no longer defines `t` (open the Herdr app) and `d` (short for `dev`), and no longer removes an alias of yours by those names. If you used them, add `alias t=herdr-app` or `alias d=dev` to your own shell rc, after bercail's block.
+
 Nothing stops an older release's `bercail update` from going straight to this one: it copies the new CLI with its own code and file lists, and this release takes the update over from there. That path is not tested, and the steps that carried older installs forward (the `agentic-dev` directories and shell markers, the 0.9 keys, old worktrunk config lines) are gone. From 0.8 (the Herdr terminal and its layout plugin), the full install above also adds the Herdr app. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them.
 
 ## First run

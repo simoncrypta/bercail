@@ -33,8 +33,7 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 
 | Command | What |
 |---------|------|
-| `dev` (or `d`) | Open the Herdr app if needed, show the space for `$PWD` (made if missing), and start its desk agent if it has none |
-| `t` | Open the Herdr app |
+| `dev` | Open the Herdr app if needed, show the space for `$PWD` (made if missing), and start its desk agent if it has none |
 | `wtc [branch]` | Create (or switch to) the worktree for `branch` + its space. New branches start from HEAD. With no branch, the current one moves to a new worktree and this checkout goes back to the default branch |
 | `wts [branch]` (or `wt.`) | Switch worktree (fzf if omitted) |
 | `wtd [branch]` | Force-remove the worktree (default: the current branch) + close its space |

@@ -11,15 +11,7 @@ worktree-dev() {
   wt_herdr_attach "${PWD}"
 }
 
-# Open the Herdr app (it keeps running apart from this shell).
-unalias t 2>/dev/null || true
-t() {
-  (nohup herdr-app >/dev/null 2>&1 &)
-}
-
-unalias d 2>/dev/null || true
 alias dev='worktree-dev'
-alias d='worktree-dev'
 
 _wt_worktree_path_for_branch() {
   local branch="$1"

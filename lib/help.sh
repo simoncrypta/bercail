@@ -45,11 +45,10 @@ Post-install CLI (bercail):
                 t: tuicr with [AI Agent] drafts. Then: run | card | ui | select | diff | open | dir
 
 Shell commands:
-  dev, d        Show the Herdr app space for $PWD and start its desk agent
+  dev           Show the Herdr app space for $PWD and start its desk agent
   wtc [branch]  Create worktree + its Herdr app space
   wts [branch]  Switch to existing worktree (fzf if no branch)
   wtd [branch]  Remove worktree + close its space
-  t             Open the Herdr app
 
 Herdr app layout "bercail" (switch with Ctrl+Shift+L):
   Left: the desk, one Pi agent per space (bstack when it is on, else plain pi)
