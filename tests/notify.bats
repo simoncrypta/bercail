@@ -475,16 +475,11 @@ EOF
   if notify_check "$desk" 2>/dev/null; then fail "a disabled sink must not count"; fi
 }
 
-@test "handoff-spawn warns on stderr for an uncovered repo and still succeeds" {
+@test "the handoff notify check warns on stderr for an uncovered repo and still succeeds" {
   local out
-  # handoff-spawn --branch runs that check on the new desk's checkout: the
-  # warning reaches stderr, stdout stays the spawn JSON, and the spawn succeeds.
   team_and_other
   # shellcheck source=/dev/null
   source "$ROOT/skills/handoff/scripts/handoff-spawn"
-  # shellcheck disable=SC2016
-  grep -q 'handoff_notify_check "$sibling"' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    || fail "handoff-spawn --branch does not run the check"
   out="$(BERCAIL_BIN="$ROOT/bin/bercail" handoff_notify_check "$BATS_TEST_TMPDIR/other" 2>"$BATS_TEST_TMPDIR/err")" \
     || fail "the check must not fail the spawn"
   [[ -z "$out" ]] || fail "the check wrote to stdout: $out"

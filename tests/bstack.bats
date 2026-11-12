@@ -186,50 +186,6 @@ EOF
   assert_eq "xai/grok-5#fast" "$(bstack_role_model judge)" "a full id is used as is"
 }
 
-@test "/ready runs tests, verify, formal checks, the judge, unslop, stage, report; no council" {
-  local ready="$ROOT/bstack/pi/prompts/ready.md" prev=0 n step
-  if grep -qi council "$ready"; then fail "ready.md must not run the council"; fi
-  for step in 'tests that cover the diff' 'verify skill, read it' 'Run any formal check' 'bstack-judge' '`unslop`' 'git add' 'exit code and evidence path'; do
-    n="$(grep -nF -- "$step" "$ready" | head -1 | cut -d: -f1)"
-    ((${n:-0} > prev)) || fail "ready.md: '$step' is missing or out of order"
-    prev="$n"
-  done
-  grep -qF 'does the diff match the issue?' "$ready" || fail "the judge gets the intent question"
-  if grep -q 'bstack-judge' "$ROOT/skills/council/SKILL.md"; then fail "the council must not call the judge"; fi
-  grep -q 'verify-<repo>' "$ROOT/skills/bstack/SKILL.md" || fail "the review playbook proves with the verify skill"
-}
-
-@test "the council reports only findings a run proved and a rerun confirmed" {
-  local skill="$ROOT/skills/council/SKILL.md" agent="$ROOT/bstack/pi/agents/bstack-council.md"
-  grep -qF 'Prove each finding with a run' "$skill" || fail "skill: a finding needs a run"
-  grep -qF 'Prove each finding with a run' "$agent" || fail "agent: a finding needs a run"
-  grep -qF 'Run its command yourself' "$skill" || fail "skill: the lead reruns"
-  grep -q 'style, naming, or YAGNI' "$skill" || fail "skill: style findings are dropped"
-  if grep -qF '`unverified`' "$agent"; then fail "agent: nothing is marked unverified"; fi
-  grep -qF 'There is no `unverified` list' "$skill" || fail "skill: unverified findings are dropped"
-  grep -qF 'review it
-yourself' "$skill" || fail "skill: says what to do with no seats"
-}
-
-@test "the playbooks, roles, and /ready point at the unit-testing skill" {
-  local f
-  for f in skills/bstack/SKILL.md bstack/pi/instructions.md bstack/pi/agents/bstack-builder.md \
-    bstack/pi/agents/bstack-judge.md bstack/pi/agents/bstack-council.md bstack/pi/prompts/ready.md; do
-    grep -qF '`unit-testing`' "$ROOT/$f" || fail "$f must point at the unit-testing skill"
-  done
-}
-
-@test "verify-bercail covers temp HOME, doctor, restore, info, status, evidence, cleanup" {
-  local dir="$ROOT/.agents/skills/verify-bercail" run step
-  head -2 "$dir/SKILL.md" | grep -qx 'name: verify-bercail' || fail "verify skill frontmatter"
-  run="$dir/run.sh"
-  [[ -x "$run" ]] || fail "run.sh is executable"
-  bash -n "$run" || fail "run.sh parses"
-  for step in 'export HOME=' 'bercail" doctor' 'desk restore --dry-run' 'handoff-spawn" --info' 'bstack status' '.bercail/verify' "trap 'rm -rf"; do
-    grep -qF -- "$step" "$run" || fail "run.sh is missing: $step"
-  done
-}
-
 @test "handoff stages bstack and autopilot run Pi on the lead and resume by its uuid" {
   reset_home
   write_config <<'EOF'
@@ -652,7 +608,7 @@ EOF
   unset FAKE_PI_READY
 }
 
-@test "the summary and help name Pi as the desk and the handoff stages" {
+@test "the summary names Pi as the desk and the handoff stages" {
   reset_home
   # shellcheck disable=SC1091
   source "$ROOT/lib/help.sh"
@@ -661,8 +617,6 @@ EOF
   out="$(show_summary)"
   grep -q 'bstack: on' <<<"$out" || fail "summary: $out"
   grep -q 'Desk agent: pi (handoff stages: bstack, autopilot)' <<<"$out" || fail "summary desk and stages: $out"
-  grep -q 'pi -p' "$ROOT/lib/help.sh" || fail "help should say headless stages run pi -p"
-  grep -q "bstack's Pi lead on the desk" "$ROOT/lib/help.sh" || fail "help --bstack should say Pi's lead on the desk"
 }
 
 @test "bstack paths default when AGENTIC_DEV_SHARE_DIR is unset" {

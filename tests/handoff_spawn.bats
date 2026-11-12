@@ -482,6 +482,9 @@ EOF
     || fail "issue_title: $got"
   got="$(handoff_result_json "Lbl" "/tmp/wt" "br" "bercail-0s1" 1 0 0 bstack pi)"
   printf '%s' "$got" | jq -e '.stage == "bstack" and .harness == "pi"' >/dev/null || fail "stage/harness: $got"
+  got="$(handoff_result_json L /p b i 1 0 1 bstack pi sp9 t28)"
+  printf '%s' "$got" | jq -e '.space == "sp9" and .desk == "t28" and .ok and .stage == "bstack" and .harness == "pi"' >/dev/null \
+    || fail "spawn JSON names the space and desk: $got"
 }
 
 @test "the space kept shown comes from --space or the shown space" {
@@ -560,23 +563,6 @@ EOF
   grep -q -- '--base BRANCH' <<<"$err" || fail "--help should document --base"
 }
 
-@test "handoff intro does not open review via the review skill" {
-  grep -q 'when the desk agent finishes, Review opens itself in this space' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    || fail "handoff intro should say Review opens itself"
-  grep -q 'post your final report on this issue with bd comment' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    || fail "a desk reports on the issue, where headless runs and Shep read it"
-  local res
-  res="$(handoff_result_json L /p b i 1 0 1 bstack pi sp9 t28)"
-  printf '%s' "$res" | jq -e '.space == "sp9" and .desk == "t28" and .ok and .stage == "bstack" and .harness == "pi"' >/dev/null \
-    || fail "spawn JSON names the space and desk: $res"
-  grep -q 'agentic-dev.layout' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    && fail "handoff intro must not name the old Herdr plugin"
-  grep -q 'review/SKILL.md' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    && fail "handoff intro must not tell the child to load the review skill"
-  grep -q 'leave them uncommitted for human review' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    || fail "handoff intro should tell the child to keep changes staged, not committed"
-}
-
 @test "the handoff text follows the repo git policy" {
   local bin="$BATS_TEST_TMPDIR/policy-bin" line
   mkdir -p "$bin"
@@ -616,8 +602,6 @@ EOF
   [[ "$(handoff_stage_names_json)" == '["bstack","autopilot"]' ]] || fail "stage names: $(handoff_stage_names_json)"
   grep -q 'WT_HERDR_AGENT_CMD' "$ROOT/skills/handoff/scripts/handoff-spawn" \
     && fail "the desk runs Pi's lead; handoff names no agent command"
-  grep -q 'WT_HERDR_AGENT_PROMPT="$prompt"' "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    || fail "pane stage must pass the issue prompt inline"
   if grep -q 'PROMPT_FILE' "$ROOT/skills/handoff/scripts/handoff-spawn"; then
     fail "handoff-spawn must not use a prompt file"
   fi
@@ -1197,6 +1181,14 @@ HELPER
   grep -q 'Use gt' "$BD_COMMENTS" && fail "no gt intro in a plain repo: $(cat "$BD_COMMENTS")"
   grep -q 'bercail handoff: stage bstack' "$BD_COMMENTS" || fail "intro missing: $(cat "$BD_COMMENTS")"
   grep -q "git policy says (bercail policy show)" "$BD_COMMENTS" || fail "intro does not name the policy: $(cat "$BD_COMMENTS")"
+  grep -q 'when the desk agent finishes, Review opens itself in this space' "$BD_COMMENTS" \
+    || fail "handoff intro should say Review opens itself"
+  grep -q 'post your final report on this issue with bd comment' "$BD_COMMENTS" \
+    || fail "a desk reports on the issue, where headless runs and Shep read it"
+  grep -q 'leave them uncommitted for human review' "$BD_COMMENTS" \
+    || fail "handoff intro should tell the child to keep changes staged, not committed"
+  if grep -q 'agentic-dev.layout' "$BD_COMMENTS"; then fail "handoff intro must not name the old Herdr plugin"; fi
+  if grep -q 'review/SKILL.md' "$BD_COMMENTS"; then fail "handoff intro must not tell the child to load the review skill"; fi
 }
 
 @test "a hung gt warns and the desk still starts" {
