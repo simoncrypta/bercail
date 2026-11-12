@@ -22,7 +22,6 @@ if [[ "${FUNCNAME[1]:-}" == deploy_configs ]]; then
   restart_update
 fi
 
-# A new install runs bstack on the desk; --no-bstack leaves plain Pi.
 default_user_config() {
   cat <<'EOF'
 [layout]
@@ -31,14 +30,9 @@ review = "tuicr"
 # only, watching; agents stage and do not commit). Someone else's PR uses `tuicr pr`.
 # Set false to open Review only with Ctrl+Shift+R.
 auto_review = true
-EOF
-  [[ "${BSTACK_NEW_INSTALL:-1}" -eq 1 ]] || return 0
-  cat <<'EOF'
 
 [bstack]
-# Pi with your own logins. `bercail bstack setup` shows what's missing;
-# `bercail bstack off` turns bstack off.
-enabled = true
+# Pi with your own logins. `bercail bstack setup` shows what's missing.
 # A model per provider. Empty: auto, the newest model of each connected plan
 # (re-picked on bercail update). Set a provider/model id (#variant allowed) to pin one.
 claude = ""
@@ -272,7 +266,7 @@ deploy_herdr_app() {
   info "Herdr app: switch to the bercail layout with Ctrl+Shift+L"
 }
 
-# No install-time picker. The desk runs Pi: bstack's lead when bstack is on.
+# No install-time picker. The desk runs bstack's Pi lead.
 prompt_user_config() {
   if [[ -f "$BERCAIL_USER_CONFIG" ]]; then
     info "using existing config: $BERCAIL_USER_CONFIG (review: $(read_layout_review))"
@@ -448,8 +442,44 @@ migrate_state_dir() {
   fi
 }
 
-# v1 has no agentic-dev command. A v0.14.0 updater still copies the shim by
-# name (bin/agentic-dev stays in the repo for it), so take the installed one out.
+# Remove the old switch. An off install (including --no-bstack, which wrote no
+# [bstack]) needs to know its next desk will run the guarded lead, not plain Pi.
+migrate_bstack_switch() {
+  local dest="$BERCAIL_USER_CONFIG" tmp was
+  [[ -f "$dest" ]] || return 0
+  tmp="$(mktemp)"
+  was="$(awk -v out="$tmp" '
+    /^[[:space:]]*\[/ {
+      sec = $0; sub(/#.*/, "", sec); gsub(/[[:space:]]/, "", sec)
+      if (sec == "[bstack]") print "section"
+    }
+    sec == "[bstack]" && /^[[:space:]]*enabled[[:space:]]*=/ {
+      sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]*(#.*)?$/, "")
+      print ($0 == "true" ? "on" : "off")
+      next
+    }
+    sec == "[bstack]" && $0 == "# `bercail bstack off` turns bstack off." { next }
+    sec == "[bstack]" && /^# Pi with your own logins\. `bercail bstack setup` shows what\047s missing;$/ { sub(/;$/, ".") }
+    { print > out }' "$dest")"
+  if grep -qx off <<<"$was" \
+    || { [[ -z "$was" && ! -e "${BSTACK_PI_DIR:-$BERCAIL_SHARE_DIR/pi}/lead.json" ]]; }; then
+    warn "bstack has no switch from this release on. This update sets up its Pi profile, and the desk runs bstack's lead with bercail's guard, not plain pi (bercail bstack status)"
+  fi
+  if ! grep -qx -e on -e off <<<"$was"; then
+    rm -f "$tmp"
+    return 0
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    rm -f "$tmp"
+    info "[dry-run] would remove enabled from [bstack] in $dest"
+    return 0
+  fi
+  # Written through, not moved over: the file may be a link into someone's dotfiles.
+  cat "$tmp" >"$dest"
+  rm -f "$tmp"
+  info "removed enabled from [bstack] in $dest: nothing reads it"
+}
+
 # [graphite] "<repo>" = true|false chose Graphite until v1; [git] names the
 # backend now. Move each entry there once. A repo [git] already names keeps
 # that entry: [git] won when a repo was in both.
@@ -538,6 +568,8 @@ migrate_graphite_config() {
   info "moved the [graphite] entries of $dest under [git]"
 }
 
+# v0.14.0 still copies this shim by name. Remove the installed command, but keep
+# bin/agentic-dev in the repo until that updater is below the upgrade floor.
 remove_agentic_dev_shim() {
   local shim="$LOCAL_BIN/agentic-dev"
   grep -qsx '# Compat shim. The CLI is bercail.' "$shim" || return 0
@@ -582,6 +614,7 @@ deploy_configs() {
   migrate_state_dir
   remove_agentic_dev_shim
   migrate_graphite_config
+  migrate_bstack_switch
   notify_rename_workspaces
 
   ensure_dir "$BERCAIL_CONFIG_DIR"

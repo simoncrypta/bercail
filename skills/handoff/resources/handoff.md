@@ -48,7 +48,7 @@ The ask is in the beads issue, so nothing but the id reaches argv.
 `pi -p --mode json --session-id <uuid>` on the lead profile. Neither opens
 anything in the Herdr app. `--stage autopilot` is that run with
 `BERCAIL_ROLE=autopilot` and cannot take `--branch`. With `--branch`, `bstack`
-starts a desk on Pi's lead from lead.json, so it needs bstack on.
+starts a desk on Pi's lead from lead.json.
 
 Pi resume reuses that uuid; `--resume` refuses anything that is not a uuid.
 Pi gets no `--add-dir`. A missing `pi`, bd, or issue writes status `blocked`

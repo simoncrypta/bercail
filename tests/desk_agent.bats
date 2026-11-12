@@ -8,7 +8,7 @@ setup() {
   isolate
   # A flag value can contain a newline; pipelines that check it must still fail the test.
   set -o pipefail
-  mkdir -p "$BATS_TEST_TMPDIR/bin" "$XDG_CONFIG_HOME/bercail"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
   hash -r
   # A key in the environment would show up as key=none failing. Tests that want one set it inline.
@@ -21,7 +21,6 @@ for a in "$@"; do printf ' [%s]' "$a"; done
 printf '\n'
 AGENT
   chmod +x "$BATS_TEST_TMPDIR/bin/other"
-  CONFIG="$XDG_CONFIG_HOME/bercail/config.toml"
 }
 
 desk() { "$ROOT/bin/bercail-desk-agent" "$@"; }
@@ -41,7 +40,6 @@ AGENT
 
 # Fake hc: a labelled desk unless a test says otherwise. Records land under the test HOME.
 arrange_record() {
-  printf '[bstack]\nenabled = true\n' >"$CONFIG"
   export HC_TERMINAL_ID=t9
   RECORDS="$XDG_STATE_HOME/bercail/desk-sessions"
   EVENTS="$BATS_TEST_TMPDIR/events"
@@ -102,11 +100,10 @@ seed_issue() {
   desk --prompt 'Your job is beads issue bercail-0uo. Run it.' pi --verbose >/dev/null
 }
 
-@test "bstack runs the Pi lead from lead.json, with the desk extension and no Anthropic env" {
+@test "the desk runs the Pi lead from lead.json, with the desk extension and no Anthropic env" {
   local got LEAD EXT
   LEAD="$HOME/.local/share/bercail/pi/lead.json"
   EXT="$HOME/.local/share/bercail/pi-extensions/bercail-desk.ts"
-  printf '[bstack]\nenabled = true\n' >"$CONFIG"
   got="$(desk 2>&1)" && fail "a bstack desk without its lead should not start: $got"
   [[ "$got" == *"lead.json is missing; run bercail update"* ]] || fail "missing lead says what to run: $got"
   mkdir -p "$(dirname "$LEAD")" "$(dirname "$EXT")"
@@ -125,18 +122,17 @@ seed_issue() {
 arrange_lead() {
   LEAD="$HOME/.local/share/bercail/pi/lead.json"
   mkdir -p "$(dirname "$LEAD")"
-  jq -n '$ARGS.positional' --args -- pi --model claude-bridge/opus:high -e /bridge.ts \
+  jq -n '$ARGS.positional' --args -- pi --model claude-bridge/opus:high -e /guard.ts \
     --append-system-prompt "/a b/instructions.md" --skill /s >"$LEAD"
 }
 
 @test "--model swaps the lead's model and changes nothing else" {
   arrange_lead
-  printf '[bstack]\nenabled = true\n' >"$CONFIG"
   expect "$(desk --prompt 'Do bercail-1' --model claude-bridge/fable:high)" \
-    "pi [--model] [claude-bridge/fable:high] [-e] [/bridge.ts] [--append-system-prompt] [/a b/instructions.md] [--skill] [/s] [Do bercail-1] key=none" \
+    "pi [--model] [claude-bridge/fable:high] [-e] [/guard.ts] [--append-system-prompt] [/a b/instructions.md] [--skill] [/s] [Do bercail-1] key=none" \
     "the lead runs on the given model, the rest of its argv as it was"
   expect "$(desk --model claude-bridge/fable:low --prompt x)" \
-    "pi [--model] [claude-bridge/fable:low] [-e] [/bridge.ts] [--append-system-prompt] [/a b/instructions.md] [--skill] [/s] [x] key=none" \
+    "pi [--model] [claude-bridge/fable:low] [-e] [/guard.ts] [--append-system-prompt] [/a b/instructions.md] [--skill] [/s] [x] key=none" \
     "the options come in either order"
   expect "$(desk --model m2 pi --model=m1 --verbose)" "pi [--model=m2] [--verbose] key=none" "an equals --model is swapped in place"
   expect "$(desk --model m2 pi --verbose -- --model)" "pi [--model] [m2] [--verbose] [--] [--model] key=none" \
@@ -159,21 +155,18 @@ arrange_lead() {
   [[ "$cmd" == *"bercail-desk-agent pi --session-id 0199-r --model claude-bridge/fable:high "* ]] \
     || fail "the resume line carries the model: $cmd"
   expect "$(bash -c "$cmd")" \
-    "pi [--session-id] [0199-r] [--model] [claude-bridge/fable:high] [-e] [/bridge.ts] [--append-system-prompt] [/a b/instructions.md] [--skill] [/s] key=none" \
+    "pi [--session-id] [0199-r] [--model] [claude-bridge/fable:high] [-e] [/guard.ts] [--append-system-prompt] [/a b/instructions.md] [--skill] [/s] key=none" \
     "the resumed desk runs Pi on the model it had"
 }
 
-@test "bstack off runs plain pi; a given command runs as is" {
+@test "a given command runs as is; a given pi gets the desk extension and no Anthropic env" {
   local EXT
   EXT="$HOME/.local/share/bercail/pi-extensions/bercail-desk.ts"
-  mkdir -p "$(dirname "$EXT")"
+  mkdir -p "$(dirname "$EXT")" "$XDG_CONFIG_HOME/bercail"
   : >"$EXT"
-  printf '[bstack]\nenabled = false\n' >"$CONFIG"
-  expect "$(ANTHROPIC_API_KEY=mine desk)" "pi [-e] [$EXT] key=mine" "bstack off runs plain pi; the env stays"
-  expect "$(desk --prompt x)" "pi [-e] [$EXT] [x] key=none" "bstack off prompt"
-  rm "$CONFIG"
-  expect "$(desk)" "pi [-e] [$EXT] key=none" "no config runs plain pi"
-  rm -f "$EXT"
+  # The switch an older config may still carry is not read.
+  printf '[bstack]\nenabled = false\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+  expect "$(ANTHROPIC_API_KEY=mine desk pi --prompt x)" "pi [-e] [$EXT] [--prompt] [x] key=none" "a given pi command"
   expect "$(desk --prompt x other --verbose)" "other [--verbose] [x]" "a given command runs as is, the prompt last"
 }
 
@@ -289,9 +282,6 @@ arrange_lead() {
   { status '{"0199-second":{"app":"pi"}}'; } >"$EVENTS"
   AGENT_LIFE=1 desk pi --session-id 0199-given >/dev/null
   expect "$(record .session)" '"0199-given"' "hc reports do not replace the selected session"
-  printf '[bstack]\nenabled = false\n' >"$CONFIG"
-  AGENT_LIFE=1 desk pi --session-id 0199-given >/dev/null
-  expect "$(record .session)" '"0199-given"' "same identity rule without bstack"
 }
 
 @test "the record names the running agent" {

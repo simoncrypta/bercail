@@ -79,23 +79,33 @@ EOF
   assert_eq "${HOME}/.bashrc" "$(shell_rc_for bash)" "bash rc is ~/.bashrc"
 }
 
-@test "a new install turns bstack on with the claude lead; --no-bstack writes no [bstack] and no agent command" {
+@test "a new install writes [bstack] with the claude lead and no switch or agent command" {
   local cfg
-  assert_contains "$(default_user_config)" 'enabled = true' \
-    "a new install turns bstack on"
-  assert_contains "$(default_user_config)" 'lead = "claude"' \
+  cfg="$(default_user_config)"
+  assert_contains "$cfg" '[bstack]' \
+    "a new install writes [bstack]"
+  assert_contains "$cfg" 'lead = "claude"' \
     "a new install names the claude family for the lead"
-  cfg="$(BSTACK_NEW_INSTALL=0 default_user_config)"
-  [[ "$cfg" != *'[bstack]'* ]] || fail "--no-bstack leaves plain Pi, no [bstack]"
+  [[ "$cfg" != *'enabled'* ]] || fail "a new install has no bstack switch"
   [[ "$cfg" != *'command = '* ]] || fail "config has no agent command"
+  # BSTACK_NEW_INSTALL was the --no-bstack switch. Nothing reads it.
+  cfg="$(BSTACK_NEW_INSTALL=0 default_user_config)"
+  assert_contains "$cfg" '[bstack]' \
+    "the old switch variable does not drop [bstack]"
+  assert_contains "$cfg" 'lead = "claude"' \
+    "the lead stays when the old switch variable is set"
+  [[ "$cfg" != *'enabled'* ]] || fail "the old switch variable does not write enabled"
 }
 
-@test "prompt_user_config writes the default review and turns bstack on" {
+@test "prompt_user_config writes the default review and [bstack] with no switch" {
   YES=1
   prompt_user_config
   assert_eq "tuicr" "$(read_layout_review)" "prompt_user_config writes the default review"
-  grep -q 'enabled = true' "$BERCAIL_USER_CONFIG" \
-    || fail "prompt_user_config turns bstack on"
+  grep -q 'lead = "claude"' "$BERCAIL_USER_CONFIG" \
+    || fail "prompt_user_config writes the lead"
+  if grep -q 'enabled' "$BERCAIL_USER_CONFIG"; then
+    fail "prompt_user_config writes no bstack switch"
+  fi
 }
 
 @test "default config turns on tuicr review with auto_review and pins no editor" {

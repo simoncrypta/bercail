@@ -100,13 +100,21 @@ EOF
     find grep sed awk tr sort uniq head tail wc mktemp date git jq touch uname sleep stat cut; do
     ln -s "$(command -v "$tool")" "$tools/$tool"
   done
-  for tool in herdr-app hc wt bd fzf pi tuicr; do
+  for tool in herdr-app hc wt bd fzf tuicr; do
     printf '#!/bin/sh\n[ "$1" != --version ] || echo 99.0.0\nexit 0\n' >"$tools/$tool"
     chmod +x "$tools/$tool"
   done
+  # Pi with the Claude bridge installed, and Claude Code signed in on a plan.
+  cat >"$tools/pi" <<'SH'
+#!/bin/sh
+case "$1" in
+  --version) echo 99.0.0 ;;
+  --offline) printf '%s\n' 'provider model context max-out thinking images' 'claude-bridge claude-opus-5-5 1M 128K yes yes' ;;
+esac
+SH
+  printf '%s\n' '#!/bin/sh' "echo '{\"loggedIn\":true,\"authMethod\":\"claude.ai\"}'" >"$tools/claude"
   printf '#!/bin/sh\nexit 1\n' >"$tools/curl"
-  chmod +x "$tools/curl"
-  printf '[bstack]\nenabled = false\n' >>"$BERCAIL_USER_CONFIG"
+  chmod +x "$tools/pi" "$tools/claude" "$tools/curl"
   : >"$HOME/.config/hypr/bindings.conf"
   output="$(env -i HOME="$HOME" PATH="$tools" SHELL=/bin/bash INSTALL_SRC="$ROOT" \
     BERCAIL_NO_PROMPT=1 "$ROOT/bin/bercail" update 2>&1)" || fail "deploy: $output"
@@ -114,6 +122,7 @@ EOF
   output="$(env -i HOME="$HOME" PATH="$tools" SHELL=/bin/bash "$HOME/.local/bin/bercail" doctor 2>&1)" || rc=$?
   [[ "$rc" -eq 0 ]] || fail "doctor: $output"
   [[ "$output" == *'not compared: installed from a release'* ]] || fail "$output"
+  [[ "$output" == *'ok  bstack (lead=claude-bridge/claude-opus-5-5:high)'* ]] || fail "bstack is part of the install: $output"
 }
 
 @test "doctor still fails missing files without a recorded source" {

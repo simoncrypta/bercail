@@ -36,7 +36,7 @@ shep_inbox_dir() {
 }
 
 # Pi's argv for Shep, into SHEP_PI_ARGV: the lead's model and extensions from
-# bstack (lead.json) when it is on, Shep's rules and start context, its inbox
+# bstack (lead.json), Shep's rules and start context, its inbox
 # and compaction extensions, and its own session folder. No context files: the
 # person's global Pi persona and any AGENTS.md stay out of Shep. --approve
 # trusts the workspace, a folder only bercail writes, so Pi loads its
@@ -79,7 +79,7 @@ _shep_ended() {
 shep_run() {
   local state code=0
   if ! command -v pi >/dev/null 2>&1; then
-    _shep_err "Pi is not installed; install it with: mise use -g pi (or turn bstack on: bercail bstack on)"
+    _shep_err "Pi is not installed; install it with: mise use -g pi (or run: bercail bstack setup)"
     _shep_ended 1
     return 0
   fi

@@ -103,7 +103,7 @@ working directory to `cwd` from `--info`. Flags only.
 - `--model <provider/id[:thinking]>` is optional: run this one agent on another Pi model, such as
   `claude-bridge/claude-fable-5-2:high`, when the person asks for one. See [Another model](#another-model).
 - Plan-only work is a line in the issue, not a flag.
-- `--branch` needs bstack on (`[bstack] enabled = true`) and a Pi lead profile. Autopilot cannot take `--branch`.
+- `--branch` needs bstack's Pi lead profile (`bercail update` writes it). Autopilot cannot take `--branch`.
 ## The desk (`--branch`)
 
 `--branch` makes a sibling worktree (`wt switch --create`), opens a Herdr app
@@ -112,7 +112,7 @@ an hc terminal running Pi's lead (an empty command, so `bercail-desk-agent`
 reads `lead.json`) with a one-line prompt pointing at the issue as its first message, labelled
 `bercail.role=agent`, `bercail.space=<space id>`, and, when known, `bercail.issue` and `bercail.issue_title`. The bercail layout shows
 it in the desk column. `--stage` is required; bercail has no default stage.
-Bstack off, or a missing lead profile, fails before any worktree is made. A desk already running in
+A missing lead profile fails before any worktree is made. A desk already running in
 that space is replaced. `wt remove <branch>` closes the space and its desk.
 
 ## Another model

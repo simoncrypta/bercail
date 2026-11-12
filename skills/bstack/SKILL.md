@@ -15,8 +15,7 @@ before you start, then work through them in order. Roles and finishing rules are
 in bstack's instructions (`~/.local/share/bercail/pi/instructions.md`).
 
 `bstack-*` subagents are `hc` sibling agents; your instructions show how to
-start one. With bstack off there are none: do the role's work yourself in this
-session and say so once.
+start one.
 
 ## Pick a playbook
 

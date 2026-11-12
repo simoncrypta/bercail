@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # bstack: bercail's agent setup on Pi. Your own Claude, GPT, and Grok logins sit
-# behind it, and bercail's workflow on top. [bstack] in config.toml turns it on
-# and maps roles to models.
+# behind it, and bercail's workflow on top. [bstack] in config.toml maps roles to
+# models.
 
 BSTACK_MARKER="managed by bercail (bstack)"
 # Paths below expand at source time. Same default as lib/common.sh: an unset
@@ -43,38 +43,6 @@ _bstack_toml_get() {
       print line
       exit
     }' "$file"
-}
-
-# Set KEY in [SECTION] to RAW (written as is: quote strings yourself). Adds the
-# key at the end of the section, or the section at the end of the file.
-_bstack_toml_set() {
-  local section="$1" key="$2" raw="$3" file="${4:-$BERCAIL_USER_CONFIG}" tmp
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would set [$section] $key = $raw in $file"
-    return 0
-  fi
-  ensure_dir "$(dirname "$file")"
-  [[ -f "$file" ]] || : >"$file"
-  tmp="$(mktemp)"
-  awk -v want="[$section]" -v key="$key" -v raw="$raw" '
-    function flush() { if (insec && !done) { print key " = " raw; done = 1 } }
-    /^[[:space:]]*\[/ {
-      s = $0; gsub(/[[:space:]]/, "", s)
-      if (insec && s != want) { flush(); insec = 0 }
-      if (s == want) { insec = 1; seen = 1 }
-      print; next
-    }
-    insec && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" { if (!done) print key " = " raw; done = 1; next }
-    { print }
-    END {
-      flush()
-      if (!seen) { print ""; print want; print key " = " raw }
-    }' "$file" >"$tmp"
-  mv "$tmp" "$file"
-}
-
-bstack_enabled() {
-  [[ "$(_bstack_toml_get bstack enabled)" == true ]]
 }
 
 _bstack_role_default() {
@@ -455,11 +423,7 @@ _bstack_pi_known() {
 bstack_status() {
   local family role ver model note
   bstack_load_state reload
-  if bstack_enabled; then
-    log "bstack: on"
-  else
-    log "bstack: off (bercail bstack on)"
-  fi
+  log "bstack:"
   if dep_present pi; then
     ver="$(pi --version 2>/dev/null || true)"
     log "  pi: $(command -v pi) (${ver:-unknown version})"
@@ -512,7 +476,6 @@ bstack_status() {
 bstack_setup() {
   bstack_load_state reload
   log "bstack setup: Pi, with your own Claude, ChatGPT, and Grok logins."
-  bstack_enabled || _bstack_toml_set bstack enabled true
   _bstack_install_pi || die "bstack on Pi needs pi; install it (mise use -g pi), then run: bercail bstack setup"
   deploy_bstack
   bstack_status
@@ -523,12 +486,8 @@ bstack_setup() {
 doctor_bstack() {
   local rel missing=0 path family any_login=0 model
   bstack_load_state reload
-  if ! bstack_enabled; then
-    log "  off  bstack (bercail bstack on)"
-    return 0
-  fi
   if ! dep_present pi; then
-    log "  missing  pi (bstack is on; bercail bstack setup)"
+    log "  missing  pi (bercail bstack setup)"
     return 1
   fi
   if _bstack_pi_version_ok; then
@@ -635,10 +594,6 @@ _bstack_resolved_text() {
 
 deploy_bstack() {
   local work rel result=0
-  if ! bstack_enabled; then
-    remove_bstack quiet
-    return 0
-  fi
   bstack_pi_fallback >/dev/null || return 1
   _bstack_install_pi || return 1
   bstack_load_state reload
@@ -664,9 +619,8 @@ deploy_bstack() {
 
 # Remove what deploy_bstack wrote, and only files that still carry the marker.
 remove_bstack() {
-  local quiet="${1:-}"
   if ! _bstack_pi_rendered_any; then
-    [[ -n "$quiet" ]] || info "bstack: nothing to remove in $BSTACK_PI_DIR"
+    info "bstack: nothing to remove in $BSTACK_PI_DIR"
     return 0
   fi
   _bstack_remove_pi
@@ -674,29 +628,13 @@ remove_bstack() {
 
 # --- bercail bstack -----------------------------------------------------------
 
-# On: the desk runs bstack's Pi lead. Off: remove bstack's files; the desk runs
-# plain Pi.
-bstack_on() {
-  _bstack_toml_set bstack enabled true
-  _bstack_install_pi || true
-  deploy_bstack
-}
-
-bstack_off() {
-  _bstack_toml_set bstack enabled false
-  remove_bstack
-  info "bstack off; the desk runs plain pi"
-}
-
 cmd_bstack() {
   local sub="${1:-status}"
   shift || true
   [[ $# -eq 0 ]] || die "unknown option: $1"
   case "$sub" in
     status) bstack_status ;;
-    on) bstack_on ;;
-    off) bstack_off ;;
     setup) bstack_setup ;;
-    *) die "usage: bercail bstack status|on|off|setup" ;;
+    *) die "usage: bercail bstack status|setup" ;;
   esac
 }

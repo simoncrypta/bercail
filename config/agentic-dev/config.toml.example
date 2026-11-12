@@ -8,7 +8,6 @@ auto_review = true
 [bstack]
 # Pi with your own Claude, ChatGPT, and X subscriptions. Setup installs the
 # Claude bridge. Sign in with `claude auth login`, /login openai, /login xai.
-enabled = true
 # Pi rate-limit fallback candidates, scanned from the start, skipping the current
 # and already attempted models. Only claude/gpt/grok, no duplicates. [] disables it.
 fallback = ["claude", "gpt", "grok"]

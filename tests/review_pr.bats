@@ -123,9 +123,8 @@ setup() {
   FIX="$BATS_TEST_TMPDIR/fix"
   LOG="$BATS_TEST_TMPDIR/log"
   FAKE_BIN="$BATS_TEST_TMPDIR/bin"
-  mkdir -p "$FIX" "$LOG" "$FAKE_BIN" "$XDG_CONFIG_HOME/bercail"
+  mkdir -p "$FIX" "$LOG" "$FAKE_BIN"
   export FIX LOG
-  printf '[bstack]\nenabled = true\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
   # bstack's reviewer argv, as bercail update writes it.
   PI_PROFILE="$HOME/.local/share/bercail/pi"
   mkdir -p "$PI_PROFILE"
@@ -770,7 +769,7 @@ PY
     "$(awk '{ print $1 }' "$LOG/stack.mod") $(awk '{ print $2 }' "$LOG/stack.mod" | jq -r '"\(.stack) \(.bercail)"')" \
     "the Stack tab is the mod, on this stack"
   [[ ! -e "$LOG/stack.argv" ]] || fail "the Stack tab runs no terminal"
-  assert_has "$(<"$LOG/hc")" "--label bercail.space=s1" "the desk starts (bstack on)"
+  assert_has "$(<"$LOG/hc")" "--label bercail.space=s1" "the desk starts without a bstack switch"
   local session
   session="$(jq -r .session_id "$REVIEWS/stack-7/desk.json")"
   assert_has "$(<"$LOG/hc")" "--label bercail.review.session=$session" "desk is attached to the review session"

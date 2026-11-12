@@ -29,7 +29,7 @@ what the others said.
 With one seat, say so in the report. Each reviewer is a
 `bstack-council-<family>` template from `hc templates`, started as a sibling
 terminal the way your instructions say. bercail update renders one per provider
-with a model. With none (no provider has a model, or bstack is off), review it
+with a model. With none (no provider has a model), review it
 yourself by the same rules and say the panel did not run.
 
 ## Reviewer rules

@@ -63,7 +63,6 @@ chmod +x "$box/bin/hc"
 
 cat >"$XDG_CONFIG_HOME/bercail/config.toml" <<'TOML'
 [bstack]
-enabled = true
 claude = "claude-bridge/claude-opus-5-5#high"
 TOML
 
@@ -124,7 +123,7 @@ step handoff-info 0 "$repo/skills/handoff/scripts/handoff-spawn" --info
 check "handoff --info is JSON" jq -e 'type == "object"' "$evidence/handoff-info.out"
 
 step bstack-status 0 "$bercail" bstack status
-check "bstack status is on" out_has bstack-status "bstack: on"
+check "bstack status reports its profile" out_has bstack-status "bstack:"
 check "the desk's lead is deployed" jq -e '.[0] == "pi"' "$profile/lead.json"
 check "review-pr's reviewer is read-only" jq -e 'index(["--tools", "read,grep,find,ls"]) != null' "$profile/review.json"
 check "/council is deployed" test -f "$profile/prompts/council.md"

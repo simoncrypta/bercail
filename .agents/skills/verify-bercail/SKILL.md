@@ -30,7 +30,7 @@ The live proofs (`tests/run.sh --live`) are not part of it.
 
 `run.sh` makes a temp directory and points `HOME`, the `XDG_*` dirs and
 `INSTALL_SRC` at it, with this checkout as the source. It clears the desk's
-`HC_*` variables, writes a `config.toml` with bstack on and one pinned model,
+`HC_*` variables, writes a `config.toml` with one pinned model,
 and runs `bercail reconfigure` to deploy into that HOME.
 
 Two stand-ins. `hc` answers for one live desk at a bare shell and logs every
@@ -50,7 +50,7 @@ higher is a crash.
 |------|--------|
 | `bercail desk restore --dry-run` on a seeded record | says `would resume`, sends no `hc send`, leaves the record unchanged |
 | `handoff-spawn --info` | prints JSON |
-| `bercail bstack status` | says `bstack: on` |
+| `bercail bstack status` | reports the profile, models and logins |
 | deployed files | the lead's `lead.json` loads the guard, review-pr's `review.json` has only read tools, `/council` is there |
 | `bercail policy show --json` on this checkout | reads `.bercail/policy.toml`, and a fresh HOME has not trusted it, so commit stays `ask` |
 | the pinned Claude model | a `bstack-council-claude` seat, and none for a provider with no model |

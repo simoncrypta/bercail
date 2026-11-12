@@ -29,8 +29,6 @@ DRY_RUN=0
 YES=0
 FORCE=0
 RECONFIGURE=0
-# A new install (no config.toml yet) turns bstack on unless --no-bstack.
-BSTACK_NEW_INSTALL="${BSTACK_NEW_INSTALL:-1}"
 
 log() { printf '%s\n' "$*"; }
 info() { printf '→ %s\n' "$*"; }

@@ -1,8 +1,7 @@
 # Set up bstack
 
-New bercail installs turn bstack on (`./install.sh --no-bstack` to skip). On an
-existing install, `bercail bstack setup` or `bercail bstack on` turns it on.
-With bstack off, the desk runs plain Pi.
+bstack comes with every bercail install: the desk runs its Pi lead.
+`bercail bstack setup` installs what is missing and names the logins to run.
 
 ## Sign in
 

@@ -77,7 +77,9 @@ EOF
   source "$ROOT/config/worktrunk/herdr-layout.sh"
 }
 
-# The checkout's space (sp-child) is open, with bstack off so no desk started.
+# The checkout's space (sp-child) is open. The log is cleared so the call under
+# test is what remains. A desk may already have started; the fake does not
+# record it unless $FAKE_STATE/desk exists.
 open_space() {
   wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature"
   : >"$CALL_LOG"
@@ -89,15 +91,14 @@ open_space() {
   [[ "$got" == "Feature_Main" ]] || fail "session name: expected Feature_Main got $got"
 }
 
-@test "layout create opens a space for the checkout and keeps the shown space" {
+@test "layout create opens a space for the checkout, keeps the shown space, and starts a desk with no config" {
   : >"$CALL_LOG"
+  rm -f "$XDG_CONFIG_HOME/bercail/config.toml"
   wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature"
   grep -qF "herdr-app do space.new --name Main_Feature --folder $FEATURE --tab Shell" "$CALL_LOG" \
     || fail "expected space.new on the checkout; log=$(cat "$CALL_LOG")"
   [[ "$(cat "$FAKE_STATE/shown")" == sp-parent ]] || fail "create must keep the user's space shown"
-  if grep -q '^hc run' "$CALL_LOG"; then
-    fail "post-start create must not start an agent with bstack off"
-  fi
+  grep -qx "$RUN" "$CALL_LOG" || fail "post-start starts the desk with no config; log=$(cat "$CALL_LOG")"
 }
 
 @test "layout create reuses the space open on that folder" {
@@ -108,11 +109,11 @@ open_space() {
   fi
 }
 
-@test "with bstack on, post-start starts a desk in a space without one, unless handoff asks not to" {
+@test "post-start starts a desk even when enabled is false, leaves a live desk, and skips when handoff asks not to" {
   open_space
-  printf '[bstack]\nenabled = true\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+  printf '[bstack]\nenabled = false\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
   wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature"
-  grep -qx "$RUN" "$CALL_LOG" || fail "with bstack on, post-start starts the desk; log=$(cat "$CALL_LOG")"
+  grep -qx "$RUN" "$CALL_LOG" || fail "enabled = false does not stop the desk; log=$(cat "$CALL_LOG")"
   [[ "$(cat "$FAKE_STATE/shown")" == sp-parent ]] || fail "the auto-started desk must keep the user's space shown"
   touch "$FAKE_STATE/desk"
   : >"$CALL_LOG"

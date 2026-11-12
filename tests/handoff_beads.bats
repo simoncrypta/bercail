@@ -150,15 +150,15 @@ wt_herdr_handoff_agent() { return 0; }
 _wt_herdr_space_by_folder() { printf 'sp1'; }
 _wt_herdr_space_desk() { printf 'desk1'; }
 HELPER
-  mkdir -p "$XDG_CONFIG_HOME/bercail" "$HOME/.local/share/bercail/pi/extensions"
-  printf '[bstack]\nenabled = true\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+  mkdir -p "$HOME/.local/share/bercail/pi/extensions"
   printf '// guard\n' >"$HOME/.local/share/bercail/pi/extensions/guard.ts"
   jq -n --arg guard "$HOME/.local/share/bercail/pi/extensions/guard.ts" --arg model "claude-bridge/lead-model:high" \
     '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard]' \
     >"$HOME/.local/share/bercail/pi/lead.json"
   (cd "$main" && PATH="$bin:$PATH" HERDR_APP_BIN="$bin/herdr-app" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    --branch feat --stage bstack --issue "$id" --clean >/dev/null)
+    --branch feat --stage bstack --issue "$id" --clean >/dev/null) \
+    || fail "a --branch spawn needs a lead profile, not [bstack] enabled"
   [[ -d "$wt" ]] || fail "spawn did not create $wt"
 }
 

@@ -405,7 +405,7 @@ ensure_tuicr() {
   ensure_tuicr_watch_config || true
 }
 
-# The desk runs Pi, bstack or not.
+# The desk runs bstack's Pi lead.
 ensure_pi() {
   dep_present pi || maybe_mise_install pi pi || warn "missing pi (install with: mise use -g pi)"
 }

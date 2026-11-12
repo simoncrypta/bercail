@@ -1,6 +1,6 @@
 # Work with the bstack agent
 
-The bstack lead is the Pi on your desk once bstack is on. It reads your ask,
+The bstack lead is the Pi on your desk. It reads your ask,
 matches a playbook, copies its steps into the todo list, and hands each step to
 the role that fits.
 

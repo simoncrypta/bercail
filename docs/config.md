@@ -7,8 +7,7 @@
 review = "tuicr"                     # or a command of yours
 auto_review = true
 
-[bstack]                             # --no-bstack installs: none, and the desk runs plain Pi
-enabled = true
+[bstack]
 fallback = ["claude", "gpt", "grok"] # Pi rate-limit candidates, no duplicates
 claude = ""
 gpt = ""
@@ -30,7 +29,7 @@ keep_recent = 50000                  # recent tokens kept word for word
 rollover = false                     # true: a fresh session instead, and each new day
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs Pi: bstack's lead when bstack is on, else plain `pi`. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start. Legacy `[graphite]` booleans still work (`true` → `gt`, `false` → `gh`), but `[git]` takes precedence.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start.
 
 ## Git policy per repo
 
@@ -60,7 +59,6 @@ With no file, the guard asks before a commit or push and no agent releases, as b
 - **Known gaps.** Pushing a tag that already exists under a name that does not look like a version (`git push origin stable`) counts as a branch push. `gh workflow run` is not treated as a release. Commands launched inside another program (`python -c`, a script file) are not seen. A command word the shell computes (`$(command -v git) push --force`, `bercail $P trust`) is not recognized at all. Shell keywords and common wrappers (`if`, `then`, `else`, `while`, `until`, `do`, `{`, `!`, `time`, `exec`, `nohup`, `setsid`, `nice`, `timeout`, `xargs`) do not hide a literal command, but this is not a complete shell parser. `eval`, `source`, a git alias, or a branch switch earlier in the same command make the guard treat the repo and branch as unknown, so it asks.
 - **The log.** Every command the guard lets through on a policy, the scratch rule, or autopilot's role is appended to `~/.local/state/bercail/guard-approvals.jsonl` with the time, terminal, role, folder, command (URL credentials masked), and why: `jq . ~/.local/state/bercail/guard-approvals.jsonl`.
 - **What agents read.** Every Pi agent that loads the guard gets the effective policy of its folder, rules included, as a `bercail_git_policy` section of its system prompt, refreshed at the start of each run. Text from a file you have not trusted is labeled as the repo's, not yours. The handoff comment names the policy in one line. Agents still stage and leave work uncommitted for review; the policy says how to commit, push, or release once someone asks.
-- **Without bstack.** The guard and the policy prompt come with bstack's Pi profile. With bstack off, neither the desks nor Shep load them, and nothing enforces a policy.
 
 ## Files bercail manages
 
@@ -70,7 +68,7 @@ With no file, the guard asks before a commit or push and no agent releases, as b
 - `~/.local/bin/{bercail,bercail-desk-agent}` (a mise or packslip install keeps its own `bercail`), and `~/.local/share/bercail/`.
 - `~/.agents/skills/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore,unit-testing}`, with a link to each in `~/.pi/agent/skills`.
 - bstack's Pi profile in `~/.local/share/bercail/pi/` and role templates in `~/.config/herdr-core/templates/` (see [Make it yours](bstack/08-make-it-yours.md#your-own-files)). bstack installs `npm:pi-claude-bridge@0.11.0` into Pi's package settings, and a 40k compaction reserve for each `claude-bridge` model in `compaction.modelOverrides` there ([why](bstack.md#how-it-runs)).
-- The Pi extension `~/.local/share/bercail/pi-extensions/bercail-desk.ts` that every Pi desk loads with `-e`, including when bstack is off.
+- The Pi extension `~/.local/share/bercail/pi-extensions/bercail-desk.ts` that every Pi desk loads with `-e`.
 - `diff_watch_interval_ms` in `~/.config/tuicr/config.toml`, unless you set it already.
 - On Linux and Omarchy, the extras in [platforms](development.md#platforms).
 
@@ -78,7 +76,7 @@ With no file, the guard asks before a commit or push and no agent releases, as b
 
 Herdr brings back spaces, tabs, and each desk's terminal, but as a bare shell: it never reruns a program. So `bercail-desk-agent` writes down what ran there, and the desk comes back on the same session in the same space, with no prompt sent again.
 
-- **The record.** `~/.local/state/bercail/desk-sessions/<address>.json` holds `session`, `cwd`, `harness`, `issue`, `issue_title` (empty when unknown), `space`, `args` (resume-safe flags, including the `--model` of a desk [handed off on another model](handoff.md)) and `pid`, keyed by the terminal's address. The `bercail-desk` Pi extension records the session Pi has open, even while idle and with bstack off. A watcher touches the file every minute while the desk lives. Headless runs get no record.
+- **The record.** `~/.local/state/bercail/desk-sessions/<address>.json` holds `session`, `cwd`, `harness`, `issue`, `issue_title` (empty when unknown), `space`, `args` (resume-safe flags, including the `--model` of a desk [handed off on another model](handoff.md)) and `pid`, keyed by the terminal's address. The `bercail-desk` Pi extension records the session Pi has open, even while idle. A watcher touches the file every minute while the desk lives. Headless runs get no record.
 - **What comes back.** A record fresh within ten minutes of shutdown (the last journal line of the previous boot), on a desk at a bare shell, in a folder that still exists, whose session is not already open. Records written since shutdown also qualify for a manual restore after a core stop/start. A desk you quit has finished, so it stays quit. Older records stay shells.
 - **Duplicate checks.** Restore checks process arguments, all live Herdr terminals' status records, and the Pi extension's runtime claims in `$XDG_RUNTIME_DIR/bercail/open-sessions/`. Claims include idle sessions, and count only while their original process is alive. A Pi started before the extension was installed may have no claim: check those manually before restoring.
 - **When.** Once per boot, through Omarchy's post-boot hook or else a systemd user unit: it waits until you open Herdr, then a notification says how many came back. Omarchy logs to `~/.local/state/bercail/desk-restore.log`; systemd logs to `journalctl --user -u bercail-desk-restore`. After a core restart, or to run it yourself, use `bercail desk restore`; `--dry-run` lists each desk and why.

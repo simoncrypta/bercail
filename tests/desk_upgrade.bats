@@ -85,6 +85,13 @@ update_from() {
   # A handoff the old release logged, in the state dir it used.
   mkdir -p "$home/.local/state/agentic-dev"
   printf '{"ok":true,"path":"%s","branch":"","issue":"old-1"}\n' "$home" >"$home/.local/state/agentic-dev/handoffs.jsonl"
+  case "${2:-}" in
+    off) sed -i 's/^enabled = true$/enabled = false/' "$home/.config/bercail/config.toml" ;;
+    no-bstack)
+      printf '[layout]\nreview = "tuicr"\n' >"$home/.config/bercail/config.toml"
+      rm -rf "$home/.local/share/bercail/pi"
+      ;;
+  esac
   # Names v1 no longer reads: a [graphite] entry and a sink's workspaces.
   printf '\n[graphite]\n"%s" = true\n' "$box/src" >>"$home/.config/bercail/config.toml"
   mkdir -p "$home/.config/bercail/notify.d"
@@ -191,6 +198,43 @@ reload_config() {
     || fail "the [graphite] entry did not move to [git]: $(cat "$home/.config/bercail/config.toml")"
   grep -qx 'spaces = "old_\*"' "$home/.config/bercail/notify.d/old.toml" \
     || fail "the sink still says workspaces: $(cat "$home/.config/bercail/notify.d/old.toml")"
+}
+
+# Offline Pi, with its bridge available; no account is needed to deploy the profile.
+upgrade_pi() {
+  cat >"$TOOLS/pi" <<'SH'
+#!/bin/sh
+case "$1" in
+  --version) echo 1.5.0 ;;
+  --offline) printf '%s\n' 'provider model context max-out thinking images' 'claude-bridge claude-opus-5-5 1M 128K yes yes' ;;
+  auth) echo '{"status":"not_ready"}'; exit 1 ;;
+  install) exit 0 ;;
+esac
+SH
+  chmod +x "$TOOLS/pi"
+}
+
+@test "v0.14.0 with bstack disabled upgrades to the guarded lead and removes the switch" {
+  need_tag v0.14.0
+  upgrade_pi
+  update_from v0.14.0 off
+  [[ "$(grep -c 'not plain pi' "$box/update.log")" == 1 ]] || fail "the update did not explain the new lead once: $(cat "$box/update.log")"
+  grep -q '^enabled' "$home/.config/bercail/config.toml" && fail "enabled was not removed"
+  jq -e '.[0] == "pi" and any(.[]; contains("extensions/guard.ts"))' "$home/.local/share/bercail/pi/lead.json" \
+    >/dev/null || fail "the guarded lead was not deployed"
+  assert_updates_itself v0.14.0
+  if grep -q 'not plain pi' "$box/update-2.log"; then fail "the second update repeated the warning"; fi
+}
+
+@test "v0.14.0 without a bstack section upgrades to the guarded lead and warns once" {
+  need_tag v0.14.0
+  upgrade_pi
+  update_from v0.14.0 no-bstack
+  [[ "$(grep -c 'not plain pi' "$box/update.log")" == 1 ]] || fail "the update did not explain the new lead once: $(cat "$box/update.log")"
+  jq -e '.[0] == "pi" and any(.[]; contains("extensions/guard.ts"))' "$home/.local/share/bercail/pi/lead.json" \
+    >/dev/null || fail "the guarded lead was not deployed"
+  assert_updates_itself v0.14.0
+  if grep -q 'not plain pi' "$box/update-2.log"; then fail "the second update repeated the warning"; fi
 }
 
 @test "a curl install of v0.14.0 updates to this tree: every file its updater fetches by name still ships" {

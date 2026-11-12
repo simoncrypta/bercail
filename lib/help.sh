@@ -18,8 +18,6 @@ Install (curl, still supported):
 install.sh options:
   -h, --help   Show this help
   -y, --yes    Non-interactive (existing/default config)
-  --no-bstack  New install without bstack: the desk runs plain Pi
-  --bstack     New install with bstack (the default): bstack's Pi lead on the desk
 
 Post-install CLI (bercail):
   help          This help
@@ -51,7 +49,7 @@ Shell commands:
   wtd [branch]  Remove worktree + close its space
 
 Herdr app layout "bercail" (switch with Ctrl+Shift+L):
-  Left: the desk, one Pi agent per space (bstack when it is on, else plain pi)
+  Left: the desk, one Pi agent per space (bstack's lead)
   Center: the space's tabs (Shell; Review runs \`tuicr -w\`, uncommitted only,
           watching, and opens itself when the desk agent finishes)
   Right: files / changes
@@ -140,9 +138,7 @@ show_summary() {
   log ""
   log "bercail installed (v${BERCAIL_VERSION})"
   log ""
-  if declare -F bstack_enabled >/dev/null && bstack_enabled; then
-    log "bstack: on. Log in to Claude, ChatGPT, or xAI: bercail bstack setup"
-  fi
+  log "bstack: log in to Claude, ChatGPT, or xAI with bercail bstack setup"
   log "Desk agent: pi (handoff stages: bstack, autopilot)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Config: ${BERCAIL_USER_CONFIG}"

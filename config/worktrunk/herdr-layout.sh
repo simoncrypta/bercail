@@ -110,15 +110,8 @@ _wt_herdr_resolve_space() {
   printf '%s' "$space"
 }
 
-_wt_bstack_on() {
-  local config="${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml"
-  [[ "$(awk '/^[[:space:]]*\[/ { s = $0; gsub(/[[:space:]]/, "", s); next }
-      s == "[bstack]" && /^[[:space:]]*enabled[[:space:]]*=/ { sub(/^[^=]*=[[:space:]]*/, ""); sub(/[[:space:]]*#.*$/, ""); print; exit }' \
-    "$config" 2>/dev/null)" == true ]]
-}
-
 # Start the space's desk agent, replacing a live one. $3: its first message
-# (optional). bercail-desk-agent runs Pi: bstack's lead when bstack is on.
+# (optional). bercail-desk-agent runs bstack's Pi lead.
 _wt_herdr_start_desk() {
   local space="$1" workdir="$2" prompt="${3:-}" shell old
   local -a argv=("$DESK_AGENT")
@@ -154,7 +147,7 @@ _wt_herdr_start_desk() {
     "${argv[@]}" >/dev/null
 }
 
-# The checkout's space, and with bstack on its desk agent unless it has one.
+# The checkout's space, and its desk agent unless it has one.
 # WT_HERDR_NO_DESK=1 (handoff-spawn, which starts its own desk): the space only.
 wt_herdr_layout_create() {
   local label="$1" workdir="$2" space
@@ -163,7 +156,7 @@ wt_herdr_layout_create() {
     return 0
   }
   space="$(_wt_herdr_resolve_space "$label" "$workdir")" || return 1
-  [[ "${WT_HERDR_NO_DESK:-}" != 1 ]] && _wt_bstack_on || return 0
+  [[ "${WT_HERDR_NO_DESK:-}" != 1 ]] || return 0
   [[ -n "$(_wt_herdr_space_desk "$space")" ]] || _wt_herdr_start_desk "$space" "$workdir" || true
 }
 

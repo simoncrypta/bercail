@@ -24,7 +24,7 @@ setup() {
   done
   printf '#!/bin/sh\nexit 1\n' >"$TOOLS/curl"
   chmod +x "$TOOLS/curl"
-  printf '[bstack]\nenabled = false\n' >"$HOME/.config/bercail/config.toml"
+  : >"$HOME/.config/bercail/config.toml"
   printf 'bind = SUPER ALT, RETURN, exec, herdr-app\n' >"$HOME/.config/hypr/bindings.conf"
   : >"$CALLS"
 }

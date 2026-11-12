@@ -91,18 +91,29 @@ desk_restore_plan() {
 # Pi takes --session-id: it creates the session when it was never written (Pi
 # writes one at its first message), where --session would exit.
 desk_resume_command() {
-  local record="$1" agent session cwd arg cmd
+  local record="$1" agent session cwd arg cmd args lead
   agent="$LOCAL_BIN/bercail-desk-agent"
   [[ -x "$agent" ]] || agent="bercail-desk-agent"
   session="$(jq -r .session <<<"$record")"
   cwd="$(jq -r .cwd <<<"$record")"
+  args="$(jq -c '.args // []' <<<"$record")"
+  # Old plain-Pi records have no managed profile. Resume them on today's lead,
+  # but keep a guarded lead or read-only reviewer exactly as it was recorded.
+  if ! jq -e 'any(.[]; test("(^|/)(guard|review)\\.ts$"))' <<<"$args" >/dev/null; then
+    lead="$BERCAIL_SHARE_DIR/pi/lead.json"
+    [[ -r "$lead" ]] || { die "$lead is missing; run bercail update"; return 1; }
+    args="$(jq -c --argjson saved "$args" '
+      .[1:] | if any($saved[]; . == "--model" or startswith("--model=")) then
+        index("--model") as $i | if $i == null then . else .[:$i] + .[$i + 2:] end
+      else . end | . + $saved' "$lead")" || return 1
+  fi
   printf -v cmd 'cd %q && TERM=xterm-256color COLORTERM=truecolor exec %q pi --session-id %q' \
     "$cwd" "$agent" "$session"
   # NUL, not lines: a recorded flag may contain a newline, and a line split would
   # turn one argument into two.
   while IFS= read -r -d '' arg; do
     printf -v cmd '%s %q' "$cmd" "$arg"
-  done < <(jq -j '.args[]? | ., "\u0000"' <<<"$record")
+  done < <(jq -j '.[] | ., "\u0000"' <<<"$args")
   printf '%s' "$cmd"
 }
 
@@ -201,7 +212,7 @@ _desk_confirm_resume() {
 # on the next pass, and a second line would land in the agent's input.
 declare -gA DESK_TYPED=()
 _desk_restore_pass() {
-  local dry="$1" facts plan shutdown row address action why record what confirm named tag
+  local dry="$1" facts plan shutdown row address action why record what confirm named tag command
   DESK_RESUMED=0 DESK_WAITING=0
   facts="$(_desk_gather)" || { warn "hc did not answer: desks left alone"; return 1; }
   shutdown="$(_desk_shutdown_time)"
@@ -233,7 +244,9 @@ _desk_restore_pass() {
             else
               printf '%-6s skip: %s%s\n' "$address" "$why" "$tag"
             fi
-          elif _desk_hc send "$address" "$(desk_resume_command "$record")" >/dev/null; then
+          elif ! command="$(desk_resume_command "$record")"; then
+            return 1
+          elif _desk_hc send "$address" "$command" >/dev/null; then
             DESK_TYPED["$address"]=1
             printf '%-6s resumed  %s\n' "$address" "$what"
             DESK_RESUMED=$((DESK_RESUMED + 1))

@@ -354,9 +354,10 @@ EOF
 EOF
 }
 
-@test "with bstack on, a shown space gets its desk once, under its Shell (no tab of its own); a quit desk stays quit" {
+@test "a shown space gets its desk once, under its Shell (no tab of its own); a quit desk stays quit; enabled is not a gate" {
   mod_case <<'EOF'
-// bstack on: a space shown without a desk starts one, under its Shell, once.
+// A space shown without a desk starts one, under its Shell, once. readConfig
+// does not return bstack, and enabled = false does not stop the start.
 {
   const ran = [];
   globalThis.herdr = {
@@ -367,10 +368,13 @@ EOF
     terminals: [],
     exec: (cmd, args) => { ran.push([cmd, ...args]); return { code: 0, stdout: "{}", stderr: "" }; },
   };
+  const parsed = readConfig("[bstack]\nenabled = true # on\n");
+  if ("bstack" in parsed || "bstack" in readConfig("[bstack]\nenabled = false\n") || "bstack" in readConfig("")) {
+    fail("readConfig does not return bstack");
+  }
   const d = new Desk();
-  Object.assign(d, { cfg: { ...readConfig('[bstack]\nenabled = true # on\n'), autoReview: false },
+  Object.assign(d, { cfg: { ...parsed, autoReview: false },
     prev: {}, pendingReview: {}, lastAuto: {}, starting: {}, hadDesk: new Set() });
-  if (!d.cfg.bstack || readConfig("[bstack]\nenabled = false\n").bstack) fail("readConfig reads [bstack] enabled");
   const starts = () => ran.filter(([c]) => c === "hc");
   const settle = () => new Promise((r) => setImmediate(r));
   show(d, "s1");
@@ -397,21 +401,22 @@ EOF
   if (starts().length !== 1) fail("a desk the person quit must not come back on its own");
   await d.command("agent");
   if (starts().length !== 2) fail("Ctrl+Shift+A starts the desk again");
-  // A space whose core terminals aren't known (s2, no live Shell): nothing yet. bstack off: never.
+  // A space whose core terminals aren't known (s2, no live Shell): nothing yet.
   show(d, "s2");
   await settle();
   if (starts().length !== 2) fail("s2 has no live Shell yet");
-  d.cfg.bstack = false;
+  // enabled = false is not a gate: clearing hadDesk starts again.
+  d.cfg = { ...readConfig("[bstack]\nenabled = false\n"), autoReview: false, bstack: false };
   d.hadDesk.clear();
   show(d, "s1");
   await settle();
-  if (starts().length !== 2) fail("bstack off must not auto-start");
+  if (starts().length !== 3) fail("enabled = false must not stop auto-start");
   // Ctrl+Shift+A in a space with no Shell: a warning, no desk.
   globalThis.herdr.spaces.push({ id: "s3", tabs: [], folder: "/w3" });
   globalThis.herdr.focused = { space: "s3", pane: null };
   globalThis.herdr.notes = [];
   await d.command("agent");
-  if (starts().length !== 2) fail("a space with no Shell must not start a desk");
+  if (starts().length !== 3) fail("a space with no Shell must not start a desk");
   if (globalThis.herdr.notes[0]?.level !== "warning") fail("no Shell: the person is told why");
 }
 EOF

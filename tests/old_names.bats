@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # What an update does with the names bercail left behind at v1:
 # ~/.local/state/agentic-dev, where the handoff log lived, the agentic-dev
-# command, [graphite] in config.toml, and workspaces in a notify sink.
+# command, [graphite] and [bstack] enabled in config.toml, and workspaces in a notify sink.
 
 # shellcheck disable=SC2034 # DRY_RUN and LOCAL_BIN are read by the sourced libs.
 # The libs define their own run(), so these tests capture output by hand.
@@ -207,4 +207,79 @@ EOF
   notify_rename_workspaces >/dev/null
   [[ "$(grep spaces "$sink")" == 'spaces = "new_*"' ]] || fail "both set: $(cat "$sink")"
   [[ "$(grep spaces "$empty")" == 'spaces = "old_*"' ]] || fail "an empty spaces fell back to workspaces: $(cat "$empty")"
+}
+
+@test "an update removes bstack's false switch and explains the move from plain Pi" {
+  local out dotfiles="$BATS_TEST_TMPDIR/dotfiles.toml"
+  cat >"$dotfiles" <<'EOF'
+[layout]
+review = "my-review"
+
+[bstack]
+# Pi with your own logins. `bercail bstack setup` shows what's missing;
+# `bercail bstack off` turns bstack off.
+enabled = false # opted out
+lead = "gpt"
+
+[shep]
+rollover = 1
+EOF
+  chmod 600 "$dotfiles"
+  ln -s "$dotfiles" "$CONFIG"
+  out="$(migrate_bstack_switch 2>&1)" || fail "migration: $out"
+  [[ "$out" == *"not plain pi"* && "$out" == *"bercail's guard"* ]] || fail "the update did not explain the change: $out"
+  [[ -L "$CONFIG" && "$(stat -c %a "$dotfiles")" == 600 ]] || fail "the config's link or mode changed"
+  cat >"$BATS_TEST_TMPDIR/expected" <<'EOF'
+[layout]
+review = "my-review"
+
+[bstack]
+# Pi with your own logins. `bercail bstack setup` shows what's missing.
+lead = "gpt"
+
+[shep]
+rollover = 1
+EOF
+  cmp -s "$CONFIG" "$BATS_TEST_TMPDIR/expected" || fail "migration changed other config: $(cat "$CONFIG")"
+  out="$(migrate_bstack_switch 2>&1)" || fail "second migration: $out"
+  [[ -z "$out" ]] || fail "the second update repeated the warning: $out"
+}
+
+@test "an update removes bstack's true switch without warning and keeps another section's enabled" {
+  local out
+  printf '[bstack]\nenabled = true\nlead = "claude"\n\n[other]\nenabled = false\n' >"$CONFIG"
+  out="$(migrate_bstack_switch 2>&1)" || fail "migration: $out"
+  [[ "$out" != *warning:* ]] || fail "an enabled install was warned: $out"
+  [[ "$(cat "$CONFIG")" == '[bstack]
+lead = "claude"
+
+[other]
+enabled = false' ]] || fail "migration: $(cat "$CONFIG")"
+}
+
+@test "a dry run leaves bstack's switch and a config without a switch is untouched" {
+  local out
+  printf '[bstack]\nenabled = false\n' >"$CONFIG"
+  cp "$CONFIG" "$BATS_TEST_TMPDIR/before"
+  out="$(DRY_RUN=1 migrate_bstack_switch 2>&1)" || fail "dry run: $out"
+  cmp -s "$CONFIG" "$BATS_TEST_TMPDIR/before" || fail "a dry run rewrote the config"
+  [[ "$out" == *"[dry-run] would remove enabled"* ]] || fail "dry run: $out"
+  printf '[bstack]\nlead = "grok"\n' >"$CONFIG"
+  cp "$CONFIG" "$BATS_TEST_TMPDIR/before"
+  out="$(migrate_bstack_switch 2>&1)" || fail "migration: $out"
+  cmp -s "$CONFIG" "$BATS_TEST_TMPDIR/before" || fail "a config with no switch changed"
+  [[ -z "$out" ]] || fail "a config with no switch: $out"
+}
+
+@test "an old no-bstack install is warned until its lead profile is deployed" {
+  local out
+  printf '[layout]\nreview = "tuicr"\n' >"$CONFIG"
+  cp "$CONFIG" "$BATS_TEST_TMPDIR/before"
+  out="$(migrate_bstack_switch 2>&1)" || fail "migration: $out"
+  [[ "$out" == *"not plain pi"* ]] || fail "the old no-bstack install was not warned: $out"
+  cmp -s "$CONFIG" "$BATS_TEST_TMPDIR/before" || fail "migration changed unrelated config"
+  mkdir -p "$BERCAIL_SHARE_DIR/pi"
+  printf '["pi"]\n' >"$BERCAIL_SHARE_DIR/pi/lead.json"
+  out="$(migrate_bstack_switch 2>&1)" || fail "second migration: $out"
+  [[ -z "$out" ]] || fail "the deployed install was warned again: $out"
 }

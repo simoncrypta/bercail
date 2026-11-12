@@ -28,6 +28,9 @@ setup() {
   # This machine may really be Omarchy. The test HOME says which one it is.
   is_omarchy() { [[ -d "$HOME/.local/share/omarchy" ]]; }
 
+  # Most cases exercise restore planning, not profile composition.
+  mkdir -p "$BERCAIL_SHARE_DIR/pi"
+  printf '["pi"]\n' >"$BERCAIL_SHARE_DIR/pi/lead.json"
   RECORDS="$XDG_STATE_HOME/bercail/desk-sessions"
   SENT="$BATS_TEST_TMPDIR/sent"
   TERMS="$BATS_TEST_TMPDIR/terms"
@@ -278,6 +281,68 @@ arrange_five() {
     "$(fact t3 null 0 "$(jq -c '.reason = "stopped_by_restart" | .foreground = null' <<<"$sibling")")" \
     "$(fact t4 null 0 "$working")")"
   expect "$got" "t1 resume " "siblings are not resumed and do not hold the desk back"
+}
+
+restore_profile() {
+  jq -n '["pi", "--model", "lead/model:high", "-e", "/profile/guard.ts", "-e", "/profile/bridge.ts", "--append-system-prompt", "/profile/instructions.md"]' \
+    >"$BERCAIL_SHARE_DIR/pi/lead.json"
+  mkdir -p "$LOCAL_BIN"
+  ln -s "$ROOT/bin/bercail-desk-agent" "$LOCAL_BIN/bercail-desk-agent"
+  printf '#!/bin/bash\njq -nc --args '\''$ARGS.positional'\'' -- "$@"\n' >"$BATS_TEST_TMPDIR/bin/pi"
+  chmod +x "$BATS_TEST_TMPDIR/bin/pi"
+}
+
+@test "restoring an old plain Pi record loads the current guarded lead and keeps its session" {
+  restore_profile
+  local rec cmd out
+  rec="$(jq -nc --arg cwd "$BATS_TEST_TMPDIR" '{session:"0199-old", cwd:$cwd, args:[]}')"
+  cmd="$(desk_resume_command "$rec")"
+  out="$(bash -c "$cmd")" || fail "restore: $out"
+  [[ "$out" == '["--session-id","0199-old","--model","lead/model:high","-e","/profile/guard.ts","-e","/profile/bridge.ts","--append-system-prompt","/profile/instructions.md"]' ]] \
+    || fail "the old plain desk did not resume on the guarded lead: $out"
+}
+
+@test "restoring an old plain Pi record keeps its model and tool flags without duplicating the default model" {
+  restore_profile
+  local args rec cmd out
+  for args in '["--model","saved/model:low","--tools","read,grep"]' '["--model=saved/model:low","--tools","read,grep"]'; do
+    rec="$(jq -nc --arg cwd "$BATS_TEST_TMPDIR" --argjson args "$args" '{session:"0199-old", cwd:$cwd, args:$args}')"
+    cmd="$(desk_resume_command "$rec")"
+    out="$(bash -c "$cmd")" || fail "restore: $out"
+    jq -e --argjson saved "$args" '.[0:2] == ["--session-id","0199-old"] and .[2:] == (["-e","/profile/guard.ts","-e","/profile/bridge.ts","--append-system-prompt","/profile/instructions.md"] + $saved)' \
+      <<<"$out" >/dev/null || fail "restore changed the saved model or flags: $out"
+  done
+}
+
+@test "restoring a guarded lead or read-only reviewer replays only its recorded profile" {
+  restore_profile
+  local extension rec cmd out
+  for extension in guard review; do
+    rec="$(jq -nc --arg cwd "$BATS_TEST_TMPDIR" --arg ext "/saved/$extension.ts" \
+      '{session:"0199-managed", cwd:$cwd, args:["-e",$ext,"--tools","read,grep,find,ls"]}')"
+    cmd="$(desk_resume_command "$rec")"
+    out="$(bash -c "$cmd")" || fail "restore: $out"
+    jq -e --arg ext "/saved/$extension.ts" '. == ["--session-id","0199-managed","-e",$ext,"--tools","read,grep,find,ls"]' \
+      <<<"$out" >/dev/null || fail "restore mixed the lead into a managed profile: $out"
+  done
+}
+
+@test "restoring an old plain Pi record without a deployed lead fails with the update command" {
+  rm "$BERCAIL_SHARE_DIR/pi/lead.json"
+  local out
+  if out="$(desk_resume_command "$(record 0199-old)" 2>&1)"; then fail "restored without a profile: $out"; fi
+  [[ "$out" == *"lead.json is missing; run bercail update"* ]] || fail "restore: $out"
+}
+
+@test "restore sends nothing and fails when an old plain desk has no deployed lead" {
+  reset_pass
+  terminal t1 "$bare"
+  put_record t1 0199-old 60
+  rm "$BERCAIL_SHARE_DIR/pi/lead.json"
+  local out
+  if out="$(_desk_restore_pass 0 2>&1)"; then fail "restore reported success without a profile: $out"; fi
+  [[ "$out" == *"lead.json is missing; run bercail update"* ]] || fail "restore: $out"
+  [[ ! -e "$SENT" ]] || fail "restore sent an empty command: $(cat "$SENT")"
 }
 
 @test "the resume line quotes its parts and leaves the prompt out" {

@@ -96,14 +96,6 @@ parse_install_args() {
         YES=1
         shift
         ;;
-      --bstack)
-        BSTACK_NEW_INSTALL=1
-        shift
-        ;;
-      --no-bstack)
-        BSTACK_NEW_INSTALL=0
-        shift
-        ;;
       *)
         die "unknown option: $1 (try --help)"
         ;;

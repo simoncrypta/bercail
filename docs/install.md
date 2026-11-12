@@ -65,6 +65,8 @@ The first update to v1 removes the `agentic-dev` command (it is `bercail`), move
 
 `handoff-spawn` prints one name for each fact from v1 on. If a script of yours reads its JSON: `graphite` is gone (read `git`: `gh`, `gt` or `origin`), `socket` is gone (read `herdr`), `workspace` is gone (read `space`), and `--workspace` is `--space`.
 
+bstack has no switch from v1 on: `bercail bstack on` and `off`, `./install.sh --no-bstack`, and `[bstack] enabled` are gone. The first update removes `enabled` from `config.toml`. If it was `false`, or the install was made with `--no-bstack`, that update sets up bstack's Pi profile and says so: the desk then runs bstack's lead with bercail's [guard](config.md#git-policy-per-repo), where it ran plain `pi`. Restoring an old plain-Pi desk also loads the current lead, keeping its session and any saved model or tool flags. Desks that already recorded the guard or the read-only review profile keep that profile.
+
 The shell block no longer defines `t` (open the Herdr app) and `d` (short for `dev`), and no longer removes an alias of yours by those names. If you used them, add `alias t=herdr-app` or `alias d=dev` to your own shell rc, after bercail's block.
 
 Nothing stops an older release's `bercail update` from going straight to this one: it copies the new CLI with its own code and file lists, and this release takes the update over from there. That path is not tested, and the steps that carried older installs forward (the `agentic-dev` directories and shell markers, the 0.9 keys, old worktrunk config lines) are gone. From 0.8 (the Herdr terminal and its layout plugin), the full install above also adds the Herdr app. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them.
@@ -78,4 +80,4 @@ dev          # this directory's space, with its desk agent
 # or: t      # open the Herdr app
 ```
 
-With [bstack](bstack.md) on, a space starts its desk as bstack's Pi lead on its own, shown in the desk column. Quit it and it stays quit until `Ctrl+Shift+A` or `dev`, even across a reboot; one still running at shutdown [comes back](config.md#desks-after-a-reboot). With bstack off nothing starts on its own; `Ctrl+Shift+A` or `dev` starts plain `pi`.
+A space starts its desk as [bstack](bstack.md)'s Pi lead on its own, shown in the desk column. Quit it and it stays quit until `Ctrl+Shift+A` or `dev`, even across a reboot; one still running at shutdown [comes back](config.md#desks-after-a-reboot).

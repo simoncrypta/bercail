@@ -140,9 +140,7 @@ is which of `shep` and `work` is hidden.
 - **Keys** (keys.json section `layout:bercail`):
   - `ctrl-shift-h` switches between the Shep view and the space view.
   - `ctrl-space` opens Herdr's Go to… search (`mod.open {name: "picker"}`).
-  - `ctrl-shift-a` focuses the desk agent, or starts one: bstack's Pi lead
-    when `[bstack] enabled = true` in `~/.config/bercail/config.toml`, else
-    plain `pi`.
+  - `ctrl-shift-a` focuses the desk agent, or starts one: bstack's Pi lead.
   - `ctrl-shift-r` Review (opens even on a clean tree); `ctrl-shift-s` the
     first tab (Shell).
   - `ctrl-shift-f` / `ctrl-shift-g` show Files / Changes; the same key again
@@ -244,10 +242,10 @@ is which of `shep` and `work` is hidden.
   place it shows. (Herdr's agents list shows sub-agents only under a parent
   that is an agent; `bercail-agents` lists the desk itself.) With
   no Shell terminal, the mod warns and starts nothing.
-  The wrapper runs bstack's Pi lead when it is on, else plain `pi`. The mod
-  finds the desk again by its labels in `terminals()`.
-  With bstack on, a space shown without a desk gets one, once per app
-  session (one the person quit stays quit).
+  The wrapper runs bstack's Pi lead. The mod finds the desk again by its
+  labels in `terminals()`.
+  A space shown without a desk gets one, once per app session (one the
+  person quit stays quit).
 - Commands it runs: `space.select`, `agent.focus`, `pane.focus`, `pane.go`, `tab.select`, `tab.new` (Review,
   with `argv`), `tab.close`, `tab.rename`, `layout.set`, `layout.select`,
   `layout.show`, `layout.hide`. Programs: `hc`, `git status --porcelain`,

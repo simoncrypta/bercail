@@ -87,14 +87,4 @@ Add your own skill next to them. Write one when you have corrected the same
 mistake twice, not before. Better still, when a lint, a test, or a type can
 catch the mistake, add that, so nothing depends on an agent reading a rule.
 
-## Turn it off
-
-```bash
-bercail bstack off
-```
-
-It removes bstack's files (the marked templates and `~/.local/share/bercail/pi/`)
-and leaves Pi, your logins, and your own config alone. The desk then runs plain
-Pi.
-
 Next: [Recipes and pitfalls](./09-recipes-and-pitfalls.md).

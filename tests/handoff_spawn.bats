@@ -494,7 +494,7 @@ STUB
   [[ ! -s "$BD_COMMENTS" ]] || fail "blocked handoff must not comment: $(cat "$BD_COMMENTS")"
 }
 
-@test "--stage is required; a Pi desk needs bstack on and a lead profile" {
+@test "--stage is required; a Pi desk needs a lead profile, not [bstack] enabled" {
   local rc=0 err
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --branch foo --issue "$ISSUE" 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "missing --stage should exit 1, got $rc ($err)"
@@ -502,21 +502,24 @@ STUB
   rc=0
   err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --issue "$ISSUE" --dry-run 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "headless without --stage should exit 1, got $rc ($err)"
+  # No config, and enabled = false, both fail on the lead profile only.
   rc=0
-  err="$(BERCAIL_CONFIG="$BATS_TEST_TMPDIR/no-config.toml" \
+  err="$(BERCAIL_CONFIG="$BATS_TEST_TMPDIR/no-config.toml" HANDOFF_PI_PROFILE="$BATS_TEST_TMPDIR/no-pi-profile" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage bstack --issue "$ISSUE" --clean --space w1 2>&1)" || rc=$?
-  [[ "$rc" -eq 1 ]] || fail "bstack off should exit 1, got $rc ($err)"
-  grep -q 'needs bstack on' <<<"$err" || fail "bstack off message: $err"
-  grep -q 'wt ' <<<"$err" && fail "must fail before wt: $err"
-  rc=0
-  printf '[bstack]\nenabled = true\n' >"$BATS_TEST_TMPDIR/bstack-on.toml"
-  err="$(BERCAIL_CONFIG="$BATS_TEST_TMPDIR/bstack-on.toml" HANDOFF_PI_PROFILE="$BATS_TEST_TMPDIR/no-pi-profile" \
-    "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage bstack --issue "$ISSUE" --clean 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "missing lead profile should exit 1, got $rc ($err)"
   grep -q 'lead profile is missing' <<<"$err" || fail "missing profile message: $err"
-  grep -q 'wt ' <<<"$err" && fail "must fail before wt: $err"
+  if grep -q 'needs bstack on' <<<"$err"; then fail "config enabled is not required: $err"; fi
+  if grep -q 'wt ' <<<"$err"; then fail "must fail before wt: $err"; fi
   rc=0
-  err="$(BERCAIL_CONFIG="$BATS_TEST_TMPDIR/bstack-on.toml" \
+  printf '[bstack]\nenabled = false\n' >"$BATS_TEST_TMPDIR/bstack-off.toml"
+  err="$(BERCAIL_CONFIG="$BATS_TEST_TMPDIR/bstack-off.toml" HANDOFF_PI_PROFILE="$BATS_TEST_TMPDIR/no-pi-profile" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage bstack --issue "$ISSUE" --clean 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "enabled = false should still exit 1 on the lead profile, got $rc ($err)"
+  grep -q 'lead profile is missing' <<<"$err" || fail "enabled = false message: $err"
+  if grep -q 'needs bstack on' <<<"$err"; then fail "enabled = false is not a gate: $err"; fi
+  if grep -q 'wt ' <<<"$err"; then fail "must fail before wt: $err"; fi
+  rc=0
+  err="$(HANDOFF_PI_PROFILE="$BATS_TEST_TMPDIR/no-pi-profile" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage autopilot --issue "$ISSUE" --clean 2>&1)" || rc=$?
   [[ "$rc" -eq 1 ]] || fail "autopilot --branch should exit 1, got $rc ($err)"
   grep -q 'headless' <<<"$err" || fail "autopilot --branch message: $err"
@@ -848,7 +851,6 @@ printf '%s\n' '{"space":"sp1"}'
 HERDR
   chmod +x "$bin/wt" "$bin/herdr-app"
   _pi_ready
-  printf '[bstack]\nenabled = true\n' >"$BATS_TEST_TMPDIR/$name-bstack.toml"
   cat >"$home/.config/worktrunk/herdr-layout.sh" <<HELPER
 _wt_herdr_keep_user_focus() { :; }
 _wt_generate_session_name() { printf 'Lbl'; }
@@ -862,7 +864,7 @@ HELPER
     cd "$repo"
     HOME="$home" PATH="$bin:$PATH" HERDR_APP_BIN="$bin/herdr-app" HANDOFF_GT_TIMEOUT=1 \
       XDG_STATE_HOME="$BATS_TEST_TMPDIR/$name-state" BERCAIL_BIN="$BATS_TEST_TMPDIR/no-bercail" \
-      BERCAIL_CONFIG="$BATS_TEST_TMPDIR/$name-bstack.toml" HANDOFF_PI_PROFILE="$HANDOFF_PI_PROFILE" \
+      HANDOFF_PI_PROFILE="$HANDOFF_PI_PROFILE" \
       "$ROOT/skills/handoff/scripts/handoff-spawn" \
       --branch feat --stage bstack --issue "$ISSUE" --clean ${base:+--base "$base"}
   )
@@ -1149,7 +1151,6 @@ _desk_fixture() {
   DESK_BIN="$BATS_TEST_TMPDIR/$name-bin"
   DESK_HOME="$BATS_TEST_TMPDIR/$name-home"
   DESK_STATE="$BATS_TEST_TMPDIR/$name-state"
-  DESK_CONFIG="$BATS_TEST_TMPDIR/$name-bstack.toml"
   git_init "$DESK_REPO"
   mkdir -p "$DESK_BIN" "$DESK_HOME/.config/worktrunk"
   cp "$ROOT/config/worktrunk/herdr-layout.sh" "$DESK_HOME/.config/worktrunk/herdr-layout.sh"
@@ -1200,7 +1201,6 @@ HC
   chmod +x "$DESK_BIN/wt" "$DESK_BIN/herdr-app" "$DESK_BIN/hc"
   _bd_stub
   _pi_ready
-  printf '[bstack]\nenabled = true\n' >"$DESK_CONFIG"
   export DESK_FOLDER="$BATS_TEST_TMPDIR/$name-folder" DESK_HC_LOG="$BATS_TEST_TMPDIR/$name-hc.log"
   export DESK_ARGV="$BATS_TEST_TMPDIR/$name-hc.argv"
   : >"$DESK_HC_LOG"
@@ -1211,7 +1211,7 @@ _desk_spawn() {
   (cd "$DESK_REPO" && HOME="$DESK_HOME" PATH="$DESK_BIN:$PATH" \
     HERDR_APP_BIN="$DESK_BIN/herdr-app" HC_BIN="$DESK_BIN/hc" \
     XDG_STATE_HOME="$DESK_STATE" BERCAIL_BIN="$BATS_TEST_TMPDIR/no-bercail" \
-    BERCAIL_CONFIG="$DESK_CONFIG" HANDOFF_PI_PROFILE="$HANDOFF_PI_PROFILE" \
+    HANDOFF_PI_PROFILE="$HANDOFF_PI_PROFILE" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage bstack --issue "$ISSUE" --clean "$@")
 }
 
@@ -1335,11 +1335,9 @@ _pi_profile() {
 }
 
 @test "headless bstack and autopilot run Pi" {
-  local saved_config="${BERCAIL_CONFIG-}" saved_profile="${HANDOFF_PI_PROFILE-}"
+  local saved_profile="${HANDOFF_PI_PROFILE-}"
   local profile wt out err rc=0 sid stub
   profile="$(_pi_profile)"
-  printf '[bstack]\nenabled = true\n' >"$BATS_TEST_TMPDIR/pi.toml"
-  export BERCAIL_CONFIG="$BATS_TEST_TMPDIR/pi.toml"
   export HANDOFF_PI_PROFILE="$profile"
   export HANDOFF_PI_BIN="$BATS_TEST_TMPDIR/bin/pi-missing"
   wt="$BATS_TEST_TMPDIR/pi-dry"
@@ -1444,7 +1442,6 @@ STUB
     || fail "pi provider error result: $(cat "$failwt/.bercail/handoff-result.json")"
   unset PI_STUB_MODE
 
-  if [[ -n "$saved_config" ]]; then export BERCAIL_CONFIG="$saved_config"; else unset BERCAIL_CONFIG; fi
   if [[ -n "$saved_profile" ]]; then export HANDOFF_PI_PROFILE="$saved_profile"; else unset HANDOFF_PI_PROFILE; fi
   unset HANDOFF_PI_BIN
 }

@@ -232,23 +232,6 @@ handoff_pi_session_id() {
   printf '%s' "$id"
 }
 
-# [bstack] KEY in bercail's config.toml, unquoted (a quoted value keeps its #variant).
-_handoff_bstack_get() {
-  local key="$1" config="${BERCAIL_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml}"
-  [[ -f "$config" ]] || return 0
-  awk -v key="$key" '
-    /^[[:space:]]*\[/ { sec = $0; gsub(/[[:space:]]/, "", sec); next }
-    sec != "[bstack]" || $0 !~ "^[[:space:]]*" key "[[:space:]]*=" { next }
-    {
-      line = $0
-      sub("^[[:space:]]*" key "[[:space:]]*=[[:space:]]*", "", line)
-      if (line ~ /^"/) { sub(/^"/, "", line); sub(/".*$/, "", line) }
-      else sub(/[[:space:]]*#.*$/, "", line)
-      print line
-      exit
-    }' "$config"
-}
-
 handoff_pi_profile() {
   printf '%s' "${HANDOFF_PI_PROFILE:-$HOME/.local/share/bercail/pi}"
 }

@@ -3,13 +3,12 @@
 // The desk agent is an hc terminal started as a sub-agent of the space's Shell
 // terminal, so it belongs to the space without a pane in any tab. It carries
 // labels bercail.role=agent and bercail.space=<space id>, and runs
-// bercail-desk-agent: Pi, as bstack when it is on. Each
-// desk shows in a terminal block of its own in the layout's `agent-stack`,
-// `desk-<address>` (an agent block can't take the keyboard from a command, and
-// agent.focus moves it to the parent pane).
+// bercail-desk-agent: bstack's Pi lead. Each desk shows in a terminal block of
+// its own in the layout's `agent-stack`, `desk-<address>` (an agent block can't
+// take the keyboard from a command, and agent.focus moves it to the parent pane).
 //
-// With bstack on, a space shown without a desk gets one, once per app session:
-// an agent the person quit stays quit until Ctrl+Shift+A.
+// A space shown without a desk gets one, once per app session: an agent the
+// person quit stays quit until Ctrl+Shift+A.
 //
 // props.role: "header" (default) runs the logic and takes key commands;
 // "empty" is the placeholder shown in the agent column when the space has no desk;
@@ -40,10 +39,9 @@ function findNode(node, id) {
   return null;
 }
 
-// Tiny TOML reader for the keys bercail needs: [layout] review and auto_review,
-// [bstack] enabled.
+// Tiny TOML reader for the keys bercail needs: [layout] review and auto_review.
 export function readConfig(text) {
-  const cfg = { review: "tuicr", autoReview: true, bstack: false };
+  const cfg = { review: "tuicr", autoReview: true };
   let section = "";
   for (const raw of text.split("\n")) {
     const line = raw.replace(/#.*$/, "").trim();
@@ -54,7 +52,6 @@ export function readConfig(text) {
     const value = kv[2].trim().replace(/^"(.*)"$/, "$1");
     if (section === "layout" && kv[1] === "review" && value) cfg.review = value === "hunk" ? "hunk diff" : value;
     if (section === "layout" && kv[1] === "auto_review") cfg.autoReview = value !== "false";
-    if (section === "bstack" && kv[1] === "enabled") cfg.bstack = value === "true";
   }
   return cfg;
 }
@@ -417,9 +414,9 @@ export default class BercailDesk extends View {
     if (f?.pane) this.lastPane = f.pane;
     if (desk) {
       this.hadDesk.add(space.id);
-    } else if (this.cfg.bstack && !this.hadDesk.has(space.id) && !space.machine
+    } else if (!this.hadDesk.has(space.id) && !space.machine
       && terminals().some((t) => t.address === shellOf(space) && t.state === "live")) {
-      // bstack starts on its own in a space shown without a desk. Only once the
+      // The desk starts on its own in a space shown without one. Only once the
       // core lists the space's Shell: before that, terminals() can't tell
       // whether the space already has a desk.
       this.start(space);

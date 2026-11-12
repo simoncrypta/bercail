@@ -42,7 +42,7 @@ usage: handoff-spawn --info
                   the lead stays. A :thinking suffix is kept; without one it
                   gets the lead's. An unknown model is refused before anything
                   starts. Sibling roles (builder, judge, council) keep theirs.
-  --branch NAME   feature branch for a new space with a desk agent (bstack only)
+  --branch NAME   feature branch for a new space with a desk agent
   --dirty         copy uncommitted main changes into the sibling as a working tree
                   (default when main is dirty)
   --clean         HEAD only; leave uncommitted files on main
@@ -537,8 +537,6 @@ handoff_spawn_main() {
       || handoff_die "stage autopilot is headless: pass --worktree <the PR's checkout> instead of --branch"
     [[ -z "$resume" && "$dry" -eq 0 && -z "$worktree" ]] \
       || handoff_die "stage $stage --branch starts a desk agent; --resume/--dry-run/--worktree are for headless stages"
-    [[ "$(_handoff_bstack_get enabled)" == true ]] \
-      || handoff_die "stage $stage on a Pi desk needs bstack on ([bstack] enabled = true). Run bercail bstack on."
     [[ -f "$(handoff_pi_lead_file)" ]] \
       || handoff_die "Pi lead profile is missing ($(handoff_pi_lead_file)). Run bercail update."
     if [[ -n "$model" ]]; then

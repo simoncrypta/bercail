@@ -120,11 +120,38 @@ PI_TEMPLATES() { printf '%s' "$XDG_CONFIG_HOME/herdr-core/templates"; }
 write_pi_config() {
   write_config <<'EOF'
 [bstack]
-enabled = true
 EOF
 }
 
-@test "[bstack] toml get/set keeps variants, sections, and comments apart" {
+@test "reconfigure refreshes the Pi profile and skills and prepares tuicr even with a custom review command" {
+  reset_home
+  write_config <<'EOF'
+[layout]
+review = "my-review"
+
+[bstack]
+enabled = false
+lead = "gpt"
+EOF
+  export FAKE_PI_READY="claude-bridge openai"
+  printf '#!/bin/sh\necho 99.0.0\n' >"$FAKE_BIN/tuicr"
+  chmod +x "$FAKE_BIN/tuicr"
+  local out
+  out="$("$ROOT/bin/bercail" reconfigure 2>&1)" || fail "reconfigure: $out"
+  [[ "$out" == *"the desk runs bstack's Pi lead  review=my-review"* ]] || fail "reconfigure: $out"
+  jq -e 'index(["--model", "openai/gpt-6.1-sol:high"]) != null and any(.[]; contains("extensions/guard.ts"))' \
+    "$(PI_DIR)/lead.json" >/dev/null || fail "the configured lead with the guard was not deployed"
+  [[ -f "$HOME/.agents/skills/bstack/SKILL.md" && -L "$HOME/.pi/agent/skills/bstack" ]] || fail "reconfigure did not refresh the skills"
+  grep -qx 'diff_watch_interval_ms = 1000' "$XDG_CONFIG_HOME/tuicr/config.toml" || fail "reconfigure did not prepare tuicr"
+}
+
+# Set KEY in [bstack], the last section of the config in these cases.
+set_bstack() {
+  sed -i "/^$1[[:space:]]*=/d" "$BERCAIL_USER_CONFIG"
+  printf '%s = %s\n' "$1" "$2" >>"$BERCAIL_USER_CONFIG"
+}
+
+@test "the config reader keeps variants, sections, and comments apart" {
   reset_home
   local f="$BATS_TEST_TMPDIR/t.toml"
   cat >"$f" <<'EOF'
@@ -133,37 +160,21 @@ review = "tuicr"
 
 [bstack]
 claude = "claude-bridge/claude-opus-5-5#high"   # keeps the variant
-enabled = true # bare value
+
+[shep]
+rollover = true # bare value
 EOF
   assert_eq "claude-bridge/claude-opus-5-5#high" "$(_bstack_toml_get bstack claude "$f")" "quoted value keeps #"
-  assert_eq "true" "$(_bstack_toml_get bstack enabled "$f")" "bare value drops comment"
+  assert_eq "true" "$(_bstack_toml_get shep rollover "$f")" "bare value drops comment"
   assert_eq "" "$(_bstack_toml_get bstack review "$f")" "keys are per section"
-  _bstack_toml_set bstack enabled false "$f"
-  _bstack_toml_set bstack gpt '"openai/gpt-6.1-sol"' "$f"
-  _bstack_toml_set layout auto_review false "$f"
-  _bstack_toml_set notify url '"x"' "$f"
-  assert_eq "false" "$(_bstack_toml_get bstack enabled "$f")" "set replaces"
-  assert_eq "openai/gpt-6.1-sol" "$(_bstack_toml_get bstack gpt "$f")" "set adds to the section"
-  assert_eq "false" "$(_bstack_toml_get layout auto_review "$f")" "set in another section"
-  assert_eq "x" "$(_bstack_toml_get notify url "$f")" "set adds a missing section"
-  assert_eq 1 "$(grep -c '^enabled' "$f")" "no duplicate key"
-  assert_eq 1 "$(grep -c '^\[bstack\]' "$f")" "no duplicate section"
 }
 
-@test "new installs default to bstack; --no-bstack leaves plain Pi" {
+@test "a new install's config names the roles and has no switch, desk command, or harness" {
   reset_home
-  BSTACK_NEW_INSTALL=1 default_user_config >"$BATS_TEST_TMPDIR/on.toml"
-  assert_eq "true" "$(_bstack_toml_get bstack enabled "$BATS_TEST_TMPDIR/on.toml")" "new install turns bstack on"
-  assert_eq "grok" "$(_bstack_toml_get bstack build "$BATS_TEST_TMPDIR/on.toml")" "build role default"
-  if grep -q -e '^\[agent\]' -e '^harness' "$BATS_TEST_TMPDIR/on.toml"; then
-    fail "no desk command or harness to pick"
-  fi
-  BSTACK_NEW_INSTALL=0 default_user_config >"$BATS_TEST_TMPDIR/off.toml"
-  if grep -q -e '^\[bstack\]' -e '^\[agent\]' "$BATS_TEST_TMPDIR/off.toml"; then
-    fail "--no-bstack writes no [bstack] and no [agent]"
-  fi
-  if BERCAIL_USER_CONFIG="$BATS_TEST_TMPDIR/off.toml" bstack_enabled; then
-    fail "--no-bstack is off"
+  default_user_config >"$BATS_TEST_TMPDIR/new.toml"
+  assert_eq "grok" "$(_bstack_toml_get bstack build "$BATS_TEST_TMPDIR/new.toml")" "build role default"
+  if grep -q -e '^\[agent\]' -e '^harness' -e '^enabled' "$BATS_TEST_TMPDIR/new.toml"; then
+    fail "no switch, desk command, or harness to pick"
   fi
 }
 
@@ -171,7 +182,6 @@ EOF
   reset_home
   write_config <<'EOF'
 [bstack]
-enabled = true
 claude = "claude-bridge/claude-opus-5-5#high"
 gpt = "openai/gpt-6.1-sol"
 grok = ""
@@ -180,8 +190,8 @@ judge = "xai/grok-5#fast"
 EOF
   assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_role_model lead)" "lead defaults to claude"
   assert_eq "openai/gpt-6.1-sol" "$(bstack_role_model build)" "build on an unset grok falls to gpt"
-  _bstack_toml_set bstack claude '""'
-  _bstack_toml_set bstack gpt '""'
+  set_bstack claude '""'
+  set_bstack gpt '""'
   assert_eq "" "$(bstack_role_model lead)" "no family with a model: Pi's default model"
   assert_eq "xai/grok-5#fast" "$(bstack_role_model judge)" "a full id is used as is"
 }
@@ -190,7 +200,6 @@ EOF
   reset_home
   write_config <<'EOF'
 [bstack]
-enabled = true
 claude = "claude-bridge/claude-opus-5-5#high"
 gpt = "openai/gpt-6.1-sol#high"
 lead = "gpt"
@@ -213,15 +222,6 @@ EOF
   if HANDOFF_BD_BIN=/nonexistent "$spawn" --stage bstack --issue bc-1x --worktree "$wt" --resume ses_9zX --dry-run >/dev/null 2>&1; then
     fail "a session id that is not Pi's uuid must be refused"
   fi
-}
-
-@test "doctor reports bstack off" {
-  reset_home
-  write_config <<'EOF'
-[bstack]
-enabled = false
-EOF
-  doctor_bstack | grep -q 'off  bstack' || fail "doctor off"
 }
 
 @test "auto adds the [bstack] effort variant each model offers" {
@@ -279,10 +279,10 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   FAKE_PI_READY="" bstack_load_state reload
   assert_eq "" "$(FAKE_PI_READY="" bstack_role_model lead)" "no login at all: Pi's default"
 
-  _bstack_toml_set bstack effort '"none"'
+  set_bstack effort '"none"'
   FAKE_PI_READY="claude-bridge" bstack_load_state reload
   assert_eq "claude-bridge/claude-opus-5-5" "$(FAKE_PI_READY="claude-bridge" bstack_resolve_model claude)" "effort none: no suffix"
-  _bstack_toml_set bstack effort '"max"'
+  set_bstack effort '"max"'
   assert_eq "claude-bridge/claude-opus-5-5#max" "$(FAKE_PI_READY="claude-bridge" bstack_resolve_model claude)" "effort max"
   local BSTACK_MODELS BSTACK_VARIANTS
   BSTACK_MODELS="xai/grok-plain"
@@ -418,27 +418,26 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   grep -q 'keeping your' "$BATS_TEST_TMPDIR/pi.log" || fail "says it kept theirs: $(cat "$BATS_TEST_TMPDIR/pi.log")"
 }
 
-@test "off removes only the Pi profile; a leftover harness key still deploys Pi" {
+@test "uninstall removes only the Pi profile; deploy has no switch, whatever enabled or harness say" {
   reset_home
   write_pi_config
   export FAKE_PI_READY="claude-bridge"
   deploy_bstack >/dev/null 2>&1
   mkdir -p "$(PI_TEMPLATES)"
   printf 'mine\n' >"$(PI_TEMPLATES)/reviewer.md"
-  bstack_off >/dev/null 2>&1
-  [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "off removes the profile"
-  [[ -f "$(PI_TEMPLATES)/reviewer.md" ]] || fail "off keeps the person's templates"
-  deploy_bstack >/dev/null 2>&1
-  [[ ! -d "$(PI_DIR)" ]] || fail "update with bstack off deploys nothing"
+  remove_bstack >/dev/null 2>&1
+  [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "remove takes the profile"
+  [[ -f "$(PI_TEMPLATES)/reviewer.md" ]] || fail "remove keeps the person's templates"
 
-  # A harness key left from an older bercail changes nothing: bstack is Pi.
+  # Keys left from an older bercail change nothing: bstack is Pi and always deployed.
   write_config <<'EOF'
 [bstack]
-enabled = true
+enabled = false
 harness = "old"
 EOF
-  deploy_bstack >/dev/null 2>&1 || fail "a leftover harness key deploys"
-  [[ -f "$(PI_DIR)/lead.json" && -f "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "a leftover harness key still gets Pi"
+  deploy_bstack >/dev/null 2>&1 || fail "leftover keys deploy"
+  [[ -f "$(PI_DIR)/lead.json" && -f "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "leftover keys still get Pi"
+  doctor_bstack | grep -q 'ok  bstack (lead=' || fail "doctor checks bstack whatever enabled says"
   unset FAKE_PI_READY
 }
 
@@ -449,7 +448,6 @@ EOF
   deploy_bstack >/dev/null 2>&1
   local out
   out="$(bstack_status)"
-  grep -q '^bstack: on$' <<<"$out" || fail "status says bstack is on: $out"
   grep -q 'lead = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "lead: $out"
   grep -q 'build = xai/grok-4.7:high' <<<"$out" || fail "build: $out"
   grep -q 'judge = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "judge: $out"
@@ -467,11 +465,11 @@ EOF
   if out="$(doctor_bstack)"; then fail "doctor: a missing file"; fi
   grep -q 'missing  bstack .*instructions.md' <<<"$out" || fail "doctor missing: $out"
   deploy_bstack >/dev/null 2>&1
-  _bstack_toml_set bstack claude '"anthropic/claude-opus-9#high"'
+  set_bstack claude '"anthropic/claude-opus-9#high"'
   if out="$(doctor_bstack)"; then fail "doctor: a pin Pi cannot run"; fi
   grep -q 'anthropic/claude-opus-9#high is not in pi --list-models' <<<"$out" || fail "doctor pin: $out"
   grep -q 'not in pi --list-models' <<<"$(bstack_status)" || fail "status flags the pin"
-  _bstack_toml_set bstack claude '"claude-bridge/claude-opus-5-5:high"'
+  set_bstack claude '"claude-bridge/claude-opus-5-5:high"'
   deploy_bstack >/dev/null 2>&1
   out="$(doctor_bstack)" || fail "doctor: a pin in Pi's own :level form is known: $out"
   if grep -q 'not in pi --list-models' <<<"$(bstack_status)"; then
@@ -480,19 +478,18 @@ EOF
   unset FAKE_PI_READY
 }
 
-@test "setup on Pi deploys and prints the logins to run; on deploys" {
+@test "setup on Pi deploys and prints the logins to run; on and off are not commands" {
   reset_home
   write_pi_config
   FAKE_PI_READY="claude-bridge" bstack_setup >"$BATS_TEST_TMPDIR/setup.log" 2>&1 || fail "setup: $(cat "$BATS_TEST_TMPDIR/setup.log")"
   [[ -f "$(PI_DIR)/instructions.md" ]] || fail "setup deploys"
   grep -q '/login xai' "$BATS_TEST_TMPDIR/setup.log" || fail "setup hints: $(cat "$BATS_TEST_TMPDIR/setup.log")"
-  write_config <<'EOF'
-[bstack]
-enabled = false
-EOF
-  FAKE_PI_READY="claude-bridge" bstack_on >/dev/null 2>&1
-  assert_eq "true" "$(_bstack_toml_get bstack enabled)" "on turns bstack on"
-  [[ -f "$(PI_DIR)/lead.json" ]] || fail "on deploys the Pi lead"
+  local sub out
+  for sub in on off; do
+    if out="$(cmd_bstack "$sub" 2>&1)"; then fail "bstack $sub ran: $out"; fi
+    [[ "$out" == 'error: usage: bercail bstack status|setup' ]] || fail "bstack $sub: $out"
+  done
+  [[ -f "$(PI_DIR)/lead.json" ]] || fail "off removed nothing"
 }
 
 @test "every Pi role including GPT/Grok council seats and empty-role lead loads bridge, fallback, and guard, and unsets Anthropic env" {
@@ -529,13 +526,13 @@ EOF
   reset_home
   write_pi_config
   export FAKE_PI_READY="claude-bridge openai xai"
-  _bstack_toml_set bstack fallback '["gpt", "grok"]'
+  set_bstack fallback '["gpt", "grok"]'
   deploy_bstack >/dev/null 2>&1
   assert_eq "$(printf 'gpt\ngrok')" "$(<"$(PI_DIR)/fallback")" "configured fallback"
   grep -q 'fallback: gpt grok' <<<"$(bstack_status)" || fail "status fallback order"
   grep -qx 'claude=claude-bridge/claude-opus-5-5#high' "$(PI_DIR)/models" || fail "models format unchanged"
   assert_eq 'claude-bridge/claude-opus-5-5#high' "$(bstack_role_model lead)" "runtime order does not change initial role"
-  _bstack_toml_set bstack fallback '["grok", "gpt"]'
+  set_bstack fallback '["grok", "gpt"]'
   local out raw
   if out="$(doctor_bstack)"; then fail "doctor stale fallback"; fi
   grep -q 'stale  bstack fallback' <<<"$out" || fail "doctor says stale fallback: $out"
@@ -543,13 +540,13 @@ EOF
   doctor_bstack >/dev/null || fail "doctor after fallback redeploy"
   for raw in '["gpt", "gpt"]' '["openai"]' '[1]' '"gpt"' '["gpt",]' ''; do
     [[ -n "$raw" ]] || raw='["claude", "grok", "grok"]'
-    _bstack_toml_set bstack fallback "$raw"
+    set_bstack fallback "$raw"
     if bstack_pi_fallback >/dev/null 2>&1; then fail "invalid fallback accepted: $raw"; fi
     if deploy_bstack >/dev/null 2>&1; then fail "deploy accepted invalid fallback: $raw"; fi
     if out="$(doctor_bstack 2>&1)"; then fail "doctor accepted invalid fallback: $raw"; fi
     grep -q 'invalid  bstack fallback' <<<"$out" || fail "doctor invalid fallback: $out"
   done
-  _bstack_toml_set bstack fallback '[]'
+  set_bstack fallback '[]'
   deploy_bstack >/dev/null 2>&1
   [[ ! -s "$(PI_DIR)/fallback" ]] || fail "empty fallback disables candidates"
   rm "$(PI_DIR)/fallback" "$(PI_DIR)/models" "$(PI_DIR)/extensions/guard.ts" "$(PI_DIR)/agents/bstack-headless.md"
@@ -612,7 +609,7 @@ EOF
   write_pi_config
   local out
   out="$(show_summary)"
-  grep -q 'bstack: on' <<<"$out" || fail "summary: $out"
+  grep -q 'bstack: log in to Claude, ChatGPT, or xAI with bercail bstack setup' <<<"$out" || fail "summary: $out"
   grep -q 'Desk agent: pi (handoff stages: bstack, autopilot)' <<<"$out" || fail "summary desk and stages: $out"
 }
 
