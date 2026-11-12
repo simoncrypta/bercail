@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Handoff router: a named stage picks binary, headless vs desk agent, model, worktree.
+# Handoff router: bstack or autopilot on Pi, headless unless --branch starts a desk.
 # The job is a beads issue; the agent prompt is one line pointing at it.
 # shellcheck shell=bash
 set -euo pipefail
@@ -449,7 +449,6 @@ handoff_info_json() {
     --arg default_copy "$default_copy" \
     --arg helper "$helper" \
     --arg space "$(handoff_shown_space 2>/dev/null || true)" \
-    --argjson stages "$(handoff_stage_names_json)" \
     --argjson herdr "$(handoff_bool_json "$herdr")" \
     --argjson herdr_env "$(handoff_bool_json "$herdr_env")" \
     --argjson socket "$(handoff_bool_json "$socket")" \
@@ -475,7 +474,7 @@ handoff_info_json() {
       space:$space,
       workspace:$space,
       beads:$beads,
-      stages:$stages
+      stages:["bstack","autopilot"]
     }'
 }
 
@@ -483,7 +482,7 @@ handoff_spawn_main() {
   local branch="" dirty="auto" issue="" issue_title="" prompt main sibling label intro graphite=0 copied=0 backend=gh
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
-  local stage="" worktree="" resume="" dry=0 mode="" binary=""
+  local stage="" worktree="" resume="" dry=0
   local base="" model=""
 
   while [[ $# -gt 0 ]]; do
@@ -553,14 +552,9 @@ handoff_spawn_main() {
   fi
 
   [[ -n "$stage" ]] || handoff_die "--stage bstack|autopilot is required; bercail does not pick a stage"
-  mode="$(handoff_stage_field "$stage" mode)" || handoff_die "unknown stage: $stage"
-  case "$mode" in
-    headless) ;;
-    *) handoff_die "stage $stage has unknown mode: $mode" ;;
-  esac
+  [[ "$stage" == bstack || "$stage" == autopilot ]] || handoff_die "unknown stage: $stage"
   [[ -n "$issue" ]] || handoff_die "--issue <beads id> is required; the job lives in that issue"
   handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id: $issue"
-  binary="$(handoff_stage_field "$stage" binary)" || handoff_die "unknown stage: $stage"
   [[ -z "$model" || "$model" =~ ^[^/[:space:]]+/[^[:space:]]+$ ]] \
     || handoff_die "--model takes PROVIDER/MODEL[:thinking], as pi --list-models names it (claude-bridge/claude-opus-5-5:high), not $model"
   [[ -z "$base" || -n "$branch" ]] \
@@ -576,16 +570,14 @@ handoff_spawn_main() {
       || handoff_die "Pi lead profile is missing ($(handoff_pi_lead_file)). Run bercail update."
     if [[ -n "$model" ]]; then
       model="$(handoff_pi_with_thinking "$model" "$(handoff_pi_lead_file)")"
-      handoff_bin_present "$(handoff_headless_bin pi)" \
+      handoff_bin_present "${HANDOFF_PI_BIN:-pi}" \
         || handoff_die "pi is not on PATH, so --model $model cannot be checked. Install it (bercail update)."
-      handoff_pi_model_check "$(handoff_headless_bin pi)" "$(handoff_pi_lead_file)" "$model"
+      handoff_pi_model_check "${HANDOFF_PI_BIN:-pi}" "$(handoff_pi_lead_file)" "$model"
     fi
-  elif [[ "$mode" == headless ]]; then
+  else
     [[ "$dirty" == auto ]] || handoff_die "stage $stage does not copy a dirty tree"
     handoff_run_headless "$stage" "$worktree" "$issue" "$resume" "$dry" "$model"
     return 0
-  else
-    handoff_usage
   fi
 
   command -v git >/dev/null 2>&1 || handoff_die "git is required"
@@ -665,7 +657,7 @@ handoff_spawn_main() {
 
   # The checkout facts used to be a prompt preamble. They go on the issue now.
   intro="$(printf 'bercail handoff: stage %s, desk agent %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr. %s Do not open Review or invoke the review skill; when the desk agent finishes, Review opens itself in this space once the user looks at it. When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
-    "$stage" "$binary" "$sibling" "$branch" "$(handoff_policy_line "$sibling")" "$issue")"
+    "$stage" pi "$sibling" "$branch" "$(handoff_policy_line "$sibling")" "$issue")"
   if [[ "$graphite" -eq 1 ]]; then
     intro="$(printf '%s\nUse gt, not raw git commit/push, unless asked.' "$intro")"
   else
@@ -696,7 +688,7 @@ handoff_spawn_main() {
 
   space="$(_wt_herdr_space_by_folder "$sibling" 2>/dev/null || true)"
   [[ -z "$space" ]] || desk="$(_wt_herdr_space_desk "$space" 2>/dev/null || true)"
-  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" "$binary" "$space" "$desk" "$issue_title")"
+  json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" pi "$space" "$desk" "$issue_title")"
   [[ -z "$base" ]] || json="$(jq -c --arg base "$base" '. + {base:$base}' <<<"$json")"
   [[ -z "$model" ]] || json="$(jq -c --arg model "$model" '. + {model:$model}' <<<"$json")"
   handoff_notify_check "$sibling"

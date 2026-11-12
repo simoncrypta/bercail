@@ -131,21 +131,21 @@ pi_log() {
 
   # A mention in other JSON, or a phrase beside a clean stop, is not a limit.
   printf '%s\n' '{"type":"text","text":"subscription_sharing_usage_limit_exceeded"}' >"$BATS_TEST_TMPDIR/mention.log"
-  [[ -z "$(handoff_usage_limit_reason "$BATS_TEST_TMPDIR/mention.log")" ]] \
+  [[ -z "$(handoff_pi_usage_limit_reason "$BATS_TEST_TMPDIR/mention.log")" ]] \
     || fail "a mention of the code is not a usage limit"
   printf '%s\n' \
     '{"type":"session","id":"cccccccc-dddd-4eee-8fff-000000000003"}' \
     '{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}' \
     "You've hit your 5-hour limit" >"$BATS_TEST_TMPDIR/pi-stop.log"
-  [[ -z "$(handoff_usage_limit_reason "$BATS_TEST_TMPDIR/pi-stop.log")" ]] \
+  [[ -z "$(handoff_pi_usage_limit_reason "$BATS_TEST_TMPDIR/pi-stop.log")" ]] \
     || fail "a Pi stop must not pick up a phrase on another line"
   printf '%s\n' \
     '{"type":"session","id":"cccccccc-dddd-4eee-8fff-000000000001"}' \
     '{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"You'\''re out of extra usage · resets 6:30pm"}}' \
     >"$BATS_TEST_TMPDIR/pi-extra.log"
-  [[ "$(handoff_usage_limit_reason "$BATS_TEST_TMPDIR/pi-extra.log")" == usage-limit ]] \
+  [[ "$(handoff_pi_usage_limit_reason "$BATS_TEST_TMPDIR/pi-extra.log")" == usage-limit ]] \
     || fail "out of extra usage should be a Pi plan limit"
   printf '%s\n' "You've hit your 5-hour limit" >"$BATS_TEST_TMPDIR/stderr-only.log"
-  [[ -z "$(handoff_usage_limit_reason "$BATS_TEST_TMPDIR/stderr-only.log")" ]] \
+  [[ -z "$(handoff_pi_usage_limit_reason "$BATS_TEST_TMPDIR/stderr-only.log")" ]] \
     || fail "plain text is not a Pi plan limit"
 }

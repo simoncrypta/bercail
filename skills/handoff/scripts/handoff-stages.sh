@@ -1,14 +1,7 @@
-# Handoff stage table and headless runner. Sourced by handoff-spawn.
+# Headless Pi runner. Sourced by handoff-spawn.
 # The job lives in a beads issue (bd). An agent's prompt is one line pointing at it.
 # Stages are bstack and autopilot. Both run Pi.
 # shellcheck shell=bash
-
-# bstack and autopilot always run Pi. There is no harness switch.
-handoff_stage_table() {
-  printf '# name\tbinary\tmode\tmodel\n'
-  printf 'bstack\tpi\theadless\tlead\n'
-  printf 'autopilot\tpi\theadless\tlead\n'
-}
 
 if ! declare -F handoff_die >/dev/null 2>&1; then
   handoff_die() {
@@ -16,29 +9,6 @@ if ! declare -F handoff_die >/dev/null 2>&1; then
     exit 1
   }
 fi
-
-handoff_stage_field() {
-  local name="$1" field="$2" line n binary mode model
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ -n "$line" && "$line" != \#* ]] || continue
-    IFS=$'\t' read -r n binary mode model <<<"$line"
-    [[ "$n" == "$name" ]] || continue
-    case "$field" in
-      binary) printf '%s' "$binary" ;;
-      mode) printf '%s' "$mode" ;;
-      model) printf '%s' "$model" ;;
-      *) return 1 ;;
-    esac
-    return 0
-  done < <(handoff_stage_table)
-  return 1
-}
-
-handoff_stage_names_json() {
-  handoff_stage_table \
-    | awk -F '\t' 'NF >= 1 && $1 !~ /^#/ { print $1 }' \
-    | jq -R . | jq -sc .
-}
 
 handoff_abspath() {
   local path="$1"
@@ -210,12 +180,6 @@ handoff_new_session_id() {
   python3 -c 'import uuid; print(uuid.uuid4())'
 }
 
-handoff_headless_bin() {
-  local binary="$1"
-  [[ "$binary" == pi ]] || handoff_die "unsupported headless binary: $binary"
-  printf '%s' "${HANDOFF_PI_BIN:-pi}"
-}
-
 handoff_bin_present() {
   local bin="$1"
   [[ -n "$bin" ]] || return 1
@@ -231,21 +195,6 @@ handoff_block() {
   handoff_write_result "$dest" blocked "$summary" "$session"
   printf 'handoff: %s\n' "$summary" >&2
   return 1
-}
-
-handoff_block_missing_harness() {
-  local dest="$1" binary="$2" session="$3"
-  handoff_block "$dest" "${binary} is not on PATH. Install it (bercail update). Bercail does not switch agents." "$session"
-}
-
-# Pi json mode: a session header, then events. A log without those is not Pi.
-handoff_log_is_pi() {
-  local log="$1"
-  [[ -f "$log" ]] || return 1
-  jq -e -s -R '
-    [ split("\n")[] | fromjson? | select(type == "object") ]
-    | any(.[]; .type == "session" or .type == "message_end")
-  ' "$log" >/dev/null 2>&1
 }
 
 # The last assistant message_end decides. A plain 429 is not a plan limit.
@@ -281,17 +230,6 @@ handoff_pi_session_id() {
   ' "$log" 2>/dev/null)"
   [[ -n "$id" && "$id" != null ]] || return 1
   printf '%s' "$id"
-}
-
-# usage-limit when LOG is a Pi plan limit, else nothing. Prints the reason; does
-# not rerun. The last assistant message_end decides. A plain 429 is not a plan
-# limit. A log that is not Pi json is not one.
-handoff_usage_limit_reason() {
-  local log="$1"
-  [[ -f "$log" ]] || return 0
-  if handoff_log_is_pi "$log"; then
-    handoff_pi_usage_limit_reason "$log"
-  fi
 }
 
 # [bstack] KEY in bercail's config.toml, unquoted (a quoted value keeps its #variant).
@@ -458,14 +396,10 @@ handoff_headless_comment_text() {
 # want: --model, or empty for the lead's.
 handoff_run_headless() {
   local stage="$1" worktree="$2" issue="$3" resume="$4" dry="$5" want="${6:-}"
-  local mode binary model session="" resumed=0 prompt bd
-  local result log bin cmd_json out rc=0 tid present=false bd_present=false reason="" issue_title=""
+  local model session="" resumed=0 prompt bd
+  local result log bin="${HANDOFF_PI_BIN:-pi}" cmd_json out rc=0 tid present=false bd_present=false reason="" issue_title=""
 
   command -v jq >/dev/null 2>&1 || handoff_die "jq is required"
-  mode="$(handoff_stage_field "$stage" mode)" || handoff_die "unknown stage: $stage"
-  [[ "$mode" == headless ]] || handoff_die "stage $stage is not headless"
-  binary="$(handoff_stage_field "$stage" binary)" || handoff_die "unknown stage: $stage"
-  [[ "$binary" == pi ]] || handoff_die "stage $stage is not Pi"
 
   [[ -n "$issue" ]] || handoff_die "stage $stage needs --issue <beads id> (the prompt points at that issue)"
   handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id: $issue"
@@ -503,7 +437,6 @@ handoff_run_headless() {
     issue_title="$(handoff_issue_title "$worktree" "$issue")"
   fi
 
-  bin="$(handoff_headless_bin "$binary")"
   if [[ "$dry" -ne 1 ]]; then
     if [[ "$bd_present" != true ]]; then
       handoff_block "$result" "bd (beads) is not on PATH. The job is a beads issue; install beads (bercail update installs it)." "$session" || true
@@ -518,7 +451,7 @@ handoff_run_headless() {
       return 1
     fi
     if ! handoff_bin_present "$bin"; then
-      handoff_block_missing_harness "$result" "$binary" "$session" || true
+      handoff_block "$result" "pi is not on PATH. Install it (bercail update)." "$session" || true
       handoff_stamp_issue "$result" "$issue" "$issue_title"
       cat -- "$result"; printf '\n'
       return 1
@@ -536,8 +469,6 @@ handoff_run_headless() {
 
   out="$(jq -nc \
     --arg stage "$stage" \
-    --arg mode "$mode" \
-    --arg binary "$binary" \
     --arg model "$model" \
     --arg worktree "$worktree" \
     --arg issue "$issue" \
@@ -549,7 +480,7 @@ handoff_run_headless() {
     --argjson bd_present "$bd_present" \
     --argjson command "$cmd_json" \
     --arg issue_title "$issue_title" \
-    '{ok:true,stage:$stage,mode:$mode,binary:$binary,model:$model,worktree:$worktree,issue:$issue,result:$result,session_id:$session_id,resume:$resume,dry_run:$dry_run,present:$present,bd_present:$bd_present,command:$command}
+    '{ok:true,stage:$stage,mode:"headless",binary:"pi",model:$model,worktree:$worktree,issue:$issue,result:$result,session_id:$session_id,resume:$resume,dry_run:$dry_run,present:$present,bd_present:$bd_present,command:$command}
      + (if $issue_title == "" then {} else {issue_title:$issue_title} end)')"
 
   if [[ "$dry" -eq 1 ]]; then
@@ -558,7 +489,7 @@ handoff_run_headless() {
   fi
 
   handoff_issue_comment "$worktree" "$issue" \
-    "$(handoff_headless_comment_text "$stage" "$binary" "$worktree" "$result" "$session" "$resumed")"
+    "$(handoff_headless_comment_text "$stage" pi "$worktree" "$result" "$session" "$resumed")"
 
   mkdir -p "$worktree/.bercail"
   rm -f -- "$result"
@@ -583,7 +514,7 @@ handoff_run_headless() {
   # The exhausted plan cannot be trusted to name its own limit. Classify the CLI
   # log and stamp reason; do not start another command.
   if [[ "$rc" -ne 0 ]]; then
-    reason="$(handoff_usage_limit_reason "$log")"
+    reason="$(handoff_pi_usage_limit_reason "$log")"
   fi
   # bercail knows the session id; the agent only has to write status and summary.
   # Keep the agent's own uuid if the CLI log had none. Never invent one: a

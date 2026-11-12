@@ -567,17 +567,18 @@ EOF
     || fail "the headless comment does not name the policy"
 }
 
-@test "stages are bstack and autopilot on Pi" {
-  handoff_stage_field arena binary && fail "arena is not a stage yet"
-  handoff_stage_field implement binary && fail "implement is not a stage yet"
-  handoff_stage_field review binary && fail "review pane is not a stage yet"
-  handoff_stage_field start binary && fail "start is not a stage"
-  [[ "$(handoff_stage_field bstack binary)" == pi ]] || fail "bstack binary"
-  [[ "$(handoff_stage_field bstack mode)" == headless ]] || fail "bstack mode"
-  [[ "$(handoff_stage_field bstack model)" == lead ]] || fail "bstack model"
-  [[ "$(handoff_stage_field autopilot binary)" == pi ]] || fail "autopilot binary"
-  [[ "$(handoff_stage_field autopilot mode)" == headless ]] || fail "autopilot mode"
-  [[ "$(handoff_stage_names_json)" == '["bstack","autopilot"]' ]] || fail "stage names: $(handoff_stage_names_json)"
+@test "--info reports bstack and autopilot stages" {
+  local out
+  _no_herdr
+  out="$(cd "$BATS_TEST_TMPDIR" && HERDR_APP_BIN="$BATS_TEST_TMPDIR/no-herdr" \
+    HANDOFF_BD_BIN="$BATS_TEST_TMPDIR/no-bd" "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
+  jq -e '.stages == ["bstack","autopilot"]' <<<"$out" >/dev/null || fail "stages: $out"
+}
+
+@test "an unknown stage fails before starting a handoff" {
+  local rc=0 err
+  err="$("$ROOT/skills/handoff/scripts/handoff-spawn" --stage unknown --issue "$ISSUE" --dry-run 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$err" == *'unknown stage: unknown'* ]] || fail "invalid stage: $rc $err"
 }
 
 # Stub bd: knows $BD_KNOWN ids, logs comments, reports $BD_BEADS_DIR.
@@ -727,8 +728,11 @@ STUB
   for stage in bstack autopilot; do
     out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" \
       --stage "$stage" --issue "$ISSUE" --worktree "$wt" --dry-run)"
-    printf '%s' "$out" | jq -e --arg want "$HANDOFF_PI_BIN" \
-      '.dry_run == true and .present == false and .bd_present == false and .binary == "pi" and any(.command[]; . == $want) and (.command | length) > 2' >/dev/null \
+    printf '%s' "$out" | jq -e --arg want "$HANDOFF_PI_BIN" --arg stage "$stage" \
+      '.dry_run == true and .present == false and .bd_present == false
+       and .stage == $stage and .mode == "headless" and .binary == "pi"
+       and .model == "claude-bridge/lead-model:high"
+       and any(.command[]; . == $want) and (.command | length) > 2' >/dev/null \
       || fail "$stage dry-run should print its argv even when pi is missing: $out"
   done
   [[ ! -f "$wt/.bercail/handoff-result.json" ]] || fail "dry-run must not write a result"

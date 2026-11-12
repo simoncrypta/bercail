@@ -253,7 +253,8 @@ arrange_five() {
   expect "$(one null 0 "$bare")" "t1 skip no record: see the desk-restore skill" "no record"
   expect "$(one "$(record '')" "$fresh" "$bare")" "t1 skip no session yet" "never reached a turn"
   expect "$(one "$(record ses_a pi sp2)" "$fresh" "$bare")" "t1 skip record is for another space" "wrong space"
-  expect "$(one "$(record ses_a other)" "$fresh" "$bare")" "t1 skip cannot resume other" "a non-Pi record is not resumed"
+  expect "$(one "$(record ses_a other)" $((SHUTDOWN - 86400)) "$bare")" \
+    "t1 skip closed before the shutdown" "a pre-Pi record is stale"
   expect "$(one "$(record ses_a)" "$fresh" "$bare" false)" "t1 skip folder is gone: /w" "worktree removed"
   expect "$(one "$(record ses_a)" "$fresh" "$bare" true true)" "t1 skip session is open elsewhere" "a process has it"
   got="$(verdict "$(fact t1 "$(record ses_a)" "$fresh" "$bare")" "$(fact t2 "$(record ses_a)" "$fresh" "$running")")"
@@ -319,17 +320,17 @@ arrange_five() {
   [[ "$out" == *"1 came back"* ]] || fail "restore counts: $out"
 }
 
-@test "only a Pi desk comes back" {
+@test "a fresh Pi desk comes back while a pre-Pi record stays stale" {
   local out
   reset_pass
   terminal t1 "$bare"; put_record t1 0199-pi 60 pi
-  terminal t2 "$bare"; put_record t2 ses_old 60 other
+  terminal t2 "$bare"; put_record t2 ses_old 86400 other
   terminal t3 "$(jq -c '.reason = "stopped_by_restart" | .foreground = null' <<<"$sibling")"
   out="$(cmd_desk restore)"
   expect "$(sed 's/^\(t[0-9]*\) .*exec [^ ]* /\1 /' "$SENT")" $'t1 pi --session-id 0199-pi' \
     "only the Pi desk is typed into"
-  [[ "$out" == *"1 came back"* && "$out" == *"cannot resume other"* && "$out" != *t3* ]] \
-    || fail "a non-Pi record is skipped and siblings are not counted: $out"
+  [[ "$out" == *"1 came back"* && "$out" == *"t2     skip: closed before the shutdown"* && "$out" != *t3* ]] \
+    || fail "the old record stays stale and siblings are not counted: $out"
 }
 
 @test "a desk is listed as id: title, resumed or skipped" {

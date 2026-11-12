@@ -27,7 +27,7 @@ Read the full message of each commit that matters (`git show --stat <sha>`).
 
 ## 2. Follow the trail
 
-In parallel where the harness has subagents (`explore`), otherwise in turn:
+Follow these sources in turn:
 
 - **PRs:** `gh pr list --state all --search <sha>`, then `gh pr view <n> --comments`
   for the body and the review threads.

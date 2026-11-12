@@ -70,7 +70,6 @@ desk_restore_plan() {
         elif $r == null then ["skip", "no record: see the desk-restore skill"]
         elif $r.space != $t.labels["bercail.space"] then ["skip", "record is for another space"]
         elif ($r.session // "") == "" then ["skip", "no session yet"]
-        elif $r.harness != "pi" then ["skip", "cannot resume \($r.harness)"]
         elif $d.mtime < ($shutdown - $window) then ["skip", "closed before the shutdown"]
         elif ($d.cwd_exists | not) then ["skip", "folder is gone: \($r.cwd)"]
         elif $d.in_ps or ($open | index($r.session)) or ($taken | index($r.session)) then ["skip", "session is open elsewhere"]

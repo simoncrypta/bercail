@@ -367,9 +367,10 @@ def main():
         tui.close()
 
     foreign = records / "t-other.json"
-    other = Tui(child_env(base, HC_TERMINAL_ID="t-other"), pi_args(sessions), foreign, "t-other", "other")
+    expected = record_text("t-other", 0, "other")
+    foreign.write_text(expected)
+    other = Tui(child_env(base, HC_TERMINAL_ID="t-other"), pi_args(sessions), address="t-other")
     other_claim = runtime / "bercail/open-sessions" / f"{other.proc.pid}.json"
-    expected = record_text("t-other", other.proc.pid, "other")
 
     def claimed_only():
         return other_claim.exists() and read_json(other_claim).get("pid") == other.proc.pid
@@ -378,7 +379,7 @@ def main():
         if foreign.read_text() != expected:
             fail(f"a foreign record was overwritten: {foreign.read_text()!r} != {expected!r}")
         else:
-            print("PASS: a non-Pi record is left byte-for-byte alone")
+            print("PASS: a stale record is left byte-for-byte alone")
     else:
         dump(other)
     other.close()

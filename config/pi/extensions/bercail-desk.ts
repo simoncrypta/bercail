@@ -35,7 +35,6 @@ export function claimPath(env, pid, platform = "linux") {
 export function deskNext(record, { address, pid, session, cwd }) {
   if (!record || typeof record !== "object" || Array.isArray(record)) return null
   if (!address || record.address !== address) return null
-  if (record.harness !== "pi") return null
   if (record.pid !== pid) return null
   if (typeof session !== "string") return null
   const next = { ...record, session }
