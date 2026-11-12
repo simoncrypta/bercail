@@ -33,8 +33,7 @@ app space the user is looking at), `beads`.
 - `main_checkout` means the primary git worktree, not “on trunk”.
 
 Never put the user's ask on the spawn command line; it goes in the beads issue.
-Never `python -c`, never a wrapper `.sh`, never `handoff-spawn <branch> -- <prompt>`.
-Auto-review rejects those as unbound executable content.
+Never `python -c`, never a wrapper `.sh`, never argv after `--`.
 
 
 ## The job is a beads issue
@@ -86,9 +85,7 @@ session, `session_id` is `none`; `--resume` refuses it.
 the argv as JSON, even when `pi` or bd is
 not on PATH (`present`, `bd_present`). It does not run Pi, check the
 issue or the model, or comment; it may ask `bd show` for the title. A missing lead profile
-fails the dry run and writes no result. Arena,
-implement, and the Composer review pane are not stages yet. Add a row to
-`scripts/handoff-stages.sh` later.
+fails the dry run and writes no result.
 
 ## Spawn a `--branch` desk
 

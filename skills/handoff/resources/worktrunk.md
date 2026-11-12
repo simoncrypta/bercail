@@ -34,5 +34,5 @@ yourself.
 
 ## Do not
 
-- Use `Agent { isolation: "worktree" }` patterns that invent throwaway branch names when Worktrunk + Herdr already define the path/branch.
+- Invent throwaway branch names. Use `handoff-spawn` for a sibling checkout.
 - Approve hooks on the user’s behalf.

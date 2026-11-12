@@ -1,5 +1,5 @@
 {
-  "name": "agentic-dev-setup",
+  "name": "bercail",
   "private": true,
   "scripts": {
     "deploy": "npm run deploy:domain && npm run deploy:site",

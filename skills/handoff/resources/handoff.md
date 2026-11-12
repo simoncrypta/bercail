@@ -39,23 +39,21 @@ run `--info` then spawn — not assemble these steps.
 Callers in no hc terminal (`HC_TERMINAL_ID` unset) run the **resolved script
 directly** with `--branch` and `--issue` (working directory = `--info` `cwd`);
 `--space` (or `--workspace`) picks the space to keep shown, else the one shown now.
-Auto-review rejects `python -c`, wrapper `.sh` files, and any argv after `--`.
+Never `python -c`, never a wrapper `.sh`, never argv after `--`.
 The ask is in the beads issue, so nothing but the id reaches argv.
 
 ## Stage router
 
-`scripts/handoff-stages.sh` is the table: name, binary, mode (`headless`),
-model. `handoff-spawn --stage` reads it. The only rows are `bstack` and
-`autopilot`. Both are headless Pi.
+`scripts/handoff-stages.sh` is the headless Pi runner `handoff-spawn` sources.
+`--stage` accepts only `bstack` and `autopilot`. Both are one
+`pi -p --mode json --session-id <uuid>` on the lead profile. Neither opens
+anything in the Herdr app. `--stage autopilot` is that run with
+`BERCAIL_ROLE=autopilot` and cannot take `--branch`. With `--branch`, `bstack`
+starts a desk on Pi's lead from lead.json, so it needs bstack on.
 
-`bstack` and `autopilot` run `pi -p --mode json --session-id <uuid>` on the
-lead profile. Pi resume reuses that uuid; `--resume` refuses anything that is
-not a uuid. Pi gets no `--add-dir`. With `--branch`, the desk runs the lead from
-lead.json, so it needs bstack on. Autopilot sets
-`BERCAIL_ROLE=autopilot` and cannot take `--branch`.
-
-A missing `pi`, bd, or issue writes status `blocked` and exits nonzero. It does
-not fall through to another stage.
+Pi resume reuses that uuid; `--resume` refuses anything that is not a uuid.
+Pi gets no `--add-dir`. A missing `pi`, bd, or issue writes status `blocked`
+and exits nonzero. It does not fall through to another stage.
 
 Every headless stage gets that one-line prompt and writes
 `<worktree>/.bercail/handoff-result.json`. Before the run, bercail checks bd
@@ -65,10 +63,7 @@ Re-handoff is `--resume <uuid>`. That id is the uuid bercail passed, or the
 session header's id when Pi reports a different one.
 
 Intake is the beads issue Shep writes (a Linear issue, a direct ask, or a
-note all become one issue). It is not a row and not a file bercail writes.
-
-Arena, implement, and the Composer review pane are not rows. Add a row; a
-stage needs no prompt file. Do not special-case the binary in `handoff-spawn`.
+note all become one issue). It is not a stage and not a file bercail writes.
 
 ## Dirty copy
 
