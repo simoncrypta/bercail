@@ -134,8 +134,8 @@ shep_repos() {
 # --- desks, handoffs, brief, board -------------------------------------------------
 
 # Live desks and background Sheps: address, name, cwd, state (working, done,
-# blocked, idle), and the issue, title and space on their labels. [] when hc
-# does not answer.
+# blocked, idle), and the issue, title, space and model (handoff --model) on
+# their labels. [] when hc does not answer.
 _shep_desks_json() {
   local addr
   { _shep_hc ls --json --label bercail.role=agent || true; } \
@@ -143,17 +143,17 @@ _shep_desks_json() {
     | while IFS= read -r addr; do
       _shep_hc get "$addr" --json | jq -c '{address, name, cwd, state: (.status.state // "unknown"),
         issue: .labels["bercail.issue"], title: .labels["bercail.issue_title"], space: .labels["bercail.space"],
-        bg: (.labels["bercail.shep"] == "bg")}' 2>/dev/null || true
+        model: .labels["bercail.model"], bg: (.labels["bercail.shep"] == "bg")}' 2>/dev/null || true
     done | jq -sc '[.[] | select(.address)]'
 }
 
-# The latest handoff record per issue: {"<id>": {desk, space, label, branch, path}}.
+# The latest handoff record per issue: {"<id>": {desk, space, label, branch, path, model}}.
 _shep_records_json() {
   local file
   file="$(notify_handoffs_file)"
   [[ -f "$file" ]] || { printf '{}'; return 0; }
   jq -ncR '[inputs | fromjson? | select(type == "object" and (.issue | type) == "string" and .issue != "")]
-    | map({key: .issue, value: {desk, space, label, branch, path}}) | from_entries' "$file" 2>/dev/null || printf '{}'
+    | map({key: .issue, value: {desk, space, label, branch, path, model}}) | from_entries' "$file" 2>/dev/null || printf '{}'
 }
 
 # The main checkout of a folder. A handoff's worktree that is gone gives
@@ -240,7 +240,8 @@ shep_brief() {
       ([ (if $desk then "\(who) \($desk.state)" elif $rec.desk then "desk \($rec.desk) gone" else "no desk" end),
          (if ($desk.space // $rec.space) then "space " + ([$rec.label, ($desk.space // $rec.space)] | map(select(.)) | if length == 2 then "\(.[0]) (\(.[1]))" else .[0] end) else empty end),
          (if $rec.branch then "branch \($rec.branch)" else empty end),
-         (if ($rec.path // $desk.cwd) then "worktree \(($rec.path // $desk.cwd) | tilde)" else empty end) ] | join(" · ")),
+         (if ($rec.path // $desk.cwd) then "worktree \(($rec.path // $desk.cwd) | tilde)" else empty end),
+         ((if $desk then $desk.model else $rec.model end) | if . then "model \(.)" else empty end) ] | join(" · ")),
       (if $screen != "" then "\(who) is blocked; its screen ends with:", ($screen | split("\n")[] | "  | " + .),
         "(the whole screen: hc read \($desk.address) --lines 60)" else empty end),
       (if ($reports | length) == 0 then
@@ -279,7 +280,8 @@ shep_board() {
           ($mine[] | "- " + head(.)
             + (if .status != "open" then " [\(.status)]" else "" end)
             + " · " + (if .desk then "\(who(.desk)) \(.desk.state)" elif .rec.desk then "desk \(.rec.desk) gone" else "no desk" end)
-            + " · " + (.rec.branch // "-")) ),
+            + " · " + (.rec.branch // "-")
+            + ((if .desk then .desk.model else .rec.model end) | if . then " · model \(.)" else "" end)) ),
       ([ $repos[] | . as $r | select(([$jobs[] | select(.repo == $r.path)] | length) == 0)
          | "\($r.path | tilde) (" + (if .open == null then "no beads" else "\(.open) open" end) + ")" ]
        | if length > 0 then "Other repos: " + join(", ") else empty end),

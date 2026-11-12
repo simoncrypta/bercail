@@ -19,9 +19,10 @@ handoff_usage() {
   cat >&2 <<'EOF'
 usage: handoff-spawn --info
        handoff-spawn --stage bstack|autopilot --issue ID --worktree PATH
-                     [--resume SESSION] [--dry-run]
+                     [--resume SESSION] [--dry-run] [--model PROVIDER/MODEL[:thinking]]
        handoff-spawn --branch <name> --stage bstack --issue ID
                      [--dirty|--clean] [--space <id>] [--base <branch>]
+                     [--model PROVIDER/MODEL[:thinking]]
 
   --info          print JSON facts and exit
   --issue ID      beads issue to work (bd show ID). It holds the detail. The
@@ -34,7 +35,13 @@ usage: handoff-spawn --info
                   Bercail has no default.
   --worktree PATH checkout for a headless stage (default: cwd)
   --resume ID     re-handoff: pi --session-id (a uuid)
-  --dry-run       print the headless command as JSON; no run, no issue check, no comment
+  --dry-run       print the headless command as JSON; no run, no issue or model
+                  check, no comment
+  --model M       run this one agent on Pi model M (provider/id, as pi
+                  --list-models names it) instead of the lead's. The rest of
+                  the lead stays. A :thinking suffix is kept; without one it
+                  gets the lead's. An unknown model is refused before anything
+                  starts. Sibling roles (builder, judge, council) keep theirs.
   --branch NAME   feature branch for a new space with a desk agent (bstack only)
   --dirty         copy uncommitted main changes into the sibling as a working tree
                   (default when main is dirty)
@@ -477,7 +484,7 @@ handoff_spawn_main() {
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0 mode="" binary=""
-  local base=""
+  local base="" model=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -516,6 +523,11 @@ handoff_spawn_main() {
         base="$2"
         shift 2
         ;;
+      --model)
+        [[ $# -ge 2 ]] || handoff_usage
+        model="$2"
+        shift 2
+        ;;
       --space|--workspace)
         [[ $# -ge 2 ]] || handoff_usage
         HANDOFF_SPACE="$2"
@@ -549,6 +561,8 @@ handoff_spawn_main() {
   [[ -n "$issue" ]] || handoff_die "--issue <beads id> is required; the job lives in that issue"
   handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id: $issue"
   binary="$(handoff_stage_field "$stage" binary)" || handoff_die "unknown stage: $stage"
+  [[ -z "$model" || "$model" =~ ^[^/[:space:]]+/[^[:space:]]+$ ]] \
+    || handoff_die "--model takes PROVIDER/MODEL[:thinking], as pi --list-models names it (claude-bridge/claude-opus-5-5:high), not $model"
   [[ -z "$base" || -n "$branch" ]] \
     || handoff_die "--base needs --branch: it picks what the new desk branch is cut from; headless stages run in an existing --worktree"
   if [[ -n "$branch" ]]; then
@@ -560,9 +574,15 @@ handoff_spawn_main() {
       || handoff_die "stage $stage on a Pi desk needs bstack on ([bstack] enabled = true). Run bercail bstack on."
     [[ -f "$(handoff_pi_lead_file)" ]] \
       || handoff_die "Pi lead profile is missing ($(handoff_pi_lead_file)). Run bercail update."
+    if [[ -n "$model" ]]; then
+      model="$(handoff_pi_with_thinking "$model" "$(handoff_pi_lead_file)")"
+      handoff_bin_present "$(handoff_headless_bin pi)" \
+        || handoff_die "pi is not on PATH, so --model $model cannot be checked. Install it (bercail update)."
+      handoff_pi_model_check "$(handoff_headless_bin pi)" "$(handoff_pi_lead_file)" "$model"
+    fi
   elif [[ "$mode" == headless ]]; then
     [[ "$dirty" == auto ]] || handoff_die "stage $stage does not copy a dirty tree"
-    handoff_run_headless "$stage" "$worktree" "$issue" "$resume" "$dry"
+    handoff_run_headless "$stage" "$worktree" "$issue" "$resume" "$dry" "$model"
     return 0
   else
     handoff_usage
@@ -661,12 +681,13 @@ handoff_spawn_main() {
   prompt="$(handoff_issue_prompt "$issue" "$issue_title")"
 
   # The desk agent runs the lead from lead.json. It gets the one-line prompt
-  # through WT_HERDR_AGENT_PROMPT, and the issue through WT_HERDR_ISSUE and
-  # WT_HERDR_ISSUE_TITLE. No file.
+  # through WT_HERDR_AGENT_PROMPT, the issue through WT_HERDR_ISSUE and
+  # WT_HERDR_ISSUE_TITLE, and --model through WT_HERDR_MODEL. No file.
   if WT_HERDR_KEEP_FOCUS="$keep_space" \
     WT_HERDR_AGENT_PROMPT="$prompt" \
     WT_HERDR_ISSUE="$issue" \
     WT_HERDR_ISSUE_TITLE="$issue_title" \
+    WT_HERDR_MODEL="$model" \
     wt_herdr_handoff_agent "$label" "$sibling"; then
     started=1
   else
@@ -677,6 +698,7 @@ handoff_spawn_main() {
   [[ -z "$space" ]] || desk="$(_wt_herdr_space_desk "$space" 2>/dev/null || true)"
   json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$graphite" "$stage" "$binary" "$space" "$desk" "$issue_title")"
   [[ -z "$base" ]] || json="$(jq -c --arg base "$base" '. + {base:$base}' <<<"$json")"
+  [[ -z "$model" ]] || json="$(jq -c --arg model "$model" '. + {model:$model}' <<<"$json")"
   handoff_notify_check "$sibling"
   handoff_remember "$json"
   printf '%s\n' "$json"

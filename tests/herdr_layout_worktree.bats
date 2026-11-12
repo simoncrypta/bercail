@@ -179,6 +179,18 @@ open_space() {
   grep -qx "$RUN" "$CALL_LOG" || fail "default agent argv unchanged: $(cat "$CALL_LOG")"
 }
 
+@test "a handoff --model reaches the desk agent and its label; a default start drops it" {
+  local model=claude-bridge/fable:high
+  open_space
+  WT_HERDR_AGENT_PROMPT=bercail-0s1 WT_HERDR_MODEL="$model" \
+    wt_herdr_handoff_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature"
+  grep -qx "hc run --bg --keep --outlive-parent --no-notify --parent t9 --cwd $FEATURE --label bercail.role=agent --label bercail.space=sp-child --label bercail.model=$model $DESK --prompt bercail-0s1 --model $model" "$CALL_LOG" \
+    || fail "the desk runs bercail-desk-agent --model, labelled with it; log=$(cat "$CALL_LOG")"
+  : >"$CALL_LOG"
+  WT_HERDR_MODEL="$model" wt_herdr_start_default_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature"
+  grep -qx "$RUN" "$CALL_LOG" || fail "a default start runs the lead's model; log=$(cat "$CALL_LOG")"
+}
+
 @test "a space with no Shell terminal gets no desk" {
   open_space
   cp "$FAKE_STATE/spaces.json" "$FAKE_STATE/spaces.bak"

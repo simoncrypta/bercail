@@ -20,9 +20,14 @@ bd create "Fix the login timeout" --description "..."     # Shep writes the issu
 
 # sibling worktree with its own space; the desk runs Pi's lead
 ~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME --stage bstack --issue ID [--dirty|--clean] [--space ID] [--base BRANCH]
+
+# either, on another Pi model than the lead's
+~/.agents/skills/handoff/scripts/handoff-spawn ... --model claude-bridge/claude-fable-5-2:high
 ```
 
 `--base BRANCH` cuts the desk branch from BRANCH instead of the default branch, so a dependent issue's desk stacks on its parent's branch. The [git backend](#git-backend) registers that parent with `gh stack`, `gt track`, or `origin stack track`. It works only with `--branch`, and stage `autopilot` can't take `--branch`: give it `--worktree` on the PR's checkout. `--branch` needs bstack on (`[bstack] enabled = true`) and a Pi lead profile.
+
+**Model.** `--model PROVIDER/MODEL[:thinking]` runs one agent, desk or headless, on that Pi model. Only the lead's `--model` changes; its extensions, guard, prompts, skills, and instructions stay. A desk gets it as `bercail-desk-agent --model`, which swaps the model in the lead's argv. A `:thinking` suffix (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) is kept as given; without one, the lead's level is added (`claude-bridge/claude-fable-5-2` becomes `claude-bridge/claude-fable-5-2:high` on a `:high` lead). Before anything starts, bercail runs `pi --offline --list-models` with the lead's extensions, since one of them can add the provider, and refuses a model Pi does not list, before any worktree, comment, or result file. A desk on another model is labelled `bercail.model=<model>`, and its spawn JSON and `handoffs.jsonl` line carry `model`, so `bercail shep brief` and `bercail shep board` show it. Its desk record keeps the swapped `--model`, so [`bercail desk restore`](config.md#desks-after-a-reboot) brings it back on the same model. The builder, judge, council, and autopilot templates it starts keep their own models (`bercail bstack status`).
 
 **Prompt.** One line pointing at the issue: ``Your job is beads issue <id>: <title>. Run `bd show <id>` (read its comments too) and do the work it describes.`` The title is the issue's, truncated to 60 characters. When bd has none, the sentence keeps the id only: ``Your job is beads issue <id>. Run `bd show <id>` (read its comments too) and do the work it describes.``
 
@@ -32,9 +37,9 @@ bd create "Fix the login timeout" --description "..."     # Shep writes the issu
 
 **Blocked, not switched.** Headless, if `pi`, `bd`, or the issue is missing, the result is `blocked` and nothing starts. With `--branch`, bstack off or a missing lead profile makes `handoff-spawn` exit 1 before it makes a worktree. Bercail never falls through to another stage.
 
-**Dry run.** `--dry-run` prints the exact argv even when `pi` is not installed. A missing lead profile fails the dry run and writes no result.
+**Dry run.** `--dry-run` prints the exact argv even when `pi` is not installed, and does not check `--model`. A missing lead profile fails the dry run and writes no result.
 
-Each `--branch` spawn is logged in `${XDG_STATE_HOME:-~/.local/state}/agentic-dev/handoffs.jsonl`; headless runs are not logged there. Follow a `--branch` desk through [agent status webhooks](shep.md#agent-status-webhooks) or with `hc wait <desk>`; `desk`, `space`, and, when known, `issue_title` (and `base`, when set) are in the spawn JSON.
+Each `--branch` spawn is logged in `${XDG_STATE_HOME:-~/.local/state}/agentic-dev/handoffs.jsonl`; headless runs are not logged there. Follow a `--branch` desk through [agent status webhooks](shep.md#agent-status-webhooks) or with `hc wait <desk>`; `desk`, `space`, and, when known, `issue_title` (and `base` and `model`, when set) are in the spawn JSON.
 
 ## Git backend
 

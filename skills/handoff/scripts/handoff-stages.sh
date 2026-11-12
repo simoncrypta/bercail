@@ -341,6 +341,43 @@ handoff_pi_lead_model() {
   ' "$1"
 }
 
+# Pi's thinking levels, the suffix of a --model value (provider/id:high).
+HANDOFF_PI_THINKING="off minimal low medium high xhigh max"
+
+handoff_pi_has_thinking() {
+  [[ "$1" == *:* && " $HANDOFF_PI_THINKING " == *" ${1##*:} "* ]]
+}
+
+# MODEL as given when it names a thinking level, else with the lead's.
+handoff_pi_with_thinking() {
+  local model="$1" lead_model
+  if ! handoff_pi_has_thinking "$model"; then
+    lead_model="$(handoff_pi_lead_model "$2")"
+    if handoff_pi_has_thinking "$lead_model"; then
+      model+=":${lead_model##*:}"
+    fi
+  fi
+  printf '%s' "$model"
+}
+
+# Dies unless Pi lists MODEL's provider/id with the lead's extensions loaded:
+# a provider can come from one (claude-bridge).
+handoff_pi_model_check() {
+  local bin="$1" lead="$2" model="$3" id ext list
+  local -a argv=("$bin" --offline --list-models)
+  id="$model"
+  if handoff_pi_has_thinking "$id"; then
+    id="${id%:*}"
+  fi
+  while IFS= read -r -d '' ext; do
+    argv+=(-e "$ext")
+  done < <(jq -j '. as $a | range(1; length - 1) | select($a[.] == "-e") | $a[. + 1], "\u0000"' "$lead")
+  list="$(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN "${argv[@]}" </dev/null 2>/dev/null)" \
+    || handoff_die "pi --list-models failed, so --model $model cannot be checked. Run ${argv[*]} to see why."
+  awk -v want="$id" 'NR > 1 && $1 "/" $2 == want { found = 1 } END { exit !found }' <<<"$list" \
+    || handoff_die "Pi has no model $id. pi --list-models lists the ones you can use."
+}
+
 # Sets HANDOFF_PI_LEAD and HANDOFF_PI_MODEL from the lead profile.
 # On failure, HANDOFF_PI_BLOCK is the summary.
 handoff_pi_prepare() {
@@ -419,8 +456,9 @@ handoff_headless_comment_text() {
     "$stage" "$binary" "$worktree" "$(handoff_policy_line "$worktree")" "$result" "$session_line"
 }
 
+# want: --model, or empty for the lead's.
 handoff_run_headless() {
-  local stage="$1" worktree="$2" issue="$3" resume="$4" dry="$5"
+  local stage="$1" worktree="$2" issue="$3" resume="$4" dry="$5" want="${6:-}"
   local mode binary model session="" resumed=0 prompt bd
   local result log bin cmd_json out rc=0 tid present=false bd_present=false reason="" issue_title=""
 
@@ -454,6 +492,7 @@ handoff_run_headless() {
     return 1
   fi
   model="$HANDOFF_PI_MODEL"
+  [[ -z "$want" ]] || model="$(handoff_pi_with_thinking "$want" "$HANDOFF_PI_LEAD")"
 
   bd="$(handoff_bd_bin)"
   if handoff_bin_present "$bd"; then
@@ -485,6 +524,7 @@ handoff_run_headless() {
       cat -- "$result"; printf '\n'
       return 1
     fi
+    [[ -z "$want" ]] || handoff_pi_model_check "$bin" "$HANDOFF_PI_LEAD" "$model"
   fi
 
   prompt="$(handoff_issue_prompt "$issue" "$issue_title")"

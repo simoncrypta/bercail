@@ -77,15 +77,15 @@ session, `session_id` is `none`; `--resume` refuses it.
 
 ```bash
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --stage bstack --issue <id> --worktree <checkout> [--resume <uuid>] [--dry-run]
+  --stage bstack --issue <id> --worktree <checkout> [--resume <uuid>] [--dry-run] [--model <provider/id[:thinking]>]
 "$HOME/.agents/skills/handoff/scripts/handoff-spawn" \
-  --stage autopilot --issue <id> --worktree <the PR's checkout> [--resume <uuid>]
+  --stage autopilot --issue <id> --worktree <the PR's checkout> [--resume <uuid>] [--model <provider/id[:thinking]>]
 ```
 
 `--resume` continues that session. It does not touch any desk agent. `--dry-run` prints
 the argv as JSON, even when `pi` or bd is
 not on PATH (`present`, `bd_present`). It does not run Pi, check the
-issue, or comment; it may ask `bd show` for the title. A missing lead profile
+issue or the model, or comment; it may ask `bd show` for the title. A missing lead profile
 fails the dry run and writes no result. Arena,
 implement, and the Composer review pane are not stages yet. Add a row to
 `scripts/handoff-stages.sh` later.
@@ -104,6 +104,8 @@ working directory to `cwd` from `--info`. Flags only.
   default the user stays on whatever space they are looking at.
 - `--dirty` / `--clean` override `default_copy`.
 - `--base <branch>` is optional: dependent issues stack on the parent's branch via `--base` (`wt switch --create --base`), then register the parent with the `git` backend from `--info`: `gh stack`, `gt track`, or `origin stack track`. Without it the branch is cut from the default branch. Publish and update through that backend's stack commands, never a hand-made PR merely based on another PR's branch. See [git-workflow.md](resources/git-workflow.md). Never run `gt` unless `git` is `gt`.
+- `--model <provider/id[:thinking]>` is optional: run this one agent on another Pi model, such as
+  `claude-bridge/claude-fable-5-2:high`, when the person asks for one. See [Another model](#another-model).
 - Plan-only work is a line in the issue, not a flag.
 - `--branch` needs bstack on (`[bstack] enabled = true`) and a Pi lead profile. Autopilot cannot take `--branch`.
 ## The desk (`--branch`)
@@ -117,11 +119,29 @@ it in the desk column. `--stage` is required; bercail has no default stage.
 Bstack off, or a missing lead profile, fails before any worktree is made. A desk already running in
 that space is replaced. `wt remove <branch>` closes the space and its desk.
 
+## Another model
+
+`--model <provider/id[:thinking]>` runs one agent, desk or headless, on that Pi
+model instead of the lead's. Nothing else in the lead changes: the same
+extensions, guard, prompts, skills, and instructions. Name the model as
+`pi --list-models` does (`claude-bridge/claude-fable-5-2`). A `:thinking`
+suffix (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) is kept;
+without one, the agent gets the lead's level. Before anything starts, bercail
+asks `pi --list-models`, with the lead's extensions loaded, for the model, and
+refuses one Pi does not list. A `--dry-run` skips that check.
+
+A desk on another model is labelled `bercail.model=<model>`, its spawn JSON and
+`handoffs.jsonl` line carry `model`, and `bercail shep brief` and `bercail shep
+board` name it. Its desk record keeps the swapped `--model`, so
+`bercail desk restore` brings it back on the same model. The sibling roles it
+starts (builder, judge, council, autopilot templates) keep their own models.
+Without `--model`, every agent runs the lead's.
+
 ## After a `--branch` spawn
 
 The script prints JSON: `ok`, `label`, `path`, `branch`, `issue`, `issue_title`
 (when known), `agent_started`, `dirty_copied`, `graphite`, `stage`, `harness`, `space` (the
-child's Herdr app space) and `desk` (the desk agent's hc address). It appends that line to
+child's Herdr app space), `desk` (the desk agent's hc address), and `model` when `--model` was given. It appends that line to
 `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling exists.
 
 Report that tuple and stop. If the script exits nonzero before creating a

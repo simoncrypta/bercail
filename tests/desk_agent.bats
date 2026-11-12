@@ -121,6 +121,48 @@ seed_issue() {
   expect "$(desk pi -- '- a message')" "pi [-e] [$EXT] [--] [- a message] key=none" "the extension comes before --"
 }
 
+# A bstack lead with a model and a thinking level, as bercail update writes it.
+arrange_lead() {
+  LEAD="$HOME/.local/share/bercail/pi/lead.json"
+  mkdir -p "$(dirname "$LEAD")"
+  jq -n '$ARGS.positional' --args -- pi --model claude-bridge/opus:high -e /bridge.ts \
+    --append-system-prompt "/a b/instructions.md" --skill /s >"$LEAD"
+}
+
+@test "--model swaps the lead's model and changes nothing else" {
+  arrange_lead
+  printf '[bstack]\nenabled = true\n' >"$CONFIG"
+  expect "$(desk --prompt 'Do bercail-1' --model claude-bridge/fable:high)" \
+    "pi [--model] [claude-bridge/fable:high] [-e] [/bridge.ts] [--append-system-prompt] [/a b/instructions.md] [--skill] [/s] [Do bercail-1] key=none" \
+    "the lead runs on the given model, the rest of its argv as it was"
+  expect "$(desk --model claude-bridge/fable:low --prompt x)" \
+    "pi [--model] [claude-bridge/fable:low] [-e] [/bridge.ts] [--append-system-prompt] [/a b/instructions.md] [--skill] [/s] [x] key=none" \
+    "the options come in either order"
+  expect "$(desk --model m2 pi --model=m1 --verbose)" "pi [--model=m2] [--verbose] key=none" "an equals --model is swapped in place"
+  expect "$(desk --model m2 pi --verbose -- --model)" "pi [--model] [m2] [--verbose] [--] [--model] key=none" \
+    "a Pi command with no --model gets one; a message after -- is not a flag"
+  local got
+  got="$(desk --model m2 other --verbose 2>&1)" && fail "--model on a command that is not Pi should fail: $got"
+  [[ "$got" == *"--model is for Pi"* ]] || fail "not-Pi message: $got"
+}
+
+@test "a desk on --model records it, and its resume relaunches on it" {
+  local cmd
+  arrange_lead
+  arrange_record
+  ln -s "$ROOT/bin/bercail-desk-agent" "$BATS_TEST_TMPDIR/bin/bercail-desk-agent"
+  desk --prompt 'Your job is beads issue bercail-ev6. Run it.' --model claude-bridge/fable:high >/dev/null
+  expect "$(record '.args[0:2]')" '["--model","claude-bridge/fable:high"]' "the record's flags carry the swapped model"
+  # shellcheck source=/dev/null
+  cmd="$(source "$ROOT/lib/common.sh" && source "$ROOT/lib/desk.sh" \
+    && desk_resume_command "$(record '.session = "0199-r"')")"
+  [[ "$cmd" == *"bercail-desk-agent pi --session-id 0199-r --model claude-bridge/fable:high "* ]] \
+    || fail "the resume line carries the model: $cmd"
+  expect "$(bash -c "$cmd")" \
+    "pi [--session-id] [0199-r] [--model] [claude-bridge/fable:high] [-e] [/bridge.ts] [--append-system-prompt] [/a b/instructions.md] [--skill] [/s] key=none" \
+    "the resumed desk runs Pi on the model it had"
+}
+
 @test "bstack off runs plain pi; a given command runs as is" {
   local EXT
   EXT="$HOME/.local/share/bercail/pi-extensions/bercail-desk.ts"

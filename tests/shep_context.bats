@@ -249,6 +249,33 @@ Waiting on the person:
 - nothing" ]] || fail "quiet board: $out"
 }
 
+@test "shep brief and board show a desk's --model from its label, or its handoff when the desk is gone" {
+  local out
+  repo app
+  printf '%s\n' "$HOME/Work/app" >"$STATE/repos"
+  issues app 'app-1|Fix the login|in_progress' 'app-2|Old job|in_progress' 'app-3|Plain|in_progress'
+  jq -n '{id: "app-1", title: "Fix the login", status: "in_progress", labels: []}' >"$HOME/Work/app/.beads/fake/app-1.json"
+  jq -n '{id: "app-2", title: "Old job", status: "in_progress", labels: []}' >"$HOME/Work/app/.beads/fake/app-2.json"
+  record --arg p "$HOME/Work/app.login" '{path: $p, branch: "login", issue: "app-1", desk: "t9", model: "claude-bridge/fable:low"}'
+  record --arg p "$HOME/Work/app.old" '{path: $p, branch: "old", issue: "app-2", desk: "t5", model: "claude-bridge/fable:high"}'
+  record --arg p "$HOME/Work/app.plain" '{path: $p, branch: "plain", issue: "app-3", desk: "t4"}'
+  desk t9 "$HOME/Work/app" working '{"bercail.issue": "app-1", "bercail.model": "claude-bridge/fable:high"}'
+  desk t4 "$HOME/Work/app" working '{"bercail.issue": "app-3"}'
+  out="$(shep brief app-1)" || fail "brief app-1: $out"
+  grep -qx 'desk t9 working · branch login · worktree ~/Work/app.login · model claude-bridge/fable:high' <<<"$out" \
+    || fail "a live desk's model is its label: $out"
+  out="$(shep brief app-2)" || fail "brief app-2: $out"
+  grep -qx 'desk t5 gone · branch old · worktree ~/Work/app.old · model claude-bridge/fable:high' <<<"$out" \
+    || fail "a gone desk's model is its handoff's: $out"
+  out="$(shep board)" || fail "board: $out"
+  grep -qx -- '- app-1: Fix the login \[in_progress\] · desk t9 working · login · model claude-bridge/fable:high' <<<"$out" \
+    || fail "board, live desk: $out"
+  grep -qx -- '- app-2: Old job \[in_progress\] · desk t5 gone · old · model claude-bridge/fable:high' <<<"$out" \
+    || fail "board, gone desk: $out"
+  grep -qx -- '- app-3: Plain \[in_progress\] · desk t4 working · plain' <<<"$out" \
+    || fail "board, a desk on the lead names no model: $out"
+}
+
 @test "shep remember, list and forget keep dated, scoped rules in Shep's preferences file" {
   local out today file="$STATE/preferences.md"
   today="$(date +%Y-%m-%d)"

@@ -132,6 +132,8 @@ Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`
   Handoff stages: bstack and autopilot, both Pi. Each works a beads issue; the
   prompt is one line pointing at it. Headless runs (\`pi -p\`) write
   .bercail/handoff-result.json; --branch starts a Pi desk instead.
+  --model provider/id[:thinking] runs one of them on another Pi model; the
+  rest of the lead, and the sibling roles' models, stay.
 EOF
 }
 

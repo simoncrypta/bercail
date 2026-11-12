@@ -43,6 +43,11 @@ one plan and spreads out as you sign in to more. A pinned model is used whether
 or not you are signed in to its plan. With no sign-in at all, agents use Pi's
 default model.
 
+To run one desk's lead on another model, without changing the lead for every
+desk, hand it off with `--model` ([handoff](../handoff.md)). Only that desk's
+lead changes; the builder, judge, council, and autopilot it starts keep the
+models above.
+
 A sibling knows nothing you didn't put in its brief. The lead writes the
 brief, then checks the result itself before passing it on.
 

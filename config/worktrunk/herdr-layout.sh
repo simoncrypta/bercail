@@ -131,20 +131,24 @@ _wt_herdr_start_desk() {
     "$HC" rm "$old" >/dev/null 2>&1 || true
   fi
   [[ -z "$prompt" ]] || argv+=(--prompt "$prompt")
-  # Handoff names the issue on the desk. A default start clears those vars.
-  local -a issue_labels=()
+  # Handoff names the issue and any model on the desk. A default start clears those vars.
+  local -a labels=()
   if [[ -n "${WT_HERDR_ISSUE:-}" ]]; then
-    issue_labels+=(--label "bercail.issue=${WT_HERDR_ISSUE}")
+    labels+=(--label "bercail.issue=${WT_HERDR_ISSUE}")
     if [[ -n "${WT_HERDR_ISSUE_TITLE:-}" ]]; then
-      issue_labels+=(--label "bercail.issue_title=${WT_HERDR_ISSUE_TITLE}")
+      labels+=(--label "bercail.issue_title=${WT_HERDR_ISSUE_TITLE}")
     fi
+  fi
+  if [[ -n "${WT_HERDR_MODEL:-}" ]]; then
+    argv+=(--model "$WT_HERDR_MODEL")
+    labels+=(--label "bercail.model=${WT_HERDR_MODEL}")
   fi
   # hc passes on the caller's environment; a headless caller (Shep) has
   # TERM=dumb, which leaves the desk without colors or key handling.
   TERM=xterm-256color COLORTERM=truecolor "$HC" run --bg --keep --outlive-parent --no-notify \
     --parent "$shell" --cwd "$(_wt_realpath "$workdir")" \
     --label bercail.role=agent --label "bercail.space=$space" \
-    "${issue_labels[@]}" \
+    "${labels[@]}" \
     "${argv[@]}" >/dev/null
 }
 
@@ -162,12 +166,12 @@ wt_herdr_layout_create() {
 }
 
 # Clear session of the desk agent (d / dev / apply). Ignores any
-# inherited handoff prompt or issue labels.
+# inherited handoff prompt, issue labels, or model.
 wt_herdr_start_default_agent() {
   local label="$1" workdir="$2" space
   _wt_herdr_app_running || { echo "Herdr app is not running" >&2; return 1; }
   space="$(_wt_herdr_resolve_space "$label" "$workdir")" || return 1
-  WT_HERDR_ISSUE= WT_HERDR_ISSUE_TITLE= _wt_herdr_start_desk "$space" "$workdir"
+  WT_HERDR_ISSUE= WT_HERDR_ISSUE_TITLE= WT_HERDR_MODEL= _wt_herdr_start_desk "$space" "$workdir"
 }
 
 # Orchestrator / handoff-spawn: start or replace the desk agent with

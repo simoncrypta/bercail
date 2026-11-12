@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# The desk agent. Usage: bercail-desk-agent [--prompt TEXT] [COMMAND [ARGS...]]
+# The desk agent. Usage: bercail-desk-agent [--prompt TEXT] [--model MODEL] [COMMAND [ARGS...]]
 #
 # COMMAND defaults to the Pi lead when bstack is on ([bstack] enabled = true),
 # else plain pi. The Pi lead is lead.json, which bercail update writes.
+# --model runs that Pi command on MODEL (provider/id[:thinking]) and changes
+# nothing else in it.
 set -euo pipefail
 
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/bercail/config.toml"
@@ -22,10 +24,14 @@ toml_get() {
 }
 
 prompt=""
-if [[ "${1:-}" == --prompt ]]; then
-  prompt="${2:-}"
+model=""
+while [[ "${1:-}" == --prompt || "${1:-}" == --model ]]; do
+  case "$1" in
+    --prompt) prompt="${2:-}" ;;
+    --model) model="${2:-}" ;;
+  esac
   shift 2 || shift $#
-fi
+done
 
 bstack=0
 [[ "$(toml_get bstack enabled)" == true ]] && bstack=1
@@ -43,6 +49,24 @@ if [[ ${#argv[@]} -eq 0 ]]; then
   else
     argv=(pi)
   fi
+fi
+
+# Swap only the model. Before the record: a restore replays its flags, so the
+# desk comes back on this model.
+if [[ -n "$model" ]]; then
+  [[ "$(basename "${argv[0]}")" == pi ]] || {
+    printf 'bercail-desk-agent: --model is for Pi, not %s\n' "${argv[0]}" >&2
+    exit 1
+  }
+  swapped=0
+  for ((i = 1; i < ${#argv[@]}; i++)); do
+    case "${argv[i]}" in
+      --) break ;;
+      --model) argv[i + 1]="$model"; swapped=1; break ;;
+      --model=*) argv[i]="--model=$model"; swapped=1; break ;;
+    esac
+  done
+  [[ "$swapped" -eq 1 ]] || argv=("${argv[0]}" --model "$model" "${argv[@]:1}")
 fi
 
 # An idle harness writes nothing. Heartbeat the record, using hc events to

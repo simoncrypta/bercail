@@ -1455,14 +1455,19 @@ STUB
   unset HANDOFF_PI_BIN
 }
 
-@test "a --branch spawn puts the title in JSON, handoffs.jsonl, and the desk labels" {
-  local repo="$BATS_TEST_TMPDIR/title-branch" bin="$BATS_TEST_TMPDIR/title-branch-bin" home="$BATS_TEST_TMPDIR/title-branch-home"
-  local state="$BATS_TEST_TMPDIR/title-branch-state" out title='Say "hi"'
-  local folder="$BATS_TEST_TMPDIR/title-folder" hclog="$BATS_TEST_TMPDIR/title-hc.log" argv="$BATS_TEST_TMPDIR/title-hc.argv"
-  git_init "$repo"
-  mkdir -p "$bin" "$home/.config/worktrunk"
-  cp "$ROOT/config/worktrunk/herdr-layout.sh" "$home/.config/worktrunk/herdr-layout.sh"
-  cat >"$bin/wt" <<'WT'
+# A --branch spawn through the real herdr-layout.sh, with fake wt, Herdr app and
+# hc. hc run's argv lands in $DESK_ARGV, its calls in $DESK_HC_LOG.
+_desk_fixture() {
+  local name="$1"
+  DESK_REPO="$BATS_TEST_TMPDIR/$name"
+  DESK_BIN="$BATS_TEST_TMPDIR/$name-bin"
+  DESK_HOME="$BATS_TEST_TMPDIR/$name-home"
+  DESK_STATE="$BATS_TEST_TMPDIR/$name-state"
+  DESK_CONFIG="$BATS_TEST_TMPDIR/$name-bstack.toml"
+  git_init "$DESK_REPO"
+  mkdir -p "$DESK_BIN" "$DESK_HOME/.config/worktrunk"
+  cp "$ROOT/config/worktrunk/herdr-layout.sh" "$DESK_HOME/.config/worktrunk/herdr-layout.sh"
+  cat >"$DESK_BIN/wt" <<'WT'
 #!/usr/bin/env bash
 branch=""
 while [[ $# -gt 0 ]]; do
@@ -1473,15 +1478,15 @@ while [[ $# -gt 0 ]]; do
 done
 main="$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
 git -C "$main" worktree add -q -b "$branch" "$main.$branch" HEAD
-printf '%s' "$(cd "$main.$branch" && pwd -P)" >"$TITLE_FOLDER"
+printf '%s' "$(cd "$main.$branch" && pwd -P)" >"$DESK_FOLDER"
 WT
-  cat >"$bin/herdr-app" <<'HERDR'
+  cat >"$DESK_BIN/herdr-app" <<'HERDR'
 #!/usr/bin/env bash
 case "$1 ${2:-}" in
   "status ") printf '{"space":"sp-keep"}\n' ;;
   "ls ")
     f=""
-    [[ -f "$TITLE_FOLDER" ]] && f="$(cat "$TITLE_FOLDER")"
+    [[ -f "$DESK_FOLDER" ]] && f="$(cat "$DESK_FOLDER")"
     if [[ -n "$f" ]]; then
       jq -nc --arg f "$f" '{spaces:[{id:"sp1",name:"Lbl",folder:$f,tabs:[{terminals:[{terminal:"t9"}]}]}]}'
     else
@@ -1489,47 +1494,147 @@ case "$1 ${2:-}" in
     fi
     ;;
   "do space.new")
-    printf '%s' "$6" >"$TITLE_FOLDER"
+    printf '%s' "$6" >"$DESK_FOLDER"
     printf '{"space":"sp1"}\n'
     ;;
   *) printf '{"ok":true}\n' ;;
 esac
 HERDR
-  cat >"$bin/hc" <<'HC'
+  cat >"$DESK_BIN/hc" <<'HC'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$TITLE_HC_LOG"
+printf '%s\n' "$*" >>"$DESK_HC_LOG"
 if [[ "$1" == run ]]; then
-  printf '%s\0' "$@" | jq -Rs 'split("\u0000") | .[:-1]' >"$TITLE_HC_ARGV"
+  printf '%s\0' "$@" | jq -Rs 'split("\u0000") | .[:-1]' >"$DESK_ARGV"
 fi
 case "$1" in
   ls) printf '{"terminals":[]}\n' ;;
   *) printf '{}\n' ;;
 esac
 HC
-  chmod +x "$bin/wt" "$bin/herdr-app" "$bin/hc"
+  chmod +x "$DESK_BIN/wt" "$DESK_BIN/herdr-app" "$DESK_BIN/hc"
   _bd_stub
   _pi_ready
-  printf '[bstack]\nenabled = true\n' >"$BATS_TEST_TMPDIR/title-bstack.toml"
-  : >"$BD_COMMENTS"
-  : >"$hclog"
-  export TITLE_FOLDER="$folder" TITLE_HC_LOG="$hclog" TITLE_HC_ARGV="$argv"
-  out="$(cd "$repo" && BD_TITLE="$title" HOME="$home" PATH="$bin:$PATH" \
-    HERDR_APP_BIN="$bin/herdr-app" HC_BIN="$bin/hc" \
-    XDG_STATE_HOME="$state" BERCAIL_BIN="$BATS_TEST_TMPDIR/no-bercail" \
-    BERCAIL_CONFIG="$BATS_TEST_TMPDIR/title-bstack.toml" HANDOFF_PI_PROFILE="$HANDOFF_PI_PROFILE" \
-    "$ROOT/skills/handoff/scripts/handoff-spawn" \
-    --branch feat --stage bstack --issue "$ISSUE" --clean 2>"$BATS_TEST_TMPDIR/title-branch.err")" \
+  printf '[bstack]\nenabled = true\n' >"$DESK_CONFIG"
+  export DESK_FOLDER="$BATS_TEST_TMPDIR/$name-folder" DESK_HC_LOG="$BATS_TEST_TMPDIR/$name-hc.log"
+  export DESK_ARGV="$BATS_TEST_TMPDIR/$name-hc.argv"
+  : >"$DESK_HC_LOG"
+}
+
+# handoff-spawn --branch feat --stage bstack --issue $ISSUE --clean, plus $@.
+_desk_spawn() {
+  (cd "$DESK_REPO" && HOME="$DESK_HOME" PATH="$DESK_BIN:$PATH" \
+    HERDR_APP_BIN="$DESK_BIN/herdr-app" HC_BIN="$DESK_BIN/hc" \
+    XDG_STATE_HOME="$DESK_STATE" BERCAIL_BIN="$BATS_TEST_TMPDIR/no-bercail" \
+    BERCAIL_CONFIG="$DESK_CONFIG" HANDOFF_PI_PROFILE="$HANDOFF_PI_PROFILE" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage bstack --issue "$ISSUE" --clean "$@")
+}
+
+@test "a --branch spawn puts the title in JSON, handoffs.jsonl, and the desk labels" {
+  local out title='Say "hi"'
+  _desk_fixture title-branch
+  out="$(BD_TITLE="$title" _desk_spawn 2>"$BATS_TEST_TMPDIR/title-branch.err")" \
     || fail "branch spawn failed: $out $(cat "$BATS_TEST_TMPDIR/title-branch.err")"
   printf '%s' "$out" | jq -e --arg t "$title" --arg id "$ISSUE" \
     '.issue == $id and .issue_title == $t and .agent_started == true' >/dev/null \
     || fail "branch json: $out $(cat "$BATS_TEST_TMPDIR/title-branch.err")"
   jq -e --arg t "$title" --arg id "$ISSUE" '.issue == $id and .issue_title == $t' \
-    "$state/agentic-dev/handoffs.jsonl" >/dev/null \
-    || fail "handoffs.jsonl: $(cat "$state/agentic-dev/handoffs.jsonl")"
+    "$DESK_STATE/agentic-dev/handoffs.jsonl" >/dev/null \
+    || fail "handoffs.jsonl: $(cat "$DESK_STATE/agentic-dev/handoffs.jsonl")"
   jq -e --arg issue "bercail.issue=$ISSUE" --arg titled "bercail.issue_title=$title" \
-    'index($issue) and index($titled)' "$argv" >/dev/null \
-    || fail "hc run labels: $(cat "$argv" 2>/dev/null) log=$(cat "$hclog")"
-  unset TITLE_FOLDER TITLE_HC_LOG TITLE_HC_ARGV
+    'index($issue) and index($titled)' "$DESK_ARGV" >/dev/null \
+    || fail "hc run labels: $(cat "$DESK_ARGV" 2>/dev/null) log=$(cat "$DESK_HC_LOG")"
+}
+
+# A Pi whose --list-models knows claude-bridge/fable and logs its argv.
+_pi_lists_models() {
+  local stub="$BATS_TEST_TMPDIR/bin/pi-lists"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  cat >"$stub" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\0' "$@" | jq -Rsc 'split("\u0000") | .[:-1]' >>"$PI_LIST_LOG"
+[[ " $* " == *" --list-models "* ]] || exit 3
+printf 'provider       model         context  max-out  thinking  images\n'
+printf 'claude-bridge  fable         1M       128K     yes       yes\n'
+printf 'claude-bridge  lead-model    1M       128K     yes       yes\n'
+STUB
+  chmod +x "$stub"
+  export HANDOFF_PI_BIN="$stub" PI_LIST_LOG="$BATS_TEST_TMPDIR/pi-list.log"
+  : >"$PI_LIST_LOG"
+}
+
+@test "a --branch --model desk runs the lead on that model, labelled and logged" {
+  local out lead
+  _desk_fixture model-branch
+  _pi_lists_models
+  out="$(_desk_spawn --model claude-bridge/fable 2>"$BATS_TEST_TMPDIR/model-branch.err")" \
+    || fail "spawn failed: $out $(cat "$BATS_TEST_TMPDIR/model-branch.err")"
+  lead="$HANDOFF_PI_PROFILE/lead.json"
+  jq -e --arg e "$(jq -r '.[6]' "$lead")" '.[0:2] == ["--offline", "--list-models"]
+    and index(["-e", "npm:pi-claude-bridge@0.11.0"]) and index(["-e", $e]) and (index("--model") | not)' \
+    "$PI_LIST_LOG" >/dev/null || fail "Pi lists models with the lead's extensions: $(cat "$PI_LIST_LOG")"
+  printf '%s' "$out" | jq -e '.model == "claude-bridge/fable:high" and .agent_started == true' >/dev/null \
+    || fail "no thinking level takes the lead's: $out"
+  jq -e '.model == "claude-bridge/fable:high"' "$DESK_STATE/agentic-dev/handoffs.jsonl" >/dev/null \
+    || fail "handoffs.jsonl: $(cat "$DESK_STATE/agentic-dev/handoffs.jsonl")"
+  jq -e --arg desk "$DESK_HOME/.local/bin/bercail-desk-agent" '
+    index("bercail.model=claude-bridge/fable:high")
+    and .[index($desk) + 1:] == ["--prompt", .[index($desk) + 2], "--model", "claude-bridge/fable:high"]' \
+    "$DESK_ARGV" >/dev/null || fail "the desk gets --model and its label: $(cat "$DESK_ARGV")"
+  rm -rf "$DESK_REPO.feat"
+  git -C "$DESK_REPO" worktree prune
+  git -C "$DESK_REPO" branch -qD feat
+  out="$(_desk_spawn --model claude-bridge/fable:low 2>&1)" || fail "spawn failed: $out"
+  printf '%s' "$out" | tail -n 1 | jq -e '.model == "claude-bridge/fable:low"' >/dev/null \
+    || fail "a given thinking level is kept: $out"
+}
+
+@test "a --branch spawn without --model runs the lead's and checks nothing" {
+  local out
+  _desk_fixture lead-branch
+  _pi_lists_models
+  out="$(_desk_spawn 2>&1)" || fail "spawn failed: $out"
+  printf '%s' "$out" | jq -e 'has("model") | not' >/dev/null || fail "no model in the JSON: $out"
+  [[ ! -s "$PI_LIST_LOG" ]] || fail "no model, no list: $(cat "$PI_LIST_LOG")"
+  jq -e 'any(.[]; test("model")) | not' "$DESK_ARGV" >/dev/null || fail "no --model or label: $(cat "$DESK_ARGV")"
+}
+
+@test "an unknown or malformed --model is refused before a worktree" {
+  local out rc=0
+  _desk_fixture bad-model
+  _pi_lists_models
+  out="$(_desk_spawn --model claude-bridge/nope:high 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "an unknown model should exit 1, got $rc ($out)"
+  [[ "$out" == *"Pi has no model claude-bridge/nope."* ]] || fail "unknown model message: $out"
+  [[ ! -e "$DESK_REPO.feat" && ! -s "$DESK_HC_LOG" ]] || fail "nothing starts on an unknown model"
+  rc=0
+  out="$(_desk_spawn --model fable 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$out" == *"--model takes PROVIDER/MODEL[:thinking]"* ]] || fail "a bare id is refused: $rc $out"
+  printf '#!/bin/sh\nexit 1\n' >"$HANDOFF_PI_BIN"
+  rc=0
+  out="$(_desk_spawn --model claude-bridge/fable 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$out" == *"pi --list-models failed"* ]] || fail "a failing Pi is refused: $rc $out"
+  [[ ! -e "$DESK_REPO.feat" ]] || fail "no worktree when the model cannot be checked"
+}
+
+@test "headless --model swaps only the model; an unknown one starts nothing" {
+  local wt="$BATS_TEST_TMPDIR/model-headless" out base rc=0
+  _start_fixture "$wt"
+  base="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage autopilot --issue "$ISSUE" --worktree "$wt" --dry-run)"
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage autopilot --issue "$ISSUE" --worktree "$wt" \
+    --dry-run --model claude-bridge/fable)"
+  jq -en --argjson a "$base" --argjson b "$out" '
+    $b.model == "claude-bridge/fable:high"
+    and ($b.command | index("--model")) == ($a.command | index("--model"))
+    and $b.command[($b.command | index("--model")) + 1] == "claude-bridge/fable:high"
+    and ($a.command | map(select(. != $a.session_id and . != $a.model)))
+      == ($b.command | map(select(. != $b.session_id and . != $b.model)))' >/dev/null \
+    || fail "only the model changes: $base vs $out"
+  _pi_lists_models
+  out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" \
+    --model claude-bridge/nope 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$out" == *"Pi has no model claude-bridge/nope."* ]] || fail "unknown model: $rc $out"
+  jq -e 'all(.[]; index("--list-models"))' -s "$PI_LIST_LOG" >/dev/null || fail "Pi only listed models: $(cat "$PI_LIST_LOG")"
+  [[ ! -s "$BD_COMMENTS" && ! -e "$wt/.bercail/handoff-result.json" ]] || fail "an unknown model comments and writes nothing"
 }
 
 _pi_profile() {
