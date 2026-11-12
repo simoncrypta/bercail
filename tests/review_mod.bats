@@ -10,7 +10,7 @@ setup() {
   # As the old file ran: a command that fails inside a pipe fails its assertion.
   set -o pipefail
 
-  # --- a run dir: #7 reviewed (CI, bot threads), #8 thin and waiting on top of it ----
+  # --- a run dir: #7 reviewed (CI), #8 thin and waiting on top of it ----
   S="$BATS_TEST_TMPDIR/stack-7"
   D7="$S/pr-7/aaaaaaa1111111"
   D8="$S/pr-8/bbbbbbb2222222"
@@ -50,11 +50,6 @@ EOF
   cat >"$D7/ci.json" <<'EOF'
 [{"name": "test", "bucket": "pass", "state": "SUCCESS", "workflow": "CI", "link": "https://ci/test"},
  {"name": "lint", "bucket": "fail", "state": "FAILURE", "workflow": "CI", "link": "https://ci/lint"}]
-EOF
-  cat >"$D7/bots.json" <<'EOF'
-{"threads": [{"path": "lib/upload.sh", "line": 12, "isResolved": false, "author": {"login": "coderabbitai[bot]"}},
-             {"path": "README", "line": 1, "isResolved": true, "author": {"login": "bugbot"}}],
- "reviews": [{"author": {"login": "coderabbitai[bot]"}}], "comments": []}
 EOF
   echo '[]' >"$D8/ci.json"
 }
@@ -346,11 +341,10 @@ SH
   export FAKE_BERCAIL="$BATS_TEST_TMPDIR/fake-bercail" FAKE_HOME="$BATS_TEST_TMPDIR/home"
 }
 
-@test "review-pr state reads the run dir: pass status, questions, bots, header" {
+@test "review-pr state reads the run dir: pass status, questions, header" {
   "$ROOT/bin/bercail" review-pr state --stack "$S" >"$BATS_TEST_TMPDIR/state.json" || fail "review-pr state"
   jq -e '.schema == "bercail.review-ui/v1" and (.prs | length) == 2 and .header != null
     and .prs[0].pass == "ready" and .prs[1].pass == "waiting" and .prs[1].review == null
-    and .prs[0].bots.unresolved == 1 and .prs[0].bots.on_decisions == 1
     and .prs[0].intent == .prs[0].review.why and .prs[0].review.intent_analysis.confidence == "medium"
     and .prs[1].intent == "Awaiting code-based intent inference."
     and (.prs[0].questions | map(.at)) == ["lib/upload.sh:12", null, null]' "$BATS_TEST_TMPDIR/state.json" >/dev/null \
@@ -385,7 +379,6 @@ SH
   "$ROOT/bin/bercail" review-pr state --stack "$S" >"$BATS_TEST_TMPDIR/state.json" || fail "review-pr state"
   jq -e '.schema == "bercail.review-ui/v1" and (.prs | length) == 2 and .header != null
     and .prs[0].pass == "ready" and .prs[1].pass == "waiting" and .prs[1].review == null
-    and .prs[0].bots.unresolved == 1 and .prs[0].bots.on_decisions == 1
     and .prs[0].intent == .prs[0].review.why and .prs[0].review.intent_analysis.confidence == "medium"
     and .prs[1].intent == "Awaiting code-based intent inference."
     and (.prs[0].questions | map(.at)) == ["lib/upload.sh:12", null, null]' "$BATS_TEST_TMPDIR/state.json" >/dev/null \
@@ -482,10 +475,6 @@ Is logging in another PR?
 3. [AI Agent]
 whole PR
 Should this ship behind a flag?
-Bots
-2 threads, 1 unresolved (1 on a decision's file)
-1 reviews, 0 comments
-bugbot, coderabbitai[bot]
 CI
 1 fail · 1 pass
 fail: lint
@@ -520,8 +509,6 @@ o
 Shell
 Inferred intent
 Awaiting code-based intent inference.
-Bots
-Not gathered yet
 CI
 no checks
 j/k pick · c code review · r re-review · o shell
@@ -551,7 +538,6 @@ EOF
   "$ROOT/bin/bercail" review-pr state --stack "$S" >"$BATS_TEST_TMPDIR/state.json" || fail "review-pr state"
   jq -e '.schema == "bercail.review-ui/v1" and (.prs | length) == 2 and .header != null
     and .prs[0].pass == "ready" and .prs[1].pass == "waiting" and .prs[1].review == null
-    and .prs[0].bots.unresolved == 1 and .prs[0].bots.on_decisions == 1
     and .prs[0].intent == .prs[0].review.why and .prs[0].review.intent_analysis.confidence == "medium"
     and .prs[1].intent == "Awaiting code-based intent inference."
     and (.prs[0].questions | map(.at)) == ["lib/upload.sh:12", null, null]' "$BATS_TEST_TMPDIR/state.json" >/dev/null \

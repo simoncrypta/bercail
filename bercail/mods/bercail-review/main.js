@@ -326,12 +326,6 @@ export default class Review extends View {
         .child(div().font_semibold().text_color(t.accent).child(`${i + 1}. [AI Agent]`))
         .child(q.at ? this.code(t, q.at) : div().text_color(t.muted).child("whole PR")))
       .child(this.prose(t, q.text)))));
-    const b = pr.bots;
-    body.child(this.section(t, "Bots", b ? [
-      this.prose(t, `${b.threads} threads, ${b.unresolved} unresolved (${b.on_decisions} on a decision's file)`),
-      this.prose(t, `${b.reviews} reviews, ${b.comments} comments`),
-      div().text_size(12).text_color(t.muted).child((b.authors ?? []).join(", ")),
-    ] : [div().text_color(t.muted).child("Not gathered yet")]));
     const rank = (c) => { const i = CI_ORDER.indexOf(c.bucket ?? "pending"); return i < 0 ? 5 : i; };
     body.child(this.section(t, "CI", [...(pr.ci ?? [])].sort((a, b) => rank(a) - rank(b)).map((c, i) => v_flex().gap(3)
       .child(div().font_semibold().text_color(c.bucket === "fail" ? t.ansi1 : t.foreground).child(`${c.bucket ?? "pending"}: ${c.name}`))

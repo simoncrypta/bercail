@@ -1192,8 +1192,8 @@ _review_json() {
 }
 
 # Everything the Stack tab mod (bercail-review) shows, as one JSON document. It
-# only reads the run dir: stack.json, stack.md, and per PR run.json, review.json,
-# ci.json and bots.json (when gathered), with the pass status the card prints.
+# only reads the run dir: stack.json, stack.md, and per PR run.json, review.json
+# and ci.json, with the pass status the card prints.
 review_state() {
   _review_load "$@"
   local pr n sha thin dir status i=0 tmp
@@ -1214,24 +1214,16 @@ review_state() {
     status="$(_review_status "$dir" "$thin")"
     _review_json "$dir/review.json" null >"$tmp/review"
     _review_json "$dir/ci.json" '[]' >"$tmp/ci"
-    _review_json "$dir/bots.json" null >"$tmp/bots"
     i=$((i + 1))
     jq -n --argjson p "$pr" --arg dir "$dir" --arg status "$status" \
-      --slurpfile review "$tmp/review" --slurpfile ci "$tmp/ci" --slurpfile bots "$tmp/bots" \
+      --slurpfile review "$tmp/review" --slurpfile ci "$tmp/ci" \
       "$REVIEW_JQ_DEFS"'
       $review[0] as $review
-      | def bots: if type != "object" then null else
-          [.threads[]? | objects] as $t | [$review.decisions[]?.evidence[]?.file] as $files
-          | {threads: ($t | length), unresolved: ([$t[] | select(.isResolved == false)] | length),
-             on_decisions: ([$t[] | select(.isResolved == false and ((.path // "") | IN($files[])))] | length),
-             reviews: ([.reviews[]? | objects] | length), comments: ([.comments[]? | objects] | length),
-             authors: ([$t[], (.reviews[]?, .comments[]? | objects) | .author.login? // .author? // .user.login? | strings] | unique)}
-          end;
-      $p + {dir: $dir, status: $status, pass: ($status | split(":")[0]),
+      | $p + {dir: $dir, status: $status, pass: ($status | split(":")[0]),
         intent: (if $review.intent_analysis != null then $review.why
           elif $review != null then "Re-review for code-based intent."
           else "Awaiting code-based intent inference." end),
-        review: $review, ci: ($ci[0] // []), bots: ($bots[0] | bots),
+        review: $review, ci: ($ci[0] // []),
         questions: (if $review == null then [] else [$review | questions[] | {text, at: (.at | loc | select(. != "") // null)}] end)}' \
       >"$tmp/pr-$(printf '%04d' "$i")"
   done < <(jq -c '.prs[]' "$R_STACK/stack.json")
