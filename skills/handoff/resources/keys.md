@@ -35,4 +35,4 @@ Herdr app keys:
 | `F2` / `Shift+F2` | Rename tab / space |
 | `Ctrl+Shift+?` | All keys |
 
-Shell: `wtc` / `wts` / `wtd` / `dev` (or `d`) / `t`.
+Shell: `wtc` / `wts` / `wtd` / `dev`.
