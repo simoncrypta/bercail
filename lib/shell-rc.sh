@@ -42,14 +42,13 @@ upsert_marker_block() {
       return 0
     fi
     tmp="$(mktemp)"
-    awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" \
-        -v lstart="$LEGACY_AGENTIC_DEV_MARKER_START" -v lend="$LEGACY_AGENTIC_DEV_MARKER_END" '
-      $0 ~ start || $0 ~ lstart { skip=1 }
+    awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" '
+      $0 ~ start { skip=1 }
       # Hold blank lines until more text follows, so the blank line written
       # before the block is not kept again on every amend.
       !skip && $0 == "" { blank++ }
       !skip && $0 != "" { for (; blank > 0; blank--) print ""; print }
-      $0 ~ end || $0 ~ lend { skip=0 }
+      $0 ~ end { skip=0 }
     ' "$rc" >"$tmp"
     printf '\n%s\n' "$content" >>"$tmp"
     mv "$tmp" "$rc"
@@ -74,10 +73,9 @@ remove_marker_block() {
   fi
   local tmp
   tmp="$(mktemp)"
-  awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" \
-      -v lstart="$LEGACY_AGENTIC_DEV_MARKER_START" -v lend="$LEGACY_AGENTIC_DEV_MARKER_END" '
-    $0 ~ start || $0 ~ lstart { skip=1; next }
-    $0 ~ end || $0 ~ lend { skip=0; next }
+  awk -v start="$AGENTIC_DEV_MARKER_START" -v end="$AGENTIC_DEV_MARKER_END" '
+    $0 ~ start { skip=1; next }
+    $0 ~ end { skip=0; next }
     !skip { print }
   ' "$rc" >"$tmp"
   mv "$tmp" "$rc"

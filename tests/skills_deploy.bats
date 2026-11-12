@@ -18,8 +18,6 @@ setup() {
   export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/agentic-dev"
   export AGENTIC_DEV_USER_CONFIG="$AGENTIC_DEV_CONFIG_DIR/config.toml"
   export AGENTS_SKILLS_DIR="$HOME/.agents/skills"
-  export AGENTIC_DEV_SKILL_ID="handoff"
-  export AGENTIC_DEV_SKILL_DIR="$AGENTS_SKILLS_DIR/handoff"
   YES=1
   DRY_RUN=0
 }
@@ -27,11 +25,11 @@ setup() {
 @test "deploy_skills installs canonical skills and links them for pi" {
   rm -rf "$HOME/.agents" "$HOME/.pi"
   deploy_skills >/dev/null
-  [[ -f "$AGENTIC_DEV_SKILL_DIR/SKILL.md" ]] || fail "canonical skill missing"
-  grep -q '^name: handoff$' "$AGENTIC_DEV_SKILL_DIR/SKILL.md" || fail "skill frontmatter missing"
-  [[ -f "$AGENTIC_DEV_SKILL_DIR/resources/handoff.md" ]] || fail "resource handoff.md missing"
-  [[ -f "$AGENTIC_DEV_SKILL_DIR/MANIFEST" ]] || fail "MANIFEST missing from deploy_tree"
-  [[ -x "$AGENTIC_DEV_SKILL_DIR/scripts/handoff-spawn" ]] || fail "handoff-spawn missing or not executable"
+  [[ -f "$AGENTS_SKILLS_DIR/handoff/SKILL.md" ]] || fail "canonical skill missing"
+  grep -q '^name: handoff$' "$AGENTS_SKILLS_DIR/handoff/SKILL.md" || fail "skill frontmatter missing"
+  [[ -f "$AGENTS_SKILLS_DIR/handoff/resources/handoff.md" ]] || fail "resource handoff.md missing"
+  [[ -f "$AGENTS_SKILLS_DIR/handoff/MANIFEST" ]] || fail "MANIFEST missing from deploy_tree"
+  [[ -x "$AGENTS_SKILLS_DIR/handoff/scripts/handoff-spawn" ]] || fail "handoff-spawn missing or not executable"
   [[ -f "$AGENTS_SKILLS_DIR/review/SKILL.md" ]] || fail "canonical review skill missing"
   grep -q '^name: review$' "$AGENTS_SKILLS_DIR/review/SKILL.md" || fail "review frontmatter missing"
   [[ -f "$AGENTS_SKILLS_DIR/review/scripts/wait-comments.sh" ]] || fail "wait-comments helper missing"
@@ -62,7 +60,7 @@ setup() {
   [[ -L "$HOME/.pi/agent/skills/handoff" ]] || fail "pi link missing before scrub"
   remove_managed_skills >/dev/null
   [[ ! -e "$HOME/.pi/agent/skills/handoff" ]] || fail "pi link should be scrubbed on uninstall"
-  [[ ! -d "$AGENTIC_DEV_SKILL_DIR" ]] || fail "canonical skill should be removed"
+  [[ ! -d "$AGENTS_SKILLS_DIR/handoff" ]] || fail "canonical skill should be removed"
 }
 
 @test "deploy_lib copies git-backend.sh next to the other libs" {

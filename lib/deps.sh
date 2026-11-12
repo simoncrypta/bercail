@@ -3,6 +3,8 @@
 
 HUNK_MIN_VERSION=0.20.1
 TUICR_MIN_VERSION=0.20.0
+# `wt list --format=json` is {schema, items: [...]} from 0.80.0 on; the shell block reads that shape.
+WORKTRUNK_MIN_VERSION=0.80.0
 TUICR_MISE_SPEC="github:agavra/tuicr"
 
 dep_present() {
@@ -474,31 +476,34 @@ _doctor_configured_bin() {
   log "  ok  $cmd ($path) (configured $role)"
 }
 
+# $3, when given, is what the config names this command for (review).
 _doctor_versioned_bin() {
-  local cmd="$1" min="$2" role="$3"
+  local cmd="$1" min="$2" role="${3:-}"
   local path output found
   [[ -n "$cmd" ]] || return 0
   if ! dep_present "$cmd"; then
-    log "  missing  $cmd (configured $role command)"
+    log "  missing  $cmd${role:+ (configured $role command)}"
     return 1
   fi
   path="$(command -v "$cmd")"
   output="$("$cmd" --version 2>/dev/null || true)"
   if found="$(parse_version "$output")" && [[ -n "$found" ]]; then
     if version_at_least "$found" "$min"; then
-      log "  ok  $cmd ($path; found $found, required >=$min) (configured $role)"
+      log "  ok  $cmd ($path; found $found, required >=$min)${role:+ (configured $role)}"
       return 0
     fi
-    log "  outdated  $cmd ($path; found $found, required >=$min) (configured $role)"
+    log "  outdated  $cmd ($path; found $found, required >=$min)${role:+ (configured $role)}"
     return 1
   fi
-  log "  ok  $cmd ($path) (configured $role)"
+  log "  ok  $cmd ($path)${role:+ (configured $role)}"
 }
 
 doctor_dependencies() {
   local missing=0 cmd
   for cmd in herdr-app hc git wt bd fzf jq; do
-    if dep_present "$cmd"; then
+    if [[ "$cmd" == wt ]]; then
+      _doctor_versioned_bin wt "$WORKTRUNK_MIN_VERSION" || missing=$((missing + 1))
+    elif dep_present "$cmd"; then
       log "  ok  $cmd ($(command -v "$cmd"))"
     else
       log "  missing  $cmd"

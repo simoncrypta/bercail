@@ -93,23 +93,23 @@ assert_updates_itself() {
   cmp -s "$ROOT/bin/bercail" "$home/.local/bin/bercail" || fail "$tag: the second update broke bin/bercail"
 }
 
-# v0.13.0's skills.sh has no PI_SKILLS_DIR and its deploy_skills unlinks Pi's skills.
-@test "bercail v0.13.0 updates to this tree with the new libs, binary, and every Pi skill link" {
-  need_tag v0.13.0
-  update_from v0.13.0
-  assert_this_tree v0.13.0
+# v0.14.0 is the oldest release that updates straight to this tree (docs/install.md).
+@test "bercail v0.14.0 updates to this tree with the new libs, binary, and every Pi skill link" {
+  need_tag v0.14.0
+  update_from v0.14.0
+  assert_this_tree v0.14.0
 }
 
-@test "after v0.13.0, the new bercail updates itself and keeps its binary" {
-  need_tag v0.13.0
-  update_from v0.13.0
-  assert_updates_itself v0.13.0
+@test "after v0.14.0, the new bercail updates itself and keeps its binary" {
+  need_tag v0.14.0
+  update_from v0.14.0
+  assert_updates_itself v0.14.0
 }
 
 @test "the latest release updates to this tree with the new libs, binary, and every Pi skill link" {
   local tag
   tag="$(latest_release)"
-  [[ -n "$tag" && "$tag" != v0.13.0 ]] || skip "the latest release is v0.13.0, covered above"
+  [[ -n "$tag" && "$tag" != v0.14.0 ]] || skip "the latest release is v0.14.0, covered above"
   need_tag "$tag"
   update_from "$tag"
   assert_this_tree "$tag"
@@ -118,7 +118,7 @@ assert_updates_itself() {
 @test "after the latest release, the new bercail updates itself and keeps its binary" {
   local tag
   tag="$(latest_release)"
-  [[ -n "$tag" && "$tag" != v0.13.0 ]] || skip "the latest release is v0.13.0, covered above"
+  [[ -n "$tag" && "$tag" != v0.14.0 ]] || skip "the latest release is v0.14.0, covered above"
   need_tag "$tag"
   update_from "$tag"
   assert_updates_itself "$tag"

@@ -52,9 +52,16 @@ The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/la
 
 If you'd rather add only the layout, you get the desk and Review, but the desk runs plain `pi` instead of bstack, Review needs tuicr installed separately, and there are no worktree spaces, handoff, skills, or webhooks. It needs the Herdr app (`herdr-app`, `~/.config/herdr-app`), not the `herdr` terminal and its `herdr plugin` system.
 
-## Coming from 0.8
+## Updating from an older release
 
-From 0.8 (the Herdr terminal and its layout plugin): run the full install once (`bercail install`, or the curl line) so it adds the Herdr app; `bercail update` alone doesn't install the Herdr app or the other dependencies (it only adds the desk agent and the review tool when they are missing). bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them. Webhook sinks in `notify.d` keep working, but their payload is now `bercail.agent_status/v2` (see [agent status webhooks](shep.md#agent-status-webhooks)).
+`bercail update` reaches this release from v0.14.0 or later. From an older one, install v0.14.0 first, then update:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/v0.14.0/install.sh | BERCAIL_REF=v0.14.0 bash
+bercail update
+```
+
+Nothing stops an older release's `bercail update` from going straight to this one: it copies the new files with its own code. That path is not tested, and the steps that carried older installs forward (the `agentic-dev` directories and shell markers, the 0.9 keys, old worktrunk config lines) are gone. From 0.8 (the Herdr terminal and its layout plugin), the full install above also adds the Herdr app. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them.
 
 ## First run
 

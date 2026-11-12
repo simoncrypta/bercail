@@ -5,11 +5,7 @@
 PI_SKILLS_DIR="${HOME}/.pi/agent/skills"
 
 _skill_ids() {
-  if ((${#AGENTIC_DEV_SKILL_IDS[@]})); then
-    printf '%s\n' "${AGENTIC_DEV_SKILL_IDS[@]}"
-    return 0
-  fi
-  printf '%s\n' "${AGENTIC_DEV_SKILL_ID:-handoff}"
+  printf '%s\n' "${AGENTIC_DEV_SKILL_IDS[@]}"
 }
 
 _skill_link_is_ours() {

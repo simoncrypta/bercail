@@ -21,15 +21,11 @@ unalias d 2>/dev/null || true
 alias dev='worktree-dev'
 alias d='worktree-dev'
 
-# `wt list --format=json` returns a plain array before worktrunk 0.80 and
-# {schema, items: [...]} (path under .worktree.path) from 0.80 on.
-_wt_list_items_jq='if type == "object" then .items else . end'
-
 _wt_worktree_path_for_branch() {
   local branch="$1"
   wt list --format=json 2>/dev/null \
     | jq -r --arg branch "$branch" \
-      "${_wt_list_items_jq} | map(select(.branch == \$branch)) | .[0] | (.worktree.path? // .path)"
+      '.items | map(select(.branch == $branch)) | .[0].worktree.path'
 }
 
 _wt_branch_exists() {
@@ -122,7 +118,7 @@ wts() {
   local branch="$1"
 
   if [[ -z "$branch" ]]; then
-    branch=$(wt list --format=json 2>/dev/null | jq -r "${_wt_list_items_jq} | .[].branch" | fzf --header="Select worktree:" --tiebreak=index)
+    branch=$(wt list --format=json 2>/dev/null | jq -r '.items[].branch' | fzf --header="Select worktree:" --tiebreak=index)
     [[ -z "$branch" ]] && { echo "No worktree selected"; return 1; }
   fi
 

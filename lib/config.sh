@@ -152,24 +152,18 @@ deploy_herdr_app_layout() {
 
 # keys.json is the person's: only the layout:bercail section is bercail's, and in it
 # only the keys still as bercail last shipped them. The last shipped section is kept
-# to tell the two apart; before bercail kept one, it was always this (0.9.0, 0.9.1),
-# in a section that has ctrl-shift-a. A section without it is the person's own.
-HERDR_APP_KEYS_LEGACY='{"ctrl-shift-a":"bercail-desk.agent","ctrl-shift-r":"bercail-desk.review","ctrl-shift-s":"bercail-desk.shell","ctrl-shift-f":"bercail-desk.files","ctrl-shift-g":"bercail-desk.changes","ctrl-alt-left":"bercail-desk.go-left","ctrl-alt-right":"bercail-desk.go-right","ctrl-alt-up":"bercail-desk.go-up","ctrl-alt-down":"bercail-desk.go-down","ctrl-shift-q":"space.close"}'
-
+# to tell the two apart; with none kept, the section is the person's own.
 _herdr_app_shipped_keys() {
   printf '%s/herdr-app/keys.json' "$AGENTIC_DEV_SHARE_DIR"
 }
 
 # The section bercail ships now and the one it shipped last, compact, one per line.
-# $2: the person's keys.json.
 _herdr_app_keys_sections() {
-  local ours="$1" keys="$2" shipped
+  local ours="$1" shipped
   shipped="$(_herdr_app_shipped_keys)"
   jq -c --arg s "$HERDR_APP_KEYS_SECTION" '.[$s]' "$ours" || return 1
   if [[ -f "$shipped" ]]; then
     jq -c --arg s "$HERDR_APP_KEYS_SECTION" '.[$s] // {}' "$shipped" || return 1
-  elif jq -e --arg s "$HERDR_APP_KEYS_SECTION" '.[$s]["ctrl-shift-a"] == "bercail-desk.agent"' "$keys" >/dev/null 2>&1; then
-    printf '%s\n' "$HERDR_APP_KEYS_LEGACY"
   else
     printf '{}\n'
   fi
@@ -203,7 +197,7 @@ deploy_herdr_app_keys() {
     printf '{}\n' >"$base"
   fi
   if ! DRY_RUN=0 deploy_install_file "bercail/keys.json" "$ours" >/dev/null \
-    || ! { read -r new && read -r old; } < <(_herdr_app_keys_sections "$ours" "$base") \
+    || ! { read -r new && read -r old; } < <(_herdr_app_keys_sections "$ours") \
     || ! _herdr_app_keys_merge "$new" "$old" <"$base" >"$tmp"; then
     warn "could not merge the $HERDR_APP_KEYS_SECTION keys into $keys; copy that section from bercail/keys.json"
     rm -f "$ours" "$tmp"
@@ -255,28 +249,6 @@ deploy_herdr_app() {
     fi
   done
   info "Herdr app: switch to the bercail layout with Ctrl+Shift+L"
-}
-
-# Move ~/.config/agentic-dev and ~/.local/share/agentic-dev to bercail names.
-migrate_agentic_dev_to_bercail() {
-  if [[ ! -d "$AGENTIC_DEV_CONFIG_DIR" && -d "$LEGACY_AGENTIC_DEV_CONFIG_DIR" ]]; then
-    info "migrating $LEGACY_AGENTIC_DEV_CONFIG_DIR → $AGENTIC_DEV_CONFIG_DIR"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-      info "[dry-run] would mv $LEGACY_AGENTIC_DEV_CONFIG_DIR $AGENTIC_DEV_CONFIG_DIR"
-    else
-      ensure_dir "$(dirname "$AGENTIC_DEV_CONFIG_DIR")"
-      mv "$LEGACY_AGENTIC_DEV_CONFIG_DIR" "$AGENTIC_DEV_CONFIG_DIR"
-    fi
-  fi
-  if [[ ! -d "$AGENTIC_DEV_SHARE_DIR" && -d "$LEGACY_AGENTIC_DEV_SHARE_DIR" ]]; then
-    info "migrating $LEGACY_AGENTIC_DEV_SHARE_DIR → $AGENTIC_DEV_SHARE_DIR"
-    if [[ "$DRY_RUN" -eq 1 ]]; then
-      info "[dry-run] would mv $LEGACY_AGENTIC_DEV_SHARE_DIR $AGENTIC_DEV_SHARE_DIR"
-    else
-      ensure_dir "$(dirname "$AGENTIC_DEV_SHARE_DIR")"
-      mv "$LEGACY_AGENTIC_DEV_SHARE_DIR" "$AGENTIC_DEV_SHARE_DIR"
-    fi
-  fi
 }
 
 # No install-time picker. The desk runs Pi: bstack's lead when bstack is on.
@@ -413,79 +385,6 @@ migrate_hunk_review_to_tuicr() {
   info "migrated layout review to tuicr in $dest"
 }
 
-# Helpers and the shipped template use Branch_Repo. Existing configs from before
-# that rename still expand Repo_Branch, so wtd/dev miss workspaces created by
-# the other side. Rewrite only that exact default S= line.
-WORKTRUNK_SESSION_LABEL_OLD='S="{{ repo | capitalize }}_{{ branch | capitalize }}"'
-WORKTRUNK_SESSION_LABEL_NEW='S="{{ branch | capitalize }}_{{ repo | capitalize }}"'
-
-migrate_worktrunk_session_labels() {
-  local dest="$WORKTRUNK_CONFIG_DIR/config.toml"
-  local tmp line
-  [[ -f "$dest" ]] || return 0
-  grep -Fq "$WORKTRUNK_SESSION_LABEL_OLD" "$dest" || return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would migrate worktrunk session labels in $dest"
-    return 0
-  fi
-  tmp="$(mktemp)"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    printf '%s\n' "${line//"$WORKTRUNK_SESSION_LABEL_OLD"/"$WORKTRUNK_SESSION_LABEL_NEW"}"
-  done <"$dest" >"$tmp"
-  mv "$tmp" "$dest"
-  info "migrated worktrunk session labels to Branch_Repo in $dest"
-}
-
-# Worktrunk post-start must not inherit WT_HERDR_AGENT_PROMPT from a parent agent
-# shell — that double-submits with the handoff skill's create.
-migrate_worktrunk_clear_handoff_prompt() {
-  local dest="$WORKTRUNK_CONFIG_DIR/config.toml"
-  local tmp
-  [[ -f "$dest" ]] || return 0
-  grep -q 'wt_herdr_layout_create' "$dest" || return 0
-  grep -q 'unset WT_HERDR_AGENT_PROMPT' "$dest" && return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would isolate handoff prompt in $dest post-start"
-    return 0
-  fi
-  tmp="$(mktemp)"
-  awk '
-    /wt_herdr_layout_create/ && !seen_unset {
-      print "unset WT_HERDR_AGENT_PROMPT"
-      seen_unset = 1
-    }
-    { print }
-  ' "$dest" >"$tmp"
-  mv "$tmp" "$dest"
-  info "migrated worktrunk post-start to unset WT_HERDR_AGENT_PROMPT in $dest"
-}
-
-# Existing installs echo the terminal herdr's layout and prefix keys after
-# post-start. Replace those echo lines with the Herdr app's.
-migrate_worktrunk_layout_echo() {
-  local dest="$WORKTRUNK_CONFIG_DIR/config.toml" tmp
-  [[ -f "$dest" ]] || return 0
-  grep -Eq 'echo "(✓ Herdr worktree group|  Layout:|  Switch|  Attach with: herdr)' "$dest" || return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would migrate worktrunk post-start echo in $dest"
-    return 0
-  fi
-  tmp="$(mktemp)"
-  awk '
-    /^echo "(✓ Herdr worktree group|  Layout:|  Switch|  Attach with: herdr)/ {
-      if (!done) {
-        print "echo \"✓ Herdr space '"'"'$S'"'"' ready\""
-        print "echo \"  Desk: Ctrl+Shift+A agent, Ctrl+Shift+R review, Ctrl+Shift+S shell, Ctrl+Shift+F/G files/changes\""
-        done = 1
-      }
-      next
-    }
-    { print }
-  ' "$dest" >"$tmp"
-  mv "$tmp" "$dest"
-  info "migrated worktrunk post-start echo in $dest"
-}
-
 # The update copies bin/bercail over the running script in place, and once
 # main returns bash reads on from its old offset into the new file. Put a
 # fresh copy at the path and empty the old inode so that read hits EOF.
@@ -519,21 +418,11 @@ deploy_finalize_permissions() {
     OMARCHY_POST_BOOT_HOOK="${OMARCHY_POST_BOOT_HOOK:-$HOME/.config/omarchy/hooks/post-boot.d/bercail-desk-restore.hook}"
     deploy_desk_restore
   fi
-  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/skills.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${AGENTIC_DEV_SHARE_DIR}/lib/skills.sh"
+  # The old updater deploys its own release's skill list: add what is new since.
+  if ! grep -qx unit-testing <<<"$(_skill_ids)"; then
+    deploy_skill_tree unit-testing
+    ensure_skill_symlink "$PI_SKILLS_DIR" unit-testing
   fi
-  local skill_id
-  for skill_id in desk-restore unit-testing; do
-    grep -qx "$skill_id" <<<"$(_skill_ids)" && continue
-    deploy_skill_tree "$skill_id"
-  done
-  # v0.13's deploy_skills unlinks Pi's skills: it reads the agent from a config
-  # key the new reader no longer has.
-  for skill_id in $(_skill_ids) desk-restore unit-testing; do
-    [[ -e "$PI_SKILLS_DIR/$skill_id" || -L "$PI_SKILLS_DIR/$skill_id" ]] && continue
-    ensure_skill_symlink "$PI_SKILLS_DIR" "$skill_id"
-  done
   run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/agentic-dev" "$LOCAL_BIN/bercail-desk-agent" \
     "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.sh" \
@@ -556,7 +445,6 @@ deploy_configs() {
   local entry rel dest
 
   describe_install_source
-  migrate_agentic_dev_to_bercail
   prompt_user_config
   migrate_hunk_review_to_tuicr
 
@@ -612,9 +500,6 @@ deploy_configs() {
     deploy_install_file "config/worktrunk/config.toml" "$WORKTRUNK_CONFIG_DIR/config.toml"
   else
     info "keeping existing worktrunk config: $WORKTRUNK_CONFIG_DIR/config.toml"
-    migrate_worktrunk_session_labels
-    migrate_worktrunk_clear_handoff_prompt
-    migrate_worktrunk_layout_echo
   fi
 
   deploy_finalize_permissions

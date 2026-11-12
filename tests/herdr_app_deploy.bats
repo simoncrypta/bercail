@@ -49,25 +49,16 @@ fresh_install() {
   deploy_herdr_app >/dev/null
 }
 
-# An install from before bercail recorded its keys (0.9.x), with the person's
-# own changes in the section, updated. Sets out.
-legacy_keys_update() {
-  fresh_install
-  rm -f "$AGENTIC_DEV_SHARE_DIR/herdr-app/keys.json"
-  jq --argjson legacy "$HERDR_APP_KEYS_LEGACY" '.["layout:bercail"] = ($legacy
-      + {"ctrl-alt-down": "pane.go:down", "ctrl-shift-x": "mine.cmd"} | del(.["ctrl-shift-s"]))' \
-    "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
-  out="$(deploy_herdr_app 2>&1)"
-}
-
-# Then bercail changes two shipped keys; the person kept one and changed the other.
+# The last update shipped two keys bercail has since changed and one it has since
+# dropped. The person kept the first, changed the second, removed a key and added
+# one. Then an update ran. Sets out.
 recorded_keys_update() {
-  legacy_keys_update
-  jq '.["layout:bercail"]["ctrl-shift-r"] = "old.review" | .["layout:bercail"]["ctrl-shift-f"] = "old.files"' \
+  fresh_install
+  jq '.["layout:bercail"] += {"ctrl-shift-r": "old.review", "ctrl-shift-f": "old.files", "ctrl-alt-q": "old.dropped"}' \
     "$ROOT/bercail/keys.json" >"$AGENTIC_DEV_SHARE_DIR/herdr-app/keys.json"
-  jq '.["layout:bercail"]["ctrl-shift-r"] = "old.review" | .["layout:bercail"]["ctrl-shift-f"] = "my.files"' \
-    "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
-  deploy_herdr_app >/dev/null 2>&1
+  jq '.["layout:bercail"] += {"ctrl-shift-r": "old.review", "ctrl-shift-f": "my.files", "ctrl-alt-q": "old.dropped", "ctrl-shift-x": "mine.cmd"}
+      | del(.["layout:bercail"]["ctrl-shift-s"])' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
+  out="$(deploy_herdr_app 2>&1)"
 }
 
 # The app rewrote its layout and someone edited the mod, then an update ran.
@@ -92,23 +83,15 @@ app_edits_then_update() {
     "$APP/keys.json" >/dev/null || fail "layout:bercail must get bercail's keys and keep the person's: $(cat "$APP/keys.json")"
 }
 
-@test "update moves 0.9.x keys to the new ones and keeps the person's changes" {
-  legacy_keys_update
-  jq -e '.["layout:bercail"] | .["alt-up"] == "bercail-desk.space-prev" and .["alt-shift-down"] == "bercail-desk.agent-next"
-      and .["ctrl-alt-up"] == "bercail-desk.subspace-prev"' "$APP/keys.json" >/dev/null || fail "new keys not added: $(section)"
-  jq -e '.["layout:bercail"] | .["ctrl-alt-down"] == "pane.go:down" and .["ctrl-shift-x"] == "mine.cmd"
-      and (has("ctrl-shift-s") | not)' "$APP/keys.json" >/dev/null || fail "the person's key changes must stay: $(section)"
-  jq -e '[.["layout:bercail"][] | select(. == "bercail-desk.go-up" or . == "bercail-desk.go-down")] == []' "$APP/keys.json" >/dev/null \
-    || fail "keys bercail dropped must go: $(section)"
-  grep -q 'key ctrl-alt-down: yours is pane.go:down' <<<"$out" || fail "update should warn about the kept key: $out"
-  cmp -s "$ROOT/bercail/keys.json" "$AGENTIC_DEV_SHARE_DIR/herdr-app/keys.json" || fail "update records the shipped keys"
-}
-
 @test "update follows bercail's key changes only where the person kept bercail's" {
   local before
   recorded_keys_update
-  jq -e '.["layout:bercail"] | .["ctrl-shift-r"] == "bercail-desk.review" and .["ctrl-shift-f"] == "my.files"' \
-    "$APP/keys.json" >/dev/null || fail "recorded keys merge: $(section)"
+  jq -e '.["layout:bercail"] | .["ctrl-shift-r"] == "bercail-desk.review" and .["ctrl-shift-f"] == "my.files"
+      and .["ctrl-shift-x"] == "mine.cmd"' "$APP/keys.json" >/dev/null || fail "recorded keys merge: $(section)"
+  jq -e '.["layout:bercail"] | (has("ctrl-shift-s") or has("ctrl-alt-q")) | not' "$APP/keys.json" >/dev/null \
+    || fail "a key the person removed stays removed, and a key bercail dropped goes: $(section)"
+  grep -q 'key ctrl-shift-f: yours is my.files' <<<"$out" || fail "update should warn about the kept key: $out"
+  cmp -s "$ROOT/bercail/keys.json" "$AGENTIC_DEV_SHARE_DIR/herdr-app/keys.json" || fail "update records the shipped keys"
   before="$(cat "$APP/keys.json")"
   deploy_herdr_app >/dev/null 2>&1
   [[ "$(cat "$APP/keys.json")" == "$before" ]] || fail "a second update must not change keys.json"

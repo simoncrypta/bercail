@@ -21,7 +21,7 @@ setup() {
   YES=1
   DRY_RUN=0
 
-  mkdir -p "$AGENTIC_DEV_CONFIG_DIR" "$WORKTRUNK_CONFIG_DIR" "$AGENTIC_DEV_SKILL_DIR" \
+  mkdir -p "$AGENTIC_DEV_CONFIG_DIR" "$WORKTRUNK_CONFIG_DIR" "$AGENTS_SKILLS_DIR/handoff" \
     "$AGENTS_SKILLS_DIR/review" "$AGENTIC_DEV_SHARE_DIR"
   cat >"$AGENTIC_DEV_USER_CONFIG" <<'EOF'
 [layout]
@@ -29,7 +29,7 @@ review = "tuicr"
 EOF
 
   cp "$ROOT/config/worktrunk/herdr-layout.sh" "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh"
-  cp "$ROOT/skills/handoff/SKILL.md" "$AGENTIC_DEV_SKILL_DIR/SKILL.md"
+  cp "$ROOT/skills/handoff/SKILL.md" "$AGENTS_SKILLS_DIR/handoff/SKILL.md"
   cp "$ROOT/skills/review/SKILL.md" "$AGENTS_SKILLS_DIR/review/SKILL.md"
   local id
   for id in bstack council autopilot how why unslop desk-restore unit-testing; do
@@ -63,7 +63,7 @@ EOF
 
 @test "doctor reports stale skill vs clone" {
   local skill_out
-  printf 'stale-skill\n' >"$AGENTIC_DEV_SKILL_DIR/SKILL.md"
+  printf 'stale-skill\n' >"$AGENTS_SKILLS_DIR/handoff/SKILL.md"
   skill_out="$(doctor_skill)" || true
   grep -q "stale  skill handoff" <<<"$skill_out" \
     || fail "mismatched skill should be stale: $skill_out"
@@ -118,7 +118,7 @@ EOF
 
 @test "doctor still fails missing files without a recorded source" {
   rm -f "$AGENTIC_DEV_SOURCE_PATH_FILE" "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
-    "$AGENTIC_DEV_SKILL_DIR/SKILL.md"
+    "$AGENTS_SKILLS_DIR/handoff/SKILL.md"
   local output rc=0
   output="$(doctor_helper)" || rc=$?
   [[ "$rc" -eq 1 && "$output" == *'missing  herdr-layout.sh'* ]] || fail "$output"

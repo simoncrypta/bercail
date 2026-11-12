@@ -164,6 +164,26 @@ tuicr_installer_under_yes() {
   assert_eq "2" "$rc" "comparator: malformed input is rejected"
 }
 
+# doctor_dependencies with a wt that reports version $1. Sets out and rc.
+doctor_with_wt() {
+  local bin="$BATS_TEST_TMPDIR/wt-bin"
+  mkdir -p "$bin"
+  printf '#!/bin/sh\necho "wt v%s"\n' "$1" >"$bin/wt"
+  chmod +x "$bin/wt"
+  if out="$(PATH="$bin:$PATH" doctor_dependencies 2>&1)"; then rc=0; else rc=$?; fi
+}
+
+@test "doctor flags a worktrunk older than the shell block can read" {
+  doctor_with_wt 0.79.9
+  grep -q "^  outdated  wt (.*; found 0.79.9, required >=0.80.0)$" <<<"$out" || fail "an old wt must be outdated: $out"
+  [[ "$rc" -ne 0 ]] || fail "an old wt must count as a failure"
+}
+
+@test "doctor accepts worktrunk at its minimum" {
+  doctor_with_wt 0.80.0
+  grep -q "^  ok  wt (.*; found 0.80.0, required >=0.80.0)$" <<<"$out" || fail "wt 0.80.0 must be ok: $out"
+}
+
 @test "check_herdr_app tells the herdr terminal from the app" {
   check_herdr_app_with herdr
   assert_contains "$out" "found herdr, the Herdr terminal: bercail needs the Herdr app" \

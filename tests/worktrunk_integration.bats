@@ -1,5 +1,5 @@
 #!/usr/bin/env bats
-# deploy_configs keeps a person's worktrunk config and migrates only bercail's lines in it.
+# deploy_configs keeps a person's worktrunk config as it is.
 
 setup() {
   load test_helper
@@ -79,80 +79,4 @@ EOF
     "update changed the existing worktrunk config"
   grep -q "keeping existing worktrunk config: $WORKTRUNK_CONFIG_DIR/config.toml" "$deploy_log" \
     || fail "update did not report keeping the existing worktrunk config"
-}
-
-@test "existing worktrunk S= templates migrate Repo_Branch to Branch_Repo" {
-  mkdir -p "$WORKTRUNK_CONFIG_DIR"
-  cat >"$WORKTRUNK_CONFIG_DIR/config.toml" <<'EOF'
-# user-customized worktrunk config - must survive install/update
-[post-start]
-herdr = """
-S="{{ repo | capitalize }}_{{ branch | capitalize }}"
-W="{{ worktree_path }}"
-custom = "echo keep-me"
-"""
-
-[post-remove]
-herdr = """
-S="{{ repo | capitalize }}_{{ branch | capitalize }}"
-"""
-EOF
-
-  deploy_configs >"$deploy_log"
-  grep -Fq 'S="{{ branch | capitalize }}_{{ repo | capitalize }}"' "$WORKTRUNK_CONFIG_DIR/config.toml" \
-    || fail "did not migrate session labels to Branch_Repo"
-  if grep -Fq 'S="{{ repo | capitalize }}_{{ branch | capitalize }}"' "$WORKTRUNK_CONFIG_DIR/config.toml"; then
-    fail "old Repo_Branch session labels still present"
-  fi
-  grep -q 'custom = "echo keep-me"' "$WORKTRUNK_CONFIG_DIR/config.toml" \
-    || fail "migrated config lost user customizations"
-  grep -q "migrated worktrunk session labels to Branch_Repo" "$deploy_log" \
-    || fail "did not report session label migration"
-  grep -q "keeping existing worktrunk config: $WORKTRUNK_CONFIG_DIR/config.toml" "$deploy_log" \
-    || fail "update did not report keeping the existing worktrunk config"
-}
-
-@test "existing worktrunk post-start unsets WT_HERDR_AGENT_PROMPT" {
-  mkdir -p "$WORKTRUNK_CONFIG_DIR"
-  cat >"$WORKTRUNK_CONFIG_DIR/config.toml" <<'EOF'
-[post-start]
-herdr = """
-S="{{ branch | capitalize }}_{{ repo | capitalize }}"
-W="{{ worktree_path }}"
-source "$HOME/.config/worktrunk/herdr-layout.sh"
-wt_herdr_layout_create "$S" "$W"
-"""
-EOF
-
-  deploy_configs >"$deploy_log"
-  grep -q 'unset WT_HERDR_AGENT_PROMPT' "$WORKTRUNK_CONFIG_DIR/config.toml" \
-    || fail "did not migrate unset WT_HERDR_AGENT_PROMPT into post-start"
-  grep -q "migrated worktrunk post-start to unset WT_HERDR_AGENT_PROMPT" "$deploy_log" \
-    || fail "did not report handoff prompt isolation migration"
-}
-
-@test "existing worktrunk post-start echo migrates to the Herdr app keys" {
-  mkdir -p "$WORKTRUNK_CONFIG_DIR"
-  cat >"$WORKTRUNK_CONFIG_DIR/config.toml" <<'EOF'
-[post-start]
-herdr = """
-S="{{ branch | capitalize }}_{{ repo | capitalize }}"
-source "$HOME/.config/worktrunk/herdr-layout.sh"
-unset WT_HERDR_AGENT_PROMPT
-wt_herdr_layout_create "$S" "$W"
-echo "  Layout: agent pane (left, sticky) | tabs: review, explorer, terminal"
-echo "  Switch tabs: Alt+1..3 (review/explorer/terminal), prefix+1 focuses agent, prefix+2..4 same tabs"
-"""
-EOF
-
-  deploy_configs >"$deploy_log"
-  if grep -Eq 'tabs: review, explorer, terminal|prefix\+' "$WORKTRUNK_CONFIG_DIR/config.toml"; then
-    fail "old layout echo still present"
-  fi
-  grep -Fq 'Desk: Ctrl+Shift+A agent' "$WORKTRUNK_CONFIG_DIR/config.toml" \
-    || fail "did not migrate post-start layout echo"
-  [[ "$(grep -c '^echo' "$WORKTRUNK_CONFIG_DIR/config.toml")" == 2 ]] \
-    || fail "the new echo is written once: $(cat "$WORKTRUNK_CONFIG_DIR/config.toml")"
-  grep -q "migrated worktrunk post-start echo" "$deploy_log" \
-    || fail "did not report layout echo migration"
 }
