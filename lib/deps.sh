@@ -405,20 +405,10 @@ ensure_tuicr_watch_config() {
     info "enabled tuicr diff watch in $dest"
     return 0
   fi
-  if declare -F install_src_dir >/dev/null 2>&1; then
-    src="$(install_src_dir)/config/tuicr/config.toml"
-  fi
-  if declare -F ensure_dir >/dev/null 2>&1; then
-    ensure_dir "$(dirname "$dest")"
-  else
-    mkdir -p "$(dirname "$dest")"
-  fi
+  src="$(install_src_dir)/config/tuicr/config.toml"
+  ensure_dir "$(dirname "$dest")"
   if [[ -f "$src" ]]; then
-    if declare -F copy_file >/dev/null 2>&1; then
-      copy_file "$src" "$dest"
-    else
-      cp "$src" "$dest"
-    fi
+    copy_file "$src" "$dest"
     return 0
   fi
   if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
@@ -434,10 +424,8 @@ EOF
 }
 
 _layout_review_bin() {
-  local cmd="tuicr"
-  if declare -F read_layout_review >/dev/null 2>&1; then
-    cmd="$(read_layout_review 2>/dev/null || printf '%s' "tuicr")"
-  fi
+  local cmd
+  cmd="$(read_layout_review 2>/dev/null || printf '%s' "tuicr")"
   printf '%s' "${cmd%% *}"
 }
 

@@ -108,10 +108,6 @@ deploy_skills() {
   done < <(_skill_ids)
 }
 
-remove_managed_handoff_skill() {
-  remove_managed_skills
-}
-
 remove_managed_skills() {
   local skill_id dest
   scrub_managed_skill_extra_links

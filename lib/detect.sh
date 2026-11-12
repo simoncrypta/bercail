@@ -127,10 +127,6 @@ detect_conflicts() {
   local rc="$1"
   [[ -f "$rc" ]] || return 0
   local conflicts=()
-  if grep -qE 'worktree-dev\(\)|function worktree-dev' "$rc" \
-    && ! grep -qF "$AGENTIC_DEV_MARKER_START" "$rc"; then
-    conflicts+=("existing worktree-dev() outside agentic-dev marker")
-  fi
   if grep -q 'source.*herdr-layout\.sh' "$rc" \
     && ! grep -qF "$AGENTIC_DEV_MARKER_START" "$rc"; then
     conflicts+=("existing herdr-layout.sh source outside agentic-dev marker")

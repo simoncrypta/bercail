@@ -189,15 +189,6 @@ wt_herdr_handoff_agent() {
   _wt_herdr_start_desk "$space" "$workdir" "$WT_HERDR_AGENT_PROMPT"
 }
 
-# Backward-compatible alias: prompted start when a prompt is set, else clear.
-wt_herdr_start_agent() {
-  if [[ -n "${WT_HERDR_AGENT_PROMPT:-}" ]]; then
-    wt_herdr_handoff_agent "$@"
-  else
-    wt_herdr_start_default_agent "$@"
-  fi
-}
-
 wt_herdr_layout_close() {
   local label="$1" space
   _wt_herdr_app_running || return 0

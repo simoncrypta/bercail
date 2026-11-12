@@ -35,6 +35,8 @@ EOF
 
   # shellcheck source=/dev/null
   source "$ROOT/lib/notify.sh"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/shep.sh"
 
   sink="$XDG_CONFIG_HOME/bercail/notify.d/work-shep.toml"
   cat >"$sink" <<'EOF'

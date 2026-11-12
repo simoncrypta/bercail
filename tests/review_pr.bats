@@ -787,7 +787,7 @@ PY
 }
 
 # --- ui: shows the Stack tab, or makes it ------------------------------------------
-@test "ui/gather replace legacy Stack terminals, keep other tabs and reuse the mod; no mod says to update" {
+@test "ui/gather recreate a closed Stack tab, keep other tabs and reuse the mod; no mod says to update" {
   local saved="$BATS_TEST_TMPDIR/herdr.saved" out
   ready_7
   cp "$HERDR_STATE" "$saved"
@@ -797,24 +797,21 @@ PY
   [[ ! -e "$LOG/stack.mod" ]] || fail "ui made a second Stack tab"
   assert_has "$(<"$LOG/herdr")" "do space.select --id s1" "ui shows the review space"
   assert_has "$(<"$LOG/herdr")" "do tab.select --id $(jq -r '.spaces[] | select(.id == "s1") | .tabs[] | select(.name == "Stack") | .id' "$HERDR_STATE")" "ui selects the Stack tab"
-  # An older bercail's Stack terminal is replaced, not left beside the mod.
-  jq '(.spaces[] | select(.id == "s1") | .tabs) |= map(if .name == "Stack" then .terminals = [{terminal: "t-old"}] else . end)' \
+  # A closed native tab is recreated by the next ui request.
+  jq '(.spaces[] | select(.id == "s1") | .tabs) |= map(select(.name != "Stack"))' \
     "$saved" >"$HERDR_STATE"
   "$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7"
   assert_eq 1 "$(wc -l <"$LOG/stack.mod" | tr -d ' ')" "a replacement mod Stack tab"
   assert_eq 1 "$(jq '[.spaces[] | select(.id == "s1") | .tabs[] | select(.name == "Stack")] | length' "$HERDR_STATE")" \
     "only the mod Stack tab remains"
-  assert_has "$(<"$LOG/herdr")" "do tab.close" "the legacy Stack terminal is closed"
-  # Gathering also migrates old spaces, including one that already has both tabs.
-  cp "$saved" "$HERDR_STATE"
-  jq '(.spaces[] | select(.id == "s1") | .tabs) += [{id: "old-stack", name: "Stack", terminals: [{terminal: "t-old"}]},
-      {id: "keep-shell", name: "Shell", terminals: [{terminal: "t-keep"}]}]' "$HERDR_STATE" >"$HERDR_STATE.tmp"
+  # Gathering reuses the mod and leaves the user's shell tab alone.
+  jq '(.spaces[] | select(.id == "s1") | .tabs) += [{id: "keep-shell", name: "Shell", terminals: [{terminal: "t-keep"}]}]' \
+    "$HERDR_STATE" >"$HERDR_STATE.tmp"
   mv "$HERDR_STATE.tmp" "$HERDR_STATE"
   : >"$LOG/herdr"
   (cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run) >/dev/null
-  assert_has "$(<"$LOG/herdr")" "do tab.close --id old-stack" "gather removes the legacy terminal beside the mod"
   assert_eq 1 "$(jq '[.spaces[] | select(.id == "s1") | .tabs[] | select(.id == "keep-shell")] | length' "$HERDR_STATE")" \
-    "migration keeps the shell"
+    "gather keeps the shell"
   assert_eq 1 "$(wc -l <"$LOG/stack.mod" | tr -d ' ')" "gather reuses the existing mod"
   # No mod: ui says to update, and a gather warns.
   mv "$MOD/main.js" "$MOD/main.js.off"

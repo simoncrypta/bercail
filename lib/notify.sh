@@ -354,7 +354,6 @@ notify_desk_changed() {
 
 # Where Shep on Pi reads desk events (lib/shep.sh), or nothing.
 notify_shep_inbox() {
-  declare -F shep_inbox_dir >/dev/null || return 0
   shep_inbox_dir
 }
 

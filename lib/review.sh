@@ -155,7 +155,6 @@ _review_is_repo() {
 _review_main_of() {
   local main
   main="$(git -C "$1" worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
-  # Old review spaces can point to worktrees of a state-directory bare clone.
   [[ -n "$main" && "$(git -C "$main" rev-parse --is-inside-work-tree 2>/dev/null)" == true ]] || return 1
   printf '%s\n' "$main"
 }
@@ -1056,7 +1055,7 @@ review_run_one() {
   [[ "$status" != failed ]]
 }
 
-# No N: one PR runs even if thin (slice 1). A longer stack starts every non-thin
+# No N: one PR runs even if thin. A longer stack starts every non-thin
 # PR that is not already ready or running.
 review_run_waiting() {
   local pr n sha thin dir out rc=0
@@ -1242,26 +1241,22 @@ _review_has_mod() {
   [[ -f "$HERDR_APP_CONFIG_DIR/mods/bercail-review/main.js" ]]
 }
 
-# The space's native Stack tab, never a legacy terminal tab.
+# The space's native Stack tab.
 _review_stack_tab() {
   "$HERDR_APP" ls 2>/dev/null | jq -r --arg id "$1" '
     first(.spaces[] | select(.id == $id) | .tabs[]?
       | select(.name == "Stack" and ((.terminals // []) | length == 0)) | .id) // empty'
 }
 
-# Open the mod before retiring the old fzf Stack terminal in this space.
+# Open the mod in this space, unless its tab is already there.
 _review_mod_tab() {
-  local space="$1" tab out id
+  local space="$1" tab out
   tab="$(_review_stack_tab "$space")"
   if [[ -z "$tab" ]]; then
     out="$("$HERDR_APP" "do" tab.new "$(jq -cn --arg space "$space" --arg stack "$R_STACK" --arg self "$(_review_self)" \
       '{space: $space, name: "Stack", mod: "bercail-review", props: {stack: $stack, bercail: $self}}')")" || return 1
     tab="$(jq -er '.tab' <<<"$out")" || return 1
   fi
-  while IFS= read -r id; do
-    [[ -z "$id" ]] || "$HERDR_APP" "do" tab.close --id "$id" --confirmed true >/dev/null || return 1
-  done < <("$HERDR_APP" ls 2>/dev/null | jq -r --arg id "$space" '.spaces[] | select(.id == $id) | .tabs[]?
-    | select(.name == "Stack" and ((.terminals // []) | length > 0)) | .id')
   printf '%s\n' "$tab"
 }
 
