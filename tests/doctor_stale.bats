@@ -81,13 +81,48 @@ EOF
     || fail "stale helper should name the clone: $helper_out"
 }
 
-@test "doctor reports unverified when install source is missing" {
+@test "doctor checks installed files without requiring a recorded source" {
   local helper_out skill_out
   rm -f "$AGENTIC_DEV_SOURCE_PATH_FILE"
-  helper_out="$(doctor_helper)" || true
-  grep -q 'unverified  herdr-layout.sh' <<<"$helper_out" \
-    || fail "missing source-path should be unverified: $helper_out"
-  skill_out="$(doctor_skill)" || true
-  grep -q 'unverified  skill handoff' <<<"$skill_out" \
-    || fail "missing source-path should unverified skill: $skill_out"
+  helper_out="$(doctor_helper)"
+  [[ "$helper_out" == *'ok  herdr-layout.sh (not compared: installed from a release)'* ]] \
+    || fail "release helper: $helper_out"
+  skill_out="$(doctor_skill)"
+  [[ "$skill_out" == *'ok  skill handoff (not compared: installed from a release)'* ]] \
+    || fail "release skill: $skill_out"
+}
+
+@test "doctor exits zero on a complete deployed install with no recorded source" {
+  local tools="$BATS_TEST_TMPDIR/bin" tool output rc=0
+  mkdir -p "$tools" "$HOME/.config/hypr"
+  # No host desktop, package manager, core socket, or network on this PATH.
+  for tool in bash sh env cat cp mv rm ln mkdir chmod cmp dirname basename realpath readlink \
+    find grep sed awk tr sort uniq head tail wc mktemp date git jq touch uname sleep stat cut; do
+    ln -s "$(command -v "$tool")" "$tools/$tool"
+  done
+  for tool in herdr-app hc wt bd fzf pi tuicr; do
+    printf '#!/bin/sh\n[ "$1" != --version ] || echo 99.0.0\nexit 0\n' >"$tools/$tool"
+    chmod +x "$tools/$tool"
+  done
+  printf '#!/bin/sh\nexit 1\n' >"$tools/curl"
+  chmod +x "$tools/curl"
+  printf '[bstack]\nenabled = false\n' >>"$AGENTIC_DEV_USER_CONFIG"
+  : >"$HOME/.config/hypr/bindings.conf"
+  output="$(env -i HOME="$HOME" PATH="$tools" SHELL=/bin/bash INSTALL_SRC="$ROOT" \
+    BERCAIL_NO_PROMPT=1 "$ROOT/bin/bercail" update 2>&1)" || fail "deploy: $output"
+  rm "$AGENTIC_DEV_SOURCE_PATH_FILE"
+  output="$(env -i HOME="$HOME" PATH="$tools" SHELL=/bin/bash "$HOME/.local/bin/bercail" doctor 2>&1)" || rc=$?
+  [[ "$rc" -eq 0 ]] || fail "doctor: $output"
+  [[ "$output" == *'not compared: installed from a release'* ]] || fail "$output"
+}
+
+@test "doctor still fails missing files without a recorded source" {
+  rm -f "$AGENTIC_DEV_SOURCE_PATH_FILE" "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
+    "$AGENTIC_DEV_SKILL_DIR/SKILL.md"
+  local output rc=0
+  output="$(doctor_helper)" || rc=$?
+  [[ "$rc" -eq 1 && "$output" == *'missing  herdr-layout.sh'* ]] || fail "$output"
+  rc=0
+  output="$(doctor_skill)" || rc=$?
+  [[ "$rc" -eq 1 && "$output" == *'missing  skill handoff'* ]] || fail "$output"
 }

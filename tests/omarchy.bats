@@ -141,13 +141,12 @@ terminal_herdr_binding() {
     "second patch is a no-op when herdr is already bound"
 }
 
-@test "doctor flags a binding that still opens terminal herdr" {
-  local output rc
+@test "doctor reports the optional Herdr binding without failing when it is absent" {
+  local output
   terminal_herdr_binding
-  if output="$(doctor_omarchy_integration 2>&1)"; then rc=0; else rc=$?; fi
-  assert_rc 1 "$rc" "doctor flags a binding that still opens terminal herdr"
-  assert_contains "$output" "missing  hypr SUPER+ALT+RETURN Herdr app binding" \
-    "doctor names the missing Herdr app binding"
+  output="$(doctor_omarchy_integration 2>&1)"
+  assert_contains "$output" "optional  hypr SUPER+ALT+RETURN Herdr app binding (not configured)" \
+    "doctor explains the optional binding"
 }
 
 @test "patch replaces the terminal herdr binding in bindings.conf" {

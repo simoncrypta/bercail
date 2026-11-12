@@ -20,8 +20,7 @@ doctor_omarchy_integration() {
     if hypr_has_herdr_binding; then
       log "  ok  hypr SUPER+ALT+RETURN launches the Herdr app"
     else
-      log "  missing  hypr SUPER+ALT+RETURN Herdr app binding"
-      missing=$((missing + 1))
+      log "  optional  hypr SUPER+ALT+RETURN Herdr app binding (not configured)"
     fi
   fi
   return "$missing"
@@ -179,8 +178,8 @@ doctor_helper() {
     return 1
   fi
   if ! src="$(_recorded_install_source)"; then
-    log "  unverified  herdr-layout.sh (no recorded install source)"
-    return 1
+    log "  ok  herdr-layout.sh (not compared: installed from a release)"
+    return 0
   fi
   if [[ -f "$src/config/worktrunk/herdr-layout.sh" ]] \
     && ! cmp -s "$src/config/worktrunk/herdr-layout.sh" "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh"; then
@@ -199,8 +198,8 @@ _doctor_one_skill() {
     return 1
   fi
   if ! src="$(_recorded_install_source)"; then
-    log "  unverified  skill $skill_id (no recorded install source)"
-    return 1
+    log "  ok  skill $skill_id (not compared: installed from a release)"
+    return 0
   fi
   if [[ -f "$src/skills/${skill_id}/SKILL.md" ]] \
     && ! cmp -s "$src/skills/${skill_id}/SKILL.md" "${dest}/SKILL.md"; then
