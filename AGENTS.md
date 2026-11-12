@@ -11,8 +11,9 @@ desk agent per space, review in tuicr. Bash CLI plus Herdr mods, skills, and doc
 - `config/`: files deployed under `~/.config` (shell, worktrunk, pi, systemd, …).
 - `bercail/`: the Herdr layout and mods (`bercail/mods/*`).
 - `skills/`: skills deployed to `~/.agents/skills`. `bstack/` is the bstack Pi setup.
-- `tests/*_test.sh`: one bash script per area, each in its own temp HOME with stand-ins
-  (`hc`, `curl`, `pi`, …). `.agents/skills/verify-bercail/` drives the CLI end to end.
+- `tests/*.bats`: one bats-core file per area, one `@test` per case, each in its own
+  temp HOME with stand-ins (`hc`, `curl`, `pi`, …). `.agents/skills/verify-bercail/`
+  drives the CLI end to end.
 - `docs/`: the reference (`docs/README.md` is the index). `site/` and `workers/` are
   the bercail.dev site and its Worker.
 
@@ -20,8 +21,11 @@ desk agent per space, review in tuicr. Bash CLI plus Herdr mods, skills, and doc
 
 ```bash
 bin/bercail <cmd>                         # this checkout's CLI; a bare `bercail` runs the installed copy
-bash tests/notify_test.sh                 # one area
-for t in tests/*_test.sh; do bash "$t" || break; done   # everything (CI runs tests/*.sh)
+npm ci                                    # once: bats-core is a pinned devDependency
+bash tests/run.sh                         # the unit suite (CI runs this)
+bash tests/run.sh tests/notify.bats       # one area
+node_modules/.bin/bats -f 'regex' tests/notify.bats   # the tests whose names match
+bash tests/run.sh --live                  # the real-Pi live proofs, tagged live
 shellcheck -S warning lib/notify.sh       # lint the files you touch; the tree has older warnings
 herdr-app check bercail/mods/bercail-desk # each mod you touch
 .agents/skills/verify-bercail/run.sh      # throwaway-HOME drive; evidence in .bercail/verify/
@@ -30,17 +34,16 @@ herdr-app check bercail/mods/bercail-desk # each mod you touch
 There is no build step for the CLI. The site build needs `npm ci` first (see
 `docs/development.md`).
 
-Known noise: `tests/handoff_spawn_test.sh` can fail its Ctrl-C check when the machine
-is busy; rerun it on its own.
-
 ## Conventions
 
 - Match the code beside you: small bash functions with a one-line comment on why,
   `local` everything, `jq` for JSON, errors on stderr with a fix in the message.
 - Secrets never go in argv or output. Pass them on stdin, in a 0600 file, or through
   a header file (see `notify_post`). Tests grep argv logs and output for the secret.
-- A behavior change comes with a test in `tests/` that fails without it. Use
-  stand-ins in `$TMP_DIR/bin`, never the real HOME, Herdr core, or network.
+- A behavior change comes with a test in `tests/` that fails without it, written to
+  `skills/unit-testing`. Each file's `setup` calls `isolate`; put stand-ins in
+  `$BATS_TEST_TMPDIR/bin`, never the real HOME, Herdr core, or network. No `@test`
+  may lean on another's state.
 - Docs speak plainly and match the code; update `docs/` and the help text in
   `bin/bercail` and `lib/help.sh` together.
 - `.bercail/policy.toml` is this repo's git and release policy (`bin/bercail policy show`);

@@ -9,6 +9,7 @@
   },
   "devDependencies": {
     "astro": "^7.4.4",
+    "bats": "1.13.0",
     "wrangler": "^4.0.0"
   }
 }

@@ -1,21 +1,30 @@
 ---
 name: verify-bercail
 description: >-
-  Drives this checkout's bercail CLI the way a user does, in a throwaway HOME:
-  deploy, doctor, desk restore --dry-run, handoff-spawn --info, bstack status.
+  Runs the unit test suite, then drives this checkout's bercail CLI the way a
+  user does, in a throwaway HOME: deploy, doctor, desk restore --dry-run,
+  handoff-spawn --info, bstack status.
   Leaves evidence under .bercail/verify/. Use at /ready, or to prove a change to
   the CLI, the deploy, handoff, desk restore, or bstack.
 ---
 
 # verify-bercail
 
-One command runs the whole proof, in about a minute and a half:
+One command runs the whole proof, in about three minutes:
 
 ```bash
 .agents/skills/verify-bercail/run.sh
 ```
 
 It exits 0 when every step and check passed, and prints the evidence folder.
+
+## Tests
+
+First, `tests/run.sh` (the unit suite, every test in its own throwaway HOME)
+with the real `${XDG_STATE_HOME:-~/.local/state}/agentic-dev/handoffs.jsonl`
+hashed before and after. A changed hash fails the check, and the added lines go
+to `handoffs-added.jsonl`: a real path there is another desk's spawn, so rerun.
+The live proofs (`tests/run.sh --live`) are not part of it.
 
 ## Launch
 
@@ -51,6 +60,7 @@ higher is a crash.
 `.bercail/verify/<timestamp>/` (gitignored):
 
 - `summary.tsv`: step, exit code, command.
+- `tests.out`: the suite's output.
 - `checks.tsv`: `ok` or `FAIL` for each claim about the state the run left.
 - `<step>.out`: each step's output.
 - `hc-calls.log`: every call to the stand-in.

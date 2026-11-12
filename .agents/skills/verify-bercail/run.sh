@@ -9,6 +9,19 @@ mkdir -p "$evidence"
 evidence="$(cd "$evidence" && pwd)"
 real_pi="$(mise which pi 2>/dev/null || command -v pi || true)"
 
+# --- tests: the suite must leave the real handoff log byte-identical ---
+real_handoffs="${XDG_STATE_HOME:-$HOME/.local/state}/agentic-dev/handoffs.jsonl"
+handoffs_lines() { [[ -f "$real_handoffs" ]] && wc -l <"$real_handoffs" || echo 0; }
+handoffs_sum() { [[ -f "$real_handoffs" ]] && sha256sum <"$real_handoffs" || echo absent; }
+handoffs_before="$(handoffs_sum)"
+handoffs_count="$(handoffs_lines)"
+tests_rc=0
+bash "$repo/tests/run.sh" >"$evidence/tests.out" 2>&1 </dev/null || tests_rc=$?
+handoffs_after="$(handoffs_sum)"
+# Another desk may spawn during the run: keep what was added so a reader can tell.
+[[ "$handoffs_before" == "$handoffs_after" ]] \
+  || tail -n "+$((handoffs_count + 1))" "$real_handoffs" >"$evidence/handoffs-added.jsonl"
+
 # --- launch: nothing below can reach the real HOME or a real Herdr core ---
 box="$(mktemp -d)"
 trap 'rm -rf "$box"' EXIT
@@ -81,6 +94,10 @@ check() {
 }
 : >"$evidence/summary.tsv"
 : >"$evidence/checks.tsv"
+
+printf '%s\t%s\t%s\n' tests "$tests_rc" "bash tests/run.sh" >>"$evidence/summary.tsv"
+check "tests pass" test "$tests_rc" -eq 0
+check "tests left the real handoffs.jsonl byte-identical" test "$handoffs_before" = "$handoffs_after"
 
 profile="$HOME/.local/share/bercail/pi"
 templates="$XDG_CONFIG_HOME/herdr-core/templates"

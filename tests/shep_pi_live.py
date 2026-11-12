@@ -169,18 +169,23 @@ def body(run):
     shep_dir = state / "bercail/shep"
     sessions, inbox, delivered = shep_dir / "pi-sessions", shep_dir / "inbox", shep_dir / "delivered"
 
+    # The inbox names an event by its second (lib/notify.sh): freeze the clock, so
+    # two followers that see one change always land in the same second.
+    now = int(time.time())
+
     def follower(*args):
         script = (f'set -euo pipefail; for l in common bstack shep notify; do source "{ROOT}/lib/$l.sh"; done; '
-                  'notify_desk_changed "$@"')
+                  f'_notify_now() {{ echo {now}; }}; notify_desk_changed "$@"')
         subprocess.run(["bash", "-c", script, "follower", *args], env=env, check=True)
 
     shep = Term([str(ROOT / "bin/bercail"), "shep", "run"], env, str(run), run / "term1.log")
     # Pi writes the session file with its first message: wait for the inbox and the TUI.
     if not wait_for("the inbox", lambda: inbox.is_dir() and delivered.is_dir()):
         return
+    # An event written before the extension watches is still drained: at
+    # session_start, and by its poll.
     if not wait_for("Pi's TUI", lambda: b"shep_pi_provider" in (run / "term1.log").read_bytes()):
         return
-    time.sleep(1)  # the watcher
 
     follower("t9", "working", "done", "pi", "sp1", str(desk), "desk title")
     if wait_for("the finished event delivered", lambda: len(desk_events(sessions)) == 1):
@@ -202,14 +207,16 @@ def body(run):
         print("PASS: the delivered event is kept with when and which session")
 
     # The same change again (another follower, same second) and a replayed file: no second message.
+    # The blocked event comes after them, so once it is reported a duplicate would have been too.
     follower("t9", "working", "done", "pi", "sp1", str(desk), "desk title")
     shutil.copy(files[0], inbox / files[0].name)
-    time.sleep(2)
-    if len(desk_events(sessions)) != 1:
-        fail(f"duplicates delivered: {len(desk_events(sessions))}")
     follower("t9", "working", "blocked", "pi", "sp1", str(desk), "desk title")
     if wait_for("the blocked event", lambda: any("Shep report: t9:blocked:" in r for r in replies(sessions))):
-        print("PASS: duplicates drop; a blocked desk is reported too")
+        finished = sum(text_of(e.get("message", e)).count("Desk t9 finished.") for e in desk_events(sessions))
+        if finished != 1:
+            fail(f"duplicates delivered: {finished}")
+        else:
+            print("PASS: duplicates drop; a blocked desk is reported too")
 
     # Shep quits; a desk finishes meanwhile; the relaunch continues the same session
     # and gets the event that waited.

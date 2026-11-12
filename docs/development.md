@@ -9,18 +9,22 @@ herdr-app check bercail/mods/bercail-shep
 herdr-app check bercail/mods/bercail-spaces
 herdr-app check bercail/mods/bercail-agents
 herdr-app check bercail/mods/bercail-review
-for t in tests/*_test.sh; do bash "$t" || break; done
+npm ci && bash tests/run.sh   # the unit suite; or name files: bash tests/run.sh tests/notify.bats
+bash tests/run.sh --live      # the live proofs: real Pi, offline, with a stand-in model
+node_modules/.bin/bats -f 'regex' tests/x.bats   # the tests whose names match
 ./install.sh --help
 bin/bercail dry-run   # this checkout's CLI; a bare `bercail` runs the installed copy
 npm ci && npm run deploy   # deploy the setup.simoncrypta.dev Worker and the site (CI does this for a v* tag)
 npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the bercail.dev site locally
 ```
 
-CI runs every `tests/*.sh` on each push and PR, each under a 5-minute `timeout`, so one hung test fails its file instead of the whole job. It deploys the site and the Workers only for a `v*` tag, when `CLOUDFLARE_API_TOKEN` is set.
+CI runs `tests/run.sh` on each push and PR. Each test runs under a 5-minute `BATS_TEST_TIMEOUT`, so one hung test fails itself instead of the whole job. It deploys the site and the Workers only for a `v*` tag, when `CLOUDFLARE_API_TOKEN` is set.
 
-The first `bercail update` after a release still runs the previous release's code, which loads only some of the new libs. `tests/desk_upgrade_test.sh` installs v0.13.0 and the latest `v*` tag into a throwaway HOME and updates each from this tree, so it needs the release tags (`git fetch --tags`; CI checks out with full history).
+The first `bercail update` after a release still runs the previous release's code, which loads only some of the new libs. `tests/desk_upgrade.bats` installs v0.13.0 and the latest `v*` tag into a throwaway HOME and updates each from this tree, so it needs the release tags (`git fetch --tags`; CI checks out with full history).
 
-Use Node 26 for the Pi extension unit tests. When Pi is installed, `tests/desk_session_pi_test.sh`, `tests/review_pi_test.sh`, and the other `*_pi_test.sh` also run the extension in a real Pi, offline, with a stand-in model, without sending a model prompt or changing your sessions.
+The tests are [bats-core](https://github.com/bats-core/bats-core) (pinned in `package.json`), one `@test` per case, each runnable alone; `skills/unit-testing` has the rules. A test file's `setup` calls `isolate` (`tests/test_helper.bash`), which gives every test its own `HOME`, with the `XDG_*` dirs and `TMPDIR` under it. `tests/setup_suite.bash` drops the desk's `HC_*`, Herdr, bercail and beads variables, sets `TZ=UTC` and `LC_ALL=C.UTF-8`, and shadows the desktop commands (`omarchy`, `hyprctl`, `fcitx5`, `notify-send`, ...) with stubs; the run fails if a test calls one. `tests/suite.bats` fails if a test file skips `isolate` or a desk variable reaches a test. `verify-bercail` also checks that the suite leaves the real `handoffs.jsonl` byte-identical.
+
+Use Node 26 for the Pi extension unit tests. The live proofs (`desk_session_pi`, `pi_guard`, `pi_fallback`, `review_pi`, `shep_pi`) run the extension in the installed Pi, offline, with a stand-in model, without sending a model prompt or changing your sessions. They are tagged `live`: `tests/run.sh` leaves them out and `tests/run.sh --live` runs only them. `real_pi` fails a test that is not tagged `live`.
 
 `site/` is bercail.dev: an Astro site served by the `bercail-site` Worker, which also serves `/install.sh` from the latest release's tag. `workers/setup-domain` keeps the legacy setup.simoncrypta.dev host alive for older installs. Both share `workers/setup-domain/src/github.js`.
 
