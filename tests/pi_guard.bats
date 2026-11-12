@@ -4,7 +4,7 @@
 setup() {
   load test_helper
   isolate
-  command -v node >/dev/null 2>&1 || skip "node not found; Pi guard proof not run"
+  need node
 }
 
 @test "the guard's decision table" {

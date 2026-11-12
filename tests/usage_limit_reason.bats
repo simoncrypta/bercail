@@ -7,7 +7,7 @@ setup() {
   # shellcheck disable=SC1091
   source "$ROOT/skills/handoff/scripts/handoff-spawn"
 
-  ISSUE=bercail-0s1
+  ISSUE="bercail-0s1"
 
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   cat >"$BATS_TEST_TMPDIR/bin/bd" <<'STUB'

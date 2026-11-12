@@ -4,7 +4,7 @@
 setup() {
   load test_helper
   isolate
-  command -v node >/dev/null 2>&1 || skip "node not found"
+  need node
   # Each stub reads the state the test sets on globalThis.herdr.
   cat >"$BATS_TEST_TMPDIR/herdr.mjs" <<'EOF'
 const h = () => globalThis.herdr;

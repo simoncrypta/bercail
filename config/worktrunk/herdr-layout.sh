@@ -1,3 +1,5 @@
+# shellcheck shell=bash
+# shellcheck disable=SC1010 # "do" is a herdr-app subcommand here, not the keyword
 # Herdr app helpers for worktrunk and shell integration.
 # Safe to source repeatedly — worktrunk hooks and shell reload pick up updates.
 #
@@ -171,7 +173,7 @@ wt_herdr_start_default_agent() {
   local label="$1" workdir="$2" space
   _wt_herdr_app_running || { echo "Herdr app is not running" >&2; return 1; }
   space="$(_wt_herdr_resolve_space "$label" "$workdir")" || return 1
-  WT_HERDR_ISSUE= WT_HERDR_ISSUE_TITLE= WT_HERDR_MODEL= _wt_herdr_start_desk "$space" "$workdir"
+  WT_HERDR_ISSUE='' WT_HERDR_ISSUE_TITLE='' WT_HERDR_MODEL='' _wt_herdr_start_desk "$space" "$workdir"
 }
 
 # Orchestrator / handoff-spawn: start or replace the desk agent with
@@ -209,8 +211,7 @@ wt_herdr_attach() {
   session_name="$(_wt_generate_session_name "$worktree_path")"
   if ! _wt_herdr_app_running; then
     (nohup "$HERDR_APP" >/dev/null 2>&1 &)
-    local i
-    for i in 1 2 3 4 5 6 7 8 9 10; do
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
       _wt_herdr_app_running && break
       sleep 0.5
     done

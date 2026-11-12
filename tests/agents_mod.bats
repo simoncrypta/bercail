@@ -5,7 +5,7 @@
 setup() {
   load test_helper
   isolate
-  command -v node >/dev/null 2>&1 || skip "node not found"
+  need node
   cat >"$BATS_TEST_TMPDIR/herdr.mjs" <<'EOF'
 const h = () => globalThis.herdr;
 export const agents = () => h().agents;

@@ -114,14 +114,11 @@ teardown() {
 setup() {
   load test_helper
   isolate
-  local bin
-  for bin in git jq python3; do
-    command -v "$bin" >/dev/null || skip "$bin not found"
-  done
+  need git jq python3
 
   # A mise shim reads $HOME, which the test replaces: take the real python3 now.
   PY="$(type -ap python3 | grep -v '/mise/shims/' | head -1)"
-  [[ -n "$PY" ]] || skip "python3 (not a mise shim) not found"
+  [[ -n "$PY" ]] || unavailable "python3 (not a mise shim) not found"
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
   FIX="$BATS_TEST_TMPDIR/fix"
   LOG="$BATS_TEST_TMPDIR/log"

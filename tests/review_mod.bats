@@ -6,9 +6,7 @@
 setup() {
   load test_helper
   isolate
-  for bin in node jq; do
-    command -v "$bin" >/dev/null 2>&1 || skip "$bin not found"
-  done
+  need node jq
   # As the old file ran: a command that fails inside a pipe fails its assertion.
   set -o pipefail
 

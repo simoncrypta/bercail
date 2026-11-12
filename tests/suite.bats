@@ -23,6 +23,24 @@ setup() {
   [[ -z "$leaked" ]] || fail "desk variables reached the test: $leaked"
 }
 
+@test "a test that needs a missing tool skips, and fails under CI" {
+  local dir="$BATS_TEST_TMPDIR/nested" out
+  mkdir -p "$dir"
+  cat >"$dir/needs.bats" <<FIXTURE
+setup() {
+  load "$ROOT/tests/test_helper"
+  isolate
+}
+@test "needs a tool" {
+  need bash no-such-tool-here
+}
+FIXTURE
+  out="$(CI='' "$ROOT/node_modules/.bin/bats" "$dir/needs.bats" 2>&1)" || fail "outside CI the test failed: $out"
+  grep -qx 'ok 1 needs a tool # skip no-such-tool-here not found' <<<"$out" || fail "no skip reported: $out"
+  out="$(CI=true "$ROOT/node_modules/.bin/bats" "$dir/needs.bats" 2>&1)" && fail "under CI the test passed: $out"
+  grep -q 'no-such-tool-here not found; CI must provide it' <<<"$out" || fail "the failure does not name the tool: $out"
+}
+
 # bats loses the watchdog's pid before a failed test's exit trap reads it;
 # isolate keeps it. Without that, under set -u (lib/common.sh) the failure
 # prints nothing, and a serial run waits out the whole BATS_TEST_TIMEOUT.

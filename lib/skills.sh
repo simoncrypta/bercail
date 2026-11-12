@@ -66,7 +66,7 @@ scrub_managed_skill_extra_links() {
 
 deploy_skill_tree() {
   local skill_id="$1"
-  local src dest_root src_root manifest line
+  local src dest_root src_root line
   dest_root="$(skill_canonical_dir "$skill_id")"
   ensure_dir "$dest_root"
 

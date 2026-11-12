@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # bercail shell integration (shared)
 # Managed by bercail — do not edit; use ~/.config/bercail/config.toml
 
@@ -104,7 +105,7 @@ wtc() {
   fi
 
   if _wt_handle_same_branch_worktree "$branch"; then
-    cd "$current_dir"
+    cd "$current_dir" || return
     return 0
   fi
 
@@ -114,7 +115,7 @@ wtc() {
   [[ -z "$new_path" || "$new_path" == "null" ]] && new_path=$(pwd)
 
   wt_herdr_attach "$new_path"
-  cd "$current_dir"
+  cd "$current_dir" || return
 }
 
 wts() {
@@ -154,7 +155,7 @@ wtd() {
   session_name=$(_wt_generate_session_name "$worktree_path")
 
   repo_root=$(git rev-parse --show-toplevel 2>/dev/null)
-  [[ -n "$repo_root" ]] && cd "$repo_root"
+  [[ -z "$repo_root" ]] || cd "$repo_root" || return
 
   wt remove "$branch" --force
   wt_herdr_layout_close "$session_name"

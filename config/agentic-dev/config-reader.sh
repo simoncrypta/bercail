@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Read ~/.config/bercail/config.toml (or leftover ~/.config/agentic-dev).
 
 _agentic_dev_user_config() {

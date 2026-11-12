@@ -211,7 +211,7 @@ EOF
 
 @test "the guard decides from bercail policy show --json" {
   local REPO WT SCRATCH node
-  [[ -n "$NODE" ]] || skip "node not found; guard decisions from policy JSON"
+  [[ -n "$NODE" ]] || unavailable "node not found"
   node="$NODE"
   commit_policy
   scratch_repo

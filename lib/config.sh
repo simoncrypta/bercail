@@ -519,7 +519,7 @@ deploy_finalize_permissions() {
   fi
   local skill_id
   for skill_id in desk-restore unit-testing; do
-    _skill_ids | grep -qx "$skill_id" && continue
+    grep -qx "$skill_id" <<<"$(_skill_ids)" && continue
     deploy_skill_tree "$skill_id"
   done
   # v0.13's deploy_skills unlinks Pi's skills: it reads the agent from a config

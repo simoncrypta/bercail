@@ -24,6 +24,21 @@ fail() {
   return 1
 }
 
+# The tools a test cannot run without. CI installs them all, so there a missing
+# one fails the test; anywhere else the test skips and says which.
+need() {
+  local tool
+  for tool in "$@"; do
+    command -v "$tool" >/dev/null 2>&1 || unavailable "$tool not found"
+  done
+}
+
+# The same rule for a need that is not one command on PATH.
+unavailable() {
+  [[ -z "${CI:-}" ]] || fail "$1; CI must provide it (.github/workflows/ci.yml)" || return
+  skip "$1"
+}
+
 # The installed Pi for a live proof, or nothing. Never a mise shim: one
 # reinstalls Pi once HOME has moved. Only a test tagged live may run it, so the
 # unit run (tests/run.sh) never does.

@@ -5,7 +5,7 @@
 setup() {
   load test_helper
   isolate
-  command -v node >/dev/null 2>&1 || skip "node not found; Pi fallback proof not run"
+  need node
   pi="${PI_FALLBACK_BIN:-}"
   [[ -n "$pi" ]] || pi="$(real_pi)"
   [[ -n "$pi" ]] || skip "Pi not found; fallback live proof not run"

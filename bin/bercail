@@ -138,6 +138,7 @@ cmd_update() {
 }
 
 cmd_reconfigure() {
+  # shellcheck disable=SC2034 # read by lib/omarchy.sh
   RECONFIGURE=1
   prompt_user_config
   deploy_skills
@@ -226,7 +227,11 @@ main() {
       load_libs
       while [[ $# -gt 0 ]]; do
         case "$1" in
-          --force|-f) FORCE=1; shift ;;
+          --force|-f)
+            # shellcheck disable=SC2034 # read by lib/config.sh and lib/shell-rc.sh
+            FORCE=1
+            shift
+            ;;
           *) die "unknown option: $1" ;;
         esac
       done
@@ -238,8 +243,8 @@ main() {
       ;;
     dry-run)
       load_libs
-      DRY_RUN=1
-      YES=1
+      # shellcheck disable=SC2034 # both read by lib/common.sh
+      DRY_RUN=1 YES=1
       install_dependencies
       deploy_configs
       deploy_omarchy_integration

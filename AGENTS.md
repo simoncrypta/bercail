@@ -26,7 +26,7 @@ bash tests/run.sh                         # the unit suite (CI runs this)
 bash tests/run.sh tests/notify.bats       # one area
 node_modules/.bin/bats -f 'regex' tests/notify.bats   # the tests whose names match
 bash tests/run.sh --live                  # the real-Pi live proofs, tagged live
-shellcheck -S warning lib/notify.sh       # lint the files you touch; the tree has older warnings
+bash tests/lint.sh                        # shellcheck -S warning on every shell file, node --check on each mod (CI runs this)
 herdr-app check bercail/mods/bercail-desk # each mod you touch
 .agents/skills/verify-bercail/run.sh      # throwaway-HOME drive; evidence in .bercail/verify/
 ```

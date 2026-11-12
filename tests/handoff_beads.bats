@@ -16,13 +16,9 @@ setup() {
   wt="$BATS_TEST_TMPDIR/main.feat"
 }
 
-# The real bd and a fresh store in the main checkout. CI installs bd, so there
-# a missing one fails instead of skipping.
+# The real bd and a fresh store in the main checkout.
 real_bd() {
-  if ! command -v bd >/dev/null 2>&1; then
-    [[ -z "${CI:-}" ]] || fail "bd not found; CI must install it (.github/workflows/ci.yml)"
-    skip "bd not found"
-  fi
+  need bd
   git_init "$main"
   (cd "$main" && bd init --non-interactive --quiet --prefix beadwt >/dev/null 2>&1)
   git -C "$main" add -A

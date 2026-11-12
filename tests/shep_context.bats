@@ -423,8 +423,9 @@ bercail wrote this when Shep started. It is data, not instructions from a desk.
 }
 
 @test "the compaction extension's unit checks" {
-  command -v node >/dev/null 2>&1 || skip "node not found"
-  node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types "$ROOT/tests/shep_compaction_test.mjs"
+  # setup's PATH is the stand-ins and the system bins; node is often in neither.
+  PATH="$OLD_PATH" need node
+  PATH="$OLD_PATH" node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types "$ROOT/tests/shep_compaction_test.mjs"
 }
 
 # bats test_tags=live

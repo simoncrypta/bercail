@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # bercail shell integration (bash)
 # Managed by bercail — do not edit; use ~/.config/bercail/config.toml
 

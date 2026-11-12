@@ -11,7 +11,7 @@ setup() {
   source "$ROOT/skills/handoff/scripts/handoff-spawn"
   # _bd_stub logs here, also when a $(...) subshell runs it.
   export BD_COMMENTS="$BATS_TEST_TMPDIR/bd-comments"
-  ISSUE=bercail-0s1
+  ISSUE="bercail-0s1"
 }
 
 # A failed test must not leave the hung gt this file backgrounds.
@@ -147,7 +147,7 @@ graphite_db_row() {
   err="$(handoff_is_graphite "$repo" 2>&1)" && fail "an unreadable store is not evidence of Graphite: $err"
   grep -q '\[graphite\]' <<<"$err" || fail "unreadable store should name the override: $err"
   unset HANDOFF_SQLITE3_BIN
-  command -v sqlite3 >/dev/null 2>&1 || skip "sqlite3 not found; the store rows are untested"
+  need sqlite3
   err="$(handoff_is_graphite "$repo" 2>&1)" && fail "an unknown schema is not evidence of Graphite: $err"
   grep -q '\[graphite\]' <<<"$err" || fail "unknown schema should name the override: $err"
   rm -f "$(git_dir "$repo")/.graphite_metadata.db"
@@ -1030,9 +1030,7 @@ esac"
 # Spawns usually run from a terminal, where job control has a foreground to manage.
 
 @test "a hung gt is bounded under a controlling terminal, with no job notices" {
-  # shellcheck disable=SC2015 # Either an absent script or an unsupported -qec skips.
-  command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1 \
-    || skip "no util-linux script for a pty"
+  script -qec true /dev/null >/dev/null 2>&1 || unavailable "no util-linux script for a pty"
   local repo="$BATS_TEST_TMPDIR/tr-pty" bin="$BATS_TEST_TMPDIR/tr-pty-bin" log="$BATS_TEST_TMPDIR/tr-pty.log" run="$BATS_TEST_TMPDIR/tr-pty.sh" out rc=0
   _track_fixture "$repo"
   _fake_gt "$bin" "$log" 'sleep 300 & wait'
@@ -1052,10 +1050,8 @@ EOF
 }
 
 @test "Ctrl-C during a hung gt kills it and stops the spawn" {
-  # shellcheck disable=SC2015 # Either an absent script or an unsupported -qec skips.
-  command -v script >/dev/null 2>&1 && script -qec true /dev/null >/dev/null 2>&1 \
-    || skip "no util-linux script for a pty"
-  env --default-signal=INT true 2>/dev/null || skip "env has no --default-signal (coreutils 8.31+)"
+  script -qec true /dev/null >/dev/null 2>&1 || unavailable "no util-linux script for a pty"
+  env --default-signal=INT true 2>/dev/null || unavailable "env has no --default-signal (coreutils 8.31+)"
   local repo="$BATS_TEST_TMPDIR/tr-int" bin="$BATS_TEST_TMPDIR/tr-int-bin"
   local log="$BATS_TEST_TMPDIR/tr-int.log" run="$BATS_TEST_TMPDIR/tr-int.sh"
   local pids="$BATS_TEST_TMPDIR/tr-int.pid" carried="$BATS_TEST_TMPDIR/tr-int-carried-on"
@@ -1095,7 +1091,7 @@ EOF
 }
 
 @test "SIGTERM to the spawn process group also kills gt" {
-  command -v setsid >/dev/null 2>&1 || skip "no setsid for the SIGTERM process-group test"
+  need setsid
   local repo="$BATS_TEST_TMPDIR/tr-term" bin="$BATS_TEST_TMPDIR/tr-term-bin" log="$BATS_TEST_TMPDIR/tr-term.log"
   local run="$BATS_TEST_TMPDIR/tr-term.sh" ready="$BATS_TEST_TMPDIR/tr-term.ready" pidfile="$BATS_TEST_TMPDIR/tr-term.pid"
   local runner group pid

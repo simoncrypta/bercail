@@ -171,7 +171,7 @@ expect_no_wait() {
 }
 
 @test "hook answers no to prompts on a terminal" {
-  command -v script >/dev/null 2>&1 || skip "script not found"
+  need script
   ask_for_binding
   out="$(timeout 20 script -qec "bash '$OMARCHY_POST_UPDATE_HOOK'" /dev/null </dev/null 2>&1)" \
     || fail "hook on a terminal exited non-zero or hung: $out"

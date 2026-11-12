@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
+# shellcheck disable=SC2034 # the constants below are read by the libs sourced after this file
 set -euo pipefail
 
 AGENTIC_DEV_VERSION="${AGENTIC_DEV_VERSION:-0.14.0}"
@@ -57,10 +58,10 @@ run() {
 read_tty() {
   local __var="$1"
   # /dev/tty can exist without a terminal behind it (no controlling tty).
-  if [[ -r /dev/tty ]] && { read -r "$__var" </dev/tty; } 2>/dev/null; then
+  if [[ -r /dev/tty ]] && { read -r "${__var?}" </dev/tty; } 2>/dev/null; then
     return 0
   fi
-  read -r "$__var"
+  read -r "${__var?}"
 }
 
 confirm() {
