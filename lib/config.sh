@@ -1,6 +1,27 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
+# An update that replaces the CLI running it is the old release's code copying
+# the new release's files: old steps, and old lists that do not name what the
+# new release added. Start again on the new CLI, which finishes lib/ from its
+# own list first (complete_lib in bin/bercail). Once per update.
+restart_update() {
+  [[ -z "${BERCAIL_UPDATE_RESTARTED:-}" ]] || return 0
+  local -a args=(update)
+  [[ "${FORCE:-0}" -ne 1 ]] || args+=(--force)
+  # The release this run already resolved, so both halves read the same one.
+  [[ -z "${GITHUB_RAW_BASE:-}" ]] || export GITHUB_RAW_BASE
+  info "restarting the update on the new bercail"
+  BERCAIL_UPDATE_RESTARTED=1 exec bash "$LOCAL_BIN/bercail" "${args[@]}"
+}
+
+# deploy_configs loads this file again once the lib/ on disk is no longer the
+# one it runs from. v0.14.0 does it on every update, right after copying lib/.
+# Nothing below this line may run in that process: its names are the old release's.
+if [[ "${FUNCNAME[1]:-}" == deploy_configs ]]; then
+  restart_update
+fi
+
 # A new install runs bstack on the desk; --no-bstack leaves plain Pi.
 default_user_config() {
   cat <<'EOF'
@@ -459,35 +480,18 @@ remove_agentic_dev_shim() {
   run rm -f "$shim"
 }
 
+# A checksum of the installed CLI when it is the one running, else nothing: a
+# clone's bin/bercail and install.sh run the tree they deploy.
+_running_install_sum() {
+  [[ "$(script_dir)" -ef "${AGENTIC_DEV_SHARE_DIR}/lib" ]] || return 0
+  { cat "$LOCAL_BIN/bercail" "${AGENTIC_DEV_SHARE_DIR}/lib"/*.sh 2>/dev/null || true; } | cksum
+}
+
 deploy_finalize_permissions() {
-  # Older update callers reload this library before finalizing, but their file
-  # list, the other libs they loaded, and remaining steps still belong to the
-  # old release.
   detach_running_bercail
-  migrate_state_dir
-  remove_agentic_dev_shim
-  # An older updater resumes its Omarchy step after this returns. Load the new
-  # integration before it can overwrite keyboard.conf with the retired override.
-  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/omarchy.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${AGENTIC_DEV_SHARE_DIR}/lib/omarchy.sh"
-  fi
   deploy_install_file "config/pi/extensions/bercail-desk.ts" \
     "${AGENTIC_DEV_SHARE_DIR}/pi-extensions/bercail-desk.ts"
-  deploy_install_file "lib/desk.sh" "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh"
-  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${AGENTIC_DEV_SHARE_DIR}/lib/desk.sh"
-  fi
-  if declare -F deploy_desk_restore >/dev/null; then
-    OMARCHY_POST_BOOT_HOOK="${OMARCHY_POST_BOOT_HOOK:-$HOME/.config/omarchy/hooks/post-boot.d/bercail-desk-restore.hook}"
-    deploy_desk_restore
-  fi
-  # The old updater deploys its own release's skill list: add what is new since.
-  if ! grep -qx unit-testing <<<"$(_skill_ids)"; then
-    deploy_skill_tree unit-testing
-    ensure_skill_symlink "$PI_SKILLS_DIR" unit-testing
-  fi
+  deploy_desk_restore
   run chmod +x "$LOCAL_BIN/bercail" "$LOCAL_BIN/bercail-desk-agent" \
     "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
     "$AGENTIC_DEV_SHELL_DIR/bercail.sh" \
@@ -506,17 +510,20 @@ deploy_configs() {
     "bin/bercail|${LOCAL_BIN}/bercail"
     "bin/bercail-desk-agent|${LOCAL_BIN}/bercail-desk-agent"
   )
-  local entry rel dest
+  local entry rel dest running
 
   describe_install_source
   prompt_user_config
   migrate_hunk_review_to_tuicr
+  migrate_state_dir
+  remove_agentic_dev_shim
 
   ensure_dir "$AGENTIC_DEV_CONFIG_DIR"
   ensure_dir "$AGENTIC_DEV_SHELL_DIR"
   ensure_dir "$WORKTRUNK_CONFIG_DIR"
   ensure_dir "$AGENTIC_DEV_SHARE_DIR"
 
+  running="$(_running_install_sum)"
   for entry in "${files[@]}"; do
     rel="${entry%%|*}"
     dest="${entry#*|}"
@@ -534,32 +541,16 @@ deploy_configs() {
 
   deploy_agentic_dev_config
   deploy_lib
-  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/config.sh" ]]; then
-    # deploy_lib may have pulled a newer lib/; reload it before the steps below.
+  # This update replaced the CLI that is running it: the new lib/config.sh
+  # takes over as it loads (restart_update, at its top).
+  if [[ "$(_running_install_sum)" != "$running" ]]; then
     # shellcheck source=/dev/null
     source "${AGENTIC_DEV_SHARE_DIR}/lib/config.sh"
   fi
-  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/bstack.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${AGENTIC_DEV_SHARE_DIR}/lib/bstack.sh"
-  fi
-  # First update from an older bercail still runs the previous deploy_configs,
-  # so re-run after the new lib is on disk.
-  if declare -F migrate_hunk_review_to_tuicr >/dev/null; then
-    migrate_hunk_review_to_tuicr
-  fi
   deploy_herdr_app
   deploy_skills
-  if declare -F deploy_bstack >/dev/null; then
-    deploy_bstack || true
-  fi
-  if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/shep.sh" ]]; then
-    # shellcheck source=/dev/null
-    source "${AGENTIC_DEV_SHARE_DIR}/lib/shep.sh"
-  fi
-  if declare -F deploy_shep >/dev/null; then
-    deploy_shep
-  fi
+  deploy_bstack || true
+  deploy_shep
   if [[ ! -f "$WORKTRUNK_CONFIG_DIR/config.toml" ]] || [[ "$FORCE" -eq 1 ]]; then
     deploy_install_file "config/worktrunk/config.toml" "$WORKTRUNK_CONFIG_DIR/config.toml"
   else
@@ -570,7 +561,5 @@ deploy_configs() {
   record_install_source
   ensure_pi
   ensure_selected_layout_tools
-  if declare -F sync_omarchy_default_agent >/dev/null 2>&1; then
-    sync_omarchy_default_agent
-  fi
+  sync_omarchy_default_agent
 }

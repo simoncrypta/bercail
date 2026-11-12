@@ -6,10 +6,12 @@ setup() {
   isolate
   mkdir -p "$BATS_TEST_TMPDIR/bin" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME"
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
-  # deploy_configs also deploys bstack, which calls these; the real pi would
-  # npm-install its bridge (~470 MB) into HOME. These tests are about worktrunk.
+  # deploy_configs also deploys bstack and the desk restore hook, which call
+  # these; the real pi would npm-install its bridge (~470 MB) into HOME, and on
+  # Omarchy the real omarchy-hook-install acts on the desktop. These tests are
+  # about worktrunk.
   local tool
-  for tool in pi claude opencode herdr-app; do
+  for tool in pi claude opencode herdr-app omarchy-hook-install; do
     printf '#!/bin/sh
 exit 0
 ' >"$BATS_TEST_TMPDIR/bin/$tool"
@@ -17,14 +19,12 @@ exit 0
   done
   export INSTALL_SRC="$ROOT"
 
-  # shellcheck source=/dev/null
-  source "$ROOT/lib/common.sh"
-  # shellcheck source=/dev/null
-  source "$ROOT/lib/deps.sh"
-  # shellcheck source=/dev/null
-  source "$ROOT/lib/config.sh"
-  # shellcheck source=/dev/null
-  source "$ROOT/lib/skills.sh"
+  # Every lib deploy_configs calls into, as bin/bercail loads them.
+  local lib
+  for lib in common detect deps config skills omarchy bstack desk shep; do
+    # shellcheck source=/dev/null
+    source "$ROOT/lib/$lib.sh"
+  done
 
   export HERDR_APP_CONFIG_DIR="$XDG_CONFIG_HOME/herdr-app"
   export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/bercail"

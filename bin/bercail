@@ -169,6 +169,19 @@ Run 'bercail help' for shell commands and keybindings.
 EOF
 }
 
+# The release this one replaces restarted its update here (restart_update, in
+# lib/config.sh) after copying lib/ by its own list. Fetch what this release
+# added before load_libs reads it.
+complete_lib() {
+  local lib
+  lib="$(find_lib_dir)" || return 0
+  # shellcheck source=/dev/null
+  source "$lib/common.sh"
+  # shellcheck source=/dev/null
+  source "$lib/config.sh"
+  deploy_lib
+}
+
 main() {
   local cmd="${1:-help}"
   shift || true
@@ -220,6 +233,7 @@ main() {
       cmd_review_pr "$@"
       ;;
     update)
+      [[ -z "${BERCAIL_UPDATE_RESTARTED:-}" ]] || complete_lib
       load_libs
       while [[ $# -gt 0 ]]; do
         case "$1" in

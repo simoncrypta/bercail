@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
-# The first update to a new release runs the previous release's bercail: its
-# bin, its loaded libs, and its deploy_configs, which reloads only some of the
-# new libs. Install a real old release, then update it from this tree.
+# The first update to a new release starts as the previous release's bercail:
+# its bin, its loaded libs, and its deploy_configs, which copies the new CLI and
+# lib/ by its own lists. The new lib/config.sh then restarts the update on the
+# new CLI. Install a real old release, then update it from this tree.
 
 setup() {
   load test_helper
@@ -13,7 +14,7 @@ setup() {
   local t
   for t in bash sh env cat cp mv rm rmdir ln mkdir chmod cmp diff dirname basename realpath readlink \
     find grep sed awk tr sort uniq head tail wc mktemp date git jq tar touch sha256sum id uname \
-    sleep stat cut tee xargs ls; do
+    sleep stat cut tee xargs ls cksum; do
     ln -s "$(command -v "$t")" "$TOOLS/$t" || fail "this test needs $t on PATH"
   done
   printf '#!/bin/sh\nexit 1\n' >"$TOOLS/curl"
@@ -43,18 +44,40 @@ in_home() {
     PATH="$TOOLS" TERM=dumb "$@" </dev/null
 }
 
-# Install release TAG into its own HOME, then update it from this tree. Sets home and box.
-update_from() {
-  local tag="$1" log rc=0
+# What a release of this tree ships, into DIR: tracked and new files that exist on disk.
+this_tree() {
+  mkdir -p "$1"
+  (cd "$ROOT" && git ls-files -co --exclude-standard \
+    | while IFS= read -r f; do [[ -e "$f" ]] && printf '%s\0' "$f"; done \
+    | tar --null -T - -cf -) | tar -x -C "$1"
+}
+
+# Install release TAG (or this tree, as "this") into its own HOME. Sets home and box.
+install_release() {
+  local tag="$1"
   box="$BATS_TEST_TMPDIR/$tag" home="$BATS_TEST_TMPDIR/$tag/home"
   mkdir -p "$box/src" "$home/run" "$home/.config/hypr"
   # A bindings file to patch, so Omarchy and plain hosts exit the same way.
   : >"$home/.config/hypr/bindings.conf"
-  git -C "$ROOT" archive "$tag" | tar -x -C "$box/src"
+  if [[ "$tag" == this ]]; then
+    this_tree "$box/src"
+  else
+    git -C "$ROOT" archive "$tag" | tar -x -C "$box/src"
+  fi
   in_home "$home" INSTALL_SRC="$box/src" bash "$box/src/bin/bercail" update >"$box/install.log" 2>&1 \
     || { cat "$box/install.log"; fail "$tag could not install itself"; }
-  # The old caller must pick up the new integration, not rewrite the input
-  # method using the override this tree no longer ships (even off an Omarchy host).
+}
+
+restarts() {
+  grep -c 'restarting the update on the new bercail' "$1" || true
+}
+
+# Install release TAG, then update it from this tree.
+update_from() {
+  local tag="$1" log rc=0
+  install_release "$tag"
+  # The old caller must not get as far as its own Omarchy step, which rewrites
+  # the input method with an override this tree no longer ships.
   mkdir -p "$home/.local/share/omarchy" "$home/.config/fcitx5/conf"
   printf 'Hint Trigger=Control+Alt+h\nCustom=keep me\n' >"$box/keyboard.conf"
   cp "$box/keyboard.conf" "$home/.config/fcitx5/conf/keyboard.conf"
@@ -69,6 +92,35 @@ update_from() {
   cmp -s "$box/keyboard.conf" "$home/.config/fcitx5/conf/keyboard.conf" \
     || fail "$tag's updater changed the input-method config"
   if grep -E 'unbound variable|syntax error|command not found' "$log"; then
+    fail "$tag's bercail update hit a shell error"
+  fi
+}
+
+# A curl install has no tree to copy from: the old release's updater fetches
+# each file it lists, by name, from the new release. The stand-in curl serves
+# this tree's files as that release and fails on a name it does not ship.
+update_from_curl() {
+  local tag="$1" rc=0
+  install_release "$tag"
+  rm -f "$home/.local/share/bercail/source-path"
+  this_tree "$box/new"
+  cat >"$TOOLS/curl" <<EOF
+#!/bin/sh
+# Stand-in: -o DEST from $box/new for a raw.test URL; anything else fails.
+url= dest=
+while [ \$# -gt 0 ]; do
+  case "\$1" in
+    -o) dest="\$2"; shift ;;
+    https://raw.test/*) url="\${1#https://raw.test/}" ;;
+  esac
+  shift
+done
+[ -n "\$url" ] && [ -n "\$dest" ] && [ -f "$box/new/\$url" ] || { echo "\$url" >>"$box/curl-missing"; exit 22; }
+cp "$box/new/\$url" "\$dest"
+EOF
+  in_home "$home" GITHUB_RAW_BASE=https://raw.test bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 || rc=$?
+  [[ "$rc" -eq 0 ]] || { tail -20 "$box/update.log"; fail "$tag's bercail update exited $rc; not served: $(cat "$box/curl-missing" 2>/dev/null)"; }
+  if grep -E 'unbound variable|syntax error|command not found' "$box/update.log"; then
     fail "$tag's bercail update hit a shell error"
   fi
 }
@@ -89,12 +141,27 @@ assert_this_tree() {
   done
 }
 
-# The new CLI updating itself: the copy it runs from is detached too.
+# The new CLI updating itself: the copy it runs from is detached too, and an
+# update that brings nothing new has nothing to restart on.
 assert_updates_itself() {
   local tag="$1"
   in_home "$home" bash "$home/.local/bin/bercail" update >"$box/update-2.log" 2>&1 \
     || { cat "$box/update-2.log"; fail "$tag: a second bercail update failed"; }
   cmp -s "$ROOT/bin/bercail" "$home/.local/bin/bercail" || fail "$tag: the second update broke bin/bercail"
+  [[ "$(restarts "$box/update-2.log")" == 0 ]] || fail "$tag: an update with nothing new restarted"
+}
+
+# Load lib/config.sh the way an updater's deploy_configs does, as CMD does it,
+# with a stand-in for the installed bercail that prints how it was started.
+reload_config() {
+  mkdir -p "$HOME/.local/bin"
+  printf '#!/bin/sh\necho "started: $* restarted=$BERCAIL_UPDATE_RESTARTED raw=$GITHUB_RAW_BASE"\n' >"$HOME/.local/bin/bercail"
+  # shellcheck disable=SC2016
+  ROOT="$ROOT" bash -c '
+    source "$ROOT/lib/common.sh"
+    deploy_configs() { source "$ROOT/lib/config.sh"; echo "went on with the old code"; }
+    '"$1"'
+    deploy_configs' 2>&1
 }
 
 # v0.14.0 is the oldest release that updates straight to this tree (docs/install.md).
@@ -110,6 +177,51 @@ assert_updates_itself() {
   [[ "$(jq -r .issue "$home/.local/state/bercail/handoffs.jsonl")" == old-1 ]] \
     || fail "the handoff log did not move: $(ls -la "$home/.local/state")"
   [[ -L "$home/.local/state/agentic-dev" ]] || fail "the old state dir is not a link"
+}
+
+@test "a curl install of v0.14.0 updates to this tree: every file its updater fetches by name still ships" {
+  need_tag v0.14.0
+  update_from_curl v0.14.0
+  assert_this_tree v0.14.0
+}
+
+@test "v0.14.0's updater hands the update to the new bercail once" {
+  need_tag v0.14.0
+  update_from v0.14.0
+  [[ "$(restarts "$box/update.log")" == 1 ]] || fail "restarted $(restarts "$box/update.log") times: $(cat "$box/update.log")"
+}
+
+@test "an update that replaces the bercail running it runs the new one's steps" {
+  install_release this
+  printf '%s\n' "$box/src" >"$home/.local/share/bercail/source-path"
+  # The next release: its update has a step this one's does not.
+  sed -i 's/^  show_summary$/  show_summary; log "a step of the next release"/' "$box/src/bin/bercail"
+  grep -q 'a step of the next release' "$box/src/bin/bercail" || fail "cmd_update has no show_summary line to extend"
+  in_home "$home" bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 \
+    || { cat "$box/update.log"; fail "the update failed"; }
+  grep -qx 'a step of the next release' "$box/update.log" \
+    || fail "the update finished on the code it replaced: $(tail -5 "$box/update.log")"
+  [[ "$(restarts "$box/update.log")" == 1 ]] || fail "restarted $(restarts "$box/update.log") times"
+}
+
+@test "lib/config.sh loaded by an updater's deploy_configs starts the installed bercail's update" {
+  local out
+  out="$(reload_config :)"
+  grep -qx 'started: update restarted=1 raw=' <<<"$out" || fail "$out"
+  if grep -q 'went on' <<<"$out"; then fail "the old code went on: $out"; fi
+}
+
+@test "a restarted update keeps --force and the release the first half read" {
+  local out
+  out="$(reload_config 'FORCE=1 GITHUB_RAW_BASE=https://raw.test/v9')"
+  grep -qx 'started: update --force restarted=1 raw=https://raw.test/v9' <<<"$out" || fail "$out"
+}
+
+@test "an update that was restarted does not restart again" {
+  local out
+  out="$(BERCAIL_UPDATE_RESTARTED=1 reload_config :)"
+  grep -qx 'went on with the old code' <<<"$out" || fail "$out"
+  if grep -q 'started:' <<<"$out"; then fail "restarted twice: $out"; fi
 }
 
 @test "after v0.14.0, the new bercail updates itself and keeps its binary" {
