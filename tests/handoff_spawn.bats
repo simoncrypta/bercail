@@ -668,16 +668,14 @@ _start_fixture() {
   handoff_result_ok "$f" || fail "a result without verification still passes"
   for good in '[]' \
     '[{"kind":"test","command":"bash t.sh","exit_code":0,"evidence":"t.log"}]' \
-    '[{"kind":"verify-skill","command":"run.sh","exit_code":1,"evidence":".bercail/verify/x"},{"kind":"statechart","command":"statechart a.tla","exit_code":0,"evidence":"tlc.out"}]' \
-    '[{"kind":"statechart","spec":"a.tla","exit_code":0,"rules_broken":[],"chart":"chart.mmd","replayed":false}]'; do
+    '[{"kind":"verify-skill","command":"run.sh","exit_code":1,"evidence":".bercail/verify/x"}]'; do
     ok_with "$good" || fail "should pass: $good"
   done
   for bad in '"passed"' 'false' '[1]' \
     '[{"kind":"vibes","command":"x","exit_code":0,"evidence":"e"}]' \
     '[{"kind":"test","command":"x","exit_code":"0","evidence":"e"}]' \
     '[{"kind":"test","exit_code":0,"evidence":"e"}]' \
-    '[{"kind":"test","command":"x","exit_code":0}]' \
-    '[{"kind":"statechart","exit_code":0}]'; do
+    '[{"kind":"test","command":"x","exit_code":0}]'; do
     if ok_with "$bad"; then fail "should fail: $bad"; fi
   done
   jq -nc '{status:"ready", summary:"done"}' >"$f"

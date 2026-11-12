@@ -68,7 +68,7 @@ If `pi`, bd, or the issue is missing, the stage writes
 nothing, and exits nonzero. It does not fall through to another stage. The
 agent writes the same result file (`status`, `summary`, and bercail fills
 `session_id`), with an optional `verification` array of
-`{kind: test|verify-skill|statechart, command, exit_code, evidence}`; bercail
+`{kind: test|verify-skill, command, exit_code, evidence}`; bercail
 drops a malformed array and keeps the rest of the result. When the run stops on a plan usage limit, bercail adds `reason`:
 `usage-limit`. It does not rerun or switch plans. Read that file. Do not scrape
 terminal output. `session_id` is the uuid bercail passed, or the session

@@ -175,16 +175,15 @@ handoff_stamp_issue() {
   printf '%s\n' "$stamped" >"$dest"
 }
 
-# verification is optional: [{kind, command, exit_code, evidence}]. A statechart
-# entry may carry spec and chart in place of command and evidence (bercail-86a).
+# verification is optional: [{kind, command, exit_code, evidence}].
 HANDOFF_VERIFICATION_DEF='
   def verification_ok:
     .verification | . == null or (type == "array" and all(.[];
       type == "object"
-      and (.kind == "test" or .kind == "verify-skill" or .kind == "statechart")
+      and (.kind == "test" or .kind == "verify-skill")
       and (.exit_code | type == "number")
-      and (((.command | type == "string") and (.evidence | type == "string"))
-        or (.kind == "statechart" and (.spec | type == "string") and (.chart | type == "string")))));
+      and (.command | type == "string")
+      and (.evidence | type == "string")));
 '
 
 handoff_result_ok() {
