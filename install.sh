@@ -25,7 +25,7 @@ bootstrap_remote_libs() {
   local tmp lib
   tmp="$(mktemp -d)"
   mkdir -p "$tmp/lib"
-  for lib in common detect deps config skills shell-rc uninstall help omarchy notify doctor bstack desk shep; do
+  for lib in common detect deps config skills shell-rc uninstall help omarchy notify doctor bstack desk shep shep-context; do
     curl -fsSL "$GITHUB_RAW_BASE/lib/${lib}.sh" -o "$tmp/lib/${lib}.sh"
   done
   printf '%s' "$tmp"

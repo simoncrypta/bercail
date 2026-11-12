@@ -136,6 +136,21 @@ step policy-show 0 "$bercail" policy show --json "$repo"
 check "the CLI reads this repo's policy" jq -e '.file != "" and .policy.integrate == "direct"' "$evidence/policy-show.out"
 check "a fresh HOME does not trust it" jq -e '.trusted == false and .policy.commit == "ask"' "$evidence/policy-show.out"
 
+# Shep: a start (the stub pi exits at once) writes its compaction settings and
+# its start context with a known repo and a rule.
+shep_state="$XDG_STATE_HOME/bercail/shep"
+mkdir -p "$shep_state"
+printf '%s\n' "$repo" >"$shep_state/repos"
+step shep-remember 0 "$bercail" shep remember "verify: a standing rule" --scope verify
+step shep-repos 0 "$bercail" shep repos --json
+check "shep repos has this checkout's main repo" jq -e --arg m "$(git -C "$repo" worktree list --porcelain | awk '/^worktree /{print substr($0, 10); exit}')" \
+  'map(.path) | index($m) != null' "$evidence/shep-repos.out"
+step shep-run 0 "$bercail" shep run </dev/null
+cp "$shep_state/workspace/.pi/settings.json" "$evidence/shep-settings.json" 2>/dev/null
+check "Shep compacts the lead at 250k of its 1M window" \
+  jq -e '.compaction.modelOverrides["claude-bridge/claude-opus-5-5"] == {keepRecentTokens: 50000, reserveTokens: 750000}' "$evidence/shep-settings.json"
+check "Shep's start context has the rule" grep -qF "[verify] verify: a standing rule" "$shep_state/context.md"
+
 cp "$XDG_CONFIG_HOME/bercail/config.toml" "$evidence/config.toml"
 
 # --- result ---

@@ -148,6 +148,7 @@ def body(run):
     share = home / ".local/share/bercail/shep"
     shutil.copy(ROOT / "shep/SHEP.md", share)
     shutil.copy(ROOT / "shep/pi/inbox.ts", share / "pi")
+    shutil.copy(ROOT / "shep/pi/compaction.ts", share / "pi")
     # bstack's lead: the fake model, as lead.json names a model and its extensions.
     (home / ".local/share/bercail/pi/lead.json").write_text(json.dumps(
         ["pi", "--model", "fake/model", "-e", str(ROOT / "tests/shep_pi_provider.ts")]))

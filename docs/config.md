@@ -23,9 +23,14 @@ judge = "claude"
 
 [policy."~/Work/some-repo"]          # optional: your override of that repo's git policy
 commit = "allow"
+
+[shep]                               # optional: Shep's compaction
+compact_at = 250000                  # context tokens at which Pi compacts Shep
+keep_recent = 50000                  # recent tokens kept word for word
+rollover = false                     # true: a fresh session instead, and each new day
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs Pi: bstack's lead when bstack is on, else plain `pi`. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo). Legacy `[graphite]` booleans still work (`true` → `gt`, `false` → `gh`), but `[git]` takes precedence.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs Pi: bstack's lead when bstack is on, else plain `pi`. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start. Legacy `[graphite]` booleans still work (`true` → `gt`, `false` → `gh`), but `[git]` takes precedence.
 
 ## Git policy per repo
 

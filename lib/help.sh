@@ -33,7 +33,10 @@ Post-install CLI (bercail):
   uninstall     Remove marker block and managed files
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
   shep          Shep, the orchestrator on Pi: status | run |
-                bg --issue ID [--cwd DIR] (a background Shep waits on the issue's job)
+                bg --issue ID [--cwd DIR] (a background Shep waits on the issue's job) |
+                repos [--json] (your known repos) | board (open jobs, what waits on you) |
+                brief ISSUE [--repo DIR] [--budget CHARS] (one issue, its desk, its latest report) |
+                remember "RULE" [--scope SCOPE] | list | forget N (Shep's standing rules)
   policy        A repo's git policy (.bercail/policy.toml): show [--json] [repo] |
                 trust [repo] (its looser values count until the file changes) | untrust [repo]
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>

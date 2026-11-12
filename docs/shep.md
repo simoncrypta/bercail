@@ -15,7 +15,7 @@ Bercail's workflow (beads issues, named stages, result files, review when a desk
 1. Shep writes the job as a [beads](https://beads.gascity.com/) issue (`bd create`): the ask, the repo, links, and any "plan only" note.
 2. Shep picks a stage for that issue and runs `handoff-spawn --branch <name> --stage bstack --issue ID` (see [handoff](handoff.md)). bercail never picks the stage and never falls back to another one.
 3. bercail checks `bd` and the issue, adds a `bd comment` with the worktree, and starts Pi in a new desk with a one-line prompt pointing at the issue.
-4. When the desk finishes or blocks, Shep hears about it [as a message in its session](#desk-events). It reads the issue (`bd show`) and the desk (`hc get`, `hc read`), and reports to you. `hc wait <desk>` also works (`desk` and `space` are in the spawn JSON).
+4. When the desk finishes or blocks, Shep hears about it [as a message in its session](#desk-events). It reads the [brief](#briefs-and-the-board) for the issue (its desk's state, the question when it is blocked, the latest report, cut short) and reports to you. `hc wait <desk>` also works (`desk` and `space` are in the spawn JSON).
 
 The Shep that ships with bercail never runs headless stages: a coding job or a code follow-up is always a desk you can see. Waiting is different: Shep never blocks its own thread on CI, a deploy, a desk, or a release, and hands that to a [background Shep](#background-sheps). `handoff-spawn` still has headless stages for other callers; a headless run opens nothing in the app, returns when it ends, and leaves `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`).
 
@@ -36,13 +36,108 @@ When Pi exits with an error, its message stays on screen until you press Enter.
 
 ## Shep on Pi
 
-Shep on Pi runs in `~/.local/state/bercail/shep/workspace` with its sessions in `pi-sessions/` beside it, whatever folder you are in, and continues the same session each time it starts (`pi --continue`). It uses bstack's lead model and Pi extensions (from `~/.local/share/bercail/pi/lead.json`) when bstack is on, else Pi's own default model; the same logins as your desks. Its rules are passed with `--append-system-prompt`, and it loads no context files, so your global Pi `AGENTS.md` (your Pi persona) is neither changed nor read by Shep. It gets the `handoff`, `review`, `desk-restore`, `how`, `why`, and `unslop` skills, and Pi's own tools. It needs `pi` on the PATH (`bercail bstack on` installs it).
+Shep on Pi runs in `~/.local/state/bercail/shep/workspace` with its sessions in `pi-sessions/` beside it, whatever folder you are in, and continues the same session each time it starts (`pi --continue`). It uses bstack's lead model and Pi extensions (from `~/.local/share/bercail/pi/lead.json`) when bstack is on, else Pi's own default model; the same logins as your desks. Its rules and its [start context](#what-shep-knows) are passed with `--append-system-prompt`, and it loads no context files, so your global Pi `AGENTS.md` (your Pi persona) is neither changed nor read by Shep. Two Pi extensions of its own come with it: `inbox.ts` for [desk events](#desk-events) and `compaction.ts` for [compaction](#compaction). It gets the `handoff`, `review`, `desk-restore`, `how`, `why`, and `unslop` skills, and Pi's own tools. It needs `pi` on the PATH (`bercail bstack on` installs it).
 
 ```bash
 bercail shep status      # Pi's session folder, desk events waiting and delivered, live background Sheps
+bercail shep repos       # your known repos: git backend, policy trust, open issues (--json too)
+bercail shep board       # one line per open job across those repos, then what waits on you
+bercail shep brief ID    # one issue: its desk and state, the question it is blocked on, the latest report
+bercail shep list        # Shep's standing rules: remember "RULE" [--scope S] adds one, forget N drops one
 ```
 
-An older `~/.config/bercail/config.toml` may still have a `[shep]` section with `backend` and `session`. bercail no longer reads them; delete them whenever you like.
+An older `~/.config/bercail/config.toml` may still have `backend` and `session` under `[shep]`. bercail no longer reads them; delete them whenever you like. The keys `[shep]` holds now are for [compaction](#compaction).
+
+## What Shep knows
+
+Shep's session is one long conversation, and most of it is tool output. What it needs to know for good sits outside it, in files bercail keeps, so a compaction or a new session loses none of it.
+
+### Known repos
+
+Shep needs no list of your repos to keep up. bercail works it out each time from what it already knows:
+
+- the `[git]`, `[graphite]` and `[policy."<path>"]` keys of `config.toml`,
+- trusted policies (`~/.local/state/bercail/policy-trust.json`),
+- handoff records (`~/.local/state/agentic-dev/handoffs.jsonl`); a record whose worktree is gone gives its main checkout, from the `<main>.<branch>` name `handoff-spawn` uses,
+- the folders of live desks,
+- and `~/.local/state/bercail/shep/repos`, one path per line (`#` starts a comment), for a repo bercail has not seen yet.
+
+Each folder becomes its main checkout; one that is no longer a git checkout drops out. `bercail shep repos` prints a line per repo: the path, its git backend (as `handoff-spawn` picks it), its [policy](config.md#git-policy-per-repo) (`policy trusted`, `policy untrusted`, or `no policy`), its open issues (not closed; `no beads` when it has no `.beads` or `bd` does not answer within 10 seconds), and where bercail saw it. `--json` gives the same as an array.
+
+### Briefs and the board
+
+`bercail shep brief <id>` is what Shep reads for a desk event, in place of `bd show` and `hc read --lines 60`:
+
+```
+app-1: Fix the login timeout
+in_progress P1 bug · labels auth · repo ~/Work/app
+desk t9 blocked · space Login-timeout_App (sp98de) · branch login-timeout · worktree ~/Work/app.login-timeout
+desk t9 is blocked; its screen ends with:
+  | Allow git push origin login-timeout? (y/n)
+(the whole screen: hc read t9 --lines 60)
+latest report: comment 2 of 2, Desk at 2026-11-11 00:43 (812 characters):
+Staged, uncommitted. What changed: …
+```
+
+The repo is `--repo DIR`, else the issue's handoff record, its live desk, or the known repo whose `bd` has it. The desk is the live terminal labelled with the issue, else the record's (`gone` when it has ended). A blocked desk adds the last 15 lines of its screen, where its question is. The report is the latest comment that is not the handoff note. One longer than `--budget` characters (1500 by default) keeps its first two thirds and its last third, and says how much was cut and that `bd comments <id>` has the rest. Measured on three real issues, a brief was 1,600 to 2,000 characters (about 400 to 500 tokens) against 31,000 to 54,000 for `bd show` plus `hc read --lines 60`: 16 to 33 times smaller.
+
+`bercail shep board` lists one line per open job across the known repos: `<id>: <title>`, its status when not `open`, its desk and state, and its branch. A job is an issue that is not closed and has a live desk, or is `in_progress` or `blocked`. A repo's other open issues are a count, with how many of them were handed off to a desk that has since ended. Then: the repos with no jobs, desks still open on closed or unknown issues, and **Waiting on the person**: blocked desks, finished desks to review, and finished background Sheps to report and end.
+
+### Standing rules
+
+A rule you give Shep in conversation ("merge bercail work straight to master", "you may answer cm0's prompts") would otherwise live only in its session. Shep records it as soon as you say it, and tells you:
+
+```bash
+bercail shep remember "Merge finished desk work straight to master and push" --scope bercail
+bercail shep list        # 1. 2026-11-11 [bercail] Merge finished desk work straight to master and push
+bercail shep forget 1
+```
+
+They live in `~/.local/state/bercail/shep/preferences.md`, one `- DATE [SCOPE] RULE` line each; `--scope` is a repo, an issue, a desk, or `all` (the default). The same rule and scope twice is kept once. A rule for everyone who uses bercail belongs in [`shep/SHEP.md`](../shep/SHEP.md) or a repo's [policy](config.md#git-policy-per-repo) instead.
+
+### The start context
+
+Each `bercail shep run` writes `~/.local/state/bercail/shep/context.md` and hands it to Pi with `--append-system-prompt`: the known repos, one short line each, and the standing rules. A restart picks up repos and rules that changed while Shep was down.
+
+## Compaction
+
+Pi compacts a session when its context passes `window - reserveTokens`: it summarizes the older part and keeps the most recent `keepRecentTokens` word for word. Pi's defaults (16384 and 20000) let Shep's 1M-token window fill to about 984k tokens first, which Shep's single session never reached. Shep gets its own numbers, and its own summary.
+
+### Settings
+
+bercail writes Shep's compaction into its workspace's `.pi/settings.json`, which Pi reads as project settings, and leaves `~/.pi/agent/settings.json` alone:
+
+```json
+{"compaction": {"enabled": true, "keepRecentTokens": 50000,
+  "modelOverrides": {"claude-bridge/claude-opus-5-5": {"keepRecentTokens": 50000, "reserveTokens": 750000}}}}
+```
+
+Pi loads project settings only from a folder you trust, and `--no-context-files` does not change that: without trust they are skipped, or Pi asks. Shep's workspace is a folder only bercail writes to, so Shep starts Pi with `--approve`, which trusts it for that process and saves nothing. Other keys in that file are kept; bercail rewrites `compaction` at each start, from `config.toml`:
+
+```toml
+[shep]
+compact_at = 250000   # context tokens at which Pi compacts Shep; 0 leaves Pi's threshold
+keep_recent = 50000   # recent tokens kept word for word
+rollover = false      # true: a fresh session instead of a threshold compaction, and each new day
+```
+
+`compact_at` becomes `reserveTokens = window - compact_at` for the lead model, with its window from `pi --list-models` (1M for Opus 5.5, so 750000). Why 250k: most of Shep's context is `bd`, `hc` and log output that is stale once a job moves on, and every turn sends all of it again; past a quarter of the window that costs time and money for nothing, and a compaction starts over from a fresh board. Why 50k: the last several desk events and your last exchanges stay as they were, briefs included, while the summary is rebuilt. When bercail cannot place `compact_at` (not a number, not below the window, or a window `pi --list-models` does not show), Pi's threshold applies and bercail says why at start. On a model whose window is 250k or less, the default `compact_at` leaves Pi's threshold without a word. Changes take effect at Shep's next start.
+
+### The summary
+
+`compaction.ts` builds the summary Pi saves, for `/compact` and for automatic compaction alike, from three parts:
+
+1. **The job board**, from `bercail shep board` at that moment. It replaces whatever the old messages said about jobs.
+2. **The standing rules**, from `preferences.md`.
+3. **Decisions and open questions** from the part being compacted, written by the lead model from Pi's `serializeConversation` text. It is told to leave out job state, which the board covers, and to carry over the previous summary's decisions unless they were settled.
+
+If any part fails (the board, the model, an empty answer), it returns nothing and Pi compacts the default way: the session is never lost. Each compaction, each fallback with its reason, and each failed compaction (`session_compact_failed`) is a line in `~/.local/state/bercail/shep/compaction.log`.
+
+### Rollover
+
+With `rollover = true`, Shep does not compact forever. When the context passes `compact_at`, it skips that compaction and, as soon as Shep is idle, starts a fresh session whose first message is the board and the rules and names the previous session's file. The first turn on a new day does the same. `/shep-rollover` in Shep does it by hand, whatever the setting. A rollover that fails (the board does not build, say) is logged, and compaction takes over again until Shep restarts.
+
+To go back to the old session, run `/resume` in Shep and pick it; the rollover's first message names its file. Once you write in it, it is the most recent session in `pi-sessions/`, so `bercail shep run` continues it from then on.
 
 ## Background Sheps
 

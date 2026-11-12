@@ -3,7 +3,7 @@ name: verify-bercail
 description: >-
   Runs the unit test suite, then drives this checkout's bercail CLI the way a
   user does, in a throwaway HOME: deploy, doctor, desk restore --dry-run,
-  handoff-spawn --info, bstack status.
+  handoff-spawn --info, bstack status, and Shep's repos, rules and start.
   Leaves evidence under .bercail/verify/. Use at /ready, or to prove a change to
   the CLI, the deploy, handoff, desk restore, or bstack.
 ---
@@ -54,6 +54,7 @@ higher is a crash.
 | deployed files | the lead's `lead.json` loads the guard, review-pr's `review.json` has only read tools, `/council` is there |
 | `bercail policy show --json` on this checkout | reads `.bercail/policy.toml`, and a fresh HOME has not trusted it, so commit stays `ask` |
 | the pinned Claude model | a `bstack-council-claude` seat, and none for a provider with no model |
+| `bercail shep remember`, `repos --json`, `run` | `repos` finds this checkout's main repo from Shep's extras file; a start writes `.pi/settings.json` with the lead at 250k of its 1M window and a start context with the rule |
 
 ## Evidence
 

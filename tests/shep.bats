@@ -19,14 +19,20 @@ setup() {
   STATE="$XDG_STATE_HOME/bercail/shep"
   SHARE="$HOME/.local/share/bercail/shep"
   cp "$ROOT/shep/SHEP.md" "$ROOT/shep/BACKGROUND.md" "$SHARE/"
-  cp "$ROOT/shep/pi/inbox.ts" "$SHARE/pi/"
+  cp "$ROOT/shep/pi/inbox.ts" "$ROOT/shep/pi/compaction.ts" "$SHARE/pi/"
   # bstack's lead, as deploy writes it.
   jq -n '["pi","--model","fake/lead:high","-e","npm:pi-claude-bridge@0.11.0","-e","/x/fallback.ts","--append-system-prompt","/x/instructions.md","--skill","/x/bstack"]' \
     >"$HOME/.local/share/bercail/pi/lead.json"
 
   # pi: logs where it ran, what it got, and whether the Anthropic env came through.
+  # --list-models (Shep's window lookup) lists the lead with a 1M window.
   cat >"$BATS_TEST_TMPDIR/bin/pi" <<'EOF'
 #!/usr/bin/env bash
+if [[ " $* " == *" --list-models "* ]]; then
+  printf 'pi-list %s\n' "$*" >>"$LOG"
+  printf 'provider  model  context\nfake      lead   1M\n'
+  exit 0
+fi
 {
   printf 'pi cwd=%s inbox=%s role=%s anthropic=%s\n' "$PWD" "${BERCAIL_SHEP_INBOX:-}" "${BERCAIL_ROLE:-}" "${ANTHROPIC_API_KEY:-unset}"
   printf 'pi-arg %s\n' "$@"
@@ -104,7 +110,8 @@ EOF
   grep -qx "pi cwd=$STATE/workspace inbox=$STATE/inbox role=shep anthropic=unset" "$LOG" || fail "Pi env: $(grep '^pi cwd' "$LOG")"
   args="$(sed -n 's/^pi-arg //p' "$LOG" | tr '\n' ' ')"
   for want in "--model fake/lead:high" "-e npm:pi-claude-bridge@0.11.0" "-e /x/fallback.ts" "-e $SHARE/pi/inbox.ts" \
-    "--append-system-prompt $SHARE/SHEP.md" "--no-context-files" "--session-dir $STATE/pi-sessions" "--continue" \
+    "-e $SHARE/pi/compaction.ts" "--append-system-prompt $SHARE/SHEP.md" "--append-system-prompt $STATE/context.md" \
+    "--no-context-files" "--approve" "--session-dir $STATE/pi-sessions" "--continue" \
     "--skill $HOME/.agents/skills/handoff" "--skill $HOME/.agents/skills/review"; do
     [[ "$args" == *"$want "* ]] || fail "Pi argv lacks '$want': $args"
   done
@@ -135,12 +142,13 @@ EOF
   grep -q 'Pi is not installed; install it with: mise use -g pi' <<<"$out" && grep -q 'Press Enter to close' <<<"$out" || fail "no Pi: $out"
 }
 
-@test "shep setup, use and handoff are gone; the usage names run, status and bg" {
+@test "shep setup, use and handoff are gone; the usage names every subcommand" {
   local sub out
   for sub in setup "use pi" "handoff --to pi"; do
     # shellcheck disable=SC2086
     out="$(shep $sub </dev/null 2>&1)" && fail "shep $sub passed"
-    [[ "$out" == "bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR]" ]] || fail "shep $sub: $out"
+    [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | remember "RULE" [--scope SCOPE] | forget N | list' ]] \
+      || fail "shep $sub: $out"
   done
 }
 
@@ -249,12 +257,12 @@ EOF
   if grep -q 'sk-ant-test' "$LOG"; then fail "the Anthropic key reached a command"; fi
 }
 
-@test "deploy installs Shep rules, the background brief and Pi extension" {
+@test "deploy installs Shep rules, the background brief and Pi extensions" {
   local rel
   reset
   rm -rf "$SHARE"
   INSTALL_SRC="$ROOT" bash -c 'set -euo pipefail; for l in common config bstack shep; do source "$1/lib/$l.sh"; done; deploy_shep' _ "$ROOT" >/dev/null
-  for rel in SHEP.md BACKGROUND.md pi/inbox.ts; do
+  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts; do
     cmp -s "$ROOT/shep/$rel" "$SHARE/$rel" || fail "deploy did not install shep/$rel"
   done
 }

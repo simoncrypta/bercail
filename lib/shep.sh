@@ -6,8 +6,13 @@
 #   bercail shep run                       what the Shep view's terminal runs
 #   bercail shep status
 #   bercail shep bg --issue ID [--cwd DIR] a background Shep: waits and follow-through
+#   bercail shep repos | brief | board | remember | forget | list   (lib/shep-context.sh)
+
+# shellcheck source=lib/shep-context.sh
+source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
 SHEP_SKILLS=(handoff review desk-restore how why unslop)
+SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | remember \"RULE\" [--scope SCOPE] | forget N | list"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -31,16 +36,20 @@ shep_inbox_dir() {
 }
 
 # Pi's argv for Shep, into SHEP_PI_ARGV: the lead's model and extensions from
-# bstack (lead.json) when it is on, Shep's rules, its inbox extension, and its
-# own session folder. No context files: the person's global Pi persona and any
-# AGENTS.md stay out of Shep.
+# bstack (lead.json) when it is on, Shep's rules and start context, its inbox
+# and compaction extensions, and its own session folder. No context files: the
+# person's global Pi persona and any AGENTS.md stay out of Shep. --approve
+# trusts the workspace, a folder only bercail writes, so Pi loads its
+# .pi/settings.json (Shep's compaction) without asking.
 shep_pi_argv() {
   local lead="${BSTACK_PI_DIR:-${AGENTIC_DEV_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json"
-  local share state id model ext
+  local share state id model ext rollover=0
   share="$(shep_share_dir)"
   state="$(shep_state_dir)"
+  [[ "$(_bstack_toml_get shep rollover)" != true ]] || rollover=1
   SHEP_PI_ARGV=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN
-    BERCAIL_ROLE=shep "BERCAIL_SHEP_INBOX=$state/inbox" pi)
+    BERCAIL_ROLE=shep "BERCAIL_SHEP_INBOX=$state/inbox" "BERCAIL_SHEP_STATE=$state"
+    "BERCAIL_SHEP_BIN=${BERCAIL_SELF:-bercail}" "BERCAIL_SHEP_ROLLOVER=$rollover" pi)
   if [[ -r "$lead" ]]; then
     model="$(jq -r 'index("--model") as $i | if $i then .[$i + 1] else empty end' "$lead" 2>/dev/null || true)"
     [[ -z "$model" ]] || SHEP_PI_ARGV+=(--model "$model")
@@ -48,8 +57,9 @@ shep_pi_argv() {
       [[ -n "$ext" ]] && SHEP_PI_ARGV+=(-e "$ext")
     done < <(jq -r '. as $a | range(0; length) | select($a[.] == "-e") | $a[. + 1]' "$lead" 2>/dev/null || true)
   fi
-  SHEP_PI_ARGV+=(-e "$share/pi/inbox.ts" --append-system-prompt "$share/SHEP.md"
-    --no-context-files --session-dir "$state/pi-sessions" --continue --name Shep)
+  SHEP_PI_ARGV+=(-e "$share/pi/inbox.ts" -e "$share/pi/compaction.ts" --append-system-prompt "$share/SHEP.md"
+    --append-system-prompt "$state/context.md" --no-context-files --approve
+    --session-dir "$state/pi-sessions" --continue --name Shep)
   for id in "${SHEP_SKILLS[@]}"; do
     [[ -d "$(skill_canonical_dir "$id")" ]] && SHEP_PI_ARGV+=(--skill "$(skill_canonical_dir "$id")")
   done
@@ -75,6 +85,10 @@ shep_run() {
   fi
   state="$(shep_state_dir)"
   mkdir -p "$state/workspace" "$state/pi-sessions" "$state/inbox" "$state/delivered"
+  # Neither may keep Shep from starting.
+  shep_settings_write "$state/workspace/.pi/settings.json" \
+    || _shep_err "could not write $state/workspace/.pi/settings.json; Pi's compaction defaults apply"
+  shep_context_write "$state/context.md" || _shep_err "could not write $state/context.md; Shep starts without it"
   shep_pi_argv
   (cd "$state/workspace" && "${SHEP_PI_ARGV[@]}") || code=$?
   _shep_ended "$code"
@@ -178,11 +192,11 @@ shep_bg() {
   jq -c --arg issue "$issue" --arg title "$title" '{address, name, cwd, issue:$issue, issue_title:$title}' <<<"$out"
 }
 
-# Install Shep's package: its rules, the background Shep's brief, and Pi extension.
+# Install Shep's package: its rules, the background Shep's brief, and Pi extensions.
 deploy_shep() {
   local share rel
   share="$(shep_share_dir)"
-  for rel in SHEP.md BACKGROUND.md pi/inbox.ts; do
+  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts; do
     deploy_install_file "shep/$rel" "$share/$rel"
   done
 }
@@ -192,6 +206,12 @@ cmd_shep() {
     run) shep_run ;;
     status) shep_status ;;
     bg) shift; shep_bg "$@" ;;
-    *) _shep_err "usage: bercail shep run | status | bg --issue ID [--cwd DIR]"; return 1 ;;
+    repos) shift; shep_repos "$@" ;;
+    brief) shift; shep_brief "$@" ;;
+    board) shift; shep_board "$@" ;;
+    remember) shift; shep_remember "$@" ;;
+    forget) shift; shep_forget "$@" ;;
+    list) shift; shep_list "$@" ;;
+    *) _shep_err "$SHEP_USAGE"; return 1 ;;
   esac
 }
