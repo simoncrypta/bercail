@@ -39,7 +39,7 @@ bd create "Fix the login timeout" --description "..."     # Shep writes the issu
 
 **Dry run.** `--dry-run` prints the exact argv even when `pi` is not installed, and does not check `--model`. A missing lead profile fails the dry run and writes no result.
 
-Each `--branch` spawn is logged in `${XDG_STATE_HOME:-~/.local/state}/agentic-dev/handoffs.jsonl`; headless runs are not logged there. Follow a `--branch` desk through [agent status webhooks](shep.md#agent-status-webhooks) or with `hc wait <desk>`; `desk`, `space`, and, when known, `issue_title` (and `base` and `model`, when set) are in the spawn JSON.
+Each `--branch` spawn appends one line to `${XDG_STATE_HOME:-~/.local/state}/bercail/handoffs.jsonl`: the spawn JSON, plus `v` (the record's version, `1`) and `at` (when, UTC). Records written before v1 have neither. Headless runs are not logged there. Follow a `--branch` desk through [agent status webhooks](shep.md#agent-status-webhooks) or with `hc wait <desk>`; `desk`, `space`, and, when known, `issue_title` (and `base` and `model`, when set) are in the spawn JSON.
 
 ## Git backend
 

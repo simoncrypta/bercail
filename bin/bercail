@@ -37,13 +37,9 @@ find_lib_dir() {
     printf '%s' "$(cd "$bin/../lib" && pwd)"
     return 0
   fi
-  for dir in "${HOME}/.local/share/bercail/lib" "${HOME}/.local/share/agentic-dev/lib"; do
-    if [[ -d "$dir" ]]; then
-      printf '%s' "$dir"
-      return 0
-    fi
-  done
-  return 1
+  dir="${HOME}/.local/share/bercail/lib"
+  [[ -d "$dir" ]] || return 1
+  printf '%s' "$dir"
 }
 
 load_libs() {

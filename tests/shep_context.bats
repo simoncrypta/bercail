@@ -15,11 +15,11 @@ setup() {
   OLD_PATH="$PATH"
   export PATH="$BATS_TEST_TMPDIR/bin:/usr/bin:/bin"
   mkdir -p "$BATS_TEST_TMPDIR/bin" "$HC_DATA" "$HOME/Work" "$XDG_CONFIG_HOME/bercail" \
-    "$XDG_STATE_HOME/bercail/shep" "$XDG_STATE_HOME/agentic-dev"
+    "$XDG_STATE_HOME/bercail/shep"
   REAL_HOME="$(cd "$HOME" && pwd -P)"
   STATE="$XDG_STATE_HOME/bercail/shep"
   CONFIG="$XDG_CONFIG_HOME/bercail/config.toml"
-  RECORDS="$XDG_STATE_HOME/agentic-dev/handoffs.jsonl"
+  RECORDS="$XDG_STATE_HOME/bercail/handoffs.jsonl"
   printf '{"terminals":[]}\n' >"$HC_DATA/ls.json"
 
   # hc answers ls, get and read from $HC_DATA.

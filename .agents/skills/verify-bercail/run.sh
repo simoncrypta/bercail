@@ -10,7 +10,7 @@ evidence="$(cd "$evidence" && pwd)"
 real_pi="$(mise which pi 2>/dev/null || command -v pi || true)"
 
 # --- tests: the suite must leave the real handoff log byte-identical ---
-real_handoffs="${XDG_STATE_HOME:-$HOME/.local/state}/agentic-dev/handoffs.jsonl"
+real_handoffs="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl"
 handoffs_lines() { [[ -f "$real_handoffs" ]] && wc -l <"$real_handoffs" || echo 0; }
 handoffs_sum() { [[ -f "$real_handoffs" ]] && sha256sum <"$real_handoffs" || echo absent; }
 handoffs_before="$(handoffs_sum)"

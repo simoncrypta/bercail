@@ -139,7 +139,7 @@ Without `--model`, every agent runs the lead's.
 The script prints JSON: `ok`, `label`, `path`, `branch`, `issue`, `issue_title`
 (when known), `agent_started`, `dirty_copied`, `graphite`, `stage`, `harness`, `space` (the
 child's Herdr app space), `desk` (the desk agent's hc address), and `model` when `--model` was given. It appends that line to
-`~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling exists.
+`~/.local/state/bercail/handoffs.jsonl` whenever the sibling exists.
 
 Report that tuple and stop. If the script exits nonzero before creating a
 worktree, report the error and stop. Do not `hc send` to the desk agent, type

@@ -58,7 +58,7 @@ Shep needs no list of your repos to keep up. bercail works it out each time from
 
 - the `[git]`, `[graphite]` and `[policy."<path>"]` keys of `config.toml`,
 - trusted policies (`~/.local/state/bercail/policy-trust.json`),
-- handoff records (`~/.local/state/agentic-dev/handoffs.jsonl`); a record whose worktree is gone gives its main checkout, from the `<main>.<branch>` name `handoff-spawn` uses,
+- handoff records (`~/.local/state/bercail/handoffs.jsonl`); a record whose worktree is gone gives its main checkout, from the `<main>.<branch>` name `handoff-spawn` uses,
 - the folders of live desks,
 - and `~/.local/state/bercail/shep/repos`, one path per line (`#` starts a comment), for a repo bercail has not seen yet.
 

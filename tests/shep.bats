@@ -221,9 +221,9 @@ EOF
   main="$BATS_TEST_TMPDIR/main"
   git init -q "$main"
   git -C "$main" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
-  mkdir -p "$main/.bercail" "$XDG_STATE_HOME/agentic-dev"
+  mkdir -p "$main/.bercail" "$XDG_STATE_HOME/bercail"
   jq -nc --arg p "$main" '{path:$p, issue:"old-1", issue_title:"Old job", stage:"bstack", harness:"pi"}' \
-    >"$XDG_STATE_HOME/agentic-dev/handoffs.jsonl"
+    >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
   printf '{"status":"ready","summary":"old","session_id":"s","issue":"old-1"}\n' >"$main/.bercail/handoff-result.json"
   snapshot() {
     jq -nc --arg s "$1" --arg main "$main" '{seq:1, terminals:[

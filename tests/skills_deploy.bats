@@ -15,7 +15,7 @@ setup() {
   source "$ROOT/lib/skills.sh"
 
   export INSTALL_SRC="$ROOT"
-  export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/agentic-dev"
+  export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/bercail"
   export AGENTIC_DEV_USER_CONFIG="$AGENTIC_DEV_CONFIG_DIR/config.toml"
   export AGENTS_SKILLS_DIR="$HOME/.agents/skills"
   YES=1

@@ -33,7 +33,7 @@ run `--info` then spawn — not assemble these steps.
    and `bercail.issue_title`, replacing a live desk
    in that space. A failed start does **not** discard the worktree.
 7. Print JSON `{ok,label,path,branch,issue,issue_title,agent_started,dirty_copied,graphite,stage,harness,space,desk}`
-   (`issue_title` omitted when unknown) and append `~/.local/state/agentic-dev/handoffs.jsonl` whenever the sibling
+   (`issue_title` omitted when unknown) and append `~/.local/state/bercail/handoffs.jsonl` whenever the sibling
    exists.
 
 Callers in no hc terminal (`HC_TERMINAL_ID` unset) run the **resolved script

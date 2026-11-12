@@ -27,7 +27,7 @@ exit 0
   source "$ROOT/lib/skills.sh"
 
   export HERDR_APP_CONFIG_DIR="$XDG_CONFIG_HOME/herdr-app"
-  export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/agentic-dev"
+  export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/bercail"
   export AGENTIC_DEV_SHELL_DIR="$AGENTIC_DEV_CONFIG_DIR/shell"
   export AGENTIC_DEV_USER_CONFIG="$AGENTIC_DEV_CONFIG_DIR/config.toml"
   export WORKTRUNK_CONFIG_DIR="$XDG_CONFIG_HOME/worktrunk"

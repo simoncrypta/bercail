@@ -224,9 +224,11 @@ assert_handed_main_store() {
     || fail "the handoff comment should land in the main store: $(cat "$main/.beads/comments" 2>&1)"
 }
 
-@test "--branch spawn: logs the issue to handoffs.jsonl under XDG_STATE_HOME" {
+@test "--branch spawn: logs a v1 record with the issue and the time in bercail's state dir" {
   fake_bd
   spawn_branch
-  jq -e --arg id "$id" 'select(.issue == $id)' "$XDG_STATE_HOME/agentic-dev/handoffs.jsonl" >/dev/null \
-    || fail "no line for $id in $XDG_STATE_HOME/agentic-dev/handoffs.jsonl"
+  jq -e --arg id "$id" '.issue == $id and .v == 1 and (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$"))' \
+    "$XDG_STATE_HOME/bercail/handoffs.jsonl" >/dev/null \
+    || fail "record: $(cat "$XDG_STATE_HOME/bercail/handoffs.jsonl" 2>&1)"
+  [[ ! -e "$XDG_STATE_HOME/agentic-dev" ]] || fail "the spawn wrote under the old state dir"
 }

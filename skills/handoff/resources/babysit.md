@@ -1,7 +1,7 @@
 # After handoff
 
 `handoff-spawn` prints `{label, path, branch, issue, agent_started, space, desk, ...}` and
-appends `~/.local/state/agentic-dev/handoffs.jsonl`. Report that. Inspect a
+appends `~/.local/state/bercail/handoffs.jsonl`. Report that. Inspect a
 child only if the user asks.
 
 Example: `Fix-auth_Myapp`, `/home/you/Work/myapp.fix-auth`, `fix-auth`, `myapp-12a`.

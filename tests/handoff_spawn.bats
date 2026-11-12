@@ -1498,8 +1498,8 @@ _desk_spawn() {
     '.issue == $id and .issue_title == $t and .agent_started == true' >/dev/null \
     || fail "branch json: $out $(cat "$BATS_TEST_TMPDIR/title-branch.err")"
   jq -e --arg t "$title" --arg id "$ISSUE" '.issue == $id and .issue_title == $t' \
-    "$DESK_STATE/agentic-dev/handoffs.jsonl" >/dev/null \
-    || fail "handoffs.jsonl: $(cat "$DESK_STATE/agentic-dev/handoffs.jsonl")"
+    "$DESK_STATE/bercail/handoffs.jsonl" >/dev/null \
+    || fail "handoffs.jsonl: $(cat "$DESK_STATE/bercail/handoffs.jsonl")"
   jq -e --arg issue "bercail.issue=$ISSUE" --arg titled "bercail.issue_title=$title" \
     'index($issue) and index($titled)' "$DESK_ARGV" >/dev/null \
     || fail "hc run labels: $(cat "$DESK_ARGV" 2>/dev/null) log=$(cat "$DESK_HC_LOG")"
@@ -1534,8 +1534,8 @@ STUB
     "$PI_LIST_LOG" >/dev/null || fail "Pi lists models with the lead's extensions: $(cat "$PI_LIST_LOG")"
   printf '%s' "$out" | jq -e '.model == "claude-bridge/fable:high" and .agent_started == true' >/dev/null \
     || fail "no thinking level takes the lead's: $out"
-  jq -e '.model == "claude-bridge/fable:high"' "$DESK_STATE/agentic-dev/handoffs.jsonl" >/dev/null \
-    || fail "handoffs.jsonl: $(cat "$DESK_STATE/agentic-dev/handoffs.jsonl")"
+  jq -e '.model == "claude-bridge/fable:high"' "$DESK_STATE/bercail/handoffs.jsonl" >/dev/null \
+    || fail "handoffs.jsonl: $(cat "$DESK_STATE/bercail/handoffs.jsonl")"
   jq -e --arg desk "$DESK_HOME/.local/bin/bercail-desk-agent" '
     index("bercail.model=claude-bridge/fable:high")
     and .[index($desk) + 1:] == ["--prompt", .[index($desk) + 2], "--model", "claude-bridge/fable:high"]' \

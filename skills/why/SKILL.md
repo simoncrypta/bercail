@@ -33,7 +33,7 @@ Follow these sources in turn:
   for the body and the review threads.
 - **beads:** issue ids in commit messages or branch names (`bd show <id>`), and
   `bd search <topic>`.
-- **Handoffs:** `~/.local/state/agentic-dev/handoffs.jsonl` names the issue and
+- **Handoffs:** `~/.local/state/bercail/handoffs.jsonl` names the issue and
   branch of each agent job.
 - **In the repo:** comments next to the code, README, CHANGELOG, docs, tests
   named after a bug.

@@ -18,7 +18,7 @@ setup() {
   source "$ROOT/lib/config.sh"
 
   export INSTALL_SRC="$ROOT"
-  export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/agentic-dev"
+  export AGENTIC_DEV_CONFIG_DIR="$XDG_CONFIG_HOME/bercail"
   export AGENTIC_DEV_USER_CONFIG="$AGENTIC_DEV_CONFIG_DIR/config.toml"
   unset EDITOR
   YES=1
@@ -47,13 +47,13 @@ install_config_reader() {
 # Sets out and rc.
 doctor_with_hunk_review() {
   local case_dir="$BATS_TEST_TMPDIR/doctor-hunk" cmd
-  mkdir -p "$case_dir/bin" "$case_dir/home/.config/agentic-dev"
-  cat >"$case_dir/home/.config/agentic-dev/config.toml" <<'EOF'
+  mkdir -p "$case_dir/bin" "$case_dir/home/.config/bercail"
+  cat >"$case_dir/home/.config/bercail/config.toml" <<'EOF'
 [layout]
 review = "hunk"
 EOF
   cp "$ROOT/config/agentic-dev/config-reader.sh" \
-    "$case_dir/home/.config/agentic-dev/config-reader.sh"
+    "$case_dir/home/.config/bercail/config-reader.sh"
   for cmd in herdr-app hc git wt bd fzf jq hunk pi; do
     ln -s /bin/true "$case_dir/bin/$cmd"
   done
@@ -61,8 +61,8 @@ EOF
   out="$(
     HOME="$case_dir/home" \
       XDG_CONFIG_HOME="$case_dir/home/.config" \
-      AGENTIC_DEV_CONFIG_DIR="$case_dir/home/.config/agentic-dev" \
-      AGENTIC_DEV_USER_CONFIG="$case_dir/home/.config/agentic-dev/config.toml" \
+      AGENTIC_DEV_CONFIG_DIR="$case_dir/home/.config/bercail" \
+      AGENTIC_DEV_USER_CONFIG="$case_dir/home/.config/bercail/config.toml" \
       PATH="$case_dir/bin:/usr/bin:/bin" \
       doctor_dependencies 2>&1
   )" || rc=$?

@@ -53,9 +53,9 @@ EOF
   git -C "$BATS_TEST_TMPDIR/myapp" commit -q --allow-empty -m init
   git -C "$BATS_TEST_TMPDIR/myapp" worktree add -q -b feat "$BATS_TEST_TMPDIR/myapp.feat"
   desk="$BATS_TEST_TMPDIR/myapp.feat"
-  mkdir -p "$XDG_STATE_HOME/agentic-dev"
+  mkdir -p "$XDG_STATE_HOME/bercail"
   jq -nc --arg p "$desk" '{path:$p, branch:"feat", issue:"myapp-1", issue_title:"Fix the login", stage:"bstack", harness:"pi"}' \
-    >"$XDG_STATE_HOME/agentic-dev/handoffs.jsonl"
+    >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
   : >"$BATS_TEST_TMPDIR/bodies.jsonl"
 }
 

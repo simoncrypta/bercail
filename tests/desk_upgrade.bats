@@ -11,7 +11,7 @@ setup() {
   TOOLS="$BATS_TEST_TMPDIR/tools"
   mkdir -p "$TOOLS"
   local t
-  for t in bash sh env cat cp mv rm ln mkdir chmod cmp diff dirname basename realpath readlink \
+  for t in bash sh env cat cp mv rm rmdir ln mkdir chmod cmp diff dirname basename realpath readlink \
     find grep sed awk tr sort uniq head tail wc mktemp date git jq tar touch sha256sum id uname \
     sleep stat cut tee xargs ls; do
     ln -s "$(command -v "$t")" "$TOOLS/$t" || fail "this test needs $t on PATH"
@@ -58,6 +58,9 @@ update_from() {
   mkdir -p "$home/.local/share/omarchy" "$home/.config/fcitx5/conf"
   printf 'Hint Trigger=Control+Alt+h\nCustom=keep me\n' >"$box/keyboard.conf"
   cp "$box/keyboard.conf" "$home/.config/fcitx5/conf/keyboard.conf"
+  # A handoff the old release logged, in the state dir it used.
+  mkdir -p "$home/.local/state/agentic-dev"
+  printf '{"ok":true,"path":"%s","branch":"","issue":"old-1"}\n' "$home" >"$home/.local/state/agentic-dev/handoffs.jsonl"
   # A clone install: the old CLI updates from its recorded source.
   printf '%s\n' "$ROOT" >"$home/.local/share/bercail/source-path"
   log="$box/update.log"
@@ -98,6 +101,14 @@ assert_updates_itself() {
   need_tag v0.14.0
   update_from v0.14.0
   assert_this_tree v0.14.0
+}
+
+@test "the first update from v0.14.0 moves the handoff log to bercail's state dir" {
+  need_tag v0.14.0
+  update_from v0.14.0
+  [[ "$(jq -r .issue "$home/.local/state/bercail/handoffs.jsonl")" == old-1 ]] \
+    || fail "the handoff log did not move: $(ls -la "$home/.local/state")"
+  [[ -L "$home/.local/state/agentic-dev" ]] || fail "the old state dir is not a link"
 }
 
 @test "after v0.14.0, the new bercail updates itself and keeps its binary" {

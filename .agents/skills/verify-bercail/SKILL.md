@@ -21,7 +21,7 @@ It exits 0 when every step and check passed, and prints the evidence folder.
 ## Tests
 
 First, `tests/run.sh` (the unit suite, every test in its own throwaway HOME)
-with the real `${XDG_STATE_HOME:-~/.local/state}/agentic-dev/handoffs.jsonl`
+with the real `${XDG_STATE_HOME:-~/.local/state}/bercail/handoffs.jsonl`
 hashed before and after. A changed hash fails the check, and the added lines go
 to `handoffs-added.jsonl`: a real path there is another desk's spawn, so rerun.
 The live proofs (`tests/run.sh --live`) are not part of it.

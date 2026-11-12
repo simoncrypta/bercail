@@ -31,7 +31,7 @@ notify_state_dir() {
 }
 
 notify_handoffs_file() {
-  printf '%s/agentic-dev/handoffs.jsonl' "${XDG_STATE_HOME:-$HOME/.local/state}"
+  printf '%s/bercail/handoffs.jsonl' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
 
 _notify_err() {

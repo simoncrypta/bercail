@@ -339,16 +339,11 @@ handoff_sibling_path() {
   printf '%s' "$path"
 }
 
-handoff_state_dir() {
-  printf '%s/agentic-dev' "${XDG_STATE_HOME:-$HOME/.local/state}"
-}
-
+# One line per --branch spawn: the spawn JSON, plus the record's version and when it was written.
 handoff_remember() {
-  local dir file
-  dir="$(handoff_state_dir)"
+  local dir="${XDG_STATE_HOME:-$HOME/.local/state}/bercail"
   mkdir -p "$dir"
-  file="$dir/handoffs.jsonl"
-  printf '%s\n' "$1" >>"$file"
+  jq -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{v: 1, at: $at} + .' <<<"$1" >>"$dir/handoffs.jsonl"
 }
 
 handoff_herdr_app_bin() {

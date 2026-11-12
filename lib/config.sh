@@ -396,11 +396,66 @@ detach_running_bercail() {
   rm -f "$bin.new" "$bin.old"
 }
 
+# The records of a handoff log that still name a folder: the worktree, or, once
+# that is gone, its main checkout (<main> from <main>.<branch>), which Shep reads.
+_handoffs_with_a_folder() {
+  local file="$1" path branch
+  local -a live=()
+  while IFS= read -r -d '' path && IFS= read -r -d '' branch; do
+    if [[ -d "$path" ]] || [[ -n "$branch" && "$path" == *".$branch" && -d "${path%".$branch"}" ]]; then
+      live+=("$path")
+    fi
+  done < <(jq -jR 'fromjson? | select(type == "object" and (.path | type) == "string")
+    | .path, "\u0000", ((.branch // "") | tostring), "\u0000"' "$file")
+  jq -cR 'fromjson? | select(type == "object" and (.path | type) == "string")
+    | select(.path as $p | $ARGS.positional | index($p) != null)' "$file" --args "${live[@]}"
+}
+
+# Before v1 the handoff log lived in ~/.local/state/agentic-dev. Move what is
+# there into bercail's state dir and leave a link at the old path, so code
+# started before the update keeps writing to the same log.
+migrate_state_dir() {
+  local state="${XDG_STATE_HOME:-$HOME/.local/state}"
+  local old="$state/agentic-dev" new="$state/bercail" log tmp entry total kept
+  [[ -d "$old" && ! -L "$old" ]] || return 0
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "[dry-run] move $old into $new and link the old path to it"
+    return 0
+  fi
+  mkdir -p "$new"
+  log="$old/handoffs.jsonl"
+  if [[ -f "$log" ]]; then
+    tmp="$(mktemp "$new/handoffs.jsonl.XXXXXX")"
+    if _handoffs_with_a_folder "$log" >"$tmp"; then
+      total="$(wc -l <"$log")" kept="$(wc -l <"$tmp")"
+      [[ ! -f "$new/handoffs.jsonl" ]] || cat "$new/handoffs.jsonl" >>"$tmp"
+      mv "$tmp" "$new/handoffs.jsonl"
+      rm -f "$log"
+      info "moved $kept handoff records to $new/handoffs.jsonl (dropped $((total - kept)) with no folder left)"
+    else
+      rm -f "$tmp"
+      warn "could not read $log; leaving $old where it is"
+      return 0
+    fi
+  fi
+  for entry in "$old"/* "$old"/.[!.]*; do
+    [[ -e "$entry" || -L "$entry" ]] || continue
+    [[ -e "$new/${entry##*/}" ]] || mv "$entry" "$new/"
+  done
+  if rmdir "$old" 2>/dev/null; then
+    ln -s bercail "$old"
+    info "moved $old into $new; the old path is now a link to it"
+  else
+    warn "$old still holds $(ls -A "$old" | tr '\n' ' ')($new has the same names). Move them, then run: bercail update"
+  fi
+}
+
 deploy_finalize_permissions() {
   # Older update callers reload this library before finalizing, but their file
   # list, the other libs they loaded, and remaining steps still belong to the
   # old release.
   detach_running_bercail
+  migrate_state_dir
   # An older updater resumes its Omarchy step after this returns. Load the new
   # integration before it can overwrite keyboard.conf with the retired override.
   if [[ -f "${AGENTIC_DEV_SHARE_DIR}/lib/omarchy.sh" ]]; then

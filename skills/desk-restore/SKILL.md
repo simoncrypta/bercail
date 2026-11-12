@@ -60,7 +60,7 @@ not permission to resume an old session.
 Even one candidate needs a content check. With several, the folder does not
 decide it. Evidence, strongest first:
 
-- `~/.local/state/agentic-dev/handoffs.jsonl`: the line whose `desk` is this
+- `~/.local/state/bercail/handoffs.jsonl`: the line whose `desk` is this
   address names the `issue`; the right session talks about that issue.
 - The session title and its first messages against the branch and the beads issue.
 - The last messages against the state of the worktree.
