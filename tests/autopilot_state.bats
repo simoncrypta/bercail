@@ -179,13 +179,16 @@ state() { "$SCRIPT" --repo "$BATS_TEST_TMPDIR" "$@"; }
   jq -e '.next == "fix-ci" and .checks.fail == 1' <<<"$(state)" >/dev/null
 }
 
+# --wait counts whole seconds on bash's clock, so --wait 1 ends at the next
+# tick, which can be milliseconds away. The cases that need a second pass
+# through the loop wait 2: at least one full second.
 @test "--wait retries an initial read failure and recovers" {
   pr
   threads
   printf '[%s]\n' "$(check test pass)" >"$BATS_TEST_TMPDIR/checks.json"
   printf 'HTTP 502\n' >"$BATS_TEST_TMPDIR/checks-error"
   touch "$BATS_TEST_TMPDIR/recover"
-  run --separate-stderr state --wait 1
+  run --separate-stderr state --wait 2
   [[ "$status" -eq 0 ]] || fail "recovery: $status $output $stderr"
   jq -e '.next == "green"' <<<"$output" >/dev/null
   [[ "$(wc -l <"$BATS_TEST_TMPDIR/calls")" -ge 2 ]] || fail "failed read was not retried"
@@ -195,7 +198,7 @@ state() { "$SCRIPT" --repo "$BATS_TEST_TMPDIR" "$@"; }
   pr
   threads
   printf 'HTTP 502\n' >"$BATS_TEST_TMPDIR/checks-error"
-  run --separate-stderr state --wait 1
+  run --separate-stderr state --wait 2
   [[ "$status" -eq 3 && -z "$output" ]] || fail "unreadable timeout: $status $output"
   [[ "$stderr" == *'HTTP 502'* ]] || fail "missing diagnostic: $stderr"
   [[ "$(wc -l <"$BATS_TEST_TMPDIR/calls")" -ge 2 ]] || fail "failed read was not retried"
@@ -206,7 +209,7 @@ state() { "$SCRIPT" --repo "$BATS_TEST_TMPDIR" "$@"; }
   threads
   printf '[%s]\n' "$(check test pending)" >"$BATS_TEST_TMPDIR/checks.json"
   printf 'HTTP 502\n' >"$BATS_TEST_TMPDIR/checks-after-error"
-  run --separate-stderr state --wait 1
+  run --separate-stderr state --wait 2
   [[ "$status" -eq 3 && -z "$output" ]] || fail "stale timeout: $status $output"
   [[ "$stderr" == *'HTTP 502'* ]] || fail "missing diagnostic: $stderr"
 }
@@ -231,10 +234,10 @@ state() { "$SCRIPT" --repo "$BATS_TEST_TMPDIR" "$@"; }
 printf '%s\\n' "\$@" >>"$BATS_TEST_TMPDIR/sleeps"
 FAKE
   chmod +x "$BATS_TEST_TMPDIR/bin/sleep"
-  run --separate-stderr state --wait 1
+  run --separate-stderr state --wait 2
   [[ "$status" -eq 124 ]] || fail "pending timeout: $status $output $stderr"
   [[ -s "$BATS_TEST_TMPDIR/sleeps" ]] || fail "poll did not sleep"
-  awk '$1 > 1 || $1 <= 0 {exit 1}' "$BATS_TEST_TMPDIR/sleeps" || fail "sleep exceeded deadline"
+  awk '$1 > 2 || $1 <= 0 {exit 1}' "$BATS_TEST_TMPDIR/sleeps" || fail "sleep exceeded deadline"
 }
 
 @test "--wait times out with exit 124" {
