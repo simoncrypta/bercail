@@ -429,6 +429,32 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   unset FAKE_PI_READY
 }
 
+@test "deploy makes Pi compact each claude-bridge model before Claude Code refuses the prompt" {
+  reset_home
+  write_pi_config
+  mkdir -p "$HOME/.pi/agent"
+  printf '%s\n' '{"defaultModel":"mine","compaction":{"enabled":true,"modelOverrides":{
+    "claude-bridge/claude-opus-5":{"keepRecentTokens":30000},
+    "claude-bridge/claude-opus-5-5":{"reserveTokens":750000},
+    "xai/grok-4.7":{"reserveTokens":1000}}}}' >"$HOME/.pi/agent/settings.json"
+  FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  jq -e '.defaultModel == "mine" and .compaction == {enabled: true, modelOverrides: {
+      "claude-bridge/claude-opus-4-8": {reserveTokens: 40000},
+      "claude-bridge/claude-opus-4-5-20251101": {reserveTokens: 40000},
+      "claude-bridge/claude-opus-5": {keepRecentTokens: 30000, reserveTokens: 40000},
+      "claude-bridge/claude-opus-5-5": {reserveTokens: 750000},
+      "claude-bridge/claude-sonnet-5-5": {reserveTokens: 40000},
+      "xai/grok-4.7": {reserveTokens: 1000}}}' "$HOME/.pi/agent/settings.json" >/dev/null \
+    || fail "settings: $(cat "$HOME/.pi/agent/settings.json")"
+
+  # Settings Pi cannot read stay as they are.
+  printf '["not", "settings"]\n' >"$HOME/.pi/agent/settings.json"
+  FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  assert_eq '["not", "settings"]' "$(cat "$HOME/.pi/agent/settings.json")" "unreadable settings untouched"
+  grep -q 'is not a JSON object; set compaction.modelOverrides reserveTokens to 40000' "$BATS_TEST_TMPDIR/pi.log" \
+    || fail "says how to fix it: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+}
+
 @test "Pi deploy leaves a template without the marker alone" {
   reset_home
   write_pi_config

@@ -69,7 +69,7 @@ With no file, the guard asks before a commit or push and no agent releases, as b
 - worktrunk hooks (`~/.config/worktrunk/config.toml`, `herdr-layout.sh`).
 - `~/.local/bin/{bercail,agentic-dev,bercail-desk-agent}` (a mise or packslip install keeps its own `bercail`), and `~/.local/share/bercail/`.
 - `~/.agents/skills/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore,unit-testing}`, with a link to each in `~/.pi/agent/skills`.
-- bstack's Pi profile in `~/.local/share/bercail/pi/` and role templates in `~/.config/herdr-core/templates/` (see [Make it yours](bstack/08-make-it-yours.md#your-own-files)). bstack installs `npm:pi-claude-bridge@0.11.0` into Pi's package settings.
+- bstack's Pi profile in `~/.local/share/bercail/pi/` and role templates in `~/.config/herdr-core/templates/` (see [Make it yours](bstack/08-make-it-yours.md#your-own-files)). bstack installs `npm:pi-claude-bridge@0.11.0` into Pi's package settings, and a 40k compaction reserve for each `claude-bridge` model in `compaction.modelOverrides` there ([why](bstack.md#how-it-runs)).
 - The Pi extension `~/.local/share/bercail/pi-extensions/bercail-desk.ts` that every Pi desk loads with `-e`, including when bstack is off.
 - `diff_watch_interval_ms` in `~/.config/tuicr/config.toml`, unless you set it already.
 - On Linux and Omarchy, the extras in [platforms](development.md#platforms).

@@ -313,7 +313,7 @@ settings_pi() {
 if [[ " $* " == *" --list-models "* ]]; then
   printf 'pi-list %s\n' "$*" >>"$LOG"
   printf 'provider  model  context  max-out\n'
-  [[ -z "${FAKE_WINDOW:-}" ]] || printf 'fake      lead   %s       128K\n' "$FAKE_WINDOW"
+  [[ -z "${FAKE_WINDOW:-}" ]] || printf '%s      lead   %s       128K\n' "${FAKE_PROVIDER:-fake}" "$FAKE_WINDOW"
   exit 0
 fi
 { printf 'pi cwd=%s state=%s bin=%s rollover=%s\n' "$PWD" "${BERCAIL_SHEP_STATE:-}" "${BERCAIL_SHEP_BIN:-}" "${BERCAIL_SHEP_ROLLOVER:-}"
@@ -321,7 +321,19 @@ fi
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/pi"
   mkdir -p "$HOME/.local/share/bercail/pi"
-  jq -n '["pi","--model","fake/lead:high","-e","/x/provider.ts"]' >"$HOME/.local/share/bercail/pi/lead.json"
+  jq -n --arg p "${FAKE_PROVIDER:-fake}" '["pi","--model","\($p)/lead:high","-e","/x/provider.ts"]' >"$HOME/.local/share/bercail/pi/lead.json"
+}
+
+@test "shep run keeps the Claude bridge's reserve when compact_at is close to the window" {
+  local out file="$STATE/workspace/.pi/settings.json"
+  export FAKE_PROVIDER=claude-bridge
+  settings_pi
+  printf '[shep]\ncompact_at = 190000\n' >"$CONFIG"
+  out="$(FAKE_WINDOW=200K shep run </dev/null 2>&1)" || fail "run: $out"
+  jq -e '.compaction.modelOverrides["claude-bridge/lead"].reserveTokens == 40000' "$file" >/dev/null || fail "near the window: $(cat "$file")"
+  printf '[shep]\ncompact_at = 100000\n' >"$CONFIG"
+  FAKE_WINDOW=200K shep run </dev/null >/dev/null 2>&1
+  jq -e '.compaction.modelOverrides["claude-bridge/lead"].reserveTokens == 100000' "$file" >/dev/null || fail "well below: $(cat "$file")"
 }
 
 @test "shep run puts Shep's compaction in its workspace settings, for the lead model, and Pi trusts that folder" {

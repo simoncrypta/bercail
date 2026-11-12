@@ -98,7 +98,9 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   Settings: [bstack] in config.toml.
   Pi >=1.2 with pi-claude-bridge@0.11.0. Claude uses claude auth login; GPT and
   Grok use /login openai and /login xai in pi. bercail update renders
-  ~/.local/share/bercail/pi/ and herdr-core templates. Every role loads the
+  ~/.local/share/bercail/pi/ and herdr-core templates, and sets a 40k compaction
+  reserve per claude-bridge model in Pi's settings.json, so Pi compacts before
+  Claude Code refuses a prompt near the window. Every role loads the
   bridge, the rate-limit fallback, and bercail's guard, which follows each repo's
   trusted git policy (bercail policy show). [bstack] fallback sets
   candidate order (default ["claude", "gpt", "grok"]). The lead starts roles as

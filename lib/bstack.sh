@@ -15,6 +15,10 @@ BSTACK_ROLES=(lead build judge)
 BSTACK_PI_DIR="${AGENTIC_DEV_SHARE_DIR}/pi"
 BSTACK_PI_TEMPLATES="${XDG_CONFIG_HOME:-$HOME/.config}/herdr-core/templates"
 BSTACK_PI_BRIDGE="npm:pi-claude-bridge@0.11.0"
+# Claude Code refuses a prompt within min(max output, 20k) + 3k tokens of the
+# window, so Pi's default 16384 reserve compacts too late on the bridge. 40k
+# compacts first, with room for the tool results Pi only estimates.
+BSTACK_PI_BRIDGE_RESERVE=40000
 BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge.md
   agents/bstack-autopilot.md agents/bstack-headless.md agents/bstack-pr-review.md prompts/ready.md
   prompts/council.md prompts/handoff.md prompts/autopilot.md prompts/how.md prompts/why.md
@@ -414,6 +418,26 @@ _bstack_remove_pi() {
   [[ ! -d "$BSTACK_PI_DIR" ]] || { info "remove: $BSTACK_PI_DIR"; run rm -rf "$BSTACK_PI_DIR"; }
 }
 
+# Pi reads compaction per model only from its settings.json, so each
+# claude-bridge model gets BSTACK_PI_BRIDGE_RESERVE there, beside the bridge
+# package. A larger reserve already set stays; other keys are kept.
+_bstack_pi_bridge_compaction() {
+  local work="$1" file="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/settings.json" current='{}'
+  local -a models
+  read -ra models <<<"$(pi --offline -e "$BSTACK_PI_BRIDGE" --list-models 2>/dev/null \
+    | awk '$1 == "claude-bridge" { printf "%s/%s ", $1, $2 }')"
+  ((${#models[@]})) || return 0
+  if [[ -s "$file" ]] && ! current="$(jq -e -c 'objects' "$file" 2>/dev/null)"; then
+    warn "$file is not a JSON object; set compaction.modelOverrides reserveTokens to $BSTACK_PI_BRIDGE_RESERVE for claude-bridge models by hand"
+    return 1
+  fi
+  jq --argjson r "$BSTACK_PI_BRIDGE_RESERVE" '
+    reduce $ARGS.positional[] as $m (.;
+      .compaction.modelOverrides[$m].reserveTokens |= ([. // 0, $r] | max))' \
+    --args -- "${models[@]}" <<<"$current" >"$work/pi-settings.json" || return 1
+  copy_file "$work/pi-settings.json" "$file"
+}
+
 # Install Pi and the Claude bridge.
 _bstack_install_pi() {
   maybe_mise_install pi pi || return 1
@@ -633,6 +657,7 @@ deploy_bstack() {
     }
   done <"$work/MANIFEST"
   _bstack_deploy_pi "$work" || result=$?
+  _bstack_pi_bridge_compaction "$work" || true
   rm -rf "$work"
   return "$result"
 }

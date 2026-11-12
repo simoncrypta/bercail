@@ -433,9 +433,10 @@ _shep_config_tokens() {
 # Shep's compaction, in its workspace's .pi/settings.json (Pi's project
 # settings; Shep runs Pi there with --approve so they load). Auto-compaction
 # stays on. For the lead model, reserveTokens = window - compact_at, so Pi
-# compacts once the context passes compact_at; keepRecentTokens is keep_recent
-# for every model. The default compact_at on a smaller window leaves Pi's
-# threshold without a word; one the person set says why it could not apply.
+# compacts once the context passes compact_at, or sooner on the Claude bridge;
+# keepRecentTokens is keep_recent for every model. The default compact_at on a
+# smaller window leaves Pi's threshold without a word; one the person set says
+# why it could not apply.
 # Other keys in the file are kept.
 shep_settings_write() {
   local file="$1" at keep model window="" reserve="" compaction tmp current='{}' set=0
@@ -452,6 +453,10 @@ shep_settings_write() {
     else
       reserve=$((window - at))
     fi
+  fi
+  # This entry wins over the bridge's reserve in Pi's settings.json (bstack deploy).
+  if [[ "$model" == claude-bridge/* && -n "$reserve" ]] && ((reserve < BSTACK_PI_BRIDGE_RESERVE)); then
+    reserve="$BSTACK_PI_BRIDGE_RESERVE"
   fi
   compaction="$(jq -nc --argjson keep "$keep" --arg model "$model" --arg reserve "$reserve" '
     {enabled: true, keepRecentTokens: $keep}

@@ -65,7 +65,10 @@ shows the order and `bercail doctor` flags stale profile data. See
   read tools, kept inside the review's stack dir.
 
 Pi's own settings and logins stay yours: bstack passes everything with flags
-and adds only the bridge package to Pi's settings.
+and adds only the bridge package to Pi's settings, plus a 40k compaction
+reserve for each `claude-bridge` model so Pi compacts before Claude Code
+refuses the prompt ([why](../bstack.md#how-it-runs)). A larger reserve you set
+stays.
 
 ## Your own files
 
