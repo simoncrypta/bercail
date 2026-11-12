@@ -229,7 +229,8 @@ policy_json() {
           "- Release: " + (if $p.release != "" then $p.release + " " else "" end)
             + (if $p.agent_may_release then "Agents may tag and release." else "Agents do not tag or release unless the person asks; the guard asks first." end),
           (if $p.rules != "" then "- Team rules:\n" + ($p.rules | sub("\n+$"; "") | split("\n") | map("  " + .) | join("\n")) else empty end),
-          "Commit, push, open a PR, or release only when the person or your job asks for it; this policy says how. Forced pushes, + refspecs, --mirror, deleting main, --no-verify, and gh pr merge stay blocked under any policy."
+          "Commit, push, open a PR, or release only when the person or your job asks for it; this policy says how. The guard checks recognized git, gt, gh, and origin commands: force-push flags, + refspecs, --mirror, deleting main, --no-verify, and PR merges (gh pr merge, gt merge, gh api writes to /pulls/N/merge) are blocked regardless of policy.",
+          "The guard is a seatbelt, not a sandbox. Commands launched inside another program (python -c, a script file) are not seen; the same rules still apply."
         ] | join("\n"))
       }'
 }

@@ -1,5 +1,6 @@
 // Decision table for bercail's Pi guard. No Pi process.
 import assert from "node:assert/strict";
+import { test } from "node:test";
 
 const { decideBash, decideTool, defaultPolicy, redact } = await import(new URL("../bstack/pi/extensions/guard.ts", import.meta.url).href);
 
@@ -305,4 +306,125 @@ blocked("/usr/bin/gh pr merge 3", at("desk", policies.loosest), /gh pr merge/);
 blocked("/bin/bash -c 'git push --force'", at("desk", policies.loosest), /Force-push/);
 allowed("git fetch && git pull && git push", at("desk", policies.branch));
 
+// A2: shell prefixes must not hide a command, but arguments remain data.
+for (const command of [
+  "if true; then git push --force; fi",
+  "if git push --force; then true; fi",
+  "if false; then true; else git push --force; fi",
+  "while git push --force; do true; done",
+  "until git push --force; do true; done",
+  "while true; do git push --force; done",
+  "{ git push --force; }",
+  "! git push --force",
+  "time git push --force",
+  "exec git push --force",
+  "nohup git push --force",
+  "setsid git push --force",
+  "nice git push --force",
+  "timeout 5 git push --force",
+  "xargs git push --force",
+  "time -p git push --force",
+  "exec -a worker git push --force",
+  "nice -n 5 git push --force",
+  "timeout -k 2s 5s git push --force",
+  "xargs -n 1 -P 2 git push --force",
+  "nohup setsid nice -n 5 timeout 5 git push --force",
+  "/usr/bin/timeout 5 git push --force",
+  "/usr/bin/nice -n 5 git push --force",
+  "/usr/bin/xargs -n 1 git push --force",
+]) {
+  test(`shell prefix checks ${command}`, () => blocked(command, auto, /Force-push/));
+}
+for (const command of [
+  'echo "time git push --force"',
+  "printf '%s' 'gt submit'",
+  "xargs echo git push --force",
+  "timeout 5 git status",
+  "nice -n 5 git diff",
+]) {
+  test(`shell prefix allows reading: ${command}`, () => allowed(command, judge));
+}
+
+const publishers = ["gt submit", "gh stack submit", "gh pr create --fill", "origin stack push --all", "origin pr create"];
+const committers = ["gt create -m x", "gt modify -c -m x"];
+for (const command of [...publishers, ...committers]) {
+  test(`publisher policy matrix: ${command}`, () => {
+    const isCommit = committers.includes(command);
+    for (const [name, fields] of Object.entries(policies)) {
+      for (const role of Object.keys(roles)) {
+        const expected = ["judge", "council"].includes(role) ? "block"
+          : role === "autopilot" ? "allow"
+          : (isCommit ? fields.commit === "allow" : ["branch", "main"].includes(fields.push)) ? "allow"
+          : role === "headless" ? "block" : "ask";
+        const got = decision(command, at(role, fields));
+        assert.equal(got.action, expected, `${role} / ${name} / ${command} → ${JSON.stringify(got)}`);
+      }
+    }
+  });
+}
+for (const command of publishers) {
+  test(`publisher on main or unknown branch: ${command}`, () => {
+    for (const branch of ["main", "master", ""]) {
+      asked(command, at("desk", policies.branch, branch));
+      allowed(command, at("desk", policies.main, branch));
+      blocked(command, at("autopilot", policies.default, branch), /main or master|Could not read/);
+    }
+  });
+}
+for (const command of [
+  "gt merge",
+  "gh api -X PUT repos/o/r/pulls/5/merge",
+  "gh api --method=PUT /repos/o/r/pulls/5/merge",
+  "gh api repos/o/r/pulls/5/merge -f merge_method=squash",
+  "gh api --hostname forge.example repos/o/r/pulls/5/merge -X PUT",
+  "gh api -X GET -X PUT repos/o/r/pulls/5/merge",
+  "gh api -X GET --method=PUT repos/o/r/pulls/5/merge",
+  "gh api --method=GET --method=PUT repos/o/r/pulls/5/merge",
+  "gh api -X PUT -t '--method=GET' repos/o/r/pulls/5/merge",
+  "gh api -X PUT -q '--method=GET' repos/o/r/pulls/5/merge",
+  "gh api -X PUT --preview '--method=GET' repos/o/r/pulls/5/merge",
+  "gh repo sync --force",
+  "gt submit --force",
+  "gt submit --stack --force",
+]) {
+  test(`publisher hard block: ${command}`, () => {
+    for (const role of Object.keys(roles)) blocked(command, at(role, policies.loosest), /merge|Force/);
+  });
+}
+for (const command of [
+  "gh api repos/o/r/pulls/5/merge",
+  "gh api -X GET repos/o/r/pulls/5/merge",
+  "gh api --method=GET repos/o/r/pulls/5/merge -f ignored=true",
+  "gh api -X PUT -X GET repos/o/r/pulls/5/merge",
+  "gh api -X GET -f '--method=PUT' repos/o/r/pulls/5/merge",
+  "gt log",
+  "gh stack status",
+  "origin stack list",
+]) {
+  test(`publisher read stays allowed: ${command}`, () => allowed(command, judge));
+}
+for (const command of [
+  "gh pr create -R someone/else --fill",
+  "gh -R someone/else pr create --fill",
+  "gh pr create -Rsomeone/else --fill",
+  "gh stack submit --repo=someone/else",
+  "gh --repo someone/else stack submit",
+  "origin pr create --repo someone/else",
+  "origin --repo=someone/else stack push --all",
+  "gt -C /other create -m x",
+  "gt --cwd=/other submit",
+  "gh --hostname forge.example pr create --fill",
+  "GIT_DIR=/other/.git gt create -m x",
+]) {
+  test(`publisher does not inherit cwd trust: ${command}`, () => {
+    asked(command, at("desk", policies.loosest));
+    blocked(command, at("headless", policies.loosest), /headless run/);
+  });
+}
+for (const command of ["gt checkout main && gh pr create", "gh pr checkout 3 && origin stack push", "git switch main; gt submit", "gh -R o/r pr checkout 3 && gt submit", "gh --repo=o/r pr checkout 3 && gt submit"]) {
+  test(`publisher respects branch invalidation: ${command}`, () => {
+    asked(command, at("desk", policies.branch));
+    blocked(command, at("autopilot", policies.default), /Could not read/);
+  });
+}
 console.log("PASS: pi guard decision table");

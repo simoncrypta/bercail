@@ -50,7 +50,7 @@ const deleteMain = "Deleting main or master is blocked.";
 const noVerify = "Skipping git hooks with --no-verify is blocked. Run the command so the hooks run.";
 const hooksPath = "Skipping git hooks with core.hooksPath is blocked. Run the command so the hooks run.";
 const configKey = (key: string) => `Setting ${key} changes what a later git push or commit does without the guard seeing it. Leave it as it is.`;
-const prMerge = "gh pr merge is blocked. Do not merge the pull request.";
+const prMerge = "Pull request merging is blocked (gh pr merge, gt merge, gh api .../pulls/N/merge). Do not merge the pull request.";
 const toMain = "A push to main or master is blocked. Push the pull request branch instead.";
 const headless = "A headless run stages its changes and leaves commit and push to the person.";
 const headlessRelease = "A headless run does not tag or release. Leave the release to the person.";
@@ -350,6 +350,13 @@ function skipSudo(words: string[], i: number): number {
   return i;
 }
 
+const shellPrefixes = new Set(["if", "then", "else", "elif", "while", "until", "do", "{", "!", "time"]);
+const wrappers: Record<string, string[]> = {
+  exec: ["-a"], nohup: [], setsid: [], nice: ["-n", "--adjustment"],
+  timeout: ["-k", "--kill-after", "-s", "--signal"],
+  xargs: ["-a", "--arg-file", "-d", "--delimiter", "-E", "-I", "-L", "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars"],
+};
+
 function commandWords(words: string[]): string[] {
   let i = 0;
   while (i < words.length) {
@@ -358,16 +365,32 @@ function commandWords(words: string[]): string[] {
       i++;
       continue;
     }
-    if (word === "command") {
+    if (shellPrefixes.has(word)) {
+      i++;
+      if (word === "time" && words[i] === "-p") i++;
+      continue;
+    }
+    const name = basename(word);
+    if (Object.hasOwn(wrappers, name)) {
+      i++;
+      while (i < words.length && words[i].startsWith("-")) {
+        const option = words[i++];
+        if (option === "--") break;
+        if (wrappers[name].includes(option)) i++;
+      }
+      if (name === "timeout") i++; // The duration precedes the command.
+      continue;
+    }
+    if (name === "command") {
       i++;
       if (words[i] === "-p" || words[i] === "--") i++;
       continue;
     }
-    if (word === "env") {
+    if (name === "env") {
       i = skipEnv(words, i);
       continue;
     }
-    if (word === "sudo") {
+    if (name === "sudo") {
       i = skipSudo(words, i);
       continue;
     }
@@ -511,10 +534,42 @@ function plainWords(words: string[]): string[] {
   return words.filter((word) => !word.startsWith("-"));
 }
 
-function isGhPrMerge(words: string[]): boolean {
-  if (words[0] !== "gh") return false;
+// Strip repo selectors for command recognition, but never lend them cwd's trust.
+function forgeCall(words: string[], cwd: string | undefined): { words: string[]; dir: string | undefined } {
+  const selectors = ["-R", "--repo", "--hostname", "--host", "-C", "--cwd", "--directory"];
+  const out: string[] = [];
+  let dir = cwd;
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    if (selectors.includes(word.split("=")[0])) {
+      dir = undefined;
+      if (!word.includes("=")) i++;
+    } else if (/^-R.+/.test(word)) {
+      dir = undefined;
+    } else out.push(word);
+  }
+  return { words: out, dir };
+}
+
+function isForgeMerge(words: string[]): boolean {
   const plain = plainWords(words);
-  return plain[1] === "pr" && plain[2] === "merge";
+  return (words[0] === "gt" && plain[1] === "merge")
+    || (words[0] === "gh" && plain[1] === "pr" && plain[2] === "merge")
+    || (words[0] === "gh" && plain[1] === "api" && ghApiWrites(words)
+      && words.some((word) => /\/pulls\/\d+\/merge(?:$|\?)/.test(word)));
+}
+
+function forgePublish(words: string[]): "commit" | "push" | undefined {
+  const plain = plainWords(words);
+  if (words[0] === "gt") {
+    if (["create", "modify"].includes(plain[1])) return "commit";
+    if (plain[1] === "submit") return "push";
+  }
+  if (["gh", "origin"].includes(words[0])) {
+    if (plain[1] === "pr" && plain[2] === "create") return "push";
+    if (plain[1] === "stack" && plain[2] === (words[0] === "gh" ? "submit" : "push")) return "push";
+  }
+  return undefined;
 }
 
 function isGhRelease(words: string[]): boolean {
@@ -523,13 +578,23 @@ function isGhRelease(words: string[]): boolean {
   return plain[1] === "release" && ["create", "edit", "delete", "upload", "delete-asset"].includes(plain[2]);
 }
 
-// gh api writing a release or a tag ref. With fields and no method, gh posts.
+// With fields and no method, gh api posts. An explicit GET still only reads.
+function ghApiWrites(words: string[]): boolean {
+  let method: string | undefined;
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    if (word === "-X" || word === "--method") method = words[++i];
+    else if (word.startsWith("--method=")) method = word.slice(9);
+    else if (/^-X.+/.test(word)) method = word.slice(2);
+    else if (["-f", "-F", "--field", "--raw-field", "--input", "-H", "--header", "-q", "--jq", "-t", "--template", "-p", "--preview", "--cache"].includes(word)) i++;
+  }
+  if (method) return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
+  return words.some((word) => ["-f", "-F", "--field", "--raw-field", "--input"].includes(word.split("=")[0]) || /^-[fF].+/.test(word));
+}
+
 function isGhApiRelease(words: string[]): boolean {
-  if (words[0] !== "gh" || plainWords(words)[1] !== "api") return false;
-  if (!words.some((word) => /(^|\/)(releases|git\/refs\/tags|git\/tags)(\/|$|\?)/.test(word))) return false;
-  const method = words.find((word, i) => i > 0 && (words[i - 1] === "-X" || words[i - 1] === "--method")) ?? words.find((word) => word.startsWith("--method="))?.slice(9);
-  if (method) return method.toUpperCase() !== "GET";
-  return words.some((word) => ["-f", "-F", "--field", "--raw-field", "--input"].includes(word.split("=")[0]));
+  return words[0] === "gh" && plainWords(words)[1] === "api" && ghApiWrites(words)
+    && words.some((word) => /(^|\/)(releases|git\/refs\/tags|git\/tags)(\/|$|\?)/.test(word));
 }
 
 function isPolicyTrust(words: string[]): boolean {
@@ -773,13 +838,22 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (script) decision = worse(decision, decideBash(script, here, depth + 1));
     // What eval or source sets stays set, and the guard cannot see what that is.
     if (words[0] === "eval" || words[0] === "source" || words[0] === ".") gitEnv = branchMoved = true;
-    if (isGhPrMerge(words)) decision = worse(decision, block(prMerge));
+    const forge = forgeCall(words, gitEnv ? undefined : here.cwd);
+    if (isForgeMerge(forge.words)) return block(prMerge);
+    const publishing = forgePublish(forge.words);
+    const forgePlain = plainWords(forge.words);
+    const sync = words[0] === "gh" && forgePlain[1] === "repo" && forgePlain[2] === "sync";
+    if ((publishing === "push" || sync) && words.some((word) => word === "-f" || word.startsWith("--force"))) return block(force);
+    if (publishing) {
+      if (hasNoVerify("push", words)) return block(noVerify);
+      decision = worse(decision, publishing === "commit" ? decideCommit(forge.dir, here) : decidePush([], forge.dir, here));
+    }
+    if (sync && readOnlyRole(input.role)) decision = worse(decision, block(readOnly));
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
     if (writesProtected(words, raw, input.protectedFiles)) decision = worse(decision, block(protectedFile));
-    if (words[0] === "gt" || (words[0] === "gh" && plainWords(words)[1] === "pr" && plainWords(words)[2] === "checkout")) branchMoved = true;
-    if (isGhRelease(words) || isGhApiRelease(words)) {
-      const elsewhere = words.some((word) => word === "-R" || word.startsWith("--repo"));
-      decision = worse(decision, decideRelease(elsewhere ? undefined : here.cwd, here));
+    if (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout")) branchMoved = true;
+    if (isGhRelease(forge.words) || isGhApiRelease(forge.words)) {
+      decision = worse(decision, decideRelease(forge.dir, here));
     }
     const git = parseGit(words, here.cwd);
     if (git) {

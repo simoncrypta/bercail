@@ -34,9 +34,6 @@ at it. These rules apply to every bstack agent.
   Ask before anything hard to undo: deletes, publishing, spending money. Never
   force-push or pass `--no-verify`.
 
-Pi runs without a bercail permission extension. These are instructions, not
-enforced tool restrictions; respect each role's scope and ask before publishing.
-
 ## Roles (hc sibling agents)
 
 Pi has no subagents. Wherever a skill or playbook names a `bstack-*` subagent, it
@@ -91,7 +88,9 @@ exception: its system prompt says so, and that prompt wins.
   `bercail_git_policy` section of your prompt, or `bercail policy show <repo>`
   for another repo. It says whether changes go through a PR or straight to main,
   how a release is cut, and the team's rules. The guard lets through, without
-  asking, only what that policy allows.
+  asking, only the publishing commands it recognizes that the policy allows.
+  The guard is a seatbelt, not a sandbox: it does not see commands launched from
+  inside another program (`python -c`, a script file). Respect the rules there too.
 - End with a short report: what changed, what you ran to prove it, what is left.
   No inventory of every file. When a beads issue names the job, also post that
   report on it (`bd comment <id>`), so it outlives the desk's screen.
