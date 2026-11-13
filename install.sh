@@ -4,33 +4,41 @@ set -euo pipefail
 # bercail.dev pins this to the release tag it serves install.sh from.
 BERCAIL_RELEASE=""
 
-# A piped install reads every file from one commit: GITHUB_RAW_BASE, else
-# BERCAIL_REF (a tag, branch, or sha), else the release pinned above, else the
-# latest release. Never master by default: master is unreleased trunk.
-remote_raw_base() {
-  local ref="${BERCAIL_REF:-$BERCAIL_RELEASE}" url
-  if [[ -n "${GITHUB_RAW_BASE:-}" ]]; then
-    printf '%s' "${GITHUB_RAW_BASE%/}"
-    return 0
-  fi
-  if [[ -z "$ref" ]]; then
-    url="$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/simoncrypta/bercail/releases/latest)" || return 1
+# A piped install reads every file from one commit, as one archive:
+# BERCAIL_ARCHIVE_URL, else BERCAIL_REF (a tag, branch, or sha), else the release
+# pinned above, else the latest release. Never master by default: master is
+# unreleased trunk. Unpacks it where bercail update will replace it, and prints
+# that path.
+fetch_release_tree() {
+  local ref="${BERCAIL_REF:-$BERCAIL_RELEASE}" url share="$HOME/.local/share/bercail" tmp
+  if [[ -z "${BERCAIL_ARCHIVE_URL:-}" && -z "$ref" ]]; then
+    url="$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/simoncrypta/bercail/releases/latest)" || url=""
     ref="${url##*/releases/tag/}"
-    [[ "$ref" == v* && "$ref" != */* ]] || return 1
+    if [[ "$ref" != v* || "$ref" == */* ]]; then
+      printf 'error: cannot find the latest bercail release on github.com; retry, or pick one with BERCAIL_REF=<tag>\n' >&2
+      return 1
+    fi
   fi
-  printf 'https://raw.githubusercontent.com/simoncrypta/bercail/%s' "$ref"
-}
-
-bootstrap_remote_libs() {
-  local tmp lib
-  tmp="$(mktemp -d)"
-  mkdir -p "$tmp/lib"
-  for lib in common detect deps config skills shell-rc uninstall help omarchy notify doctor bstack desk shep shep-context; do
-    curl -fsSL "$GITHUB_RAW_BASE/lib/${lib}.sh" -o "$tmp/lib/${lib}.sh"
-  done
-  # lib/toml.sh is a link in the repo; fetch the file it points at.
-  curl -fsSL "$GITHUB_RAW_BASE/skills/handoff/scripts/toml.sh" -o "$tmp/lib/toml.sh"
-  printf '%s' "$tmp"
+  url="${BERCAIL_ARCHIVE_URL:-https://github.com/simoncrypta/bercail/archive/$ref.tar.gz}"
+  printf 'bercail: installing from %s\n' "$url" >&2
+  mkdir -p "$share"
+  tmp="$(mktemp -d "$share/release.XXXXXX")"
+  if ! curl -fsSL "$url" -o "$tmp/archive.tar.gz" \
+    || ! tar -xzf "$tmp/archive.tar.gz" -C "$tmp" --strip-components=1; then
+    rm -rf "$tmp"
+    printf 'error: could not download bercail from %s; retry, or pick a release with BERCAIL_REF=<tag>\n' "$url" >&2
+    return 1
+  fi
+  # The check fetch_release_tree in lib/common.sh makes before an update.
+  if [[ ! -f "$tmp/install.sh" || ! -f "$tmp/bin/bercail" || ! -d "$tmp/config" || ! -d "$tmp/skills" || ! -d "$tmp/bstack" ]] \
+    || ! grep -q '^BERCAIL_LIBS=' "$tmp/lib/common.sh" 2>/dev/null; then
+    rm -rf "$tmp"
+    printf 'error: %s is not a bercail release that installs from an archive (v0.14.0 and older are not); install an older one with its own install.sh: curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/<tag>/install.sh | BERCAIL_REF=<tag> bash\n' "$url" >&2
+    return 1
+  fi
+  rm -rf "$tmp/archive.tar.gz" "$share/release"
+  mv "$tmp" "$share/release"
+  printf '%s' "$share/release"
 }
 
 local_root() {
@@ -39,20 +47,7 @@ local_root() {
   cd "$(dirname "$self")" && pwd
 }
 
-if ! ROOT="$(local_root)"; then
-  # Mark remote install so install_src_dir() is not treated as a local tree.
-  INSTALL_SRC="${INSTALL_SRC:-https://bercail.dev}"
-  if ! GITHUB_RAW_BASE="$(remote_raw_base)"; then
-    printf 'error: cannot find the latest bercail release on github.com; retry, or pick one with BERCAIL_REF=<tag>\n' >&2
-    exit 1
-  fi
-  printf 'bercail: installing from %s\n' "$GITHUB_RAW_BASE"
-  ROOT="$(bootstrap_remote_libs)"
-fi
-if [[ ! -f "$ROOT/lib/common.sh" ]]; then
-  printf 'error: failed to load installer libraries\n' >&2
-  exit 1
-fi
+ROOT="$(local_root)" || ROOT="$(fetch_release_tree)" || exit 1
 # Unpacked from a release by mise or packslip: that tool owns the bercail command.
 if [[ -f "$ROOT/.bercail-package" ]]; then
   export BERCAIL_PACKAGED=1
@@ -60,32 +55,10 @@ fi
 
 # shellcheck source=lib/common.sh
 source "$ROOT/lib/common.sh"
-# shellcheck source=lib/detect.sh
-source "$ROOT/lib/detect.sh"
-# shellcheck source=lib/deps.sh
-source "$ROOT/lib/deps.sh"
-# shellcheck source=lib/config.sh
-source "$ROOT/lib/config.sh"
-# shellcheck source=lib/skills.sh
-source "$ROOT/lib/skills.sh"
-# shellcheck source=lib/shell-rc.sh
-source "$ROOT/lib/shell-rc.sh"
-# shellcheck source=lib/uninstall.sh
-source "$ROOT/lib/uninstall.sh"
-# shellcheck source=lib/help.sh
-source "$ROOT/lib/help.sh"
-# shellcheck source=lib/omarchy.sh
-source "$ROOT/lib/omarchy.sh"
-# shellcheck source=lib/doctor.sh
-source "$ROOT/lib/doctor.sh"
-# shellcheck source=lib/notify.sh
-source "$ROOT/lib/notify.sh"
-# shellcheck source=lib/bstack.sh
-source "$ROOT/lib/bstack.sh"
-# shellcheck source=lib/desk.sh
-source "$ROOT/lib/desk.sh"
-# shellcheck source=lib/shep.sh
-source "$ROOT/lib/shep.sh"
+for lib in "${BERCAIL_LIBS[@]}"; do
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/$lib.sh"
+done
 
 parse_install_args() {
   while [[ $# -gt 0 ]]; do

@@ -1088,9 +1088,6 @@ PY
   assert_has "$("$BERCAIL" help)" "review-pr close" "bercail help lists close"
   assert_has "$(<"$ROOT/docs/cli.md")" "review-pr close" "docs/cli.md lists close"
   assert_has "$("$BERCAIL" review-pr https://github.com/acme/widgets/issues/1 2>&1 || true)" "not a pull request URL" "bad URL"
-  grep -qx 'pi/agents/bstack-pr-review.md' "$ROOT/bstack/MANIFEST" || fail "MANIFEST ships the reviewer's rules"
-  grep -qx 'pi/extensions/review.ts' "$ROOT/bstack/MANIFEST" || fail "MANIFEST ships the reviewer's extension"
-  grep -qx 'pi/prompts/pr-review.md' "$ROOT/bstack/MANIFEST" || fail "MANIFEST ships the /pr-review prompt"
 }
 
 # The reviewer is read-only by its argv; review.ts keeps reads in the stack dir

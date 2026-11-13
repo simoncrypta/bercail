@@ -24,6 +24,11 @@ skill_canonical_dir() {
 }
 BERCAIL_SHARE_DIR="${HOME}/.local/share/bercail"
 BERCAIL_SOURCE_PATH_FILE="${BERCAIL_SHARE_DIR}/source-path"
+# The tree a curl install deploys from: its release, unpacked (fetch_release_tree).
+BERCAIL_RELEASE_DIR="${BERCAIL_SHARE_DIR}/release"
+# The libs every command loads after this file, in order, for install.sh and
+# bin/bercail. The others (review.sh, policy.sh, ...) load with their command.
+BERCAIL_LIBS=(detect deps config skills shell-rc uninstall help omarchy notify doctor bstack desk shep)
 
 DRY_RUN=0
 YES=0
@@ -121,17 +126,15 @@ install_src_dir() {
       return 0
     fi
   fi
-  printf '%s' "https://bercail.dev"
+  printf '%s' "$BERCAIL_RELEASE_DIR"
 }
 
-# Remote install assets (config/, bin/, skills/) come from GitHub raw, all from
-# one commit: GITHUB_RAW_BASE, else BERCAIL_REF (a tag, branch, or sha), else the
-# latest release. Never master by default: master is unreleased trunk. Sets
-# GITHUB_RAW_BASE, so call it outside $(...) to resolve once per run.
-resolve_github_raw_base() {
-  [[ -z "${GITHUB_RAW_BASE:-}" ]] || return 0
-  local ref="${BERCAIL_REF:-}" url
-  if [[ -z "$ref" ]]; then
+# A curl install's files come from one commit, as one archive: BERCAIL_ARCHIVE_URL,
+# else BERCAIL_REF (a tag, branch, or sha), else the latest release. Never master
+# by default: master is unreleased trunk. Unpacks it over BERCAIL_RELEASE_DIR.
+fetch_release_tree() {
+  local ref="${BERCAIL_REF:-}" url tmp
+  if [[ -z "${BERCAIL_ARCHIVE_URL:-}" && -z "$ref" ]]; then
     # github.com redirects /releases/latest to the tag: no API token, no jq.
     url="$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/simoncrypta/bercail/releases/latest 2>/dev/null)" || url=""
     ref="${url##*/releases/tag/}"
@@ -140,24 +143,25 @@ resolve_github_raw_base() {
       return 1
     fi
   fi
-  GITHUB_RAW_BASE="https://raw.githubusercontent.com/simoncrypta/bercail/$ref"
-}
-
-fetch_file() {
-  local rel="$1" dest="$2"
-  local base
-  base="$(install_src_dir)"
-  if [[ -d "$base" ]]; then
-    copy_file "$base/$rel" "$dest"
-    return 0
-  fi
-  ensure_dir "$(dirname "$dest")"
-  resolve_github_raw_base || return 1
-  local url
-  url="${GITHUB_RAW_BASE%/}/$rel"
+  url="${BERCAIL_ARCHIVE_URL:-https://github.com/simoncrypta/bercail/archive/$ref.tar.gz}"
   info "download: $url"
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    return 0
+  ensure_dir "$BERCAIL_SHARE_DIR"
+  # Beside the tree it replaces, so a failed download leaves that one whole.
+  tmp="$(mktemp -d "$BERCAIL_SHARE_DIR/release.XXXXXX")"
+  if ! curl -fsSL "$url" -o "$tmp/archive.tar.gz" \
+    || ! tar -xzf "$tmp/archive.tar.gz" -C "$tmp" --strip-components=1; then
+    rm -rf "$tmp"
+    warn "could not download bercail from $url; retry, or pick a release with BERCAIL_REF=<tag>"
+    return 1
   fi
-  curl -fsSL "$url" -o "$dest"
+  # A whole tree whose own update unpacks archives. v0.14.0 and older record this
+  # dir as a clone and never download again; install.sh checks the same.
+  if [[ ! -f "$tmp/install.sh" || ! -f "$tmp/bin/bercail" || ! -d "$tmp/config" || ! -d "$tmp/skills" || ! -d "$tmp/bstack" ]] \
+    || ! grep -q '^BERCAIL_LIBS=' "$tmp/lib/common.sh" 2>/dev/null; then
+    rm -rf "$tmp"
+    warn "$url is not a bercail release that updates from an archive (v0.14.0 and older are not); install an older one with its own install.sh: curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/<tag>/install.sh | BERCAIL_REF=<tag> bash"
+    return 1
+  fi
+  rm -rf "$tmp/archive.tar.gz" "$BERCAIL_RELEASE_DIR"
+  mv "$tmp" "$BERCAIL_RELEASE_DIR"
 }

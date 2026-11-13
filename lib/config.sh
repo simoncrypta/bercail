@@ -3,14 +3,17 @@
 
 # An update that replaces the CLI running it is the old release's code copying
 # the new release's files: old steps, and old lists that do not name what the
-# new release added. Start again on the new CLI, which finishes lib/ from its
-# own list first (complete_lib in bin/bercail). Once per update.
+# new release added. Start again on the new CLI, whose update runs the source
+# tree's own bercail (update_from_tree in bin/bercail). Once per update. Only
+# v0.14.0's updater gets here.
 restart_update() {
   [[ -z "${BERCAIL_UPDATE_RESTARTED:-}" ]] || return 0
   local -a args=(update)
   [[ "${FORCE:-0}" -ne 1 ]] || args+=(--force)
-  # The release this run already resolved, so both halves read the same one.
-  [[ -z "${GITHUB_RAW_BASE:-}" ]] || export GITHUB_RAW_BASE
+  # The release v0.14.0 already resolved, so both halves read the same one.
+  if [[ -z "${BERCAIL_REF:-}" && "${GITHUB_RAW_BASE:-}" == https://raw.githubusercontent.com/simoncrypta/bercail/?* ]]; then
+    export BERCAIL_REF="${GITHUB_RAW_BASE#https://raw.githubusercontent.com/simoncrypta/bercail/}"
+  fi
   info "restarting the update on the new bercail"
   BERCAIL_UPDATE_RESTARTED=1 exec bash "$LOCAL_BIN/bercail" "${args[@]}"
 }
@@ -339,54 +342,34 @@ deploy_tree() {
 }
 
 deploy_install_file() {
-  local rel="$1" dest="$2"
-  local src
-  src="$(install_src_dir)"
-  if [[ -d "$src" ]]; then
-    copy_file "$src/$rel" "$dest"
-  else
-    fetch_file "$rel" "$dest"
-  fi
+  copy_file "$(install_src_dir)/$1" "$2"
 }
 
 deploy_bercail_config() {
   local src file sub
   src="$(install_src_dir)"
-  if [[ -d "$src" ]]; then
-    while IFS= read -r -d '' file; do
-      sub="${file#"$src/config/agentic-dev"/}"
-      [[ "$sub" == "config.toml" || "$sub" == "config-reader.sh" ]] && continue
-      copy_file "$file" "$BERCAIL_CONFIG_DIR/$sub"
-    done < <(find "$src/config/agentic-dev" -type f -print0 2>/dev/null)
-  else
-    deploy_install_file "config/agentic-dev/config.toml.example" "$BERCAIL_CONFIG_DIR/config.toml.example"
-  fi
+  while IFS= read -r -d '' file; do
+    sub="${file#"$src/config/agentic-dev"/}"
+    [[ "$sub" == "config.toml" || "$sub" == "config-reader.sh" ]] && continue
+    copy_file "$file" "$BERCAIL_CONFIG_DIR/$sub"
+  done < <(find "$src/config/agentic-dev" -type f -print0 2>/dev/null)
   # Older releases installed a reader here; lib/toml.sh replaced it.
   run rm -f "$BERCAIL_CONFIG_DIR/config-reader.sh"
 }
 
 deploy_lib() {
-  local src
-  src="$(install_src_dir)"
-  if [[ -d "$src" ]]; then
-    deploy_tree "$src/lib" "${BERCAIL_SHARE_DIR}/lib"
-  else
-    local libfile
-    for libfile in common.sh detect.sh deps.sh config.sh skills.sh shell-rc.sh uninstall.sh help.sh omarchy.sh notify.sh doctor.sh bstack.sh desk.sh shep.sh shep-context.sh review.sh review-desk.sh stack.sh policy.sh; do
-      deploy_install_file "lib/$libfile" "${BERCAIL_SHARE_DIR}/lib/$libfile"
-    done
-  fi
-  # Installed lib/ has no adjacent skills tree. The curl update restarts onto
-  # this deploy_lib, so a file added here is fetched with the new release.
+  deploy_tree "$(install_src_dir)/lib" "${BERCAIL_SHARE_DIR}/lib"
+  # Installed lib/ has no adjacent skills tree.
   deploy_install_file "skills/handoff/scripts/git-backend.sh" "${BERCAIL_SHARE_DIR}/lib/git-backend.sh"
   deploy_install_file "skills/handoff/scripts/pi-log.sh" "${BERCAIL_SHARE_DIR}/lib/pi-log.sh"
   deploy_install_file "skills/handoff/scripts/toml.sh" "${BERCAIL_SHARE_DIR}/lib/toml.sh"
 }
 
+# The tree the installed files were copied from: the recorded clone or package,
+# else a curl install's release.
 _recorded_install_source() {
-  local src
-  [[ -f "$BERCAIL_SOURCE_PATH_FILE" ]] || return 1
-  src="$(<"$BERCAIL_SOURCE_PATH_FILE")"
+  local src="$BERCAIL_RELEASE_DIR"
+  [[ ! -f "$BERCAIL_SOURCE_PATH_FILE" ]] || src="$(<"$BERCAIL_SOURCE_PATH_FILE")"
   [[ -n "$src" && -d "$src" && -f "$src/install.sh" && -d "$src/config" ]] || return 1
   printf '%s' "$src"
 }
@@ -396,11 +379,6 @@ _recorded_install_source() {
 describe_install_source() {
   local src branch sha tag
   src="$(install_src_dir)"
-  if [[ ! -d "$src" ]]; then
-    resolve_github_raw_base || return 1
-    info "source: $src (GitHub ${GITHUB_RAW_BASE##*/})"
-    return 0
-  fi
   if ! git -C "$src" rev-parse --git-dir >/dev/null 2>&1; then
     info "source: $src (v${BERCAIL_VERSION})"
     return 0
@@ -417,7 +395,9 @@ describe_install_source() {
 record_install_source() {
   local src
   src="$(install_src_dir)"
-  [[ -d "$src" && -f "$src/install.sh" && -d "$src/config" ]] || return 0
+  # A curl install's release is found without a record, and bercail update replaces it.
+  # -ef: with HOME behind a symlink, src is the physical path.
+  [[ ! "$src" -ef "$BERCAIL_RELEASE_DIR" && -f "$src/install.sh" && -d "$src/config" ]] || return 0
   ensure_dir "$BERCAIL_SHARE_DIR"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     info "[dry-run] would record install source $src"

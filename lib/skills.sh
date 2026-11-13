@@ -62,33 +62,18 @@ scrub_managed_skill_extra_links() {
 
 deploy_skill_tree() {
   local skill_id="$1"
-  local src dest_root src_root line
+  local dest_root src_root
   dest_root="$(skill_canonical_dir "$skill_id")"
   ensure_dir "$dest_root"
 
-  src="$(install_src_dir)"
-  if [[ -d "$src" ]]; then
-    src_root="$src/skills/${skill_id}"
-    [[ -d "$src_root" ]] || {
-      warn "skill source missing: $src_root"
-      return 1
-    }
-    deploy_tree "$src_root" "$dest_root"
-    if [[ -d "$dest_root/scripts" ]]; then
-      run find "$dest_root/scripts" -type f -exec chmod +x {} +
-    fi
-    return 0
-  fi
-
-  deploy_install_file "skills/${skill_id}/MANIFEST" "${dest_root}/MANIFEST"
-  [[ -f "${dest_root}/MANIFEST" ]] || {
-    warn "skill MANIFEST missing after fetch"
+  src_root="$(install_src_dir)/skills/${skill_id}"
+  [[ -d "$src_root" ]] || {
+    warn "skill source missing: $src_root"
     return 1
   }
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    [[ -n "$line" && "$line" != \#* ]] || continue
-    deploy_install_file "skills/${skill_id}/$line" "${dest_root}/$line"
-  done <"${dest_root}/MANIFEST"
+  deploy_tree "$src_root" "$dest_root"
+  # Older releases shipped a file list for the curl install.
+  run rm -f "$dest_root/MANIFEST"
   if [[ -d "$dest_root/scripts" ]]; then
     run find "$dest_root/scripts" -type f -exec chmod +x {} +
   fi

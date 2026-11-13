@@ -577,24 +577,16 @@ _bstack_resolved_text() {
 }
 
 deploy_bstack() {
-  local work rel result=0
+  local work result=0
   bstack_pi_fallback >/dev/null || return 1
   _bstack_install_pi || return 1
   bstack_load_state reload
   work="$(mktemp -d)"
-  if ! DRY_RUN=0 deploy_install_file "bstack/MANIFEST" "$work/MANIFEST" >/dev/null; then
-    warn "could not read bstack/MANIFEST"
+  if ! cp -R "$(install_src_dir)/bstack" "$work/src"; then
+    warn "could not read bstack/ from $(install_src_dir)"
     rm -rf "$work"
     return 1
   fi
-  while IFS= read -r rel || [[ -n "$rel" ]]; do
-    [[ -n "$rel" && "$rel" != \#* && "$rel" != MANIFEST ]] || continue
-    DRY_RUN=0 deploy_install_file "bstack/$rel" "$work/src/$rel" >/dev/null || {
-      warn "could not read bstack/$rel"
-      rm -rf "$work"
-      return 1
-    }
-  done <"$work/MANIFEST"
   _bstack_deploy_pi "$work" || result=$?
   _bstack_pi_bridge_compaction "$work" || true
   rm -rf "$work"

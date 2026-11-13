@@ -1,8 +1,9 @@
 #!/usr/bin/env bats
-# The first update to a new release starts as the previous release's bercail:
-# its bin, its loaded libs, and its deploy_configs, which copies the new CLI and
-# lib/ by its own lists. The new lib/config.sh then restarts the update on the
-# new CLI. Install a real old release, then update it from this tree.
+# The first update from v0.14.0 starts as that release's bercail: its bin, its
+# loaded libs, and its deploy_configs, which copies the new CLI and lib/ by its
+# own lists. The new lib/config.sh then restarts the update on the new CLI, and
+# that one runs the source tree's own bercail, as every later update does.
+# Install a real old release, then update it from this tree.
 
 setup() {
   load test_helper
@@ -14,7 +15,7 @@ setup() {
   local t
   for t in bash sh env cat cp mv rm rmdir ln mkdir chmod cmp diff dirname basename realpath readlink \
     find grep sed awk tr sort uniq head tail wc mktemp date git jq tar touch sha256sum id uname \
-    sleep stat cut tee xargs ls cksum; do
+    sleep stat cut tee xargs ls cksum gzip timeout; do
     ln -s "$(command -v "$t")" "$TOOLS/$t" || fail "this test needs $t on PATH"
   done
   printf '#!/bin/sh\nexit 1\n' >"$TOOLS/curl"
@@ -108,17 +109,14 @@ update_from() {
   fi
 }
 
-# A curl install has no tree to copy from: the old release's updater fetches
-# each file it lists, by name, from the new release. The stand-in curl serves
-# this tree's files as that release and fails on a name it does not ship.
-update_from_curl() {
-  local tag="$1" rc=0
-  install_release "$tag"
-  rm -f "$home/.local/share/bercail/source-path"
+# The stand-in curl serves $box/new as the new release: each file by name under
+# raw.test, which is how v0.14.0's updater fetches, and the whole tree as
+# raw.test/archive.tar.gz, which is how this one does. It logs what was asked
+# for, and fails on a name the tree does not ship.
+serve_new_release() {
   this_tree "$box/new"
   cat >"$TOOLS/curl" <<EOF
 #!/bin/sh
-# Stand-in: -o DEST from $box/new for a raw.test URL; anything else fails.
 url= dest=
 while [ \$# -gt 0 ]; do
   case "\$1" in
@@ -127,10 +125,27 @@ while [ \$# -gt 0 ]; do
   esac
   shift
 done
-[ -n "\$url" ] && [ -n "\$dest" ] && [ -f "$box/new/\$url" ] || { echo "\$url" >>"$box/curl-missing"; exit 22; }
+echo "\$url" >>"$box/curl.log"
+[ -n "\$url" ] && [ -n "\$dest" ] || exit 22
+if [ "\$url" = archive.tar.gz ]; then
+  [ ! -e "$box/no-archive" ] || exit 22
+  tar -czf "\$dest" -C "$box" new
+  exit
+fi
+[ -f "$box/new/\$url" ] || { echo "\$url" >>"$box/curl-missing"; exit 22; }
 cp "$box/new/\$url" "\$dest"
 EOF
-  in_home "$home" GITHUB_RAW_BASE=https://raw.test bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 || rc=$?
+}
+
+# A curl install has no clone to copy from. v0.14.0's updater fetches each file
+# it lists, by name, from the new release, then the new bercail takes over.
+update_from_curl() {
+  local tag="$1" rc=0
+  install_release "$tag"
+  rm -f "$home/.local/share/bercail/source-path"
+  serve_new_release
+  in_home "$home" GITHUB_RAW_BASE=https://raw.test BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz \
+    bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 || rc=$?
   [[ "$rc" -eq 0 ]] || { tail -20 "$box/update.log"; fail "$tag's bercail update exited $rc; not served: $(cat "$box/curl-missing" 2>/dev/null)"; }
   if grep -E 'unbound variable|syntax error|command not found' "$box/update.log"; then
     fail "$tag's bercail update hit a shell error"
@@ -167,7 +182,7 @@ assert_updates_itself() {
 # with a stand-in for the installed bercail that prints how it was started.
 reload_config() {
   mkdir -p "$HOME/.local/bin"
-  printf '#!/bin/sh\necho "started: $* restarted=$BERCAIL_UPDATE_RESTARTED raw=$GITHUB_RAW_BASE"\n' >"$HOME/.local/bin/bercail"
+  printf '#!/bin/sh\necho "started: $* restarted=$BERCAIL_UPDATE_RESTARTED ref=$BERCAIL_REF"\n' >"$HOME/.local/bin/bercail"
   # shellcheck disable=SC2016
   ROOT="$ROOT" bash -c '
     source "$ROOT/lib/common.sh"
@@ -241,6 +256,41 @@ SH
   need_tag v0.14.0
   update_from_curl v0.14.0
   assert_this_tree v0.14.0
+  # The new bercail took the rest from the release's archive, not file by file.
+  [[ "$(grep -cx archive.tar.gz "$box/curl.log")" == 1 ]] || fail "the archive was not fetched once: $(cat "$box/curl.log")"
+  [[ "$(tail -1 "$box/curl.log")" == archive.tar.gz ]] || fail "files were fetched by name after the archive: $(cat "$box/curl.log")"
+  cmp -s "$box/new/lib/review.sh" "$home/.local/share/bercail/release/lib/review.sh" \
+    || fail "the release was not unpacked under ~/.local/share/bercail/release"
+  [[ ! -e "$home/.local/share/bercail/source-path" ]] || fail "the release tree was recorded as a clone"
+}
+
+@test "a curl install's update unpacks the next release and runs that tree's bercail; a failed download changes nothing" {
+  install_release this
+  rm -f "$home/.local/share/bercail/source-path"
+  serve_new_release
+  # The next release: its update has a step this one's does not, and a new lib file.
+  sed -i 's/^  show_summary$/  show_summary; log "a step of the next release"/' "$box/new/bin/bercail"
+  : >"$box/new/lib/next.sh"
+  : >"$box/no-archive"
+  if in_home "$home" BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1; then
+    fail "an update with no download succeeded: $(cat "$box/update.log")"
+  fi
+  grep -q 'could not download bercail from https://raw.test/archive.tar.gz' "$box/update.log" || fail "no word on the download: $(cat "$box/update.log")"
+  cmp -s "$ROOT/bin/bercail" "$home/.local/bin/bercail" || fail "a failed download changed bin/bercail"
+  [[ -z "$(find "$home/.local/share/bercail" -maxdepth 1 -name 'release*')" ]] || fail "a failed download left a tree behind"
+  rm "$box/no-archive"
+  in_home "$home" BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 \
+    || { cat "$box/update.log"; fail "the update failed"; }
+  grep -qx 'a step of the next release' "$box/update.log" \
+    || fail "the update finished on the code it replaced: $(tail -5 "$box/update.log")"
+  cmp -s "$box/new/bin/bercail" "$home/.local/bin/bercail" || fail "bin/bercail is not the next release's"
+  [[ -f "$home/.local/share/bercail/lib/next.sh" ]] || fail "a lib file the next release added was not installed"
+  [[ "$(restarts "$box/update.log")" == 0 ]] || fail "restarted $(restarts "$box/update.log") times"
+  if grep -vx archive.tar.gz "$box/curl.log"; then fail "fetched more than the archive"; fi
+  # Doctor compares against the unpacked release.
+  printf 'stale\n' >>"$home/.config/worktrunk/herdr-layout.sh"
+  in_home "$home" bash "$home/.local/bin/bercail" doctor >"$box/doctor.log" 2>&1 || true
+  grep -q 'stale  herdr-layout.sh' "$box/doctor.log" || fail "doctor did not compare with the release: $(grep herdr-layout "$box/doctor.log")"
 }
 
 @test "v0.14.0's updater hands the update to the new bercail once" {
@@ -249,7 +299,63 @@ SH
   [[ "$(restarts "$box/update.log")" == 1 ]] || fail "restarted $(restarts "$box/update.log") times: $(cat "$box/update.log")"
 }
 
-@test "an update that replaces the bercail running it runs the new one's steps" {
+@test "a curl install with HOME behind a symlink records no clone, so its update downloads the next release" {
+  box="$BATS_TEST_TMPDIR/link" home="$BATS_TEST_TMPDIR/link/home"
+  mkdir -p "$box/real/run" "$box/real/.config/hypr"
+  : >"$box/real/.config/hypr/bindings.conf"
+  ln -s "$box/real" "$home"
+  serve_new_release
+  env -i HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_RUNTIME_DIR="$home/run" PATH="$TOOLS" TERM=dumb \
+    BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz bash -s -- --yes <"$box/new/install.sh" >"$box/install.log" 2>&1 \
+    || { cat "$box/install.log"; fail "the piped install failed"; }
+  [[ ! -e "$home/.local/share/bercail/source-path" ]] \
+    || fail "the release was recorded as a clone: $(cat "$home/.local/share/bercail/source-path")"
+  sed -i 's/^  show_summary$/  show_summary; log "a step of the next release"/' "$box/new/bin/bercail"
+  in_home "$home" BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 \
+    || { cat "$box/update.log"; fail "the update failed"; }
+  grep -qx 'a step of the next release' "$box/update.log" || fail "the update did not run the next release: $(tail -5 "$box/update.log")"
+  [[ "$(grep -cx archive.tar.gz "$box/curl.log")" == 2 ]] || fail "the update did not download: $(cat "$box/curl.log")"
+}
+
+@test "an update refuses an archive of v0.14.0 or of half a tree, and keeps the release it had" {
+  need_tag v0.14.0
+  install_release this
+  rm -f "$home/.local/share/bercail/source-path"
+  serve_new_release
+  in_home "$home" BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 \
+    || { cat "$box/update.log"; fail "the first update failed"; }
+  local release="$home/.local/share/bercail/release" bad
+  for bad in v0.14.0 half; do
+    rm -rf "$box/new" && mkdir -p "$box/new"
+    if [[ "$bad" == v0.14.0 ]]; then
+      git -C "$ROOT" archive v0.14.0 | tar -x -C "$box/new"
+    else
+      # Passes a check for the files the update starts with, not a deploy.
+      mkdir -p "$box/new/bin" "$box/new/lib"
+      cp "$ROOT/install.sh" "$box/new/"; cp "$ROOT/bin/bercail" "$box/new/bin/"; cp "$ROOT/lib/common.sh" "$box/new/lib/"
+    fi
+    if in_home "$home" BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1; then
+      fail "an update to $bad succeeded: $(tail -5 "$box/update.log")"
+    fi
+    grep -q 'is not a bercail release that updates from an archive' "$box/update.log" || fail "$bad: no word on why: $(tail -3 "$box/update.log")"
+    cmp -s "$ROOT/lib/review.sh" "$release/lib/review.sh" || fail "$bad replaced the release it had"
+    cmp -s "$ROOT/bin/bercail" "$home/.local/bin/bercail" || fail "$bad changed the installed CLI"
+    [[ ! -e "$home/.local/share/bercail/source-path" ]] || fail "$bad recorded a clone"
+    [[ "$(find "$home/.local/share/bercail" -maxdepth 1 -name 'release*' | wc -l)" == 1 ]] || fail "$bad left a tree behind"
+  done
+}
+
+@test "an update whose source tree's bin/bercail links to the running one runs once" {
+  install_release this
+  cp -a "$box/src" "$box/linked"
+  ln -sf "$home/.local/bin/bercail" "$box/linked/bin/bercail"
+  local rc=0
+  in_home "$home" INSTALL_SRC="$box/linked" timeout 30 bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 || rc=$?
+  [[ "$rc" != 124 ]] || fail "the update execs itself over and over"
+  [[ "$rc" == 0 ]] || { cat "$box/update.log"; fail "the update exited $rc"; }
+}
+
+@test "an update from a clone runs the clone's own bercail, so a step the next release adds runs" {
   install_release this
   printf '%s\n' "$box/src" >"$home/.local/share/bercail/source-path"
   # The next release: its update has a step this one's does not.
@@ -259,20 +365,20 @@ SH
     || { cat "$box/update.log"; fail "the update failed"; }
   grep -qx 'a step of the next release' "$box/update.log" \
     || fail "the update finished on the code it replaced: $(tail -5 "$box/update.log")"
-  [[ "$(restarts "$box/update.log")" == 1 ]] || fail "restarted $(restarts "$box/update.log") times"
+  [[ "$(restarts "$box/update.log")" == 0 ]] || fail "restarted $(restarts "$box/update.log") times"
 }
 
 @test "lib/config.sh loaded by an updater's deploy_configs starts the installed bercail's update" {
   local out
   out="$(reload_config :)"
-  grep -qx 'started: update restarted=1 raw=' <<<"$out" || fail "$out"
+  grep -qx 'started: update restarted=1 ref=' <<<"$out" || fail "$out"
   if grep -q 'went on' <<<"$out"; then fail "the old code went on: $out"; fi
 }
 
 @test "a restarted update keeps --force and the release the first half read" {
   local out
-  out="$(reload_config 'FORCE=1 GITHUB_RAW_BASE=https://raw.test/v9')"
-  grep -qx 'started: update --force restarted=1 raw=https://raw.test/v9' <<<"$out" || fail "$out"
+  out="$(reload_config 'FORCE=1 GITHUB_RAW_BASE=https://raw.githubusercontent.com/simoncrypta/bercail/v9.9.0')"
+  grep -qx 'started: update --force restarted=1 ref=v9.9.0' <<<"$out" || fail "$out"
 }
 
 @test "an update that was restarted does not restart again" {

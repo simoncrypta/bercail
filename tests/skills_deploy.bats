@@ -24,18 +24,20 @@ setup() {
 
 @test "deploy_skills installs canonical skills and links them for pi" {
   rm -rf "$HOME/.agents" "$HOME/.pi"
+  # The file list an older release's curl install left in each skill.
+  mkdir -p "$AGENTS_SKILLS_DIR/handoff"
+  : >"$AGENTS_SKILLS_DIR/handoff/MANIFEST"
   deploy_skills >/dev/null
   [[ -f "$AGENTS_SKILLS_DIR/handoff/SKILL.md" ]] || fail "canonical skill missing"
   grep -q '^name: handoff$' "$AGENTS_SKILLS_DIR/handoff/SKILL.md" || fail "skill frontmatter missing"
   [[ -f "$AGENTS_SKILLS_DIR/handoff/resources/git-workflow.md" ]] || fail "resource git-workflow.md missing"
-  [[ -f "$AGENTS_SKILLS_DIR/handoff/MANIFEST" ]] || fail "MANIFEST missing from deploy_tree"
+  [[ ! -e "$AGENTS_SKILLS_DIR/handoff/MANIFEST" ]] || fail "an older release's MANIFEST stays"
   [[ -x "$AGENTS_SKILLS_DIR/handoff/scripts/handoff-spawn" ]] || fail "handoff-spawn missing or not executable"
   [[ -f "$AGENTS_SKILLS_DIR/review/SKILL.md" ]] || fail "canonical review skill missing"
   grep -q '^name: review$' "$AGENTS_SKILLS_DIR/review/SKILL.md" || fail "review frontmatter missing"
   [[ -f "$AGENTS_SKILLS_DIR/review/scripts/wait-comments.sh" ]] || fail "wait-comments helper missing"
   [[ -x "$AGENTS_SKILLS_DIR/review/scripts/publish-github.sh" ]] || fail "publish-github helper missing or not executable"
   [[ -f "$AGENTS_SKILLS_DIR/review/scripts/is-agent.jq" ]] || fail "the jq both review scripts include is missing"
-  grep -qx 'scripts/is-agent.jq' "$ROOT/skills/review/MANIFEST" || fail "a curl install would not fetch is-agent.jq"
   [[ -L "$HOME/.pi/agent/skills/handoff" ]] || fail "pi skill symlink missing"
   [[ -L "$HOME/.pi/agent/skills/review" ]] || fail "pi review symlink missing"
   [[ -L "$HOME/.pi/agent/skills/bstack" && -L "$HOME/.pi/agent/skills/council" ]] \

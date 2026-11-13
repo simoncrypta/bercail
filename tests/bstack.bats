@@ -255,8 +255,8 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   assert_eq "$clone" "$(script_dir() { printf '%s' "$BATS_TEST_TMPDIR/nowhere/lib"; }; INSTALL_SRC='' install_src_dir)" \
     "the installed CLI uses the recorded clone, not master"
   rm -f "$BERCAIL_SOURCE_PATH_FILE"
-  assert_eq "https://bercail.dev" "$(script_dir() { printf '%s' "$BATS_TEST_TMPDIR/nowhere/lib"; }; INSTALL_SRC='' install_src_dir)" \
-    "no recorded source: remote"
+  assert_eq "$BERCAIL_SHARE_DIR/release" "$(script_dir() { printf '%s' "$BATS_TEST_TMPDIR/nowhere/lib"; }; INSTALL_SRC='' install_src_dir)" \
+    "no recorded source: the release a curl install unpacked"
 }
 
 @test "Pi families resolve from the catalog and auth check; variants map to :level" {

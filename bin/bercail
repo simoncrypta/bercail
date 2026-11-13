@@ -41,39 +41,17 @@ find_lib_dir() {
 }
 
 load_libs() {
-  local lib
+  local lib name
   lib="$(find_lib_dir)" || {
     printf 'error: cannot find bercail lib (re-run install.sh)\n' >&2
     exit 1
   }
   # shellcheck source=/dev/null
   source "$lib/common.sh"
-  # shellcheck source=/dev/null
-  source "$lib/detect.sh"
-  # shellcheck source=/dev/null
-  source "$lib/deps.sh"
-  # shellcheck source=/dev/null
-  source "$lib/config.sh"
-  # shellcheck source=/dev/null
-  source "$lib/skills.sh"
-  # shellcheck source=/dev/null
-  source "$lib/shell-rc.sh"
-  # shellcheck source=/dev/null
-  source "$lib/uninstall.sh"
-  # shellcheck source=/dev/null
-  source "$lib/help.sh"
-  # shellcheck source=/dev/null
-  source "$lib/omarchy.sh"
-  # shellcheck source=/dev/null
-  source "$lib/notify.sh"
-  # shellcheck source=/dev/null
-  source "$lib/doctor.sh"
-  # shellcheck source=/dev/null
-  source "$lib/bstack.sh"
-  # shellcheck source=/dev/null
-  source "$lib/desk.sh"
-  # shellcheck source=/dev/null
-  source "$lib/shep.sh"
+  for name in "${BERCAIL_LIBS[@]}"; do
+    # shellcheck source=/dev/null
+    source "$lib/$name.sh"
+  done
 }
 
 cmd_doctor() {
@@ -145,17 +123,23 @@ cmd_reconfigure() {
   info "the desk runs bstack's Pi lead  review=$(read_layout_review)"
 }
 
-# The release this one replaces restarted its update here (restart_update, in
-# lib/config.sh) after copying lib/ by its own list. Fetch what this release
-# added before load_libs reads it.
-complete_lib() {
-  local lib
+# An update is the source tree's own bercail deploying itself, never this
+# installed copy running a newer tree's files. A curl install has no clone or
+# package to copy from: its tree is the release, downloaded here first.
+update_from_tree() {
+  local lib src
   lib="$(find_lib_dir)" || return 0
   # shellcheck source=/dev/null
   source "$lib/common.sh"
-  # shellcheck source=/dev/null
-  source "$lib/config.sh"
-  deploy_lib
+  src="$(install_src_dir)"
+  # The file, not its dir: a tree whose bin/bercail links to this one is this one.
+  [[ ! "$src/bin/bercail" -ef "$(bercail_bin_dir)/bercail" ]] || return 0
+  # -ef too: HOME behind a symlink makes the physical path differ.
+  if [[ "$src" == "$BERCAIL_RELEASE_DIR" || "$src" -ef "$BERCAIL_RELEASE_DIR" ]]; then
+    fetch_release_tree || exit 1
+  fi
+  [[ -f "$src/bin/bercail" ]] || return 0
+  exec bash "$src/bin/bercail" update "$@"
 }
 
 main() {
@@ -213,7 +197,7 @@ main() {
       cmd_review_pr "$@"
       ;;
     update)
-      [[ -z "${BERCAIL_UPDATE_RESTARTED:-}" ]] || complete_lib
+      update_from_tree "$@"
       load_libs
       while [[ $# -gt 0 ]]; do
         case "$1" in
