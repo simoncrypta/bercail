@@ -45,7 +45,7 @@ There is no build step for the CLI. The site build needs `npm ci` first (see
   `$BATS_TEST_TMPDIR/bin`, never the real HOME, Herdr core, or network. No `@test`
   may lean on another's state.
 - Docs speak plainly and match the code; update `docs/` and the help text in
-  `bin/bercail` and `lib/help.sh` together.
+  `lib/help.sh` together.
 - `.bercail/policy.toml` is this repo's git and release policy (`bin/bercail policy show`);
   Pi desks get it in their prompt and the guard enforces it once trusted. It is
   the one versioned file under `.bercail/`.

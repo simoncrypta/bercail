@@ -37,7 +37,7 @@ hc wait <t>                          # until it stops working
 ```
 
 Main-repo to worktree handoff is `scripts/handoff-spawn` only
-(`resources/handoff.md`). Never deliver a task by typing into a desk:
+(`SKILL.md`). Never deliver a task by typing into a desk:
 
 ```bash
 # wrong: types into the agent's TUI

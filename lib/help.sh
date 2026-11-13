@@ -1,24 +1,10 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-show_help() {
-  cat <<EOF
-bercail v${BERCAIL_VERSION}
-
-Install (recommended: mise + packslip, signed release):
-  mise use -g packslip:github.com/simoncrypta/bercail && bercail install
-  packslip install github.com/simoncrypta/bercail && bercail install   (no mise)
-
-Install (curl, still supported):
-  curl -fsSL https://bercail.dev/install.sh | bash
-  curl -fsSL https://bercail.dev/install.sh | bash -s -- --yes
-  curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/master/install.sh | BERCAIL_REF=master bash
-                 (unreleased trunk; BERCAIL_REF takes a tag, branch, or sha, for bercail update too)
-
-install.sh options:
-  -h, --help   Show this help
-  -y, --yes    Non-interactive (existing/default config)
-
+# The commands, once: bercail help shows them in full, and a command bercail
+# does not know prints only this.
+help_commands() {
+  cat <<'EOF'
 Post-install CLI (bercail):
   help          This help
   install       Full install from the release mise or packslip unpacked
@@ -42,6 +28,30 @@ Post-install CLI (bercail):
                 gathers every PR, with one detached sibling worktree and a Stack tab.
                 Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,
                 t: tuicr with [AI Agent] drafts. Then: run | card | ui | select | diff | open | dir
+EOF
+}
+
+show_help() {
+  cat <<EOF
+bercail v${BERCAIL_VERSION}
+
+Install (recommended: mise + packslip, signed release):
+  mise use -g packslip:github.com/simoncrypta/bercail && bercail install
+  packslip install github.com/simoncrypta/bercail && bercail install   (no mise)
+
+Install (curl, still supported):
+  curl -fsSL https://bercail.dev/install.sh | bash
+  curl -fsSL https://bercail.dev/install.sh | bash -s -- --yes
+  curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/master/install.sh | BERCAIL_REF=master bash
+                 (unreleased trunk; BERCAIL_REF takes a tag, branch, or sha, for bercail update too)
+
+install.sh options:
+  -h, --help   Show this help
+  -y, --yes    Non-interactive (existing/default config)
+
+EOF
+  help_commands
+  cat <<EOF
 
 Shell commands:
   dev           Show the Herdr app space for $PWD and start its desk agent

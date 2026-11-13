@@ -27,19 +27,36 @@ setup() {
   deploy_skills >/dev/null
   [[ -f "$AGENTS_SKILLS_DIR/handoff/SKILL.md" ]] || fail "canonical skill missing"
   grep -q '^name: handoff$' "$AGENTS_SKILLS_DIR/handoff/SKILL.md" || fail "skill frontmatter missing"
-  [[ -f "$AGENTS_SKILLS_DIR/handoff/resources/handoff.md" ]] || fail "resource handoff.md missing"
+  [[ -f "$AGENTS_SKILLS_DIR/handoff/resources/git-workflow.md" ]] || fail "resource git-workflow.md missing"
   [[ -f "$AGENTS_SKILLS_DIR/handoff/MANIFEST" ]] || fail "MANIFEST missing from deploy_tree"
   [[ -x "$AGENTS_SKILLS_DIR/handoff/scripts/handoff-spawn" ]] || fail "handoff-spawn missing or not executable"
   [[ -f "$AGENTS_SKILLS_DIR/review/SKILL.md" ]] || fail "canonical review skill missing"
   grep -q '^name: review$' "$AGENTS_SKILLS_DIR/review/SKILL.md" || fail "review frontmatter missing"
   [[ -f "$AGENTS_SKILLS_DIR/review/scripts/wait-comments.sh" ]] || fail "wait-comments helper missing"
   [[ -x "$AGENTS_SKILLS_DIR/review/scripts/publish-github.sh" ]] || fail "publish-github helper missing or not executable"
+  [[ -f "$AGENTS_SKILLS_DIR/review/scripts/is-agent.jq" ]] || fail "the jq both review scripts include is missing"
+  grep -qx 'scripts/is-agent.jq' "$ROOT/skills/review/MANIFEST" || fail "a curl install would not fetch is-agent.jq"
   [[ -L "$HOME/.pi/agent/skills/handoff" ]] || fail "pi skill symlink missing"
   [[ -L "$HOME/.pi/agent/skills/review" ]] || fail "pi review symlink missing"
   [[ -L "$HOME/.pi/agent/skills/bstack" && -L "$HOME/.pi/agent/skills/council" ]] \
     || fail "pi links for bstack and council missing"
   grep -q '^name: unit-testing$' "$AGENTS_SKILLS_DIR/unit-testing/SKILL.md" || fail "canonical unit-testing skill missing"
   [[ -L "$HOME/.pi/agent/skills/unit-testing" ]] || fail "pi link for unit-testing missing"
+}
+
+@test "deploy_skills removes the handoff resources an older release installed" {
+  mkdir -p "$AGENTS_SKILLS_DIR/handoff/resources"
+  printf 'old\n' >"$AGENTS_SKILLS_DIR/handoff/resources/handoff.md"
+  printf 'old\n' >"$AGENTS_SKILLS_DIR/handoff/resources/keys.md"
+  printf 'mine\n' >"$AGENTS_SKILLS_DIR/handoff/resources/notes.md"
+  deploy_skills >/dev/null
+  [[ ! -e "$AGENTS_SKILLS_DIR/handoff/resources/handoff.md" && ! -e "$AGENTS_SKILLS_DIR/handoff/resources/keys.md" ]] \
+    || fail "the folded resources are still installed"
+  [[ -f "$AGENTS_SKILLS_DIR/handoff/resources/notes.md" ]] || fail "a file bercail does not own was removed"
+  local link
+  while IFS= read -r link; do
+    [[ -e "$AGENTS_SKILLS_DIR/handoff/$link" ]] || fail "the skill links a file that is not installed: $link"
+  done < <(grep -oE 'resources/[a-z-]+\.md' "$AGENTS_SKILLS_DIR/handoff/SKILL.md" | sort -u)
 }
 
 @test "deploy_skills preserves a foreign path in the pi skills dir" {

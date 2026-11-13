@@ -36,20 +36,13 @@ done
 
 [[ "$TIMEOUT" =~ ^[0-9]+$ ]] || usage
 
-is_agent_author_jq() {
-  cat <<'JQ'
-def is_agent:
-  ((.author // .username // "user") | ascii_downcase) as $a
-  | $a == "pi" or $a == "agent"
-    or $a == "claude" or $a == "gpt" or $a == "grok" or $a == "copilot"
-    or ($a | startswith("claude"));
-JQ
-}
+# is-agent.jq, beside this script, defines is_agent.
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 comment_ids() {
   local json="$1"
-  printf '%s' "$json" | jq -r '
-    '"$(is_agent_author_jq)"'
+  printf '%s' "$json" | jq -L "$HERE" -r '
+    include "is-agent";
     ((.comments // .) | if type == "array" then . else [] end)
     | .[]
     | select(is_agent | not)
@@ -109,8 +102,8 @@ filter_comments() {
   local -a ids=("$@")
   local jq_ids
   jq_ids="$(printf '%s\n' "${ids[@]}" | jq -R . | jq -s .)"
-  printf '%s' "$json" | jq --argjson ids "$jq_ids" '
-    '"$(is_agent_author_jq)"'
+  printf '%s' "$json" | jq -L "$HERE" --argjson ids "$jq_ids" '
+    include "is-agent";
     def items: (.comments // .) | if type == "array" then . else [] end;
     def cid: .id // .noteId // .commentId // "";
     {comments: [items[] | select(is_agent | not) | select(cid as $c | $ids | index($c))]}

@@ -197,6 +197,20 @@ EOF
   [[ "$rc" -eq 1 && "$out" == *"usage: bercail config get <section> <key>"* ]] || fail "usage: rc=$rc out=$out"
 }
 
+@test "a command bercail does not know prints the commands as bercail help lists them, each dispatched command among them" {
+  local out help rc=0 cmd line
+  out="$(bash "$ROOT/bin/bercail" nope 2>&1 >/dev/null)" || rc=$?
+  [[ "$rc" -eq 1 ]] || fail "an unknown command exits 1, got $rc"
+  help="$(bash "$ROOT/bin/bercail" help)"
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == Run* ]] || grep -qxF -- "$line" <<<"$help" || fail "not in bercail help: $line"
+  done <<<"$out"
+  while IFS= read -r cmd; do
+    grep -q "^  $cmd " <<<"$out" || fail "bercail dispatches $cmd but the list leaves it out: $out"
+  done < <(sed -n '/^main() {/,/^}/s/^    \([a-z-]*\))$/\1/p' "$ROOT/bin/bercail")
+  [[ "$(grep -c . <<<"$out")" -gt 15 ]] || fail "the list is short: $out"
+}
+
 @test "doctor checks the Herdr app and herdr-core" {
   doctor_with_hunk_review
   assert_contains "$out" "ok  herdr-app" "doctor checks the Herdr app"

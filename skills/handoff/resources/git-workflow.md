@@ -3,7 +3,7 @@
 Read `git` from `scripts/handoff-spawn --info`: `gh`, `gt`, or `origin`.
 Use that backend throughout the job; do not probe with `gt`, because any `gt`
 command auto-initializes a plain repo. Detection and per-repo overrides:
-[handoff.md](handoff.md#git-backend).
+[the skill](../SKILL.md#git-backend).
 
 Handoff never auto-commits. Agents stage their work (`git add`) and leave it
 uncommitted: the staged diff is what the human reviews in tuicr (`tuicr -w`,

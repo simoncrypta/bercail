@@ -29,7 +29,7 @@ Worktrunk will not run project hooks/aliases until the user approves them. In no
 ## Handoffs
 
 Run `scripts/handoff-spawn --info` then `handoff-spawn` (see
-`resources/handoff.md`). Do not assemble `wt switch` / space create / desk start
+`SKILL.md`). Do not assemble `wt switch` / space create / desk start
 yourself.
 
 ## Do not

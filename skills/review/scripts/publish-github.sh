@@ -89,12 +89,8 @@ set +e
 comments_out="$("$TUICR_BIN" review comments --repo . --session "$slug" 2>/dev/null)"
 set -e
 
-comments="$(printf '%s' "$comments_out" | jq -c '
-  def is_agent:
-    ((.author // .username // "user") | ascii_downcase) as $a
-    | $a == "pi" or $a == "agent"
-      or $a == "claude" or $a == "gpt" or $a == "grok" or $a == "copilot"
-      or ($a | startswith("claude"));
+comments="$(printf '%s' "$comments_out" | jq -L "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" -c '
+  include "is-agent";
   def items: if type == "array" then . else (.comments // []) end;
   [
     items[]

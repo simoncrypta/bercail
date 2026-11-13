@@ -98,8 +98,10 @@ working directory to `cwd` from `--info`. Flags only.
 
 - `--space <id>` is optional: the app space to keep on screen. By
   default the user stays on whatever space they are looking at.
-- `--dirty` / `--clean` override `default_copy`.
-- `--base <branch>` is optional: dependent issues stack on the parent's branch via `--base` (`wt switch --create --base`), then register the parent with the `git` backend from `--info`: `gh stack`, `gt track`, or `origin stack track`. Without it the branch is cut from the default branch. Publish and update through that backend's stack commands, never a hand-made PR merely based on another PR's branch. See [git-workflow.md](resources/git-workflow.md). Never run `gt` unless `git` is `gt`.
+- `--dirty` / `--clean` override `default_copy` (a dirty main checkout is copied, a clean
+  one starts from HEAD). The copy is the main checkout's `git diff HEAD` plus its untracked
+  files, put in the sibling as unstaged work before the desk starts; nothing is `git add`ed.
+- `--base <branch>` is optional: dependent issues stack on the parent's branch via `--base` (`wt switch --create --base`), then register the parent with the `git` backend from `--info`: `gh stack`, `gt track`, or `origin stack track`. Without it the branch is cut from the default branch. Publish and update through that backend's stack commands, never a hand-made PR merely based on another PR's branch. See [Git backend](#git-backend). Never run `gt` unless `git` is `gt`.
 - `--model <provider/id[:thinking]>` is optional: run this one agent on another Pi model, such as
   `claude-bridge/claude-fable-5-2:high`, when the person asks for one. See [Another model](#another-model).
 - Plan-only work is a line in the issue, not a flag.
@@ -133,6 +135,26 @@ board` name it. Its desk record keeps the swapped `--model`, so
 starts (builder, judge, council, autopilot templates) keep their own models.
 Without `--model`, every agent runs the lead's.
 
+## Git backend
+
+`--info` and the spawn JSON report one `git` backend for the repo: `gh`, `gt`,
+or `origin`. Read it; do not detect it yourself, and never probe with `gt`,
+which initializes any repo it runs in. A linked worktree uses its main
+checkout's choice. How to publish and update a stack on each backend is in
+[git-workflow.md](resources/git-workflow.md).
+
+When the spawn warns that it could not tell (an unreadable Graphite store, a
+failed Origin lookup) or notes a Graphite config with nothing tracked, the
+person settles it in `~/.config/bercail/config.toml`, keyed by main checkout:
+
+```toml
+[git]
+"~/Work/some-repo" = "gt"   # gh | gt | origin
+```
+
+Registering the new branch with `gt` can fail or hang. The spawn then prints a
+warning with the `gt track` command to run, and the desk still starts.
+
 ## After a `--branch` spawn
 
 The script prints JSON: `ok`, `label`, `path`, `branch`, `issue`, `issue_title`
@@ -155,5 +177,4 @@ terminal labelled `bercail.space=<space>` in `hc ls`).
 ## Other Worktrunk control
 
 Not the spawn path: `resources/worktrunk.md`, `resources/babysit.md`,
-`resources/herdr-control.md` (herdr-app and hc), `resources/keys.md` (keys,
-for user questions only).
+`resources/herdr-control.md` (herdr-app and hc).

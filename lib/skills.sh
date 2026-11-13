@@ -97,6 +97,8 @@ deploy_skill_tree() {
 deploy_skills() {
   local skill_id
   ensure_dir "$AGENTS_SKILLS_DIR"
+  # Folded into the handoff skill; a copy left behind would be read as current.
+  run rm -f "$(skill_canonical_dir handoff)/resources/handoff.md" "$(skill_canonical_dir handoff)/resources/keys.md"
   while IFS= read -r skill_id; do
     [[ -n "$skill_id" ]] || continue
     deploy_skill_tree "$skill_id"
