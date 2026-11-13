@@ -11,7 +11,8 @@ Post-install CLI (bercail):
   doctor        Check dependencies and integration
   bstack        bercail's Pi setup: status | setup
   config        A config.toml value as bercail reads it: config get <section> <key>
-  desk          Bring back the desk agents a reboot took: desk restore [--dry-run]
+  desk          Desk agents: restore [--dry-run] (bring back what a reboot took) |
+                model DESK PROVIDER/MODEL[:thinking] (switch a live desk's model)
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills from config.toml (not a full redeploy)
   dry-run       Show planned actions without changes

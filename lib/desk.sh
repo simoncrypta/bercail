@@ -357,10 +357,77 @@ _desk_restore_boot_locked() {
   done
 }
 
+# --- model ---
+
+# How long `desk model` waits for an idle desk to answer, in seconds.
+DESK_MODEL_WAIT="${BERCAIL_DESK_MODEL_WAIT:-5}"
+
+_desk_commands_dir() {
+  printf '%s/bercail/desk-commands' "${XDG_STATE_HOME:-$HOME/.local/state}"
+}
+
+# Dies unless Pi lists MODEL's provider/id, with the lead's extensions loaded:
+# a provider can come from one (claude-bridge).
+_desk_model_check() {
+  local model="$1" id ext list lead="$BERCAIL_SHARE_DIR/pi/lead.json"
+  local -a argv=(pi --offline --list-models)
+  id="$(sed -E 's/:(off|minimal|low|medium|high|xhigh|max)$//' <<<"$model")"
+  while IFS= read -r ext; do
+    [[ -z "$ext" ]] || argv+=(-e "$ext")
+  done < <(jq -r '. as $a | range(0; length) | select($a[.] == "-e") | $a[. + 1]' "$lead" 2>/dev/null || true)
+  list="$(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN "${argv[@]}" </dev/null 2>/dev/null)" \
+    || die "pi --list-models failed, so $model cannot be checked. Run ${argv[*]} to see why."
+  awk -v want="$id" 'NR > 1 && $1 "/" $2 == want { found = 1 } END { exit !found }' <<<"$list" \
+    || die "Pi has no model $id. pi --list-models lists the ones you can use."
+}
+
+# Asks a live Pi desk to switch model through the bercail-desk extension: a
+# request file it takes when it is idle, never a chat message. Waits a moment
+# for the answer; a busy desk switches when its run ends.
+_desk_model() {
+  local desk="$1" model="$2" terminal address record pid dir id request reply answer="" i
+  [[ "$model" =~ ^[^/[:space:]]+/[^[:space:]]+$ ]] \
+    || die "bercail desk model takes PROVIDER/MODEL[:thinking], as pi --list-models names it (claude-bridge/claude-opus-5-5:high), not $model"
+  terminal="$(_desk_hc get "$desk" --json 2>/dev/null)" || die "no live terminal $desk (hc ls lists them)"
+  jq -e '.state == "live" and .labels["bercail.role"] == "agent"' <<<"$terminal" >/dev/null \
+    || die "$desk is not a live desk; only a desk (label bercail.role=agent) switches model"
+  address="$(jq -r .address <<<"$terminal")"
+  record="$(_desk_sessions_dir)/$address.json"
+  pid="$(jq -r 'select(.harness == "pi") | .pid // empty' "$record" 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null \
+    || die "$desk has no running Pi desk agent ($record); start it with bercail-desk-agent"
+  _desk_model_check "$model"
+  dir="$(_desk_commands_dir)"
+  ( umask 077 && mkdir -p "$dir" ) || die "cannot create $dir"
+  id="$(date +%s)-$$-$RANDOM"
+  reply="$dir/$address.done.json"
+  rm -f "$reply"
+  request="$(umask 077 && mktemp "$dir/.$address.json.XXXXXX")" || die "cannot write to $dir"
+  jq -n --arg id "$id" --argjson pid "$pid" --arg model "$model" '{id: $id, pid: $pid, model: $model}' >"$request" \
+    && mv "$request" "$dir/$address.json" || { rm -f "$request"; die "cannot write to $dir"; }
+  for ((i = 0; i < DESK_MODEL_WAIT * 5; i++)); do
+    answer="$(jq -c --arg id "$id" 'select(.id == $id)' "$reply" 2>/dev/null || true)"
+    [[ -z "$answer" ]] || break
+    sleep 0.2
+  done
+  if [[ -z "$answer" ]]; then
+    log "$address is busy: it switches to $model when its current run ends"
+  elif [[ "$(jq -r .status <<<"$answer")" == switched ]]; then
+    log "$address switched to $(jq -r .model <<<"$answer") (was $(jq -r .from <<<"$answer"))"
+  else
+    die "$address refused $model: $(jq -r .reason <<<"$answer")"
+  fi
+}
+
 cmd_desk() {
   local sub="${1:-}" mode=""
   shift || true
-  [[ "$sub" == restore ]] || die "usage: bercail desk restore [--dry-run]"
+  if [[ "$sub" == model ]]; then
+    (($# == 2)) || die "usage: bercail desk model DESK PROVIDER/MODEL[:thinking]"
+    _desk_model "$1" "$2"
+    return
+  fi
+  [[ "$sub" == restore ]] || die "usage: bercail desk restore [--dry-run] | desk model DESK PROVIDER/MODEL[:thinking]"
   while (($#)); do
     case "$1" in
       --dry-run | --boot) mode="$1" ;;

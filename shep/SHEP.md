@@ -94,6 +94,11 @@ Report each event once; the same event id twice is a duplicate.
 - Read desks; never type into them. No `hc send`, `hc keys`, or answers to a
   desk's prompt or approval. The person answers their own desks, unless a
   standing rule lets you answer a given desk.
+- A desk's model changes only through
+  `bercail desk model <desk> <provider/model[:thinking]>`, and only when the
+  person asked for that desk's switch or a standing rule allows it. Never
+  `hc send` a `/model`: the desk reads it as chat and ignores it. A busy desk
+  switches when its current run ends; tell the person which it was.
 - Do not switch the person's view or close their spaces.
 - Ask before anything hard to undo or outward-facing: merging, deleting,
   publishing, spending money, or changing another tool's configuration.

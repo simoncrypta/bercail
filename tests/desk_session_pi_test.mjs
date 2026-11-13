@@ -127,7 +127,9 @@ try {
   })
   expect(typeof handlers.session_start === "function" && typeof handlers.session_info_changed === "function",
     "session_start and session_info_changed both publish")
-  expect(handlers.session_shutdown === undefined, "shutdown does not publish")
+  let read = false
+  handlers.session_shutdown?.({}, { get sessionManager() { read = true; return {} } })
+  expect(!read, "shutdown does not publish")
   const ctx = {
     cwd: "/work",
     sessionManager: {

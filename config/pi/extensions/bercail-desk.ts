@@ -3,6 +3,9 @@
 // record that names this process. An ephemeral session cannot be resumed, so
 // it stores an empty session and claims nothing. Every Pi that loads this,
 // desk or not, also claims the session it has open.
+//
+// It also takes `bercail desk model` requests: a file, not a message, so no
+// chat text from another agent can switch the desk's model.
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
@@ -23,6 +26,13 @@ export function deskRecordPath(env) {
   const root = env.XDG_STATE_HOME || (env.HOME ? join(env.HOME, ".local/state") : "")
   if (!root) return null
   return join(root, "bercail/desk-sessions", `${id}.json`)
+}
+
+// desk-commands/<address>.json: the request `bercail desk model` writes.
+// <address>.done.json: what became of it.
+export function modelRequestPath(env) {
+  const record = deskRecordPath(env)
+  return record && join(dirname(dirname(record)), "desk-commands", `${env.HC_TERMINAL_ID}.json`)
 }
 
 export function claimPath(env, pid, platform = "linux") {
@@ -143,13 +153,129 @@ function publish(ctx) {
   } catch {}
 }
 
+// provider/id[:thinking] as pi --list-models names it, or null.
+export function parseModel(text) {
+  if (typeof text !== "string") return null
+  const m = /^([^/\s]+)\/(\S+?)(?::(off|minimal|low|medium|high|xhigh|max))?$/.exec(text)
+  return m ? { provider: m[1], id: m[2], thinking: m[3] || "" } : null
+}
+
+// The record's args with --model set to MODEL, so a restore comes back on it.
+export function withModel(args, model) {
+  const out = Array.isArray(args) ? [...args] : []
+  for (let i = 0; i < out.length; i++) {
+    if (out[i] === "--model" && i + 1 < out.length) {
+      out[i + 1] = model
+      return out
+    }
+    if (typeof out[i] === "string" && out[i].startsWith("--model=")) {
+      out[i] = `--model=${model}`
+      return out
+    }
+  }
+  return ["--model", model, ...out]
+}
+
+// The request, when it is for this process. Renamed before it is read, so a
+// newer one written meanwhile is not lost. Another pid's request is stale.
+export function takeRequest(path, pid) {
+  const taken = `${path}.taken-${pid}`
+  try {
+    renameSync(path, taken)
+  } catch {
+    return null
+  }
+  try {
+    const request = readJSON(taken)
+    if (!request || request.pid !== pid || typeof request.id !== "string") return null
+    return request
+  } finally {
+    try {
+      unlinkSync(taken)
+    } catch {}
+  }
+}
+
+function current(pi, ctx) {
+  const model = ctx.model
+  return model ? `${model.provider}/${model.id}:${pi.getThinkingLevel()}` : ""
+}
+
+// Switches to the request's model, or says why not. Without a thinking level
+// the desk keeps its own: setModel resets it, so it is set again (Pi clamps it
+// to what the model supports).
+export async function switchModel(pi, ctx, request) {
+  const from = current(pi, ctx)
+  const level = pi.getThinkingLevel()
+  const want = parseModel(request.model)
+  if (!want) return { status: "refused", from, reason: `not provider/model[:thinking]: ${request.model}` }
+  const model = ctx.modelRegistry.find(want.provider, want.id)
+  if (!model) return { status: "refused", from, reason: `Pi has no model ${want.provider}/${want.id}` }
+  if (!(await pi.setModel(model))) return { status: "refused", from, reason: `no login for ${want.provider}/${want.id}` }
+  pi.setThinkingLevel(want.thinking || level)
+  return { status: "switched", from, model: `${model.provider}/${model.id}:${pi.getThinkingLevel()}` }
+}
+
+// Logged in the session, the record, and the bercail.model label, so restore
+// and `bercail shep brief` show the model the desk runs on now.
+async function takeModelRequest(pi, ctx) {
+  const env = process.env
+  const path = modelRequestPath(env)
+  if (!path) return
+  const request = takeRequest(path, process.pid)
+  if (!request) return
+  const result = { id: request.id, ...(await switchModel(pi, ctx, request)) }
+  if (result.status === "switched") {
+    pi.appendEntry("bercail-desk-model", { from: result.from, to: result.model, by: "bercail desk model" })
+    const record = deskRecordPath(env)
+    const prev = record && readJSON(record)
+    if (prev && prev.address === env.HC_TERMINAL_ID && prev.pid === process.pid) {
+      try {
+        writeAtomic(record, `${JSON.stringify({ ...prev, args: withModel(prev.args, result.model) })}\n`)
+      } catch {}
+    }
+    try {
+      await pi.exec("hc", ["label", env.HC_TERMINAL_ID, `bercail.model=${result.model}`], { timeout: 5000 })
+    } catch {}
+    if (ctx.hasUI) ctx.ui.notify(`bercail desk model: ${result.from} → ${result.model}`, "info")
+  } else if (ctx.hasUI) {
+    ctx.ui.notify(`bercail desk model refused: ${result.reason}`, "warning")
+  }
+  try {
+    writeAtomic(path.replace(/\.json$/, ".done.json"), `${JSON.stringify(result)}\n`, 0o600)
+  } catch {}
+}
+
+// Only between runs: a run in flight finishes on the model it started with.
+export function modelWatch(pi, ctx) {
+  let busy = false
+  return async () => {
+    if (busy || !ctx.isIdle()) return
+    busy = true
+    try {
+      await takeModelRequest(pi, ctx)
+    } catch {
+    } finally {
+      busy = false
+    }
+  }
+}
+
 // /new and /resume replace the runtime and fire session_start again. Shutdown
 // must not clear the session: a reboot still needs it.
 export default function (pi: ExtensionAPI) {
+  let timer = null
   pi.on("session_start", (_event, ctx) => {
     publish(ctx)
+    if (timer || !modelRequestPath(process.env)) return
+    timer = setInterval(modelWatch(pi, ctx), 1000)
+    timer.unref?.()
   })
   pi.on("session_info_changed", (_event, ctx) => {
     publish(ctx)
+  })
+  pi.on("session_shutdown", () => {
+    clearInterval(timer)
+    timer = null
   })
 }
