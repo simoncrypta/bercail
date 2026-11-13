@@ -9,8 +9,8 @@ bstack comes with every bercail install: the desk runs its Pi lead.
 bercail bstack setup
 ```
 
-It installs [Pi](https://pi.dev) when it is missing (bstack needs 1.2.0 or
-newer) and the Claude bridge (`npm:pi-claude-bridge@0.11.0`), then prints the
+It installs [Pi](https://pi.dev) when it is missing (bstack needs 1.5.1 or
+newer) and the Claude bridge (`npm:pi-claude-bridge@0.12.0`), then prints the
 sign-ins that are still missing:
 
 | Plan | How to sign in |

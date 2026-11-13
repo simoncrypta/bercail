@@ -39,7 +39,7 @@ mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$box/bin" "$XDG_STATE_HOME/bercail/desk-ses
 cat >"$box/bin/pi" <<'PI'
 #!/usr/bin/env bash
 case "$1" in
-  --version) if [[ -n "$REAL_PI" ]]; then "$REAL_PI" --version; else echo 1.5.0; fi ;;
+  --version) if [[ -n "$REAL_PI" ]]; then "$REAL_PI" --version; else echo 1.5.2; fi ;;
   --offline) printf 'provider model context max-out thinking images\nclaude-bridge claude-opus-5-5 1M 128K yes yes\n' ;;
   install) exit 0 ;;
   auth) printf '{"status":"not_ready"}\n'; exit 1 ;;

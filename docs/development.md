@@ -51,7 +51,7 @@ Installed if missing: the [Herdr app](https://herdr.dev) with herdr-core (`herdr
 
 worktrunk and beads install the same way: skip if present, else mise, else Homebrew (`brew install worktrunk` / `brew install beads`), else upstream (worktrunk's GitHub release; the [beads installer](https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh), which puts `bd` in `/usr/local/bin` when writable, else `~/.local/bin`).
 
-The desk agent: [Pi](https://pi.dev) (mise), 1.2.0+, with `npm:pi-claude-bridge@0.11.0`; the bridge runs `claude` on your Claude plan, so a Claude plan needs `claude` installed and signed in too.
+The desk agent: [Pi](https://pi.dev) (mise), 1.5.1+, with `npm:pi-claude-bridge@0.12.0`; the bridge runs `claude` on your Claude plan, so a Claude plan needs `claude` installed and signed in too.
 
 ## platforms
 

@@ -347,7 +347,7 @@ _pi_ready() {
   mkdir -p "$profile/extensions" "$profile/agents" "$BATS_TEST_TMPDIR/bin"
   printf '// guard\n' >"$guard"
   jq -n --arg guard "$guard" --arg model "claude-bridge/lead-model:high" \
-    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard]' >"$profile/lead.json"
+    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.12.0","-e",$guard]' >"$profile/lead.json"
   export HANDOFF_PI_PROFILE="$profile"
   export HANDOFF_PI_BIN="$BATS_TEST_TMPDIR/bin/pi-missing"
 }
@@ -1256,7 +1256,7 @@ STUB
     || fail "spawn failed: $out $(cat "$BATS_TEST_TMPDIR/model-branch.err")"
   lead="$HANDOFF_PI_PROFILE/lead.json"
   jq -e --arg e "$(jq -r '.[6]' "$lead")" '.[0:2] == ["--offline", "--list-models"]
-    and index(["-e", "npm:pi-claude-bridge@0.11.0"]) and index(["-e", $e]) and (index("--model") | not)' \
+    and index(["-e", "npm:pi-claude-bridge@0.12.0"]) and index(["-e", $e]) and (index("--model") | not)' \
     "$PI_LIST_LOG" >/dev/null || fail "Pi lists models with the lead's extensions: $(cat "$PI_LIST_LOG")"
   printf '%s' "$out" | jq -e '.model == "claude-bridge/fable:high" and .agent_started == true' >/dev/null \
     || fail "no thinking level takes the lead's: $out"
@@ -1329,7 +1329,7 @@ _pi_profile() {
   printf '// guard\n' >"$guard"
   jq -n --arg guard "$guard" --arg model "claude-bridge/lead-model:high" \
     --arg prompts "$profile/prompts" --arg instructions "$profile/instructions.md" \
-    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard,"--prompt-template",$prompts,"--append-system-prompt",$instructions]' \
+    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.12.0","-e",$guard,"--prompt-template",$prompts,"--append-system-prompt",$instructions]' \
     >"$profile/lead.json"
   printf '%s' "$profile"
 }
@@ -1396,7 +1396,7 @@ _pi_profile() {
   jq -e '.status == "blocked" and (.summary | test("bercail update"))' "$wt/.bercail/handoff-result.json" >/dev/null \
     || fail "missing lead.json result: $(cat "$wt/.bercail/handoff-result.json") $err"
   rm -f "$wt/.bercail/handoff-result.json"
-  jq -n --arg model "claude-bridge/lead-model:high" '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0"]' >"$HANDOFF_PI_PROFILE/lead.json"
+  jq -n --arg model "claude-bridge/lead-model:high" '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.12.0"]' >"$HANDOFF_PI_PROFILE/lead.json"
   rc=0
   err="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" 2>&1)" || rc=$?
   [[ "$rc" -ne 0 ]] || fail "missing guard should block"

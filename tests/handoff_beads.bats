@@ -105,7 +105,7 @@ spawn_headless() {
   mkdir -p "${stub%/*}" "$profile/extensions" "$profile/agents"
   printf '// guard\n' >"$profile/extensions/guard.ts"
   jq -n --arg guard "$profile/extensions/guard.ts" --arg model "claude-bridge/lead-model:high" \
-    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard]' >"$profile/lead.json"
+    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.12.0","-e",$guard]' >"$profile/lead.json"
   cat >"$stub" <<'STUB'
 #!/usr/bin/env bash
 jq -nc --arg sid "${BERCAIL_SESSION_ID:-none}" \
@@ -153,7 +153,7 @@ HELPER
   mkdir -p "$HOME/.local/share/bercail/pi/extensions"
   printf '// guard\n' >"$HOME/.local/share/bercail/pi/extensions/guard.ts"
   jq -n --arg guard "$HOME/.local/share/bercail/pi/extensions/guard.ts" --arg model "claude-bridge/lead-model:high" \
-    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard]' \
+    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.12.0","-e",$guard]' \
     >"$HOME/.local/share/bercail/pi/lead.json"
   (cd "$main" && PATH="$bin:$PATH" HERDR_APP_BIN="$bin/herdr-app" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" \

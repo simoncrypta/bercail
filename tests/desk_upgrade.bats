@@ -222,7 +222,7 @@ upgrade_pi() {
   cat >"$TOOLS/pi" <<'SH'
 #!/bin/sh
 case "$1" in
-  --version) echo 1.5.0 ;;
+  --version) echo 1.5.2 ;;
   --offline) printf '%s\n' 'provider model context max-out thinking images' 'claude-bridge claude-opus-5-5 1M 128K yes yes' ;;
   auth) echo '{"status":"not_ready"}'; exit 1 ;;
   install) exit 0 ;;

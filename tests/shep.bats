@@ -21,7 +21,7 @@ setup() {
   cp "$ROOT/shep/SHEP.md" "$ROOT/shep/BACKGROUND.md" "$SHARE/"
   cp "$ROOT/shep/pi/inbox.ts" "$ROOT/shep/pi/compaction.ts" "$SHARE/pi/"
   # bstack's lead, as deploy writes it.
-  jq -n '["pi","--model","fake/lead:high","-e","npm:pi-claude-bridge@0.11.0","-e","/x/fallback.ts","--append-system-prompt","/x/instructions.md","--skill","/x/bstack"]' \
+  jq -n '["pi","--model","fake/lead:high","-e","npm:pi-claude-bridge@0.12.0","-e","/x/fallback.ts","--append-system-prompt","/x/instructions.md","--skill","/x/bstack"]' \
     >"$HOME/.local/share/bercail/pi/lead.json"
 
   # pi: logs where it ran, what it got, and whether the Anthropic env came through.
@@ -109,7 +109,7 @@ EOF
   start_pi
   grep -qx "pi cwd=$STATE/workspace inbox=$STATE/inbox role=shep anthropic=unset" "$LOG" || fail "Pi env: $(grep '^pi cwd' "$LOG")"
   args="$(sed -n 's/^pi-arg //p' "$LOG" | tr '\n' ' ')"
-  for want in "--model fake/lead:high" "-e npm:pi-claude-bridge@0.11.0" "-e /x/fallback.ts" "-e $SHARE/pi/inbox.ts" \
+  for want in "--model fake/lead:high" "-e npm:pi-claude-bridge@0.12.0" "-e /x/fallback.ts" "-e $SHARE/pi/inbox.ts" \
     "-e $SHARE/pi/compaction.ts" "--append-system-prompt $SHARE/SHEP.md" "--append-system-prompt $STATE/context.md" \
     "--no-context-files" "--approve" "--session-dir $STATE/pi-sessions" "--continue" \
     "--skill $HOME/.agents/skills/handoff" "--skill $HOME/.agents/skills/review"; do
@@ -150,7 +150,7 @@ EOF
     env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u BERCAIL_SHEP_INBOX
     BERCAIL_ROLE=shep-bg TERM=xterm-256color COLORTERM=truecolor bercail-desk-agent
     --prompt 'Your job is beads issue bc-1: Wait for CI on PR 12, then merge it. Run `bd show bc-1` (read its comments too) and do exactly what it describes, then stop.'
-    pi --model fake/lead:high -e npm:pi-claude-bridge@0.11.0 -e /x/fallback.ts
+    pi --model fake/lead:high -e npm:pi-claude-bridge@0.12.0 -e /x/fallback.ts
     --append-system-prompt /x/instructions.md --skill /x/bstack --append-system-prompt "$SHARE/BACKGROUND.md")
   [[ "$(printf '%s\n' "${argv[@]}")" == "$(printf '%s\n' "${want[@]}")" ]] \
     || fail "hc run argv: $(diff <(printf '%s\n' "${want[@]}") <(printf '%s\n' "${argv[@]}"))"

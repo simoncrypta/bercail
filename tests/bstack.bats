@@ -29,22 +29,22 @@ setup() {
 #!/usr/bin/env bash
 if [[ "$*" == *--credentials* ]]; then echo "credentials must never be requested" >&2; exit 9; fi
 case "$1" in
-  --version) echo "${FAKE_PI_VERSION:-1.5.0}" ;;
+  --version) echo "${FAKE_PI_VERSION:-1.5.2}" ;;
   install)
-    [[ "$2" == npm:pi-claude-bridge@0.11.0 ]] || exit 2
+    [[ "$2" == npm:pi-claude-bridge@0.12.0 ]] || exit 2
     [[ -z "${FAKE_PI_INSTALL_FAIL:-}" ]] || exit 1
     mkdir -p "$HOME/.pi"
     touch "$HOME/.pi/bridge-installed"
     mkdir -p "$HOME/.pi/agent"
     [[ -f "$HOME/.pi/agent/settings.json" ]] || printf '{}\n' >"$HOME/.pi/agent/settings.json"
-    jq '.packages = ((.packages // []) + ["npm:pi-claude-bridge@0.11.0"] | unique)' \
+    jq '.packages = ((.packages // []) + ["npm:pi-claude-bridge@0.12.0"] | unique)' \
       "$HOME/.pi/agent/settings.json" >"$HOME/.pi/settings.tmp"
     mv "$HOME/.pi/settings.tmp" "$HOME/.pi/agent/settings.json"
     printf '%s\n' "$*" >>"$HOME/.pi/install-log"
     ;;
   list)
     [[ -f "$HOME/.pi/bridge-installed" && -z "${FAKE_PI_BRIDGE_MISSING:-}" ]] || exit 0
-    printf 'User packages:\n  npm:pi-claude-bridge@0.11.0\n    /fake/bridge\n'
+    printf 'User packages:\n  npm:pi-claude-bridge@0.12.0\n    /fake/bridge\n'
     ;;
   auth)
     for id in ${FAKE_PI_READY:-}; do
@@ -52,7 +52,7 @@ case "$1" in
     done
     printf '{"status":"not_ready"}\n'; exit 1 ;;
   --offline)
-    [[ "$*" == '--offline -e npm:pi-claude-bridge@0.11.0 --list-models' ]] || exit 2
+    [[ "$*" == '--offline -e npm:pi-claude-bridge@0.12.0 --list-models' ]] || exit 2
     [[ -f "$HOME/.pi/bridge-installed" && -z "${FAKE_PI_BRIDGE_MISSING:-}" ]] || exit 3
     cat <<'EOF'
 provider   model                       context  max-out  thinking  images
@@ -342,7 +342,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     || fail "review-pr's reviewer: $(cat "$p/review.json")"
   [[ -f "$p/agents/bstack-headless.md" ]] || fail "headless lead brief"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
-    and (index(["-e", "npm:pi-claude-bridge@0.11.0"]) != null)
+    and (index(["-e", "npm:pi-claude-bridge@0.12.0"]) != null)
     and (index(["-e", "\($p)/extensions/fallback.ts", "-e", "\($p)/extensions/guard.ts"]) != null)
     and (index(["--prompt-template", "\($p)/prompts"]) != null)
     and (index(["--append-system-prompt", "\($p)/instructions.md"]) != null)
@@ -359,7 +359,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     sed -n 5p "$t/$rel.md" | grep -qx -- '---' || fail "frontmatter holds only key: value in $rel"
     grep -q ' pi ' "$t/$rel.md" || fail "$rel runs pi"
     grep -q -- "-e $p/extensions/fallback.ts -e $p/extensions/guard.ts" "$t/$rel.md" || fail "$rel loads fallback then guard"
-    grep -q -- "-e npm:pi-claude-bridge@0.11.0" "$t/$rel.md" || fail "$rel loads bridge"
+    grep -q -- "-e npm:pi-claude-bridge@0.12.0" "$t/$rel.md" || fail "$rel loads bridge"
     grep -q -- "env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN " "$t/$rel.md" || fail "$rel unsets Anthropic env"
     grep -q -- "--prompt-template $p/prompts" "$t/$rel.md" || fail "--prompt-template in $rel"
     grep -q -- "--append-system-prompt $p/instructions.md" "$t/$rel.md" || fail "instructions in $rel"
@@ -374,7 +374,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   grep -q 'bstack-builder.md' "$t/bstack-builder.md" || fail "builder brief"
 
   assert_eq 'mine' "$(jq -r .defaultModel "$HOME/.pi/agent/settings.json")" "unrelated settings preserved"
-  jq -e '.packages == ["npm:pi-claude-bridge@0.11.0"]' "$HOME/.pi/agent/settings.json" >/dev/null || fail "bridge installed"
+  jq -e '.packages == ["npm:pi-claude-bridge@0.12.0"]' "$HOME/.pi/agent/settings.json" >/dev/null || fail "bridge installed"
   assert_eq '{"token":"secret"}' "$(cat "$HOME/.pi/agent/auth.json")" "auth.json untouched"
 
   grep -qx 'grok=xai/grok-4.7#high' "$p/models" || fail "resolved models: $(cat "$p/models")"
@@ -511,7 +511,7 @@ EOF
     eval "$cmd"
     grep -qxF "$(PI_DIR)/extensions/fallback.ts" "$FAKE_PI_LAUNCH_LOG" || fail "fallback in $template"
     grep -qxF "$(PI_DIR)/extensions/guard.ts" "$FAKE_PI_LAUNCH_LOG" || fail "guard in $template"
-    grep -qxF 'npm:pi-claude-bridge@0.11.0' "$FAKE_PI_LAUNCH_LOG" || fail "bridge in $template"
+    grep -qxF 'npm:pi-claude-bridge@0.12.0' "$FAKE_PI_LAUNCH_LOG" || fail "bridge in $template"
     if grep -q '^ANTHROPIC_' "$FAKE_PI_LAUNCH_LOG.env"; then
       fail "Anthropic env leaked from $template"
     fi
@@ -520,7 +520,7 @@ EOF
   eval "$cmd"
   grep -qxF "$(PI_DIR)/extensions/fallback.ts" "$FAKE_PI_LAUNCH_LOG" || fail "lead fallback"
   grep -qxF "$(PI_DIR)/extensions/guard.ts" "$FAKE_PI_LAUNCH_LOG" || fail "lead guard"
-  grep -qxF 'npm:pi-claude-bridge@0.11.0' "$FAKE_PI_LAUNCH_LOG" || fail "lead bridge"
+  grep -qxF 'npm:pi-claude-bridge@0.12.0' "$FAKE_PI_LAUNCH_LOG" || fail "lead bridge"
   if grep -q '^ANTHROPIC_' "$FAKE_PI_LAUNCH_LOG.env"; then
     fail "Anthropic env leaked from lead"
   fi
@@ -621,7 +621,7 @@ EOF
   if out="$(FAKE_PI_BRIDGE_MISSING=1 doctor_bstack)"; then
     fail "doctor missing actual bridge despite declaration"
   fi
-  grep -q 'missing  bridge npm:pi-claude-bridge@0.11.0' <<<"$out" || fail "doctor bridge: $out"
+  grep -q 'missing  bridge npm:pi-claude-bridge@0.12.0' <<<"$out" || fail "doctor bridge: $out"
   out="$(FAKE_PI_BRIDGE_MISSING=1 bstack_status)"
   grep -q 'bridge: missing' <<<"$out" || fail "status broken bridge: $out"
   out="$(FAKE_PI_READY='openai' doctor_bstack)" || true
@@ -638,9 +638,9 @@ EOF
   grep -q 'Claude auth: ready' <<<"$(FAKE_CLAUDE_AUTH_METHOD=oauth_token bstack_status)" || fail "status accepts oauth_token"
   unset FAKE_CLAUDE_AUTH_METHOD
   [[ "$(FAKE_PI_READY=anthropic _bstack_pi_connected_ids)" != *claude-bridge* ]] || fail "Pi anthropic login must not imply Claude Code login"
-  if out="$(FAKE_PI_VERSION=1.1.9 doctor_bstack)"; then fail "doctor old Pi"; fi
-  grep -q 'bstack needs >=1.2.0' <<<"$out" || fail "doctor old version: $out"
-  if FAKE_PI_VERSION=1.1.9 deploy_bstack >/dev/null 2>&1; then fail "deploy old Pi"; fi
+  if out="$(FAKE_PI_VERSION=1.5.0 doctor_bstack)"; then fail "doctor old Pi"; fi
+  grep -q 'bstack needs >=1.5.1' <<<"$out" || fail "doctor old version: $out"
+  if FAKE_PI_VERSION=1.5.0 deploy_bstack >/dev/null 2>&1; then fail "deploy old Pi"; fi
   unset FAKE_PI_READY
 }
 

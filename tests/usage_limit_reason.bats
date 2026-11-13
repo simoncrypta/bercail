@@ -37,7 +37,7 @@ STUB
   guard="$profile/extensions/guard.ts"
   printf '// guard\n' >"$guard"
   jq -n --arg guard "$guard" --arg model "claude-bridge/lead-model:high" \
-    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.11.0","-e",$guard]' >"$profile/lead.json"
+    '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.12.0","-e",$guard]' >"$profile/lead.json"
   export HANDOFF_PI_PROFILE="$profile"
   export HANDOFF_PI_BIN="$BATS_TEST_TMPDIR/bin/pi"
   export HANDOFF_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"

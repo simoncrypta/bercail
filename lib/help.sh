@@ -106,7 +106,7 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green; pushes, never
   merges), /pr-review (bercail review-pr's read-only decisions pass).
   Settings: [bstack] in config.toml.
-  Pi >=1.2 with pi-claude-bridge@0.11.0. Claude uses claude auth login; GPT and
+  Pi >=1.5.1 with pi-claude-bridge@0.12.0. Claude uses claude auth login; GPT and
   Grok use /login openai and /login xai in pi. bercail update renders
   ~/.local/share/bercail/pi/ and herdr-core templates, and sets a 40k compaction
   reserve per claude-bridge model in Pi's settings.json, so Pi compacts before
