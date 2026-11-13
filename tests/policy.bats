@@ -243,3 +243,50 @@ EOF
   [[ "$(decide "$SCRATCH" "git commit -m x" headless)" == allow ]] || fail "a scratch commit did not go through"
   [[ "$(decide "$SCRATCH" "git push /tmp/x.git HEAD:main")" == ask ]] || fail "a scratch push did not ask"
 }
+
+# A policy file in the main checkout with the review keys in $1, untracked.
+review_policy() {
+  mkdir -p "$REPO/.bercail"
+  printf '%b' "$1" >"$REPO/.bercail/policy.toml"
+}
+
+@test "review keys: by stakes, no high-stakes path, and budgets of 400 and 1000 lines by default" {
+  local REPO WT
+  init_repo
+  [[ "$(field "$REPO" '.policy | [.review, (.high_stakes | length), .diff_budget, .review_budget] | join(" ")')" == "by-stakes 0 400 1000" ]] \
+    || fail "defaults: $(policy show --json "$REPO" | jq -c .policy)"
+}
+
+@test "review keys: review none and a bigger budget wait for trust; high_stakes and a smaller budget apply at once" {
+  local REPO WT out
+  init_repo
+  review_policy 'review = "none"\ndiff_budget = 800\nreview_budget = 500\nhigh_stakes = ["lib/policy.sh"]\n'
+  out="$(policy show --json "$REPO")"
+  jq -e '.policy.review == "by-stakes" and .policy.diff_budget == 400 and .policy.review_budget == 500
+    and .policy.high_stakes == ["lib/policy.sh"] and .untrusted == ["review", "diff_budget"]' <<<"$out" >/dev/null \
+    || fail "untrusted: $out"
+  policy trust "$REPO" >/dev/null
+  [[ "$(field "$REPO" '.policy | [.review, .diff_budget] | join(" ")')" == "none 800" ]] || fail "trusted: $(policy show --json "$REPO" | jq -c .policy)"
+}
+
+@test "review keys: high_stakes takes one glob a line, without blanks or comments, or a one-line array, and show lists them" {
+  local REPO WT
+  init_repo
+  review_policy 'high_stakes = """\nlib/policy.sh\n# the installer\n  install.sh  \n\n"""\n'
+  [[ "$(field "$REPO" '.policy.high_stakes | join(",")')" == "lib/policy.sh,install.sh" ]] || fail "lines: $(policy show --json "$REPO" | jq -c .policy.high_stakes)"
+  policy show "$REPO" | grep -qx '  install.sh' || fail "show lists the globs: $(policy show "$REPO")"
+  review_policy 'high_stakes = ["workers/", "site/worker*"]\n'
+  [[ "$(field "$REPO" '.policy.high_stakes | join(",")')" == "workers/,site/worker*" ]] || fail "array: $(policy show --json "$REPO" | jq -c .policy.high_stakes)"
+}
+
+@test "review keys: bad values warn and fall back" {
+  local REPO WT err
+  init_repo
+  mkdir -p "$REPO/.bercail"
+  printf 'review = "sometimes"\nhigh_stakes = ["../outside", ":(top)x"]\ndiff_budget = 0\nreview_budget = "lots"\n' >"$REPO/.bercail/policy.toml"
+  err="$(policy show --json "$REPO" 2>&1 >/dev/null)"
+  [[ "$err" == *'review = "sometimes" is not allowed'* && "$err" == *'high_stakes = ["../outside",":(top)x"] is not allowed'* \
+    && "$err" == *'diff_budget = 0 is not allowed'* && "$err" == *'review_budget = "lots" is not allowed'* ]] || fail "warnings: $err"
+  [[ "$(field "$REPO" '[.sources.review, .sources.high_stakes, .sources.diff_budget] | join(" ")' 2>/dev/null)" == "default default default" ]] \
+    || fail "bad values were used: $(policy show --json "$REPO" 2>/dev/null | jq -c .sources)"
+}

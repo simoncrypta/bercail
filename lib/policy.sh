@@ -18,7 +18,12 @@ source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
 POLICY_FILE=".bercail/policy.toml"
 
 # Today's behavior: the guard asks before a commit or push, and no agent releases.
-POLICY_DEFAULTS='{"commit":"ask","push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"rules":"","pr_template":"","provenance":"line"}'
+# Review is by stakes, with no path marked high-stakes until the repo names one.
+# diff_budget: lines one change adds and removes before /validate warns, past
+# the 200 to 400 a reviewer reads well in one sitting. review_budget: lines
+# waiting on the person's review before Shep warns at a new desk, about two
+# hours of review.
+POLICY_DEFAULTS='{"commit":"ask","push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000}'
 
 _policy_err() {
   printf 'bercail policy: %s\n' "$*" >&2
@@ -39,10 +44,12 @@ _policy_hash() {
 
 # The known keys among toml_records lines on stdin, as one JSON object. Unknown
 # keys, bad values, and lines the reader could not take warn on stderr (naming
-# $1) and are left out.
+# $1) and are left out. high_stakes is an array, or a string with one glob a
+# line, since the TOML reader takes only one-line arrays.
 _policy_object() {
   local out
   out="$(jq -sr --arg where "$1" '
+    def globs: if type == "string" then [split("\n")[] | sub("^\\s+"; "") | sub("\\s+$"; "") | select(. != "" and (startswith("#") | not))] else . end;
     def ok($k; $v):
       if $k == "commit" then $v == "ask" or $v == "allow"
       elif $k == "push" then $v == "ask" or $v == "branch" or $v == "main"
@@ -51,8 +58,12 @@ _policy_object() {
       elif $k == "release" or $k == "rules" then ($v | type) == "string"
       elif $k == "provenance" then $v == "line" or $v == "trailer" or $v == "none"
       elif $k == "pr_template" then ($v | type) == "string" and ($v | test("^/|(^|/)\\.\\.(/|$)") | not)
+      elif $k == "review" then $v == "always" or $v == "by-stakes" or $v == "none"
+      elif $k == "high_stakes" then ($v | type) == "array"
+        and all($v[]; type == "string" and length > 0 and (test("^[/:]|(^|/)\\.\\.(/|$)") | not))
+      elif $k == "diff_budget" or $k == "review_budget" then ($v | type) == "number" and $v >= 1 and $v == ($v | floor)
       else null end;
-    (map(select(has("value")) | .ok = ok(.key; .value))) as $rows
+    (map(select(has("value")) | if .key == "high_stakes" then .value |= globs else . end | .ok = ok(.key; .value))) as $rows
     | ($rows | map(select(.ok == true) | {(.key): .value}) | add // {} | tojson),
       (.[] | select(has("error")) | "bercail policy: \($where) line \(.line): \(.error)"),
       (.[] | select(has("raw")) | "bercail policy: \($where) line \(.line): \(.key) = \(.raw): use a quoted string, true, or false"),
@@ -129,7 +140,8 @@ policy_json() {
     --argjson trusted "$trusted" --argjson scratch "$scratch" \
     --argjson repo "$repo" --argjson local "$local_" --argjson defaults "$POLICY_DEFAULTS" '
     def looser($k; $v):
-      ($k == "commit" and $v == "allow") or ($k == "push" and $v != "ask") or ($k == "agent_may_release" and $v == true);
+      ($k == "commit" and $v == "allow") or ($k == "push" and $v != "ask") or ($k == "agent_may_release" and $v == true)
+      or ($k == "review" and $v == "none") or (($k == "diff_budget" or $k == "review_budget") and $v > $defaults[$k]);
     ($defaults | keys_unsorted) as $keys
     | [ $keys[] as $k
         | if $local | has($k) then {k: $k, v: $local[$k], from: "local"}
@@ -190,8 +202,9 @@ _policy_show() {
       else "\(.file) (not trusted: bercail policy trust \(.root))" end),
     (if .scratch then "scratch: a temp repo with no remote; the guard lets commits through" else empty end),
     "",
-    (.sources as $s | .policy | to_entries[] | select(.key != "rules" and .key != "release")
-      | "  \(.key | . + ("                   "[length:]))\(.value | tostring | if . == "" then "-" else . end | . + ("        "[length:]))  \($s[.key])"),
+    (.sources as $s | .policy | to_entries[] | select(.key != "rules" and .key != "release" and .key != "high_stakes")
+      | "  \(.key | . + ("                   "[length:]))\(.value | tostring | if . == "" then "-" else . end | . + ("          "[length:]))  \($s[.key])"),
+    (if .policy.high_stakes != [] then "", "high_stakes (\(.sources.high_stakes)):", (.policy.high_stakes[] | "  " + .) else empty end),
     (if .policy.release != "" then "", "release (\(.sources.release)):", "  \(.policy.release)" else empty end),
     (if .policy.rules != "" then "", "rules (\(.sources.rules)):", (.policy.rules | sub("\n+$"; "") | split("\n")[] | "  " + .) else empty end)
   ' <<<"$out"

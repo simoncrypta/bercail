@@ -306,6 +306,159 @@ Waiting on the person:
   [[ "$out" == *"(quote the rule)"* ]] || fail "two words: $out"
 }
 
+# The review queue's fixture in ~/Work/app, a GitHub repo whose policy marks
+# lib/*.sh high-stakes and allows 10 lines of review: app-2's desk is done with
+# 6 lines staged (and a lockfile), app-3's desk is gone with 2 lines staged,
+# and app-4's desk is still working on 3. gh lists 5 open PRs.
+queue_fixture() {
+  repo app
+  repo docs
+  git -C "$HOME/Work/app" remote add origin git@github.com:o/app.git
+  mkdir -p "$HOME/Work/app/.bercail"
+  printf 'high_stakes = ["lib/*.sh"]\nreview_budget = 10\n' >"$HOME/Work/app/.bercail/policy.toml"
+  git -C "$HOME/Work/app" add .bercail/policy.toml
+  git -C "$HOME/Work/app" -c user.name=t -c user.email=t@example.invalid commit -q -m policy
+  printf '%s\n' "$HOME/Work/app" "$HOME/Work/docs" >"$STATE/repos"
+  # app-3 is closed, so the queue knows no title for it.
+  issues app 'app-2|Add the export|in_progress' 'app-3|Old job|closed' 'app-4|Still going|in_progress'
+  jq -n '{id: "app-2", title: "Add the export", status: "in_progress", labels: []}' >"$HOME/Work/app/.beads/fake/app-2.json"
+  worktree app export
+  worktree app old
+  worktree app busy
+  mkdir -p "$HOME/Work/app.export/lib"
+  seq 1 6 >"$HOME/Work/app.export/lib/a.sh"
+  seq 1 40 >"$HOME/Work/app.export/yarn.lock"
+  git -C "$HOME/Work/app.export" add lib/a.sh yarn.lock
+  seq 1 2 >"$HOME/Work/app.old/notes.md"
+  git -C "$HOME/Work/app.old" add notes.md
+  seq 1 3 >"$HOME/Work/app.busy/wip.md"
+  git -C "$HOME/Work/app.busy" add wip.md
+  record --arg p "$HOME/Work/app.export" '{path: $p, branch: "export", issue: "app-2", desk: "t8"}'
+  record --arg p "$HOME/Work/app.old" '{path: $p, branch: "old", issue: "app-3", desk: "t5"}'
+  record --arg p "$HOME/Work/app.busy" '{path: $p, branch: "busy", issue: "app-4", desk: "t4"}'
+  desk t8 "$HOME/Work/app.export" "done" '{"bercail.issue": "app-2", "bercail.issue_title": "Add the export"}'
+  desk t4 "$HOME/Work/app.busy" working '{"bercail.issue": "app-4"}'
+  # 12 asks simon for a review; 15 is the old handoff's branch. 13 is a draft,
+  # 14 is approved, 16 is someone else's with no ask.
+  jq -n '[
+    {number: 12, title: "Teammate fix", url: "https://github.com/o/app/pull/12", isDraft: false, reviewDecision: "REVIEW_REQUIRED",
+     headRefName: "fix", reviewRequests: [{login: "simon"}], files: [{path: "a.go", additions: 3, deletions: 1}, {path: "go.sum", additions: 90, deletions: 0}]},
+    {number: 13, title: "Draft", url: "u13", isDraft: true, reviewDecision: "", headRefName: "d", reviewRequests: [{login: "simon"}], files: []},
+    {number: 14, title: "Approved", url: "u14", isDraft: false, reviewDecision: "APPROVED", headRefName: "export", reviewRequests: [], files: []},
+    {number: 15, title: "Old job PR", url: "https://github.com/o/app/pull/15", isDraft: false, reviewDecision: "", headRefName: "old",
+     reviewRequests: [], files: [{path: "x.md", additions: 3, deletions: 0}]},
+    {number: 16, title: "Theirs", url: "u16", isDraft: false, reviewDecision: "", headRefName: "theirs", reviewRequests: [{login: "ana"}], files: []}]' \
+    >"$HC_DATA/prs.json"
+  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'GH'
+#!/usr/bin/env bash
+printf 'gh %s in %s\n' "$*" "$PWD" >>"$LOG"
+case "$1 $2" in
+  "api user") printf 'simon\n' ;;
+  "pr list") cat "$HC_DATA/prs.json" ;;
+  *) exit 2 ;;
+esac
+GH
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+}
+
+@test "shep queue: staged work no desk is still on and PRs that wait on the person, their size and stakes, against the repo's review budget" {
+  local out want
+  queue_fixture
+  out="$(shep queue --repo "$HOME/Work/app.export")" || fail "queue: $out"
+  want="Review queue: 15 lines in 4 changes
+~/Work/app: 15 of 10 lines, over its review budget
+- app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · ~/Work/app.export
+- app-3 · 2 lines staged in 1 file · stakes low · ~/Work/app.old
+- PR #12: Teammate fix · 4 lines · https://github.com/o/app/pull/12
+- PR #15: Old job PR · 3 lines · https://github.com/o/app/pull/15
+~/Work/app is over its review budget: 15 lines wait on the person, the budget is 10. Tell them what waits and ask before you start another desk there."
+  [[ "$out" == "$want" ]] || fail "queue: $(diff <(printf '%s\n' "$want") <(printf '%s\n' "$out"))"
+  if grep -q "^gh .* in $HOME/Work/docs\$" "$LOG"; then fail "gh ran in a repo with no GitHub remote: $(cat "$LOG")"; fi
+}
+
+@test "shep queue: a repo within its budget, and nothing waiting" {
+  local out
+  queue_fixture
+  out="$(shep queue --repo "$HOME/Work/docs")"
+  [[ "$out" == "Review queue: 15 lines in 4 changes"*$'\n'"~/Work/docs: 0 of 1000 lines wait on the person; a new desk fits its review budget." ]] \
+    || fail "a repo with nothing waiting: $out"
+  git -C "$HOME/Work/app.export" reset -q
+  git -C "$HOME/Work/app.old" reset -q
+  printf '[]\n' >"$HC_DATA/prs.json"
+  out="$(shep queue --repo "$HOME/Work/app")"
+  [[ "$out" == "Review queue: nothing waits on the person.
+~/Work/app: 0 of 10 lines wait on the person; a new desk fits its review budget." ]] || fail "empty queue: $out"
+}
+
+@test "shep board ends with the review queue, and leaves it out when nothing waits" {
+  local out
+  queue_fixture
+  out="$(shep board)" || fail "board: $out"
+  [[ "$out" == *$'\nWaiting on the person:\n'*$'\nReview queue: 15 lines in 4 changes\n~/Work/app: 15 of 10 lines, over its review budget\n- app-2: '* ]] \
+    || fail "the board does not end with the queue: $out"
+  git -C "$HOME/Work/app.export" reset -q
+  git -C "$HOME/Work/app.old" reset -q
+  printf '[]\n' >"$HC_DATA/prs.json"
+  [[ "$(shep board)" != *"Review queue"* ]] || fail "an empty queue is on the board: $(shep board)"
+}
+
+@test "shep brief shows the job's staged size and stakes" {
+  local out
+  queue_fixture
+  out="$(shep brief app-2)" || fail "brief: $out"
+  grep -qx "staged: 6 lines in 1 file (1 more left out: lockfiles, generated or binary), stakes high: lib/a.sh; the person reviews it before it is committed or merged" <<<"$out" \
+    || fail "brief does not show the staged change: $out"
+}
+
+@test "shep mistake records each time, with where it happened" {
+  local out file="$STATE/mistakes.jsonl"
+  repo app
+  worktree app login
+  out="$(shep mistake pipefail-grep-q $'printf | grep -q under pipefail\n  SIGPIPEd' --repo "$HOME/Work/app.login" --issue app-1)"
+  [[ "$out" == "recorded pipefail-grep-q: printf | grep -q under pipefail SIGPIPEd" ]] || fail "first: $out"
+  jq -e --arg r "$REAL_HOME/Work/app" '.key == "pipefail-grep-q" and .repo == $r and .issue == "app-1" and (.at | test("^[0-9]{4}-"))' "$file" >/dev/null \
+    || fail "the line: $(cat "$file")"
+}
+
+@test "shep mistake says so from the second time a key shows up, and asks for a guardrail" {
+  local out
+  repo app
+  shep mistake pipefail-grep-q "first" --repo "$HOME/Work/app" --issue app-1 >/dev/null
+  shep mistake desk-pushed-main "another key" >/dev/null
+  out="$(shep mistake pipefail-grep-q "the same in doctor" --issue app-2)"
+  [[ "$out" == "recorded pipefail-grep-q: the same in doctor
+pipefail-grep-q has now happened 2 times; the first: $(date -u +%Y-%m-%d) (app-1, ~/Work/app).
+A mistake seen twice is fixed in the system: file an issue for a guardrail (a lint rule, a test, the guard, or a doctor check) instead of fixing it by hand again." ]] \
+    || fail "second: $out"
+}
+
+@test "shep mistake list groups each key's times, the most frequent first" {
+  local out today
+  today="$(date -u +%Y-%m-%d)"
+  out="$(shep mistake list)"
+  [[ "$out" == 'no mistakes recorded yet; record one with: bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID]' ]] || fail "empty list: $out"
+  shep mistake desk-pushed-main "pushed master itself" >/dev/null
+  shep mistake pipefail-grep-q "first" --issue app-1 >/dev/null
+  shep mistake pipefail-grep-q "second" >/dev/null
+  out="$(shep mistake list)"
+  [[ "$out" == "pipefail-grep-q: 2 times
+  $today  app-1: first
+  $today  second
+desk-pushed-main: 1 time
+  $today  pushed master itself" ]] || fail "list: $out"
+}
+
+@test "shep mistake refuses a bad key, no WHAT, or a --repo that is no checkout, and writes nothing" {
+  local out
+  out="$(shep mistake 'Bad Key' x 2>&1)" && fail "a bad key passed"
+  [[ "$out" == *"KEY is a short name in a-z, 0-9 and -"* ]] || fail "bad key: $out"
+  out="$(shep mistake some-key 2>&1)" && fail "no WHAT passed"
+  [[ "$out" == *'usage: bercail shep mistake KEY "WHAT"'* ]] || fail "no what: $out"
+  out="$(shep mistake some-key x --repo "$BATS_TEST_TMPDIR" 2>&1)" && fail "a --repo that is no checkout passed"
+  [[ "$out" == *"is not a git checkout"* ]] || fail "bad repo: $out"
+  [[ ! -e "$STATE/mistakes.jsonl" ]] || fail "a refused mistake was written: $(cat "$STATE/mistakes.jsonl")"
+}
+
 # pi: logs each run; --list-models prints the table for $FAKE_WINDOW (none when empty).
 settings_pi() {
   cat >"$BATS_TEST_TMPDIR/bin/pi" <<'EOF'

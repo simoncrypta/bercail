@@ -131,7 +131,7 @@ EOF
 @test "the shep usage names every subcommand" {
   local out
   out="$(shep unknown </dev/null 2>&1)" && fail "an unknown subcommand passed"
-  [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | remember "RULE" [--scope SCOPE] | forget N | list' ]] \
+  [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list' ]] \
     || fail "shep usage: $out"
 }
 

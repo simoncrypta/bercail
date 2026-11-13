@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # What Shep knows beyond its session: the person's repos, a lean brief per
-# issue, the job board, the person's standing rules, and Shep's own compaction
-# settings. Sourced by lib/shep.sh.
+# issue, the job board, what waits on the person's review, the person's
+# standing rules, the mistakes ledger, and Shep's own compaction settings.
+# Sourced by lib/shep.sh.
 #
 #   bercail shep repos [--json]
 #   bercail shep brief ISSUE [--repo DIR] [--budget CHARS]
 #   bercail shep board
+#   bercail shep queue [--repo DIR]
 #   bercail shep remember "RULE" [--scope SCOPE] | forget N | list
+#   bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list
 
-# The policy and git-backend libs, on first use: the piped installer sources
-# this file without them.
+# The describe, policy and git-backend libs, on first use: the piped installer
+# sources this file without them.
 _shep_need_policy() {
-  declare -F policy_json >/dev/null && return 0
-  # shellcheck source=lib/policy.sh
-  source "$(dirname "${BASH_SOURCE[0]}")/policy.sh"
+  declare -F desc_change >/dev/null && return 0
+  # shellcheck source=lib/describe.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/describe.sh"
 }
 
 # Context tokens at which Pi compacts Shep, and the recent tokens it keeps.
@@ -173,6 +176,7 @@ _shep_screen_tail() {
 
 shep_brief() {
   local issue="" repo="" budget="$SHEP_BRIEF_BUDGET" records desks rec desk main="" issue_json comments screen="" candidate
+  local worktree change staged=""
   local usage="usage: bercail shep brief ISSUE [--repo DIR] [--budget CHARS]"
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -213,8 +217,13 @@ shep_brief() {
   if [[ "$(jq -r '.state // empty' <<<"$desk")" == blocked ]]; then
     screen="$(_shep_screen_tail "$(jq -r .address <<<"$desk")")"
   fi
+  worktree="$(jq -r '$rec.path // .cwd // empty' --argjson rec "$rec" <<<"${desk:-null}")"
+  if [[ -n "$worktree" && -d "$worktree" ]] && change="$(desc_change "$worktree" 2>/dev/null)" \
+    && jq -e '.files > 0' <<<"$change" >/dev/null 2>&1; then
+    staged="staged: $(desc_change_line "$change")"
+  fi
   jq -nr --arg home "$HOME" --arg repo "$main" --argjson issue "$issue_json" --argjson comments "$comments" \
-    --argjson rec "$rec" --argjson desk "$desk" --arg screen "$screen" --argjson budget "$budget" "$SHEP_JQ_DEFS"'
+    --argjson rec "$rec" --argjson desk "$desk" --arg screen "$screen" --argjson budget "$budget" --arg staged "$staged" "$SHEP_JQ_DEFS"'
     def who: if $desk.bg then "background Shep \($desk.name // $desk.address)" else "desk \($desk.address)" end;
     def trim($n; $id):
       if length <= $n then .
@@ -232,6 +241,7 @@ shep_brief() {
          (if $rec.branch then "branch \($rec.branch)" else empty end),
          (if ($rec.path // $desk.cwd) then "worktree \(($rec.path // $desk.cwd) | tilde)" else empty end),
          ((if $desk then $desk.model else $rec.model end) | if . then "model \(.)" else empty end) ] | join(" · ")),
+      (if $staged != "" then $staged else empty end),
       (if $screen != "" then "\(who) is blocked; its screen ends with:", ($screen | split("\n")[] | "  | " + .),
         "(the whole screen: hc read \($desk.address) --lines 60)" else empty end),
       (if ($reports | length) == 0 then
@@ -285,6 +295,121 @@ shep_board() {
              else empty end),
          ($desks[] | select((.issue | not) and .state == "blocked") | "- \(who(.)) (\(.cwd // "?" | tilde)) is blocked") ]
        | if length > 0 then .[] else "- nothing" end)'
+  _shep_queue_text "$(_shep_queue_json "$repos" "$desks" "$records")"
+}
+
+# --- review queue -------------------------------------------------------------------
+
+# Open PRs in the GitHub repo MAIN that wait on the person, as a JSON array: not
+# a draft, not approved, and either asking LOGIN for a review or opened from a
+# handoff's branch (BRANCHES, a JSON array). Lines leave lockfiles out. []
+# without a github.com remote, or when gh does not answer within 10 seconds.
+_shep_queue_prs() {
+  local main="$1" login="$2" branches="$3" raw
+  grep -q 'github\.com[:/]' <<<"$(git -C "$main" remote -v 2>/dev/null)" || { printf '[]'; return 0; }
+  raw="$(cd "$main" && _git_backend_bounded 10 "${GH_BIN:-gh}" pr list --state open --limit 100 \
+    --json number,title,url,isDraft,reviewDecision,headRefName,reviewRequests,files </dev/null 2>/dev/null)" \
+    || { printf '[]'; return 0; }
+  jq -c --arg repo "$main" --arg login "$login" --argjson branches "$branches" --arg locks "$DESC_LOCKFILES" '
+    ($locks | split(" ")) as $l
+    | [.[]? | select((.isDraft | not) and .reviewDecision != "APPROVED"
+        and (([.reviewRequests[]?.login] | index($login)) or (.headRefName | IN($branches[]))))
+      | {kind: "pr", repo: $repo, number, title, url, branch: .headRefName,
+         lines: ([.files[]? | select(.path | split("/") | last | IN($l[]) | not) | .additions + .deletions] | add // 0)}]' \
+    <<<"$raw" 2>/dev/null || printf '[]'
+}
+
+# What waits on the person's review, as JSON: {items, repos}. An item is a
+# worktree with staged changes whose desk is not working (done, idle, blocked,
+# or gone), or an open PR that waits on them. repos has each
+# repo's lines against its policy's review_budget, for the repos with items.
+_shep_queue_json() {
+  local repos="$1" desks="$2" records="$3" path issue title desk main change gh_repos branches start login="" items='[]'
+  local -A policies=()
+  # \x1f, not a tab: read would merge an empty title's two tabs into one.
+  while IFS=$'\x1f' read -r path issue title desk; do
+    main="$(_shep_main_of "$path")" || continue
+    [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
+    change="$(desc_change "$path" 2>/dev/null)" || continue
+    jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || continue
+    items="$(jq -c --arg repo "$main" --arg path "$path" --arg issue "$issue" --arg title "$title" --arg desk "$desk" --argjson change "$change" '
+      . + [{kind: "staged", repo: $repo, path: $path, issue: (if $issue == "" then null else $issue end),
+            title: (if $title == "" then null else $title end), desk: (if $desk == "" then null else $desk end), change: $change}]' <<<"$items")"
+  done < <(jq -nr --argjson repos "$repos" --argjson desks "$desks" --argjson rec "$records" '
+    ([$repos[].issues // [] | .[] | {key: .id, value: .title}] | from_entries) as $titles
+    | ([$desks[] | select(.bg | not) | select(.cwd) | {path: .cwd, issue, title, desk: .address, state}]
+       + [$rec | to_entries[] | select(.value.path) | {path: .value.path, issue: .key, title: null, desk: .value.desk, state: "gone"}]) as $all
+    | ($all | group_by(.path)[] | select(all(.[]; .state != "working")) | .[0])
+    | [.path, (.issue // ""), (.title // $titles[.issue // ""] // ""), (.desk // "")] | join("\u001f")')
+  gh_repos="$(jq -r '.[] | select(.backend == "gh") | .path' <<<"$repos")"
+  if [[ -n "$gh_repos" ]]; then
+    # Shep's compaction gives the board 60 seconds: no new gh call after 20.
+    start=$SECONDS
+    login="$(_git_backend_bounded 5 "${GH_BIN:-gh}" api user --jq .login </dev/null 2>/dev/null)" || login=""
+    while IFS= read -r main; do
+      ((SECONDS - start < 20)) || break
+      [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
+      # A handoff's worktree is <main>.<branch>, gone or not.
+      branches="$(jq -c --arg m "$main" '[.[] | select(.branch and .path and (.path | startswith($m + "."))) | .branch]' <<<"$records")"
+      items="$(jq -c --argjson prs "$(_shep_queue_prs "$main" "$login" "$branches")" '. + $prs' <<<"$items")"
+    done <<<"$gh_repos"
+  fi
+  for main in "${!policies[@]}"; do
+    printf '%s\t%s\n' "$main" "${policies[$main]:-$POLICY_DEFAULTS}"
+  done | jq -nRc --argjson items "$items" --argjson defaults "$POLICY_DEFAULTS" '
+    ([inputs | split("\t") | {key: .[0], value: (.[1] | fromjson? // $defaults)}] | from_entries) as $p
+    | {items: $items,
+       repos: [$items | group_by(.repo)[] | .[0].repo as $r
+         | ([.[] | .lines // .change.lines] | add) as $lines
+         | {path: $r, lines: $lines, changes: length, budget: ($p[$r].review_budget // $defaults.review_budget),
+            over: ($lines > ($p[$r].review_budget // $defaults.review_budget))}]}'
+}
+
+# The queue for a person to read. With .repo (shep queue --repo), a last line
+# says whether that repo is over its review budget, so Shep asks before
+# another desk there.
+_shep_queue_text() {
+  jq -nr --arg home "$HOME" --argjson q "$1" "$SHEP_JQ_DEFS"'
+    def size: (.lines // .change.lines) as $n | "\($n) line\(if $n == 1 then "" else "s" end)";
+    if ($q.items | length) == 0 then (if $q.repo then "Review queue: nothing waits on the person." else empty end)
+    else
+      "Review queue: \([$q.repos[].lines] | add) lines in \($q.items | length) change\(if ($q.items | length) == 1 then "" else "s" end)",
+      ($q.repos[] | . as $r
+        | "\($r.path | tilde): \($r.lines) of \($r.budget) lines" + (if $r.over then ", over its review budget" else "" end),
+          ($q.items[] | select(.repo == $r.path)
+            | if .kind == "pr" then "- PR #\(.number): \(.title // "" | flat | cut(70)) · \(size) · \(.url)"
+              else "- " + (if .issue then .issue + (if .title then ": \(.title | flat | cut(70))" else "" end) else (.path | tilde) end)
+                + ((.change.files - .change.left_out.files) as $n | " · \(size) staged in \($n) file\(if $n == 1 then "" else "s" end)")
+                + " · stakes \(.change.stakes)" + (if .change.review == "required" then ", needs the person'"'"'s LGTM" else "" end)
+                + (if .issue then " · \(.path | tilde)" else "" end) end))
+    end,
+    ($q.repo // empty
+      | if .over then
+          "\(.path | tilde) is over its review budget: \(.lines) lines wait on the person, the budget is \(.budget). Tell them what waits and ask before you start another desk there."
+        else "\(.path | tilde): \(.lines) of \(.budget) lines wait on the person; a new desk fits its review budget." end)'
+}
+
+shep_queue() {
+  local repo="" main="" queue budget
+  local usage="usage: bercail shep queue [--repo DIR]"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="${2:-}"; shift 2 || shift $# ;;
+      --repo=*) repo="${1#*=}"; shift ;;
+      *) _shep_err "$usage"; return 1 ;;
+    esac
+  done
+  _shep_need_policy
+  if [[ -n "$repo" ]]; then
+    main="$(_shep_main_of "$repo")" || { _shep_err "$repo is not a git checkout"; return 1; }
+  fi
+  queue="$(_shep_queue_json "$(_shep_repos_json)" "$(_shep_desks_json)" "$(_shep_records_json)")"
+  if [[ -n "$main" ]]; then
+    budget="$(policy_json "$main" 2>/dev/null | jq -r .policy.review_budget)" || budget=""
+    queue="$(jq -c --arg m "$main" --argjson b "${budget:-$(jq .review_budget <<<"$POLICY_DEFAULTS")}" '
+      . + {repo: ((.repos[] | select(.path == $m)) // {path: $m, lines: 0, changes: 0} | .budget = $b | .over = (.lines > $b))}' <<<"$queue")"
+  fi
+  _shep_queue_text "$queue"
 }
 
 # --- standing rules ---------------------------------------------------------------
@@ -352,6 +477,71 @@ shep_forget() {
   tmp="$(mktemp "$file.XXXXXX")"
   awk -v n="$n" '/^- / && ++i == n { next } { print }' "$file" >"$tmp" && mv "$tmp" "$file"
   printf 'forgot: %s\n' "${gone#- }"
+}
+
+# --- mistakes ledger -------------------------------------------------------------------
+
+# One JSON line per mistake seen: {at, key, what, repo, issue}. A key seen twice
+# asks for a guardrail instead of another fix by hand.
+shep_mistakes_file() {
+  printf '%s/mistakes.jsonl' "$(shep_state_dir)"
+}
+
+SHEP_MISTAKE_USAGE='usage: bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list'
+
+shep_mistake() {
+  local key="" what="" repo="" issue="" main="" file count
+  [[ "${1:-}" != list ]] || { shift; _shep_mistake_list "$@"; return; }
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="${2:-}"; shift 2 || shift $# ;;
+      --repo=*) repo="${1#*=}"; shift ;;
+      --issue) issue="${2:-}"; shift 2 || shift $# ;;
+      --issue=*) issue="${1#*=}"; shift ;;
+      -*) _shep_err "$SHEP_MISTAKE_USAGE"; return 1 ;;
+      *)
+        if [[ -z "$key" ]]; then key="$1"
+        elif [[ -z "$what" ]]; then what="$1"
+        else _shep_err "$SHEP_MISTAKE_USAGE (quote WHAT)"; return 1; fi
+        shift ;;
+    esac
+  done
+  what="$(printf '%s' "$what" | tr '\n\t\r' '   ' | sed 's/  */ /g; s/^ //; s/ $//')"
+  [[ -n "$key" && -n "$what" ]] || { _shep_err "$SHEP_MISTAKE_USAGE"; return 1; }
+  [[ "$key" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] \
+    || { _shep_err "KEY is a short name in a-z, 0-9 and -, the same each time the mistake shows up (bercail shep mistake list shows the ones in use)"; return 1; }
+  [[ -z "$issue" || "$issue" =~ ^[A-Za-z0-9._-]+$ ]] || { _shep_err "issue id '$issue' has characters a beads id does not"; return 1; }
+  if [[ -n "$repo" ]]; then
+    _shep_need_policy
+    main="$(_shep_main_of "$repo")" || { _shep_err "$repo is not a git checkout"; return 1; }
+  fi
+  file="$(shep_mistakes_file)"
+  mkdir -p "$(dirname "$file")"
+  jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg key "$key" --arg what "$what" --arg repo "$main" --arg issue "$issue" \
+    '{at: $at, key: $key, what: $what} + (if $repo == "" then {} else {repo: $repo} end) + (if $issue == "" then {} else {issue: $issue} end)' >>"$file"
+  count="$(jq -c --arg k "$key" 'select(.key == $k)' "$file" 2>/dev/null | grep -c '' || true)"
+  printf 'recorded %s: %s\n' "$key" "$what"
+  ((count >= 2)) || return 0
+  jq -nr --arg home "$HOME" --arg k "$key" --argjson n "$count" "$SHEP_JQ_DEFS"'
+    [inputs | select(.key == $k)] | first as $f
+    | "\($k) has now happened \($n) times; the first: \($f.at[0:10])" + ([$f.issue, ($f.repo // empty | tilde)] | map(select(.)) | if length > 0 then " (" + join(", ") + ")" else "" end) + ".",
+      "A mistake seen twice is fixed in the system: file an issue for a guardrail (a lint rule, a test, the guard, or a doctor check) instead of fixing it by hand again."' "$file"
+}
+
+# Each key with its count, the most frequent first, then one line per time it
+# happened.
+_shep_mistake_list() {
+  local file
+  [[ $# -eq 0 ]] || { _shep_err "$SHEP_MISTAKE_USAGE"; return 1; }
+  file="$(shep_mistakes_file)"
+  if [[ ! -s "$file" ]]; then
+    printf 'no mistakes recorded yet; record one with: bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID]\n'
+    return 0
+  fi
+  jq -nr --arg home "$HOME" "$SHEP_JQ_DEFS"'
+    [inputs | select(type == "object" and .key)] | group_by(.key) | sort_by(-length, .[0].at)[]
+    | "\(.[0].key): \(length) time\(if length == 1 then "" else "s" end)",
+      (.[] | "  \(.at[0:10])  " + ([.issue, (.repo // empty | tilde)] | map(select(.)) | join(" · ") | if . == "" then "" else . + ": " end) + .what)' "$file"
 }
 
 # --- what Shep gets at start ----------------------------------------------------------

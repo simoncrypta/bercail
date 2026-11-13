@@ -269,3 +269,89 @@ SH
   describe stamp >/dev/null
   describe check 2>&1 | grep -qF 'fail: a provenance line is written by hand' || fail "by hand: $(describe check 2>&1)"
 }
+
+# The policy in $1, committed, so it is no edit of its own.
+committed_policy() {
+  mkdir -p .bercail
+  printf '%b' "$1" >.bercail/policy.toml
+  git add -f .bercail/policy.toml && git commit -qm policy
+}
+
+@test "stakes: a staged path the policy's high_stakes names makes the change high-stakes, and stamp records it" {
+  committed_policy 'high_stakes = """\nlib/\ninstall.sh\n"""\n'
+  described
+  grep -qx 'stakes: low' .bercail/description.md && grep -qx 'review: optional' .bercail/description.md \
+    || fail "a path no glob names is low stakes: $(cat .bercail/description.md)"
+  mkdir -p lib && printf 'x\n' >lib/policy.sh
+  git add lib/policy.sh
+  evidence
+  describe stamp | grep -qx 'the change: 2 lines in 2 files, stakes high: lib/policy.sh; the person reviews it before it is committed or merged' \
+    || fail "stamp says: $(describe stamp)"
+  grep -qx 'stakes: high' .bercail/description.md && grep -qx 'review: required' .bercail/description.md \
+    || fail "frontmatter: $(cat .bercail/description.md)"
+}
+
+@test "stakes: an edit to the policy file, staged or not, makes the change high-stakes" {
+  committed_policy 'high_stakes = ["lib/"]\n'
+  mkdir -p lib && printf 'x\n' >lib/a.sh
+  git add lib/a.sh
+  printf 'high_stakes = []\n' >.bercail/policy.toml
+  describe check --json | jq -e '.change | .stakes == "high" and .high_stakes == [".bercail/policy.toml"] and .review == "required"' >/dev/null \
+    || fail "an unstaged edit lowered the stakes: $(describe check --json | jq -c .change)"
+  git add -f .bercail/policy.toml
+  describe check --json | jq -e '.change.high_stakes == [".bercail/policy.toml"]' >/dev/null \
+    || fail "a staged edit: $(describe check --json | jq -c .change)"
+}
+
+@test "stakes: review = always makes a low-stakes change wait for the person" {
+  mkdir -p "$XDG_CONFIG_HOME/bercail"
+  printf '[policy."%s"]\nreview = "always"\n' "$(pwd -P)" >"$XDG_CONFIG_HOME/bercail/config.toml"
+  change
+  describe check --json | jq -e '.change | .stakes == "low" and .review == "required"' >/dev/null \
+    || fail "review always: $(describe check --json | jq -c .change)"
+}
+
+@test "size: a change over the diff budget warns and never fails; lockfiles, generated and binary files are left out" {
+  local out
+  mkdir -p .bercail
+  printf 'diff_budget = 5\n' >.bercail/policy.toml
+  printf 'gen.js linguist-generated\n' >.gitattributes
+  seq 1 3 >notes.txt
+  seq 1 90 >package-lock.json
+  seq 1 90 >gen.js
+  printf '\0\1\2' >logo.bin
+  git add .gitattributes notes.txt package-lock.json gen.js logo.bin
+  evidence
+  plain_body | description "notes: add lines"
+  describe stamp >/dev/null
+  describe check --json | jq -e '.change | .lines == 4 and .files == 5 and .left_out == {files: 3, lines: 180} and .over_budget == false' >/dev/null \
+    || fail "counted: $(describe check --json | jq -c .change)"
+  [[ "$(describe check 2>&1)" != *"diff budget"* ]] || fail "4 lines warned: $(describe check 2>&1)"
+  seq 4 5 >>notes.txt
+  git add notes.txt
+  evidence
+  describe stamp >/dev/null
+  out="$(describe check 2>&1)" || fail "over the budget failed the check: $out"
+  grep -qx 'warn: the change is 6 lines added and removed, over the diff budget of 5 (lockfiles and generated files left out): split it, or say in the description why it is one change' <<<"$out" \
+    || fail "no size warning: $out"
+}
+
+@test "commit: a change the person reviews first needs --reviewed-by where the repo commits straight to main" {
+  local out
+  committed_policy 'integrate = "direct"\nhigh_stakes = ["file.txt"]\n'
+  described
+  out="$(describe commit 2>&1)" && fail "commit printed a message for an unreviewed high-stakes change: $out"
+  [[ "$out" == *'stakes high: file.txt; the person reviews it before it is committed or merged, and this repo commits straight to main: once they gave their LGTM, pass --reviewed-by "<their name>"' ]] \
+    || fail "the refusal: $out"
+  [[ "$(describe commit --reviewed-by Simon | tail -1)" == "Written with bercail; reviewed by Simon" ]] || fail "with the reviewer: $(describe commit --reviewed-by Simon 2>&1)"
+  describe body >/dev/null || fail "body is not gated"
+}
+
+@test "commit: a PR repo's commit and a low-stakes change need no reviewer" {
+  committed_policy 'integrate = "pr"\nhigh_stakes = ["file.txt"]\n'
+  described
+  describe commit >/dev/null || fail "a PR repo's commit is gated: the person reviews the PR"
+  committed_policy 'integrate = "direct"\n'
+  described
+  describe commit >/dev/null || fail "a low-stakes change is gated: $(describe commit 2>&1)"
+}

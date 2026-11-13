@@ -12,7 +12,10 @@
 #
 # body and commit end with the provenance the policy asks for (provenance =
 # line, trailer or none): that an agent wrote it, on which model, and who
-# reviewed it, from facts only.
+# reviewed it, from facts only. The check also weighs the change for its
+# reviewer: its size against the policy's diff_budget, and its stakes from the
+# policy's high_stakes paths. A change the person must review first gets no
+# commit message without --reviewed-by in a repo that commits straight to main.
 
 # shellcheck source=lib/policy.sh
 source "$(dirname "${BASH_SOURCE[0]}")/policy.sh"
@@ -21,6 +24,8 @@ DESC_FILE=".bercail/description.md"
 DESC_EVIDENCE=".bercail/validate.json"
 # A PR body fits on one screen.
 DESC_MAX_LINES=40
+# Lockfiles, by name: nobody reviews them line by line.
+DESC_LOCKFILES='package-lock.json npm-shrinkwrap.json yarn.lock pnpm-lock.yaml bun.lock bun.lockb deno.lock Cargo.lock Gemfile.lock composer.lock poetry.lock Pipfile.lock uv.lock go.sum flake.lock mix.lock pubspec.lock Podfile.lock packages.lock.json'
 
 _desc_err() {
   printf 'bercail describe: %s\n' "$*" >&2
@@ -124,6 +129,64 @@ _desc_provenance_form() {
   policy_json "$1" 2>/dev/null | jq -r '.policy.provenance // "line" | if . == "" then "line" else . end'
 }
 
+# The staged files as "added<TAB>removed<TAB>path" lines; a binary has - for
+# both. A rename is its new path.
+_desc_numstat() {
+  local rec added removed path
+  git -C "$1" diff --cached --numstat -z | while IFS= read -r -d '' rec; do
+    IFS=$'\t' read -r added removed path <<<"$rec"
+    [[ -n "$path" ]] || { IFS= read -r -d '' path; IFS= read -r -d '' path; }
+    printf '%s\t%s\t%s\n' "$added" "$removed" "$path"
+  done
+}
+
+# The staged change at ROOT as its reviewer meets it, as JSON: the files, the
+# lines added and removed without lockfiles, binaries and files .gitattributes
+# marks linguist-generated (left_out counts those), the high-stakes paths it
+# touches, and whether the person reviews it before it lands (review:
+# required). The policy file itself is always high-stakes once it differs
+# from HEAD, staged or not: this reads the worktree's copy, so a desk that
+# edits high_stakes on its branch must not lower its own change's stakes.
+desc_change() {
+  local root="$1" numstat generated="" high="" glob policy
+  local -a specs=()
+  policy="$(policy_json "$root" 2>/dev/null | jq -c .policy)" || policy=""
+  [[ -n "$policy" ]] || policy="$POLICY_DEFAULTS"
+  numstat="$(_desc_numstat "$root")"
+  if [[ -n "$numstat" ]]; then
+    generated="$(cut -f3- <<<"$numstat" | tr '\n' '\0' | git -C "$root" check-attr -z --stdin linguist-generated \
+      | tr '\0' '\n' | paste - - - | awk -F'\t' '$3 == "set" || $3 == "true" { print $1 }')"
+    while IFS= read -r glob; do
+      specs+=(":(glob)$glob")
+    done < <(jq -r '.high_stakes // [] | .[]' <<<"$policy")
+    ((${#specs[@]} == 0)) || high="$(git -C "$root" diff --cached --no-renames --name-only -- "${specs[@]}")"
+  fi
+  [[ -z "$(git -C "$root" status --porcelain --untracked-files=all -- "$POLICY_FILE")" ]] || high+=$'\n'"$POLICY_FILE"
+  high="$(sort -u <<<"$high" | jq -Rnc '[inputs | select(. != "")]')"
+  jq -Rnc --argjson policy "$policy" --argjson high "$high" --arg gen "$generated" --arg locks "$DESC_LOCKFILES" '
+    ($gen | split("\n")) as $g | ($locks | split(" ")) as $l
+    | [inputs | select(. != "") | split("\t") | {a: .[0], d: .[1], p: (.[2:] | join("\t"))}
+        | .out = (.a == "-" or (.p | IN($g[])) or (.p | split("/") | last | IN($l[])))
+        | .n = (if .a == "-" then 0 else (.a | tonumber) + (.d | tonumber) end)] as $f
+    | ([$f[] | select(.out | not) | .n] | add // 0) as $lines
+    | (if ($high | length) > 0 then "high" else "low" end) as $stakes
+    | {files: ($f | length), lines: $lines,
+       left_out: {files: ([$f[] | select(.out)] | length), lines: ([$f[] | select(.out) | .n] | add // 0)},
+       stakes: $stakes, high_stakes: $high,
+       review: (if $policy.review == "always" or ($policy.review == "by-stakes" and $stakes == "high") then "required" else "optional" end),
+       diff_budget: $policy.diff_budget, over_budget: ($lines > $policy.diff_budget)}' <<<"$numstat"
+}
+
+# One line on CHANGE (desc_change's JSON) for a report: its size and stakes.
+desc_change_line() {
+  jq -r '(.files - .left_out.files) as $n
+    | "\(.lines) line\(if .lines == 1 then "" else "s" end) in \($n) file\(if $n == 1 then "" else "s" end)"
+    + (if .left_out.files > 0 then " (\(.left_out.files) more left out: lockfiles, generated or binary)" else "" end)
+    + ", stakes \(.stakes)"
+    + (if .stakes == "high" then ": " + (.high_stakes | if length > 3 then (.[0:3] | join(", ")) + ", …" else join(", ") end) else "" end)
+    + (if .review == "required" then "; the person reviews it before it is committed or merged" else "" end)' <<<"$1"
+}
+
 # The staged tree: after the commit it equals HEAD^{tree}, so one id names the
 # change before and after it is committed.
 _desc_tree() {
@@ -195,14 +258,15 @@ _desc_body_problems() {
 
 # Everything check knows, as JSON. Exit status is not the verdict; .fails is.
 desc_state() {
-  local root="$1" file evidence title style tree current tpl_json template meta_tpl tpl_text="" body ids line
+  local root="$1" file evidence title style tree current tpl_json template meta_tpl tpl_text="" body ids line change
   local -a fails=() warns=()
   file="$root/$DESC_FILE"
   evidence="$root/$DESC_EVIDENCE"
   current="$(_desc_tree "$root")" || return 1
+  change="$(desc_change "$root")"
   if [[ ! -f "$file" ]]; then
-    jq -nc --arg file "$file" --arg cur "$current" \
-      '{file: $file, tree: null, current_tree: $cur, stale: true, fails: ["no \($file): run /validate"], warns: []}'
+    jq -nc --arg file "$file" --arg cur "$current" --argjson change "$change" \
+      '{file: $file, tree: null, current_tree: $cur, stale: true, change: $change, fails: ["no \($file): run /validate"], warns: []}'
     return 0
   fi
   title="$(_desc_meta "$file" title)"
@@ -227,6 +291,9 @@ desc_state() {
     while IFS= read -r line; do
       warns+=("$line")
     done < <(jq -r '.checks[] | select(.exit_code != 0) | "the check `\(.command)` exited \(.exit_code): say so in the validation"' "$evidence")
+  fi
+  if jq -e .over_budget <<<"$change" >/dev/null; then
+    warns+=("$(jq -r '"the change is \(.lines) lines added and removed, over the diff budget of \(.diff_budget) (lockfiles and generated files left out): split it, or say in the description why it is one change"' <<<"$change")")
   fi
   if git -C "$root" ls-files -- .bercail | grep -qvx '.bercail/policy.toml'; then
     fails+=(".bercail/ runtime files are staged: git rm --cached them; only .bercail/policy.toml is versioned")
@@ -254,13 +321,13 @@ desc_state() {
   fi
   ids="$(_desc_beads_ids "$root")"
   jq -nc --arg file "$file" --arg title "$title" --arg style "$style" --arg template "$template" \
-    --arg tree "$tree" --arg cur "$current" \
+    --arg tree "$tree" --arg cur "$current" --argjson change "$change" \
     --argjson body "$(_desc_body_problems "$body" "$title" "$tpl_text" "$ids")" \
     --argjson fails "$(jq -nc '$ARGS.positional' --args -- "${fails[@]+"${fails[@]}"}")" \
     --argjson warns "$(jq -nc '$ARGS.positional' --args -- "${warns[@]+"${warns[@]}"}")" '
     {file: $file, title: $title, style: $style, template: (if $template == "" then null else $template end),
      tree: (if $tree == "" then null else $tree end), current_tree: $cur,
-     stale: ($tree != $cur), fails: ($fails + $body.fails), warns: ($warns + $body.warns)}'
+     stale: ($tree != $cur), change: $change, fails: ($fails + $body.fails), warns: ($warns + $body.warns)}'
 }
 
 # Keep the runtime dir out of git status, tuicr and git add -A, in a repo that
@@ -276,7 +343,7 @@ _desc_ignore() {
 # Record the staged tree, the template and the agent in the frontmatter. It
 # needs validate.json for that same tree, so a new stamp needs new evidence.
 _desc_stamp() {
-  local root="$1" file tree title style template tpl_json meta_tpl tmp agent
+  local root="$1" file tree title style template tpl_json meta_tpl tmp agent change
   file="$root/$DESC_FILE"
   [[ -f "$file" ]] || { _desc_err "no $file: write the description first (the describe skill)"; return 1; }
   title="$(_desc_meta "$file" title)"
@@ -292,15 +359,18 @@ _desc_stamp() {
   [[ -z "$meta_tpl" ]] || template="$meta_tpl"
   [[ "$style" == pr ]] || template=""
   agent="$(_desc_agent "$root")"
+  change="$(desc_change "$root")"
   tmp="$(mktemp "$file.XXXXXX")"
   {
     printf -- '---\ntitle: %s\ntree: %s\n' "$title" "$tree"
     [[ -z "$template" ]] || printf 'template: %s\n' "$template"
     [[ -z "$agent" ]] || printf 'agent: %s\n' "$agent"
+    jq -r '"stakes: \(.stakes)", "review: \(.review)"' <<<"$change"
     printf -- '---\n'
     _desc_body "$file"
   } >"$tmp" && mv "$tmp" "$file"
   printf 'stamped %s: %s style, tree %s%s\n' "$DESC_FILE" "$style" "${tree:0:12}" "${template:+, template $template}"
+  printf 'the change: %s\n' "$(desc_change_line "$change")"
 }
 
 # Print the problems; 0 when none fail.
@@ -319,6 +389,7 @@ _desc_check() {
   fi
   if _desc_report "$state"; then
     printf 'ok %s: %s style, tree %s\n' "$DESC_FILE" "$(jq -r .style <<<"$state")" "$(jq -r '.tree[0:12]' <<<"$state")"
+    printf 'the change: %s\n' "$(desc_change_line "$(jq -c .change <<<"$state")")"
   else
     return 1
   fi
@@ -330,6 +401,10 @@ _desc_print() {
   local what="$1" root="$2" reviewer="$3" state file body provenance
   state="$(desc_state "$root")" || return 1
   _desc_report "$state" || { _desc_err "not printing a description that fails the check"; return 1; }
+  if [[ "$what" == commit && -z "$reviewer" ]] && jq -e '.style == "commit" and .change.review == "required"' <<<"$state" >/dev/null; then
+    _desc_err "$(desc_change_line "$(jq -c .change <<<"$state")"), and this repo commits straight to main: once they gave their LGTM, pass --reviewed-by \"<their name>\""
+    return 1
+  fi
   file="$root/$DESC_FILE"
   body="$(_desc_body "$file")"
   provenance="$(_desc_provenance "$(_desc_provenance_form "$root")" "$(_desc_meta "$file" agent)" "$reviewer")"

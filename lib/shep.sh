@@ -6,13 +6,13 @@
 #   bercail shep run                       what the Shep view's terminal runs
 #   bercail shep status
 #   bercail shep bg --issue ID [--cwd DIR] a background Shep: waits and follow-through
-#   bercail shep repos | brief | board | remember | forget | list   (lib/shep-context.sh)
+#   bercail shep repos | brief | board | queue | remember | forget | list | mistake   (lib/shep-context.sh)
 
 # shellcheck source=lib/shep-context.sh
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
 SHEP_SKILLS=(handoff review desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | remember \"RULE\" [--scope SCOPE] | forget N | list"
+SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -209,9 +209,11 @@ cmd_shep() {
     repos) shift; shep_repos "$@" ;;
     brief) shift; shep_brief "$@" ;;
     board) shift; shep_board "$@" ;;
+    queue) shift; shep_queue "$@" ;;
     remember) shift; shep_remember "$@" ;;
     forget) shift; shep_forget "$@" ;;
     list) shift; shep_list "$@" ;;
+    mistake) shift; shep_mistake "$@" ;;
     *) _shep_err "$SHEP_USAGE"; return 1 ;;
   esac
 }

@@ -35,8 +35,10 @@ committed.
   <the body>
   ```
 
-  `stamp` adds `tree` (the staged tree it describes), `template`, and `agent`
-  (the harness and model from this desk's record). The style is `commit` when
+  `stamp` adds `tree` (the staged tree it describes), `template`, `agent`
+  (the harness and model from this desk's record), `stakes` (`high` when a
+  staged path matches the policy's `high_stakes`, else `low`) and `review`
+  (`required` when the person reviews it before it lands). The style is `commit` when
   the policy integrates straight to main, else `pr`. When the repo has several
   templates, name yours with `template: <path>`.
 
@@ -52,7 +54,10 @@ committed.
 4. Write `description.md` to the standard. Its validation names the commands in
    `validate.json` and their results.
 5. `bercail describe stamp`, then `bercail describe check`. Fix every `fail:`.
-   Read every `warn:` and fix the ones that are real.
+   Read every `warn:` and fix the ones that are real. A change over the
+   policy's `diff_budget` (lines added and removed, without lockfiles,
+   generated and binary files) warns: split it, or say in the body why it is
+   one change.
 
 Any change to the staged tree after that makes the description stale: a tuicr
 fix, a review fix, a rebase. Rerun the checks it touches, update
@@ -68,6 +73,9 @@ prints it and refuses a stale or failing description. When it refuses, the
 desk reruns /validate. `body` and `commit` end with the provenance line (see
 the standard). Pass `--reviewed-by "<name>"` only when that person reviewed
 this exact change, for example in tuicr; otherwise it says not yet reviewed.
+Where the repo commits straight to main, `commit` refuses a change whose
+`review` is `required` until it gets `--reviewed-by`: the person gives their
+LGTM first.
 
 Each change lands on the trunk as one commit whose message is the
 description. A direct-commit repo gets one commit per finished job. On `gt`,

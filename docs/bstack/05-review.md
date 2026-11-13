@@ -62,6 +62,14 @@ claude-opus-5-5); reviewed by Simon`, or `not yet reviewed` without
 `provenance` key picks `line`, `trailer` (`Assisted-by:` and `Reviewed-by:`),
 or `none`.
 
+The check also weighs the change for you. It warns when the change is over the
+policy's `diff_budget` (400 lines by default, lockfiles and generated files
+left out), so the desk splits it or says why it is one. It marks the change
+high-stakes when a staged path matches the policy's `high_stakes`; with
+`review = "by-stakes"` (the default) such a change waits for your LGTM, and in
+a repo that commits straight to main `bercail describe commit` refuses it
+without `--reviewed-by`. See [review by stakes and size](../config.md#review-by-stakes-and-size).
+
 Each change lands as one commit whose message is the description. On Graphite
 a fix after review amends the PR's commit (`gt m -a`); on GitHub and Origin it
 is a new commit, and you squash-merge with the description as the message.

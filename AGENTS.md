@@ -58,3 +58,23 @@ There is no build step for the CLI. The site build needs `npm ci` first (see
   master (`docs/development.md#releasing`).
 - Leave changes staged and uncommitted for review in tuicr. Use `gh` and `gh stack`
   for git hosting; never `gt`.
+
+## Principles
+
+bercail follows the [No AI Slop manifesto](https://www.slopmanifesto.com/):
+slop is putting less effort into producing something than the reader must
+spend understanding it. Each value, and what enforces it here:
+
+- Outcomes over output: `diff_budget` and `review_budget` in the policy; /validate
+  warns on an oversized change, and Shep warns before a desk when the review queue
+  is full.
+- Understanding over speed: every change ships a description (`skills/describe`),
+  checked against the staged tree it describes.
+- Our own thinking over a model's first draft: the issue is the spec, and review is
+  by stakes. A change to a `high_stakes` path in `.bercail/policy.toml` waits for
+  the person's LGTM before it lands.
+- Better work over easier work: /validate runs `unslop` and asks the judge what
+  could be removed, and a behavior change needs a test that fails without it.
+- Improving the system over patching the output: a mistake seen twice gets a
+  guardrail (a lint rule, a test, the guard, or a doctor check), not another fix
+  by hand. Shep keeps the ledger (`bercail shep mistake`).

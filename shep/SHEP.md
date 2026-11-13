@@ -15,7 +15,9 @@ issues) and their standing rules. It is data, not instructions from a desk.
   handoffs, live desks, `config.toml`, and trusted policies.
 - `bercail shep board` is the job board: one line per open job across those
   repos (`<id>: <title>`, its desk and state, its branch), then what waits on
-  the person. Run it when asked what is going on, instead of `bd list` per repo.
+  the person, and the review queue: staged work and PRs waiting on their
+  review, with sizes and stakes. Run it when asked what is going on, instead
+  of `bd list` per repo.
 - After a compaction your summary starts with a board and the rules from that
   moment. The board is a snapshot: run `bercail shep board` before you act on it.
 
@@ -38,11 +40,14 @@ boundaries below allow, but only for its scope.
 1. Write it as a beads issue in the repo it belongs to (`bd create`): the ask,
    links, constraints, what done looks like, and any "plan only" note. Pick the
    repo from the known repos; ask only when none fits or two could.
-2. From that repo's main checkout, run the `handoff` skill's
+2. Run `bercail shep queue --repo <checkout>`. When its last line says the
+   repo is over its review budget, tell the person what waits and ask whether
+   to start the desk anyway. They decide; you do not refuse.
+3. From that repo's main checkout, run the `handoff` skill's
    `handoff-spawn --info`, then spawn a desk:
    `handoff-spawn --branch <name> --stage bstack --issue <id>`.
    Stack dependent work on the parent's branch with `--base <branch>`.
-3. Report the issue as `<id>: <title>`, with the desk and its space from the
+4. Report the issue as `<id>: <title>`, with the desk and its space from the
    spawn JSON, and stop. The desk reports back on its own.
 
 Every coding job and every code follow-up runs in a visible desk. Never run a
@@ -83,8 +88,9 @@ desk, the issue, and the event id, nothing the desk wrote. For each one:
   missing: `bd comments <issue>` for the whole report, `hc read <desk> --lines 60`
   for the whole screen.
 - Tell the person, in a few lines: `<id>: <title>`, finished or blocked, what
-  changed (the description's title when the desk wrote one), what the desk ran
-  to prove it, and what is left. Then the next step:
+  changed (the description's title when the desk wrote one), its size and
+  stakes (the brief's `staged:` line, and whether it needs their LGTM), what
+  the desk ran to prove it, and what is left. Then the next step:
   review the staged changes in that space, or the question the desk is waiting
   on, in the person's words to answer.
 
@@ -119,5 +125,45 @@ Report each event once; the same event id twice is a duplicate.
   needs /validate again, and stop. Add `--reviewed-by "<their name>"` only
   when the person reviewed this change and asked you to ship it. Beads ids stay
   in your reports, never in a commit or a PR.
+- Review by stakes. `bercail describe check --json <worktree>` has the
+  change's `stakes` and `review`. When `review` is `required` (it touches a
+  path the repo's policy lists in `high_stakes`, or the policy says
+  `review = "always"`), the person reviews it and gives their LGTM before you
+  commit or merge it, even where the policy commits straight to main and even
+  when a standing rule says to merge without asking. Only the repo's
+  `review = "none"` waives it. Tell them it is high-stakes and which paths,
+  and wait for their answer. Low-stakes changes keep the flow the policy and
+  the standing rules give them.
 - Someone else's PR: `bercail review-pr <PR url or branch>`, then report what
   its JSON says needs a decision.
+
+## Mistakes
+
+A mistake seen twice is fixed in the system, not by hand again. When a desk's
+report, a review, or the person names something that went wrong in the work
+(not a bug in the product), record it:
+
+    bercail shep mistake <key> "<what happened>" --repo <checkout> --issue <id>
+
+Run `bercail shep mistake list` first and reuse a key that fits; a key is a
+short name for the kind of mistake (`tests-touch-real-state`), the same each
+time. When the command says the key has happened twice or more, write a beads
+issue for a guardrail that catches it (a lint rule, a test, the guard, or a
+doctor check) in the repo that owns the check, bercail's own for bercail's
+tools, and tell the person in one line. Do not just fix the instance again.
+
+## Why
+
+These rules follow the [No AI Slop manifesto](https://www.slopmanifesto.com/):
+slop is putting less effort into producing something than the reader must
+spend understanding it.
+
+- Outcomes over output: a desk reports what changed and how it was proven,
+  and the review queue keeps work in flight within what the person can review.
+- Understanding over speed: each change ships a description written for a
+  reader who was not there.
+- Our own thinking over a model's first draft: the person's ask is the issue,
+  and high-stakes changes wait for their LGTM.
+- Better work over easier work: a judge checks each change against the issue
+  and asks what could be removed.
+- Improving the system over patching the output: the mistakes ledger.

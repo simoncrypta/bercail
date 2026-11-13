@@ -11,3 +11,25 @@ Desks stage their changes and leave them uncommitted for review in tuicr; Shep m
 Use gh and gh stack for git hosting; never gt.
 A behavior change comes with a test in tests/ that fails without it.
 """
+review = "by-stakes"
+# A change that touches one of these waits for Simon's review before Shep
+# commits it: the guard, the policy, the install and update path, the Workers,
+# CI, and the release files. Git glob pathspecs, one a line. This file is
+# always high-stakes. README.md's release link and pin are left out: they
+# change with each release commit, which Simon cuts himself.
+high_stakes = """
+bstack/pi/extensions/guard.ts
+lib/policy.sh
+install.sh
+bin/bercail
+lib/common.sh
+lib/config.sh
+lib/deps.sh
+lib/uninstall.sh
+site/worker.ts
+site/github.ts
+site/wrangler.jsonc
+.github/workflows/
+manifest.json
+packaging/
+"""

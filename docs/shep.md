@@ -32,7 +32,7 @@ The bercail layout opens on Shep: its terminal fills the window, with the spaces
 - **Start.** The app starts Shep once per session as one hc terminal, `bercail-shep` (label `bercail.role=shep`), outside every space. The terminal runs `bercail shep run`, which starts Shep on Pi. A Shep that is already running, after a window restart for example, is shown again rather than started twice. Quit it and it stays quit until you click **Start Shep**.
 - **Spaces.** Click a space to see it, or press `Ctrl+Space` and search for it: the navigator moves left and the space's desk, tabs and panels fill the rest. **Back to Shep** at the top of the navigator, or `Ctrl+Shift+H`, returns to the same Shep session. Nothing is started or stopped by switching, and the keyboard goes back where it was in each view.
 - **Agents.** Click an agent or a desk in the agents list to open its own terminal in a dialog over either view. While it is open, what you type goes to that agent; nothing is sent for you. ✕ or a click beside the dialog closes it and puts the keyboard back where it was; **Show in space** goes to its space.
-- **Authority.** The view only shows things. Shep's tools and approvals are Pi's with bercail's guard, the same as in any other terminal, and the desks' rules don't change. Shep loads the same guard as the desks, so a repo's trusted [git policy](config.md#git-policy-per-repo) lets Shep's commits and pushes there through as it does a desk's. Shep sits in its own folder, not a repo, so instead of a policy in its prompt it runs `bercail policy show <repo>` before it commits, merges, pushes, or releases. It commits or opens a PR with the description the desk's `/validate` wrote (`bercail describe commit|body`), never one of its own; a stale one goes back to the desk.
+- **Authority.** The view only shows things. Shep's tools and approvals are Pi's with bercail's guard, the same as in any other terminal, and the desks' rules don't change. Shep loads the same guard as the desks, so a repo's trusted [git policy](config.md#git-policy-per-repo) lets Shep's commits and pushes there through as it does a desk's. Shep sits in its own folder, not a repo, so instead of a policy in its prompt it runs `bercail policy show <repo>` before it commits, merges, pushes, or releases. It commits or opens a PR with the description the desk's `/validate` wrote (`bercail describe commit|body`), never one of its own; a stale one goes back to the desk. A [high-stakes](config.md#review-by-stakes-and-size) change waits for your LGTM before Shep commits or merges it, even in a repo that integrates straight to main and even under a standing rule to merge without asking.
 
 When Pi exits with an error, its message stays on screen until you press Enter.
 
@@ -44,8 +44,10 @@ Shep on Pi runs in `~/.local/state/bercail/shep/workspace` with its sessions in 
 bercail shep status      # Pi's session folder, desk events waiting and delivered, live background Sheps
 bercail shep repos       # your known repos: git backend, policy trust, open issues (--json too)
 bercail shep board       # one line per open job across those repos, then what waits on you
+bercail shep queue       # what waits on your review, with sizes and stakes (--repo DIR: against its budget)
 bercail shep brief ID    # one issue: its desk and state, the question it is blocked on, the latest report
 bercail shep list        # Shep's standing rules: remember "RULE" [--scope S] adds one, forget N drops one
+bercail shep mistake list  # the mistakes ledger: mistake KEY "WHAT" [--repo DIR] [--issue ID] records one
 ```
 
 An older `~/.config/bercail/config.toml` may still have `backend` and `session` under `[shep]`. bercail no longer reads them; delete them whenever you like. The keys `[shep]` holds now are for [compaction](#compaction).
@@ -81,9 +83,21 @@ latest report: comment 2 of 2, Desk at 2026-11-11 00:43 (812 characters):
 Staged, uncommitted. What changed: …
 ```
 
-The repo is `--repo DIR`, else the issue's handoff record, its live desk, or the known repo whose `bd` has it. The desk is the live terminal labelled with the issue, else the record's (`gone` when it has ended). A desk [handed off with `--model`](handoff.md) ends its line with `model <provider/id:thinking>`, from its `bercail.model` label, or the record's when it has ended. A blocked desk adds the last 15 lines of its screen, where its question is. The report is the latest comment that is not the handoff note. One longer than `--budget` characters (1500 by default) keeps its first two thirds and its last third, and says how much was cut and that `bd comments <id>` has the rest. Measured on three real issues, a brief was 1,600 to 2,000 characters (about 400 to 500 tokens) against 31,000 to 54,000 for `bd show` plus `hc read --lines 60`: 16 to 33 times smaller.
+The repo is `--repo DIR`, else the issue's handoff record, its live desk, or the known repo whose `bd` has it. When the job's worktree has staged changes, a `staged:` line gives their size and [stakes](config.md#review-by-stakes-and-size), and says when the change waits for your LGTM. The desk is the live terminal labelled with the issue, else the record's (`gone` when it has ended). A desk [handed off with `--model`](handoff.md) ends its line with `model <provider/id:thinking>`, from its `bercail.model` label, or the record's when it has ended. A blocked desk adds the last 15 lines of its screen, where its question is. The report is the latest comment that is not the handoff note. One longer than `--budget` characters (1500 by default) keeps its first two thirds and its last third, and says how much was cut and that `bd comments <id>` has the rest. Measured on three real issues, a brief was 1,600 to 2,000 characters (about 400 to 500 tokens) against 31,000 to 54,000 for `bd show` plus `hc read --lines 60`: 16 to 33 times smaller.
 
 `bercail shep board` lists one line per open job across the known repos: `<id>: <title>`, its status when not `open`, its desk and state, its branch, and its model when it was handed off with `--model`. A job is an issue that is not closed and has a live desk, or is `in_progress` or `blocked`. A repo's other open issues are a count, with how many of them were handed off to a desk that has since ended. Then: the repos with no jobs, desks still open on closed or unknown issues, and **Waiting on the person**: blocked desks, finished desks to review, and finished background Sheps to report and end.
+
+When anything waits on your review, the board ends with the **review queue**, which `bercail shep queue` prints on its own:
+
+```
+Review queue: 15 lines in 4 changes
+~/Work/app: 15 of 10 lines, over its review budget
+- app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · ~/Work/app.export
+- app-3: Old job · 2 lines staged in 1 file · stakes low · ~/Work/app.old
+- PR #12: Teammate fix · 4 lines · https://github.com/o/app/pull/12
+```
+
+A staged change counts when its desk is not working (done, idle, blocked, or gone); a desk still working is not waiting on you yet. On a repo with a GitHub remote, an open PR counts when it is not a draft, not approved, and either asks you for a review or comes from a handoff's branch. A staged change's lines leave out lockfiles, generated and binary files; a PR's leave out lockfiles. Each repo's total is weighed against its policy's [`review_budget`](config.md#review-by-stakes-and-size). Before Shep starts a desk it runs `bercail shep queue --repo <checkout>`; when that repo is over budget, Shep tells you what waits and asks whether to start it anyway.
 
 ### Standing rules
 
@@ -96,6 +110,17 @@ bercail shep forget 1
 ```
 
 They live in `~/.local/state/bercail/shep/preferences.md`, one `- DATE [SCOPE] RULE` line each; `--scope` is a repo, an issue, a desk, or `all` (the default). The same rule and scope twice is kept once. A rule for everyone who uses bercail belongs in [`shep/SHEP.md`](../shep/SHEP.md) or a repo's [policy](config.md#git-policy-per-repo) instead.
+
+### Mistakes
+
+A mistake that shows up twice should get a guardrail, not a second fix by hand. Shep keeps a ledger of them in `~/.local/state/bercail/shep/mistakes.jsonl`, one line each time: when, a short key, what happened, and where (repo and issue).
+
+```bash
+bercail shep mistake tests-touch-real-state "the handoff test wrote to the real handoffs.jsonl" --repo ~/Work/bercail --issue bercail-4k9
+bercail shep mistake list   # each key with its count, most frequent first
+```
+
+A key is a-z, 0-9 and `-`, the same each time. When a key reaches its second time, the command says so, and [`SHEP.md`](../shep/SHEP.md) has Shep write an issue for a guardrail (a lint rule, a test, the guard, or a doctor check) and tell you.
 
 ### The start context
 
