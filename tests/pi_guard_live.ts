@@ -1,6 +1,7 @@
 // Real Pi, offline provider: the guard blocks git push --force, and follows a
 // repo's trusted git policy (commit and push go through and are logged; an
 // untrusted repo is blocked again in a headless run).
+// Usage: PI_GUARD_BIN=PI node tests/pi_guard_live.ts
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
@@ -12,7 +13,7 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const pi = process.env.PI_GUARD_BIN || "pi";
 const dir = mkdtempSync(join(tmpdir(), "pi-guard-"));
 const bercail = resolve(root, "bin/bercail");
-const env = {
+const env: NodeJS.ProcessEnv = {
   ...process.env,
   HOME: dir,
   XDG_STATE_HOME: join(dir, "state"),
@@ -31,22 +32,37 @@ delete env.BERCAIL_ROLE;
 delete env.HC_TERMINAL_ID;
 delete env.BERCAIL_CONFIG;
 
-function runPi(cwd, commands) {
+function runPi(cwd: string, commands: string[]) {
   const args = [
-    "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-context-files", "--no-mcp",
-    "--mode", "json", "-p",
-    "-e", resolve(root, "bstack/pi/extensions/guard.ts"),
-    "-e", resolve(root, "tests/pi_guard_provider.ts"),
-    "--model", "fake-guard/model",
+    "--offline",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-context-files",
+    "--no-mcp",
+    "--mode",
+    "json",
+    "-p",
+    "-e",
+    resolve(root, "bstack/pi/extensions/guard.ts"),
+    "-e",
+    resolve(root, "tests/pi_guard_provider.ts"),
+    "--model",
+    "fake-guard/model",
     "Do the git work.",
   ];
-  const result = spawnSync(pi, args, { env: { ...env, PI_GUARD_COMMANDS: JSON.stringify(commands) }, cwd, encoding: "utf8", timeout: 60000 });
+  const result = spawnSync(pi, args, {
+    env: { ...env, PI_GUARD_COMMANDS: JSON.stringify(commands) },
+    cwd,
+    encoding: "utf8",
+    timeout: 60000,
+  });
   assert.equal(result.error, undefined, String(result.error));
   assert.doesNotMatch(result.stderr, /Failed to load extension/i, result.stderr);
   return result;
 }
 
-function git(cwd, ...args) {
+function git(cwd: string, ...args: string[]) {
   const result = spawnSync("git", args, { env, cwd, encoding: "utf8" });
   assert.equal(result.status, 0, `git ${args.join(" ")}: ${result.stderr}`);
   return result.stdout.trim();
@@ -54,7 +70,10 @@ function git(cwd, ...args) {
 
 try {
   mkdirSync(join(dir, "agent"), { recursive: true });
-  writeFileSync(join(dir, "agent/settings.json"), JSON.stringify({ retry: { enabled: false }, compaction: { enabled: false } }));
+  writeFileSync(
+    join(dir, "agent/settings.json"),
+    JSON.stringify({ retry: { enabled: false }, compaction: { enabled: false } }),
+  );
 
   let result = runPi(dir, ["git push --force"]);
   assert.match(result.stdout, /Force-push is blocked/, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
@@ -88,13 +107,28 @@ try {
   assert.equal(git(remote, "rev-parse", "feature"), git(repo, "rev-parse", "HEAD"), out);
   assert.match(result.stdout, /Force-push is blocked/, out);
   assert.match(result.stdout, /headless run stages/, out);
-  assert.notEqual(spawnSync("git", ["rev-parse", "--verify", "-q", "main"], { env, cwd: remote }).status, 0, "the push to main must not run");
+  assert.notEqual(
+    spawnSync("git", ["rev-parse", "--verify", "-q", "main"], { env, cwd: remote }).status,
+    0,
+    "the push to main must not run",
+  );
   assert.match(result.stdout, /policy-in-prompt=yes/, out);
-  const log = readFileSync(join(dir, "state/bercail/guard-approvals.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
-  assert.deepEqual(log.map((entry) => entry.command), ["git commit -qm 'add a'", "git push -q origin feature"]);
+  const log: { command: string; approved: string[] }[] = readFileSync(
+    join(dir, "state/bercail/guard-approvals.jsonl"),
+    "utf8",
+  )
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  assert.deepEqual(
+    log.map((entry) => entry.command),
+    ["git commit -qm 'add a'", "git push -q origin feature"],
+  );
   assert.match(log[0].approved[0], /commit = allow \(repo\)/);
   assert.match(log[1].approved[0], /push = branch \(repo\)/);
-  console.log("PASS: real Pi let a trusted policy's commit and push through, logged them, and still blocked force and main");
+  console.log(
+    "PASS: real Pi let a trusted policy's commit and push through, logged them, and still blocked force and main",
+  );
 
   const untrust = spawnSync(bercail, ["policy", "untrust", repo], { env, encoding: "utf8" });
   assert.equal(untrust.status, 0, untrust.stderr);
@@ -103,7 +137,11 @@ try {
   result = runPi(repo, ["git commit -qm 'add b'"]);
   assert.match(result.stdout, /headless run stages/, `stdout: ${result.stdout}`);
   assert.equal(git(repo, "log", "-1", "--format=%s"), "add a");
-  assert.equal(existsSync(join(dir, "state/bercail/guard-approvals.jsonl")) && readFileSync(join(dir, "state/bercail/guard-approvals.jsonl"), "utf8").trim().split("\n").length, 2);
+  assert.equal(
+    existsSync(join(dir, "state/bercail/guard-approvals.jsonl")) &&
+      readFileSync(join(dir, "state/bercail/guard-approvals.jsonl"), "utf8").trim().split("\n").length,
+    2,
+  );
   console.log("PASS: real Pi blocked the commit again once the repo was untrusted");
 } catch (error) {
   console.error(`Artifacts: ${dir}`);

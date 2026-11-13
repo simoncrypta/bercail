@@ -114,11 +114,11 @@ teardown() {
 setup() {
   load test_helper
   isolate
-  need git jq python3
+  need git jq node
 
-  # A mise shim reads $HOME, which the test replaces: take the real python3 now.
-  PY="$(type -ap python3 | grep -v '/mise/shims/' | head -1)"
-  [[ -n "$PY" ]] || unavailable "python3 (not a mise shim) not found"
+  # A mise shim reads $HOME, which the test replaces: take the real node now.
+  NODE="$(type -ap node | grep -v '/mise/shims/' | head -1)"
+  [[ -n "$NODE" ]] || unavailable "node (not a mise shim) not found"
   export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@t
   FIX="$BATS_TEST_TMPDIR/fix"
   LOG="$BATS_TEST_TMPDIR/log"
@@ -497,12 +497,16 @@ SH
   assert_has "$md" 'PR title/body are the weakest clues and may be stale.' "PR prose is not source of truth"
   assert_has "$md" "commit $SHA7" "commit provenance"
   printf '%s\n' "$md" >"$BATS_TEST_TMPDIR/intent-sources.md"
-  "$PY" - "$BATS_TEST_TMPDIR/intent-sources.md" <<'PY'
-import sys
-from pathlib import Path
-text = Path(sys.argv[1]).read_text()
-assert text.index('## Linked issues') < text.index('## Commit messages') < text.index('## PR body (weak hint)')
-PY
+  "$NODE" - "$BATS_TEST_TMPDIR/intent-sources.md" <<'JS'
+const assert = require("node:assert/strict");
+const text = require("node:fs").readFileSync(process.argv[2], "utf8");
+const at = (heading) => {
+  const i = text.indexOf(heading);
+  assert.ok(i >= 0, `missing ${heading}`);
+  return i;
+};
+assert.ok(at("## Linked issues") < at("## Commit messages") && at("## Commit messages") < at("## PR body (weak hint)"));
+JS
   : >"$issues"
   jq '.closingIssuesReferences = [] | .body = "Retries uploads forever to prevent failures. This description may be stale."' "$FIX/pr-7.json" >"$BATS_TEST_TMPDIR/no-issue.json"
   md="$(_review_intent_md "$BATS_TEST_TMPDIR/no-issue.json" "$issues" '[]' '[]' "$commits")"
@@ -525,21 +529,23 @@ PY
   assert_has "$agent" 'Missing issues mean no issue clues to compare' "agent keeps inferring without issues"
   assert_has "$agent" 'likely stale description' "stale description policy"
   assert_has "$agent" 'not as an author question about the code' "stale descriptions do not seed code questions"
-  "$PY" - "$ROOT/bstack/pi/agents/bstack-pr-review.md" <<'PY'
-import json, re, sys
-from pathlib import Path
-schema = json.loads(re.findall(r'```json\n(.*?)\n```', Path(sys.argv[1]).read_text(), re.S)[-1])
-assert schema['why_source'] == 'diff'
-assert 'commit' in schema['decisions'][0]['stated'] and 'PR body' not in schema['decisions'][0]['stated']
-assert 'best educated guess' in schema['why']
-analysis = schema['intent_analysis']
-assert set(analysis) == {'confidence', 'evidence', 'clues', 'assessment'}
-assert all(level in analysis['confidence'] for level in ('high', 'medium', 'low'))
-assert analysis['evidence'][0]['file'] and analysis['evidence'][0]['line']
-assert all(status in analysis['clues'][0]['alignment'] for status in ('agrees', 'more', 'less', 'different', 'stale', 'unavailable'))
-assert 'right thing to build' in analysis['assessment']
-assert 'PR body' not in schema['unmet_intent'][0]['source']
-PY
+  "$NODE" - "$ROOT/bstack/pi/agents/bstack-pr-review.md" <<'JS'
+const assert = require("node:assert/strict");
+const text = require("node:fs").readFileSync(process.argv[2], "utf8");
+const blocks = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)];
+const schema = JSON.parse(blocks.at(-1)[1]);
+assert.equal(schema.why_source, "diff");
+assert.ok(schema.decisions[0].stated.includes("commit") && !schema.decisions[0].stated.includes("PR body"));
+assert.ok(schema.why.includes("best educated guess"));
+const analysis = schema.intent_analysis;
+assert.deepEqual(Object.keys(analysis).sort(), ["assessment", "clues", "confidence", "evidence"]);
+assert.ok(["high", "medium", "low"].every((level) => analysis.confidence.includes(level)));
+assert.ok(analysis.evidence[0].file && analysis.evidence[0].line);
+const statuses = ["agrees", "more", "less", "different", "stale", "unavailable"];
+assert.ok(statuses.every((status) => analysis.clues[0].alignment.includes(status)));
+assert.ok(analysis.assessment.includes("right thing to build"));
+assert.ok(!schema.unmet_intent[0].source.includes("PR body"));
+JS
 }
 
 # --- review-pr <url>: a thin PR stops at the JSON --------------------------------

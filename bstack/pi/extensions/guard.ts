@@ -16,7 +16,14 @@ export type Policy = {
   from: Record<string, string>;
 };
 
-export const defaultPolicy: Policy = { commit: "ask", push: "ask", agentMayRelease: false, scratch: false, repo: "", from: {} };
+export const defaultPolicy: Policy = {
+  commit: "ask",
+  push: "ask",
+  agentMayRelease: false,
+  scratch: false,
+  repo: "",
+  from: {},
+};
 
 export type GuardInput = {
   role: string;
@@ -49,8 +56,10 @@ const mirror = "git push --mirror is blocked.";
 const deleteMain = "Deleting main or master is blocked.";
 const noVerify = "Skipping git hooks with --no-verify is blocked. Run the command so the hooks run.";
 const hooksPath = "Skipping git hooks with core.hooksPath is blocked. Run the command so the hooks run.";
-const configKey = (key: string) => `Setting ${key} changes what a later git push or commit does without the guard seeing it. Leave it as it is.`;
-const prMerge = "Pull request merging is blocked (gh pr merge, gt merge, gh api .../pulls/N/merge). Do not merge the pull request.";
+const configKey = (key: string) =>
+  `Setting ${key} changes what a later git push or commit does without the guard seeing it. Leave it as it is.`;
+const prMerge =
+  "Pull request merging is blocked (gh pr merge, gt merge, gh api .../pulls/N/merge). Do not merge the pull request.";
 const toMain = "A push to main or master is blocked. Push the pull request branch instead.";
 const headless = "A headless run stages its changes and leaves commit and push to the person.";
 const headlessRelease = "A headless run does not tag or release. Leave the release to the person.";
@@ -58,7 +67,8 @@ const autopilotRelease = "Autopilot does not tag or release. Leave the release t
 const readOnly = "This role is read-only. Do not edit files or change the git tree.";
 const readOnlyTool = "This role is read-only. Do not edit or write files.";
 const unknownBranch = "Could not read the current branch, so this push is blocked. Push the branch by name.";
-const trustCommand = "Trusting a repo's policy is the person's call. Ask them to run bercail policy trust in their own shell.";
+const trustCommand =
+  "Trusting a repo's policy is the person's call. Ask them to run bercail policy trust in their own shell.";
 const protectedFile = "This file decides what bercail's guard lets through. Ask the person to edit it.";
 
 const allow: GuardDecision = { action: "allow" };
@@ -152,6 +162,9 @@ function subsIn(text: string): string[] {
   }
   return subs;
 }
+
+// A shell word, an operator that ends a command, or a command substitution's body.
+type Token = { kind: "op" } | { kind: "word"; value: string } | { kind: "sub"; value: string };
 
 function tokenize(command: string): Token[] {
   const tokens: Token[] = [];
@@ -345,16 +358,37 @@ function skipSudo(words: string[], i: number): number {
     if (!word.startsWith("-") || word === "-") break;
     const name = word.split("=")[0];
     i++;
-    if (!word.includes("=") && ["-u", "-g", "-h", "-p", "-C", "-D", "-T", "-R", "--user", "--group", "--host"].includes(name)) i++;
+    if (
+      !word.includes("=") &&
+      ["-u", "-g", "-h", "-p", "-C", "-D", "-T", "-R", "--user", "--group", "--host"].includes(name)
+    )
+      i++;
   }
   return i;
 }
 
 const shellPrefixes = new Set(["if", "then", "else", "elif", "while", "until", "do", "{", "!", "time"]);
 const wrappers: Record<string, string[]> = {
-  exec: ["-a"], nohup: [], setsid: [], nice: ["-n", "--adjustment"],
+  exec: ["-a"],
+  nohup: [],
+  setsid: [],
+  nice: ["-n", "--adjustment"],
   timeout: ["-k", "--kill-after", "-s", "--signal"],
-  xargs: ["-a", "--arg-file", "-d", "--delimiter", "-E", "-I", "-L", "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars"],
+  xargs: [
+    "-a",
+    "--arg-file",
+    "-d",
+    "--delimiter",
+    "-E",
+    "-I",
+    "-L",
+    "-n",
+    "--max-args",
+    "-P",
+    "--max-procs",
+    "-s",
+    "--max-chars",
+  ],
 };
 
 function commandWords(words: string[]): string[] {
@@ -399,7 +433,17 @@ function commandWords(words: string[]): string[] {
   return words.slice(i);
 }
 
-const gitValue = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--config-env", "--exec-path", "--shallow-file"]);
+const gitValue = new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--super-prefix",
+  "--config-env",
+  "--exec-path",
+  "--shallow-file",
+]);
 
 type GitCall = { sub: string; args: string[]; dir: string | undefined; config: string[] };
 
@@ -495,13 +539,16 @@ function pushFacts(args: string[]): PushFacts {
       const cluster = shortCluster(arg);
       if (cluster?.includes("f")) forceFlag = true;
       if (cluster?.includes("d")) deleting = true;
-      if (arg === "-o" || arg === "--push-option" || arg === "--repo" || arg === "--receive-pack" || arg === "--exec") i++;
+      if (arg === "-o" || arg === "--push-option" || arg === "--repo" || arg === "--receive-pack" || arg === "--exec")
+        i++;
       continue;
     }
     positionals.push(arg);
   }
   const first = positionals[0];
-  const firstIsRef = first !== undefined && (first.includes(":") || first.startsWith("+") || first.startsWith("refs/") || first === "HEAD" || isMainRef(first));
+  const firstIsRef =
+    first !== undefined &&
+    (first.includes(":") || first.startsWith("+") || first.startsWith("refs/") || first === "HEAD" || isMainRef(first));
   const refspecs = first === undefined ? [] : firstIsRef ? positionals : positionals.slice(1);
   for (const spec of refspecs) {
     if (spec.startsWith("+")) plus = true;
@@ -553,10 +600,14 @@ function forgeCall(words: string[], cwd: string | undefined): { words: string[];
 
 function isForgeMerge(words: string[]): boolean {
   const plain = plainWords(words);
-  return (words[0] === "gt" && plain[1] === "merge")
-    || (words[0] === "gh" && plain[1] === "pr" && plain[2] === "merge")
-    || (words[0] === "gh" && plain[1] === "api" && ghApiWrites(words)
-      && words.some((word) => /\/pulls\/\d+\/merge(?:$|\?)/.test(word)));
+  return (
+    (words[0] === "gt" && plain[1] === "merge") ||
+    (words[0] === "gh" && plain[1] === "pr" && plain[2] === "merge") ||
+    (words[0] === "gh" &&
+      plain[1] === "api" &&
+      ghApiWrites(words) &&
+      words.some((word) => /\/pulls\/\d+\/merge(?:$|\?)/.test(word)))
+  );
 }
 
 function forgePublish(words: string[]): "commit" | "push" | undefined {
@@ -586,15 +637,39 @@ function ghApiWrites(words: string[]): boolean {
     if (word === "-X" || word === "--method") method = words[++i];
     else if (word.startsWith("--method=")) method = word.slice(9);
     else if (/^-X.+/.test(word)) method = word.slice(2);
-    else if (["-f", "-F", "--field", "--raw-field", "--input", "-H", "--header", "-q", "--jq", "-t", "--template", "-p", "--preview", "--cache"].includes(word)) i++;
+    else if (
+      [
+        "-f",
+        "-F",
+        "--field",
+        "--raw-field",
+        "--input",
+        "-H",
+        "--header",
+        "-q",
+        "--jq",
+        "-t",
+        "--template",
+        "-p",
+        "--preview",
+        "--cache",
+      ].includes(word)
+    )
+      i++;
   }
   if (method) return !["GET", "HEAD", "OPTIONS"].includes(method.toUpperCase());
-  return words.some((word) => ["-f", "-F", "--field", "--raw-field", "--input"].includes(word.split("=")[0]) || /^-[fF].+/.test(word));
+  return words.some(
+    (word) => ["-f", "-F", "--field", "--raw-field", "--input"].includes(word.split("=")[0]) || /^-[fF].+/.test(word),
+  );
 }
 
 function isGhApiRelease(words: string[]): boolean {
-  return words[0] === "gh" && plainWords(words)[1] === "api" && ghApiWrites(words)
-    && words.some((word) => /(^|\/)(releases|git\/refs\/tags|git\/tags)(\/|$|\?)/.test(word));
+  return (
+    words[0] === "gh" &&
+    plainWords(words)[1] === "api" &&
+    ghApiWrites(words) &&
+    words.some((word) => /(^|\/)(releases|git\/refs\/tags|git\/tags)(\/|$|\?)/.test(word))
+  );
 }
 
 function isPolicyTrust(words: string[]): boolean {
@@ -604,7 +679,20 @@ function isPolicyTrust(words: string[]): boolean {
 
 // A shell write to a file that decides the guard's answers: a redirect, or a
 // command that writes files, naming it. A seatbelt, not a sandbox.
-const fileWriters = new Set(["tee", "cp", "mv", "rm", "ln", "install", "truncate", "sed", "perl", "dd", "chmod", "touch"]);
+const fileWriters = new Set([
+  "tee",
+  "cp",
+  "mv",
+  "rm",
+  "ln",
+  "install",
+  "truncate",
+  "sed",
+  "perl",
+  "dd",
+  "chmod",
+  "touch",
+]);
 
 function writesProtected(words: string[], raw: string[], files: string[] | undefined): boolean {
   if (!files?.length) return false;
@@ -616,10 +704,49 @@ function writesProtected(words: string[], raw: string[], files: string[] | undef
 // git commands that leave HEAD on its branch. Anything else, an alias included,
 // may move it.
 const keepsBranch = new Set([
-  "status", "diff", "log", "show", "add", "commit", "push", "fetch", "pull", "merge", "cherry-pick", "revert",
-  "stash", "tag", "config", "remote", "rev-parse", "ls-files", "ls-remote", "blame", "grep", "describe",
-  "shortlog", "restore", "rm", "mv", "notes", "format-patch", "apply", "am", "clean", "gc", "fsck",
-  "for-each-ref", "show-ref", "cat-file", "rev-list", "reflog", "help", "version", "var", "count-objects", "",
+  "status",
+  "diff",
+  "log",
+  "show",
+  "add",
+  "commit",
+  "push",
+  "fetch",
+  "pull",
+  "merge",
+  "cherry-pick",
+  "revert",
+  "stash",
+  "tag",
+  "config",
+  "remote",
+  "rev-parse",
+  "ls-files",
+  "ls-remote",
+  "blame",
+  "grep",
+  "describe",
+  "shortlog",
+  "restore",
+  "rm",
+  "mv",
+  "notes",
+  "format-patch",
+  "apply",
+  "am",
+  "clean",
+  "gc",
+  "fsck",
+  "for-each-ref",
+  "show-ref",
+  "cat-file",
+  "rev-list",
+  "reflog",
+  "help",
+  "version",
+  "var",
+  "count-objects",
+  "",
 ]);
 
 function movesBranch(git: GitCall): boolean {
@@ -636,18 +763,32 @@ function envConfigKeys(word: string): string[] {
   if (key) return [key[1]];
   const params = /^GIT_CONFIG_PARAMETERS=(.*)$/s.exec(word);
   if (!params) return [];
-  return params[1].split(/\s+/).map((part) => part.replace(/['"]/g, "").split("=")[0]).filter(Boolean);
+  return params[1]
+    .split(/\s+/)
+    .map((part) => part.replace(/['"]/g, "").split("=")[0])
+    .filter(Boolean);
 }
 
 // git tag with a name creates or deletes a tag; -l, -v, and no name only read.
-const tagListValue = new Set(["--contains", "--no-contains", "--points-at", "--merged", "--no-merged", "--sort", "--format", "--color", "--column"]);
+const tagListValue = new Set([
+  "--contains",
+  "--no-contains",
+  "--points-at",
+  "--merged",
+  "--no-merged",
+  "--sort",
+  "--format",
+  "--color",
+  "--column",
+]);
 
 function tagWrites(args: string[]): boolean {
   let names = 0;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     const name = arg.split("=")[0];
-    if (["--delete", "--annotate", "--sign", "--local-user", "--force", "--message", "--file", "--edit"].includes(name)) return true;
+    if (["--delete", "--annotate", "--sign", "--local-user", "--force", "--message", "--file", "--edit"].includes(name))
+      return true;
     if (arg === "--list" || arg === "--verify") return false;
     const cluster = shortCluster(arg);
     if (cluster !== undefined) {
@@ -675,13 +816,18 @@ function configWrite(args: string[]): string | undefined {
 function gitWrite(sub: string, args: string[]): boolean {
   if (["add", "commit", "push", "restore", "clean", "rm", "mv", "merge", "rebase"].includes(sub)) return true;
   if (sub === "reset" && args.some((arg) => arg === "--hard" || arg.startsWith("--hard"))) return true;
-  if (sub === "checkout" && (args.includes("--") || args.includes(".") || args.some((arg) => arg === "-f" || arg === "--force"))) return true;
+  if (
+    sub === "checkout" &&
+    (args.includes("--") || args.includes(".") || args.some((arg) => arg === "-f" || arg === "--force"))
+  )
+    return true;
   return false;
 }
 
 function publish(kind: "commit" | "push" | "release", input: GuardInput): GuardDecision {
   if (input.hasUI) {
-    if (kind === "release") return { action: "ask", reason: "Allow this tag or release? This repo's policy leaves releases to the person." };
+    if (kind === "release")
+      return { action: "ask", reason: "Allow this tag or release? This repo's policy leaves releases to the person." };
     return { action: "ask", reason: `Allow this git ${kind}? No leaves the changes staged for the person.` };
   }
   return block(kind === "release" ? headlessRelease : headless);
@@ -734,7 +880,8 @@ function decidePush(args: string[], dir: string | undefined, input: GuardInput):
     ...facts.deleted.filter((ref) => !isTagRef(ref)),
   ];
   // A bare push sends the current branch; a push of tags alone sends no branch.
-  if (facts.refspecs.length === 0 && facts.deleted.length === 0 && !args.includes("--tags") && !facts.every) dests.push("");
+  if (facts.refspecs.length === 0 && facts.deleted.length === 0 && !args.includes("--tags") && !facts.every)
+    dests.push("");
   if (facts.every) dests.push("*");
   if (dests.length === 0 || decision.action === "block") return decision;
   const hitsMain = (dest: string) => dest.includes("*") || (dest !== "" && isMainRef(dest));
@@ -843,15 +990,20 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     const publishing = forgePublish(forge.words);
     const forgePlain = plainWords(forge.words);
     const sync = words[0] === "gh" && forgePlain[1] === "repo" && forgePlain[2] === "sync";
-    if ((publishing === "push" || sync) && words.some((word) => word === "-f" || word.startsWith("--force"))) return block(force);
+    if ((publishing === "push" || sync) && words.some((word) => word === "-f" || word.startsWith("--force")))
+      return block(force);
     if (publishing) {
       if (hasNoVerify("push", words)) return block(noVerify);
-      decision = worse(decision, publishing === "commit" ? decideCommit(forge.dir, here) : decidePush([], forge.dir, here));
+      decision = worse(
+        decision,
+        publishing === "commit" ? decideCommit(forge.dir, here) : decidePush([], forge.dir, here),
+      );
     }
     if (sync && readOnlyRole(input.role)) decision = worse(decision, block(readOnly));
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
     if (writesProtected(words, raw, input.protectedFiles)) decision = worse(decision, block(protectedFile));
-    if (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout")) branchMoved = true;
+    if (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout"))
+      branchMoved = true;
     if (isGhRelease(forge.words) || isGhApiRelease(forge.words)) {
       decision = worse(decision, decideRelease(forge.dir, here));
     }
@@ -870,7 +1022,8 @@ export function decideTool(tool: string, command: string | undefined, input: Gua
   if (tool === "edit" || tool === "write") {
     if (readOnlyRole(input.role)) return block(readOnlyTool);
     const full = path?.startsWith("~/") && input.home ? join(input.home, path.slice(2)) : path;
-    if (full && input.cwd !== undefined && input.protectedFiles?.includes(resolve(input.cwd, full))) return block(protectedFile);
+    if (full && input.cwd !== undefined && input.protectedFiles?.includes(resolve(input.cwd, full)))
+      return block(protectedFile);
   }
   if (tool === "bash") return decideBash(command ?? "", input);
   return allow;
@@ -894,9 +1047,16 @@ type PolicyJson = {
 };
 
 // bercail policy show --json, or undefined outside a git checkout or without bercail.
-async function policyJson(pi: ExtensionAPI, dir: string, signal: AbortSignal | undefined): Promise<PolicyJson | undefined> {
+async function policyJson(
+  pi: ExtensionAPI,
+  dir: string,
+  signal: AbortSignal | undefined,
+): Promise<PolicyJson | undefined> {
   try {
-    const result = await pi.exec(process.env.BERCAIL_BIN || "bercail", ["policy", "show", "--json", dir], { timeout: 10000, signal });
+    const result = await pi.exec(process.env.BERCAIL_BIN || "bercail", ["policy", "show", "--json", dir], {
+      timeout: 10000,
+      signal,
+    });
     return result.code === 0 ? (JSON.parse(result.stdout) as PolicyJson) : undefined;
   } catch {
     return undefined;
@@ -930,7 +1090,14 @@ function logApproval(command: string, approved: string[], input: GuardInput): vo
   try {
     const file = join(stateDir(), "guard-approvals.jsonl");
     mkdirSync(dirname(file), { recursive: true });
-    const entry = { at: new Date().toISOString(), terminal: process.env.HC_TERMINAL_ID ?? "", role: input.role || "lead", cwd: input.cwd, command: redact(command), approved };
+    const entry = {
+      at: new Date().toISOString(),
+      terminal: process.env.HC_TERMINAL_ID ?? "",
+      role: input.role || "lead",
+      cwd: input.cwd,
+      command: redact(command),
+      approved,
+    };
     appendFileSync(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
   } catch {
     // The log is for the person's audit; a full disk must not stop the agent.
@@ -943,7 +1110,8 @@ export default function (pi: ExtensionAPI) {
   const home = process.env.HOME;
   const protectedFiles = [
     join(stateDir(), "policy-trust.json"),
-    process.env.BERCAIL_CONFIG || join(process.env.XDG_CONFIG_HOME || join(home ?? "", ".config"), "bercail/config.toml"),
+    process.env.BERCAIL_CONFIG ||
+      join(process.env.XDG_CONFIG_HOME || join(home ?? "", ".config"), "bercail/config.toml"),
   ];
 
   // Each run starts with the policy of the repo this agent works in.
@@ -958,13 +1126,28 @@ export default function (pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     const input = event.input as { command?: string; path?: string };
     const command = event.toolName === "bash" ? String(input.command ?? "") : undefined;
-    let guardInput: GuardInput = { role: process.env.BERCAIL_ROLE ?? "", hasUI: ctx.hasUI, cwd: ctx.cwd, home, protectedFiles };
+    let guardInput: GuardInput = {
+      role: process.env.BERCAIL_ROLE ?? "",
+      hasUI: ctx.hasUI,
+      cwd: ctx.cwd,
+      home,
+      protectedFiles,
+    };
     let decision = decideTool(event.toolName, command, guardInput, input.path);
     for (let i = 0; i < 8 && (decision.action === "need-branch" || decision.action === "need-policy"); i++) {
       if (decision.action === "need-branch") {
-        guardInput = { ...guardInput, branches: { ...guardInput.branches, [decision.dir]: await branchAt(pi, decision.dir, ctx.signal) } };
+        guardInput = {
+          ...guardInput,
+          branches: { ...guardInput.branches, [decision.dir]: await branchAt(pi, decision.dir, ctx.signal) },
+        };
       } else {
-        guardInput = { ...guardInput, policies: { ...guardInput.policies, [decision.dir]: policyFromJson(await policyJson(pi, decision.dir, ctx.signal)) } };
+        guardInput = {
+          ...guardInput,
+          policies: {
+            ...guardInput.policies,
+            [decision.dir]: policyFromJson(await policyJson(pi, decision.dir, ctx.signal)),
+          },
+        };
       }
       decision = decideTool(event.toolName, command, guardInput, input.path);
     }
@@ -973,7 +1156,10 @@ export default function (pi: ExtensionAPI) {
       return;
     }
     if (decision.action === "need-branch" || decision.action === "need-policy") {
-      return { block: true, reason: "This command touches too many repos to check. Split it into one command per repo." };
+      return {
+        block: true,
+        reason: "This command touches too many repos to check. Split it into one command per repo.",
+      };
     }
     if (decision.action === "ask") {
       if (ctx.hasUI && (await ctx.ui.confirm("Allow this git command?", decision.reason))) return;

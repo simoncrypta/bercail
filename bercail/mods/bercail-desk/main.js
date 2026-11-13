@@ -22,8 +22,20 @@
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import {
-  agents, exec, focused, home, layout, nextCommand, notify, panes, props,
-  readTextFile, run, spaces, terminals, theme,
+  agents,
+  exec,
+  focused,
+  home,
+  layout,
+  nextCommand,
+  notify,
+  panes,
+  props,
+  readTextFile,
+  run,
+  spaces,
+  terminals,
+  theme,
 } from "herdr";
 
 const CONFIG = "/.config/bercail/config.toml";
@@ -46,7 +58,10 @@ export function readConfig(text) {
   for (const raw of text.split("\n")) {
     const line = raw.replace(/#.*$/, "").trim();
     const sec = line.match(/^\[(.+)\]$/);
-    if (sec) { section = sec[1]; continue; }
+    if (sec) {
+      section = sec[1];
+      continue;
+    }
     const kv = line.match(/^(\w+)\s*=\s*(.+)$/);
     if (!kv) continue;
     const value = kv[2].trim().replace(/^"(.*)"$/, "$1");
@@ -57,9 +72,11 @@ export function readConfig(text) {
 }
 
 function deskFor(spaceId) {
-  return terminals().find((t) => t.state === "live"
-    && t.labels?.["bercail.role"] === "agent"
-    && t.labels?.["bercail.space"] === spaceId) ?? null;
+  return (
+    terminals().find(
+      (t) => t.state === "live" && t.labels?.["bercail.role"] === "agent" && t.labels?.["bercail.space"] === spaceId,
+    ) ?? null
+  );
 }
 
 // The space a terminal belongs to: a desk by its label, else the tab of its pane,
@@ -87,7 +104,9 @@ async function foreignPr(folder) {
     const me = await exec("gh", ["api", "user", "--jq", ".login"], { cwd: folder });
     if (me.code !== 0 || !me.stdout.trim() || author?.login === me.stdout.trim()) return null;
     return number ?? null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 // What Review runs. `review = "tuicr"`: own work is the uncommitted tree, watched
@@ -113,8 +132,9 @@ function placeOf(space, ps) {
 // rows: { id, machine, git: { repo, linked } | null } in spaces() order. Returns them in
 // the sidebar's order, each with `parent`: the space it is nested under, or null.
 export function sidebarOrder(rows) {
-  const machines = [...new Set(rows.map((r) => r.machine ?? null))]
-    .sort((a, b) => (a === null ? -1 : b === null ? 1 : a.localeCompare(b)));
+  const machines = [...new Set(rows.map((r) => r.machine ?? null))].sort((a, b) =>
+    a === null ? -1 : b === null ? 1 : a.localeCompare(b),
+  );
   const out = [];
   for (const m of machines) {
     const list = rows.filter((r) => (r.machine ?? null) === m);
@@ -160,8 +180,8 @@ export function stepAgent(order, list, current, space, dir) {
   if (i >= 0) return wrap(all, i + dir);
   const here = rank.get(space) ?? -1;
   return dir > 0
-    ? all.find((a) => rank.get(a.space) >= here) ?? all[0]
-    : [...all].reverse().find((a) => rank.get(a.space) <= here) ?? all[all.length - 1];
+    ? (all.find((a) => rank.get(a.space) >= here) ?? all[0])
+    : ([...all].reverse().find((a) => rank.get(a.space) <= here) ?? all[all.length - 1]);
 }
 
 // The webhook follower (`bercail notify run`): one hidden hc terminal, kept
@@ -180,15 +200,19 @@ export default class BercailDesk extends View {
   init(_props, cx) {
     this.role = props()?.role ?? "header";
     this.cfg = readConfig("");
-    this.prev = {};          // desk address -> last status
+    this.prev = {}; // desk address -> last status
     this.pendingReview = {}; // space id -> folder, opened when the space is shown
-    this.starting = {};      // space id -> true while hc run is in flight
-    this.lastAuto = {};      // space id -> when Review last opened on its own (ms)
-    this.lastPane = null;    // the pane the keyboard was last in, to come back from the desk
-    this.git = {};           // [machine, folder] -> { at, git: { repo, linked } | null }
+    this.starting = {}; // space id -> true while hc run is in flight
+    this.lastAuto = {}; // space id -> when Review last opened on its own (ms)
+    this.lastPane = null; // the pane the keyboard was last in, to come back from the desk
+    this.git = {}; // [machine, folder] -> { at, git: { repo, linked } | null }
     this.hadDesk = new Set(); // space ids that had a desk or got one started: no auto-start again
     cx.spawn(async (cx) => {
-      try { this.cfg = readConfig(await readTextFile(home() + CONFIG)); } catch { /* defaults */ }
+      try {
+        this.cfg = readConfig(await readTextFile(home() + CONFIG));
+      } catch {
+        /* defaults */
+      }
       cx.notify();
     });
     if (this.role === "keys") {
@@ -210,7 +234,9 @@ export default class BercailDesk extends View {
       try {
         const r = await exec("bash", ["-lc", `${NOTIFIER_PATH}; command -v bercail`]);
         this.hasBercail = r.code === 0;
-      } catch { this.hasBercail = false; }
+      } catch {
+        this.hasBercail = false;
+      }
       this.ensureNotifier();
     });
     cx.timer.every(60000, () => this.ensureNotifier());
@@ -243,13 +269,17 @@ export default class BercailDesk extends View {
         if (desk) this.focusAgent({ address: desk.address, space: space.id, desk: true });
         else await this.start(space);
         break;
-      case "review": await this.review(space, desk?.cwd ?? space.folder, true); break;
+      case "review":
+        await this.review(space, desk?.cwd ?? space.folder, true);
+        break;
       case "close-review": {
         const tab = space.tabs.find((t) => t.name === "Review");
         if (tab) run("tab.close", { id: tab.id });
         break;
       }
-      case "shell": run("tab.select", { index: 1 }); break;
+      case "shell":
+        run("tab.select", { index: 1 });
+        break;
       case "go-left":
       case "go-right":
       case "go-up":
@@ -267,8 +297,13 @@ export default class BercailDesk extends View {
       }
       case "agent-next":
       case "agent-prev": {
-        const a = stepAgent(await this.spaceOrder(), this.agentList(), focused()?.terminal, space.id,
-          c.endsWith("next") ? 1 : -1);
+        const a = stepAgent(
+          await this.spaceOrder(),
+          this.agentList(),
+          focused()?.terminal,
+          space.id,
+          c.endsWith("next") ? 1 : -1,
+        );
         if (a) this.focusAgent(a);
         break;
       }
@@ -276,8 +311,12 @@ export default class BercailDesk extends View {
       case "changes": {
         // Toggle, as the tab bar's Files/Changes buttons do: the same key again hides the panel.
         const tree = layout();
-        const panel = findNode(tree, "panel"), body = findNode(tree, "panel-body");
-        if (panel && !panel.hidden && body?.active === c) { run("layout.hide", { id: "panel" }); break; }
+        const panel = findNode(tree, "panel"),
+          body = findNode(tree, "panel-body");
+        if (panel && !panel.hidden && body?.active === c) {
+          run("layout.hide", { id: "panel" });
+          break;
+        }
         run("layout.select", { stack: "panel-body", child: c });
         run("layout.show", { id: "panel" });
         break;
@@ -307,21 +346,29 @@ export default class BercailDesk extends View {
   async spaceOrder() {
     const ps = panes();
     const now = Date.now();
-    const rows = await Promise.all(spaces().map(async (s) => {
-      const on = s.machine ?? null;
-      const cwd = placeOf(s, ps);
-      const key = JSON.stringify([on, cwd]);
-      if (!(now - (this.git[key]?.at ?? 0) < 10000)) {
-        let git = null;
-        try {
-          const r = await exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"], { cwd, on });
-          const [top, repo] = r.stdout.trim().split("\n");
-          if (r.code === 0 && top && repo) git = { repo, linked: repo !== `${top}/.git` };
-        } catch { /* no folder, or its machine is away: not a repo for now */ }
-        this.git[key] = { at: now, git };
-      }
-      return { id: s.id, machine: on, git: this.git[key].git };
-    }));
+    const rows = await Promise.all(
+      spaces().map(async (s) => {
+        const on = s.machine ?? null;
+        const cwd = placeOf(s, ps);
+        const key = JSON.stringify([on, cwd]);
+        if (!(now - (this.git[key]?.at ?? 0) < 10000)) {
+          let git = null;
+          try {
+            const r = await exec(
+              "git",
+              ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir"],
+              { cwd, on },
+            );
+            const [top, repo] = r.stdout.trim().split("\n");
+            if (r.code === 0 && top && repo) git = { repo, linked: repo !== `${top}/.git` };
+          } catch {
+            /* no folder, or its machine is away: not a repo for now */
+          }
+          this.git[key] = { at: now, git };
+        }
+        return { id: s.id, machine: on, git: this.git[key].git };
+      }),
+    );
     return sidebarOrder(rows);
   }
 
@@ -332,14 +379,18 @@ export default class BercailDesk extends View {
       const desk = deskFor(s.id);
       if (desk) out.push({ address: desk.address, space: s.id, desk: true });
     }
-    for (const a of agents()) if (!out.some((o) => o.address === a.address)) out.push({ address: a.address, space: a.space });
+    for (const a of agents())
+      if (!out.some((o) => o.address === a.address)) out.push({ address: a.address, space: a.space });
     return out;
   }
 
   // agent.focus would put the keyboard on a desk's parent pane (the Shell): a desk is
   // shown in its space's agent block and focused there.
   focusAgent(a) {
-    if (!a.desk) { run("agent.focus", { terminal: a.address }); return; }
+    if (!a.desk) {
+      run("agent.focus", { terminal: a.address });
+      return;
+    }
     if (focused()?.space !== a.space) {
       run("space.select", { id: a.space });
       // Add or select the desk's block in the agent column before focusing it.
@@ -362,10 +413,23 @@ export default class BercailDesk extends View {
     try {
       const wrapper = home() + DESK_AGENT;
       const argv = (await exec("test", ["-x", wrapper])).code === 0 ? [wrapper] : ["pi"];
-      const r = await exec("hc", ["run", "--bg", "--json", "--keep", "--outlive-parent", "--no-notify",
-        "--parent", shell, "--cwd", placeOf(space, panes()),
-        "--label", "bercail.role=agent", "--label", `bercail.space=${space.id}`,
-        ...argv]);
+      const r = await exec("hc", [
+        "run",
+        "--bg",
+        "--json",
+        "--keep",
+        "--outlive-parent",
+        "--no-notify",
+        "--parent",
+        shell,
+        "--cwd",
+        placeOf(space, panes()),
+        "--label",
+        "bercail.role=agent",
+        "--label",
+        `bercail.space=${space.id}`,
+        ...argv,
+      ]);
       if (r.code !== 0) throw new Error(r.stderr || r.stdout);
       const first = space.tabs[0];
       if (first && !first.named) run("tab.rename", { id: first.id, name: "Shell" });
@@ -385,7 +449,10 @@ export default class BercailDesk extends View {
     const tab = space.tabs.find((t) => t.name === "Review");
     if (tab) {
       const live = panes().some((p) => p.tab === tab.id && p.terminal && p.program?.key !== "shell");
-      if (live) { if (shown) run("tab.select", { id: tab.id }); return; }
+      if (live) {
+        if (shown) run("tab.select", { id: tab.id });
+        return;
+      }
       run("tab.close", { id: tab.id, confirmed: true });
     }
     try {
@@ -402,8 +469,20 @@ export default class BercailDesk extends View {
   ensureNotifier() {
     if (!this.hasBercail) return;
     if (terminals().some((t) => t.name === NOTIFIER && t.state === "live")) return;
-    exec("hc", ["run", "--bg", "--no-parent", "--no-notify", "--rm", "--name", NOTIFIER,
-      "--label", "bercail.role=notify", "bash", "-lc", NOTIFIER_RUN]).catch(() => {});
+    exec("hc", [
+      "run",
+      "--bg",
+      "--no-parent",
+      "--no-notify",
+      "--rm",
+      "--name",
+      NOTIFIER,
+      "--label",
+      "bercail.role=notify",
+      "bash",
+      "-lc",
+      NOTIFIER_RUN,
+    ]).catch(() => {});
   }
 
   // Runs on every render: Herdr re-renders on any live change.
@@ -414,8 +493,11 @@ export default class BercailDesk extends View {
     if (f?.pane) this.lastPane = f.pane;
     if (desk) {
       this.hadDesk.add(space.id);
-    } else if (!this.hadDesk.has(space.id) && !space.machine
-      && terminals().some((t) => t.address === shellOf(space) && t.state === "live")) {
+    } else if (
+      !this.hadDesk.has(space.id) &&
+      !space.machine &&
+      terminals().some((t) => t.address === shellOf(space) && t.state === "live")
+    ) {
       // The desk starts on its own in a space shown without one. Only once the
       // core lists the space's Shell: before that, terminals() can't tell
       // whether the space already has a desk.
@@ -438,8 +520,10 @@ export default class BercailDesk extends View {
         const id = desk ? `desk-${desk.address}` : null;
         const kids = stack.children ?? [];
         // The shared block of older layouts, and blocks whose desk has finished.
-        const ended = (c) => c.id === "agent" || (c.id.startsWith("desk-")
-          && terminals().some((t) => t.address === c.content?.terminal && t.state !== "live"));
+        const ended = (c) =>
+          c.id === "agent" ||
+          (c.id.startsWith("desk-") &&
+            terminals().some((t) => t.address === c.content?.terminal && t.state !== "live"));
         const add = Boolean(id) && !kids.some((c) => c.id === id) && !this.added.has(id);
         const want = id && (add || kids.some((c) => c.id === id)) ? id : "empty";
         if (add || kids.some(ended)) {
@@ -452,7 +536,9 @@ export default class BercailDesk extends View {
           run("layout.select", { stack: "agent-stack", child: want });
         }
       }
-    } catch { /* a layout without the agent column: show nothing extra */ }
+    } catch {
+      /* a layout without the agent column: show nothing extra */
+    }
 
     // Review when a desk finishes with uncommitted changes. A short turn can
     // finish between renders, so any arrival at done counts (first sight too).
@@ -481,27 +567,63 @@ export default class BercailDesk extends View {
     if (this.role === "keys") return div();
     const t = theme();
     if (this.role === "empty") {
-      return v_flex().size_full().items_center().justify_center().gap(12).bg(t.background).text_color(t.muted).text_size(13)
+      return v_flex()
+        .size_full()
+        .items_center()
+        .justify_center()
+        .gap(12)
+        .bg(t.background)
+        .text_color(t.muted)
+        .text_size(13)
         .child("No agent on this desk")
-        .child(div().id("start-agent").px(14).py(6).rounded(6).bg(t.solid).text_color(t.solid_foreground)
-          .hover((s) => s.opacity(0.85))
-          .on_click((_e, cx) => cx.spawn(async (cx) => {
-            const sp = this.space();
-            if (sp) await this.start(sp);
-            cx.notify();
-          }))
-          .child("Start the agent"))
+        .child(
+          div()
+            .id("start-agent")
+            .px(14)
+            .py(6)
+            .rounded(6)
+            .bg(t.solid)
+            .text_color(t.solid_foreground)
+            .hover((s) => s.opacity(0.85))
+            .on_click((_e, cx) =>
+              cx.spawn(async (cx) => {
+                const sp = this.space();
+                if (sp) await this.start(sp);
+                cx.notify();
+              }),
+            )
+            .child("Start the agent"),
+        )
         .child(div().text_color(t.dim).text_size(12).child("Ctrl+Shift+A"));
     }
     const desk = this.sync();
     const info = desk ? agents().find((a) => a.address === desk.address) : null;
     const status = info?.status ?? desk?.status ?? null;
     const color = { working: t.working, blocked: t.blocked, done: t.done, idle: t.idle }[status] ?? t.dim;
-    return h_flex().size_full().px(12).gap(8).items_center().bg(t.chrome).text_size(12.5).text_color(t.muted)
-      .border_b_2().border_color(this.deskFocused ? t.accent : t.chrome)
+    return h_flex()
+      .size_full()
+      .px(12)
+      .gap(8)
+      .items_center()
+      .bg(t.chrome)
+      .text_size(12.5)
+      .text_color(t.muted)
+      .border_b_2()
+      .border_color(this.deskFocused ? t.accent : t.chrome)
       .child(div().size(7).rounded(4).bg(color))
-      .child(div().text_color(t.foreground).font_semibold().child(info?.program?.name ?? desk?.program?.name ?? (desk ? "agent" : "desk")))
-      .child(div().flex_1().truncate().text_color(t.dim).child(desk ? (info?.title ?? desk.title ?? "") : "Ctrl+Shift+A starts the agent"))
+      .child(
+        div()
+          .text_color(t.foreground)
+          .font_semibold()
+          .child(info?.program?.name ?? desk?.program?.name ?? (desk ? "agent" : "desk")),
+      )
+      .child(
+        div()
+          .flex_1()
+          .truncate()
+          .text_color(t.dim)
+          .child(desk ? (info?.title ?? desk.title ?? "") : "Ctrl+Shift+A starts the agent"),
+      )
       .when(Boolean(status), (el) => el.child(div().text_color(color).child(status)));
   }
 }

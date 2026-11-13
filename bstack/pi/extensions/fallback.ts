@@ -86,7 +86,10 @@ export default function (pi: ExtensionAPI) {
     try {
       const self = await pi.exec("hc", ["get", me, "--json"], { timeout: 5000 });
       const parent = self.code === 0 ? JSON.parse(self.stdout).parent : undefined;
-      if (parent) await pi.exec("hc", ["send", parent, `${role} ${me} stopped: ${text} Do this part yourself.`], { timeout: 5000 });
+      if (parent)
+        await pi.exec("hc", ["send", parent, `${role} ${me} stopped: ${text} Do this part yourself.`], {
+          timeout: 5000,
+        });
     } catch {
       // The parent is gone or hc is missing; the desk's own status still says why.
     }
@@ -130,10 +133,14 @@ export default function (pi: ExtensionAPI) {
   pi.on("after_provider_response", (event) => {
     const rejected = event.headers["anthropic-ratelimit-unified-status"] === "rejected";
     response = { status: event.status, rejected };
-    const reset = Number(event.headers["anthropic-ratelimit-unified-reset"]) * 1000
-      || Date.now() + Number(event.headers["retry-after"]) * 1000;
+    const reset =
+      Number(event.headers["anthropic-ratelimit-unified-reset"]) * 1000 ||
+      Date.now() + Number(event.headers["retry-after"]) * 1000;
     if (rejected || event.status === 429) {
-      rejection = { claim: event.headers["anthropic-ratelimit-unified-representative-claim"], reset: Number.isFinite(reset) ? reset : undefined };
+      rejection = {
+        claim: event.headers["anthropic-ratelimit-unified-representative-claim"],
+        reset: Number.isFinite(reset) ? reset : undefined,
+      };
     }
   });
   pi.on("turn_end", (event) => {
@@ -146,10 +153,29 @@ export default function (pi: ExtensionAPI) {
     if (response && [400, 401, 403].includes(response.status)) return;
     if (isContextOverflow(assistant, ctx.model?.contextWindow)) return;
     // Explicit request errors win over transport signals, including bridge headers.
-    if (/\b(?:400|401|403)\b|unauthenticated|unauthorized|not.authorized|authenticat|invalid.api.key|permission.denied|access.denied|forbidden|invalid_request_error|bad.request|context.{0,30}(?:overflow|length|window|exceed|limit)|prompt.{0,20}(?:too.long|exceed)|too.many.tokens|request.{0,10}abort/i.test(error)) return;
+    if (
+      /\b(?:400|401|403)\b|unauthenticated|unauthorized|not.authorized|authenticat|invalid.api.key|permission.denied|access.denied|forbidden|invalid_request_error|bad.request|context.{0,30}(?:overflow|length|window|exceed|limit)|prompt.{0,20}(?:too.long|exceed)|too.many.tokens|request.{0,10}abort/i.test(
+        error,
+      )
+    )
+      return;
     // No credits or no subscription does not reset on its own: skip it for the session.
-    const isDead = response?.status === 402 || /\b402\b|payment.required|out of credits|insufficient.(?:credits|balance|funds)|need an? [\w-]+(?: [\w-]+)? subscription|no active subscription/i.test(error);
-    if (!isDead && !(response?.status === 429 || response?.rejected || /\b429\b|rate[_ -]?limit|usage[_ -]?limit|usage cap|quota (?:exceeded|exhausted)|hit your limit|out of usage/i.test(error))) return;
+    const isDead =
+      response?.status === 402 ||
+      /\b402\b|payment.required|out of credits|insufficient.(?:credits|balance|funds)|need an? [\w-]+(?: [\w-]+)? subscription|no active subscription/i.test(
+        error,
+      );
+    if (
+      !isDead &&
+      !(
+        response?.status === 429 ||
+        response?.rejected ||
+        /\b429\b|rate[_ -]?limit|usage[_ -]?limit|usage cap|quota (?:exceeded|exhausted)|hit your limit|out of usage/i.test(
+          error,
+        )
+      )
+    )
+      return;
 
     const current = `${assistant.provider}/${assistant.model}`;
     attempted.add(current);
@@ -161,7 +187,11 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify(`${assistant.provider} is dead for this session, skipping it: ${reason}`, "warning");
         try {
           mkdirSync(dirname(deadLog), { recursive: true });
-          appendFileSync(deadLog, JSON.stringify({ at: new Date().toISOString(), provider: assistant.provider, model: current, reason }) + "\n");
+          appendFileSync(
+            deadLog,
+            JSON.stringify({ at: new Date().toISOString(), provider: assistant.provider, model: current, reason }) +
+              "\n",
+          );
         } catch {
           // doctor only reads this; the fallback goes on without it.
         }
@@ -170,30 +200,62 @@ export default function (pi: ExtensionAPI) {
       // A plan window every model shares limits the provider; a one-model window, the model.
       const claim = rejection?.claim ?? error.match(/rate limit \((\w+)\)/)?.[1];
       const scope = claim && !planWindows.has(claim) ? current : assistant.provider;
-      limited.set(scope, rejection?.reset && rejection.reset > Date.now() ? rejection.reset : Date.now() + unknownReset);
+      limited.set(
+        scope,
+        rejection?.reset && rejection.reset > Date.now() ? rejection.reset : Date.now() + unknownReset,
+      );
     }
 
-    const models = new Map((read("models") ?? "").split(/\r?\n/).flatMap<[string, string]>((line) => {
-      const index = line.indexOf("=");
-      return index > 0 ? [[line.slice(0, index).trim(), line.slice(index + 1).trim()]] : [];
-    }));
+    const models = new Map(
+      (read("models") ?? "").split(/\r?\n/).flatMap<[string, string]>((line) => {
+        const index = line.indexOf("=");
+        return index > 0 ? [[line.slice(0, index).trim(), line.slice(index + 1).trim()]] : [];
+      }),
+    );
     // Each line is a family (claude, gpt, grok) or a Pi model id.
-    const order = (read("fallback") ?? "claude\ngpt\ngrok").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    const order = (read("fallback") ?? "claude\ngpt\ngrok")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
     const skipped = [`${current}: ${blocked(current)}`];
     for (const entry of order) {
       const configured = entry.includes("/") ? entry : models.get(entry);
-      if (!configured) { skipped.push(`${entry}: no model`); continue; }
+      if (!configured) {
+        skipped.push(`${entry}: no model`);
+        continue;
+      }
       const name = configured.replace(efforts, "");
       if (attempted.has(name)) continue;
       attempted.add(name);
       const why = blocked(name);
-      if (why) { skipped.push(`${name}: ${why}`); continue; }
+      if (why) {
+        skipped.push(`${name}: ${why}`);
+        continue;
+      }
       const model = find(ctx, name);
-      if (!model) { skipped.push(`${name}: unavailable`); continue; }
+      if (!model) {
+        skipped.push(`${name}: unavailable`);
+        continue;
+      }
       if (model.provider === "claude-bridge") {
         // The bridge's dummy API key makes setModel succeed even without a Claude login.
         try {
-          const auth = await pi.exec("env", ["-u", "ANTHROPIC_API_KEY", "-u", "ANTHROPIC_BASE_URL", "-u", "ANTHROPIC_AUTH_TOKEN", "claude", "auth", "status", "--json"], { signal: ctx.signal, timeout: 5000 });
+          const auth = await pi.exec(
+            "env",
+            [
+              "-u",
+              "ANTHROPIC_API_KEY",
+              "-u",
+              "ANTHROPIC_BASE_URL",
+              "-u",
+              "ANTHROPIC_AUTH_TOKEN",
+              "claude",
+              "auth",
+              "status",
+              "--json",
+            ],
+            { signal: ctx.signal, timeout: 5000 },
+          );
           const login = auth.code === 0 ? JSON.parse(auth.stdout) : undefined;
           if (login?.loggedIn !== true || !["claude.ai", "oauth_token"].includes(login.authMethod)) {
             skipped.push(`${name}: no Claude subscription login`);
@@ -206,17 +268,36 @@ export default function (pi: ExtensionAPI) {
         }
       }
       if (ctx.signal?.aborted) return;
-      if (!(await switchTo(model))) { skipped.push(`${name}: no login`); continue; }
+      if (!(await switchTo(model))) {
+        skipped.push(`${name}: no login`);
+        continue;
+      }
       const text = `${isDead ? "Dead model" : "Rate limit"}: switched ${current} → ${name}. Continuing the same request.`;
-      ctx.ui.setStatus("bercail-fallback", `fallback: ${name}${dead.size ? ` · dead ${[...dead.keys()].join(",")}` : ""}`);
+      ctx.ui.setStatus(
+        "bercail-fallback",
+        `fallback: ${name}${dead.size ? ` · dead ${[...dead.keys()].join(",")}` : ""}`,
+      );
       ctx.ui.notify(text, "warning");
       noteSession(name);
-      const failed = [...event.context.contextEntries].reverse().find((entry) => entry.messages.some((message) => message.role === "assistant" && message.stopReason === "error") && entry.sourceEntry.type === "message");
+      const failed = [...event.context.contextEntries]
+        .reverse()
+        .find(
+          (entry) =>
+            entry.messages.some((message) => message.role === "assistant" && message.stopReason === "error") &&
+            entry.sourceEntry.type === "message",
+        );
       // Omit the empty error assistant. A later provider 400s on it and then looks like a non-limit failure.
       return {
-        entries: [...event.entries,
+        entries: [
+          ...event.entries,
           ...(failed ? [{ type: "context_edit" as const, targetId: failed.sourceEntry.id, replacement: null }] : []),
-          { type: "custom_message" as const, customType: "bercail-fallback", content: text, display: true, details: { from: current, to: name, skipped, dead: Object.fromEntries(dead) } },
+          {
+            type: "custom_message" as const,
+            customType: "bercail-fallback",
+            content: text,
+            display: true,
+            details: { from: current, to: name, skipped, dead: Object.fromEntries(dead) },
+          },
         ],
         continue: true,
       };
@@ -226,6 +307,16 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.notify(text, "error");
     noteSession(current);
     await tellParent(text);
-    return { entries: [...event.entries, { type: "custom" as const, customType: "bercail-fallback-error", data: { text, attempted: [...attempted], skipped, dead: Object.fromEntries(dead) } }], continue: false };
+    return {
+      entries: [
+        ...event.entries,
+        {
+          type: "custom" as const,
+          customType: "bercail-fallback-error",
+          data: { text, attempted: [...attempted], skipped, dead: Object.fromEntries(dead) },
+        },
+      ],
+      continue: false,
+    };
   });
 }

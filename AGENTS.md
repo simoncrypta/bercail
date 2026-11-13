@@ -11,6 +11,8 @@ desk agent per space, review in tuicr. Bash CLI plus Herdr mods, skills, and doc
 - `config/`: files deployed under `~/.config` (shell, worktrunk, pi, systemd, …).
 - `bercail/`: the Herdr layout and mods (`bercail/mods/*`).
 - `skills/`: skills deployed to `~/.agents/skills`. `bstack/` is the bstack Pi setup.
+- `tests/*.test.ts`: Vitest unit tests for the Pi extensions and the Worker (`vp test`).
+  `tests/*_live.ts`: the real-Pi live proofs, run by their `live`-tagged bats test.
 - `tests/*.bats`: one bats-core file per area, one `@test` per case, each in its own
   temp HOME with stand-ins (`hc`, `curl`, `pi`, …). `.agents/skills/verify-bercail/`
   drives the CLI end to end.
@@ -21,12 +23,14 @@ desk agent per space, review in tuicr. Bash CLI plus Herdr mods, skills, and doc
 
 ```bash
 bin/bercail <cmd>                         # this checkout's CLI; a bare `bercail` runs the installed copy
-npm ci                                    # once: bats-core is a pinned devDependency
-bash tests/run.sh                         # the unit suite (CI runs this)
+npm ci                                    # once: bats-core and vite-plus are pinned devDependencies
+bash tests/run.sh                         # the unit suite: bats, then vp test (CI runs this)
 bash tests/run.sh tests/notify.bats       # one area
 node_modules/.bin/bats -f 'regex' tests/notify.bats   # the tests whose names match
 bash tests/run.sh --live                  # the real-Pi live proofs, tagged live
-bash tests/lint.sh                        # shellcheck -S warning on every shell file, node --check on each mod (CI runs this)
+npm exec -- vp test -t 'regex'            # the TypeScript tests whose names match
+bash tests/lint.sh                        # shellcheck -S warning on every shell file, vp check, the mods' lint (CI runs this)
+npm exec -- vp check --fix                # format, lint and type-check the TypeScript and JavaScript
 herdr-app check bercail/mods/bercail-desk # each mod you touch
 .agents/skills/verify-bercail/run.sh      # throwaway-HOME drive; evidence in .bercail/verify/
 ```

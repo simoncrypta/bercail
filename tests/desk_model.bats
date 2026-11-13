@@ -67,10 +67,6 @@ answer() { # status field=value...
   ) >/dev/null 2>&1 3>&- &
 }
 
-@test "the desk extension switches on a request and never on chat text" {
-  node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types "$ROOT/tests/desk_model_pi_test.mjs"
-}
-
 @test "a desk by name gets a request for its own Pi, and says what it switched to" {
   desk t9 agent my-desk
   export BERCAIL_DESK_MODEL_WAIT=5
@@ -126,6 +122,6 @@ answer() { # status field=value...
   [[ -n "$pi" ]] || skip "Pi not found; live proof not run"
   version="$("$pi" --version 2>/dev/null || true)"
   pi_at_least "$version" 1.2 || skip "Pi $version is older than 1.2.0; live proof not run"
-  need python3
-  python3 "$ROOT/tests/desk_model_pi_live.py" "$ROOT" "$pi"
+  need script
+  node "$ROOT/tests/desk_model_pi_live.ts" "$ROOT" "$pi"
 }

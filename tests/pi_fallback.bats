@@ -14,5 +14,5 @@ setup() {
 }
 
 @test "live: Pi fallback runs offline against real Pi >= 1.5" {
-  PI_FALLBACK_BIN="$pi" node "$ROOT/tests/pi_fallback_test.mjs"
+  PI_FALLBACK_BIN="$pi" node "$ROOT/tests/pi_fallback_live.ts"
 }

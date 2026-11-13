@@ -2,15 +2,19 @@
 # shellcheck shell=bash
 # Runs the unit suite, or the .bats files named. Each @test gets its own HOME
 # (test_helper.bash); setup_suite.bash cuts the run off from the desk it ran in.
-# The live proofs (real Pi, tagged `live`) run only with --live. With GNU
-# parallel installed, the unit run spreads files and tests over two jobs per
-# core, since most tests spend their time waiting on a child (BATS_JOBS
-# overrides the count). Without it, they run one at a time.
+# With no arguments, the TypeScript unit tests (tests/*.test.ts) run after them
+# with vp test. The live proofs (real Pi, tagged `live`) run only with --live.
+# With GNU parallel installed, the unit run spreads files and tests over two
+# jobs per core, since most tests spend their time waiting on a child
+# (BATS_JOBS overrides the count). Without it, they run one at a time.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-bats=node_modules/.bin/bats
-[[ -x "$bats" ]] || { printf 'tests/run.sh: bats is missing; run npm ci\n' >&2; exit 1; }
+bats=node_modules/.bin/bats vp=node_modules/.bin/vp
+for tool in "$bats" "$vp"; do
+  [[ -x "$tool" ]] || { printf 'tests/run.sh: %s is missing; run npm ci\n' "${tool##*/}" >&2; exit 1; }
+done
+vitest=$(($# == 0))
 tags='!live'
 jobs=()
 if [[ "${1:-}" == --live ]]; then
@@ -34,4 +38,9 @@ if ((${#jobs[@]})); then
   export PARALLEL_HOME
   trap 'rm -rf "$PARALLEL_HOME"' EXIT
 fi
-"$bats" ${jobs[@]+"${jobs[@]}"} --filter-tags "$tags" "$@"
+rc=0
+"$bats" ${jobs[@]+"${jobs[@]}"} --filter-tags "$tags" "$@" || rc=$?
+if ((vitest)); then
+  "$vp" test || rc=$?
+fi
+exit "$rc"

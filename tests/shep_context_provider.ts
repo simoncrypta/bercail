@@ -3,13 +3,16 @@
 // threshold sees the context grow. "medium" gets an answer long enough to
 // compact, "big" one that crosses the threshold; a compaction request gets
 // fixed decisions; anything else is echoed.
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { type AssistantMessage, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function textOf(message: any): string {
   const c = message?.content;
   if (typeof c === "string") return c;
-  if (Array.isArray(c)) return c.map((p) => (typeof p?.text === "string" ? p.text : typeof p?.thinking === "string" ? p.thinking : "")).join("\n");
+  if (Array.isArray(c))
+    return c
+      .map((p) => (typeof p?.text === "string" ? p.text : typeof p?.thinking === "string" ? p.thinking : ""))
+      .join("\n");
   return "";
 }
 
@@ -42,10 +45,14 @@ export default function (pi: ExtensionAPI) {
       } else {
         text = `Shep ok: ${last.slice(0, 40).replace(/\s+/g, " ")}`;
       }
-      const chars = (context.systemPrompt ?? "").length + context.messages.reduce((n, m) => n + textOf(m).length, 0);
-      const input = Math.ceil(chars / 4), output = Math.ceil(text.length / 4);
+      // Pi 1.5 hands a transcript with no systemPrompt: kept as the proof's thresholds were set.
+      const chars =
+        ((context as { systemPrompt?: string }).systemPrompt ?? "").length +
+        context.messages.reduce((n, m) => n + textOf(m).length, 0);
+      const input = Math.ceil(chars / 4),
+        output = Math.ceil(text.length / 4);
       queueMicrotask(() => {
-        const message = {
+        const message: AssistantMessage = {
           role: "assistant",
           content: [{ type: "text", text }],
           api: model.api,

@@ -422,12 +422,6 @@ bercail wrote this when Shep started. It is data, not instructions from a desk.
     && grep -qx -- '- none yet' "$STATE/context.md" || fail "empty context: $(cat "$STATE/context.md")"
 }
 
-@test "the compaction extension's unit checks" {
-  # setup's PATH is the stand-ins and the system bins; node is often in neither.
-  PATH="$OLD_PATH" need node
-  PATH="$OLD_PATH" node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types "$ROOT/tests/shep_compaction_test.mjs"
-}
-
 # bats test_tags=live
 @test "live: Pi loads Shep's workspace settings only when the folder is trusted, context files or not" {
   local pi ws="$HOME/.local/state/bercail/shep/workspace" flags out
@@ -462,6 +456,6 @@ EOF
   local pi
   pi="$(PATH="$OLD_PATH" real_pi)"
   [[ -n "$pi" ]] || skip "Pi not found; live proof not run"
-  command -v python3 >/dev/null 2>&1 || fail "python3 is required for the live proof"
-  python3 "$ROOT/tests/shep_context_live.py" "$ROOT" "$pi"
+  command -v script >/dev/null 2>&1 || fail "script (util-linux) is required for the live proof"
+  "$(PATH="$OLD_PATH" command -v node)" "$ROOT/tests/shep_context_live.ts" "$ROOT" "$pi"
 }

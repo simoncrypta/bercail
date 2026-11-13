@@ -51,11 +51,12 @@ jobs:
       - name: GNU parallel
         run: command -v parallel || { sudo apt-get update -q && sudo apt-get install -y -q parallel; }
       # Pinned: a newer shellcheck warns about more, and that should not turn
-      # an unrelated push red.
-      - name: Lint (shellcheck, mod syntax)
+      # an unrelated push red. vp check and the mods' lint come from npm ci.
+      - name: Lint (shellcheck, vp check, mods)
         env:
           MISE_GITHUB_TOKEN: ${{ github.token }}
         run: mise use -g "shellcheck@$SHELLCHECK_VERSION" && bash tests/lint.sh
+      # The bats unit suite, then the TypeScript unit tests (vp test).
       - name: Run tests
         run: bash tests/run.sh
 

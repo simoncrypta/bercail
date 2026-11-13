@@ -10,6 +10,8 @@ setup() {
   # Pipeline assertions (sort | sed, and the libraries' own pipes) must still fail the test.
   set -o pipefail
   mkdir -p "$BATS_TEST_TMPDIR/bin" "$XDG_RUNTIME_DIR/herdr-core" "$HOME"
+  # A mise shim reads $HOME, which the test replaces: take the real node now.
+  NODE="$(type -ap node | grep -v '/mise/shims/' | head -1 || true)"
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH" HC_BIN="$BATS_TEST_TMPDIR/bin/hc"
   export DESK_RESTORE_POLL=0 INSTALL_SRC="$ROOT"
   YES=1
@@ -181,10 +183,17 @@ reset_pass() {
   DESK_TYPED=()
 }
 
+# A unix socket file at $1, as the core's would be: node binds it and exits.
+BIND_JS='require("node:net").createServer().listen(process.argv[1], () => process.exit(0))'
+make_socket() {
+  [[ -n "$NODE" ]] || unavailable "node (not a mise shim) not found" || return
+  "$NODE" -e "$BIND_JS" "$1"
+}
+
 # --boot waits forever without the core socket. Tests that are not about that wait create it.
 ensure_core_socket() {
   mkdir -p "$(dirname "$SOCK")"
-  [[ -S "$SOCK" ]] || /usr/bin/python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$SOCK"
+  [[ -S "$SOCK" ]] || make_socket "$SOCK"
 }
 
 claim_file() { # pid ticks session
@@ -511,7 +520,7 @@ EOF
   # The wait stays in the loop until the core's socket shows up.
   cat >"$BATS_TEST_TMPDIR/bin/sleep" <<EOF
 #!/usr/bin/env bash
-[[ -S "$SOCK" ]] || /usr/bin/python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$SOCK"
+[[ -S "$SOCK" ]] || "$NODE" -e '$BIND_JS' "$SOCK"
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/sleep"
   hash -r

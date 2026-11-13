@@ -1,5 +1,5 @@
 // Loaded by the installed Pi binary: two models that answer OK, no network calls.
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { type AssistantMessage, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export default function (pi: ExtensionAPI) {
@@ -19,7 +19,7 @@ export default function (pi: ExtensionAPI) {
     streamSimple(model) {
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
-        const message = {
+        const message: AssistantMessage = {
           role: "assistant",
           content: [{ type: "text", text: "OK" }],
           api: model.api,

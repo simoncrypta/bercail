@@ -1,14 +1,10 @@
 #!/usr/bin/env bats
-# The guard's decision table, plus a live Pi block when Pi is installed.
+# What the guard blocks, on a live Pi. The decision table is tests/pi_guard.test.ts (vp test).
 
 setup() {
   load test_helper
   isolate
   need node
-}
-
-@test "the guard's decision table" {
-  node "$ROOT/tests/pi_guard_test.mjs"
 }
 
 # bats test_tags=live
@@ -19,5 +15,5 @@ setup() {
   [[ -n "$pi" ]] || skip "Pi not found; guard live proof not run"
   version="$("$pi" --version)"
   pi_at_least "$version" 1.5 || skip "Pi $version is older than 1.5; guard live proof not run"
-  PI_GUARD_BIN="$pi" node "$ROOT/tests/pi_guard_live.mjs"
+  PI_GUARD_BIN="$pi" node "$ROOT/tests/pi_guard_live.ts"
 }

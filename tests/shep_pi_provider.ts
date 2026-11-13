@@ -1,6 +1,6 @@
 // Loaded by the installed Pi binary for Shep's live proof: a model with no
 // network that answers each turn with "Shep report:" and the event ids it was given.
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { type AssistantMessage, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 function textOf(message: any): string {
@@ -31,7 +31,7 @@ export default function (pi: ExtensionAPI) {
       const last = context.messages[context.messages.length - 1];
       const ids = [...textOf(last).matchAll(/\[event ([^\]]+)\]/g)].map((m) => m[1]);
       queueMicrotask(() => {
-        const message = {
+        const message: AssistantMessage = {
           role: "assistant",
           content: [{ type: "text", text: `Shep report: ${ids.length ? ids.join(", ") : "no events"}` }],
           api: model.api,

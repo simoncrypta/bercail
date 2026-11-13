@@ -25,8 +25,20 @@
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import {
-  agents, closeOverlay, exec, focused, home, layout, nextCommand, notify, panes, props,
-  run, spaces, terminals, theme,
+  agents,
+  closeOverlay,
+  exec,
+  focused,
+  home,
+  layout,
+  nextCommand,
+  notify,
+  panes,
+  props,
+  run,
+  spaces,
+  terminals,
+  theme,
 } from "herdr";
 
 const NAME = "bercail-shep";
@@ -66,8 +78,12 @@ function setView(view) {
 
 // The view written into a tree, for a layout.set made before a setView has shown.
 export function withView(tree, view) {
-  const shep = find(tree, "shep"), work = find(tree, "work");
-  if (shep && work) { shep.hidden = view !== "shep"; work.hidden = view === "shep"; }
+  const shep = find(tree, "shep"),
+    work = find(tree, "work");
+  if (shep && work) {
+    shep.hidden = view !== "shep";
+    work.hidden = view === "shep";
+  }
   return tree;
 }
 
@@ -121,9 +137,15 @@ const S = { found: null, check: null, starting: false, error: null };
 
 function checkBercail() {
   S.check ??= exec("hc", ["exec", "bash", "-lc", `${BERCAIL_PATH}; command -v bercail`])
-    .then((r) => { S.found = r.code === 0; })
-    .catch(() => { S.found = false; })
-    .finally(() => { S.check = null; });
+    .then((r) => {
+      S.found = r.code === 0;
+    })
+    .catch(() => {
+      S.found = false;
+    })
+    .finally(() => {
+      S.check = null;
+    });
   return S.check;
 }
 
@@ -136,9 +158,23 @@ async function startShep() {
   try {
     await checkBercail();
     if (!S.found) return;
-    const r = await exec("hc", ["run", "--bg", "--json", "--no-parent", "--no-notify", "--rm", "--name", NAME,
-      "--cwd", home(), "--label", `bercail.role=${ROLE}`,
-      "bash", "-lc", SHEP_RUN]);
+    const r = await exec("hc", [
+      "run",
+      "--bg",
+      "--json",
+      "--no-parent",
+      "--no-notify",
+      "--rm",
+      "--name",
+      NAME,
+      "--cwd",
+      home(),
+      "--label",
+      `bercail.role=${ROLE}`,
+      "bash",
+      "-lc",
+      SHEP_RUN,
+    ]);
     if (r.code !== 0 && !/"name_taken"/.test(r.stderr + r.stdout)) throw new Error((r.stderr || r.stdout).trim());
   } catch (e) {
     S.error = String(e?.message ?? e);
@@ -157,11 +193,14 @@ export default class BercailShep extends View {
   init(_props, cx) {
     this.role = props()?.role ?? "nav";
     if (this.role === "modal") return;
-    cx.spawn(async (cx) => { await checkBercail(); cx.notify(); });
+    cx.spawn(async (cx) => {
+      await checkBercail();
+      cx.notify();
+    });
     if (this.role !== "nav") return;
     this.added = new Set(); // Shep block ids this copy added
-    this.back = {};         // space id -> { pane } or { terminal }: where the keyboard was
-    this.pending = null;    // { view, at }: a view this copy set that layout() doesn't show yet
+    this.back = {}; // space id -> { pane } or { terminal }: where the keyboard was
+    this.pending = null; // { view, at }: a view this copy set that layout() doesn't show yet
     // Once per app session (a mod reload keeps globalThis): the Shep view, and Shep.
     // Done in sync(): layout() and terminals() are empty this early.
     const app = (globalThis.bercailShep ??= {});
@@ -181,14 +220,26 @@ export default class BercailShep extends View {
     const view = viewOf(layout());
     const [c, arg] = raw.split(/:(.*)/s);
     switch (c) {
-      case "toggle": if (view) this.show(view === "shep" ? "space" : "shep"); break;
-      case "show": if (view) this.show("shep"); break;
-      case "space": if (view) this.show("space"); break;
-      case "start": await startShep(); break;
+      case "toggle":
+        if (view) this.show(view === "shep" ? "space" : "shep");
+        break;
+      case "show":
+        if (view) this.show("shep");
+        break;
+      case "space":
+        if (view) this.show("space");
+        break;
+      case "start":
+        await startShep();
+        break;
       // Ctrl+Space: Herdr's own Go to… search, over the space view so a pick shows.
-      case "goto": this.inSpace(view, ["mod.open", { name: "picker" }]); break;
+      case "goto":
+        this.inSpace(view, ["mod.open", { name: "picker" }]);
+        break;
       // A bercail-desk key pressed in the Shep view (its `keys` copy sends it here).
-      case "desk": if (arg) this.inSpace(view, [`bercail-desk.${arg}`]); break;
+      case "desk":
+        if (arg) this.inSpace(view, [`bercail-desk.${arg}`]);
+        break;
     }
   }
 
@@ -238,13 +289,21 @@ export default class BercailShep extends View {
     // Where the keyboard is in the space, kept while the space view stays: hiding the
     // Shep view moves it on its own first.
     if (view === "space" && was === "space" && f?.space) {
-      const desk = f.terminal && terminals().find((t) => t.address === f.terminal
-        && t.labels?.["bercail.role"] === "agent" && t.labels?.["bercail.space"] === f.space);
+      const desk =
+        f.terminal &&
+        terminals().find(
+          (t) =>
+            t.address === f.terminal &&
+            t.labels?.["bercail.role"] === "agent" &&
+            t.labels?.["bercail.space"] === f.space,
+        );
       if (f.pane) this.back[f.space] = { pane: f.pane };
       else if (desk) this.back[f.space] = { terminal: f.terminal };
     }
-    const ready = Boolean(shep) && !plan.set
-      && Boolean(find(tree, "shep-stack")?.children?.some((c) => c.id === `shep-${shep.address}`));
+    const ready =
+      Boolean(shep) &&
+      !plan.set &&
+      Boolean(find(tree, "shep-stack")?.children?.some((c) => c.id === `shep-${shep.address}`));
     const space = spaces().find((s) => s.id === f?.space);
     const to = focusPlan(view, was, f, shep, ready, this.back[f?.space], ps, space);
     if (to) run("pane.focus", to);
@@ -255,9 +314,12 @@ export default class BercailShep extends View {
   render(cx) {
     const t = theme();
     switch (this.role) {
-      case "header": return this.header(t);
-      case "empty": return this.empty(t);
-      case "modal": return this.modal(t);
+      case "header":
+        return this.header(t);
+      case "empty":
+        return this.empty(t);
+      case "modal":
+        return this.modal(t);
     }
     const view = this.sync();
     const shep = shepTerminal();
@@ -265,32 +327,81 @@ export default class BercailShep extends View {
     const dot = shep ? t.ansi2 : S.found === false ? t.blocked : t.dim;
     // The sidebar's rail (narrower than 160px): the mark alone.
     const rail = (find(layout(), "sidebar")?.size?.px ?? Infinity) < 160;
-    return h_flex().size_full().px(rail ? 0 : 8).items_center().justify_center().bg(t.chrome).text_size(13)
-      .child(h_flex().id("shep-row").h(34).px(8).gap(9).items_center().rounded(8)
-        .when(!rail, (el) => el.flex_1())
-        .when(on, (el) => el.bg(t.selected))
-        .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
-        .cursor_pointer()
-        .tooltip(on ? "Shep, the orchestrator" : `Back to Shep (${KEY})`)
-        .on_click(() => { if (view) this.show("shep"); })
-        .child(on || rail
-          ? h_flex().size(18).flex_none().rounded(5).bg(on ? t.solid : t.raised).items_center().justify_center()
-            .text_size(10.5).font_bold().text_color(on ? t.solid_foreground : t.foreground).child("S")
-          : svg("mods/workspace-chrome/chevron-left.svg").size(14).mx(2).flex_none().text_color(t.muted))
-        .when(!rail, (el) => el
-          .child(div().flex_1().truncate().text_color(t.foreground).font_medium().child(on ? "Shep" : "Back to Shep"))
-          .when(!on, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(KEY)))
-          .child(div().size(7).mx(3).flex_none().rounded(4).bg(dot))));
+    return h_flex()
+      .size_full()
+      .px(rail ? 0 : 8)
+      .items_center()
+      .justify_center()
+      .bg(t.chrome)
+      .text_size(13)
+      .child(
+        h_flex()
+          .id("shep-row")
+          .h(34)
+          .px(8)
+          .gap(9)
+          .items_center()
+          .rounded(8)
+          .when(!rail, (el) => el.flex_1())
+          .when(on, (el) => el.bg(t.selected))
+          .when(!on, (el) => el.hover((s) => s.bg(t.hover)))
+          .cursor_pointer()
+          .tooltip(on ? "Shep, the orchestrator" : `Back to Shep (${KEY})`)
+          .on_click(() => {
+            if (view) this.show("shep");
+          })
+          .child(
+            on || rail
+              ? h_flex()
+                  .size(18)
+                  .flex_none()
+                  .rounded(5)
+                  .bg(on ? t.solid : t.raised)
+                  .items_center()
+                  .justify_center()
+                  .text_size(10.5)
+                  .font_bold()
+                  .text_color(on ? t.solid_foreground : t.foreground)
+                  .child("S")
+              : svg("mods/workspace-chrome/chevron-left.svg").size(14).mx(2).flex_none().text_color(t.muted),
+          )
+          .when(!rail, (el) =>
+            el
+              .child(
+                div()
+                  .flex_1()
+                  .truncate()
+                  .text_color(t.foreground)
+                  .font_medium()
+                  .child(on ? "Shep" : "Back to Shep"),
+              )
+              .when(!on, (el) => el.child(div().flex_none().text_size(11).text_color(t.dim).child(KEY)))
+              .child(div().size(7).mx(3).flex_none().rounded(4).bg(dot)),
+          ),
+      );
   }
 
   header(t) {
     const shep = shepTerminal();
     const word = shep ? "running" : S.found === false ? "bercail missing" : S.starting ? "starting" : "stopped";
     const color = shep ? t.ansi2 : S.found === false ? t.blocked : t.dim;
-    return h_flex().size_full().px(12).gap(8).items_center().bg(t.chrome).text_size(12.5).text_color(t.muted)
+    return h_flex()
+      .size_full()
+      .px(12)
+      .gap(8)
+      .items_center()
+      .bg(t.chrome)
+      .text_size(12.5)
+      .text_color(t.muted)
       .child(div().size(7).rounded(4).bg(color))
       .child(div().text_color(t.foreground).font_semibold().child("Shep"))
-      .child(div().flex_1().truncate().text_color(t.dim).child(shep?.title || "the orchestrator for every desk"))
+      .child(
+        div()
+          .flex_1()
+          .truncate()
+          .text_color(t.dim)
+          .child(shep?.title || "the orchestrator for every desk"),
+      )
       .child(div().text_color(color).child(word))
       .child(div().text_size(11).text_color(t.dim).child(`${KEY} spaces`));
   }
@@ -298,15 +409,40 @@ export default class BercailShep extends View {
   empty(t) {
     const missing = S.found === false;
     const busy = S.starting || S.found === null;
-    const act = (cx, f) => cx.spawn(async (cx) => { await f(); cx.notify(); });
-    const button = (id, label, f) => div().id(id).px(14).py(6).rounded(6).bg(t.solid).text_color(t.solid_foreground)
-      .hover((s) => s.opacity(0.85)).on_click((_e, cx) => act(cx, f)).child(label);
-    const body = v_flex().size_full().items_center().justify_center().gap(10).px(24).bg(t.background)
-      .text_color(t.muted).text_size(13);
+    const act = (cx, f) =>
+      cx.spawn(async (cx) => {
+        await f();
+        cx.notify();
+      });
+    const button = (id, label, f) =>
+      div()
+        .id(id)
+        .px(14)
+        .py(6)
+        .rounded(6)
+        .bg(t.solid)
+        .text_color(t.solid_foreground)
+        .hover((s) => s.opacity(0.85))
+        .on_click((_e, cx) => act(cx, f))
+        .child(label);
+    const body = v_flex()
+      .size_full()
+      .items_center()
+      .justify_center()
+      .gap(10)
+      .px(24)
+      .bg(t.background)
+      .text_color(t.muted)
+      .text_size(13);
     if (missing) {
       return body
         .child(div().text_color(t.foreground).font_semibold().child("bercail is not installed"))
-        .child(div().max_w(460).text_center().child("Shep starts with bercail shep run. Install bercail (bercail.dev), then check again."))
+        .child(
+          div()
+            .max_w(460)
+            .text_center()
+            .child("Shep starts with bercail shep run. Install bercail (bercail.dev), then check again."),
+        )
         .child(button("shep-check", "Check again", checkBercail))
         .child(div().text_color(t.dim).text_size(12).child("Your spaces work without it: pick one on the right."));
     }
@@ -315,7 +451,9 @@ export default class BercailShep extends View {
       .child(div().text_color(t.foreground).font_semibold().child("Shep is not running"))
       .child(button("shep-start", "Start Shep", startShep))
       .child(div().text_color(t.dim).text_size(12).child("Runs Shep on Pi, in its own session."))
-      .when(Boolean(S.error), (el) => el.child(div().max_w(460).text_center().text_color(t.blocked).text_size(12).child(S.error)));
+      .when(Boolean(S.error), (el) =>
+        el.child(div().max_w(460).text_center().text_color(t.blocked).text_size(12).child(S.error)),
+      );
   }
 
   // The bar of an agent opened in a dialog. Its terminal is the one in its pane or
@@ -330,24 +468,58 @@ export default class BercailShep extends View {
     const space = spaces().find((s) => s.id === spaceId);
     const desk = k?.labels?.["bercail.role"] === "agent";
     const pic = icon(k?.program ?? a?.program, 14, t.foreground);
-    const button = (id, label, onClick) => div().id(id).px(8).py(2).rounded(5).text_color(t.muted)
-      .cursor_pointer().hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(onClick).child(label);
-    return h_flex().size_full().px(12).gap(8).items_center().bg(t.chrome).border_b(1).border_color(t.border)
-      .text_size(12.5).text_color(t.muted)
+    const button = (id, label, onClick) =>
+      div()
+        .id(id)
+        .px(8)
+        .py(2)
+        .rounded(5)
+        .text_color(t.muted)
+        .cursor_pointer()
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click(onClick)
+        .child(label);
+    return h_flex()
+      .size_full()
+      .px(12)
+      .gap(8)
+      .items_center()
+      .bg(t.chrome)
+      .border_b(1)
+      .border_color(t.border)
+      .text_size(12.5)
+      .text_color(t.muted)
       .child(div().size(7).flex_none().rounded(4).bg(color))
       .when(Boolean(pic), (el) => el.child(pic))
-      .child(div().flex_none().font_semibold().text_color(t.foreground)
-        .child(desk ? "Desk" : (k?.name || a?.program?.name || k?.program?.name || terminal || "")))
-      .when(Boolean(space), (el) => el.child(div().flex_none().max_w(220).truncate().text_color(t.dim).child(space.name)))
-      .child(div().flex_1().truncate().text_color(t.dim).child(a?.title ?? k?.title ?? ""))
+      .child(
+        div()
+          .flex_none()
+          .font_semibold()
+          .text_color(t.foreground)
+          .child(desk ? "Desk" : k?.name || a?.program?.name || k?.program?.name || terminal || ""),
+      )
+      .when(Boolean(space), (el) =>
+        el.child(div().flex_none().max_w(220).truncate().text_color(t.dim).child(space.name)),
+      )
+      .child(
+        div()
+          .flex_1()
+          .truncate()
+          .text_color(t.dim)
+          .child(a?.title ?? k?.title ?? ""),
+      )
       .when(Boolean(status), (el) => el.child(div().flex_none().text_color(color).child(status)))
-      .when(Boolean(space), (el) => el.child(button("modal-space", "Show in space", () => {
-        this.left = true;
-        closeOverlay(overlay);
-        run("space.select", { id: space.id });
-        if (viewOf(layout())) setView("space");
-        if (!desk) run("agent.focus", { terminal });
-      })))
+      .when(Boolean(space), (el) =>
+        el.child(
+          button("modal-space", "Show in space", () => {
+            this.left = true;
+            closeOverlay(overlay);
+            run("space.select", { id: space.id });
+            if (viewOf(layout())) setView("space");
+            if (!desk) run("agent.focus", { terminal });
+          }),
+        ),
+      )
       .child(button("modal-close", "✕", () => closeOverlay(overlay)));
   }
 

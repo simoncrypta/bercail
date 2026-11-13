@@ -17,22 +17,42 @@ export default function (pi: ExtensionAPI) {
     api: "review-pi-test",
     baseUrl: "http://invalid.invalid",
     apiKey: "offline-test-key",
-    models: [{
-      id: "model",
-      name: "review",
-      reasoning: false,
-      input: ["text"],
-      contextWindow: 200000,
-      maxTokens: 1000,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    }],
+    models: [
+      {
+        id: "model",
+        name: "review",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 200000,
+        maxTokens: 1000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    ],
     streamSimple(model, context, options) {
       const stream = createAssistantMessageEventStream();
-      const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-      const base = { role: "assistant" as const, api: model.api, provider: model.provider, model: model.id, usage, timestamp: Date.now() };
+      const usage = {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      };
+      const base = {
+        role: "assistant" as const,
+        api: model.api,
+        provider: model.provider,
+        model: model.id,
+        usage,
+        timestamp: Date.now(),
+      };
       const last = context.messages[context.messages.length - 1] as any;
       const say = (text: string) => {
-        stream.push({ type: "done", reason: "stop", message: { ...base, stopReason: "stop", content: [{ type: "text", text }] } });
+        stream.push({
+          type: "done",
+          reason: "stop",
+          message: { ...base, stopReason: "stop", content: [{ type: "text", text }] },
+        });
         stream.end();
       };
       queueMicrotask(() => {
@@ -43,14 +63,22 @@ export default function (pi: ExtensionAPI) {
           stream.push({
             type: "done",
             reason: "toolUse",
-            message: { ...base, stopReason: "toolUse", content: [{ type: "toolCall", id: "review-read", name: "read", arguments: { path: read[1] } }] },
+            message: {
+              ...base,
+              stopReason: "toolUse",
+              content: [{ type: "toolCall", id: "review-read", name: "read", arguments: { path: read[1] } }],
+            },
           });
           stream.end();
           return;
         }
         if (prompt === "HOLD") {
           const stop = () => {
-            stream.push({ type: "error", reason: "aborted", error: { ...base, stopReason: "aborted", errorMessage: "aborted", content: [] } });
+            stream.push({
+              type: "error",
+              reason: "aborted",
+              error: { ...base, stopReason: "aborted", errorMessage: "aborted", content: [] },
+            });
             stream.end();
           };
           if (options?.signal?.aborted) return stop();
