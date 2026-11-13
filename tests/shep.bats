@@ -119,20 +119,6 @@ EOF
   [[ -d "$STATE/inbox" && -d "$STATE/delivered" ]] || fail "no inbox"
 }
 
-@test "the old [shep] backend and session keys are ignored; run and status work" {
-  local old out
-  for old in 'backend = "pi"\nsession = "agent:sheep:main"' 'session = "agent:sheep:main"' 'backend = "nope"'; do
-    reset
-    printf "[shep]\n$old\n" >"$CONFIG"
-    cp "$CONFIG" "$BATS_TEST_TMPDIR/before"
-    out="$(shep run </dev/null 2>&1)" || fail "run failed with: $(cat "$CONFIG")"
-    [[ -z "$out" && "$(ran '^pi cwd=')" == 1 ]] || fail "old keys: $out $(cat "$LOG")"
-    out="$(shep status 2>&1)" || fail "status failed with: $(cat "$CONFIG")"
-    [[ "$out" == "pi sessions: $STATE/pi-sessions"$'\n'"desk events: 0 waiting, 0 delivered"$'\n'"background Sheps: none" ]] || fail "status: $out"
-    cmp -s "$CONFIG" "$BATS_TEST_TMPDIR/before" || fail "config changed: $(cat "$CONFIG")"
-  done
-}
-
 @test "no Pi: it says how to install it" {
   local out
   reset

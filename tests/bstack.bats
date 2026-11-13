@@ -164,15 +164,15 @@ claude = "claude-bridge/claude-opus-5-5#high"   # keeps the variant
 [shep]
 rollover = true # bare value
 EOF
-  assert_eq "claude-bridge/claude-opus-5-5#high" "$(_bstack_toml_get bstack claude "$f")" "quoted value keeps #"
-  assert_eq "true" "$(_bstack_toml_get shep rollover "$f")" "bare value drops comment"
-  assert_eq "" "$(_bstack_toml_get bstack review "$f")" "keys are per section"
+  assert_eq "claude-bridge/claude-opus-5-5#high" "$(toml_value "$f" bstack claude)" "quoted value keeps #"
+  assert_eq "true" "$(toml_value "$f" shep rollover)" "bare value drops comment"
+  assert_eq "" "$(toml_value "$f" bstack review)" "keys are per section"
 }
 
 @test "a new install's config names the roles and has no switch, desk command, or harness" {
   reset_home
   default_user_config >"$BATS_TEST_TMPDIR/new.toml"
-  assert_eq "grok" "$(_bstack_toml_get bstack build "$BATS_TEST_TMPDIR/new.toml")" "build role default"
+  assert_eq "grok" "$(toml_value "$BATS_TEST_TMPDIR/new.toml" bstack build)" "build role default"
   if grep -q -e '^\[agent\]' -e '^harness' -e '^enabled' "$BATS_TEST_TMPDIR/new.toml"; then
     fail "no switch, desk command, or harness to pick"
   fi
@@ -278,6 +278,12 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
 
   FAKE_PI_READY="" bstack_load_state reload
   assert_eq "" "$(FAKE_PI_READY="" bstack_role_model lead)" "no login at all: Pi's default"
+
+  set_bstack gpt '"openai/gpt-6.1-sol:xhigh"'
+  FAKE_PI_READY="claude-bridge openai xai" bstack_load_state reload
+  assert_eq "openai/gpt-6.1-sol:xhigh" "$(_bstack_pi_model_id "$(FAKE_PI_READY="claude-bridge openai xai" bstack_resolve_model gpt)")" "a pin written :level reaches Pi as written"
+  _bstack_pi_known "openai/gpt-6.1-sol:xhigh" || fail "a :level pin is a known model"
+  set_bstack gpt '""'
 
   set_bstack effort '"none"'
   FAKE_PI_READY="claude-bridge" bstack_load_state reload

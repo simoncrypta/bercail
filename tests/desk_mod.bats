@@ -368,6 +368,9 @@ EOF
     terminals: [],
     exec: (cmd, args) => { ran.push([cmd, ...args]); return { code: 0, stdout: "{}", stderr: "" }; },
   };
+  // The file the bash reader's tests read: same answers from the mod's reader.
+  const hard = readConfig(readFileSync(process.env.ROOT + "/tests/fixtures/config-hard.toml", "utf8"));
+  if (hard.review !== "hunk diff" || hard.autoReview !== false) fail(`the shared fixture: ${JSON.stringify(hard)}`);
   const parsed = readConfig("[bstack]\nenabled = true # on\n");
   if ("bstack" in parsed || "bstack" in readConfig("[bstack]\nenabled = false\n") || "bstack" in readConfig("")) {
     fail("readConfig does not return bstack");

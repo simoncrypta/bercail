@@ -12,6 +12,8 @@
 
 # shellcheck source=lib/git-backend.sh
 source "$(dirname "${BASH_SOURCE[0]}")/git-backend.sh"
+# shellcheck source=lib/toml.sh
+source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
 
 POLICY_FILE=".bercail/policy.toml"
 
@@ -35,89 +37,12 @@ _policy_hash() {
   fi
 }
 
-# The flat keys of TOML tables as "table<TAB>key<TAB>json value" lines. The root
-# table is "", [policy."<path>"] is <path>, any other table is skipped. Strings
-# (basic, literal, multi-line) and booleans; anything else warns on stderr.
-_policy_toml() {
-  awk -v file="$1" '
-    function jstr(s) {
-      gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, "\\t", s)
-      gsub(/\r/, "\\r", s); gsub(/\n/, "\\n", s)
-      return "\"" s "\""
-    }
-    function unesc(s,   out, i, c, n) {
-      out = ""
-      for (i = 1; i <= length(s); i++) {
-        c = substr(s, i, 1)
-        if (c != "\\") { out = out c; continue }
-        n = substr(s, ++i, 1)
-        if (n == "n") out = out "\n"
-        else if (n == "t") out = out "\t"
-        else if (n == "r") out = out "\r"
-        else if (n == "\"" || n == "\\") out = out n
-        else if (n == "\n") { while (substr(s, i + 1, 1) ~ /[ \t\n]/) i++ }
-        else out = out "\\" n
-      }
-      return out
-    }
-    function emit(key, json) { if (table != "\001") print table "\t" key "\t" json }
-    function bad(why) { printf "bercail policy: %s line %d: %s\n", file, NR, why > "/dev/stderr" }
-    BEGIN { table = "" }
-    ml != "" {
-      i = index($0, ml)
-      if (!i) { buf = buf $0 "\n"; next }
-      buf = buf substr($0, 1, i - 1)
-      emit(mlkey, jstr(ml == "\047\047\047" ? buf : unesc(buf)))
-      ml = ""
-      next
-    }
-    /^[ \t]*(#|$)/ { next }
-    /^[ \t]*\[/ {
-      h = $0
-      sub(/^[ \t]*\[[ \t]*/, "", h); sub(/[ \t]*\][ \t]*(#.*)?$/, "", h)
-      table = "\001"
-      if (h ~ /^policy\.".*"$/ || h ~ /^policy\.\047.*\047$/) table = substr(h, 9, length(h) - 9)
-      next
-    }
-    {
-      if (!match($0, /^[ \t]*[A-Za-z0-9_-]+[ \t]*=[ \t]*/)) { if (table != "\001") bad("not a key = value line"); next }
-      key = substr($0, RSTART, RLENGTH); gsub(/[ \t=]/, "", key)
-      v = substr($0, RSTART + RLENGTH)
-      q = substr(v, 1, 3)
-      if (q == "\"\"\"" || q == "\047\047\047") {
-        v = substr(v, 4)
-        i = index(v, q)
-        if (i) { emit(key, jstr(q == "\047\047\047" ? substr(v, 1, i - 1) : unesc(substr(v, 1, i - 1)))); next }
-        ml = q; mlkey = key; buf = (v == "" ? "" : v "\n")
-        next
-      }
-      c = substr(v, 1, 1)
-      if (c == "\"") {
-        s = substr(v, 2)
-        for (i = 1; i <= length(s); i++) {
-          c = substr(s, i, 1)
-          if (c == "\\") { i++; continue }
-          if (c == "\"") break
-        }
-        emit(key, jstr(unesc(substr(s, 1, i - 1))))
-      } else if (c == "\047") {
-        s = substr(v, 2)
-        emit(key, jstr(substr(s, 1, index(s, "\047") - 1)))
-      } else {
-        sub(/[ \t]*(#.*)?$/, "", v)
-        if (v == "true" || v == "false") emit(key, v)
-        else if (table != "\001") bad(key " = " v ": use a quoted string, true, or false")
-      }
-    }
-    END { if (ml != "") bad("multi-line string for " mlkey " never closes") }
-  ' "$1"
-}
-
-# The known keys of TOML lines on stdin as one JSON object. Unknown keys and
-# bad values warn on stderr (naming $1) and are left out.
+# The known keys among toml_records lines on stdin, as one JSON object. Unknown
+# keys, bad values, and lines the reader could not take warn on stderr (naming
+# $1) and are left out.
 _policy_object() {
   local out
-  out="$(jq -sRr --arg where "$1" '
+  out="$(jq -sr --arg where "$1" '
     def ok($k; $v):
       if $k == "commit" then $v == "ask" or $v == "allow"
       elif $k == "push" then $v == "ask" or $v == "branch" or $v == "main"
@@ -125,37 +50,43 @@ _policy_object() {
       elif $k == "pr_draft" or $k == "agent_may_release" then ($v | type) == "boolean"
       elif $k == "release" or $k == "rules" then ($v | type) == "string"
       else null end;
-    [split("\n")[] | select(length > 0) | split("\t") | {k: .[0], v: (.[1] | fromjson)} | .ok = ok(.k; .v)]
-    | (map(select(.ok == true) | {(.k): .v}) | add // {} | tojson),
-      (.[] | select(.ok != true)
-        | "bercail policy: \($where): " + (if .ok == null then "unknown key \(.k)" else "\(.k) = \(.v | tojson) is not allowed" end) + ", ignored")')"
+    (map(select(has("value")) | .ok = ok(.key; .value))) as $rows
+    | ($rows | map(select(.ok == true) | {(.key): .value}) | add // {} | tojson),
+      (.[] | select(has("error")) | "bercail policy: \($where) line \(.line): \(.error)"),
+      (.[] | select(has("raw")) | "bercail policy: \($where) line \(.line): \(.key) = \(.raw): use a quoted string, true, or false"),
+      ($rows[] | select(.ok != true)
+        | "bercail policy: \($where): " + (if .ok == null then "unknown key \(.key)" else "\(.key) = \(.value | tojson) is not allowed" end) + ", ignored")')"
   printf '%s' "${out%%$'\n'*}"
   [[ "$out" != *$'\n'* ]] || printf '%s\n' "${out#*$'\n'}" >&2
 }
 
+# The [policy."<path>"] names in CONFIG that are MAIN, as written, one a line.
+_policy_scopes() {
+  local config="$1" main="$2" scope path
+  [[ -f "$config" ]] || return 0
+  while IFS= read -r scope; do
+    path="$scope"
+    [[ "$path" != \~/* ]] || path="$HOME/${path#\~/}"
+    [[ "$(_git_backend_realpath "$path")" != "$main" ]] || printf '%s\n' "$scope"
+  done < <(toml_records "$config" | jq -r 'select(.section | length == 2 and .[0] == "policy") | .section[1]' | sort -u)
+}
+
 # Keys the person set for MAIN under [policy."<path>"] in config.toml.
 _policy_local() {
-  local main="$1" config table key value
+  local main="$1" config scopes
   config="$(_git_backend_config_file)"
-  [[ -f "$config" ]] || { printf '{}'; return 0; }
-  while IFS=$'\t' read -r table key value; do
-    [[ -n "$table" ]] || continue
-    [[ "$table" != \~/* ]] || table="$HOME/${table#\~/}"
-    [[ "$(_git_backend_realpath "$table")" == "$main" ]] || continue
-    printf '%s\t%s\n' "$key" "$value"
-  done < <(_policy_toml "$config") | _policy_object "$config [policy.\"$main\"]"
+  scopes="$(_policy_scopes "$config" "$main")"
+  [[ -n "$scopes" ]] || { printf '{}'; return 0; }
+  toml_records "$config" \
+    | jq -c --arg scopes "$scopes" 'select(.section | length == 2 and .[0] == "policy" and (.[1] | IN($scopes | split("\n")[])))' \
+    | _policy_object "$config [policy.\"$main\"]"
 }
 
 # 0 when MAIN is named under [git] or [policy] in config.toml.
 _policy_configured() {
-  local main="$1" table _k _v
+  local main="$1"
   git_backend_override "$main" >/dev/null 2>&1 && return 0
-  while IFS=$'\t' read -r table _k _v; do
-    [[ -n "$table" ]] || continue
-    [[ "$table" != \~/* ]] || table="$HOME/${table#\~/}"
-    [[ "$(_git_backend_realpath "$table")" == "$main" ]] && return 0
-  done < <(_policy_toml "$(_git_backend_config_file)" 2>/dev/null)
-  return 1
+  [[ -n "$(_policy_scopes "$(_git_backend_config_file)" "$main")" ]]
 }
 
 # A throwaway repo: under a temp dir, no remote, and not configured. A copy of
@@ -184,7 +115,7 @@ policy_json() {
   if [[ -f "$root/$POLICY_FILE" ]]; then
     file="$root/$POLICY_FILE"
     hash="$(_policy_hash "$file")"
-    repo="$(_policy_toml "$file" | sed -n $'s/^\t//p' | _policy_object "$file")"
+    repo="$(toml_records "$file" | jq -c 'select(.section == [] or .section == null)' | _policy_object "$file")"
     trust="$(policy_trust_file)"
     if [[ -f "$trust" ]] && jq -e --arg m "$main" --arg h "$hash" '.[$m].sha256 == $h' "$trust" >/dev/null 2>&1; then
       trusted=true

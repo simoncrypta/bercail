@@ -79,3 +79,12 @@ setup() {
     || fail "repo lib/pi-log.sh must be the skill script"
   [[ ! -L "$BERCAIL_SHARE_DIR/lib/pi-log.sh" ]] || fail "installed pi-log.sh must be a file, not a skills-tree symlink"
 }
+
+@test "deploy_lib copies toml.sh next to the other libs" {
+  deploy_lib >/dev/null
+  cmp -s "$ROOT/skills/handoff/scripts/toml.sh" "$BERCAIL_SHARE_DIR/lib/toml.sh" \
+    || fail "installed lib/toml.sh must match the skill script"
+  cmp -s "$ROOT/skills/handoff/scripts/toml.sh" "$ROOT/lib/toml.sh" \
+    || fail "repo lib/toml.sh must be the skill script"
+  [[ ! -L "$BERCAIL_SHARE_DIR/lib/toml.sh" ]] || fail "installed toml.sh must be a file, not a skills-tree symlink"
+}

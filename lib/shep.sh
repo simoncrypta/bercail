@@ -46,7 +46,7 @@ shep_pi_argv() {
   local share state id model ext rollover=0
   share="$(shep_share_dir)"
   state="$(shep_state_dir)"
-  [[ "$(_bstack_toml_get shep rollover)" != true ]] || rollover=1
+  [[ "$(toml_value "$BERCAIL_USER_CONFIG" shep rollover)" != true ]] || rollover=1
   SHEP_PI_ARGV=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN
     BERCAIL_ROLE=shep "BERCAIL_SHEP_INBOX=$state/inbox" "BERCAIL_SHEP_STATE=$state"
     "BERCAIL_SHEP_BIN=${BERCAIL_SELF:-bercail}" "BERCAIL_SHEP_ROLLOVER=$rollover" pi)

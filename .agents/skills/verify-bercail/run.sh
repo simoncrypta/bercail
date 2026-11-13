@@ -63,7 +63,7 @@ chmod +x "$box/bin/hc"
 
 cat >"$XDG_CONFIG_HOME/bercail/config.toml" <<'TOML'
 [bstack]
-claude = "claude-bridge/claude-opus-5-5#high"
+claude = "claude-bridge/claude-opus-5-5:high"
 TOML
 
 bercail="$repo/bin/bercail"

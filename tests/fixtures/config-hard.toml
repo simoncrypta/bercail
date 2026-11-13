@@ -1,0 +1,26 @@
+# Shared hard cases. ~/ is literal. # inside quotes is not a comment.
+
+[layout]
+review = "hunk" # comment after
+auto_review = false
+
+["bstack"]
+claude = "claude-bridge/claude-opus-5-5#high"   # keeps the variant
+gpt = "openai/gpt-6.1-sol:high"
+fallback = ["claude", "gpt", "grok"]
+
+[shep]
+compact_at = 250000
+
+[git]
+"~/Work/a.b" = "gh"
+"esc\tape" = "gt"
+
+[policy."~/Work/a.b"]
+commit = "allow"
+rules = """
+Use gh, never gt.
+Simon merges."""
+
+[policy."hash#path"]
+push = "main"

@@ -35,20 +35,10 @@ _shep_repo_candidates() {
   local config trust extras
   config="$(_git_backend_config_file)"
   if [[ -f "$config" ]]; then
-    awk '
-      /^[[:space:]]*\[/ {
-        h = $0
-        sub(/^[[:space:]]*\[[[:space:]]*/, "", h); sub(/[[:space:]]*\][[:space:]]*(#.*)?$/, "", h)
-        sec = h
-        if (h ~ /^policy\.".*"$/ || h ~ /^policy\.\047.*\047$/) print "config\t" substr(h, 9, length(h) - 9)
-        next
-      }
-      sec == "git" {
-        line = $0; sub(/^[[:space:]]*/, "", line); q = substr(line, 1, 1)
-        if (q != "\"" && q != "\047") next
-        line = substr(line, 2); i = index(line, q)
-        if (i > 1) print "config\t" substr(line, 1, i - 1)
-      }' "$config"
+    toml_records "$config" | jq -r '
+      if .section == ["git"] and has("key") then "config\t" + .key
+      elif (.section | length) == 2 and .section[0] == "policy" then "config\t" + .section[1]
+      else empty end' | sort -u
   fi
   trust="$(policy_trust_file)"
   [[ ! -f "$trust" ]] || jq -r 'keys[] | "trust\t" + .' "$trust" 2>/dev/null || true
@@ -421,7 +411,7 @@ _shep_model_window() {
 # A [shep] key of config.toml that must be a whole number, else DEFAULT.
 _shep_config_tokens() {
   local key="$1" default="$2" value
-  value="$(_bstack_toml_get shep "$key")"
+  value="$(toml_value "$BERCAIL_USER_CONFIG" shep "$key")"
   [[ -n "$value" ]] || { printf '%s' "$default"; return 0; }
   if [[ ! "$value" =~ ^[0-9]+$ ]]; then
     _shep_err "[shep] $key = $value in config.toml is not a number of tokens; using $default"
@@ -440,7 +430,7 @@ _shep_config_tokens() {
 # Other keys in the file are kept.
 shep_settings_write() {
   local file="$1" at keep model window="" reserve="" compaction tmp current='{}' set=0
-  [[ -z "$(_bstack_toml_get shep compact_at)" ]] || set=1
+  [[ -z "$(toml_value "$BERCAIL_USER_CONFIG" shep compact_at)" ]] || set=1
   at="$(_shep_config_tokens compact_at "$SHEP_COMPACT_AT")"
   keep="$(_shep_config_tokens keep_recent "$SHEP_KEEP_RECENT")"
   model="$(_shep_lead_model)"

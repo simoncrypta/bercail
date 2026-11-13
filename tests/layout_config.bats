@@ -38,11 +38,6 @@ assert_contains() {
   [[ "$haystack" == *"$needle"* ]] || fail "${msg}: missing '$needle' in '$haystack'"
 }
 
-install_config_reader() {
-  mkdir -p "$BERCAIL_CONFIG_DIR"
-  cp "$ROOT/config/agentic-dev/config-reader.sh" "$BERCAIL_CONFIG_DIR/config-reader.sh"
-}
-
 # doctor_dependencies on a host with every tool but tuicr, and review = "hunk",
 # a tool bercail once installed and held to 0.20.1. Sets out and rc.
 doctor_with_hunk_review() {
@@ -52,11 +47,11 @@ doctor_with_hunk_review() {
 [layout]
 review = "hunk"
 EOF
-  cp "$ROOT/config/agentic-dev/config-reader.sh" \
-    "$case_dir/home/.config/bercail/config-reader.sh"
-  for cmd in herdr-app hc git wt bd fzf jq pi; do
+  for cmd in herdr-app hc git wt bd fzf pi; do
     ln -s /bin/true "$case_dir/bin/$cmd"
   done
+  # The config reader runs jq, so this one is real.
+  ln -s "$(command -v jq)" "$case_dir/bin/jq"
   printf '#!/bin/sh\necho hunk 0.1.0\n' >"$case_dir/bin/hunk"
   chmod +x "$case_dir/bin/hunk"
   rc=0
@@ -117,11 +112,13 @@ EOF
     || fail "default config must not pin fresh as the editor"
 }
 
-@test "the config reader returns tuicr review for a new install" {
-  YES=1
-  prompt_user_config
-  install_config_reader
-  assert_eq "tuicr" "$(read_layout_review)" "review defaults to tuicr"
+@test "read_layout_review is tuicr with no config, hunk diff for hunk, and any other command as written" {
+  assert_eq "tuicr" "$(read_layout_review)" "no config"
+  mkdir -p "$BERCAIL_CONFIG_DIR"
+  printf '[bstack]\nreview = "not this one"\n[layout]\nreview = "hunk"\n' >"$BERCAIL_USER_CONFIG"
+  assert_eq "hunk diff" "$(read_layout_review)" "hunk, and only the [layout] key"
+  printf '[layout]\nreview = "lazygit --diff"\n' >"$BERCAIL_USER_CONFIG"
+  assert_eq "lazygit --diff" "$(read_layout_review)" "another command"
 }
 
 @test "doctor takes the configured review command as it is: no tuicr, no minimum version" {
@@ -130,6 +127,74 @@ EOF
   assert_contains "$out" "ok  hunk" "doctor accepts the configured command"
   [[ "$out" != *"missing  tuicr"* ]] || fail "doctor should not require tuicr when review names another command"
   [[ "$out" != *"required >="* ]] || fail "doctor holds a command bercail does not install to a version: $out"
+}
+
+@test "doctor names the config keys nothing reads, a [git] value that is no backend, and a line it cannot read" {
+  local out
+  mkdir -p "$BERCAIL_CONFIG_DIR"
+  cat >"$BERCAIL_USER_CONFIG" <<'EOF'
+[layout]
+review = "tuicr"
+reveiw = "hunk"
+[bstack]
+harness = "pi"
+lead = "claude"
+[agent]
+command = "pi"
+[shep]
+session = "agent:sheep:main"
+backend = "pi"
+rollover = true
+oops
+[git]
+"~/Work/a.b" = "gh"
+"~/Work/c" = "github"
+[policy."~/Work/a.b"]
+commit = "allow"
+merge = "yes"
+[policy]
+commit = "allow"
+EOF
+  out="$(doctor_config)" || fail "an unread key is not a failure: $out"
+  assert_eq '  unknown  [layout] reveiw (nothing reads it)
+  unknown  [bstack] harness (nothing reads it)
+  unknown  [agent] command (nothing reads it)
+  unknown  [shep] session (nothing reads it)
+  unknown  [shep] backend (nothing reads it)
+  unread  config.toml line 13: not a key = value line
+  unknown  [git] "~/Work/c" = github (use gh, gt, or origin)
+  unknown  [policy."~/Work/a.b"] merge (nothing reads it)
+  unknown  [policy] commit (nothing reads it)' "$out" "doctor notes"
+}
+
+@test "doctor has nothing to say about the config docs/config.md shows, the example, or a new install's" {
+  local out
+  mkdir -p "$BERCAIL_CONFIG_DIR"
+  awk '/^```toml$/ { on = 1; next } /^```$/ { exit } on' "$ROOT/docs/config.md" >"$BERCAIL_USER_CONFIG"
+  grep -q '^\[shep\]' "$BERCAIL_USER_CONFIG" || fail "did not find the documented config"
+  out="$(doctor_config)"
+  assert_eq "" "$out" "docs/config.md"
+  cp "$ROOT/config/agentic-dev/config.toml.example" "$BERCAIL_USER_CONFIG"
+  out="$(doctor_config)"
+  assert_eq "" "$out" "config.toml.example"
+  default_user_config >"$BERCAIL_USER_CONFIG"
+  out="$(doctor_config)"
+  assert_eq "" "$out" "a new install"
+}
+
+@test "bercail config get prints a value as bercail reads it, and exits 1 for a key that is not set" {
+  local out rc=0
+  mkdir -p "$BERCAIL_CONFIG_DIR"
+  cp "$ROOT/tests/fixtures/config-hard.toml" "$BERCAIL_USER_CONFIG"
+  assert_eq hunk "$(bash "$ROOT/bin/bercail" config get layout review)" "a string, comment dropped"
+  assert_eq false "$(bash "$ROOT/bin/bercail" config get layout auto_review)" "a bool"
+  assert_eq '["claude","gpt","grok"]' "$(bash "$ROOT/bin/bercail" config get bstack fallback)" "an array"
+  assert_eq allow "$(bash "$ROOT/bin/bercail" config get 'policy."~/Work/a.b"' commit)" "a quoted table name"
+  out="$(bash "$ROOT/bin/bercail" config get layout no_such 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && -z "$out" ]] || fail "a missing key: rc=$rc out=$out"
+  rc=0
+  out="$(bash "$ROOT/bin/bercail" config set layout review 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$out" == *"usage: bercail config get <section> <key>"* ]] || fail "usage: rc=$rc out=$out"
 }
 
 @test "doctor checks the Herdr app and herdr-core" {

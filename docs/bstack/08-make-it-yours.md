@@ -41,7 +41,8 @@ names are valid, duplicates are rejected, and `[]` disables fallback. This does
 not change the initial role model picks above.
 
 Claude IDs use `claude-bridge/`, for example
-`claude-bridge/claude-opus-5-5#high`. The bridge uses `claude auth login`, not
+`claude-bridge/claude-opus-5-5:high`, as `pi --list-models` and
+`handoff-spawn --model` write it. The bridge uses `claude auth login`, not
 Pi's Anthropic login. Status and doctor count a subscription only when
 `claude auth status` reports `authMethod` `claude.ai` or `oauth_token`.
 Run `bercail update` after changing fallback or model pins. `bercail bstack status`

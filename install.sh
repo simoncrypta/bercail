@@ -28,6 +28,8 @@ bootstrap_remote_libs() {
   for lib in common detect deps config skills shell-rc uninstall help omarchy notify doctor bstack desk shep shep-context; do
     curl -fsSL "$GITHUB_RAW_BASE/lib/${lib}.sh" -o "$tmp/lib/${lib}.sh"
   done
+  # lib/toml.sh is a link in the repo; fetch the file it points at.
+  curl -fsSL "$GITHUB_RAW_BASE/skills/handoff/scripts/toml.sh" -o "$tmp/lib/toml.sh"
   printf '%s' "$tmp"
 }
 

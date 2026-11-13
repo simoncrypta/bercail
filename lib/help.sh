@@ -23,7 +23,8 @@ Post-install CLI (bercail):
   help          This help
   install       Full install from the release mise or packslip unpacked
   doctor        Check dependencies and integration
-  bstack        bercail's Pi setup: status | setup | on | off
+  bstack        bercail's Pi setup: status | setup
+  config        A config.toml value as bercail reads it: config get <section> <key>
   desk          Bring back the desk agents a reboot took: desk restore [--dry-run]
   update        Re-sync configs, Herdr layout and mod, helper, and skills
   reconfigure   Refresh skills from config.toml (not a full redeploy)

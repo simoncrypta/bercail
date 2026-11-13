@@ -13,6 +13,7 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 | `bercail help` | This reference |
 | `bercail doctor` | Deps, Herdr layout, mod and keys, skills, webhook sinks and follower |
 | `bercail bstack setup` / `status` | [bstack](bstack.md): Pi on your own plans. No subcommand = `status` |
+| `bercail config get <section> <key>` | A `config.toml` value as bercail reads it: `bercail config get layout review`, `bercail config get 'policy."~/Work/some-repo"' commit`. An array prints as JSON. Prints nothing and exits 1 when the key is not set |
 | `bercail desk restore` / `--dry-run` | Bring back the desk agents a reboot or a core restart took, each on its session in its own space. See [desks after a reboot](config.md#desks-after-a-reboot). `--dry-run` lists each desk and what would happen to it |
 | `bercail update` | Re-sync configs, Herdr layout and mods, helper, skills, and bstack; restart the notify follower. `--force` (`-f`) also replaces a changed layout and the worktrunk config, and writes the shell block despite conflicts |
 | `bercail review-pr <PR url-or-branch>` / `run` / `card` / `ui` / `state` / `select` / `checkout` / `rereview` / `open` / `dir` | Review a whole PR stack by intent and decisions: one visible review desk session, cards and a stack summary beside its worktree. See [review](review.md#someone-elses-pr-bercail-review-pr) |

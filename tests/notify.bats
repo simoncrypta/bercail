@@ -537,6 +537,15 @@ EOF
   if (cd "$BATS_TEST_TMPDIR" && notify_repo add team 2>/dev/null); then fail "repo add outside a checkout needs a name"; fi
 }
 
+@test "repo add on a sink with two repos lines leaves one line, and the added repo is read" {
+  local out
+  team_and_other
+  printf 'repos = "stale"\n' >>"$team"
+  out="$(notify_repo add team other 2>&1)" || fail "repo add: $out"
+  [[ "$(grep -c '^repos' "$team")" -eq 1 ]] || fail "one repos line: $(cat "$team")"
+  [[ "$(notify_sink_value "$team" repos)" == "stale, other" ]] || fail "the list read back: $(cat "$team")"
+}
+
 @test "repo add and remove are no-ops on an --all-repos sink; an old sink gains a repos line" {
   local everyone old action out
   team_and_other

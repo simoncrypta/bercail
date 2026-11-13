@@ -34,7 +34,7 @@ auto_review = true
 [bstack]
 # Pi with your own logins. `bercail bstack setup` shows what's missing.
 # A model per provider. Empty: auto, the newest model of each connected plan
-# (re-picked on bercail update). Set a provider/model id (#variant allowed) to pin one.
+# (re-picked on bercail update). Set a provider/model id to pin one; :high sets its level.
 claude = ""
 gpt = ""
 grok = ""
@@ -48,35 +48,81 @@ judge = "claude"
 EOF
 }
 
-_config_reader_path() {
-  local src
-  src="$(install_src_dir)"
-  if [[ -d "$src" && -f "$src/config/agentic-dev/config-reader.sh" ]]; then
-    printf '%s' "$src/config/agentic-dev/config-reader.sh"
-    return 0
-  fi
-  if [[ -f "$BERCAIL_CONFIG_DIR/config-reader.sh" ]]; then
-    printf '%s' "$BERCAIL_CONFIG_DIR/config-reader.sh"
-    return 0
-  fi
-  return 1
-}
-
-ensure_config_reader() {
-  declare -F bercail_layout_review >/dev/null 2>&1 && return 0
-  local reader
-  reader="$(_config_reader_path)" || return 1
-  # shellcheck source=/dev/null
-  source "$reader"
-}
-
+# [layout] review, or tuicr. toml.sh is sourced here, not at the top: a v0.14.0
+# updater sources this file before lib/toml.sh is on disk.
 read_layout_review() {
-  ensure_config_reader || true
-  if declare -F bercail_layout_review >/dev/null 2>&1; then
-    bercail_layout_review
-  else
-    printf '%s' "tuicr"
+  local review="tuicr"
+  if [[ -r "$BERCAIL_USER_CONFIG" ]]; then
+    # shellcheck source=lib/toml.sh
+    source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
+    review="$(toml_value "$BERCAIL_USER_CONFIG" layout review tuicr)"
   fi
+  [[ "$review" == hunk ]] && review="hunk diff"
+  printf '%s' "$review"
+}
+
+# Every key bercail reads in config.toml, one "section key" a line; the example
+# in docs/config.md shows the same ones. [git] takes a repo path as its key,
+# and each [policy."<repo>"] takes the policy keys.
+BERCAIL_CONFIG_KEYS='layout review
+layout auto_review
+bstack fallback
+bstack claude
+bstack gpt
+bstack grok
+bstack effort
+bstack lead
+bstack build
+bstack judge
+shep compact_at
+shep keep_recent
+shep rollover
+policy commit
+policy push
+policy integrate
+policy pr_draft
+policy release
+policy agent_may_release
+policy rules'
+
+# bercail config get SECTION KEY: the value as bercail reads it. No output and
+# status 1 when it is not set.
+cmd_config() {
+  local status=0
+  [[ $# -eq 3 && "$1" == get ]] || die "usage: bercail config get <section> <key>"
+  # shellcheck source=lib/toml.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
+  toml_get "$BERCAIL_USER_CONFIG" "$2" "$3" >/dev/null 2>&1 || status=$?
+  [[ "$status" -ne 1 ]] || return 1
+  toml_value "$BERCAIL_USER_CONFIG" "$2" "$3"
+  printf '\n'
+}
+
+# config.toml keys that nothing reads (a key from an older release, a typo),
+# [git] values that are no backend, and lines the reader cannot take. Each one
+# changes nothing without a word, so doctor names it; it is not a failure.
+doctor_config() {
+  local line
+  [[ -f "$BERCAIL_USER_CONFIG" ]] || return 0
+  # shellcheck source=lib/toml.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
+  while IFS= read -r line; do
+    log "  $line"
+  done < <(toml_records "$BERCAIL_USER_CONFIG" | jq -r --arg known "$BERCAIL_CONFIG_KEYS" '
+    def name: if test("^[A-Za-z0-9_-]+$") then . else tojson end;
+    ($known | split("\n")) as $known
+    | if has("error") then "unread  config.toml line \(.line): \(.error)"
+      elif .section == ["git"] then
+        (.value // .raw) as $v
+        | select($v | IN("gh", "gt", "origin") | not)
+        | "unknown  [git] \(.key | name) = \($v) (use gh, gt, or origin)"
+      else
+        # A bare [policy] names no repo, so nothing reads its keys either.
+        (if .section == ["policy"] then "" elif (.section | length) == 2 and .section[0] == "policy" then "policy" else .section | join(".") end) as $table
+        | "\($table) \(.key)" as $name
+        | select($known | index($name) | not)
+        | "unknown  [\(.section | map(name) | join("."))] \(.key) (nothing reads it)"
+      end' | awk '!seen[$0]++')
 }
 
 # shellcheck disable=SC2034 # Read by the installer that sources this library.
@@ -309,13 +355,14 @@ deploy_bercail_config() {
   if [[ -d "$src" ]]; then
     while IFS= read -r -d '' file; do
       sub="${file#"$src/config/agentic-dev"/}"
-      [[ "$sub" == "config.toml" ]] && continue
+      [[ "$sub" == "config.toml" || "$sub" == "config-reader.sh" ]] && continue
       copy_file "$file" "$BERCAIL_CONFIG_DIR/$sub"
     done < <(find "$src/config/agentic-dev" -type f -print0 2>/dev/null)
   else
-    deploy_install_file "config/agentic-dev/config-reader.sh" "$BERCAIL_CONFIG_DIR/config-reader.sh"
     deploy_install_file "config/agentic-dev/config.toml.example" "$BERCAIL_CONFIG_DIR/config.toml.example"
   fi
+  # Older releases installed a reader here; lib/toml.sh replaced it.
+  run rm -f "$BERCAIL_CONFIG_DIR/config-reader.sh"
 }
 
 deploy_lib() {
@@ -333,6 +380,7 @@ deploy_lib() {
   # this deploy_lib, so a file added here is fetched with the new release.
   deploy_install_file "skills/handoff/scripts/git-backend.sh" "${BERCAIL_SHARE_DIR}/lib/git-backend.sh"
   deploy_install_file "skills/handoff/scripts/pi-log.sh" "${BERCAIL_SHARE_DIR}/lib/pi-log.sh"
+  deploy_install_file "skills/handoff/scripts/toml.sh" "${BERCAIL_SHARE_DIR}/lib/toml.sh"
 }
 
 _recorded_install_source() {
@@ -595,8 +643,7 @@ deploy_finalize_permissions() {
     "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" \
     "$BERCAIL_SHELL_DIR/bercail.sh" \
     "$BERCAIL_SHELL_DIR/bercail.zsh" \
-    "$BERCAIL_SHELL_DIR/bercail.inc.sh" \
-    "$BERCAIL_CONFIG_DIR/config-reader.sh" 2>/dev/null || true
+    "$BERCAIL_SHELL_DIR/bercail.inc.sh" 2>/dev/null || true
   find "${BERCAIL_SHARE_DIR}/lib" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 }
 

@@ -4,6 +4,9 @@
 # install copies this file to lib/git-backend.sh). Detection never runs gt.
 # shellcheck shell=bash
 
+# shellcheck source=skills/handoff/scripts/toml.sh
+source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
+
 # Primary worktree of ROOT, canonicalized. Empty output and status 1 when ROOT
 # is not a git checkout. Config keys use this path.
 git_backend_main() {
@@ -45,34 +48,13 @@ git_backend_override() {
   config="$(_git_backend_config_file)"
   [[ -f "$config" ]] || return 1
   main="$(git_backend_main "$1")" || return 1
-  while IFS=$'\t' read -r key value; do
+  while IFS=$'\t' read -r value key; do
     [[ "$key" != \~/* ]] || key="$HOME/${key#\~/}"
     [[ "$(_git_backend_realpath "$key")" == "$main" ]] || continue
     printf '%s' "$value"
     return 0
-  done < <(awk '
-    /^[[:space:]]*\[/ {
-      sec = $0
-      sub(/#.*/, "", sec)
-      gsub(/[[:space:]"\047]/, "", sec)
-      next
-    }
-    sec != "[git]" { next }
-    {
-      line = $0
-      sub(/^[[:space:]]*/, "", line)
-      q = substr(line, 1, 1)
-      if (q != "\"" && q != "\047") next
-      line = substr(line, 2)
-      i = index(line, q)
-      if (!i) next
-      key = substr(line, 1, i - 1)
-      value = substr(line, i + 1)
-      sub(/^[[:space:]]*=[[:space:]]*/, "", value)
-      sub(/[[:space:]]*(#.*)?$/, "", value)
-      gsub(/^["\047]|["\047]$/, "", value)
-      if (value == "gh" || value == "gt" || value == "origin") print key "\t" value
-    }' "$config")
+  done < <(toml_records "$config" \
+    | jq -r 'select(.section == ["git"]) | (.value // .raw) as $v | select($v | IN("gh", "gt", "origin")) | $v + "\t" + .key')
   return 1
 }
 

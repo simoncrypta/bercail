@@ -12,7 +12,7 @@ auto_review = true
 # and already attempted models. Only claude/gpt/grok, no duplicates. [] disables it.
 fallback = ["claude", "gpt", "grok"]
 # A model per provider. Empty: auto, the newest model of each connected plan
-# (re-picked on bercail update). Set a provider/model id (#variant allowed) to pin one.
+# (re-picked on bercail update). Set a provider/model id to pin one; :high sets its level.
 # Claude on Pi: claude-bridge/claude-opus-5-5, not anthropic/claude-opus-5-5.
 claude = ""
 gpt = ""

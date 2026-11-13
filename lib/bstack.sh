@@ -26,24 +26,8 @@ BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge
 
 # --- config.toml --------------------------------------------------------------
 
-# Value of KEY in [SECTION], unquoted. A quoted value keeps its '#' (model
-# variants like claude-bridge/claude-opus-5-5#high); a bare one loses a trailing comment.
-_bstack_toml_get() {
-  local section="$1" key="$2" file="${3:-$BERCAIL_USER_CONFIG}"
-  [[ -f "$file" ]] || return 0
-  awk -v want="[$section]" -v key="$key" '
-    /^[[:space:]]*\[/ { sec = $0; gsub(/[[:space:]]/, "", sec); next }
-    sec != want { next }
-    {
-      line = $0
-      if (line !~ "^[[:space:]]*" key "[[:space:]]*=") next
-      sub("^[[:space:]]*" key "[[:space:]]*=[[:space:]]*", "", line)
-      if (line ~ /^"/) { sub(/^"/, "", line); sub(/".*$/, "", line) }
-      else { sub(/[[:space:]]*#.*$/, "", line); sub(/[[:space:]]+$/, "", line) }
-      print line
-      exit
-    }' "$file"
-}
+# shellcheck source=lib/toml.sh
+source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
 
 _bstack_role_default() {
   case "$1" in
@@ -70,7 +54,7 @@ bstack_resolve_model() {
     claude|gpt|grok) ;;
     *) printf '%s' "$spec"; return 0 ;;
   esac
-  model="$(_bstack_toml_get bstack "$spec")"
+  model="$(toml_value "$BERCAIL_USER_CONFIG" bstack "$spec")"
   if [[ -n "$model" ]]; then
     printf '%s' "$model"
     return 0
@@ -80,7 +64,7 @@ bstack_resolve_model() {
 }
 
 bstack_model_source() {
-  if [[ -n "$(_bstack_toml_get bstack "$1")" ]]; then
+  if [[ -n "$(toml_value "$BERCAIL_USER_CONFIG" bstack "$1")" ]]; then
     printf 'pinned'
   else
     printf 'auto'
@@ -92,7 +76,7 @@ bstack_model_source() {
 # once the X subscription is connected. A full model id is used as is.
 bstack_role_model() {
   local role="$1" spec family model
-  spec="$(_bstack_toml_get bstack "$role")"
+  spec="$(toml_value "$BERCAIL_USER_CONFIG" bstack "$role")"
   [[ -n "$spec" ]] || spec="$(_bstack_role_default "$role")"
   case "$spec" in
     claude|gpt|grok) ;;
@@ -145,7 +129,7 @@ BSTACK_EFFORTS=(low medium high xhigh max)
 # list, none.
 _bstack_variant() {
   local model="$1" want offered level best=""
-  want="$(_bstack_toml_get bstack effort)"
+  want="$(toml_value "$BERCAIL_USER_CONFIG" bstack effort)"
   want="${want:-high}"
   [[ "$want" == none ]] && return 0
   [[ -n "${BSTACK_VARIANTS:-}" ]] || return 0
@@ -177,7 +161,7 @@ bstack_login_command() {
 # The array is a list of family names; an empty array disables fallback.
 bstack_pi_fallback() {
   local raw
-  raw="$(_bstack_toml_get bstack fallback)"
+  raw="$(toml_value "$BERCAIL_USER_CONFIG" bstack fallback)"
   [[ -n "$raw" ]] || raw='["claude", "gpt", "grok"]'
   if ! jq -e 'type == "array" and all(.[]; . == "claude" or . == "gpt" or . == "grok") and (length == (unique | length))' \
     <<<"$raw" >/dev/null 2>&1; then

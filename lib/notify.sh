@@ -14,6 +14,9 @@
 #
 # The desk mod keeps one `run` alive as the hidden hc terminal bercail-notify.
 
+# shellcheck source=lib/toml.sh
+source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
+
 NOTIFY_SCHEMA="bercail.agent_status/v2"
 
 notify_hc() {
@@ -57,26 +60,16 @@ notify_sink_name() {
   printf '%s' "${base%.toml}"
 }
 
-# Flat `key = value` reader (same subset as config-reader.sh). Quotes optional.
+# A sink's key: its file is one root table. A list comes back as a comma
+# string, written as an array or bare (notify = finished, blocked): the
+# filters split on commas.
 notify_sink_value() {
-  local file="$1" key="$2" default="${3:-}" line val
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    line="${line#"${line%%[![:space:]]*}"}"
-    [[ "$line" == \#* ]] && continue
-    [[ "$line" =~ ^${key}[[:space:]]*= ]] || continue
-    val="${line#*=}"
-    val="${val#"${val%%[![:space:]]*}"}"
-    if [[ "$val" == \"* ]]; then
-      val="${val#\"}"
-      val="${val%%\"*}"
-    else
-      val="${val%%#*}"
-      val="${val%"${val##*[![:space:]]}"}"
-    fi
-    printf '%s' "$val"
-    return 0
-  done <"$file"
-  printf '%s' "$default"
+  local value
+  value="$(toml_value "$1" '' "$2" "${3:-}")"
+  if [[ "$value" == \[* ]]; then
+    value="$(jq -r 'join(", ")' <<<"$value" 2>/dev/null)" || value="${3:-}"
+  fi
+  printf '%s' "$value"
 }
 
 _notify_mode() {
@@ -706,8 +699,9 @@ _notify_set_repos() {
   tmp="$(umask 077 && mktemp "$(dirname "$file")/.$(basename "$file").XXXXXX")" || return 1
   if {
     while IFS= read -r line || [[ -n "$line" ]]; do
-      if [[ "$hit" -eq 0 && "$line" =~ ^[[:space:]]*repos[[:space:]]*= ]]; then
-        printf 'repos = "%s"\n' "$repos"
+      if [[ "$line" =~ ^[[:space:]]*repos[[:space:]]*= ]]; then
+        # One line: with two, the last would win over the one written here.
+        [[ "$hit" -eq 1 ]] || printf 'repos = "%s"\n' "$repos"
         hit=1
       else
         printf '%s\n' "$line"
