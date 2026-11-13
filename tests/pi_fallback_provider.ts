@@ -5,6 +5,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const scenario = process.env.PI_FALLBACK_CASE!;
 const log = (data: unknown) => appendFileSync(process.env.PI_FALLBACK_LOG!, JSON.stringify(data) + "\n");
+const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
+// A limit that lifts at the next whole second, as the bridge's reset header says.
+const resetSoon = () => ({ "anthropic-ratelimit-unified-reset": String(Math.floor(Date.now() / 1000) + 1) });
+// Scenarios whose fake-a limit lifts within a second, so the next turn goes back to it.
+const lifts = ["restore", "user-reset", "followup-reset", "new-user-reset"];
 export default function (pi: ExtensionAPI) {
   let calls = 0;
   let toolSent = false;
@@ -15,6 +20,7 @@ export default function (pi: ExtensionAPI) {
     parameters: { type: "object", properties: {} } as any,
     async execute() {
       log({ type: "tool" });
+      if (lifts.includes(scenario)) await sleep(1100);
       if (scenario === "user-reset" || scenario === "followup-reset") {
         pi.sendUserMessage("Second real user turn", { deliverAs: scenario === "user-reset" ? "steer" : "followUp" });
       }
@@ -25,12 +31,12 @@ export default function (pi: ExtensionAPI) {
     pi.registerProvider(provider, {
       api: "pi-fallback-test", baseUrl: "http://invalid.invalid",
       apiKey: provider === "fake-unlogged" ? "$PI_FALLBACK_MISSING_KEY" : "offline-test-key",
-      models: [{ id: "model", name: provider, reasoning: true, input: ["text"], contextWindow: 200000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }],
+      models: ["model", ...(provider === "fake-a" ? ["other"] : [])].map((id) => ({ id, name: `${provider} ${id}`, reasoning: true, input: ["text"] as ["text"], contextWindow: 200000, maxTokens: 1000, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } })),
       streamSimple(model, context, options) {
         const stream = createAssistantMessageEventStream();
         queueMicrotask(async () => {
           calls++;
-          const first = model.provider === "fake-a";
+          const first = model.provider === "fake-a" && model.id === "model";
           let error = first ? "429 rate_limit_error" : undefined;
           let status = first ? 429 : 200;
           let headers: Record<string, string> = {};
@@ -42,6 +48,16 @@ export default function (pi: ExtensionAPI) {
           if (first && scenario === "400") { error = "400 invalid request"; status = 400; }
           if (first && scenario === "context") { error = "context overflow: usage limit"; status = 200; }
           if (first && scenario === "usage") { error = "You have hit your usage limit"; status = 200; }
+          if (first && lifts.includes(scenario)) headers = resetSoon();
+          if (first && scenario === "restore" && userTurns > 1) { error = undefined; status = 200; }
+          if (scenario === "restore" && model.provider === "fake-b") await sleep(1100);
+          if (first && scenario === "dead-402") { error = 'fake-a API error (402): 402 "You have run out of credits or need a Grok subscription."'; status = 402; }
+          if (first && scenario === "dead-credits") { error = "You need a Grok subscription to use this model"; status = 200; }
+          if (["dead-402", "dead-credits", "no-restore"].includes(scenario) && model.provider === "fake-b" && userTurns > 1) { error = "429 rate_limit_error"; status = 429; }
+          if (first && scenario === "plan-window") headers = { "anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-unified-representative-claim": "five_hour", ...resetSoon() };
+          if (first && scenario === "model-window") headers = { "anthropic-ratelimit-unified-status": "rejected", "anthropic-ratelimit-unified-representative-claim": "seven_day_opus", ...resetSoon() };
+          if (scenario === "plan-window" && model.provider === "fake-a") { error = "429 rate_limit_error"; status = 429; }
+          if (scenario === "role-exhaustion") error = "429 rate_limit_error";
           if (first && scenario === "bridge") { error = "Claude Code turn failed"; status = 200; headers = { "anthropic-ratelimit-unified-status": "rejected" }; }
           if (first && scenario === "bridge-auth") { error = "401 authentication failed"; status = 200; headers = { "anthropic-ratelimit-unified-status": "rejected" }; }
           if (first && scenario === "bridge-success") { error = undefined; status = 200; headers = { "anthropic-ratelimit-unified-status": "rejected" }; }
@@ -53,10 +69,11 @@ export default function (pi: ExtensionAPI) {
           if (toolScenario && model.provider === "fake-b") { error = emitTool ? undefined : "429 rate_limit_error"; }
           if (["user-reset", "followup-reset"].includes(scenario) && first && toolSent) error = undefined;
           if (scenario === "new-user-reset") {
+            if (userTurns === 1 && model.provider === "fake-b") await sleep(1100);
             if (userTurns === 1 && !first) error = undefined;
             if (userTurns === 2) error = first ? undefined : "429 rate_limit_error";
           }
-          log({ type: "request", provider: model.provider, calls, reasoning: options?.reasoning, at: Date.now(), messages: context.messages });
+          log({ type: "request", provider: model.provider, id: model.id, userTurns, calls, reasoning: options?.reasoning, at: Date.now(), messages: context.messages });
           // The stale case deliberately omits the next response hook entirely.
           if (!(scenario === "stale" && calls > 1)) await options?.onResponse?.({ status, headers }, model);
           const output: any = { role: "assistant", content: error ? [] : [{ type: "text", text: "PI_FALLBACK_OK" }], api: model.api, provider: model.provider, model: model.id, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }, stopReason: error ? "error" : "stop", timestamp: Date.now(), ...(error ? { errorMessage: error } : {}) };
@@ -75,7 +92,7 @@ export default function (pi: ExtensionAPI) {
   }
   for (const name of ["message_start", "before_agent_start", "agent_start", "turn_start", "turn_end", "agent_before_settle", "agent_settled", "model_select"] as const) {
     pi.on(name as any, (event: any, ctx: any) => {
-      log({ type: "event", event: name, outcome: event.outcome, role: event.message?.role, continue: event.continue, model: ctx.model?.provider, aborted: event.aborted });
+      log({ type: "event", event: name, outcome: event.outcome, role: event.message?.role, continue: event.continue, model: ctx.model?.provider, id: ctx.model?.id, aborted: event.aborted });
       if (name === "agent_settled" && process.env.PI_FALLBACK_TUI_SHUTDOWN) ctx.shutdown();
     });
   }

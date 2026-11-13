@@ -564,6 +564,42 @@ EOF
   unset FAKE_PI_READY
 }
 
+@test "Pi fallback order takes Pi model ids beside families, so another model on the plan can go first" {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="claude-bridge openai xai"
+  set_bstack fallback '["claude-bridge/claude-sonnet-5-5", "claude", "gpt"]'
+  deploy_bstack >/dev/null 2>&1
+  assert_eq "$(printf 'claude-bridge/claude-sonnet-5-5\nclaude\ngpt')" "$(<"$(PI_DIR)/fallback")" "model id kept as written"
+  local out raw
+  out="$(doctor_bstack)" || fail "doctor: $out"
+  grep -qF 'ok  bstack fallback order: claude-bridge/claude-sonnet-5-5 claude gpt' <<<"$out" || fail "doctor shows the order: $out"
+  for raw in '["/claude-opus-5-5"]' '["claude-bridge/"]' '["xai/grok-4.7:high"]' '["claude bridge/x"]' '["xai/grok-4.7", "xai/grok-4.7"]'; do
+    set_bstack fallback "$raw"
+    if bstack_pi_fallback >/dev/null 2>&1; then fail "invalid fallback accepted: $raw"; fi
+  done
+  unset FAKE_PI_READY
+}
+
+@test "doctor reports providers the fallback found dead in the last day, the latest per provider, and skips bad lines" {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="claude-bridge openai xai"
+  deploy_bstack >/dev/null 2>&1
+  local log="$XDG_STATE_HOME/bercail/fallback-dead.jsonl" out
+  mkdir -p "$(dirname "$log")"
+  {
+    printf '{"at":"%s","provider":"openai","model":"openai/gpt-6.1-sol","reason":"old"}\n' "$(date -u -d '-2 days' +%FT%T.000Z)"
+    printf 'not json\n'
+    printf '{"at":"%s","provider":"xai","model":"xai/grok-4.6","reason":"first"}\n' "$(date -u -d '-1 hour' +%FT%T.000Z)"
+    printf '{"at":"%s","provider":"xai","model":"xai/grok-4.7","reason":"402 out of credits"}\n' "$(date -u +%FT%T.000Z)"
+  } >"$log"
+  out="$(doctor_bstack)" || fail "a dead provider is a report, not a failure: $out"
+  [[ "$(grep -c '  dead  ' <<<"$out")" -eq 1 ]] || fail "one dead line: $out"
+  grep -q 'dead  bstack xai (xai/grok-4.7) at .*: 402 out of credits (fallback skips it' <<<"$out" || fail "latest xai record: $out"
+  unset FAKE_PI_READY
+}
+
 @test "Pi bridge install is required and idempotent; doctor verifies actual bridge, Claude Code auth and minimum Pi version" {
   reset_home
   write_pi_config

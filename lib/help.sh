@@ -113,8 +113,10 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   Claude Code refuses a prompt near the window. Every role loads the
   bridge, the rate-limit fallback, and bercail's guard, which follows each repo's
   trusted git policy (bercail policy show). [bstack] fallback sets
-  candidate order (default ["claude", "gpt", "grok"]). The lead starts roles as
-  hc siblings.
+  candidate order: families or Pi model ids (default ["claude", "gpt", "grok"]).
+  The fallback skips limited models and dead providers (402, no credits), keeps
+  the desk's thinking level, and goes back to the desk's model once its limit
+  lifts. The lead starts roles as hc siblings.
 
 Config:
   ~/.config/bercail/config.toml               review, [bstack], [git], [policy."<repo>"]

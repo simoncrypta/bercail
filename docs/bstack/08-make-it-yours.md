@@ -34,11 +34,18 @@ you ask for gets the next one down.
 ### Rate-limit fallback
 
 `fallback = ["claude", "gpt", "grok"]` sets runtime candidates after Pi
-exhausts rate-limit retries. Each switch scans from the
-start, skipping the current and already attempted models. For example,
-`fallback = ["gpt", "grok"]` tries GPT before Grok. Only these three family
-names are valid, duplicates are rejected, and `[]` disables fallback. This does
-not change the initial role model picks above.
+exhausts rate-limit retries. Each switch scans from the start, skipping the
+current model, models already tried, models still limited, and providers that
+are dead for the session (402, out of credits, no subscription). For example,
+`fallback = ["gpt", "grok"]` tries GPT before Grok. An entry is a family name or
+a Pi model id without an effort: `["claude-bridge/claude-sonnet-5-5", "claude",
+"gpt"]` tries Sonnet before Opus. That helps only when the limit belongs to one
+model (`seven_day_opus`); the five-hour and weekly windows cover the whole plan,
+and the fallback skips every Claude model then. Duplicates are rejected, and
+`[]` disables fallback. This does not change the initial role model picks above.
+
+When the desk's own model's limit lifts, the next user message or turn goes back
+to it. Every switch keeps the desk's thinking level, so a `:high` desk stays high.
 
 Claude IDs use `claude-bridge/`, for example
 `claude-bridge/claude-opus-5-5:high`, as `pi --list-models` and
@@ -46,7 +53,8 @@ Claude IDs use `claude-bridge/`, for example
 Pi's Anthropic login. Status and doctor count a subscription only when
 `claude auth status` reports `authMethod` `claude.ai` or `oauth_token`.
 Run `bercail update` after changing fallback or model pins. `bercail bstack status`
-shows the order and `bercail doctor` flags stale profile data. See
+shows the order, and `bercail doctor` flags stale profile data and lists the
+providers the fallback found dead in the last day. See
 [How it runs](../bstack.md#how-it-runs) for installation and role launches.
 
 ## What bstack sets up in Pi

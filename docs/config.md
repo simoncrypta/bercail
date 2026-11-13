@@ -8,7 +8,7 @@ review = "tuicr"                     # or a command of yours
 auto_review = true
 
 [bstack]
-fallback = ["claude", "gpt", "grok"] # Pi rate-limit candidates, no duplicates
+fallback = ["claude", "gpt", "grok"] # Pi rate-limit candidates: families or Pi model ids, no duplicates
 claude = ""
 gpt = ""
 grok = ""

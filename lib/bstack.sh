@@ -158,17 +158,28 @@ bstack_login_command() {
 # --- pi -----------------------------------------------------------------------
 
 # Runtime fallback candidates, separate from the initial role model picks.
-# The array is a list of family names; an empty array disables fallback.
+# Each entry is a family name or a Pi model id (claude-bridge/claude-fable-5-2),
+# so another model on the same plan can come first; an empty array disables fallback.
 bstack_pi_fallback() {
   local raw
   raw="$(toml_value "$BERCAIL_USER_CONFIG" bstack fallback)"
   [[ -n "$raw" ]] || raw='["claude", "gpt", "grok"]'
-  if ! jq -e 'type == "array" and all(.[]; . == "claude" or . == "gpt" or . == "grok") and (length == (unique | length))' \
+  if ! jq -e 'type == "array" and all(.[]; type == "string" and (. == "claude" or . == "gpt" or . == "grok" or test("^[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+$"))) and (length == (unique | length))' \
     <<<"$raw" >/dev/null 2>&1; then
-    warn '[bstack] fallback must be an array of claude, gpt, grok, without duplicates'
+    warn '[bstack] fallback must be an array of claude, gpt, grok or Pi model ids (provider/model, no effort), without duplicates'
     return 1
   fi
   jq -r '.[]' <<<"$raw"
+}
+
+# Providers the fallback found dead (402, no credits, no subscription) in the
+# last day, one "provider<TAB>when<TAB>model<TAB>why" line each, the latest
+# per provider. fallback.ts writes the file; nothing probes the providers.
+bstack_pi_dead() {
+  local file="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/fallback-dead.jsonl"
+  [[ -s "$file" ]] || return 0
+  jq -rRn '[inputs | fromjson? | objects | select(((.at // "") | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch 0) > now - 86400)]
+    | group_by(.provider) | map(last) | .[] | [.provider, .at, .model, .reason] | @tsv' "$file" 2>/dev/null || true
 }
 
 _bstack_pi_version_ok() {
@@ -426,7 +437,7 @@ bstack_status() {
   fi
   local fallback
   if fallback="$(bstack_pi_fallback)"; then
-    log "  fallback: $(paste -sd' ' - <<<"$fallback") (skips current/already attempted)"
+    log "  fallback: $(paste -sd' ' - <<<"$fallback") (skips limited and dead models; back to the desk's model when its limit lifts)"
   else
     log "  fallback: invalid [bstack] fallback"
   fi
@@ -513,7 +524,13 @@ doctor_bstack() {
   elif [[ -f "$BSTACK_PI_DIR/fallback" && "$fallback" != "$(<"$BSTACK_PI_DIR/fallback")" ]]; then
     log "  stale  bstack fallback (bercail update)"
     missing=1
+  else
+    log "  ok  bstack fallback order: $(paste -sd' ' - <<<"${fallback:-(none)}")"
   fi
+  local provider at why
+  while IFS=$'\t' read -r provider at model why; do
+    log "  dead  bstack $provider ($model) at $at: $why (fallback skips it; add credits or a subscription)"
+  done < <(bstack_pi_dead)
   if [[ -f "$BSTACK_PI_DIR/models" ]] && [[ "$(_bstack_resolved_text)" != "$(<"$BSTACK_PI_DIR/models")" ]]; then
     log "  stale  bstack models (a login or model changed since the last deploy; bercail update)"
     missing=1
