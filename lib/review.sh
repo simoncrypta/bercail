@@ -1556,7 +1556,8 @@ review_close() {
     fi
   fi
   if [[ -n "$wt" ]] && _review_herdr; then
-    space="$(_wt_herdr_space_by_folder "$wt" || true)"
+    space="$(_wt_herdr_space_by_folder "$wt")" \
+      || { warn "herdr-app could not list its spaces; close the review space and its desk there by hand"; space=""; }
   elif [[ -n "$space" ]]; then
     warn "the Herdr app is not running; close the review space there by hand"
     space=""

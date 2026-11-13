@@ -325,7 +325,7 @@ case "$1 $2" in
   *) echo "fake tuicr: $*" >&2; exit 2 ;;
 esac
 SH
-  # herdr-app: down unless FAKE_HERDR_UP; state in $HERDR_STATE.
+  # herdr-app: down unless FAKE_HERDR_UP; state in $HERDR_STATE. FAKE_HERDR_LS_FAIL fails ls alone.
   cat >"$FAKE_BIN/herdr-app" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >>"$LOG/herdr"
@@ -333,7 +333,7 @@ printf '%s\n' "$*" >>"$LOG/herdr"
 st="$HERDR_STATE"
 case "$1" in
   status) echo '{"space":"s0"}' ;;
-  ls) cat "$st" ;;
+  ls) [[ -z "${FAKE_HERDR_LS_FAIL:-}" ]] || exit 1; cat "$st" ;;
   do)
     cmd="$2"; shift 2
     declare -A a=()
@@ -1637,6 +1637,24 @@ assert_7_kept() {
   out="$(cd "$WORK" && "$BERCAIL" review-pr close 7 2>&1)" || fail "close: $out"
   [[ ! -e "$WORK.review-7" && ! -e "$REVIEWS/stack-7" ]] || fail "the worktree and the run dir are removed"
   assert_has "$out" "close the review space there by hand" "the space that is left is named"
+}
+
+@test "close --stack with no value prints the close usage and removes nothing" {
+  local out
+  reviewed_7
+  if out="$(cd "$WORK.review-7" && "$BERCAIL" review-pr close --stack 2>&1)"; then fail "close --stack with no value succeeds: $out"; fi
+  assert_has "$out" "usage: bercail review-pr close [<PR url> | N] [--stack DIR] [--force]" "the usage is printed"
+  assert_7_kept "--stack with no value"
+}
+
+@test "close with a failing herdr-app ls still removes the worktree and run dir, and names the space it left" {
+  local out
+  space_7
+  out="$(cd "$WORK" && FAKE_HERDR_LS_FAIL=1 "$BERCAIL" review-pr close 7 2>&1)" || fail "close exits $? saying: '$out'"
+  assert_has "$out" "removed worktree" "the worktree is reported"
+  assert_has "$out" "removed run dir" "the run dir is reported"
+  assert_has "$out" "close the review space and its desk there by hand" "the space and desk that are left are named"
+  [[ ! -e "$WORK.review-7" && ! -e "$REVIEWS/stack-7" ]] || fail "the worktree and the run dir are removed"
 }
 
 @test "close refuses while a gather, a pass, an open or the desk's summary or start runs, and removes nothing" {
