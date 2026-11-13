@@ -112,7 +112,8 @@ update_from() {
 # The stand-in curl serves $box/new as the new release: each file by name under
 # raw.test, which is how v0.14.0's updater fetches, and the whole tree as
 # raw.test/archive.tar.gz, which is how this one does. It logs what was asked
-# for, and fails on a name the tree does not ship.
+# for, and fails on a name the tree does not ship. A link is served as its
+# target's path, as raw.githubusercontent.com does.
 serve_new_release() {
   this_tree "$box/new"
   cat >"$TOOLS/curl" <<EOF
@@ -133,7 +134,7 @@ if [ "\$url" = archive.tar.gz ]; then
   exit
 fi
 [ -f "$box/new/\$url" ] || { echo "\$url" >>"$box/curl-missing"; exit 22; }
-cp "$box/new/\$url" "\$dest"
+if [ -L "$box/new/\$url" ]; then readlink "$box/new/\$url" >"\$dest"; else cp "$box/new/\$url" "\$dest"; fi
 EOF
 }
 
@@ -186,6 +187,7 @@ reload_config() {
   # shellcheck disable=SC2016
   ROOT="$ROOT" bash -c '
     source "$ROOT/lib/common.sh"
+    deploy_install_file() { :; }
     deploy_configs() { source "$ROOT/lib/config.sh"; echo "went on with the old code"; }
     '"$1"'
     deploy_configs' 2>&1
@@ -262,6 +264,47 @@ SH
   cmp -s "$box/new/lib/review.sh" "$home/.local/share/bercail/release/lib/review.sh" \
     || fail "the release was not unpacked under ~/.local/share/bercail/release"
   [[ ! -e "$home/.local/share/bercail/source-path" ]] || fail "the release tree was recorded as a clone"
+}
+
+# v0.14.0 copies the new bin and libs by its own list, then the new bercail
+# downloads the rest. When that download fails, the libs it left must still run.
+@test "a curl install of v0.14.0 whose restarted update cannot download still runs bercail, desk restore, doctor and review-pr" {
+  need_tag v0.14.0
+  install_release v0.14.0
+  rm -f "$home/.local/share/bercail/source-path"
+  serve_new_release
+  : >"$box/no-archive"
+  if in_home "$home" GITHUB_RAW_BASE=https://raw.test BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz \
+    bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1; then
+    fail "an update with no download succeeded: $(tail -5 "$box/update.log")"
+  fi
+  grep -q 'could not download bercail from https://raw.test/archive.tar.gz' "$box/update.log" \
+    || fail "the update did not fail on the download: $(tail -5 "$box/update.log")"
+  grep -qx "BERCAIL_VERSION=\"$new_version\"" "$home/.local/share/bercail/lib/common.sh" \
+    || fail "v0.14.0 did not copy the new libs"
+  # No live terminals, as at boot before Herdr starts its desks.
+  cat >"$TOOLS/hc" <<'SH'
+#!/bin/sh
+echo '{"terminals":[]}'
+SH
+  chmod +x "$TOOLS/hc"
+  local cmd want
+  for cmd in help "desk restore --dry-run" doctor review-pr; do
+    case "$cmd" in
+      help) want="bercail v$new_version" ;;
+      review-pr) want='Usage: bercail review-pr <command>' ;;
+      desk*) want='0 would come back' ;;
+      # doctor's bstack check, which reads config.toml.
+      doctor) want='  missing  pi (bercail bstack setup)' ;;
+    esac
+    # shellcheck disable=SC2086 # cmd is a command and its arguments
+    in_home "$home" bash "$home/.local/bin/bercail" $cmd >"$box/cmd.log" 2>&1 || true
+    grep -qxF "$want" "$box/cmd.log" || fail "bercail $cmd failed on the libs v0.14.0 left: $(tail -3 "$box/cmd.log")"
+  done
+  rm "$box/no-archive"
+  in_home "$home" BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 \
+    || { tail -20 "$box/update.log"; fail "the next update failed"; }
+  assert_this_tree v0.14.0
 }
 
 @test "a curl install's update unpacks the next release and runs that tree's bercail; a failed download changes nothing" {
