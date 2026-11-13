@@ -27,7 +27,9 @@ Post-install CLI (bercail):
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
                 gathers every PR, with one detached sibling worktree and a Stack tab.
                 Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,
-                t: tuicr with [AI Agent] drafts. Then: run | card | ui | select | diff | open | dir
+                t: tuicr with [AI Agent] drafts. Then: run | card | ui | select | checkout |
+                rereview | open | dir. When done, review-pr close <PR url> removes the
+                worktree, the run dir, and the space.
 EOF
 }
 

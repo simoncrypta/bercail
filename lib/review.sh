@@ -1427,6 +1427,169 @@ review_open() {
   cat "$R_DIR/seeded.json"
 }
 
+# --- close: the worktree, the run dir, and the space -------------------------
+
+# The run dir of the stack holding PR N in the repo dirs given: stack-N, else
+# the one stack that lists N. Prints nothing when there is none.
+_review_stack_of() {
+  local n="$1" dir f
+  local -a hits=()
+  shift
+  for dir in "$@"; do
+    if [[ -d "$dir/stack-$n" ]]; then
+      hits+=("$dir/stack-$n")
+      continue
+    fi
+    for f in "$dir"/stack-*/stack.json; do
+      [[ -f "$f" ]] || continue
+      if jq -e --argjson n "$n" 'any(.prs[]; .number == $n)' "$f" >/dev/null 2>&1; then
+        hits+=("${f%/stack.json}")
+      fi
+    done
+  done
+  [[ ${#hits[@]} -le 1 ]] || die "PR #$n is in ${#hits[@]} review stacks (${hits[*]}); pass --stack DIR"
+  printf '%s' "${hits[0]:-}"
+}
+
+# Only a worktree review-pr made for this stack is removed, and never one with
+# work in it unless --force.
+_review_close_check() {
+  local wt="$1" force="$2" gd marked="" head
+  gd="$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null)" \
+    || die "refusing to remove $wt: not a git worktree; move it away, then close again"
+  [[ "$gd" != "$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)" ]] \
+    || die "refusing to remove $wt: it is a main checkout"
+  [[ ! -f "$gd/bercail-review-stack" ]] || marked="$(cd "$(<"$gd/bercail-review-stack")" 2>/dev/null && pwd -P || true)"
+  [[ ! -L "$wt" && "$marked" == "$R_STACK" ]] \
+    || die "refusing to remove $wt: not this stack's review worktree"
+  [[ "$force" -eq 0 ]] || return 0
+  [[ -z "$(git -C "$wt" status --porcelain)" ]] \
+    || die "refusing to remove $wt: it has local changes; commit or move them, or pass --force to drop them"
+  # A commit made on the detached worktree is on no branch and would go with it.
+  head="$(git -C "$wt" rev-parse HEAD)"
+  if ! git -C "$wt" symbolic-ref -q HEAD >/dev/null \
+    && ! jq -e --arg sha "$head" 'any(.prs[]; .head_sha == $sha)' "$R_STACK/stack.json" >/dev/null; then
+    die "refusing to remove $wt: its HEAD $head is on no branch and is no PR's head; put a branch on it (git -C $wt switch -c NAME), or pass --force to drop it"
+  fi
+}
+
+# Remove what review-pr <url> made for one stack: its worktree, its desk, its
+# run dir, then its Herdr space. The space goes last, since close may run from a
+# terminal in it. Nothing left to remove is not an error.
+review_close() {
+  local force=0 n="" url="" stack="${BERCAIL_REVIEW_STACK:-}" root dir host origin_host="" lock wt="" src="" common="" branch="" space="" desk keep
+  local usage="usage: bercail review-pr close [<PR url> | N] [--stack DIR] [--force]"
+  local -a repos=() rm_args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force) force=1; shift ;;
+      --stack) [[ -n "${2:-}" ]] || die "$usage"; stack="$2"; shift 2 ;;
+      http://*|https://*) url="$1"; shift ;;
+      *) [[ "$1" =~ ^[0-9]+$ ]] || die "$usage"; n="$1"; shift ;;
+    esac
+  done
+  root="$(_review_root)"
+  if [[ -n "$url" ]]; then
+    _review_parse_url "$url"
+    n="$R_WANT"
+    repos=("$root/$R_HOST/$R_OWNER/$R_REPO")
+  else
+    if [[ -z "$stack" ]]; then
+      if [[ -f "$PWD/stack.json" ]]; then stack="$PWD"; else stack="$(_review_read_marker || true)"; fi
+    fi
+    if [[ -n "$n" && -n "$stack" ]]; then
+      repos=("$(dirname "$stack")")
+    elif [[ -n "$n" ]]; then
+      # N alone: the reviews of the repo this checkout is. An origin that names
+      # another host is another repo; an ssh alias or a path names none.
+      [[ "$(git remote get-url origin 2>/dev/null)" =~ ^([a-z+]+://([^@/]+@)?|[^@/]+@)([^/:]+) ]] \
+        && origin_host="${BASH_REMATCH[3],,}"
+      for dir in "$root"/*/*/*/; do
+        dir="${dir%/}"
+        [[ -d "$dir" ]] || continue
+        host="$(basename "$(dirname "$(dirname "$dir")")")"
+        _review_is_repo "$PWD" "$host" "$(basename "$(dirname "$dir")")" "$(basename "$dir")" || continue
+        [[ "$host" == origin.cursor.com || "$origin_host" != *.* || "$origin_host" == "${host,,}" ]] || continue
+        repos+=("$dir")
+      done
+      [[ ${#repos[@]} -gt 0 ]] \
+        || die "no review of this checkout's repo; run close $n in a checkout of the repo, or pass the PR url"
+    fi
+    [[ -n "$n" || -n "$stack" ]] || die "no review stack here; $usage"
+  fi
+  if [[ -n "$n" ]]; then
+    stack="$(_review_stack_of "$n" "${repos[@]}")" || exit 1
+  fi
+  if [[ -z "$stack" || ! -d "$stack" ]]; then
+    info "nothing to close${n:+ for PR #$n}"
+    return 0
+  fi
+  R_STACK="$(cd "$stack" && pwd -P)"
+  root="$(cd "$root" 2>/dev/null && pwd -P)" || root=""
+  [[ -n "$root" && "${R_STACK#"$root"/}" =~ ^[^/]+/[^/]+/[^/]+/stack-[0-9]+$ ]] \
+    || die "$R_STACK is not a review run dir under $(_review_root)"
+  _review_lock "$R_STACK/context" || die "the review stack is busy gathering; try again when it ends"
+  trap '_review_unlock "$R_STACK/context"' EXIT
+  # Any other lock: a pass, the desk's summary or start, or an open seeding tuicr.
+  while IFS= read -r lock; do
+    [[ "$lock" != "$R_STACK/context.lock" ]] || continue
+    if [[ "$lock" == *.reap ]] || _review_locked "${lock%.lock}"; then
+      die "the review stack is in use (${lock#"$R_STACK"/}); let it end, then close"
+    fi
+  done < <(find "$R_STACK" -maxdepth 3 \( -name '*.lock' -o -name '*.lock.reap' \))
+
+  if [[ -f "$R_STACK/stack.json" ]]; then
+    wt="$(jq -r '.worktree // empty' "$R_STACK/stack.json")"
+    src="$(jq -r '.source // empty' "$R_STACK/stack.json")"
+    space="$(jq -r '.space // empty' "$R_STACK/stack.json")"
+  fi
+  if [[ -n "$wt" && -e "$wt" ]]; then
+    _review_close_check "$wt" "$force"
+    wt="$(cd "$wt" && pwd -P)"
+    common="$(git -C "$wt" rev-parse --path-format=absolute --git-common-dir)"
+    branch="$(git -C "$wt" symbolic-ref -q --short HEAD || true)"
+  elif [[ -n "$wt" && -n "$src" ]]; then
+    # Gone from disk; the source checkout may still list it.
+    common="$(git -C "$src" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+    if [[ -z "$common" ]] || ! git --git-dir="$common" worktree list --porcelain | grep -qxF "worktree $wt"; then
+      common=""
+    fi
+  fi
+  if [[ -n "$wt" ]] && _review_herdr; then
+    space="$(_wt_herdr_space_by_folder "$wt" || true)"
+  elif [[ -n "$space" ]]; then
+    warn "the Herdr app is not running; close the review space there by hand"
+    space=""
+  fi
+
+  # Off the worktree before it goes; close may run from inside it.
+  cd /
+  if [[ -n "$common" ]]; then
+    [[ "$force" -eq 0 ]] || rm_args+=(--force)
+    git --git-dir="$common" worktree remove "${rm_args[@]}" "$wt" \
+      || die "could not remove the review worktree $wt"
+    info "removed worktree $wt"
+    [[ -z "$branch" ]] || info "branch $branch stays in ${src:-the source checkout}; delete it with git branch -d when done"
+  fi
+  # The desk's Pi runs in the run dir, so it ends first.
+  if [[ -n "$space" ]]; then
+    desk="$(_wt_herdr_space_desk "$space" || true)"
+    if [[ -n "$desk" ]]; then
+      "$HC" kill "$desk" >/dev/null 2>&1 || true
+      "$HC" rm "$desk" >/dev/null 2>&1 || true
+    fi
+  fi
+  rm -rf "$R_STACK"
+  info "removed run dir $R_STACK"
+  if [[ -n "$space" ]]; then
+    keep="$(_wt_herdr_focused_space || true)"
+    "$HERDR_APP" "do" space.close --id "$space" --confirmed true >/dev/null \
+      || die "herdr-app did not close space $space; close it by hand"
+    info "closed Herdr space $space"
+    [[ "$keep" == "$space" ]] || _wt_herdr_keep_user_focus "$keep"
+  fi
+}
+
 review_usage() {
   cat <<'EOF'
 Usage: bercail review-pr <command>
@@ -1450,9 +1613,14 @@ Usage: bercail review-pr <command>
   rereview [N]          gather the stack again, then run that PR's pass again
   open [N]              a Review #N tab with tuicr pr N, seeded with the questions
   dir [N]               print the PR's run dir
+  close [<PR url> | N] [--force]
+                        remove the stack's worktree, run dir, and Herdr space
+                        (desk and Stack tab). Refuses a worktree with local
+                        changes unless --force. Nothing left to remove is fine.
 
-run, card, ui, state, summarize, select, checkout, rereview, open, and dir take --stack DIR, or find the stack
-from the review worktree they run in. N defaults to the stack's current PR.
+run, card, ui, state, summarize, select, checkout, rereview, open, dir, and close take --stack DIR, or find the stack
+from the review worktree they run in. N defaults to the stack's current PR;
+close N finds the stack holding PR N for the checkout it runs in.
 EOF
 }
 
@@ -1470,6 +1638,7 @@ cmd_review_pr() {
     rereview) shift; review_rereview "$@" ;;
     open) shift; review_open "$@" ;;
     dir) shift; _review_load "$@"; printf '%s\n' "$R_DIR" ;;
+    close) shift; review_close "$@" ;;
     *) review_start "$@" ;;
   esac
 }

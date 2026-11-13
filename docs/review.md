@@ -50,3 +50,13 @@ If a process is killed during lock recovery, an empty `*.lock.reap` directory ca
 Bercail refuses to reuse an unmarked sibling, or switch a review worktree that has edits or is no longer detached. An interruption between worktree creation and writing its marker can leave an unmarked sibling. Inspect it and remove it with `git worktree remove <path>` before retrying. Do not force removal of user changes.
 
 Refresh after a push is a separate slice. When a stack branches or has ambiguous parents, bercail prints a notice and reviews the requested PR alone. It never chooses a partial path through a fork. Cycles, truncated discovery and API errors still fail.
+
+### Done with a review
+
+```bash
+bercail review-pr close https://github.com/OWNER/REPO/pull/123
+```
+
+This removes what `review-pr <url>` made for that stack: the sibling worktree, the run dir under `~/.local/state/bercail/reviews/`, and the Herdr space with its desk and Stack tab. Any PR of the stack names it. `close N` works from a checkout of the repo, and plain `close` from the review worktree or with `--stack DIR`.
+
+Close refuses, and removes nothing, while a gather, a pass, the desk's summary or a `review-pr open` is running, and when the worktree has local changes. A commit made on the detached worktree counts as a local change, since it is on no branch. `--force` drops those changes. Files git ignores go with the worktree either way. It only removes a worktree that review-pr made for that stack. Your checkout, its branches (one made by `review-pr checkout` included) and the space you are looking at stay as they are. With the Herdr app closed, the worktree and run dir still go and close tells you to close the space by hand. Closing a stack that is already gone prints `nothing to close` and succeeds.

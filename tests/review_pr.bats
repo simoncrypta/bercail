@@ -369,6 +369,8 @@ case "$1" in
           rm -f "$LOG/tuicr.active"
         fi
         jq --arg id "${a[id]}" '.spaces[].tabs |= map(select(.id != $id))' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
+      space.close)
+        jq --arg id "${a[id]}" '.spaces |= map(select(.id != $id))' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
     esac ;;
 esac
 SH
@@ -1082,6 +1084,9 @@ PY
   assert_has "$("$BERCAIL" help)" "review-pr" "bercail help lists review-pr"
   assert_has "$("$BERCAIL" nope 2>&1 || true)" "review-pr" "usage lists review-pr"
   assert_has "$("$BERCAIL" review-pr)" "open [N]" "review-pr usage"
+  assert_has "$("$BERCAIL" review-pr)" "close [<PR url> | N] [--force]" "review-pr usage lists close"
+  assert_has "$("$BERCAIL" help)" "review-pr close" "bercail help lists close"
+  assert_has "$(<"$ROOT/docs/cli.md")" "review-pr close" "docs/cli.md lists close"
   assert_has "$("$BERCAIL" review-pr https://github.com/acme/widgets/issues/1 2>&1 || true)" "not a pull request URL" "bad URL"
   grep -qx 'pi/agents/bstack-pr-review.md' "$ROOT/bstack/MANIFEST" || fail "MANIFEST ships the reviewer's rules"
   grep -qx 'pi/extensions/review.ts' "$ROOT/bstack/MANIFEST" || fail "MANIFEST ships the reviewer's extension"
@@ -1579,4 +1584,139 @@ EOF
     fail "a stack without the requested PR"
   fi
   assert_has "$(<"$LOG/membership.err")" "native stack omitted requested PR #1" "the missing PR is named"
+}
+
+# --- close: the worktree, the run dir, and the space ---------------------------------
+
+# Everything review-pr made for #7 is still there.
+assert_7_kept() {
+  [[ -d "$WORK.review-7" && -f "$REVIEWS/stack-7/stack.json" ]] || fail "$1: the worktree and run dir stay"
+  [[ "$(git -C "$WORK" worktree list --porcelain)" == *"widgets.review-7"* ]] || fail "$1: the worktree stays registered"
+}
+
+@test "close from the review worktree removes it, the desk, the run dir and the space, and nothing of yours; again is a no-op" {
+  local out refs
+  stack_source
+  (cd / && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run) >/dev/null
+  refs="$(git -C "$WORK" for-each-ref)"
+  : >"$LOG/herdr"
+  : >"$LOG/hc"
+  out="$(cd "$WORK.review-7" && "$BERCAIL" review-pr close 2>&1)" || fail "close: $out"
+  [[ ! -e "$WORK.review-7" ]] || fail "the review worktree is removed"
+  if git -C "$WORK" worktree list --porcelain | grep -q 'widgets.review-7'; then fail "the worktree is unregistered"; fi
+  [[ ! -e "$REVIEWS/stack-7" ]] || fail "the run dir is removed"
+  assert_eq s0 "$(jq -r '[.spaces[].id] | join(" ")' "$HERDR_STATE")" "the review space is closed, yours stays"
+  assert_has "$(<"$LOG/hc")" "kill t-desk" "the desk ends"
+  assert_eq 'do space.close --id s1 --confirmed true' "$(grep '^do ' "$LOG/herdr")" \
+    "the only command sent to the Herdr app closes that space; the shown space is not switched"
+  assert_eq "$refs" "$(git -C "$WORK" for-each-ref)" "the source's branches and refs are unchanged"
+  assert_source_untouched
+  out="$(cd "$WORK" && "$BERCAIL" review-pr close 7 2>&1)" || fail "a second close fails: $out"
+  assert_has "$out" "nothing to close for PR #7" "a second close says so"
+  out="$(cd / && "$BERCAIL" review-pr close --stack "$REVIEWS/stack-7" 2>&1)" || fail "close --stack on a closed stack fails: $out"
+  assert_has "$out" "nothing to close" "close --stack on a closed stack"
+}
+
+@test "close refuses a worktree with local changes, and --force drops them; without the Herdr app the rest still goes" {
+  local out before
+  reviewed_7
+  before="$(git -C "$WORK" status --porcelain)"
+  printf 'note\n' >"$WORK.review-7/note"
+  if out="$(cd "$WORK" && "$BERCAIL" review-pr close 7 2>&1)"; then fail "a dirty worktree is closed: $out"; fi
+  assert_has "$out" "local changes" "the refusal names the cause"
+  assert_has "$out" "--force" "and the way out"
+  assert_7_kept "dirty"
+  [[ -f "$WORK.review-7/note" ]] || fail "the local change stays"
+  out="$(cd "$WORK" && "$BERCAIL" review-pr close https://github.com/acme/widgets/pull/7 --force 2>&1)" || fail "close --force: $out"
+  [[ ! -e "$WORK.review-7" && ! -e "$REVIEWS/stack-7" ]] || fail "--force removes the worktree and the run dir"
+  if grep -q 'by hand' <<<"$out"; then fail "no space was made, so none to close by hand: $out"; fi
+  assert_eq "$before" "$(git -C "$WORK" status --porcelain)" "the source checkout's status is unchanged"
+}
+
+@test "close with the Herdr app down removes the worktree and run dir and says the space is left to close by hand" {
+  local out
+  space_7
+  unset FAKE_HERDR_UP
+  out="$(cd "$WORK" && "$BERCAIL" review-pr close 7 2>&1)" || fail "close: $out"
+  [[ ! -e "$WORK.review-7" && ! -e "$REVIEWS/stack-7" ]] || fail "the worktree and the run dir are removed"
+  assert_has "$out" "close the review space there by hand" "the space that is left is named"
+}
+
+@test "close refuses while a gather, a pass, an open or the desk's summary or start runs, and removes nothing" {
+  local out lock
+  reviewed_7
+  for lock in context "pr-7/$SHA7/pass" "pr-7/$SHA7/open" summary desk-init; do
+    ln -s "$$" "$REVIEWS/stack-7/$lock.lock"
+    if out="$(cd "$WORK" && "$BERCAIL" review-pr close 7 2>&1)"; then fail "closed under a live $lock lock: $out"; fi
+    grep -qE 'try again when it ends|let it end, then close' <<<"$out" || fail "$lock: no word on waiting in: $out"
+    assert_7_kept "$lock"
+    rm -f "$REVIEWS/stack-7/$lock.lock"
+  done
+}
+
+@test "close removes only a worktree review-pr made for this stack, and only a run dir under the reviews root" {
+  local out gd stray="$BATS_TEST_TMPDIR/stray/stack-7"
+  reviewed_7
+  gd="$(git -C "$WORK.review-7" rev-parse --absolute-git-dir)"
+  # The worktree's marker names another stack.
+  printf '%s\n' "$REVIEWS/stack-8" >"$gd/bercail-review-stack"
+  if out="$(cd "$WORK" && "$BERCAIL" review-pr close 7 2>&1)"; then fail "an unmarked worktree is removed: $out"; fi
+  assert_has "$out" "not this stack's review worktree" "unmarked worktree"
+  assert_7_kept "unmarked"
+  printf '%s\n' "$REVIEWS/stack-7" >"$gd/bercail-review-stack"
+  # stack.json names the main checkout.
+  cp "$REVIEWS/stack-7/stack.json" "$LOG/stack.saved"
+  jq --arg wt "$WORK" '.worktree = $wt' "$LOG/stack.saved" >"$REVIEWS/stack-7/stack.json"
+  if out="$(cd / && "$BERCAIL" review-pr close --stack "$REVIEWS/stack-7" --force 2>&1)"; then fail "the main checkout is removed: $out"; fi
+  assert_has "$out" "main checkout" "main checkout"
+  [[ -f "$WORK/README" ]] || fail "the main checkout stays"
+  cp "$LOG/stack.saved" "$REVIEWS/stack-7/stack.json"
+  assert_7_kept "main checkout"
+  # A commit on the detached worktree: clean, but on no branch.
+  git -C "$WORK.review-7" commit -q --allow-empty -m mine
+  if out="$(cd "$WORK" && "$BERCAIL" review-pr close 7 2>&1)"; then fail "a commit on no branch is dropped: $out"; fi
+  assert_has "$out" "on no branch" "a detached commit"
+  assert_7_kept "detached commit"
+  git -C "$WORK.review-7" switch -q --detach "$SHA7"
+  # A dir inside the run dir is not the run dir.
+  if out="$(cd / && "$BERCAIL" review-pr close --stack "$REVIEWS/stack-7/pr-7" 2>&1)"; then fail "part of a run dir is removed: $out"; fi
+  assert_has "$out" "not a review run dir" "inside the run dir"
+  # The same owner/repo reviewed from another host is another repo.
+  mkdir -p "$XDG_STATE_HOME/bercail/reviews/ghe.example.com/acme"
+  mv "$REVIEWS" "$XDG_STATE_HOME/bercail/reviews/ghe.example.com/acme/widgets"
+  git -C "$WORK" remote set-url origin https://github.com/acme/widgets.git
+  if out="$(cd "$WORK" && "$BERCAIL" review-pr close 7 2>&1)"; then fail "another host's review is closed: $out"; fi
+  assert_has "$out" "no review of this checkout's repo" "another host"
+  [[ -d "$WORK.review-7" ]] || fail "another host's worktree stays"
+  mv "$XDG_STATE_HOME/bercail/reviews/ghe.example.com/acme/widgets" "$REVIEWS"
+  # Not in a checkout of the repo: N alone finds nothing, and says so as an error.
+  if out="$(cd / && "$BERCAIL" review-pr close 7 2>&1)"; then fail "close 7 outside the repo succeeds: $out"; fi
+  assert_has "$out" "pass the PR url" "outside the repo"
+  assert_7_kept "outside the repo"
+  # A stack.json somewhere else is not a run dir to delete.
+  mkdir -p "$stray" && cp "$LOG/stack.saved" "$stray/stack.json"
+  if out="$(cd / && "$BERCAIL" review-pr close --stack "$stray" --force 2>&1)"; then fail "a dir outside the reviews root is removed: $out"; fi
+  assert_has "$out" "not a review run dir" "outside the reviews root"
+  [[ -f "$stray/stack.json" ]] || fail "the stray dir stays"
+  assert_7_kept "stray"
+}
+
+@test "close by a middle PR closes its whole stack; a worktree on a PR's branch goes and the branch stays; a worktree already gone is unregistered" {
+  local out
+  stack_source
+  three_prs_gathered
+  "$BERCAIL" review-pr checkout 23 --stack "$stack" >/dev/null
+  assert_eq s3 "$(git -C "$sib" symbolic-ref --short HEAD)" "the worktree is on #23's branch"
+  out="$(cd "$WORK" && "$BERCAIL" review-pr close 22 2>&1)" || fail "close 22: $out"
+  [[ ! -e "$sib" && ! -e "$stack" ]] || fail "the stack rooted at #21 is closed from #22"
+  assert_eq "$sha23" "$(git -C "$WORK" rev-parse s3)" "the branch checkout made stays"
+  assert_has "$out" "branch s3 stays" "and close says so"
+  assert_source_untouched
+  # Deleted by hand: git still lists it until close.
+  (cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run) >/dev/null
+  rm -rf "$WORK.review-7"
+  out="$(cd "$WORK" && "$BERCAIL" review-pr close 7 2>&1)" || fail "close after rm -rf: $out"
+  if git -C "$WORK" worktree list --porcelain | grep -q 'widgets.review-7'; then fail "the stale registration is removed"; fi
+  [[ ! -e "$REVIEWS/stack-7" ]] || fail "the run dir is removed"
+  [[ -d "$other" ]] || fail "another worktree of the source stays"
 }
