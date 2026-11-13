@@ -71,6 +71,26 @@ doctor_herdr_app_update() {
   log "  hint  Herdr $newest is downloaded (running $running); restart the Herdr window to apply it"
 }
 
+# bercail-spaces and bercail-agents are copies of Herdr's mods, and Herdr never
+# updates a copy. Each mod.json records the main.js it was copied from, as
+# Herdr's installed.json names it; a different one there means Herdr's mod has
+# moved on and the copy has not, or that Herdr is older than the copy.
+doctor_mod_copies() {
+  local mod json name version base now running
+  running="$(herdr-app --version 2>/dev/null </dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | sed -n 1p || true)"
+  for mod in bercail-spaces bercail-agents; do
+    json="$HERDR_APP_CONFIG_DIR/mods/$mod/mod.json"
+    IFS=$'\t' read -r name version base < <(jq -r '.cloned_from | [.name, .version, .main_js] | @tsv' "$json" 2>/dev/null) || continue
+    now="$(jq -r --arg name "$name" '.[$name]["main.js"] // empty' "$HERDR_APP_CONFIG_DIR/installed.json" 2>/dev/null || true)"
+    [[ -n "$base" && -n "$now" && "$now" != "$base" ]] || continue
+    if [[ -n "$running" && "$running" != "$version" && "$(printf '%s\n%s\n' "$running" "$version" | sort -V | sed -n 1p)" == "$running" ]]; then
+      log "  hint  $mod is bercail's copy of Herdr $version's $name mod and this Herdr is $running; update Herdr"
+    else
+      log "  hint  Herdr's $name mod changed after $version; $mod is bercail's copy of that one and lacks the change until bercail updates it"
+    fi
+  done
+}
+
 # Did the live follower miss a desk finishing or blocking? Prints what it
 # missed and fails. A desk now done or blocked since after the follower
 # started, later than the last transition the follower recorded, is one it

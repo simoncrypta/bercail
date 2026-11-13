@@ -1,7 +1,9 @@
 # Proposal for Herdr: list sub-agents whose parent isn't an agent
 
-For the Herdr app's shipped `agents` mod (`mods/agents/main.js`, 0.1.11).
-This is a written proposal. Nobody has filed it upstream.
+For the Herdr app's shipped `agents` mod (`mods/agents/main.js`). Written
+against 0.1.11; 0.1.15 still draws its rows only from `agents()`. This is a
+written proposal, not filed upstream yet: `herdr-app feedback` drafts it for a
+person to send.
 
 ## Problem
 

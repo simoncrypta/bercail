@@ -42,6 +42,35 @@ state() {
     || fail "a replaced binary the window has not run yet should hint: $out"
 }
 
+@test "doctor hints when Herdr's mod is no longer the one bercail's copy was made from" {
+  local out mod
+  printf '0.1.16\n' >"$BATS_TEST_TMPDIR/version"
+  for mod in bercail-spaces bercail-agents; do
+    mkdir -p "$HERDR_APP_CONFIG_DIR/mods/$mod"
+    cp "$ROOT/bercail/mods/$mod/mod.json" "$HERDR_APP_CONFIG_DIR/mods/$mod/"
+  done
+  jq -n --slurpfile s "$ROOT/bercail/mods/bercail-spaces/mod.json" --slurpfile a "$ROOT/bercail/mods/bercail-agents/mod.json" \
+    '{spaces: {"main.js": $s[0].cloned_from.main_js}, agents: {"main.js": $a[0].cloned_from.main_js}}' \
+    >"$HERDR_APP_CONFIG_DIR/installed.json"
+  out="$(doctor_mod_copies)"
+  [[ -z "$out" ]] || fail "the mods bercail copied are the installed ones: $out"
+
+  jq '.agents["main.js"] = "0000000000000000"' "$HERDR_APP_CONFIG_DIR/installed.json" >"$BATS_TEST_TMPDIR/installed.json"
+  mv "$BATS_TEST_TMPDIR/installed.json" "$HERDR_APP_CONFIG_DIR/installed.json"
+  out="$(doctor_mod_copies)"
+  [[ "$out" == "  hint  Herdr's agents mod changed after 0.1.15; bercail-agents is bercail's copy of that one and lacks the change until bercail updates it" ]] \
+    || fail "a newer agents mod should hint, and only it: $out"
+
+  printf '0.1.14\n' >"$BATS_TEST_TMPDIR/version"
+  out="$(doctor_mod_copies)"
+  [[ "$out" == "  hint  bercail-agents is bercail's copy of Herdr 0.1.15's agents mod and this Herdr is 0.1.14; update Herdr" ]] \
+    || fail "an older Herdr is the one to update: $out"
+
+  rm "$HERDR_APP_CONFIG_DIR/installed.json"
+  out="$(doctor_mod_copies)"
+  [[ -z "$out" ]] || fail "no installed.json is nothing to compare: $out"
+}
+
 @test "doctor stays silent when the versions are equal" {
   local out
   state 0.1.11 0.1.11 0.1.11

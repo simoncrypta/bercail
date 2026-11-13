@@ -1,8 +1,1 @@
-{
-  "place": "none",
-  "title": "Spaces",
-  "cloned_from": {
-    "name": "spaces",
-    "version": "0.1.14"
-  }
-}
+{ "place": "none", "title": "Spaces", "cloned_from": { "name": "spaces", "version": "0.1.15", "main_js": "b53526708eb1ddab" } }

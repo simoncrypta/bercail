@@ -52,7 +52,8 @@ import Agents, { deskRows, withDesks } from "./main.mjs";
 import { els } from "./gpui.mjs";
 
 const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exit(1); };
-globalThis.localStorage = { getItem: () => null, setItem: () => {} };
+const store = new Map();
+globalThis.localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v), removeItem: (k) => store.delete(k) };
 
 const spaces = [{ id: "s1", name: "one", tabs: [] }, { id: "s2", name: "two", tabs: [] }];
 const desk = (address, space, parent, status = "working") => ({
@@ -160,5 +161,26 @@ const d = deskRows([], [desk("t2", "s1", "t1")], spaces, { agent: "t2" })[0];
 if (d.space_name !== "one" || !d.focused || d.pane !== null) fail(`desk row shape: ${JSON.stringify(d)}`);
 const merged = withDesks([agent("t4", "s1"), agent("t9", "s2"), agent("t10", "s2")], [{ ...d, address: "t2", space: "s2" }], spaces);
 if (merged.map((a) => a.address).join() !== "t4,t2,t9,t10") fail(`space order: ${merged.map((a) => a.address)}`);
+EOF
+}
+
+@test "a pin the older mod kept in localStorage moves to the terminal's label, and a pinned desk leads the list" {
+  mod_case <<'EOF'
+// Herdr's agents mod up to 0.1.14, and bercail's copy of it, kept pins in localStorage.
+store.set("pins", JSON.stringify(["t2"]));
+renderShellDesk();
+const pin = globalThis.herdr.calls.find(([name]) => name === "terminal.pin");
+if (!pin || pin[1].terminal !== "t2" || pin[1].pinned !== true) fail(`the stored pin was not handed to core: ${JSON.stringify(globalThis.herdr.calls)}`);
+if (!store.has("pins")) fail("the stored pin was dropped before core confirmed it");
+
+// Core echoes the label: the stored copy goes, and the desk (space s1) leads t9 either way,
+// so pin the later one to see the order move.
+const pinned = { ...desk("t2", "s2", "t1"), labels: { "bercail.role": "agent", "bercail.space": "s2", "herdr.pinned": "1" } };
+render({
+  agents: [agent("t4", "s1")],
+  terminals: [{ address: "t1", state: "live", status: null, labels: {} }, pinned, { address: "t4", state: "live", status: "idle", labels: {} }],
+});
+if (store.has("pins")) fail("a pin core holds is still in localStorage");
+if (globalThis.herdr.order.join() !== "t2,t4") fail(`a pinned desk must lead: ${globalThis.herdr.order}`);
 EOF
 }
