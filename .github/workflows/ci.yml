@@ -1,7 +1,9 @@
 name: CI
 
-# Tests run on every push to master and every PR. The Cloudflare deploy runs
-# only for a v* tag: master is unreleased trunk, and a tag is the release.
+# Lint and tests run side by side on every push to master and every PR. The
+# Cloudflare deploy runs only for a v* tag, once both pass: master is
+# unreleased trunk, and a tag is the release. docs/development.md#ci has the
+# timings, the caches, and how to turn on a bigger test runner.
 on:
   push:
     branches: [master]
@@ -9,60 +11,60 @@ on:
   pull_request:
   workflow_dispatch:
 
+# A newer push to the same PR or branch, master included, cancels the run it
+# supersedes. A tag run never cancels: it is the release and the deploy.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 permissions:
   contents: read
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      BD_VERSION: 1.3.4
       SHELLCHECK_VERSION: 0.11.0
+    steps:
+      - uses: actions/checkout@v4
+      # Pinned: a newer shellcheck warns about more, and that should not turn
+      # an unrelated push red. vp check and the mods' lint come from npm ci.
+      - uses: ./.github/actions/setup
+        with:
+          tools: shellcheck@${{ env.SHELLCHECK_VERSION }}
+      - name: Lint (shellcheck, vp check, mods)
+        run: bash tests/lint.sh
+
+  test:
+    # The repo variable CI_TEST_RUNNER names a bigger runner's label; unset,
+    # the free 4-vCPU runner. tests/run.sh sizes its jobs to the cores it gets.
+    runs-on: ${{ vars.CI_TEST_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 15
+    env:
+      BD_VERSION: 1.3.4
     steps:
       - uses: actions/checkout@v4
         with:
           # desk_upgrade.bats updates from real release tags.
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 26
-          cache: npm
-      - run: npm ci --ignore-scripts
       # With CI set, a test fails when a tool it needs is missing (need, in
       # tests/test_helper.bash), so nothing skips here unseen. The beads tests
-      # need the real bd. It goes in the way bercail installs it for users
-      # (lib/deps.sh: mise use -g BEADS_MISE_SPEC), pinned, and the action
-      # caches both tools per version.
-      - uses: jdx/mise-action@v5
+      # need the real bd, pinned.
+      - uses: ./.github/actions/setup
         with:
-          cache_key_prefix: mise-beads-${{ env.BD_VERSION }}-shellcheck-${{ env.SHELLCHECK_VERSION }}
-          cache_save_post: true
-      - name: bd (beads)
-        env:
-          MISE_GITHUB_TOKEN: ${{ github.token }}
-        run: mise use -g "github:gastownhall/beads@$BD_VERSION" && bd version
+          tools: github:gastownhall/beads@${{ env.BD_VERSION }}
       # With GNU parallel, tests/run.sh runs two jobs per core. The runner
       # image has it; install it if that changes.
       - name: GNU parallel
         run: command -v parallel || { sudo apt-get update -q && sudo apt-get install -y -q parallel; }
-      # Pinned: a newer shellcheck warns about more, and that should not turn
-      # an unrelated push red. vp check and the mods' lint come from npm ci.
-      - name: Lint (shellcheck, vp check, mods)
-        env:
-          MISE_GITHUB_TOKEN: ${{ github.token }}
-        run: mise use -g "shellcheck@$SHELLCHECK_VERSION" && bash tests/lint.sh
       # The bats unit suite, then the TypeScript unit tests (vp test).
       - name: Run tests
         run: bash tests/run.sh
 
   deploy:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [lint, test]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
