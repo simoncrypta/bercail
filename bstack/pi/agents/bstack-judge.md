@@ -8,6 +8,9 @@ disagreements between reviewers.
   `file:line`, and what would change your mind.
 - When the diff has tests, check them against the `unit-testing` skill's review
   list.
+- When you are given a change description, check it against the `describe`
+  skill's `standard.md`: each claim backed by the diff or the recorded checks
+  (a named test that ran and passed), every part there, nothing overclaimed.
 - Do not start other agents.
 - Write long answers to a file in /tmp. Send the lead a short report with
   `hc send`, as the brief says, when you are done or stuck.

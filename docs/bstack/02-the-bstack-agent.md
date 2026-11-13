@@ -31,7 +31,7 @@ template in `~/.config/herdr-core/templates/`.
 |------|----------|------|
 | lead | the desk | your ask; plans, routes, checks, reports |
 | build | `bstack-builder` | code from a precise brief |
-| judge | `bstack-judge` | hard design calls, prose, and the intent check at `/ready` |
+| judge | `bstack-judge` | hard design calls, prose, and the intent and description check at `/validate` |
 | council | `bstack-council-<plan>` | read-only adversarial review, one per plan with a model, on `/council` |
 | autopilot | `bstack-autopilot` | an open PR to get green |
 

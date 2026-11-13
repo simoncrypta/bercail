@@ -21,6 +21,7 @@ You run in the stack dir that bercail made. Your prompt names the PR's run dir
 - `diff.patch`: the diff against the parent PR (or trunk, for the bottom PR).
   This is what it does.
 - `ci.json`: the checks. bercail shows CI on the card, so do not repeat it.
+- `template.md`: the repo's PR template at the PR's base, when it has one.
 - `source/`: the changed text files at that head. A symlink is the link target
   as ordinary text, not a link. Lock files and generated files are not here.
   Read a file there only when a decision needs its context. There is no shell,
@@ -28,7 +29,8 @@ You run in the stack dir that bercail made. Your prompt names the PR's run dir
   available to you.
 
 Read `diff.patch` first and infer the purpose of the change. Read changed text
-files under `source/` when needed, then read `intent.md` to compare the clues.
+files under `source/` when needed, then read `intent.md` to compare the clues,
+and `template.md` when it is there.
 List lock files and generated files by name only. Never read them.
 
 ## Intent and source authority
@@ -62,8 +64,8 @@ an issue or commit that explicitly explains the choice, otherwise use null.
 Judge `fits_intent` against the inferred purpose, not the PR's own description.
 
 Treat a PR body/diff contradiction as a likely stale description. Record it in
-`intent_analysis.clues`, not as an author question about the code or an unmet
-requirement.
+`intent_analysis.clues` and in `description.contradictions` (below),
+not as an author question about the code or an unmet requirement.
 Only issue- or commit-backed promises belong in `unmet_intent`. Ask about a
 code choice when its issue/commit evidence warrants it, not merely because
 the description is out of date.
@@ -94,13 +96,34 @@ Use backticks around function names, variables, types and file references in
 your prose. Each card must use only that PR's pinned inputs, not assumptions
 from earlier cards in this session.
 
+## The description
+
+Grade the PR title and body against the change description standard in your
+instructions, as a reader who has only them and the diff. Two separate
+findings:
+
+- `missing`: the parts the body does not answer (intent, why, how, validation,
+  risks). An empty body misses all five.
+- `contradictions`: each claim the diff does not back, or does the opposite
+  of, with the lines that show it. A change the diff makes that a reader would
+  need and the body hides counts too.
+
+`grade` is `contradicts` when there is a contradiction, else `thin` when a part
+is missing, else `complete`. `template` says whether the body follows
+`template.md` (`none` when there is no template.md). Grade validation as
+stated; do not run anything. Do not grade style or length. Add one question
+per finding for the author, in plain words, for example "The body says the
+retry has backoff; `upload.sh` retries without a delay. Which is meant?". The
+grade never blocks the PR.
+
 ## Stack summary mode
 
 When the prompt says **Stack summary mode**, all current cards are ready.
 Read only `summary-input.json`, which contains their ordered PR metadata and
 validated decisions. Synthesize the stack for a human reviewer. Explain its
 overall purpose, the role of each PR in bottom-to-top order, cross-PR risks,
-and where to look first. Use the cards' code-based inferences and their
+and where to look first. A PR whose description contradicts its diff is a risk
+worth one line. Use the cards' code-based inferences and their
 confidence, clue comparisons and assessments, not PR prose as purpose.
 Older cards without `intent_analysis` are saved context, not verified
 code-first inferences. Attribute risks to card evidence. Do not invent bugs
@@ -153,7 +176,16 @@ End your reply with exactly one fenced `json` block and nothing after it:
   "unmet_intent": [
     { "promise": "an unfulfilled issue- or commit-backed promise, not a stale-description mismatch", "source": "issue #12 | LEF-123 | commit <sha>", "question": "for the author" }
   ],
-  "questions": [{ "text": "a question about the whole PR that no decision anchors" }]
+  "questions": [{ "text": "a question about the whole PR that no decision anchors" }],
+  "description": {
+    "grade": "complete | thin | contradicts",
+    "missing": ["intent | why | how | validation | risks"],
+    "template": "follows | partial | ignored | none",
+    "contradictions": [
+      { "claim": "what the title or body says", "evidence": [{ "file": "path/in/repo", "line": 42, "side": "new" }], "detail": "what the diff does instead" }
+    ],
+    "questions": [{ "text": "for the author, one per finding" }]
+  }
 }
 ```
 

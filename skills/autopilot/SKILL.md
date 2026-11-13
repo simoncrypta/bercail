@@ -64,6 +64,20 @@ Run `pr-state.sh`, do what `next` says, push, then run it again.
 One failure per commit. Re-run `pr-state.sh` after every push: a new head
 starts new checks, and a fix can fail a different job.
 
+The PR's description lands as one commit (the `describe` skill). On `gt`, a
+fix amends the PR's commit: `gt m -a -m "$(bercail describe commit)"`, then
+`gt submit --no-edit --no-ai`. On `gh` and `origin`, push each fix as a new
+commit; the person squash-merges with the description as the message. Never
+force-push there.
+
+After each fix, keep the description true. Rerun the checks the fix touched
+into `.bercail/validate.json` for the new tree, update the parts of
+`.bercail/description.md` the fix changed, run `bercail describe stamp` and
+`bercail describe check`, then update the PR body:
+`bercail describe body | gh pr edit <n> --title "$(bercail describe title)" --body-file -`
+(`origin pr edit` on `origin`). With no description in the worktree, leave
+the body alone and say so in the report.
+
 A failure is a flake only when the log shows it (a timeout, a network error, a
 runner that died) and the same check passed on a recent run of this code. Rerun
 it once with `gh run rerun <run> --failed`. A second failure is real.
@@ -104,8 +118,8 @@ Stop and report when `next` is `green`, `merged`, or `closed`, or:
 - 10 pushes in one run.
 
 Report in five lines or fewer: the PR, the state (`green` or what blocks it),
-what you pushed (commit subjects), the threads you answered, and what waits on
-a person. Do not merge. Say "ready to merge" when it is.
+what you pushed (commit subjects), the threads you answered, whether the PR
+body is current, and what waits on a person. Do not merge. Say "ready to merge" when it is.
 
 ## Inside bercail
 

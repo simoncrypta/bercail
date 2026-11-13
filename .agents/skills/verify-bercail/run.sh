@@ -127,9 +127,15 @@ check "bstack status reports its profile" out_has bstack-status "bstack:"
 check "the desk's lead is deployed" jq -e '.[0] == "pi"' "$profile/lead.json"
 check "review-pr's reviewer is read-only" jq -e 'index(["--tools", "read,grep,find,ls"]) != null' "$profile/review.json"
 check "/council is deployed" test -f "$profile/prompts/council.md"
+check "/validate is deployed, and no /ready" test -f "$profile/prompts/validate.md" -a ! -e "$profile/prompts/ready.md"
+check "the describe skill and its standard are deployed" test -f "$HOME/.agents/skills/describe/standard.md"
+check "review-pr's reviewer reads the description standard" grep -qF describe/standard.md "$profile/review.json"
 check "the pinned claude has a council seat" test -f "$templates/bstack-council-claude.md"
 check "no seat for a provider without a model" test ! -e "$templates/bstack-council-gpt.md"
 check "the lead loads the guard" grep -qF extensions/guard.ts "$profile/lead.json"
+
+step describe-template 0 "$bercail" describe template "$repo"
+check "bercail has no PR template" out_has describe-template none
 
 step policy-show 0 "$bercail" policy show --json "$repo"
 check "the CLI reads this repo's policy" jq -e '.file != "" and .policy.integrate == "direct"' "$evidence/policy-show.out"

@@ -297,6 +297,22 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   unset FAKE_PI_READY
 }
 
+@test "deploy renders /validate and removes the /ready an older release installed, with no alias" {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="claude-bridge xai"
+  local p
+  p="$(PI_DIR)"
+  mkdir -p "$p/prompts"
+  printf -- '---\ndescription: old\n---\nGet the current work ready.\n' >"$p/prompts/ready.md"
+  deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  [[ -f "$p/prompts/validate.md" ]] || fail "validate.md missing"
+  [[ ! -e "$p/prompts/ready.md" ]] || fail "the old ready.md stays after an update"
+  if grep -rlq '/ready\b' "$p"; then fail "a rendered file still names /ready: $(grep -rl '/ready\b' "$p")"; fi
+  grep -q 'bercail describe check' "$p/prompts/validate.md" || fail "validate checks the description"
+  grep -q 'never commits, pushes, or opens a PR' "$p/prompts/validate.md" || fail "validate never publishes"
+}
+
 @test "deploy installs the bridge and renders the Pi profile and hc templates, preserving unrelated settings" {
   reset_home
   write_pi_config
@@ -312,7 +328,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     agents/bstack-autopilot.md agents/bstack-pr-review.md agents/bstack-council-claude.md agents/bstack-council-grok.md; do
     [[ -f "$p/$rel" ]] || fail "missing $rel"
   done
-  for rel in ready council handoff autopilot how why unslop pr-review bstack-setup; do
+  for rel in validate council handoff autopilot how why unslop pr-review bstack-setup; do
     [[ -f "$p/prompts/$rel.md" ]] || fail "missing prompt $rel"
     if grep -q '!`' "$p/prompts/$rel.md"; then fail "Pi templates have no !cmd: $rel"; fi
     if grep -q '^agent:' "$p/prompts/$rel.md"; then fail "Pi templates have no agent key: $rel"; fi

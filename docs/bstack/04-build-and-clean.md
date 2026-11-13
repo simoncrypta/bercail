@@ -52,7 +52,7 @@ closing summaries, and keeps your voice:
 /unslop the readme changes, keep it terse
 ```
 
-`/ready` runs it on the diff for you before it stages.
+`/validate` runs it on the diff for you before it stages.
 
 **Pitfall:** treating cleanup as polish. A padded diff reads as unfinished, and
 the extra code is where the next bug hides.

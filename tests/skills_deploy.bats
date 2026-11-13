@@ -44,6 +44,9 @@ setup() {
     || fail "pi links for bstack and council missing"
   grep -q '^name: unit-testing$' "$AGENTS_SKILLS_DIR/unit-testing/SKILL.md" || fail "canonical unit-testing skill missing"
   [[ -L "$HOME/.pi/agent/skills/unit-testing" ]] || fail "pi link for unit-testing missing"
+  grep -q '^name: describe$' "$AGENTS_SKILLS_DIR/describe/SKILL.md" || fail "canonical describe skill missing"
+  [[ -f "$AGENTS_SKILLS_DIR/describe/standard.md" ]] || fail "the describe standard missing"
+  [[ -L "$HOME/.pi/agent/skills/describe" ]] || fail "pi link for describe missing"
 }
 
 @test "deploy_skills removes the handoff resources an older release installed" {

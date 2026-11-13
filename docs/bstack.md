@@ -40,7 +40,7 @@ Set `fallback = ["gpt", "grok"]` to limit candidates, or `[]` to disable them. A
 | The playbooks, the roles (lead, build, judge, council, autopilot), what a prompt holds | [Work with the bstack agent](bstack/02-the-bstack-agent.md) |
 | `/how`, `/why`, taking over a branch | [Understand the code](bstack/03-understand.md) |
 | The build playbooks, `/unslop` | [Build and clean the change](bstack/04-build-and-clean.md) |
-| `/council`, `/ready` | [Review it](bstack/05-review.md) |
+| `/council`, `/validate` | [Review it](bstack/05-review.md) |
 | `/autopilot` and what `bstack-autopilot` may do | [Ship with autopilot](bstack/06-autopilot.md) |
 | `/handoff`, stages `bstack` and `autopilot` | [Run jobs in parallel](bstack/07-handoff.md) |
 | Pinning models, effort, role fallback, the files bstack writes | [Make it yours](bstack/08-make-it-yours.md) |

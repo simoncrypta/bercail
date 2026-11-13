@@ -266,6 +266,14 @@ if (reviewed) {
     if (!inferred.includes(text)) fail(`no-issue inference missing ${text}`);
   }
   if (inferred.includes("Intent unknown")) fail("missing issues hid the inferred intent");
+  if (inferred.includes("Description")) fail("a card without a grade shows none");
+  const graded = structuredClone(reviewed);
+  graded.review.description = {grade: "contradicts", missing: ["validation"], template: "partial", questions: [],
+    contradictions: [{claim: "Retries back off.", detail: "No delay between tries.", evidence: [{file: "lib/retry.sh", line: 3}]}]};
+  const desc = dump(v.body(theme(), graded)).join("\n");
+  for (const text of ["Description", "contradicts · template partial", "Missing", "validation", "Says", "Retries back off.", "The diff", "No delay between tries.", "lib/retry.sh:3"]) {
+    if (!desc.includes(text)) fail(`the description section misses ${text}`);
+  }
   const legacy = structuredClone(reviewed);
   delete legacy.review.intent_analysis;
   const saved = dump(v.body(theme(), legacy)).join("\n");

@@ -6,7 +6,7 @@
 # checkout, and one Herdr space named by the root (bottom) PR. The run dir is
 #   ${XDG_STATE_HOME:-~/.local/state}/bercail/reviews/<host>/<owner>/<repo>/stack-<root>/
 # with stack.json, stack.md, and per PR and head sha
-#   pr-<n>/<sha>/ pr.json intent.md diff.patch ci.json source/ review.json run.json
+#   pr-<n>/<sha>/ pr.json intent.md diff.patch ci.json source/ template.md review.json run.json
 # The worktree is <main>.review-<root> (for example ~/Work/leftlane_app.review-123),
 # registered to the source git dir. It is not under the state dir.
 #
@@ -30,6 +30,8 @@ REVIEW_PR_FIELDS="number,title,body,url,author,isDraft,baseRefName,headRefName,h
 source "$(dirname "${BASH_SOURCE[0]}")/stack.sh"
 # shellcheck source=lib/review-desk.sh
 source "$(dirname "${BASH_SOURCE[0]}")/review-desk.sh"
+# shellcheck source=lib/describe.sh
+source "$(dirname "${BASH_SOURCE[0]}")/describe.sh"
 
 _review_root() {
   printf '%s/bercail/reviews' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -351,6 +353,16 @@ _review_snapshot() {
     mkdir -p "$dest/$(dirname "$path")"
     mv "$blob" "$dest/$path"
   done < <(git -C "$main" diff-tree -r --no-commit-id --name-only --diff-filter=ACMRT -M -z "$mb" "$sha")
+}
+
+# The repo's PR template at the PR's base, not its head, so the PR cannot change
+# what its own description is graded against. No single template: no file.
+_review_template() {
+  local main="$1" base="$2" dest="$3" path
+  rm -f "$dest"
+  path="$(git -C "$main" ls-tree -r --name-only "$base" | desc_template_pick | jq -r '.template // empty')"
+  [[ -n "$path" ]] || return 0
+  git -C "$main" --no-pager show "$base:$path" >"$dest"
 }
 
 # --- gather helpers -----------------------------------------------------------
@@ -749,7 +761,8 @@ review_start() {
     (
       git -C "$main" --no-pager diff --no-ext-diff "$base_sha...$head_sha" >"$tmp/diff-$num" \
         && git -C "$main" --no-pager log --no-show-signature --no-decorate --format='commit %H%n%B' "$base_sha..$head_sha" -- >"$tmp/commits-$num" \
-        && _review_snapshot "$main" "$head_sha" "$base_sha" "$prdir/source"
+        && _review_snapshot "$main" "$head_sha" "$base_sha" "$prdir/source" \
+        && _review_template "$main" "$base_sha" "$prdir/template.md"
     ) &
     jobs+=("$!")
   done
@@ -940,7 +953,19 @@ _review_valid_reply() {
         type == "object" and (.source | text and length > 0) and (.detail | text and length > 0) and
         (.alignment | IN("agrees", "more", "less", "different", "stale", "unavailable"))) and
       (.assessment | text and length > 0);
+    def description:
+      type == "object" and (.grade | IN("complete", "thin", "contradicts")) and
+      (.template | IN("follows", "partial", "ignored", "none")) and
+      (.missing | type == "array") and all(.missing[]; IN("intent", "why", "how", "validation", "risks")) and
+      (.contradictions | type == "array") and all(.contradictions[];
+        type == "object" and (.claim | text and length > 0) and (.detail | text and length > 0) and
+        (.evidence | type == "array" and length > 0) and all(.evidence[]; evidence)) and
+      ((.questions // []) | type == "array") and all((.questions // [])[]; type == "object" and (.text | text)) and
+      (if (.contradictions | length) > 0 then .grade == "contradicts"
+       elif (.missing | length) > 0 then .grade == "thin"
+       else .grade == "complete" end);
     def review: type == "object" and (.why | text) and (.why_source | optional_text) and
+    (.description == null or (.description | description)) and
     (.intent_analysis == null or ((.why | length > 0) and .why_source == "diff" and (.intent_analysis | inference))) and
     (.decisions | type == "array") and
     all(.decisions[];
@@ -1015,15 +1040,15 @@ review_run_one() {
     status=blocked
     reason="$(jq -r '.blocked' <<<"$block")"
   elif [[ "$rc" == 0 ]] && _review_valid_reply <<<"$block" \
-    && jq -e '.intent_analysis != null' <<<"$block" >/dev/null \
+    && jq -e '.intent_analysis != null and .description != null' <<<"$block" >/dev/null \
     && { [[ ! -s "$R_DIR/diff.patch" ]] || jq -e '.intent_analysis.evidence | length > 0' <<<"$block" >/dev/null; }; then
     status=ready
     jq --arg schema "$REVIEW_SCHEMA" --argjson pr "$R_N" --arg sha "$R_SHA" --arg session "$session" '
       {schema: $schema, pr: $pr, head_sha: $sha, session_id: $session,
        why: .why, why_source: (.why_source // null), intent_analysis: .intent_analysis, decisions: .decisions,
-       unmet_intent: (.unmet_intent // []), questions: (.questions // [])}' <<<"$block" \
+       unmet_intent: (.unmet_intent // []), questions: (.questions // []), description: .description}' <<<"$block" \
       | _review_write "$R_DIR/review.json"
-    summary="$(jq -r '"\(.decisions | length) decisions, \([.decisions[] | select(.stated == null)] | length) undocumented, \(.unmet_intent | length) unmet, \(([.decisions[] | select(.question)] | length) + ([.unmet_intent[] | select(.question)] | length) + (.questions | length)) questions"' "$R_DIR/review.json")"
+    summary="$(jq -r '"\(.decisions | length) decisions, \([.decisions[] | select(.stated == null)] | length) undocumented, \(.unmet_intent | length) unmet, description \(.description.grade), \(([.decisions[] | select(.question)] | length) + ([.unmet_intent[] | select(.question)] | length) + (.description.questions // [] | length) + (.questions | length)) questions"' "$R_DIR/review.json")"
   else
     status=failed
     err="$(_review_turn_error "$R_DIR/pass.jsonl" "$R_DIR/pass.err")"
@@ -1114,12 +1139,13 @@ review_run() {
 # --- card, rows, ui -------------------------------------------------------------
 
 # Questions for the author, in seeding order: each decision's (anchored at its
-# first evidence), each unmet promise's, then the whole-PR ones.
+# first evidence), each unmet promise's, the description's, then the whole-PR ones.
 REVIEW_JQ_DEFS='
 def loc: if . == null or .file == null then ""
   else .file + (if .line then ":\(.line)" + (if (.end_line // .line) != .line then "-\(.end_line)" else "" end) else "" end) end;
 def questions: [ (.decisions // [] | .[] | select(.question) | {text: .question, at: ((.evidence // [])[0])}),
   (.unmet_intent // [] | .[] | select(.question) | {text: .question, at: null}),
+  (.description.questions // [] | .[] | {text: .text, at: null}),
   (.questions // [] | .[] | {text: (if type == "object" then .text else . end), at: null}) | select(.text) ];
 '
 
@@ -1159,6 +1185,12 @@ review_card() {
        (if ($r.unmet_intent | length) > 0
         then "", "Intent with no change",
              ($r.unmet_intent[] | "  - \(.promise)\(if .source then "  [\(.source)]" else "" end)")
+        else empty end),
+       (if $r.description then
+         "", "Description: \($r.description.grade)\(if $r.description.template != "none" then " · template \($r.description.template)" else "" end)",
+         (if ($r.description.missing | length) > 0 then "  Missing: \($r.description.missing | join(", "))" else empty end),
+         ($r.description.contradictions[] | ((.evidence // [])[0] | loc) as $at
+           | "  Contradicts the diff: \(.claim)\(if $at != "" then "  [\($at)]" else "" end)", "     \(.detail)")
         else empty end),
        ($r | questions) as $q
        | (if ($q | length) > 0

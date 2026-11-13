@@ -22,7 +22,7 @@ BSTACK_PI_MIN=1.5.1
 # compacts first, with room for the tool results Pi only estimates.
 BSTACK_PI_BRIDGE_RESERVE=40000
 BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge.md
-  agents/bstack-autopilot.md agents/bstack-headless.md agents/bstack-pr-review.md prompts/ready.md
+  agents/bstack-autopilot.md agents/bstack-headless.md agents/bstack-pr-review.md prompts/validate.md
   prompts/council.md prompts/handoff.md prompts/autopilot.md prompts/how.md prompts/why.md
   prompts/unslop.md prompts/pr-review.md prompts/bstack-setup.md)
 
@@ -281,7 +281,8 @@ _bstack_pi_argv() {
 
 # bercail review-pr's reviewer, into BSTACK_PI_ARGV: the lead's model, the
 # read-only tools, and review.ts, which keeps it in the stack dir. No skills,
-# prompt templates, or context files: the pr-review rules are its whole brief.
+# prompt templates, or context files: the pr-review rules and the description
+# standard are its whole brief.
 _bstack_pi_review_argv() {
   local model="$1"
   BSTACK_PI_ARGV=(pi)
@@ -289,7 +290,8 @@ _bstack_pi_review_argv() {
   BSTACK_PI_ARGV+=(-e "$BSTACK_PI_BRIDGE" -e "$BSTACK_PI_DIR/extensions/fallback.ts"
     -e "$BSTACK_PI_DIR/extensions/review.ts" --tools "read,grep,find,ls"
     --no-skills --no-prompt-templates --no-context-files
-    --append-system-prompt "$BSTACK_PI_DIR/agents/bstack-pr-review.md")
+    --append-system-prompt "$BSTACK_PI_DIR/agents/bstack-pr-review.md"
+    --append-system-prompt "$(skill_canonical_dir describe)/standard.md")
 }
 
 # The command line a bstack agent starts with. BERCAIL_ROLE identifies its role;

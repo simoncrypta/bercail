@@ -127,7 +127,7 @@ assuming the rule holds.
 
 ## Reviewing tests
 
-For the judge, the council, and `/ready`. Report a finding only when a run
+For the judge, the council, and `/validate`. Report a finding only when a run
 shows it, and include the command.
 
 1. **Does it fail without the change?** Export the base to /tmp

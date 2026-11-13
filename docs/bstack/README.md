@@ -12,7 +12,7 @@ shows you the evidence.
 2. [Work with the bstack agent](./02-the-bstack-agent.md). Playbooks, roles, and what a good prompt holds.
 3. [Understand the code](./03-understand.md). `/how`, `/why`, and taking over someone else's branch.
 4. [Build and clean the change](./04-build-and-clean.md). The build playbooks and `/unslop`.
-5. [Review it](./05-review.md). `/council`, `/ready`, and tuicr.
+5. [Review it](./05-review.md). `/council`, `/validate`, and tuicr.
 6. [Ship with autopilot](./06-autopilot.md). A PR to green: CI, review threads, conflicts.
 7. [Run jobs in parallel](./07-handoff.md). Beads issues, sibling desks, and headless runs.
 8. [Make it yours](./08-make-it-yours.md). Pin models, change roles, keep your own files.

@@ -15,7 +15,8 @@ at it. These rules apply to every bstack agent.
 - Load the `bstack` skill for anything beyond a one-line change. It holds the
   playbooks (bug fix, feature, refactor, investigation, review, ship, handoff).
 - Other bercail skills: `how` (how code works now), `why` (why it is that way,
-  from the record), `unslop` (clean prose and diffs), `unit-testing` (writing
+  from the record), `unslop` (clean prose and diffs), `describe` (a change's
+  description: PR body or commit message), `unit-testing` (writing
   and reviewing tests), `council` (cross-provider review), `autopilot` (drive a
   PR to green).
 
@@ -80,6 +81,8 @@ exception: its system prompt says so, and that prompt wins.
 
 ## Finishing (bercail's review loop)
 
+- Finish with `/validate`: it proves the work, writes its description, and stages
+  it.
 - Stage your changes with `git add` and leave them uncommitted. The human reviews
   the staged tree in tuicr when your desk goes `done`. Commit, push, open a PR, or
   release only when asked. Asking for `autopilot` is asking to commit and push to

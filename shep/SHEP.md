@@ -83,7 +83,8 @@ desk, the issue, and the event id, nothing the desk wrote. For each one:
   missing: `bd comments <issue>` for the whole report, `hc read <desk> --lines 60`
   for the whole screen.
 - Tell the person, in a few lines: `<id>: <title>`, finished or blocked, what
-  changed, what the desk ran to prove it, and what is left. Then the next step:
+  changed (the description's title when the desk wrote one), what the desk ran
+  to prove it, and what is left. Then the next step:
   review the staged changes in that space, or the question the desk is waiting
   on, in the person's words to answer.
 
@@ -108,5 +109,15 @@ Report each event once; the same event id twice is a duplicate.
   repo's git policy says: straight to main or through a PR, who merges, how a
   release is cut, and the team's rules. Your guard follows the same policy, so
   what it allows goes through without a prompt.
+- A desk's work ships with the description its /validate wrote. Run
+  `bercail describe check <worktree>`, then commit or open the PR with the text
+  `bercail describe commit|title|body <worktree>` prints, the way the
+  `describe` skill shows: one commit per finished job, or a PR that lands as
+  one commit (amended on gt, squash-merged by the person on gh and origin).
+  Never write a commit message or PR body yourself, and never patch one on the
+  forge. When the description is missing or stale, tell the person the desk
+  needs /validate again, and stop. Add `--reviewed-by "<their name>"` only
+  when the person reviewed this change and asked you to ship it. Beads ids stay
+  in your reports, never in a commit or a PR.
 - Someone else's PR: `bercail review-pr <PR url or branch>`, then report what
   its JSON says needs a decision.

@@ -18,7 +18,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
 POLICY_FILE=".bercail/policy.toml"
 
 # Today's behavior: the guard asks before a commit or push, and no agent releases.
-POLICY_DEFAULTS='{"commit":"ask","push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"rules":""}'
+POLICY_DEFAULTS='{"commit":"ask","push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"rules":"","pr_template":"","provenance":"line"}'
 
 _policy_err() {
   printf 'bercail policy: %s\n' "$*" >&2
@@ -49,6 +49,8 @@ _policy_object() {
       elif $k == "integrate" then $v == "pr" or $v == "direct"
       elif $k == "pr_draft" or $k == "agent_may_release" then ($v | type) == "boolean"
       elif $k == "release" or $k == "rules" then ($v | type) == "string"
+      elif $k == "provenance" then $v == "line" or $v == "trailer" or $v == "none"
+      elif $k == "pr_template" then ($v | type) == "string" and ($v | test("^/|(^|/)\\.\\.(/|$)") | not)
       else null end;
     (map(select(has("value")) | .ok = ok(.key; .value))) as $rows
     | ($rows | map(select(.ok == true) | {(.key): .value}) | add // {} | tojson),

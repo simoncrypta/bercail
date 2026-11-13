@@ -51,7 +51,7 @@ each step ending in something you can check.
 4. Fix at the root (`bstack-builder` for a mechanical fix, `bstack-judge` when the
    cause is subtle).
 5. Rerun the repro and the tests. Both must change for the right reason.
-6. Finish with `/ready`.
+6. Finish with `/validate`.
 
 ## feature
 
@@ -61,7 +61,7 @@ each step ending in something you can check.
 3. Build it in small steps that each end green (`bstack-builder`, with a brief per step).
    New behavior gets tests that follow the `unit-testing` skill.
 4. Drive the real path the user takes: the CLI, the app, the endpoint.
-5. Finish with `/ready`.
+5. Finish with `/validate`.
 
 ## refactor
 
@@ -70,7 +70,7 @@ each step ending in something you can check.
 3. Move callers to the new shape and delete the old one in the same change. No
    compatibility layer unless the issue asks for one.
 4. Prefer a script or codemod over hand edits for anything repeated.
-5. The same tests pass, unchanged. Finish with `/ready`.
+5. The same tests pass, unchanged. Finish with `/validate`.
 
 ## review
 
@@ -84,7 +84,9 @@ each step ending in something you can check.
 
 ## ship
 
-The person reviewed in tuicr, committed, and opened the PR. Now:
+The person reviewed in tuicr, committed, and opened the PR with the description
+/validate wrote (the `describe` skill). Stacks use the backend's stack commands
+(the `handoff` skill's `resources/git-workflow.md`). Now:
 
 1. Run the `autopilot` skill on the PR. It is the ask to commit and push fixes.
 2. It loops on CI and review threads until the PR is green or it needs a person.

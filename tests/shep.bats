@@ -14,7 +14,7 @@ setup() {
   # Only the stand-ins, then the system bins: a real pi or hc later on PATH would run instead.
   export PATH="$BATS_TEST_TMPDIR/bin:/usr/bin:/bin"
   mkdir -p "$BATS_TEST_TMPDIR/bin" "$HOME/.local/share/bercail/shep/pi" "$HOME/.local/share/bercail/pi" \
-    "$HOME/.agents/skills/handoff" "$HOME/.agents/skills/review"
+    "$HOME/.agents/skills/handoff" "$HOME/.agents/skills/review" "$HOME/.agents/skills/describe"
   CONFIG="$XDG_CONFIG_HOME/bercail/config.toml"
   STATE="$XDG_STATE_HOME/bercail/shep"
   SHARE="$HOME/.local/share/bercail/shep"
@@ -112,7 +112,7 @@ EOF
   for want in "--model fake/lead:high" "-e npm:pi-claude-bridge@0.12.0" "-e /x/fallback.ts" "-e $SHARE/pi/inbox.ts" \
     "-e $SHARE/pi/compaction.ts" "--append-system-prompt $SHARE/SHEP.md" "--append-system-prompt $STATE/context.md" \
     "--no-context-files" "--approve" "--session-dir $STATE/pi-sessions" "--continue" \
-    "--skill $HOME/.agents/skills/handoff" "--skill $HOME/.agents/skills/review"; do
+    "--skill $HOME/.agents/skills/handoff" "--skill $HOME/.agents/skills/review" "--skill $HOME/.agents/skills/describe"; do
     [[ "$args" == *"$want "* ]] || fail "Pi argv lacks '$want': $args"
   done
   [[ "$args" != *instructions.md* && "$args" != */x/bstack* && "$args" != *desk-restore* ]] || fail "Pi got the lead's rules or a missing skill: $args"

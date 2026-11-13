@@ -507,6 +507,43 @@ export default class Review extends View {
             ),
           ),
         );
+      if (r.description) {
+        const d = r.description;
+        body.child(
+          this.section(
+            t,
+            "Description",
+            [
+              this.field(t, "Missing", d.missing.length ? d.missing.join(", ") : "Nothing"),
+              ...d.contradictions.map((c) =>
+                v_flex()
+                  .p(12)
+                  .gap(8)
+                  .rounded(8)
+                  .bg(t.surface)
+                  .child(this.field(t, "Says", c.claim))
+                  .child(this.field(t, "The diff", c.detail))
+                  .child(
+                    this.field(
+                      t,
+                      "Evidence",
+                      h_flex()
+                        .flex_wrap()
+                        .gap(6)
+                        .children(
+                          (c.evidence ?? [])
+                            .map(loc)
+                            .filter(Boolean)
+                            .map((at) => this.code(t, at)),
+                        ),
+                    ),
+                  ),
+              ),
+            ],
+            d.template === "none" ? d.grade : `${d.grade} · template ${d.template}`,
+          ),
+        );
+      }
     }
     if (pr.questions?.length)
       body.child(

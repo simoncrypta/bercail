@@ -13,7 +13,7 @@ restart_update() {
   # The libs v0.14.0's list leaves out, which the new ones load. Fetched with its
   # own deploy_install_file, so a restart whose download fails still runs.
   lib="$(dirname "${BASH_SOURCE[0]}")"
-  for rel in skills/handoff/scripts/toml.sh skills/handoff/scripts/pi-log.sh lib/shep-context.sh; do
+  for rel in skills/handoff/scripts/toml.sh skills/handoff/scripts/pi-log.sh lib/shep-context.sh lib/describe.sh; do
     deploy_install_file "$rel" "$lib/${rel##*/}" || warn "could not fetch $rel; run bercail update again"
   done
   [[ "${FORCE:-0}" -ne 1 ]] || args+=(--force)

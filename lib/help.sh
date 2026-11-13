@@ -25,6 +25,10 @@ Post-install CLI (bercail):
                 remember "RULE" [--scope SCOPE] | list | forget N (Shep's standing rules)
   policy        A repo's git policy (.bercail/policy.toml): show [--json] [repo] |
                 trust [repo] (its looser values count until the file changes) | untrust [repo]
+  describe      A change's description (.bercail/description.md, written by /validate):
+                check [--json] | stamp (record the staged tree) | template |
+                title | body | commit [--reviewed-by NAME] (the text for git and the
+                forge, with its provenance line; refuses a stale one)
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
                 gathers every PR, with one detached sibling worktree and a Stack tab.
                 Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,
@@ -102,7 +106,7 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   bercail bstack setup   install Pi and the Claude bridge (models are picked for you)
   bercail bstack status  what is logged in, each model (auto or pinned), each role
   Roles: lead (the bstack agent), build (bstack-builder), judge (bstack-judge);
-  council: one read-only reviewer per provider. In Pi: /council, /ready, /handoff,
+  council: one read-only reviewer per provider. In Pi: /council, /validate, /handoff,
   /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green; pushes, never
   merges), /pr-review (bercail review-pr's read-only decisions pass).
   Settings: [bstack] in config.toml.
@@ -134,11 +138,12 @@ Config:
   ~/.agents/skills/{how,why,unslop,autopilot}/  explain, history, cleanup, PR to green
   ~/.agents/skills/desk-restore/              put a desk with no record back by hand
   ~/.agents/skills/unit-testing/              F.I.R.S.T. rules for writing and reviewing tests
+  ~/.agents/skills/describe/                  the change description standard: PR body or commit message
   ~/.local/state/bercail/desk-sessions/       which session runs in which desk
   ~/.local/share/bercail/pi/                  bstack's Pi profile
   ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates
 
-Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`, \`unit-testing\`):
+Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`, \`unit-testing\`, \`describe\`):
   Installed to ~/.agents/skills/<id> (https://agentskills.io), with a link in
   ~/.pi/agent/skills for each. Source: skills/handoff/, skills/review/.
   Manual: npx skills add simoncrypta/bercail -s handoff -g
@@ -158,7 +163,7 @@ show_summary() {
   log "Desk agent: pi (handoff stages: bstack, autopilot)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Config: ${BERCAIL_USER_CONFIG}"
-  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore,unit-testing}"
+  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore,unit-testing,describe}"
   log ""
   log "Try: dev"
   log "Help: bercail help"

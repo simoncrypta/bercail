@@ -4,7 +4,7 @@ description: >-
   Adversarial review on request: one read-only reviewer per provider tries to
   break a change, each finding must come with a run, and only findings a rerun
   confirms are reported. Use only when someone asks for /council or "council";
-  /ready and ordinary review do not run it.
+  /validate and ordinary review do not run it.
 ---
 
 # council

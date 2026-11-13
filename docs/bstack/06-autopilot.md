@@ -58,6 +58,11 @@ or merge: bstack's guard extension blocks each of those for every role. It
 does not tag or release unless the repo's trusted
 [git policy](../config.md#git-policy-per-repo) sets `agent_may_release`.
 
+On Graphite a fix amends the PR's commit (`gt m -a`, then `gt submit`). On
+GitHub and Origin each fix is a new commit, and you squash-merge the PR with its
+description as the message. After each fix it updates the PR body from the
+desk's description (`bercail describe body`).
+
 It stops when the PR is green, when the same check fails after two real fixes,
 when a fix needs a change outside the PR, when every open thread needs a person,
 or after 10 pushes. Then it reports: the state, the commits, the threads it

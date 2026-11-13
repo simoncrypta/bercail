@@ -17,7 +17,7 @@ OMARCHY_POST_BOOT_HOOK="${HOME}/.config/omarchy/hooks/post-boot.d/bercail-desk-r
 LOCAL_BIN="${HOME}/.local/bin"
 # Canonical skill install per Agent Skills (https://agentskills.io): ~/.agents/skills.
 AGENTS_SKILLS_DIR="${HOME}/.agents/skills"
-BERCAIL_SKILL_IDS=(handoff review bstack council autopilot how why unslop desk-restore unit-testing)
+BERCAIL_SKILL_IDS=(handoff review bstack council autopilot how why unslop desk-restore unit-testing describe)
 
 skill_canonical_dir() {
   printf '%s/%s' "$AGENTS_SKILLS_DIR" "$1"

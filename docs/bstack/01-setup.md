@@ -65,6 +65,6 @@ Each sibling agent and each council seat spends tokens from a plan. To spend les
 
 - Save the playbooks for work that needs them. A one-line fix doesn't.
 - Point `build` at your cheapest plan in `[bstack]` (see [Make it yours](./08-make-it-yours.md)).
-- `/ready` does not run the council. Ask for `/council` only when a change earns it.
+- `/validate` does not run the council. Ask for `/council` only when a change earns it.
 
 Next: [Work with the bstack agent](./02-the-bstack-agent.md).

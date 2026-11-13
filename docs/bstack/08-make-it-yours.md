@@ -60,7 +60,7 @@ providers the fallback found dead in the last day. See
 ## What bstack sets up in Pi
 
 - **The lead on the desk**, on the lead's model, with bercail's instructions
-  (`pi/instructions.md`), its prompt templates (`/ready`, `/council`, ...), and
+  (`pi/instructions.md`), its prompt templates (`/validate`, `/council`, ...), and
   bercail's skills.
 - **The roles as `hc` templates** in `~/.config/herdr-core/templates/`, each with
   its own model and brief.

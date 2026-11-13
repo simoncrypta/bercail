@@ -192,7 +192,8 @@ EOF
    "stated": null, "fits_intent": "unclear", "alternative": null, "question": "Was dropping the timeout intended?"}],
  "unmet_intent": [{"promise": "Log each retry", "source": "issue #12",
    "question": "The issue asks to log each retry; is that in another PR?"}],
- "questions": []}
+ "questions": [],
+ "description": {"grade": "thin", "missing": ["validation", "risks"], "template": "none", "contradictions": [], "questions": []}}
 EOF
 
   # --- fakes ----------------------------------------------------------------------
@@ -595,7 +596,7 @@ JS
   assert_eq "$REVIEWS/stack-7" "$(<"$LOG/pi.pwd")" "the pass runs in the stack dir, not the reviewed repo"
   [[ ! -e "$REVIEWS/stack-7/.pi" ]] || fail "the author's Pi config must not be copied to the launch cwd"
   assert_eq 'ready ses_fake' "$(jq -r '"\(.status) \(.session_id)"' "$dir/run.json")" "run.json"
-  assert_eq '3 decisions, 2 undocumented, 1 unmet, 3 questions' "$(jq -r .summary "$dir/run.json")" "run.json summary"
+  assert_eq '3 decisions, 2 undocumented, 1 unmet, description thin, 3 questions' "$(jq -r .summary "$dir/run.json")" "run.json summary"
   assert_eq "bercail.review/v1 7 $SHA7 ses_fake 3" \
     "$(jq -r '"\(.schema) \(.pr) \(.head_sha) \(.session_id) \(.decisions | length)"' "$dir/review.json")" "review.json"
   jq -e '.why_source == "diff" and .intent_analysis.confidence == "medium"
@@ -633,6 +634,7 @@ JS
   assert_has "$card" $'Intent with no change\n  - Log each retry  [issue #12]' "unmet intent"
   assert_has "$card" "  2. outside.txt:40  Was dropping the timeout intended?" "anchored question"
   assert_has "$card" "  3. (whole PR)  The issue asks to log each retry; is that in another PR?" "whole-PR question"
+  assert_has "$card" $'Description: thin\n  Missing: validation, risks' "description grade and missing parts"
   assert_has "$card" "CI  1 fail · 1 pending · 1 pass" "CI counts"
   assert_has "$card" "  fail     lint (CI)  https://ci/lint" "failing check with its link"
   assert_has "$(status_of "$REVIEWS/stack-7" 7)" "ready: 3 decisions" "pass status in state"
@@ -649,7 +651,8 @@ JS
       clues:[{source:"linked issues",alignment:"unavailable",detail:"No linked issue clues to compare."},
         {source:("commit " + $sha),alignment:"agrees",detail:"The commit describes a docs update."}],
       assessment:"A small documentation update looks reasonable; its value depends on the note."},
-    decisions:[], unmet_intent:[], questions:[]}' >"$FIX/reply.json"
+    decisions:[], unmet_intent:[], questions:[],
+    description:{grade:"thin", missing:["intent","why","how","validation","risks"], template:"none", contradictions:[], questions:[]}}' >"$FIX/reply.json"
   "$BERCAIL" review-pr run 8 --stack "$stack" >/dev/null
   assert_eq 'Best guess: clarify the README with another note.' "$("$BERCAIL" review-pr state --stack "$stack" | jq -r '.prs[0].intent')" "no linked issue still yields inferred intent"
   card="$("$BERCAIL" review-pr card 8 --stack "$stack")"
@@ -658,6 +661,46 @@ JS
   assert_has "$card" 'unavailable · linked issues: No linked issue clues to compare.' "missing clue is not missing intent"
   grep -qF 'Intent unknown' <<<"$card" && fail "missing issue hid inferred intent"
   mv "$FIX/linked-reply.json" "$FIX/reply.json"
+}
+
+@test "description: graded against the template at the PR's base, a contradiction at its line, its question for the author, an old card without it" {
+  local base head stack="$REVIEWS/stack-9" dir card
+  (
+    cd "$BATS_TEST_TMPDIR/seed" || exit
+    git switch -q main && mkdir -p .github
+    printf '# Summary\n\n# How to test\n' >.github/pull_request_template.md
+    git add .github && git commit -qm template && git push -q "$REMOTE" main
+    git switch -qc speed && printf '# Anything\n' >.github/pull_request_template.md
+    echo 'retry() { sleep 0; }' >retry.sh && git add . && git commit -qm speed
+    git push -q "$REMOTE" HEAD:refs/pull/9/head
+  )
+  base="$(git -C "$BATS_TEST_TMPDIR/seed" rev-parse main)"
+  head="$(git -C "$BATS_TEST_TMPDIR/seed" rev-parse speed)"
+  pr_json 9 "$head" "Faster retries" $'# Summary\n\nRetries now back off.' '[]' \
+    | jq --arg b "$base" '.baseRefOid = $b | .headRefName = "speed"' >"$FIX/pr-9.json"
+  printf 'diff --git a/retry.sh b/retry.sh\n+retry() { sleep 0; }\n' >"$FIX/pr-9.diff"
+  jq '.description = {grade: "contradicts", missing: ["validation"], template: "partial",
+      contradictions: [{claim: "Retries now back off.", detail: "retry sleeps 0 seconds between tries.",
+        evidence: [{file: "retry.sh", line: 1, side: "new"}]}],
+      questions: [{text: "The body says retries back off; retry.sh sleeps 0. Which is meant?"}]}' \
+    "$FIX/reply.json" >"$FIX/reply-9.json"
+  cp "$FIX/reply.json" "$FIX/reply-7.json" && cp "$FIX/reply-9.json" "$FIX/reply.json"
+  (cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/9 --no-run) >/dev/null
+  dir="$stack/pr-9/$head"
+  assert_eq $'# Summary\n\n# How to test' "$(cat "$dir/template.md")" "the template is the base's, not the head's"
+  "$BERCAIL" review-pr run 9 --stack "$stack" >/dev/null || fail "the pass"
+  assert_eq '3 decisions, 2 undocumented, 1 unmet, description contradicts, 4 questions' "$(jq -r .summary "$dir/run.json")" "the summary counts the description's question"
+  mv "$FIX/reply-7.json" "$FIX/reply.json"
+  card="$("$BERCAIL" review-pr card 9 --stack "$stack")"
+  assert_has "$card" "Description: contradicts · template partial" "the grade and the template"
+  assert_has "$card" "  Missing: validation" "missing apart from contradictions"
+  assert_has "$card" $'  Contradicts the diff: Retries now back off.  [retry.sh:1]\n     retry sleeps 0 seconds between tries.' "the contradiction at its line"
+  "$BERCAIL" review-pr state --stack "$stack" | jq -e '.prs[0].questions | any(.text | startswith("The body says retries back off"))' >/dev/null \
+    || fail "the description's question goes to the author drafts"
+  jq 'del(.description)' "$dir/review.json" >"$dir/review.old" && mv "$dir/review.old" "$dir/review.json"
+  card="$("$BERCAIL" review-pr card 9 --stack "$stack")"
+  assert_has "$card" "Decisions (3, 2 undocumented)" "an old card still renders"
+  if grep -q '^Description:' <<<"$card"; then fail "an old card shows no grade it never had"; fi
 }
 
 @test "run: failed (no block, crash), blocked (drops the old review), a long pass, one pass at a time, a dead pass" {
@@ -677,7 +720,11 @@ JS
     '.intent_analysis.evidence[0].file = "../outside"' '.intent_analysis.clues[0].alignment = "okay"' \
     '.intent_analysis.clues = []' '.intent_analysis.assessment = 42' \
     '.decisions = ["not an object"]' '.decisions[0].evidence = {file:"a",line:1}' \
-    '.unmet_intent = ["not an object"]' '.questions = [{text:42}]' '., .'; do
+    '.unmet_intent = ["not an object"]' '.questions = [{text:42}]' '., .' \
+    'del(.description)' '.description.grade = "fine"' '.description.missing = ["style"]' \
+    '.description.grade = "complete"' '.description.template = "yes"' \
+    '.description.grade = "contradicts" | .description.contradictions = [{claim:"it retries"}]' \
+    '.description.grade = "contradicts" | .description.contradictions = [{claim:"a", detail:"b", evidence:[]}]'; do
     jq "$bad" "$FIX/good-reply.json" >"$FIX/reply.json"
     "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null && fail "malformed review must fail: $bad"
     assert_eq 'failed ses_fake' "$(jq -r '"\(.status) \(.session_id)"' "$dir/run.json")" "invalid shape keeps its session id"
@@ -1098,7 +1145,7 @@ JS
 
 # The reviewer is read-only by its argv; review.ts keeps reads in the stack dir
 # (tests/review_pi_test.sh proves that on a real Pi).
-@test "bstack-pr-review on Pi: read, grep, find and ls only, review.ts, the pr-review rules" {
+@test "bstack-pr-review on Pi: read, grep, find and ls only, review.ts, the pr-review rules and the description standard" {
   # shellcheck source=/dev/null
   source "$ROOT/lib/common.sh"
   # shellcheck source=/dev/null
@@ -1111,6 +1158,7 @@ JS
   assert_has "$argv" "-e $BSTACK_PI_DIR/extensions/review.ts" "review.ts confines reads"
   assert_has "$argv" "--no-skills --no-prompt-templates --no-context-files" "nothing but the pr-review rules"
   assert_has "$argv" "--append-system-prompt $BSTACK_PI_DIR/agents/bstack-pr-review.md" "the pr-review rules"
+  assert_has "$argv" "--append-system-prompt $AGENTS_SKILLS_DIR/describe/standard.md" "the description standard"
   if grep -q -- '-e .*guard.ts' <<<"$argv"; then fail "no bash, so no guard"; fi
 }
 

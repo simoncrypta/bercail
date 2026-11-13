@@ -20,6 +20,13 @@ another PR's branch. Keep the parent relation in the selected backend. Never
 run `gt` in a `gh` or `origin` repo. For an independent `gh` branch, plain
 `git` and `gh pr` remain appropriate.
 
+The PR body and the commit that lands are the description the desk's /validate
+wrote (the `describe` skill shows each backend's commands). On `gt` a fix after
+review amends the PR's commit (`gt m -a`, then `gt submit`). On `gh` and
+`origin` a fix is a new commit, and the person squash-merges with the
+description as the message; bercail never force-pushes there. A direct-to-main
+repo gets one commit per finished job.
+
 Do not commit/submit unless the user asked. When asked, follow the repo's git
 policy (`bercail policy show`): a PR or straight to main, drafts, how a release
 is cut. Autopilot may commit and push to its PR branch, but never merges. Stop

@@ -188,6 +188,12 @@ main() {
       source "$(find_lib_dir)/policy.sh"
       cmd_policy "$@"
       ;;
+    describe)
+      load_libs
+      # shellcheck source=/dev/null
+      source "$(find_lib_dir)/describe.sh"
+      cmd_describe "$@"
+      ;;
     review-pr)
       load_libs
       # shellcheck source=/dev/null

@@ -11,7 +11,7 @@
 # shellcheck source=lib/shep-context.sh
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
-SHEP_SKILLS=(handoff review desk-restore how why unslop)
+SHEP_SKILLS=(handoff review desk-restore how why unslop describe)
 SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | remember \"RULE\" [--scope SCOPE] | forget N | list"
 
 shep_state_dir() {
