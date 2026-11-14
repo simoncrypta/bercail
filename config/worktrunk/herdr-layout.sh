@@ -31,18 +31,24 @@ _wt_herdr_app_running() {
   "$HERDR_APP" status >/dev/null 2>&1
 }
 
+# <Branch>_<Repo>, as worktrunk's post-start names the space. A sibling
+# <main>.<branch> folder names both (a review worktree there is detached).
+# Any other folder, a nested <repo>/<branch> layout among them, takes the repo
+# from its main checkout's folder, as notify's space.repo does, and the branch from git.
 _wt_generate_session_name() {
   local worktree_path="$1"
-  local worktree_name repo_name branch
+  local worktree_name main repo_name branch
 
   worktree_name=$(basename "$worktree_path")
+  main="$(_wt_git_main_worktree "$worktree_path")"
+  [[ -z "$main" ]] || main="$(basename "$main")"
 
-  if [[ "$worktree_name" == *.* ]]; then
+  if [[ "$worktree_name" == *.* && ( -z "$main" || "$worktree_name" == "$main".* ) ]]; then
     repo_name=$(echo "$worktree_name" | sed 's/\.[a-zA-Z0-9_-]*$//' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
     branch=$(echo "$worktree_name" | sed 's/^[^.]*\.//' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
   else
-    repo_name=$(echo "$worktree_name" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-    branch=$(cd "$worktree_path" && git branch --show-current 2>/dev/null | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+    repo_name=$(echo "${main:-$worktree_name}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+    branch=$(git -C "$worktree_path" branch --show-current 2>/dev/null | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
   fi
 
   echo "${branch}_${repo_name}"

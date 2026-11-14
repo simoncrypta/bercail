@@ -91,6 +91,23 @@ open_space() {
   [[ "$got" == "Feature_Main" ]] || fail "session name: expected Feature_Main got $got"
 }
 
+@test "sibling and nested worktree layouts both label Branch_Repo" {
+  local w="$BATS_TEST_TMPDIR/work" got
+  git_init "$w/app"
+  git -C "$w/app" worktree add -q -b feat/x "$w/app.feat-x"
+  git -C "$w/app" worktree add -q --detach "$w/app.review-12"
+  git_init "$w/lesentiel/lesentiel"
+  git -C "$w/lesentiel/lesentiel" worktree add -q -b explore-kvmd-api "$w/lesentiel/explore-kvmd-api"
+  git -C "$w/lesentiel/lesentiel" worktree add -q -b v1.2 "$w/lesentiel/v1.2"
+  git -C "$w/lesentiel/lesentiel" worktree add -q --detach "$w/lesentiel/lesentiel.review-7"
+  for want in "app.feat-x Feat-x_App" "app.review-12 Review-12_App" \
+    "lesentiel/explore-kvmd-api Explore-kvmd-api_Lesentiel" "lesentiel/v1.2 V1.2_Lesentiel" \
+    "lesentiel/lesentiel.review-7 Review-7_Lesentiel"; do
+    got="$(_wt_generate_session_name "$w/${want%% *}")"
+    [[ "$got" == "${want#* }" ]] || fail "${want%% *}: expected ${want#* } got $got"
+  done
+}
+
 @test "layout create opens a space for the checkout, keeps the shown space, and starts a desk with no config" {
   : >"$CALL_LOG"
   rm -f "$XDG_CONFIG_HOME/bercail/config.toml"
