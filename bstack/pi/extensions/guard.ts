@@ -39,6 +39,10 @@ export type GuardInput = {
   home?: string;
   /** Within one command: a GIT_* variable now points git somewhere the guard cannot place. */
   gitEnv?: boolean;
+  /** Within one command: a GIT_CONFIG* variable now points git at other config. */
+  gitConfigEnv?: boolean;
+  /** Within one command: repos it made with git init under a mktemp -d dir. */
+  fresh?: ReadonlySet<string>;
   /** Within one command: an earlier part may have switched the branch. */
   branchMoved?: boolean;
 };
@@ -163,11 +167,48 @@ function subsIn(text: string): string[] {
   return subs;
 }
 
-// A shell word, an operator that ends a command, or a command substitution's body.
-type Token = { kind: "op" } | { kind: "word"; value: string } | { kind: "sub"; value: string };
+// $(mktemp -d ...) and nothing else, not a dry run: it prints a new, empty directory.
+function makesTempDir(body: string): boolean {
+  const words = body.trim().split(/\s+/);
+  return (
+    words[0] === "mktemp" &&
+    words.every((word) => /^[\w./%+=-]+$/.test(word) && word !== "--dry-run" && !/^-[^-]*u/.test(word)) &&
+    words.some((word) => word === "--directory" || /^-[qt]*d[qt]*p?$/.test(word))
+  );
+}
 
-function tokenize(command: string): Token[] {
+// A mktemp -d dir stands in a word as a path no real dir can have (it holds a NUL),
+// so the guard never looks it up and .. out of it lands nowhere it knows.
+const tempPrefix = "/\0mktemp";
+
+function tempRoot(path: string | undefined): string | undefined {
+  return path?.startsWith(tempPrefix) ? path.split("/").slice(0, 2).join("/") : undefined;
+}
+
+// Where TARGET is from BASE, or undefined when the guard cannot tell.
+function placeIn(base: string | undefined, target: string): string | undefined {
+  if (/[$`]/.test(target)) return undefined;
+  const full = isAbsolute(target) ? target : base === undefined ? undefined : `${base}/${target}`;
+  if (full === undefined) return undefined;
+  const root = tempRoot(full);
+  const out = resolve(full);
+  if (root && out !== root && !out.startsWith(`${root}/`)) return undefined;
+  return out;
+}
+
+// Stands in a word for a $ the shell leaves as it is (single quotes, a backslash),
+// so only a live $NAME is read as a mktemp -d dir.
+const literalDollar = "\u0001";
+const literal = (text: string) => text.replaceAll("$", literalDollar);
+
+// A shell word, an operator that ends a command, or a command substitution's body.
+type Token = { kind: "op"; op: string } | { kind: "word"; value: string } | { kind: "sub"; value: string };
+
+// tag keeps the mktemp -d dirs of nested commands apart.
+function tokenize(command: string, tag = ""): Token[] {
   const tokens: Token[] = [];
+  let temps = 0;
+  const tempDir = () => `${tempPrefix}${tag}.${temps++}`;
   // Heredocs opened on the current line; their bodies start after its newline.
   const heredocs: { delim: string; strip: boolean; quoted: boolean }[] = [];
   let i = 0;
@@ -213,7 +254,7 @@ function tokenize(command: string): Token[] {
       }
     }
     if (c === "\n" && heredocs.length) {
-      tokens.push({ kind: "op" });
+      tokens.push({ kind: "op", op: "\n" });
       i++;
       for (const doc of heredocs.splice(0)) {
         while (i < command.length) {
@@ -228,14 +269,14 @@ function tokenize(command: string): Token[] {
       continue;
     }
     if (c === "\n" || c === ";" || c === "|" || c === "&") {
-      if ((c === "|" && command[i + 1] === "|") || (c === "&" && command[i + 1] === "&")) i++;
-      tokens.push({ kind: "op" });
-      i++;
+      const double = (c === "|" && command[i + 1] === "|") || (c === "&" && command[i + 1] === "&");
+      tokens.push({ kind: "op", op: double ? c + c : c });
+      i += double ? 2 : 1;
       continue;
     }
     if (c === "$" && command[i + 1] === "(") {
       const inner = readBalanced(command, i + 1);
-      if (inner) {
+      if (inner && !makesTempDir(inner.body)) {
         tokens.push({ kind: "sub", value: inner.body });
         i = inner.end;
         continue;
@@ -243,7 +284,7 @@ function tokenize(command: string): Token[] {
     }
     if (c === "`") {
       const end = command.indexOf("`", i + 1);
-      if (end > i) {
+      if (end > i && !makesTempDir(command.slice(i + 1, end))) {
         tokens.push({ kind: "sub", value: command.slice(i + 1, end) });
         i = end + 1;
         continue;
@@ -253,16 +294,28 @@ function tokenize(command: string): Token[] {
     while (i < command.length) {
       const ch = command[i];
       if (" \t\n;|&".includes(ch)) break;
-      if (ch === "$" && command[i + 1] === "(") break;
-      if (ch === "`") break;
+      if (ch === "$" && command[i + 1] === "(") {
+        const inner = readBalanced(command, i + 1);
+        if (!inner || !makesTempDir(inner.body)) break;
+        word += tempDir();
+        i = inner.end;
+        continue;
+      }
+      if (ch === "`") {
+        const end = command.indexOf("`", i + 1);
+        if (end < 0 || !makesTempDir(command.slice(i + 1, end))) break;
+        word += tempDir();
+        i = end + 1;
+        continue;
+      }
       if (ch === "'") {
         const end = command.indexOf("'", i + 1);
         if (end < 0) {
-          word += command.slice(i + 1);
+          word += literal(command.slice(i + 1));
           i = command.length;
           break;
         }
-        word += command.slice(i + 1, end);
+        word += literal(command.slice(i + 1, end));
         i = end + 1;
         continue;
       }
@@ -270,14 +323,15 @@ function tokenize(command: string): Token[] {
         i++;
         while (i < command.length && command[i] !== '"') {
           if (command[i] === "\\" && i + 1 < command.length) {
-            word += command[i + 1];
+            word += literal(command[i + 1]);
             i += 2;
             continue;
           }
           if (command[i] === "$" && command[i + 1] === "(") {
             const inner = readBalanced(command, i + 1);
             if (inner) {
-              tokens.push({ kind: "sub", value: inner.body });
+              if (makesTempDir(inner.body)) word += tempDir();
+              else tokens.push({ kind: "sub", value: inner.body });
               i = inner.end;
               continue;
             }
@@ -285,7 +339,9 @@ function tokenize(command: string): Token[] {
           if (command[i] === "`") {
             const end = command.indexOf("`", i + 1);
             if (end > i) {
-              tokens.push({ kind: "sub", value: command.slice(i + 1, end) });
+              const body = command.slice(i + 1, end);
+              if (makesTempDir(body)) word += tempDir();
+              else tokens.push({ kind: "sub", value: body });
               i = end + 1;
               continue;
             }
@@ -297,7 +353,7 @@ function tokenize(command: string): Token[] {
         continue;
       }
       if (ch === "\\") {
-        if (i + 1 < command.length) word += command[i + 1];
+        if (i + 1 < command.length) word += literal(command[i + 1]);
         i += 2;
         continue;
       }
@@ -309,22 +365,30 @@ function tokenize(command: string): Token[] {
   return tokens;
 }
 
-function segmentsOf(command: string): { words: string[]; subs: string[] }[] {
-  const tokens = tokenize(command);
-  const out: { words: string[]; subs: string[] }[] = [];
+// One simple command, with the operators before and after it ("" at either end).
+// marked keeps literalDollar where words has the $ back.
+type Segment = { words: string[]; marked: string[]; subs: string[]; before: string; after: string };
+
+function segmentsOf(command: string, tag = ""): Segment[] {
+  const out: Segment[] = [];
   let words: string[] = [];
   let subs: string[] = [];
-  const flush = () => {
-    if (words.length || subs.length) out.push({ words, subs });
+  let before = "";
+  const flush = (op: string) => {
+    if (words.length || subs.length) {
+      const plain = words.map((word) => word.replaceAll(literalDollar, "$"));
+      out.push({ words: plain, marked: words, subs, before, after: op });
+    }
     words = [];
     subs = [];
+    before = op;
   };
-  for (const token of tokens) {
-    if (token.kind === "op") flush();
+  for (const token of tokenize(command, tag)) {
+    if (token.kind === "op") flush(token.op);
     else if (token.kind === "sub") subs.push(token.value);
     else words.push(token.value);
   }
-  flush();
+  flush("");
   return out;
 }
 
@@ -464,7 +528,7 @@ function parseGit(words: string[], cwd: string | undefined): GitCall | undefined
     const value = eq > 0 ? word.slice(eq + 1) : words[i + 1];
     if (name === "-C") {
       if (eq < 0) i++;
-      if (value) dir = isAbsolute(value) ? resolve(value) : dir === undefined ? undefined : resolve(dir, value);
+      if (value) dir = placeIn(dir, value);
       i++;
       continue;
     }
@@ -754,8 +818,9 @@ function movesBranch(git: GitCall): boolean {
   return !keepsBranch.has(git.sub);
 }
 
-// GIT_* variables that point git at another repo, index, or config.
-const gitPlace = /^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE|CONFIG\w*)(=|$)/;
+// GIT_* variables that point git at another repo or index, and at other config.
+const gitPlace = /^GIT_(DIR|WORK_TREE|INDEX_FILE|COMMON_DIR|OBJECT_DIRECTORY|NAMESPACE)(=|$)/;
+const gitConfigVar = /^GIT_CONFIG\w*(=|$)/;
 
 // Config keys set through GIT_CONFIG_KEY_<n> or GIT_CONFIG_PARAMETERS.
 function envConfigKeys(word: string): string[] {
@@ -836,7 +901,7 @@ function publish(kind: "commit" | "push" | "release", input: GuardInput): GuardD
 // The policy for a git dir: need-policy until the wrapper has looked it up. A dir
 // the guard cannot place gets the default, which loosens nothing.
 function policyFor(dir: string | undefined, input: GuardInput): Policy | GuardDecision {
-  if (dir === undefined) return defaultPolicy;
+  if (dir === undefined || tempRoot(dir)) return defaultPolicy;
   return input.policies?.[dir] ?? { action: "need-policy", dir };
 }
 
@@ -850,7 +915,7 @@ function because(policy: Policy, key: string, value: string): string {
 
 // "" in dests is the current branch.
 function branchOf(dir: string | undefined, input: GuardInput): string | GuardDecision {
-  if (dir === undefined || input.branchMoved) return "";
+  if (dir === undefined || tempRoot(dir) || input.branchMoved) return "";
   return input.branches?.[dir] ?? { action: "need-branch", dir };
 }
 
@@ -915,6 +980,8 @@ function decidePush(args: string[], dir: string | undefined, input: GuardInput):
 function decideCommit(dir: string | undefined, input: GuardInput): GuardDecision {
   if (readOnlyRole(input.role)) return block(readOnly);
   if (input.role === "autopilot") return approve("autopilot commits to its pull request branch");
+  if (dir !== undefined && input.fresh?.has(dir))
+    return approve("scratch repo: this command made it with git init under mktemp -d");
   const policy = policyFor(dir, input);
   if (!isPolicy(policy)) return policy;
   if (policy.commit === "allow") return approve(because(policy, "commit", "allow"));
@@ -954,8 +1021,74 @@ function cdTarget(words: string[], cwd: string | undefined, home: string | undef
     target = home + target.slice(1);
   }
   if (target.startsWith("~")) return undefined;
-  if (isAbsolute(target)) return resolve(target);
-  return cwd === undefined ? undefined : resolve(cwd, target);
+  return placeIn(cwd, target);
+}
+
+// The dir git init makes a repo in, or undefined when the repo goes elsewhere.
+const initValue = new Set(["-b", "--initial-branch", "--template", "--object-format", "--ref-format"]);
+
+function initDir(git: GitCall): string | undefined {
+  let target = ".";
+  for (let i = 0; i < git.args.length; i++) {
+    const arg = git.args[i];
+    if (arg.split("=")[0] === "--separate-git-dir") return undefined;
+    if (initValue.has(arg)) i++;
+    else if (!arg.startsWith("-")) target = arg;
+  }
+  return placeIn(git.dir, target);
+}
+
+// NAME=value set once, outside a pipe, a subshell or a skipped branch, and only
+// to a mktemp -d dir: what $NAME and \${NAME} mean in the rest of the command.
+type TempVars = Map<string, { value: string; chained: boolean }>;
+
+const declares = new Set(["export", "declare", "typeset", "readonly"]);
+
+// Words that start code which may run in another order, more than once, or not at
+// all: past one, the guard no longer knows a repo was made where it thinks.
+const compound = new Set([
+  "if",
+  "then",
+  "else",
+  "elif",
+  "fi",
+  "while",
+  "until",
+  "do",
+  "done",
+  "for",
+  "select",
+  "case",
+  "esac",
+  "function",
+  "{",
+  "}",
+  "!",
+]);
+
+function assignedOnce(command: string, name: string): boolean {
+  return (command.match(new RegExp(`(?<![\\w$])(?<!\\$\\{)${name}(?!\\w)`, "g")) ?? []).length === 1;
+}
+
+function recordTemps(command: string, segment: Segment, words: string[], vars: TempVars): void {
+  const plain = ["", ";", "\n", "&&"].includes(segment.before) && ["", ";", "\n", "&&"].includes(segment.after);
+  const head = declares.has(words[0]) ? 1 : 0;
+  const rest = words.slice(head);
+  const pure = rest.every((word) => assign.test(word) || (head === 1 && word.startsWith("-")));
+  for (const word of rest.filter((w) => assign.test(w))) {
+    const name = word.slice(0, word.indexOf("="));
+    const value = word.slice(name.length + 1);
+    if (plain && pure && tempRoot(value) && !/[$`]/.test(value) && assignedOnce(command, name))
+      vars.set(name, { value, chained: segment.before === "&&" });
+    else vars.delete(name);
+  }
+}
+
+function expandTemps(word: string, vars: TempVars): string {
+  return word.replace(
+    /\$(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))/g,
+    (ref, braced?: string, bare?: string) => vars.get(braced ?? bare ?? "")?.value ?? ref,
+  );
 }
 
 export function decideBash(command: string, input: GuardInput, depth = 0): GuardDecision {
@@ -963,29 +1096,61 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   let decision: GuardDecision = allow;
   let cwd = input.cwd;
   let gitEnv = input.gitEnv ?? false;
+  let gitConfigEnv = input.gitConfigEnv ?? false;
   let branchMoved = input.branchMoved ?? false;
-  for (const segment of segmentsOf(command)) {
+  const fresh = new Set(input.fresh);
+  const chainedFresh = new Set<string>();
+  let chainedCd = false;
+  const vars: TempVars = new Map();
+  let straight = true;
+  for (const segment of segmentsOf(command, `${depth}`)) {
     // export GIT_DIR=... holds for the rest of the command, so it counts from here on.
     if (segment.words.some((word) => gitPlace.test(word))) gitEnv = true;
+    if (segment.words.some((word) => gitConfigVar.test(word))) gitConfigEnv = true;
     const envKey = segment.words.flatMap(envConfigKeys).find((key) => riskyConfig.test(key));
     if (envKey) return configBlock(envKey);
-    const here = { ...input, cwd, gitEnv, branchMoved };
+    // What ran after && may not have run once that chain ends.
+    if (segment.before !== "&&") {
+      for (const [name, v] of vars) if (v.chained) vars.delete(name);
+      for (const dir of chainedFresh) fresh.delete(dir);
+      chainedFresh.clear();
+      if (chainedCd) cwd = undefined;
+      chainedCd = false;
+    }
+    const subshell = segment.words[0]?.startsWith("(") ?? false;
+    const closes = segment.words.some((word) => word.endsWith(")"));
+    // Past a branch, loop, function, subshell, || or pipe, no repo counts as made here.
+    if (subshell || closes || compound.has(segment.words[0]) || ["||", "|", "&"].includes(segment.before)) {
+      straight = false;
+      fresh.clear();
+      vars.clear();
+    }
+    const here = { ...input, cwd, gitEnv, gitConfigEnv, branchMoved, fresh };
     for (const sub of segment.subs) decision = worse(decision, decideBash(sub, here, depth + 1));
     // A ( subshell's cd ends at its ); from there on the guard cannot place the shell.
-    const raw = segment.words.map((word, i) => (i === 0 ? word.replace(/^\(+/, "") : word));
-    const subshell = raw[0] !== segment.words[0];
+    const raw = segment.marked.map((word, i) =>
+      expandTemps(i === 0 ? word.replace(/^\(+/, "") : word, vars).replaceAll(literalDollar, "$"),
+    );
+    if (straight) recordTemps(command, segment, raw, vars);
     const words = commandWords(raw);
     if (words.length === 0) continue;
     // /usr/bin/git is git.
     if (words[0].includes("/")) words[0] = basename(words[0]);
-    if (words[0] === "cd" || words[0] === "pushd") cwd = cdTarget(words, cwd, input.home);
+    // A cd in a pipe or in the background may run in a subshell: where the shell is, is unknown.
+    const piped = segment.before === "|" || segment.after === "|" || segment.after === "&";
+    if (words[0] === "cd" || words[0] === "pushd") cwd = piped ? undefined : cdTarget(words, cwd, input.home);
     else if (words[0] === "popd" || subshell) cwd = undefined;
-    if (segment.words.some((word) => word.endsWith(")"))) cwd = undefined;
+    if (closes) cwd = undefined;
+    // A cd after && may not have run once that chain ends.
+    if (["cd", "pushd", "popd"].includes(words[0]) && segment.before === "&&") chainedCd = true;
     const script = shellScript(words);
     if (script) decision = worse(decision, decideBash(script, here, depth + 1));
     // What eval or source sets stays set, and the guard cannot see what that is.
-    if (words[0] === "eval" || words[0] === "source" || words[0] === ".") gitEnv = branchMoved = true;
-    const forge = forgeCall(words, gitEnv ? undefined : here.cwd);
+    if (words[0] === "eval" || words[0] === "source" || words[0] === ".") {
+      gitEnv = branchMoved = true;
+      vars.clear();
+    }
+    const forge = forgeCall(words, gitEnv || gitConfigEnv ? undefined : here.cwd);
     if (isForgeMerge(forge.words)) return block(prMerge);
     const publishing = forgePublish(forge.words);
     const forgePlain = plainWords(forge.words);
@@ -1009,7 +1174,13 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     }
     const git = parseGit(words, here.cwd);
     if (git) {
-      if (gitEnv) git.dir = undefined;
+      const made = git.sub === "init" && straight && !gitEnv ? initDir(git) : undefined;
+      if (made && tempRoot(made)) {
+        fresh.add(made);
+        if (segment.before === "&&") chainedFresh.add(made);
+      }
+      // Other config cannot move a commit out of a repo this command just made.
+      if (gitEnv || (gitConfigEnv && !(git.dir && fresh.has(git.dir)))) git.dir = undefined;
       decision = worse(decision, decideGit(git, here));
       if (movesBranch(git)) branchMoved = true;
     }

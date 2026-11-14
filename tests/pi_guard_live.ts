@@ -20,6 +20,7 @@ const env: NodeJS.ProcessEnv = {
   XDG_CONFIG_HOME: join(dir, "config"),
   PI_CODING_AGENT_DIR: join(dir, "agent"),
   PI_OFFLINE: "1",
+  TMPDIR: dir,
   BERCAIL_BIN: bercail,
   GIT_CONFIG_GLOBAL: join(dir, "gitconfig"),
   GIT_CONFIG_NOSYSTEM: "1",
@@ -143,6 +144,17 @@ try {
     2,
   );
   console.log("PASS: real Pi blocked the commit again once the repo was untrusted");
+
+  // A throwaway repo the command makes under mktemp -d, fake remote and all: the
+  // commit goes through, the push does not.
+  const scratch = `cd "$(mktemp -d)" && git init -q r && cd r && git remote add origin https://x/y.git && git commit -q --allow-empty -m scratch && git log -1 --format=scratch-commit=%s`;
+  result = runPi(dir, [scratch, `${scratch} && git push -q origin HEAD:feature`]);
+  assert.match(result.stdout, /scratch-commit=scratch/, `stdout: ${result.stdout}`);
+  assert.match(result.stdout, /headless run stages/, `stdout: ${result.stdout}`);
+  const approvals = readFileSync(join(dir, "state/bercail/guard-approvals.jsonl"), "utf8").trim().split("\n");
+  assert.equal(approvals.length, 3, approvals.join("\n"));
+  assert.match(JSON.parse(approvals[2]).approved[0], /git init under mktemp -d/);
+  console.log("PASS: real Pi let a commit in a repo made under mktemp -d through, and blocked its push");
 } catch (error) {
   console.error(`Artifacts: ${dir}`);
   throw error;

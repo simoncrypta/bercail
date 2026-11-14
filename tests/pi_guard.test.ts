@@ -289,6 +289,86 @@ test("a scratch repo: commits go through, pushes still ask", () => {
   blocked("git commit --no-verify -m x", scratch("desk"), /--no-verify/);
 });
 
+// The commands desks ran on 2026-11-13 that made the guard ask (bercail-7ih).
+const t1d9 =
+  'cd "$(mktemp -d)" && export HOME=$PWD/h XDG_STATE_HOME=$PWD/h/s GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@x && mkdir -p $HOME && B=/w/bin/bercail && git init -q r && cd r && git remote add origin https://x/y.git && git commit -q --allow-empty -m i && git add . && $B describe check --json | jq -c .change';
+const t1d3 = `set -e; T=$(mktemp -d); export HOME=$T/home XDG_CONFIG_HOME=$T/cfg XDG_STATE_HOME=$T/state GIT_CONFIG_GLOBAL=$T/gc; mkdir -p $HOME; git config --global user.email t@e; git config --global user.name t
+B=$PWD/bin/bercail; cd $T; git init -q -b main r; cd r; mkdir .github; printf '# Summary\\n\\nLoom:\\n' > .github/pull_request_template.md; git add .; git commit -qm init
+echo hi > a.txt; git add a.txt`;
+test("a repo the same command made with git init under mktemp -d: commits go through, remote or not", () => {
+  for (const command of [
+    t1d9,
+    t1d3,
+    "T=$(mktemp -d); cd $T; git init r; cd r; git commit -m x",
+    'T=$(mktemp -d /tmp/x.XXXX) && git init -q "$T/r" && git -C "${T}/r" commit -m x',
+    "cd `mktemp -d` && git init && git commit -m x",
+  ]) {
+    allowed(command, roles.desk);
+    allowed(command, roles.headless);
+    assertMatch(decision(command, roles.desk).approved?.[0] ?? "", /git init under mktemp -d/, command);
+  }
+});
+test("mktemp -d evidence that does not reach the commit's repo still asks", () => {
+  for (const command of [
+    'cd "$DIR" && git init && git commit -m x',
+    'cd "$(mktemp -d)" && git commit -m x',
+    'cd "$(mktemp)" && git init && git commit -m x',
+    'cd "$(mktemp -d)" && git init r && git commit -m x',
+    "T=$(mktemp -d); git init $T; cd $T/..; git commit -m x",
+    "T=$(mktemp -d); git init $T; T=/work; cd $T && git commit -m x",
+    "T=$(mktemp -d); git init $T; for T in /work; do cd $T && git commit -m x; done",
+    "false && T=$(mktemp -d); git init $T; cd $T; git commit -m x",
+    "T=$(mktemp -d) | cat; git init $T; cd $T; git commit -m x",
+    "T=$(mktemp -d); git init $T; source env.sh; cd $T; git commit -m x",
+    "T=$(mktemp -d); git init --separate-git-dir /work/.git $T; cd $T; git commit -m x",
+    'cd "$(mktemp -d)" && git init && export GIT_DIR=/work/.git && git commit -m x',
+    "T=$(mktemp -d); git init $T; cd /work; git commit -m x",
+    "T=$(mktemp -d); git init $T; git -C /work commit -m x",
+    // The judge's recheck: a $ the shell leaves alone, a dry run, code that may not run.
+    "T=$(mktemp -d); git init -q $T; bash -c 'git -C \"$T\" commit -qm x'",
+    "T=$(mktemp -d); git init -q $T; cd '$T'; git commit -m x",
+    "T=$(mktemp -d); git init -q $T; cd \\$T; git commit -m x",
+    'cd "$(mktemp -du)"; git init -q; git commit -m x',
+    'cd "$(mktemp -d --dry-run)"; git init -q; git commit -m x',
+    "T=$(mktemp -d); git init -q $T\nin_t() {\n cd $T\n}\ngit commit -m x",
+    'if [ -n "$X" ]; then\n T=$(mktemp -d)\nfi\ngit init -q $T; git -C "$T" commit -m x',
+    'cd "$(mktemp -d)"; [ -n "$X" ] && git init -q; git commit -m x',
+    'cd "$(mktemp -d)"; git init -q || true; git commit -m x',
+    'cd "$(mktemp -d)"; git init -q | cat; git commit -m x',
+    "T=$(mktemp -d); git init -q $T; cp -r fixtures $T/ && cd $T; git add -A; git commit -qm x",
+    'T=$(mktemp -d); git init -q $T; [ -n "$X" ] && cd $T; git commit -qm x',
+  ]) {
+    asked(command, { ...roles.desk, policies: none });
+  }
+  blocked('cd "$(mktemp -d; git push --force)"', roles.desk, /Force-push/);
+  allowed('T=$(mktemp -d); git init -q $T; bash -c "git -C $T commit -qm x"', roles.desk);
+});
+test("a GIT_CONFIG variable keeps gh and gt from borrowing the folder's policy", () => {
+  asked("GIT_CONFIG_GLOBAL=/tmp/gc gh pr create", at("desk", policies.branch));
+  asked("export GIT_CONFIG_GLOBAL=/tmp/gc; gt submit", at("desk", policies.branch));
+});
+test("a repo made under mktemp -d still asks before a push or a tag", () => {
+  const made =
+    'cd "$(mktemp -d)" && git init -q r && cd r && git remote add origin https://x/y.git && git commit -qm i';
+  asked(`${made} && git push -u origin feature`, roles.desk);
+  asked(`${made} && git tag v1.0.0`, roles.desk);
+  blocked(`${made} && git push origin feature`, roles.headless, /headless run stages/);
+  // A clone is not a repo the command made: its commit and its push ask.
+  const clone = 'cd "$(mktemp -d)" && git clone -q https://github.com/o/r r && cd r && git commit -qm x';
+  asked(clone, roles.desk);
+  asked("cd /tmp/clone && git push origin feature", { ...roles.desk, policies: { "/tmp/clone": defaultPolicy } });
+});
+test("a cd in a pipe or in the background moves nothing the guard can trust", () => {
+  const fromWork = {
+    ...scratch("desk"),
+    cwd: "/work",
+    policies: { ...scratch("desk").policies, "/work": defaultPolicy },
+  };
+  allowed("cd /tmp/s; git commit -m x", fromWork);
+  asked("cd /tmp/s | cat; git commit -m x", fromWork);
+  asked("cd /tmp/s & git commit -m x", fromWork);
+});
+
 test("reading tags is not a release", () => {
   // Reading tags is not a release.
   allowed("git tag", tui);
