@@ -204,6 +204,29 @@ SH
   describe check >/dev/null 2>&1 || fail "a conventional title passes: $(describe check 2>&1)"
 }
 
+@test "title: a YAML-quoted title gives the subject a plain one does; a subject still in quotes fails" {
+  local plain
+  described
+  plain="$(describe commit)"
+  plain_body | description '"file: add a line"'
+  describe stamp >/dev/null
+  [[ "$(describe commit)" == "$plain" ]] || fail "double-quoted: $(describe commit 2>&1)"
+  plain_body | description "'file: add a line'"
+  describe stamp >/dev/null
+  [[ "$(describe commit)" == "$plain" ]] || fail "single-quoted: $(describe commit 2>&1)"
+  plain_body | description "'file''s line: say \"hi\"'"
+  describe stamp >/dev/null
+  [[ "$(describe title)" == "file's line: say \"hi\"" ]] || fail "single-quoted escape: $(describe title 2>&1)"
+  plain_body | description '"file: say \"hi\""'
+  describe stamp >/dev/null
+  [[ "$(describe title)" == 'file: say "hi"' ]] || fail "double-quoted escape: $(describe title 2>&1)"
+  plain_body | description '"\"file: add a line\""'
+  describe stamp >/dev/null
+  describe check 2>&1 | grep -qF 'fail: the title is in quotes' || fail "a quoted subject: $(describe check 2>&1)"
+  describe commit >/dev/null 2>&1 && fail "commit printed a quoted subject"
+  return 0
+}
+
 @test "check: a direct-commit repo uses commit style and no template" {
   leftlane_template
   described
@@ -301,6 +324,32 @@ committed_policy() {
   git add -f .bercail/policy.toml
   describe check --json | jq -e '.change.high_stakes == [".bercail/policy.toml"]' >/dev/null \
     || fail "a staged edit: $(describe check --json | jq -c .change)"
+}
+
+@test "stakes: once the change is committed, check measures it from the commit the stamp saw, never a made-up one" {
+  local before after
+  committed_policy 'integrate = "direct"\nhigh_stakes = ["file.txt"]\n'
+  described
+  before="$(describe check --json | jq -c .change)"
+  # A base: that is no ancestor of HEAD, here a commit of the index itself, is ignored.
+  sed -i "s/^base: .*/base: $(git commit-tree "$(git write-tree)" -p HEAD -m forged)/" .bercail/description.md
+  [[ "$(describe check --json | jq -c .change)" == "$before" ]] || fail "a forged base lowered the stakes: $(describe check --json | jq -c .change)"
+  describe stamp >/dev/null
+  git commit -qF <(describe commit --reviewed-by Simon) || fail "commit"
+  after="$(describe check --json | jq -c .change)"
+  [[ "$after" == "$before" ]] || fail "the committed change: $after, staged it was $before"
+  jq -e '.files == 1 and .lines == 1 and .stakes == "high"' <<<"$after" >/dev/null || fail "measured: $after"
+  describe commit 2>&1 | grep -qF 'pass --reviewed-by' || fail "the gate holds after the commit: $(describe commit 2>&1)"
+
+  printf 'integrate = "direct"\n' >.bercail/policy.toml
+  git add -f .bercail/policy.toml
+  change again
+  evidence
+  plain_body | description "file: add another line"
+  describe stamp >/dev/null
+  git commit -qF <(describe commit --reviewed-by Simon) || fail "commit the policy edit"
+  describe check --json | jq -e '.change.high_stakes == [".bercail/policy.toml"]' >/dev/null \
+    || fail "a committed policy edit lowered the stakes: $(describe check --json | jq -c .change)"
 }
 
 @test "stakes: review = always makes a low-stakes change wait for the person" {

@@ -53,9 +53,10 @@ and [review-pr](../review.md#someone-elses-pr-bercail-review-pr).
 `bercail describe stamp` records the staged tree it describes; `bercail describe
 check` fails on a stale description, a missing or empty template section, an
 empty label line such as `Loom:`, a leftover template comment, a title over 72
-characters, a beads id (they mean nothing outside your machine), or no checks
-for that tree. When you or Shep commit or open the PR, `bercail describe
-commit`, `body` and `title` print the text as written and refuse a stale one.
+characters or in quotes (the commit subject would keep them), a beads id (they
+mean nothing outside your machine), or no checks for that tree. When you or
+Shep commit or open the PR, `bercail describe commit`, `body` and `title` print
+the text as written and refuse a stale one.
 `body` and `commit` end with a provenance line: `Written with bercail (Pi,
 claude-opus-5-5); reviewed by Simon`, or `not yet reviewed` without
 `--reviewed-by`. The model comes from the desk's record; the policy's
@@ -65,8 +66,10 @@ or `none`.
 The check also weighs the change for you. It warns when the change is over the
 policy's `diff_budget` (400 lines by default, lockfiles and generated files
 left out), so the desk splits it or says why it is one. It marks the change
-high-stakes when a staged path matches the policy's `high_stakes`; with
-`review = "by-stakes"` (the default) such a change waits for your LGTM, and in
+high-stakes when a staged path matches the policy's `high_stakes`. Once the
+change is committed, it measures from the commit the stamp saw, so the size
+and stakes stay the same until Shep merges it. With `review = "by-stakes"`
+(the default) such a change waits for your LGTM, and in
 a repo that commits straight to main `bercail describe commit` refuses it
 without `--reviewed-by`. See [review by stakes and size](../config.md#review-by-stakes-and-size).
 

@@ -86,6 +86,19 @@ _desc_meta() {
     }' "$1"
 }
 
+# The frontmatter title as YAML reads it: a "double-quoted" one unescaped, a
+# 'single-quoted' one with '' read as ', a plain one as written. Agents quote
+# a title that has a colon, and git would keep the quotes in the subject.
+_desc_title() {
+  local v inner q="'"
+  v="$(_desc_meta "$1" title)"
+  case "$v" in
+    \"*\") jq -ser 'if length == 1 and (.[0] | type) == "string" then .[0] else error end' <<<"$v" 2>/dev/null || printf '%s\n' "$v" ;;
+    \'*\') inner="${v:1:${#v}-2}"; printf '%s\n' "${inner//"$q$q"/"$q"}" ;;
+    *) printf '%s\n' "$v" ;;
+  esac
+}
+
 # What follows the frontmatter, without the leading blank lines.
 _desc_body() {
   awk '
@@ -129,11 +142,11 @@ _desc_provenance_form() {
   policy_json "$1" 2>/dev/null | jq -r '.policy.provenance // "line" | if . == "" then "line" else . end'
 }
 
-# The staged files as "added<TAB>removed<TAB>path" lines; a binary has - for
-# both. A rename is its new path.
+# The staged files as "added<TAB>removed<TAB>path" lines, against BASE (a
+# commit, default HEAD); a binary has - for both. A rename is its new path.
 _desc_numstat() {
   local rec added removed path
-  git -C "$1" diff --cached --numstat -z | while IFS= read -r -d '' rec; do
+  git -C "$1" diff --cached --numstat -z ${2:+"$2"} | while IFS= read -r -d '' rec; do
     IFS=$'\t' read -r added removed path <<<"$rec"
     [[ -n "$path" ]] || { IFS= read -r -d '' path; IFS= read -r -d '' path; }
     printf '%s\t%s\t%s\n' "$added" "$removed" "$path"
@@ -145,23 +158,28 @@ _desc_numstat() {
 # marks linguist-generated (left_out counts those), the high-stakes paths it
 # touches, and whether the person reviews it before it lands (review:
 # required). The policy file itself is always high-stakes once it differs
-# from HEAD, staged or not: this reads the worktree's copy, so a desk that
-# edits high_stakes on its branch must not lower its own change's stakes.
+# from HEAD (or BASE), staged or not: this reads the worktree's copy, so a desk
+# that edits high_stakes on its branch must not lower its own change's stakes.
+# With BASE, the change runs from that commit to the index instead of from
+# HEAD, so it keeps its size and stakes once it is committed.
 desc_change() {
-  local root="$1" numstat generated="" high="" glob policy
+  local root="$1" base="${2:-}" numstat generated="" high="" glob policy
   local -a specs=()
   policy="$(policy_json "$root" 2>/dev/null | jq -c .policy)" || policy=""
   [[ -n "$policy" ]] || policy="$POLICY_DEFAULTS"
-  numstat="$(_desc_numstat "$root")"
+  numstat="$(_desc_numstat "$root" "$base")"
   if [[ -n "$numstat" ]]; then
     generated="$(cut -f3- <<<"$numstat" | tr '\n' '\0' | git -C "$root" check-attr -z --stdin linguist-generated \
       | tr '\0' '\n' | paste - - - | awk -F'\t' '$3 == "set" || $3 == "true" { print $1 }')"
     while IFS= read -r glob; do
       specs+=(":(glob)$glob")
     done < <(jq -r '.high_stakes // [] | .[]' <<<"$policy")
-    ((${#specs[@]} == 0)) || high="$(git -C "$root" diff --cached --no-renames --name-only -- "${specs[@]}")"
+    ((${#specs[@]} == 0)) || high="$(git -C "$root" diff --cached --no-renames --name-only ${base:+"$base"} -- "${specs[@]}")"
   fi
-  [[ -z "$(git -C "$root" status --porcelain --untracked-files=all -- "$POLICY_FILE")" ]] || high+=$'\n'"$POLICY_FILE"
+  if [[ -n "$(git -C "$root" status --porcelain --untracked-files=all -- "$POLICY_FILE")" ]] \
+    || { [[ -n "$base" ]] && ! git -C "$root" diff --quiet "$base" -- "$POLICY_FILE"; }; then
+    high+=$'\n'"$POLICY_FILE"
+  fi
   high="$(sort -u <<<"$high" | jq -Rnc '[inputs | select(. != "")]')"
   jq -Rnc --argjson policy "$policy" --argjson high "$high" --arg gen "$generated" --arg locks "$DESC_LOCKFILES" '
     ($gen | split("\n")) as $g | ($locks | split(" ")) as $l
@@ -258,26 +276,34 @@ _desc_body_problems() {
 
 # Everything check knows, as JSON. Exit status is not the verdict; .fails is.
 desc_state() {
-  local root="$1" file evidence title style tree current tpl_json template meta_tpl tpl_text="" body ids line change
+  local root="$1" file evidence title style tree current tpl_json template meta_tpl tpl_text="" body ids line change base
   local -a fails=() warns=()
   file="$root/$DESC_FILE"
   evidence="$root/$DESC_EVIDENCE"
   current="$(_desc_tree "$root")" || return 1
-  change="$(desc_change "$root")"
   if [[ ! -f "$file" ]]; then
+    change="$(desc_change "$root")"
     jq -nc --arg file "$file" --arg cur "$current" --argjson change "$change" \
       '{file: $file, tree: null, current_tree: $cur, stale: true, change: $change, fails: ["no \($file): run /validate"], warns: []}'
     return 0
   fi
-  title="$(_desc_meta "$file" title)"
+  title="$(_desc_title "$file")"
   tree="$(_desc_meta "$file" tree)"
   meta_tpl="$(_desc_meta "$file" template)"
+  # Measured from the commit the stamp saw: after the change is committed,
+  # the index holds nothing new, and the stakes that gate a merge must hold.
+  # Only an ancestor of HEAD: the desk writes this file, and a made-up commit
+  # whose tree is the index would measure the change as nothing.
+  base="$(_desc_meta "$file" base)"
+  [[ -z "$base" ]] || git -C "$root" merge-base --is-ancestor "$base" HEAD 2>/dev/null || base=""
+  change="$(desc_change "$root" "$base")"
   style="$(_desc_style "$root")"
   tpl_json="$(desc_template "$root")" || return 1
   body="$(_desc_body "$file")"
 
   [[ -n "$title" ]] || fails+=("no title: put title: <intent, 72 characters or fewer> in the frontmatter")
   [[ "${#title}" -le 72 ]] || fails+=("the title is ${#title} characters; 72 at most (it is the commit subject)")
+  [[ ! "$title" =~ ^[\"\'].*[\"\']$ ]] || fails+=("the title is in quotes, and the commit subject would keep them: write title: <subject> without them")
   if [[ -z "$tree" ]]; then
     fails+=("not stamped: run bercail describe stamp")
   elif [[ "$tree" != "$current" ]]; then
@@ -340,10 +366,11 @@ _desc_ignore() {
   printf '.bercail/*\n!.bercail/policy.toml\n' >>"$exclude"
 }
 
-# Record the staged tree, the template and the agent in the frontmatter. It
-# needs validate.json for that same tree, so a new stamp needs new evidence.
+# Record the staged tree, the commit under it, the template and the agent in
+# the frontmatter. It needs validate.json for that same tree, so a new stamp
+# needs new evidence.
 _desc_stamp() {
-  local root="$1" file tree title style template tpl_json meta_tpl tmp agent change
+  local root="$1" file tree title style template tpl_json meta_tpl tmp agent change base
   file="$root/$DESC_FILE"
   [[ -f "$file" ]] || { _desc_err "no $file: write the description first (the describe skill)"; return 1; }
   title="$(_desc_meta "$file" title)"
@@ -360,9 +387,11 @@ _desc_stamp() {
   [[ "$style" == pr ]] || template=""
   agent="$(_desc_agent "$root")"
   change="$(desc_change "$root")"
+  base="$(git -C "$root" rev-parse --verify --quiet HEAD || true)"
   tmp="$(mktemp "$file.XXXXXX")"
   {
     printf -- '---\ntitle: %s\ntree: %s\n' "$title" "$tree"
+    [[ -z "$base" ]] || printf 'base: %s\n' "$base"
     [[ -z "$template" ]] || printf 'template: %s\n' "$template"
     [[ -z "$agent" ]] || printf 'agent: %s\n' "$agent"
     jq -r '"stakes: \(.stakes)", "review: \(.review)"' <<<"$change"

@@ -35,11 +35,15 @@ committed.
   <the body>
   ```
 
-  `stamp` adds `tree` (the staged tree it describes), `template`, `agent`
-  (the harness and model from this desk's record), `stakes` (`high` when a
-  staged path matches the policy's `high_stakes`, else `low`) and `review`
-  (`required` when the person reviews it before it lands). The style is `commit` when
-  the policy integrates straight to main, else `pr`. When the repo has several
+  Write the title unquoted, colon and all: `check` reads a quoted one as YAML
+  and fails a subject that still starts and ends with a quote.
+
+  `stamp` adds `tree` (the staged tree it describes), `base` (the commit it
+  sits on, so the change keeps its size and stakes once committed),
+  `template`, `agent` (the harness and model from this desk's record),
+  `stakes` (`high` when a staged path matches the policy's `high_stakes`, else
+  `low`) and `review` (`required` when the person reviews it before it lands).
+  The style is `commit` when the policy integrates straight to main, else `pr`. When the repo has several
   templates, name yours with `template: <path>`.
 
 ## Write it

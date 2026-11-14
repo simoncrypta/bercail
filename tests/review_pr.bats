@@ -1501,7 +1501,7 @@ cross_repo_prs() {
 }
 
 @test "a gather holds the stack's context lock, so a second gather waits" {
-  local holder
+  local holder out
   stack_source
   three_prs_gathered
   rm -f "$LOG/gh.held" "$LOG/gh.release" "$LOG/pi.release"
@@ -1509,11 +1509,28 @@ cross_repo_prs() {
   holder=$!
   wait_for "$LOG/gh.held"
   [[ -L "$stack/context.lock" ]] || fail "gather did not take the context lock"
-  assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/21 --no-run 2>&1 || true)" \
-    "review stack is busy" "a second gather waits"
+  out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/21 --no-run 2>"$LOG/busy.err")" \
+    && fail "a second gather ran"
+  assert_has "$(<"$LOG/busy.err")" "review stack is busy gathering; try again when it ends ($stack)" "a second gather waits"
+  assert_eq "$stack" "$(jq -r .stack <<<"$out")" "and prints the last gather's stack"
   touch "$LOG/gh.release"
   wait_exit "$holder" "the held gather"
   assert_source_untouched
+}
+
+@test "review-pr prints its JSON on one line, and a rerun refused as busy still prints the stack and names its dir" {
+  local out
+  rm -f "$LOG/pi.child" "$LOG/pi.release"
+  export FAKE_HOLD=1
+  out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 2>"$LOG/start.err" | tail -1)"
+  assert_eq "$REVIEWS/stack-7 started" "$(jq -r '"\(.stack) \(.pass)"' <<<"$out")" "the last line is all of the JSON"
+  assert_has "$(<"$LOG/start.err")" "the stack is $REVIEWS/stack-7" "the start names the stack dir before it gathers"
+  wait_for "$LOG/pi.child"
+  out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 2>"$LOG/busy.err")" \
+    && fail "a gather ran under a live pass"
+  assert_eq "$REVIEWS/stack-7 running" "$(jq -r '"\(.stack) \(.pass)"' <<<"$out")" "the busy rerun prints the stack"
+  assert_has "$(<"$LOG/busy.err")" "the review stack is busy running a pass; try again when it ends ($REVIEWS/stack-7)" "the error names the stack dir"
+  touch "$LOG/pi.release"
 }
 
 @test "graphite: a 5-PR stack entered from the middle syncs with gt only in a private clone; a fork entry reviews alone" {

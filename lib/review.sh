@@ -625,6 +625,66 @@ _review_parse_url() {
   R_WANT="${BASH_REMATCH[4]}"
 }
 
+# The review-pr JSON for the stack in R_STACK, on one line, so a caller's
+# `| tail -1` gets all of it. SPAWNED are the PRs whose pass this run started.
+_review_report() {
+  local url="$1" num row_sha row_dir row_pass row_sum row_ci rows="[]" agg_pass next=""
+  shift
+  local -A spawned=()
+  for num in "$@"; do spawned["$num"]=1; done
+  while IFS= read -r num; do
+    row_sha="$(jq -r --argjson n "$num" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
+    row_dir="$R_STACK/pr-$num/$row_sha"
+    if [[ -n "${spawned[$num]:-}" ]]; then
+      row_pass=started
+    elif _review_locked "$row_dir/pass"; then
+      row_pass=running
+    elif [[ -f "$row_dir/run.json" && "$(jq -r '.status' "$row_dir/run.json")" == ready ]]; then
+      row_pass="done"
+    else
+      row_pass=waiting
+    fi
+    row_sum="$(jq -er 'select(.intent_analysis != null) | .why' "$row_dir/review.json" 2>/dev/null \
+      || printf 'Awaiting code-based intent inference.')"
+    row_ci="$(_review_ci_counts "$row_dir/ci.json")"
+    rows="$(jq -nc --argjson rows "$rows" --argjson n "$num" --arg pass "$row_pass" --arg dir "$row_dir" \
+      --arg summary "$row_sum" --argjson ci "$row_ci" \
+      '$rows + [{number: $n, pass: $pass, dir: $dir, summary: $summary, ci: $ci}]')"
+  done < <(jq -r '.prs[].number' "$R_STACK/stack.json")
+  if jq -ne --argjson rows "$rows" 'any($rows[]; .pass == "started")' >/dev/null; then
+    agg_pass=started
+  elif jq -ne --argjson rows "$rows" 'any($rows[]; .pass == "running")' >/dev/null; then
+    agg_pass=running
+  elif jq -ne --argjson rows "$rows" 'any($rows[]; .pass == "waiting")' >/dev/null; then
+    agg_pass=waiting
+    next="bercail review-pr run --stack $R_STACK"
+  else
+    agg_pass="done"
+  fi
+
+  jq -nc --slurpfile stack "$R_STACK/stack.json" --argjson rows "$rows" --arg pass "$agg_pass" \
+    --arg url "$url" --arg stackdir "$R_STACK" --arg next "$next" '
+    $stack[0] as $s | {
+      schema: "bercail.review-pr/v1", url: $url, repo: "\($s.owner)/\($s.repo)",
+      stack: $stackdir, worktree: $s.worktree, space: $s.space,
+      prs: [$s.prs[] as $p | ($rows[] | select(.number == $p.number)) as $r | {
+        number: $p.number, title: $p.title, author: $p.author, url: $p.url, head_sha: $p.head_sha,
+        dir: $r.dir, summary: $r.summary, linked: $p.linked, linear: $p.linear, ci: $r.ci,
+        thin: $p.thin, pass: $r.pass}],
+      thin: ([$s.prs[].thin[]] | length > 0),
+      pass: $pass,
+      next: (if $next == "" then null else $next end),
+      gather_s: ($s.gather_s // null)
+    }'
+}
+
+# Refuse to gather again, but print the stack already there, so the caller
+# still learns where it is and how its passes stand.
+_review_busy() {
+  [[ ! -f "$R_STACK/stack.json" ]] || _review_report "$1" || true
+  die "the review stack is busy $2; try again when it ends ($R_STACK)"
+}
+
 review_start() {
   local url="" branch="" run=1 arg host owner repo n slug t0 tmp order via trunk
   local source="" root sha base main sibling space="" gather dir linear thin desk_ready=0
@@ -703,16 +763,18 @@ review_start() {
   done < <(jq -r '.numbers[]' <<<"$order")
   root="${numbers[0]}"
   R_STACK="$(_review_root)/$host/$owner/$repo/stack-$root"
+  # Before the gather, so a run that dies or is killed still says where.
+  printf 'bercail review-pr: the stack is %s\n' "$R_STACK" >&2
 
   main="$(cd "$source" && pwd -P)"
   sibling="$(_review_sibling_path "$main" "$root")"
 
   mkdir -p "$R_STACK"
-  _review_lock "$R_STACK/context" || die "the review stack is busy gathering; try again when it ends"
+  _review_lock "$R_STACK/context" || _review_busy "$url" gathering
   # shellcheck disable=SC2064
   trap '_review_unlock "$R_STACK/context"; rm -rf '"$(printf '%q' "$tmp")" EXIT
   if _review_passes_live "$R_STACK"; then
-    die "the review stack is busy gathering or running a pass; try again when it ends"
+    _review_busy "$url" "running a pass"
   fi
 
   local num
@@ -846,53 +908,7 @@ review_start() {
   done
   [[ "$desk_ready" != 1 || ${#to_spawn[@]} -gt 0 ]] || _review_spawn_summary
 
-  local rows="[]" row_n row_sha row_dir row_pass row_sum row_ci
-  for num in "${numbers[@]}"; do
-    row_n="$num"
-    row_sha="$(jq -r --argjson n "$num" '.prs[] | select(.number == $n) | .head_sha' "$R_STACK/stack.json")"
-    row_dir="$R_STACK/pr-$num/$row_sha"
-    if [[ -n "${spawned[$num]:-}" ]]; then
-      row_pass=started
-    elif _review_locked "$row_dir/pass"; then
-      row_pass=running
-    elif [[ -f "$row_dir/run.json" && "$(jq -r '.status' "$row_dir/run.json")" == ready ]]; then
-      row_pass="done"
-    else
-      row_pass=waiting
-    fi
-    row_sum="$(jq -er 'select(.intent_analysis != null) | .why' "$row_dir/review.json" 2>/dev/null \
-      || printf 'Awaiting code-based intent inference.')"
-    row_ci="$(_review_ci_counts "$row_dir/ci.json")"
-    rows="$(jq -nc --argjson rows "$rows" --argjson n "$row_n" --arg pass "$row_pass" --arg dir "$row_dir" \
-      --arg summary "$row_sum" --argjson ci "$row_ci" \
-      '$rows + [{number: $n, pass: $pass, dir: $dir, summary: $summary, ci: $ci}]')"
-  done
-  local agg_pass next=""
-  if jq -ne --argjson rows "$rows" 'any($rows[]; .pass == "started")' >/dev/null; then
-    agg_pass=started
-  elif jq -ne --argjson rows "$rows" 'any($rows[]; .pass == "running")' >/dev/null; then
-    agg_pass=running
-  elif jq -ne --argjson rows "$rows" 'any($rows[]; .pass == "waiting")' >/dev/null; then
-    agg_pass=waiting
-    next="bercail review-pr run --stack $R_STACK"
-  else
-    agg_pass="done"
-  fi
-
-  jq -n --slurpfile stack "$R_STACK/stack.json" --argjson rows "$rows" --arg pass "$agg_pass" \
-    --arg url "$url" --arg stackdir "$R_STACK" --argjson gather "$gather" --arg next "$next" '
-    $stack[0] as $s | {
-      schema: "bercail.review-pr/v1", url: $url, repo: "\($s.owner)/\($s.repo)",
-      stack: $stackdir, worktree: $s.worktree, space: $s.space,
-      prs: [$s.prs[] as $p | ($rows[] | select(.number == $p.number)) as $r | {
-        number: $p.number, title: $p.title, author: $p.author, url: $p.url, head_sha: $p.head_sha,
-        dir: $r.dir, summary: $r.summary, linked: $p.linked, linear: $p.linear, ci: $r.ci,
-        thin: $p.thin, pass: $r.pass}],
-      thin: ([$s.prs[].thin[]] | length > 0),
-      pass: $pass,
-      next: (if $next == "" then null else $next end),
-      gather_s: $gather
-    }'
+  _review_report "$url" "${!spawned[@]}"
 }
 
 # --- bercail review-pr run ------------------------------------------------------
@@ -1629,10 +1645,13 @@ review_usage() {
 Usage: bercail review-pr <command>
 
   <PR url or branch> [--no-run]
-                        gather the whole stack into the root PR's run dir, one
-                        detached sibling worktree, and a Herdr space. Thin PRs
-                        wait; the rest start. JSON lists thin flags and pass
-                        per PR. A single thin PR still waits for: review-pr run
+                        gather the whole stack into the root PR's run dir (named
+                        on stderr first), one detached sibling worktree, and a
+                        Herdr space. Thin PRs wait; the rest start. One line
+                        of JSON lists thin flags and pass per PR. A single
+                        thin PR still waits for: review-pr run. While the
+                        stack gathers or a pass runs, it fails, naming the
+                        stack dir, and prints the JSON of its last gather
   run [N]               N reviews that PR, even if thin. No N starts every
                         non-thin waiting pass in parallel (a stack of one runs
                         even if thin).
