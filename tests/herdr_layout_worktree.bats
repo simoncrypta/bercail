@@ -216,6 +216,23 @@ open_space() {
   fi
 }
 
+@test "layout close finds the space by worktree path after the checkout's branch changed" {
+  # post-remove expands S from the new branch, so only the path still finds it.
+  local wt="$BATS_TEST_TMPDIR/main.renamed" dir id
+  git init -q -b branch-a "$wt"
+  dir="$(cd "$wt" && pwd -P)"
+  wt_herdr_layout_create "Branch-a_Main" "$wt"
+  id="$(jq -r --arg f "$dir" '.[] | select(.folder == $f) | .id' "$FAKE_STATE/spaces.json")"
+  [[ -n "$id" ]] || fail "expected a space on $dir; spaces=$(cat "$FAKE_STATE/spaces.json")"
+  git -C "$wt" checkout -q -b branch-b
+  rm -rf "$wt"
+  : >"$CALL_LOG"
+  wt_herdr_layout_close "Branch-b_Main" "$wt"
+  grep -qxF "herdr-app do space.close --id $id --confirmed true" "$CALL_LOG" \
+    || fail "close should find the space by the removed worktree's path; log=$(cat "$CALL_LOG")"
+  [[ "$(cat "$FAKE_STATE/shown")" == sp-parent ]] || fail "close must keep the user's space shown"
+}
+
 @test "a closed app skips the space on post-start and fails a handoff" {
   touch "$FAKE_STATE/down"
   wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" 2>/dev/null \

@@ -146,7 +146,7 @@ wtd() {
   [[ -z "$repo_root" ]] || cd "$repo_root" || return
 
   wt remove "$branch" --force
-  wt_herdr_layout_close "$session_name"
+  wt_herdr_layout_close "$session_name" "$worktree_path"
 }
 
 alias wt.='wts'

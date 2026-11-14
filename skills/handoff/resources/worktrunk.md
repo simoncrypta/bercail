@@ -7,7 +7,7 @@ Worktrunk (`wt`) manages git worktrees. Here each checkout is a Herdr app space;
 - **User** `~/.config/worktrunk/config.toml` — personal preferences; propose changes, get consent.
 - **Project** `<repo>/.config/wt.toml` — team hooks; edit with care; warn on destructive commands.
 
-This layout also uses `~/.config/worktrunk/herdr-layout.sh` and user hooks so `post-start` / `post-remove` open or close the Herdr app space of a sibling checkout.
+This layout also uses `~/.config/worktrunk/herdr-layout.sh` and user hooks so `post-start` / `post-remove` open or close the Herdr app space of a sibling checkout. `post-remove` finds the space by the checkout's folder, so it still closes after the checkout switched branches.
 
 ## Useful commands
 

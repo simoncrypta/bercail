@@ -20,5 +20,5 @@ echo "  Desk: Ctrl+Shift+A agent, Ctrl+Shift+R review, Ctrl+Shift+S shell, Ctrl+
 herdr = """
 S="{{ branch | capitalize }}_{{ repo | capitalize }}"
 source "$HOME/.config/worktrunk/herdr-layout.sh"
-wt_herdr_layout_close "$S"
+wt_herdr_layout_close "$S" "{{ worktree_path }}"
 """

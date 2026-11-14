@@ -12,9 +12,13 @@ HERDR_APP="${HERDR_APP_BIN:-herdr-app}"
 HC="${HC_BIN:-hc}"
 DESK_AGENT="${BERCAIL_DESK_AGENT:-$HOME/.local/bin/bercail-desk-agent}"
 
+# A removed checkout (post-remove) resolves through its parent.
 _wt_realpath() {
-  local path="$1"
-  (cd "$path" 2>/dev/null && pwd -P) || printf '%s' "$path"
+  local path="$1" parent
+  (cd "$path" 2>/dev/null && pwd -P) && return
+  parent="$(cd "$(dirname "$path")" 2>/dev/null && pwd -P)" \
+    && printf '%s/%s' "$parent" "$(basename "$path")" && return
+  printf '%s' "$path"
 }
 
 _wt_git_main_worktree() {
@@ -182,10 +186,13 @@ wt_herdr_handoff_agent() {
   _wt_herdr_start_desk "$space" "$workdir" "$WT_HERDR_AGENT_PROMPT"
 }
 
+# The checkout's space: the one open on its folder (the branch, and so the
+# label, may have changed since it opened), else the one named label.
 wt_herdr_layout_close() {
-  local label="$1" space
+  local label="$1" workdir="${2:-}" space=
   _wt_herdr_app_running || return 0
-  space="$(_wt_herdr_space_by_name "$label")"
+  [[ -z "$workdir" ]] || space="$(_wt_herdr_space_by_folder "$workdir")"
+  [[ -n "$space" ]] || space="$(_wt_herdr_space_by_name "$label")"
   [[ -n "$space" ]] || return 0
   "$HERDR_APP" do space.close --id "$space" --confirmed true >/dev/null 2>&1 || true
 }

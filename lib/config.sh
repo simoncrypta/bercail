@@ -517,6 +517,28 @@ migrate_bstack_switch() {
   info "removed enabled from [bstack] in $dest: nothing reads it"
 }
 
+# A kept worktrunk config's post-remove closed the space by label only, which
+# misses it once the checkout's branch changed. Pass the worktree path too.
+migrate_worktrunk_close_by_path() {
+  local dest="$WORKTRUNK_CONFIG_DIR/config.toml" tmp line
+  # shellcheck disable=SC2016 # the hook's own "$S", not ours
+  local old='wt_herdr_layout_close "$S"' new='wt_herdr_layout_close "$S" "{{ worktree_path }}"'
+  [[ -f "$dest" ]] || return 0
+  grep -Fxq "$old" "$dest" || return 0
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "[dry-run] would migrate worktrunk post-remove to close by worktree path in $dest"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "$old" ]]; then printf '%s\n' "$new"; else printf '%s\n' "$line"; fi
+  done <"$dest" >"$tmp"
+  # Written through, not moved over: the file may be a link into someone's dotfiles.
+  cat "$tmp" >"$dest"
+  rm -f "$tmp"
+  info "migrated worktrunk post-remove to close by worktree path in $dest"
+}
+
 # [graphite] "<repo>" = true|false chose Graphite until v1; [git] names the
 # backend now. Move each entry there once. A repo [git] already names keeps
 # that entry: [git] won when a repo was in both.
@@ -690,6 +712,7 @@ deploy_configs() {
     deploy_install_file "config/worktrunk/config.toml" "$WORKTRUNK_CONFIG_DIR/config.toml"
   else
     info "keeping existing worktrunk config: $WORKTRUNK_CONFIG_DIR/config.toml"
+    migrate_worktrunk_close_by_path
   fi
 
   deploy_finalize_permissions

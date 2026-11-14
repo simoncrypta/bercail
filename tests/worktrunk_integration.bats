@@ -80,3 +80,26 @@ EOF
   grep -q "keeping existing worktrunk config: $WORKTRUNK_CONFIG_DIR/config.toml" "$deploy_log" \
     || fail "update did not report keeping the existing worktrunk config"
 }
+
+@test "update migrates a label-only post-remove close to pass the worktree path" {
+  mkdir -p "$WORKTRUNK_CONFIG_DIR"
+  cat >"$WORKTRUNK_CONFIG_DIR/config.toml" <<'TOML'
+[post-remove]
+herdr = """
+S="{{ branch | capitalize }}_{{ repo | capitalize }}"
+source "$HOME/.config/worktrunk/herdr-layout.sh"
+wt_herdr_layout_close "$S"
+"""
+TOML
+
+  deploy_configs >"$deploy_log"
+  # shellcheck disable=SC2016 # the hook's own "$S"
+  grep -Fxq 'wt_herdr_layout_close "$S" "{{ worktree_path }}"' "$WORKTRUNK_CONFIG_DIR/config.toml" \
+    || fail "post-remove should pass the worktree path: $(cat "$WORKTRUNK_CONFIG_DIR/config.toml")"
+  # shellcheck disable=SC2016
+  if grep -Fxq 'wt_herdr_layout_close "$S"' "$WORKTRUNK_CONFIG_DIR/config.toml"; then
+    fail "the label-only close is still there"
+  fi
+  grep -q "migrated worktrunk post-remove to close by worktree path" "$deploy_log" \
+    || fail "update did not report the migration: $(cat "$deploy_log")"
+}
