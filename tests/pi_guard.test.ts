@@ -263,6 +263,12 @@ for (const role of roleNames) {
     blocked("gh pr merge 3 --squash", input, /gh pr merge/);
     blocked("bercail policy trust .", input, /person's call/);
     blocked("~/.local/bin/bercail policy trust", input, /person's call/);
+    // eval joins its words and runs them, like bash -c.
+    blocked("eval git push --force", input, /Force-push/);
+    blocked("eval 'git push' --force", input, /Force-push/);
+    blocked("eval -- git push --force", input, /Force-push/);
+    blocked("eval gh pr merge 3", input, /gh pr merge/);
+    blocked("eval entire trail approve 3", input, /person's call/);
   });
 }
 

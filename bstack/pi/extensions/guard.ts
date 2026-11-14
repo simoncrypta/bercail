@@ -679,7 +679,8 @@ function pushFacts(args: string[]): PushFacts {
 function shellScript(words: string[]): string | undefined {
   const cmd = words[0];
   if (cmd !== "bash" && cmd !== "sh" && cmd !== "dash" && cmd !== "eval") return undefined;
-  if (cmd === "eval") return words[1];
+  // eval joins its words with spaces and runs that, after an optional --.
+  if (cmd === "eval") return words.slice(words[1] === "--" ? 2 : 1).join(" ") || undefined;
   for (let i = 1; i < words.length; i++) {
     const word = words[i];
     if (word === "-c" || word === "--command") return words[i + 1];
