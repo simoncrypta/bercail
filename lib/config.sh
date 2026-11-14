@@ -124,8 +124,8 @@ doctor_config() {
     | if has("error") then "unread  config.toml line \(.line): \(.error)"
       elif .section == ["git"] then
         (.value // .raw) as $v
-        | select($v | IN("gh", "gt", "origin") | not)
-        | "unknown  [git] \(.key | name) = \($v) (use gh, gt, or origin)"
+        | select($v | IN("gh", "gt", "origin", "entire") | not)
+        | "unknown  [git] \(.key | name) = \($v) (use gh, gt, origin, or entire)"
       else
         # A bare [policy] names no repo, so nothing reads its keys either.
         (if .section == ["policy"] then "" elif (.section | length) == 2 and .section[0] == "policy" then "policy" else .section | join(".") end) as $table

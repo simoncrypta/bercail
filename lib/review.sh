@@ -651,6 +651,7 @@ review_start() {
       || die "pass a PR url, or run review-pr from a checkout of the repo"
     local listed count
     R_BACKEND="$(git_backend "$PWD")"
+    [[ "$R_BACKEND" != entire ]] || die "review-pr reviews GitHub and Origin PRs; a repo hosted on Entire has trails (entire trail show)"
     local pr_cli=_stack_gh
     [[ "$R_BACKEND" != origin ]] || pr_cli=origin
     listed="$("$pr_cli" pr list --head "$branch" --state open --limit 20 --json number,url)" \

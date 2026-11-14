@@ -1789,3 +1789,14 @@ assert_7_kept() {
   [[ ! -e "$REVIEWS/stack-7" ]] || fail "the run dir is removed"
   [[ -d "$other" ]] || fail "another worktree of the source stays"
 }
+
+@test "a branch in a repo hosted on Entire is refused before any gh: its changes are trails" {
+  local repo="$BATS_TEST_TMPDIR/et-repo" out
+  git init -q -b main "$repo"
+  git -C "$repo" commit -q --allow-empty -m init
+  git -C "$repo" remote add origin entire://aws-us-east-2.entire.io/et/acme/widgets
+  : >"$LOG/gh"
+  out="$(cd "$repo" && "$BERCAIL" review-pr feature 2>&1)" && fail "review-pr took an Entire branch: $out"
+  assert_has "$out" "a repo hosted on Entire has trails" "why it refuses"
+  [[ ! -s "$LOG/gh" ]] || fail "gh ran: $(cat "$LOG/gh")"
+}

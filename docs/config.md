@@ -18,7 +18,7 @@ build = "grok"
 judge = "claude"
 
 [git]                                # optional, one line per main checkout
-"~/Work/some-repo" = "gh"              # gh | gt | origin
+"~/Work/some-repo" = "gh"              # gh | gt | origin | entire
 
 [policy."~/Work/some-repo"]          # optional: your override of that repo's git policy
 commit = "allow"

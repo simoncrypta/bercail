@@ -120,7 +120,7 @@ _policy_scratch() {
 # the file and whether it is trusted, each value with where it came from, and
 # the text agents get in their prompt.
 policy_json() {
-  local dir="${1:-.}" root main file="" hash="" trusted=false scratch=false repo='{}' local_ trust
+  local dir="${1:-.}" root main file="" hash="" trusted=false scratch=false entire=false repo='{}' local_ trust
   root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" \
     || { _policy_err "$dir is not a git checkout"; return 1; }
   root="$(_git_backend_realpath "$root")"
@@ -136,8 +136,10 @@ policy_json() {
   fi
   local_="$(_policy_local "$main")"
   _policy_scratch "$main" "$root" && scratch=true
+  # The guard blocks git push --all where Entire keeps shadow branches.
+  git_backend_entire_capture "$root" && entire=true
   jq -n --arg repo_path "$main" --arg root "$root" --arg file "$file" --arg hash "$hash" \
-    --argjson trusted "$trusted" --argjson scratch "$scratch" \
+    --argjson trusted "$trusted" --argjson scratch "$scratch" --argjson entire "$entire" \
     --argjson repo "$repo" --argjson local "$local_" --argjson defaults "$POLICY_DEFAULTS" '
     def looser($k; $v):
       ($k == "commit" and $v == "allow") or ($k == "push" and $v != "ask") or ($k == "agent_may_release" and $v == true)
@@ -154,6 +156,7 @@ policy_json() {
     | {
         repo: $repo_path, root: $root, file: $file, sha256: $hash, trusted: $trusted,
         scratch: ($scratch and (($local.commit // $repo.commit // "") != "ask")),
+        entire: $entire,
         policy: $p,
         sources: ($rows | map({(.k): .from}) | add),
         untrusted: [$rows[] | select(.from | startswith("default:")) | .k],
@@ -174,7 +177,7 @@ policy_json() {
           "- Release: " + (if $p.release != "" then $p.release + " " else "" end)
             + (if $p.agent_may_release then "Agents may tag and release." else "Agents do not tag or release unless the person asks; the guard asks first." end),
           (if $p.rules != "" then "- Team rules:\n" + ($p.rules | sub("\n+$"; "") | split("\n") | map("  " + .) | join("\n")) else empty end),
-          "Commit, push, open a PR, or release only when the person or your job asks for it; this policy says how. The guard checks recognized git, gt, gh, and origin commands: force-push flags, + refspecs, --mirror, deleting main, --no-verify, and PR merges (gh pr merge, gt merge, gh api writes to /pulls/N/merge) are blocked regardless of policy.",
+          "Commit, push, open a PR, or release only when the person or your job asks for it; this policy says how. The guard checks recognized git, gt, gh, origin, and entire commands: force-push flags, + refspecs, --mirror, deleting main, --no-verify, PR merges (gh pr merge, gt merge, gh api writes to /pulls/N/merge), and trail approvals and merges (entire trail approve, entire trail merge) are blocked regardless of policy.",
           "The guard is a seatbelt, not a sandbox. Commands launched inside another program (python -c, a script file) are not seen; the same rules still apply."
         ] | join("\n"))
       }'

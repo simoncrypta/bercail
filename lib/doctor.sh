@@ -2,6 +2,9 @@
 # shellcheck shell=bash
 # Doctor checks. Source after detect/config/omarchy/skills.
 
+# shellcheck source=lib/git-backend.sh
+source "$(dirname "${BASH_SOURCE[0]}")/git-backend.sh"
+
 doctor_omarchy_integration() {
   if [[ "$(detect_os)" != "linux" ]]; then
     return 0
@@ -240,4 +243,107 @@ doctor_skill() {
     fi
   done < <(_skill_ids)
   [[ "$missing" -eq 0 ]]
+}
+
+# Pi's trust decision for DIR: the closest saved one in trust.json (true or
+# false), else defaultProjectTrust (always, ask, never). Desks skip a project's
+# .pi/extensions when it is not trusted.
+_doctor_pi_trust() {
+  local dir="$1" agent="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}" saved
+  saved="$(jq -r --arg d "$dir" '[to_entries[] | select(.key as $k | $k == $d or ($d | startswith($k + "/")))]
+    | max_by(.key | length) // empty | .value | tostring' "$agent/trust.json" 2>/dev/null)" || saved=""
+  if [[ -n "$saved" ]]; then
+    printf '%s' "$saved"
+  else
+    jq -r '.defaultProjectTrust // "ask"' "$agent/settings.json" 2>/dev/null || printf 'ask'
+  fi
+}
+
+# GitHub's visibility of SLUG (owner/repo): PUBLIC, PRIVATE, INTERNAL, or
+# nothing when gh cannot tell within 10 seconds.
+_doctor_gh_visibility() {
+  _git_backend_bounded 10 gh repo view "$1" --json visibility --jq .visibility </dev/null 2>/dev/null || true
+}
+
+# Entire in the repo doctor runs from: what desks need for their sessions to be
+# captured, and where the transcripts go. Silent outside an Entire repo. Never
+# fails doctor: whoever clones a repo that uses Entire may not use it.
+doctor_entire() {
+  local top hooks hook ver settings trust dest slug url vis
+  local -a files=() gone=()
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 0
+  [[ -f "$top/.entire/settings.json" ]] || return 0
+  log ""
+  log "Entire ($top):"
+  if ! git_backend_entire_capture "$top"; then
+    log "  ok  off here (enabled: false)"
+    return 0
+  fi
+  if ! command -v entire >/dev/null 2>&1; then
+    log "  missing  entire, so its git hooks skip and nothing is captured (https://docs.entire.com/installation)"
+    return 0
+  fi
+  ver="$(entire version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if version_at_least "${ver:-0}" 0.13.0; then
+    log "  ok  entire $ver"
+  else
+    log "  old  entire ${ver:-(unknown version)}; bercail is tested with 0.13 (entire update)"
+  fi
+  hooks="$(git rev-parse --path-format=absolute --git-path hooks)"
+  for hook in prepare-commit-msg commit-msg post-commit post-rewrite pre-push; do
+    grep -qs '# Entire CLI hooks' "$hooks/$hook" || gone+=("$hook")
+  done
+  if ((${#gone[@]} == 0)); then
+    log "  ok  git hooks in $hooks"
+  else
+    log "  missing  Entire's ${gone[*]} hook in $hooks, so commits are not linked to sessions (you run: entire configure --force)"
+  fi
+  if git -C "$top" ls-files --error-unmatch .pi/extensions/entire/index.ts >/dev/null 2>&1; then
+    log "  ok  Pi extension committed, so every worktree's desk has it"
+  elif [[ -f "$top/.pi/extensions/entire/index.ts" ]]; then
+    log "  warning  .pi/extensions/entire/index.ts is not committed: desks in new worktrees go uncaptured"
+  else
+    log "  missing  Entire's Pi extension: desks go uncaptured (you run: entire agent add pi, then commit it)"
+  fi
+  trust="$(_doctor_pi_trust "$top")"
+  case "$trust" in
+    true | always) log "  ok  Pi trusts $top, so desks load the extension" ;;
+    *) log "  warning  Pi does not trust $top ($trust): desks skip Entire's extension. Trust it with /trust in a Pi there" ;;
+  esac
+
+  if _git_backend_bounded 10 entire auth status </dev/null >/dev/null 2>&1; then
+    log "  ok  logged in to Entire"
+  else
+    log "  hint  not logged in to Entire; only trails need it (you run: entire login)"
+  fi
+
+  files=("$top/.entire/settings.json")
+  [[ ! -f "$top/.entire/settings.local.json" ]] || files+=("$top/.entire/settings.local.json")
+  settings="$(jq -s 'reduce .[] as $s ({}; . * $s)' "${files[@]}" 2>/dev/null)" || settings='{}'
+  jq -e '.commit_linking == "always"' <<<"$settings" >/dev/null \
+    || log "  hint  commit_linking is $(jq -r '.commit_linking // "prompt"' <<<"$settings"): a person's commit waits 15 s on Entire's prompt. Set \"commit_linking\": \"always\" in .entire/settings.json"
+  jq -e '.telemetry != true' <<<"$settings" >/dev/null \
+    || log "  hint  telemetry is on, for everyone who clones. Set \"telemetry\": false in .entire/settings.json"
+  jq -e '.redaction.pii.enabled == true' <<<"$settings" >/dev/null \
+    || log "  hint  PII redaction is off: emails and phone numbers stay in transcripts. Set redaction.pii.enabled in .entire/settings.json"
+
+  if jq -e '.strategy_options.push_sessions == false' <<<"$settings" >/dev/null; then
+    log "  ok  checkpoints stay in this clone (push_sessions: false)"
+    return 0
+  fi
+  if jq -e '.strategy_options.checkpoint_remote' <<<"$settings" >/dev/null; then
+    dest="$(jq -r '.strategy_options.checkpoint_remote | "\(.provider):\(.repo)"' <<<"$settings")"
+    [[ "$dest" != github:* ]] || slug="${dest#github:}"
+  else
+    url="$(git -C "$top" remote get-url origin 2>/dev/null || true)"
+    dest="origin ($url)"
+    [[ ! "$url" =~ github\.com[:/]([^/]+/[^/]+)$ ]] || slug="${BASH_REMATCH[1]%.git}"
+  fi
+  vis=""
+  [[ -z "${slug:-}" ]] || vis="$(_doctor_gh_visibility "$slug")"
+  case "$vis" in
+    PUBLIC) log "  warning  checkpoints (full agent transcripts) go to $dest, which is public. Set strategy_options.checkpoint_remote to a private repo, or push_sessions: false" ;;
+    PRIVATE | INTERNAL) log "  ok  checkpoints go to $dest, which is ${vis,,}" ;;
+    *) log "  unknown  checkpoints go to $dest; check that it is private before you push (they are full agent transcripts)" ;;
+  esac
 }

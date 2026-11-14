@@ -81,21 +81,29 @@ Each change lands on the trunk as one commit whose message is the
 description. A direct-commit repo gets one commit per finished job. On `gt`,
 a fix after review amends the PR's commit. On `gh` and `origin`, a fix is a new
 commit on the PR branch, and the PR lands by squash-merge with the description
-as the squash commit's message. bercail never force-pushes there. The person
-merges: the guard stops agents at a merge, and nothing auto-merges.
+as the squash commit's message. bercail never force-pushes there. On `entire`
+(a repo hosted on Entire), the trail is the PR, and Entire writes the merge.
+The person merges: the guard stops agents at a merge or a trail approval, and
+nothing auto-merges.
+
+A squash or a reworded amend drops each commit's `Entire-Checkpoint` trailer,
+the link to the agent sessions that wrote it. `--checkpoints <base>` carries
+the trailers of `<base>..HEAD` into the text. It changes nothing where there
+are none, so the commands below always pass it.
 
 | Repo | Open the PR | After a review fix | Land it |
 |------|-------------|--------------------|---------|
 | direct | `bercail describe commit \| git commit -F -` | the next job is a new commit | the commit is on the trunk |
-| `gh` | `bercail describe commit \| git commit -F -`, push, then `bercail describe body \| gh pr create --title "$(bercail describe title)" --body-file -` | commit the fix, push, then `bercail describe body \| gh pr edit <n> --title "$(bercail describe title)" --body-file -` | `bercail describe body \| gh pr merge <n> --squash --subject "$(bercail describe title)" --body-file -` |
+| `gh` | `bercail describe commit \| git commit -F -`, push, then `bercail describe body \| gh pr create --title "$(bercail describe title)" --body-file -` | commit the fix, push, then `bercail describe body \| gh pr edit <n> --title "$(bercail describe title)" --body-file -` | `bercail describe body --checkpoints origin/<base> \| gh pr merge <n> --squash --subject "$(bercail describe title)" --body-file -` |
 | `gh` stack | `gh stack submit --auto`, then the `gh pr edit` above in each layer's worktree | the same, in the layer's worktree | each PR squash-merged as above |
-| `gt` | `gt create -m "$(bercail describe commit)"`, `gt submit --no-edit --no-ai`, then the `gh pr edit` above | `gt m -a -m "$(bercail describe commit)"` (`gt modify --all`), `gt submit --no-edit --no-ai`, then `gh pr edit` | the PR's one commit already carries it |
-| `origin` | as `gh`, with `bercail describe body \| origin pr create --title "$(bercail describe title)" --body-file - --status open` (`--stack-on <parent>` for a stack) | commit the fix, push, then `bercail describe body \| origin pr edit <n> --title "$(bercail describe title)" --body-file -` | `bercail describe body \| origin pr merge <n> --squash --subject "$(bercail describe title)" --body-file -` (one PR at a time: a stack merge takes no message) |
+| `gt` | `gt create -m "$(bercail describe commit)"`, `gt submit --no-edit --no-ai`, then the `gh pr edit` above | `gt m -a -m "$(bercail describe commit --checkpoints HEAD~1)"` (`gt modify --all`), `gt submit --no-edit --no-ai`, then `gh pr edit` | the PR's one commit already carries it |
+| `origin` | as `gh`, with `bercail describe body \| origin pr create --title "$(bercail describe title)" --body-file - --status open` (`--stack-on <parent>` for a stack) | commit the fix, push, then `bercail describe body \| origin pr edit <n> --title "$(bercail describe title)" --body-file -` | `bercail describe body --checkpoints origin/<base> \| origin pr merge <n> --squash --subject "$(bercail describe title)" --body-file -` (one PR at a time: a stack merge takes no message) |
+| `entire` | `bercail describe commit \| git commit -F -`, then `entire trail create --title "$(bercail describe title)" --body "$(bercail describe body)"`: it publishes the branch (`--base <parent>` for a stack) | commit the fix, push, then `entire trail update --title "$(bercail describe title)" --body "$(bercail describe body)"` | the person runs `entire trail merge` once the trail's gates pass; it takes no message, so the trail carries the description |
 
 - A stack layer describes its own diff against its parent. Each layer's
   worktree has its own description.
-- Read the backend from `handoff-spawn --info`. Never run `gt` in a `gh` or
-  `origin` repo.
+- Read the backend from `handoff-spawn --info`. Never run `gt` in a `gh`,
+  `origin` or `entire` repo.
 
 ## Grade someone else's
 

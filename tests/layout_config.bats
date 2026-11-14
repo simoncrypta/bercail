@@ -162,7 +162,7 @@ EOF
   unknown  [shep] session (nothing reads it)
   unknown  [shep] backend (nothing reads it)
   unread  config.toml line 13: not a key = value line
-  unknown  [git] "~/Work/c" = github (use gh, gt, or origin)
+  unknown  [git] "~/Work/c" = github (use gh, gt, origin, or entire)
   unknown  [policy."~/Work/a.b"] merge (nothing reads it)
   unknown  [policy] commit (nothing reads it)' "$out" "doctor notes"
 }

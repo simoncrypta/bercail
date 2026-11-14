@@ -173,6 +173,14 @@ EOF
   printf '%s' "$out" | jq -e '[has("graphite", "socket", "workspace")] | any | not' >/dev/null \
     || fail "--info still prints a second name for git, herdr or space: $out"
   printf '%s' "$out" | jq -e '.main_checkout == true' >/dev/null || fail "info main_checkout: $out"
+  printf '%s' "$out" | jq -e '.entire == false' >/dev/null || fail "info entire, none: $out"
+  mkdir -p "$repo/.entire" "$repo/sub"
+  printf '{"enabled": true}\n' >"$repo/.entire/settings.json"
+  git -C "$repo" remote add origin entire://aws-us-east-2.entire.io/et/acme/widgets
+  git -C "$repo" update-ref -d refs/branch-metadata/feat
+  out="$(cd "$repo/sub" && HERDR_APP_BIN="$BATS_TEST_TMPDIR/no-herdr" \
+    "$ROOT/skills/handoff/scripts/handoff-spawn" --info)"
+  printf '%s' "$out" | jq -e '.entire == true and .git == "entire"' >/dev/null || fail "info entire, from a subfolder: $out"
 }
 
 @test "--info treats a live Herdr app as herdr outside an hc terminal" {
@@ -1038,6 +1046,22 @@ EOF
   grep -q 'gh stack' "$BD_COMMENTS" || fail "the desk is told to use gh stack: $(cat "$BD_COMMENTS")"
 }
 
+@test "an entire --base spawn tracks no stack and tells the desk to name the base on the trail" {
+  local repo="$BATS_TEST_TMPDIR/sp-et" bin="$BATS_TEST_TMPDIR/sp-et-bin" log="$BATS_TEST_TMPDIR/sp-et.log" out
+  git_init "$repo"
+  git -C "$repo" branch parent-branch
+  git -C "$repo" remote add origin entire://aws-us-east-2.entire.io/et/acme/widgets
+  _fake_logger "$bin" gh "$log"
+  _fake_logger "$bin" gt "$log"
+  _fake_logger "$bin" entire "$log"
+  out="$(_spawn_branch sp-et "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-et-home" parent-branch 2>"$BATS_TEST_TMPDIR/sp-et.err")" \
+    || fail "spawn failed: $out $(cat "$BATS_TEST_TMPDIR/sp-et.err")"
+  printf '%s' "$out" | jq -e '.git == "entire" and .agent_started == true' >/dev/null || fail "spawn json: $out"
+  [[ ! -s "$log" ]] || fail "no gh, gt or entire call at spawn: $(cat "$log")"
+  grep -q 'Git backend is entire' "$BD_COMMENTS" || fail "the desk hears its backend: $(cat "$BD_COMMENTS")"
+  grep -q 'entire trail create --base parent-branch' "$BD_COMMENTS" || fail "the desk names the base: $(cat "$BD_COMMENTS")"
+}
+
 @test "a title is truncated, one line, and a missing bd or issue is a bare id" {
   local wt="$BATS_TEST_TMPDIR/title-norm" got err long want messy
   mkdir -p "$wt"
@@ -1346,12 +1370,12 @@ _pi_profile() {
   out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage bstack --issue "$ISSUE" --worktree "$wt" --dry-run)"
   printf '%s' "$out" | jq -e --arg bin "$HANDOFF_PI_BIN" --arg profile "$profile" --arg model "claude-bridge/lead-model:high" --arg id "$ISSUE" '
     .dry_run == true and .binary == "pi" and .model == $model and .stage == "bstack"
-    and .command[0:11] == ["env","-u","ANTHROPIC_API_KEY","-u","ANTHROPIC_BASE_URL","-u","ANTHROPIC_AUTH_TOKEN","-u","BERCAIL_ROLE","-u","HC_TERMINAL_ID"]
+    and .command[0:13] == ["env","-u","ANTHROPIC_API_KEY","-u","ANTHROPIC_BASE_URL","-u","ANTHROPIC_AUTH_TOKEN","-u","BERCAIL_ROLE","-u","HC_TERMINAL_ID","-u","ENTIRE_PI_NESTED"]
     and (any(.command[]; . == "BERCAIL_ROLE=autopilot") | not)
-    and .command[11] == $bin
-    and .command[12:16] == ["-p","--mode","json","--session-id"]
-    and (.command[16] | test("^[0-9a-fA-F-]{36}$"))
-    and .session_id == .command[16]
+    and .command[13] == $bin
+    and .command[14:18] == ["-p","--mode","json","--session-id"]
+    and (.command[18] | test("^[0-9a-fA-F-]{36}$"))
+    and .session_id == .command[18]
     and .command[(.command | index("--model")) + 1] == $model
     and any(.command[]; . == ($profile + "/extensions/guard.ts"))
     and any(.command[]; . == ($profile + "/agents/bstack-headless.md"))
@@ -1364,10 +1388,10 @@ _pi_profile() {
   out="$(cd "$wt" && "$ROOT/skills/handoff/scripts/handoff-spawn" --stage autopilot --issue "$ISSUE" --worktree "$wt" --dry-run)"
   printf '%s' "$out" | jq -e --arg bin "$HANDOFF_PI_BIN" --arg profile "$profile" '
     .binary == "pi" and .stage == "autopilot"
-    and .command[0:11] == ["env","-u","ANTHROPIC_API_KEY","-u","ANTHROPIC_BASE_URL","-u","ANTHROPIC_AUTH_TOKEN","-u","BERCAIL_ROLE","-u","HC_TERMINAL_ID"]
-    and .command[11] == "BERCAIL_ROLE=autopilot"
-    and .command[12] == $bin
-    and .command[13:17] == ["-p","--mode","json","--session-id"]
+    and .command[0:13] == ["env","-u","ANTHROPIC_API_KEY","-u","ANTHROPIC_BASE_URL","-u","ANTHROPIC_AUTH_TOKEN","-u","BERCAIL_ROLE","-u","HC_TERMINAL_ID","-u","ENTIRE_PI_NESTED"]
+    and .command[13] == "BERCAIL_ROLE=autopilot"
+    and .command[14] == $bin
+    and .command[15:19] == ["-p","--mode","json","--session-id"]
     and any(.command[]; . == ($profile + "/agents/bstack-headless.md"))
     and any(.command[]; . == ($profile + "/agents/bstack-autopilot.md"))
     and .command[-2] == "--"

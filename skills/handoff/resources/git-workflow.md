@@ -1,6 +1,6 @@
 # Project git backend (handoff)
 
-Read `git` from `scripts/handoff-spawn --info`: `gh`, `gt`, or `origin`.
+Read `git` from `scripts/handoff-spawn --info`: `gh`, `gt`, `origin`, or `entire`.
 Use that backend throughout the job; do not probe with `gt`, because any `gt`
 command auto-initializes a plain repo. Detection and per-repo overrides:
 [the skill](../SKILL.md#git-backend).
@@ -14,18 +14,22 @@ uncommitted changes only). When the user later asks to commit/submit:
 | `gh` | `gh stack init <parent> <child>` adopts existing branches; `gh stack add <child>` extends a stack from its tip. Publish with `gh stack submit`, update with `gh stack sync`. |
 | `gt` | `gt create` for a new branch, `gt track --parent <parent>` for an existing branch, `gt submit`, and `gt get` for remote stack updates. |
 | `origin` | `origin stack track <child> --onto <parent>` before publication. Open the child with `origin pr create --stack-on <parent-PR> --status open`; update with `origin stack get`, `origin stack restack`, and `origin stack push --all`. |
+| `entire` | A repo hosted on Entire, where the trail is the PR. No native stacks: the child's trail names its parent (`entire trail create --base <parent>`), and `entire trail retarget` moves it once the parent lands. |
 
 `--base <parent>` dependents are stacks, not hand-made PRs that merely target
 another PR's branch. Keep the parent relation in the selected backend. Never
-run `gt` in a `gh` or `origin` repo. For an independent `gh` branch, plain
+run `gt` in a `gh`, `origin` or `entire` repo. For an independent `gh` branch, plain
 `git` and `gh pr` remain appropriate.
 
 The PR body and the commit that lands are the description the desk's /validate
 wrote (the `describe` skill shows each backend's commands). On `gt` a fix after
 review amends the PR's commit (`gt m -a`, then `gt submit`). On `gh` and
 `origin` a fix is a new commit, and the person squash-merges with the
-description as the message; bercail never force-pushes there. A direct-to-main
-repo gets one commit per finished job.
+description as the message; bercail never force-pushes there. On `entire` a
+fix is a new commit too, and the person merges with `entire trail merge` once
+the trail's gates pass. A direct-to-main repo gets one commit per finished job.
+Agents never approve or merge a trail, or dismiss its findings: the guard
+stops them.
 
 Do not commit/submit unless the user asked. When asked, follow the repo's git
 policy (`bercail policy show`): a PR or straight to main, drafts, how a release

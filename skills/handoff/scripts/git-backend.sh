@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared git backend for one repo: gh, gt, or origin.
+# Shared git backend for one repo: gh, gt, origin, or entire.
 # Sourced by handoff-spawn (beside this file) and by the bercail CLI (the
 # install copies this file to lib/git-backend.sh). Detection never runs gt.
 # shellcheck shell=bash
@@ -41,8 +41,8 @@ _git_backend_realpath() {
   fi
 }
 
-# This repo's [git] entry (gh|gt|origin), keyed by the main checkout. Status 1
-# with no entry. A value that is not one of the three is ignored.
+# This repo's [git] entry (gh|gt|origin|entire), keyed by the main checkout.
+# Status 1 with no entry. A value that is not one of the four is ignored.
 git_backend_override() {
   local config main key value
   config="$(_git_backend_config_file)"
@@ -54,7 +54,7 @@ git_backend_override() {
     printf '%s' "$value"
     return 0
   done < <(toml_records "$config" \
-    | jq -r 'select(.section == ["git"]) | (.value // .raw) as $v | select($v | IN("gh", "gt", "origin")) | $v + "\t" + .key')
+    | jq -r 'select(.section == ["git"]) | (.value // .raw) as $v | select($v | IN("gh", "gt", "origin", "entire")) | $v + "\t" + .key')
   return 1
 }
 
@@ -123,6 +123,27 @@ git_backend_origin_remote() {
     return 0
   fi
   [[ ${#kept[@]} -eq 2 && "${kept[0],,}" != git ]]
+}
+
+# Offline: origin is a repo hosted on Entire, entire://<host>/et/<project>/<repo>.
+# A mirror (entire://<host>/gh/<owner>/<repo>) is not: GitHub owns it and its
+# PRs, so it stays gh.
+git_backend_entire_remote() {
+  local url
+  url="$(git -C "$1" remote get-url origin 2>/dev/null)" || return 1
+  [[ "$url" =~ ^entire://[^/]+/et/[^/]+/[^/]+$ ]]
+}
+
+# Entire captures agent sessions in the checkout at ROOT: .entire/settings.json
+# that does not say enabled: false, where settings.local.json, when it says
+# either, has the last word. policy_json hands it to the guard.
+git_backend_entire_capture() {
+  local dir="$1/.entire" enabled=""
+  [[ -f "$dir/settings.json" ]] || return 1
+  [[ ! -f "$dir/settings.local.json" ]] \
+    || enabled="$(jq -r '.enabled | select(type == "boolean")' "$dir/settings.local.json" 2>/dev/null)" || true
+  [[ -n "$enabled" ]] || enabled="$(jq -r '.enabled != false' "$dir/settings.json" 2>/dev/null)" || return 1
+  [[ "$enabled" == true ]]
 }
 
 # Status 124 on timeout. Kill leftover children even after a successful command:
@@ -201,12 +222,13 @@ git_backend_origin_owns() {
   esac
 }
 
-# Print gh, gt, or origin.
+# Print gh, gt, origin, or entire.
 # 1. The repo's [git] entry.
 # 2. Graphite tracking evidence (v0.11). No gt.
-# 3. Origin remote whose mirrorStatus is no-mirror or outbound.
+# 3. An origin hosted on Entire (et/). A GitHub mirror on Entire stays gh.
+# 4. Origin remote whose mirrorStatus is no-mirror or outbound.
 #    A matched host with unknown ownership stays gh and warns.
-# 4. gh.
+# 5. gh.
 git_backend() {
   local override
   if override="$(git_backend_override "$1")"; then
@@ -215,6 +237,10 @@ git_backend() {
   fi
   if git_backend_graphite_tracks "$1"; then
     printf 'gt'
+    return 0
+  fi
+  if git_backend_entire_remote "$1"; then
+    printf 'entire'
     return 0
   fi
   if git_backend_origin_remote "$1"; then

@@ -54,12 +54,16 @@ For changing `handoff-spawn`; agents follow the [handoff skill](../skills/handof
 
 ## Git backend
 
-`handoff-spawn --info` reports `"git": "gh"`, `"gt"`, or `"origin"`.
+`handoff-spawn --info` reports `"git": "gh"`, `"gt"`, `"origin"`, or `"entire"`,
+and `"entire": true` where Entire captures the agents' sessions (see
+[entire.md](entire.md)).
 Use that backend throughout the job. The result of a `--branch` spawn carries
 the same `git`.
 
 Detection order is: a per-repo `[git]` override, real Graphite tracking, an
-Origin repo, then `gh`. Keys are main-checkout paths; linked worktrees share
+origin hosted on Entire (`entire://<host>/et/<project>/<repo>`), an Origin
+repo, then `gh`. A GitHub repo mirrored on Entire (`entire://<host>/gh/...`)
+stays `gh`: GitHub holds its PRs. Keys are main-checkout paths; linked worktrees share
 the choice:
 
 ```toml
@@ -83,6 +87,7 @@ result before publishing. Ordinary GitHub repos make no Origin API call.
 | `gh` | `gh stack init` adopts existing parent/child branches; `gh stack add` extends a stack. Publish with `gh stack submit`; update with `gh stack sync`. |
 | `gt` | `gt create` or `gt track --parent` records branches; `gt submit` publishes and `gt get` fetches stack updates. |
 | `origin` | `origin stack track --onto` records local parents. Publish child PRs with `origin pr create --stack-on <parent-PR> --status open`; update with `origin stack get`, `origin stack restack`, and `origin stack push --all`. |
+| `entire` | No stacks. The child's trail names its parent branch (`entire trail create --base <parent>`); once the parent lands, `entire trail retarget --base <trunk>` moves it. |
 
 Never hand-make a dependent PR that merely targets another PR's branch, and
 never run `gt` in a `gh` repo. Handoff stages work without committing or

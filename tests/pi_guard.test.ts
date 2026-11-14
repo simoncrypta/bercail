@@ -1,11 +1,13 @@
 // Decision table for bercail's Pi guard. No Pi process.
 import { expect, test } from "vite-plus/test";
-import {
+import guard, {
   type GuardInput,
   type Policy,
   decideBash,
   decideTool,
   defaultPolicy,
+  isReviewWorktree,
+  policyFromJson,
   redact,
 } from "../bstack/pi/extensions/guard.ts";
 
@@ -647,3 +649,148 @@ for (const command of [
     blocked(command, at("autopilot", policies.default), /Could not read/);
   });
 }
+
+// Entire: reads pass, a trail publish is a push, approve and merge are the
+// person's, and so are setup, login and anything that rewrites or deletes.
+for (const command of [
+  "entire status",
+  "entire why lib/desk.sh:12",
+  "entire trail show",
+  "entire trail list --project gh/simoncrypta",
+  "entire trail finding",
+  "entire trail finding list --severity high",
+  "entire checkpoint explain 01M7BPKH122DK761RTTN58R0Z0",
+  "entire cp list",
+  "entire session current",
+  "entire auth status",
+  "entire agent-help trail",
+  "entire repo view /gh/o/r",
+]) {
+  test(`entire read: ${command}`, () => {
+    for (const role of roleNames) allowed(command, at(role, policies.default));
+  });
+}
+for (const command of [
+  "entire trail merge",
+  "entire trail merge 3 --force --yes",
+  "entire trail merge --dry-run --force",
+  "entire trail approve 3 -m ok",
+  "entire --context work trail merge",
+  "entire trail --branch feature merge",
+  "entire trail merge --dry-run",
+  "entire trail merge --help",
+  "entire trail merge 3 -- --dry-run",
+  "entire trail approve 3 -m --help",
+  "entire trail approve 3 -m -h",
+  "entire trail --unknown-flag show approve",
+  "/usr/local/bin/entire trail approve",
+  "export GIT_TERMINAL_PROMPT=0\nentire trail merge",
+]) {
+  test(`entire merge and approve are the person's: ${command}`, () => {
+    for (const role of roleNames) blocked(command, at(role, policies.loosest), /person's call/);
+  });
+}
+for (const [command, reason] of [
+  ["entire enable --agent pi", /Suggest it to the person/],
+  ["entire disable --uninstall", /Suggest it to the person/],
+  ["entire configure --local --skip-push-sessions", /Suggest it to the person/],
+  ["entire agent add pi --force", /Suggest it to the person/],
+  ["entire login", /Suggest it to the person/],
+  ["entire repo mirror add /gh/o/r", /Suggest it to the person/],
+  ["entire repo remote add origin --override", /Suggest it to the person/],
+  ["entire checkpoint delete 01M7BPKH122DK761RTTN58R0Z0", /deletes checkpoints/],
+  ["entire session attach 01a1 --force", /amends a commit/],
+  ["entire session resume feature -f", /amends a commit/],
+  ["entire sessions attach 01a1 --force", /amends a commit/],
+  ["entire session attach 01a1 -fa pi", /amends a commit/],
+  ["entire enable --agent pi --initial-commit-message -h", /Suggest it to the person/],
+  ["entire configure --checkpoint-remote --help", /Suggest it to the person/],
+] as const) {
+  test(`entire setup, rewrites and deletes are blocked: ${command}`, () => {
+    for (const role of roleNames) blocked(command, at(role, policies.loosest), reason);
+  });
+}
+for (const command of [
+  "entire trail create --title x",
+  "entire trail link 3",
+  "entire trail ci-pr",
+  "entire checkpoint push",
+]) {
+  test(`entire publish follows the push policy: ${command}`, () => {
+    for (const [name, fields] of Object.entries(policies)) {
+      for (const role of roleNames) {
+        const expected = ["judge", "council"].includes(role)
+          ? "block"
+          : role === "autopilot" || ["branch", "main"].includes(fields.push ?? "")
+            ? "allow"
+            : role === "headless"
+              ? "block"
+              : "ask";
+        const got = decision(command, at(role, fields));
+        assertEqual(got.action, expected, `${role} / ${name} / ${command} → ${JSON.stringify(got)}`);
+      }
+    }
+  });
+}
+test("entire trail writes are like gh pr edit; dismissing a finding is the person's; unknown commands ask", () => {
+  for (const command of [
+    "entire trail update --body x",
+    "entire trail ready",
+    "entire trail finding reply 1 --body x",
+    "entire trail finding resolve 2",
+  ]) {
+    for (const role of ["desk", "shep", "headless", "autopilot"] as const) allowed(command, at(role, policies.default));
+    blocked(command, at("judge", policies.default), /read-only/);
+  }
+  for (const command of [
+    "entire trail finding dismiss 2",
+    "entire trail finding dismiss 2 -m -h",
+    "entire checkpoint explain 01M7 --generate",
+    "entire dispatch",
+    "entire session stop",
+  ]) {
+    asked(command, at("desk", policies.loosest));
+    blocked(command, at("headless", policies.loosest));
+    blocked(command, at("autopilot", policies.loosest));
+    blocked(command, at("council", policies.loosest));
+  }
+  blocked("entire trail finding dismiss 2", at("autopilot", policies.loosest), /only the person/);
+  blocked("entire trail finding dismiss 2 -m --help", at("autopilot", policies.loosest), /only the person/);
+});
+test("entire --repo does not lend cwd trust, and a trail checkout moves the branch", () => {
+  asked("entire trail create --repo gh/o/r --title x", at("desk", policies.loosest));
+  blocked("entire trail create --repo gh/o/r --title x", at("headless", policies.loosest), /headless run/);
+  asked("entire trail checkout 3 && git push", at("desk", policies.branch));
+  asked("entire trail create --title x --checkout && git push", at("desk", policies.branch));
+});
+
+test("in an Entire repo, pushing every branch is blocked: shadow branches hold unredacted snapshots", () => {
+  for (const role of ["desk", "shep", "headless"] as const) {
+    for (const command of ["git push --all origin", "git push --branches", "git push origin 'refs/heads/*'"]) {
+      blocked(command, at(role, { push: "main", entire: true }), /shadow branches/);
+      allowed(command, at(role, { push: "main" }));
+    }
+    allowed("git push origin feature", at(role, { push: "main", entire: true }));
+  }
+});
+
+test("policy show --json says whether Entire is on; the guard takes it as it is", () => {
+  const json = { repo: "/m", scratch: false, prompt: "", sources: {} };
+  const policyJson = { commit: "allow", push: "main", agent_may_release: false } as const;
+  assertEqual(policyFromJson({ ...json, entire: true, policy: policyJson }).entire, true);
+  assertEqual(policyFromJson({ ...json, policy: policyJson }).entire, false);
+});
+
+test("a review worktree's project files are never trusted; other folders are left to Pi", async () => {
+  assertEqual(isReviewWorktree("/home/u/Work/app.review-12"), true);
+  assertEqual(isReviewWorktree("/home/u/Work/app.review-12/lib"), true);
+  assertEqual(isReviewWorktree("/home/u/Work/app.reviews-12"), false);
+  assertEqual(isReviewWorktree("/home/u/Work/app.review"), false);
+  assertEqual(isReviewWorktree("/home/u/Work/app"), false);
+  const handlers: Record<string, (event: { cwd: string }) => Promise<unknown>> = {};
+  guard({
+    on: (name: string, handler: (event: { cwd: string }) => Promise<unknown>) => (handlers[name] = handler),
+  } as never);
+  assertDeepEqual(await handlers.project_trust({ cwd: "/home/u/Work/app.review-3" }), { trusted: "no" });
+  assertDeepEqual(await handlers.project_trust({ cwd: "/home/u/Work/app" }), { trusted: "undecided" });
+});

@@ -282,14 +282,15 @@ _bstack_pi_argv() {
 # bercail review-pr's reviewer, into BSTACK_PI_ARGV: the lead's model, the
 # read-only tools, and review.ts, which keeps it in the stack dir. No skills,
 # prompt templates, or context files: the pr-review rules and the description
-# standard are its whole brief.
+# standard are its whole brief. --no-approve: no project's .pi/ ever loads, so
+# a PR's own extensions never run, whatever Pi's trust settings say.
 _bstack_pi_review_argv() {
   local model="$1"
   BSTACK_PI_ARGV=(pi)
   [[ -z "$model" ]] || BSTACK_PI_ARGV+=(--model "$(_bstack_pi_model_id "$model")")
   BSTACK_PI_ARGV+=(-e "$BSTACK_PI_BRIDGE" -e "$BSTACK_PI_DIR/extensions/fallback.ts"
     -e "$BSTACK_PI_DIR/extensions/review.ts" --tools "read,grep,find,ls"
-    --no-skills --no-prompt-templates --no-context-files
+    --no-skills --no-prompt-templates --no-context-files --no-approve
     --append-system-prompt "$BSTACK_PI_DIR/agents/bstack-pr-review.md"
     --append-system-prompt "$(skill_canonical_dir describe)/standard.md")
 }

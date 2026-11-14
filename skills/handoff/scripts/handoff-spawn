@@ -342,7 +342,7 @@ handoff_result_json() {
 
 handoff_info_json() {
   local cwd branch helper default_copy backend=gh
-  local herdr_env=0 herdr=0 main_ok=0 dirty=0 helper_present=0 beads=0
+  local herdr_env=0 herdr=0 main_ok=0 dirty=0 helper_present=0 beads=0 entire=0 top
   cwd="$(_git_backend_realpath "$PWD")"
   [[ -n "${HC_TERMINAL_ID:-}" ]] && herdr_env=1
   if handoff_herdr_app_ok; then
@@ -358,6 +358,8 @@ handoff_info_json() {
     local info_rc=0
     backend="$(git_backend "$cwd")" || info_rc=$?
     [[ "$info_rc" -ne 130 ]] || exit 130
+    # Entire captures the agents' sessions here, whatever the backend.
+    top="$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)" && git_backend_entire_capture "$top" && entire=1
   fi
   branch="$(git -C "$cwd" branch --show-current 2>/dev/null || true)"
   helper="${HOME}/.config/worktrunk/herdr-layout.sh"
@@ -381,6 +383,7 @@ handoff_info_json() {
     --argjson main_checkout "$(handoff_bool_json "$main_ok")" \
     --argjson dirty "$(handoff_bool_json "$dirty")" \
     --arg git "$backend" \
+    --argjson entire "$(handoff_bool_json "$entire")" \
     --argjson helper_present "$(handoff_bool_json "$helper_present")" \
     --argjson beads "$(handoff_bool_json "$beads")" \
     '{
@@ -391,6 +394,7 @@ handoff_info_json() {
       branch:$branch,
       dirty:$dirty,
       git:$git,
+      entire:$entire,
       default_copy:$default_copy,
       helper:$helper,
       helper_present:$helper_present,
@@ -567,6 +571,7 @@ handoff_spawn_main() {
     origin)
       [[ -z "$base" ]] || handoff_track_origin "$sibling" "$branch" "$base"
       ;;
+    # entire: trails have no stack to track; the trail names its base instead.
   esac
 
   label="$(_wt_generate_session_name "$sibling")"
@@ -585,6 +590,8 @@ handoff_spawn_main() {
       intro="$(printf '%s Stack %s on %s with gh stack init or gh stack add, then gh stack submit. Do not open a PR that only targets %s.' "$intro" "$branch" "$base" "$base")"
     elif [[ -n "$base" && "$backend" == origin ]]; then
       intro="$(printf '%s Stack %s on %s with origin stack track --onto and origin pr create --stack-on. Do not open a PR that only targets %s.' "$intro" "$branch" "$base" "$base")"
+    elif [[ -n "$base" && "$backend" == entire ]]; then
+      intro="$(printf '%s Entire has no stacks: open the trail with entire trail create --base %s, and once %s lands, move it with entire trail retarget.' "$intro" "$base" "$base")"
     fi
   fi
   handoff_issue_comment "$sibling" "$issue" "$intro"

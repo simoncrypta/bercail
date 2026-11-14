@@ -395,10 +395,22 @@ _desc_check() {
   fi
 }
 
+# The Entire-Checkpoint trailers of SINCE..HEAD, oldest first, once each. A
+# squash or a reworded amend drops them, and with them the commit's link to the
+# agent sessions that wrote it.
+_desc_checkpoints() {
+  local root="$1" since="$2"
+  git -C "$root" rev-parse --verify --quiet "$since^{commit}" >/dev/null \
+    || { _desc_err "--checkpoints $since names no commit; pass the base the branch's commits sit on"; return 1; }
+  git -C "$root" log --reverse --format='%(trailers:key=Entire-Checkpoint,valueonly)' "$since..HEAD" \
+    | awk 'NF && !seen[$0]++ { print "Entire-Checkpoint: " $0 }'
+}
+
 # title, body or commit: the text, only when the check passes. body and commit
 # end with the provenance; REVIEWER only when a person reviewed this change.
+# With SINCE, they carry the checkpoint trailers of SINCE..HEAD too.
 _desc_print() {
-  local what="$1" root="$2" reviewer="$3" state file body provenance
+  local what="$1" root="$2" reviewer="$3" since="${4:-}" state file body provenance form checkpoints=""
   state="$(desc_state "$root")" || return 1
   _desc_report "$state" || { _desc_err "not printing a description that fails the check"; return 1; }
   if [[ "$what" == commit && -z "$reviewer" ]] && jq -e '.style == "commit" and .change.review == "required"' <<<"$state" >/dev/null; then
@@ -407,7 +419,14 @@ _desc_print() {
   fi
   file="$root/$DESC_FILE"
   body="$(_desc_body "$file")"
-  provenance="$(_desc_provenance "$(_desc_provenance_form "$root")" "$(_desc_meta "$file" agent)" "$reviewer")"
+  [[ -z "$since" ]] || checkpoints="$(_desc_checkpoints "$root" "$since")" || return 1
+  form="$(_desc_provenance_form "$root")"
+  provenance="$(_desc_provenance "$form" "$(_desc_meta "$file" agent)" "$reviewer")"
+  # Trailers share the provenance's block when it is one; git reads only the last paragraph.
+  if [[ -n "$checkpoints" ]]; then
+    if [[ "$form" == trailer && -n "$provenance" ]]; then provenance+=$'\n'"$checkpoints"
+    else provenance+="${provenance:+$'\n\n'}$checkpoints"; fi
+  fi
   [[ -z "$provenance" ]] || body+=$'\n\n'"$provenance"
   case "$what" in
     title) jq -r .title <<<"$state" ;;
@@ -417,7 +436,7 @@ _desc_print() {
 }
 
 cmd_describe() {
-  local sub="${1:-check}" json=0 dir="." root reviewer=""
+  local sub="${1:-check}" json=0 dir="." root reviewer="" since=""
   shift || true
   while (($#)); do
     case "$1" in
@@ -425,6 +444,10 @@ cmd_describe() {
       --reviewed-by)
         reviewer="${2:-}"
         [[ -n "$reviewer" && "$reviewer" != *$'\n'* ]] || { _desc_err "--reviewed-by takes the reviewer's name"; return 1; }
+        shift ;;
+      --checkpoints)
+        since="${2:-}"
+        [[ -n "$since" ]] || { _desc_err "--checkpoints takes the base ref, as in --checkpoints origin/main"; return 1; }
         shift ;;
       -*) _desc_err "unknown option: $1"; return 1 ;;
       *) dir="$1" ;;
@@ -444,7 +467,7 @@ cmd_describe() {
       ;;
     stamp) _desc_stamp "$root" ;;
     check) _desc_check "$json" "$root" ;;
-    title|body|commit) _desc_print "$sub" "$root" "$reviewer" ;;
-    *) _desc_err "usage: bercail describe template|stamp|check [--json] [dir] | title|body|commit [--reviewed-by NAME] [dir]"; return 1 ;;
+    title|body|commit) _desc_print "$sub" "$root" "$reviewer" "$since" ;;
+    *) _desc_err "usage: bercail describe template|stamp|check [--json] [dir] | title|body|commit [--reviewed-by NAME] [--checkpoints BASE] [dir]"; return 1 ;;
   esac
 }

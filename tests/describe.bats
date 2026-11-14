@@ -355,3 +355,26 @@ committed_policy() {
   described
   describe commit >/dev/null || fail "a low-stakes change is gated: $(describe commit 2>&1)"
 }
+
+@test "--checkpoints: the branch's Entire-Checkpoint trailers survive a squash and a reworded amend, once each" {
+  git commit -qm base --allow-empty
+  local base
+  base="$(git rev-parse HEAD)"
+  git commit -q --allow-empty -m $'one\n\nEntire-Checkpoint: 01AAA'
+  git commit -q --allow-empty -m $'two\n\nEntire-Checkpoint: 01BBB\nEntire-Checkpoint: 01AAA'
+  git commit -q --allow-empty -m 'three, no agent'
+  described
+  [[ "$(describe body --checkpoints "$base")" == "$(plain_body)$NOBODY"$'\n\nEntire-Checkpoint: 01AAA\nEntire-Checkpoint: 01BBB' ]] \
+    || fail "line form: $(describe body --checkpoints "$base")"
+  [[ "$(describe body --checkpoints HEAD)" == "$(plain_body)$NOBODY" ]] || fail "nothing since HEAD"
+  printf 'provenance = "trailer"\n' >.bercail/policy.toml
+  git commit -qF <(describe commit --reviewed-by Simon --checkpoints "$base") || fail "commit"
+  [[ "$(git log -1 --format='%(trailers:key=Entire-Checkpoint,valueonly,separator=%x20)')" == "01AAA 01BBB" ]] \
+    || fail "git reads them in the provenance's block: $(git log -1 --format=%B)"
+  [[ "$(git log -1 --format='%(trailers:key=Assisted-by,valueonly)')" == "bercail" ]] || fail "provenance kept"
+  printf 'provenance = "none"\n' >.bercail/policy.toml
+  [[ "$(describe body --checkpoints "$base")" == "$(plain_body)"$'\n\nEntire-Checkpoint: 01AAA\nEntire-Checkpoint: 01BBB' ]] \
+    || fail "none: $(describe body --checkpoints "$base")"
+  describe body --checkpoints nope 2>&1 | grep -qF -- '--checkpoints nope names no commit' || fail "a bad base"
+  describe body --checkpoints 2>&1 | grep -qF -- '--checkpoints takes the base ref' || fail "no base"
+}

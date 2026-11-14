@@ -290,3 +290,35 @@ EOF
     [[ "$got" == "$cfg" ]] || fail "track helper must not depend on cwd, got $got"
   )
 }
+
+@test "an origin hosted on Entire (et/) is entire, offline; a GitHub mirror on Entire stays gh" {
+  local repo="$BATS_TEST_TMPDIR/ent" cfg="$BATS_TEST_TMPDIR/ent.toml"
+  git_init "$repo"
+  _origin_remote "$repo" entire://aws-us-east-2.entire.io/et/acme/widgets
+  [[ "$(git_backend "$repo")" == entire ]] || fail "an et/ origin: $(git_backend "$repo")"
+  _origin_remote "$repo" entire://aws-us-east-2.entire.io/gh/acme/widgets
+  [[ "$(git_backend "$repo")" == gh ]] || fail "a gh/ mirror: GitHub owns its PRs"
+  _origin_remote "$repo" https://github.com/acme/et/widgets.git
+  [[ "$(git_backend "$repo")" == gh ]] || fail "an et/ path elsewhere is not Entire"
+  export BERCAIL_CONFIG="$cfg"
+  printf '[git]\n"%s" = "entire"\n' "$repo" >"$cfg"
+  [[ "$(git_backend "$repo")" == entire ]] || fail "the [git] override takes entire"
+  unset BERCAIL_CONFIG
+}
+
+@test "Entire capture: .entire/settings.json unless it says enabled false; settings.local.json has the last word" {
+  local root="$BATS_TEST_TMPDIR/cap"
+  mkdir -p "$root/.entire"
+  git_backend_entire_capture "$root" && fail "no settings.json: off"
+  printf '{"telemetry": false}\n' >"$root/.entire/settings.json"
+  git_backend_entire_capture "$root" || fail "settings.json without enabled: on"
+  printf '{"enabled": false}\n' >"$root/.entire/settings.json"
+  git_backend_entire_capture "$root" && fail "enabled false: off"
+  printf '{"enabled": true}\n' >"$root/.entire/settings.local.json"
+  git_backend_entire_capture "$root" || fail "a local enabled true wins"
+  printf '{"enabled": true}\n' >"$root/.entire/settings.json"
+  printf '{"enabled": false}\n' >"$root/.entire/settings.local.json"
+  git_backend_entire_capture "$root" && fail "a local enabled false wins"
+  printf '{"log_level": "debug"}\n' >"$root/.entire/settings.local.json"
+  git_backend_entire_capture "$root" || fail "a local file that says nothing leaves the project's"
+}

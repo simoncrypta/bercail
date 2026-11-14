@@ -11,6 +11,8 @@ export type Policy = {
   agentMayRelease: boolean;
   /** A temp-dir repo with no remote: commits go through. */
   scratch: boolean;
+  /** Entire captures sessions here (.entire/settings.json, enabled). */
+  entire: boolean;
   /** For the log: the main checkout, and where each value came from. */
   repo: string;
   from: Record<string, string>;
@@ -21,6 +23,7 @@ export const defaultPolicy: Policy = {
   push: "ask",
   agentMayRelease: false,
   scratch: false,
+  entire: false,
   repo: "",
   from: {},
 };
@@ -74,6 +77,15 @@ const unknownBranch = "Could not read the current branch, so this push is blocke
 const trustCommand =
   "Trusting a repo's policy is the person's call. Ask them to run bercail policy trust in their own shell.";
 const protectedFile = "This file decides what bercail's guard lets through. Ask the person to edit it.";
+const pushAllEntire =
+  "In an Entire repo, pushing every branch (--all, --branches, a refs/heads/* glob) would also push Entire's shadow branches, which hold unredacted snapshots. Push the branch by name.";
+const entireMerge = "Approving or merging an Entire trail is the person's call. Do not approve or merge it.";
+const entireDismiss = "Dismissing a trail finding can clear a merge gate; only the person does that.";
+const entirePerson =
+  "This entire command changes Entire's setup, hooks, login, or repositories. Suggest it to the person; do not run it.";
+const entireDestroy =
+  "This entire command amends a commit, resets git state, or deletes checkpoints. Ask the person to run it.";
+const entireUnknown = "A headless run only uses entire commands bercail knows. Leave this one to the person.";
 
 const allow: GuardDecision = { action: "allow" };
 const block = (reason: string): GuardDecision => ({ action: "block", reason });
@@ -687,6 +699,87 @@ function forgePublish(words: string[]): "commit" | "push" | undefined {
   return undefined;
 }
 
+// What an entire command does: a read, a publish like gh pr create, a trail
+// write like gh pr edit, or one that is the person's (bercail-znd's classes,
+// starting from `entire agent-help`).
+type EntireKind = "read" | "push" | "write" | "ask" | "dismiss" | "merge" | "person" | "destroy";
+
+// entire's flags that take a value, so the value is not read as a subcommand.
+const entireValueFlags = new Set(
+  [
+    "--context --project --repo --branch --base --body --title --type --status --priority --assignee",
+    "--add-assignee --remove-assignee --branch-action --idempotency-key --trail --severity --cursor",
+    "--limit -n --freshness --message -m --session --commit --checkpoint -c --line --from --cluster",
+    "--agent --model",
+  ]
+    .join(" ")
+    .split(" "),
+);
+
+function entirePath(words: string[]): string[] {
+  const path: string[] = [];
+  for (let i = 1; i < words.length && words[i] !== "--"; i++) {
+    if (!words[i].startsWith("-")) path.push(words[i]);
+    else if (entireValueFlags.has(words[i])) i++;
+  }
+  return path;
+}
+
+// No --help or --dry-run shortcut: a string flag takes the next word as its
+// value, so `trail approve 3 -m --help` is a real approval.
+const entireAliases: Record<string, string> = { cp: "checkpoint", checkpoints: "checkpoint", sessions: "session" };
+
+function entireKind(words: string[]): EntireKind | undefined {
+  if (words[0] !== "entire") return undefined;
+  const path = entirePath(words);
+  const [cmd, sub, third] = [entireAliases[path[0]] ?? path[0], path[1], path[2]];
+  const flag = (...names: string[]) => words.some((w) => names.some((n) => w === n || w.startsWith(`${n}=`)));
+  const among = (word: string | undefined, list: string) => word === undefined || list.split(" ").includes(word);
+  if (cmd === undefined || among(cmd, "status why blame search activity labs recap version agent-help help"))
+    return "read";
+  if (cmd === "auth" && sub === "status") return "read";
+  if (among(cmd, "enable disable configure clean login logout auth cluster org project service-account plugin"))
+    return "person";
+  if (cmd === "agent") return sub === "list" ? "read" : "person";
+  if (cmd === "repo")
+    return sub === "view" || sub === "list" || (sub === "mirror" && third === "list") ? "read" : "person";
+  if (cmd === "checkpoint") {
+    if (among(sub, "list search tokens") || (sub === "explain" && !flag("--generate"))) return "read";
+    return sub === "push" ? "push" : sub === "delete" ? "destroy" : "ask";
+  }
+  if (cmd === "session") {
+    if (among(sub, "list info current tokens")) return "read";
+    const force = flag("--force") || words.some((w) => shortCluster(w)?.split("=")[0].includes("f"));
+    return among(sub, "attach resume") && force ? "destroy" : "ask";
+  }
+  if (cmd === "trail") {
+    // Anywhere in the path: a value flag bercail does not know must not hide them.
+    if (path.includes("merge") || path.includes("approve")) return "merge";
+    if (path.includes("finding") && path.includes("dismiss")) return "dismiss";
+    if (among(sub, "approvals list sessions show stack timeline watch")) return "read";
+    if (among(sub, "create link ci-pr update-branch")) return "push";
+    if (sub === "finding") return among(third, "list show") ? "read" : third === "dismiss" ? "dismiss" : "write";
+    if (among(sub, "update ready retarget comment rerun-review unlink attachment")) return "write";
+  }
+  return "ask";
+}
+
+function decideEntire(kind: EntireKind, dir: string | undefined, input: GuardInput): GuardDecision {
+  if (kind === "read") return allow;
+  if (kind === "merge") return block(entireMerge);
+  if (kind === "person") return block(entirePerson);
+  if (kind === "destroy") return block(entireDestroy);
+  if (readOnlyRole(input.role)) return block(readOnly);
+  if (kind === "push") return decidePush([], dir, input);
+  if (kind === "write") return allow;
+  if (kind === "dismiss") {
+    if (input.role === "autopilot" || !input.hasUI) return block(entireDismiss);
+    return { action: "ask", reason: "Dismiss this trail finding? It can clear a merge gate." };
+  }
+  if (!input.hasUI) return block(entireUnknown);
+  return { action: "ask", reason: "Allow this entire command? bercail does not know it to be read-only." };
+}
+
 function isGhRelease(words: string[]): boolean {
   if (words[0] !== "gh") return false;
   const plain = plainWords(words);
@@ -964,6 +1057,7 @@ function decidePush(args: string[], dir: string | undefined, input: GuardInput):
 
   const policy = policyFor(dir, input);
   if (!isPolicy(policy)) return policy;
+  if (facts.every && policy.entire) return block(pushAllEntire);
   if (policy.push === "main") return worse(decision, approve(because(policy, "push", "main")));
   if (policy.push === "branch") {
     let toMainRef = dests.some(hitsMain);
@@ -1152,6 +1246,13 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     }
     const forge = forgeCall(words, gitEnv || gitConfigEnv ? undefined : here.cwd);
     if (isForgeMerge(forge.words)) return block(prMerge);
+    const entire = entireKind(forge.words);
+    if (entire) {
+      decision = worse(decision, decideEntire(entire, forge.dir, here));
+      const path = entirePath(forge.words);
+      if (path.includes("checkout") || path.includes("resume") || forge.words.includes("--checkout"))
+        branchMoved = true;
+    }
     const publishing = forgePublish(forge.words);
     const forgePlain = plainWords(forge.words);
     const sync = words[0] === "gh" && forgePlain[1] === "repo" && forgePlain[2] === "sync";
@@ -1212,6 +1313,8 @@ async function branchAt(pi: ExtensionAPI, dir: string, signal: AbortSignal | und
 type PolicyJson = {
   repo: string;
   scratch: boolean;
+  /** Entire captures sessions in this checkout (git_backend_entire_capture). */
+  entire?: boolean;
   prompt: string;
   policy: { commit: Policy["commit"]; push: Policy["push"]; agent_may_release: boolean };
   sources: Record<string, string>;
@@ -1242,9 +1345,16 @@ export function policyFromJson(json: PolicyJson | undefined): Policy {
     push: json.policy.push === "main" || json.policy.push === "branch" ? json.policy.push : "ask",
     agentMayRelease: json.policy.agent_may_release === true,
     scratch: json.scratch === true,
+    entire: json.entire === true,
     repo: json.repo,
     from: json.sources ?? {},
   };
+}
+
+// A review worktree (<repo>.review-<n>, from bercail review-pr) holds someone
+// else's PR head, so its .pi/ extensions are the author's code.
+export function isReviewWorktree(cwd: string): boolean {
+  return cwd.split("/").some((part) => /\.review-\d+$/.test(part));
 }
 
 function stateDir(): string {
@@ -1284,6 +1394,9 @@ export default function (pi: ExtensionAPI) {
     process.env.BERCAIL_CONFIG ||
       join(process.env.XDG_CONFIG_HOME || join(home ?? "", ".config"), "bercail/config.toml"),
   ];
+
+  // A PR head's .pi/ extensions never load, whatever trust.json says of the parent.
+  pi.on("project_trust", async (event) => ({ trusted: isReviewWorktree(event.cwd) ? "no" : "undecided" }));
 
   // Each run starts with the policy of the repo this agent works in.
   pi.on("before_agent_start", async (event, ctx) => {

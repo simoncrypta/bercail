@@ -235,6 +235,12 @@ EOF
   [[ "$(decide "$WT" "git commit -m x" headless)" == allow ]] || fail "trusted headless commit did not go through"
   [[ "$(decide "$WT" "git push --force origin feature")" == block ]] || fail "force-push under a trusted policy"
   [[ "$(decide "$WT" "git tag v1.0.0")" == ask ]] || fail "a tag without agent_may_release"
+  [[ "$(field "$WT" .entire)" == false ]] || fail "no .entire/settings.json: Entire is off"
+  [[ "$(decide "$WT" "git push --all origin")" == allow ]] || fail "push --all under push = main, no Entire"
+  mkdir -p "$WT/.entire" && printf '{"enabled": true}\n' >"$WT/.entire/settings.json"
+  [[ "$(field "$WT" .entire)" == true ]] || fail "show --json says Entire is on"
+  [[ "$(decide "$WT" "git push --all origin")" == block ]] || fail "push --all where Entire keeps shadow branches"
+  rm -rf "$WT/.entire"
   printf 'rules = "changed"\n' >>"$WT/.bercail/policy.toml"
   [[ "$(decide "$WT" "git commit -m x")" == ask ]] || fail "an edited policy still allowed the commit"
   git -C "$WT" checkout -q -- .bercail/policy.toml

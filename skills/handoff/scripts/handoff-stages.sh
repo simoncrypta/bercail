@@ -325,8 +325,11 @@ handoff_build_pi_argv() {
   if [[ "$saw" -eq 0 && -n "$model" ]]; then
     replaced=(--model "$model" "${replaced[@]+"${replaced[@]}"}")
   fi
-  # No HC_TERMINAL_ID: a run started from a desk is not that desk.
-  HANDOFF_START_ARGV=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u BERCAIL_ROLE -u HC_TERMINAL_ID)
+  # No HC_TERMINAL_ID: a run started from a desk is not that desk. No
+  # ENTIRE_PI_NESTED either: Entire would take the run for the desk's subagent
+  # and record nothing of it.
+  HANDOFF_START_ARGV=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u BERCAIL_ROLE -u HC_TERMINAL_ID
+    -u ENTIRE_PI_NESTED)
   [[ "$stage" == autopilot ]] && HANDOFF_START_ARGV+=(BERCAIL_ROLE=autopilot)
   HANDOFF_START_ARGV+=("$bin" -p --mode json --session-id "$session")
   if [[ ${#replaced[@]} -gt 0 ]]; then

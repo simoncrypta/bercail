@@ -87,6 +87,7 @@ cmd_doctor() {
   doctor_notify || failures=1
   doctor_bstack || failures=1
   doctor_desk_restore || failures=1
+  doctor_entire
   return "$failures"
 }
 

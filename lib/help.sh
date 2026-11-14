@@ -8,7 +8,7 @@ help_commands() {
 Post-install CLI (bercail):
   help          This help
   install       Full install from the release mise or packslip unpacked
-  doctor        Check dependencies and integration
+  doctor        Check dependencies and integration (and Entire, run inside a repo that uses it)
   bstack        bercail's Pi setup: status | setup
   config        A config.toml value as bercail reads it: config get <section> <key>
   desk          Desk agents: restore [--dry-run] (bring back what a reboot took) |
@@ -32,6 +32,8 @@ Post-install CLI (bercail):
                 template | title | body | commit [--reviewed-by NAME] (the text for git and
                 the forge, with its provenance line; refuses a stale one, and a change
                 that waits for your review where the repo commits straight to main)
+                [--checkpoints BASE] (keep the Entire-Checkpoint trailers of BASE..HEAD
+                through a squash or a reworded amend)
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
                 gathers every PR, with one detached sibling worktree and a Stack tab.
                 Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,

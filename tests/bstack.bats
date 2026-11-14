@@ -354,7 +354,8 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
     and (index(["-e", "\($p)/extensions/review.ts"]) != null) and (index(["--tools", "read,grep,find,ls"]) != null)
     and (index(["--append-system-prompt", "\($p)/agents/bstack-pr-review.md"]) != null)
-    and (index("--skill") == null) and (index("\($p)/extensions/guard.ts") == null)' "$p/review.json" >/dev/null \
+    and (index("--skill") == null) and (index("\($p)/extensions/guard.ts") == null)
+    and (index("--no-approve") != null)' "$p/review.json" >/dev/null \
     || fail "review-pr's reviewer: $(cat "$p/review.json")"
   [[ -f "$p/agents/bstack-headless.md" ]] || fail "headless lead brief"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
