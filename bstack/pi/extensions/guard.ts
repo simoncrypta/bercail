@@ -80,6 +80,8 @@ const protectedFile = "This file decides what bercail's guard lets through. Ask 
 const pushAllEntire =
   "In an Entire repo, pushing every branch (--all, --branches, a refs/heads/* glob) would also push Entire's shadow branches, which hold unredacted snapshots. Push the branch by name.";
 const entireMerge = "Approving or merging an Entire trail is the person's call. Do not approve or merge it.";
+const shepMerge =
+  "Shep merges a trail only as a plain entire trail merge [<trail>], when the person asks: no --force, which skips the trail's gates, and no flag before merge that bercail does not know.";
 const entireDismiss = "Dismissing a trail finding can clear a merge gate; only the person does that.";
 const entirePerson =
   "This entire command changes Entire's setup, hooks, login, or repositories. Suggest it to the person; do not run it.";
@@ -737,7 +739,17 @@ function forgePublish(words: string[]): "commit" | "push" | undefined {
 // What an entire command does: a read, a publish like gh pr create, a trail
 // write like gh pr edit, or one that is the person's (bercail-znd's classes,
 // starting from `entire agent-help`).
-type EntireKind = "read" | "push" | "write" | "ask" | "dismiss" | "merge" | "person" | "destroy" | BrainKind;
+type EntireKind =
+  | "read"
+  | "push"
+  | "write"
+  | "ask"
+  | "dismiss"
+  | "merge"
+  | "approve"
+  | "person"
+  | "destroy"
+  | BrainKind;
 // Brain and Graph (bercail-shr): a local index rebuild, a repository memory, a
 // model call on the person's tokens, and setup, sync or background work.
 type BrainKind = "refresh" | "remember" | "spend" | "setup";
@@ -761,6 +773,41 @@ function entirePath(words: string[]): string[] {
     else if (entireValueFlags.has(words[i])) i++;
   }
   return path;
+}
+
+// The same words as cobra reads them when each flag bercail does not know takes a
+// value: it eats the next word, so `entire --verbose status trail merge` runs
+// trail merge. undefined when that reading is no different.
+function entireValueReading(words: string[]): string[] | undefined {
+  const out = [words[0]];
+  let eaten = false;
+  for (let i = 1; i < words.length; i++) {
+    const word = words[i];
+    out.push(word);
+    if (word === "--") return eaten ? [...out, ...words.slice(i + 1)] : undefined;
+    if (entireValueFlags.has(word)) {
+      if (i + 1 < words.length) out.push(words[++i]);
+    } else if (/^(--[^=]+|-[^-=])$/.test(word) && i + 1 < words.length) {
+      i++;
+      eaten = true;
+    }
+  }
+  return eaten ? out : undefined;
+}
+
+// entire trail merge [<trail>] that both readings agree on: before merge, only
+// flags with a value bercail knows, and no --force.
+function plainTrailMerge(words: string[]): boolean {
+  const lead: string[] = [];
+  let i = 1;
+  for (; i < words.length && lead.length < 2; i++) {
+    if (!words[i].startsWith("-")) lead.push(words[i]);
+    else if (entireValueFlags.has(words[i])) i++;
+    else if (!/^-[^=]+=/.test(words[i])) return false;
+  }
+  const end = words.indexOf("--");
+  const flags = end < 0 ? words : words.slice(0, end);
+  return lead.join(" ") === "trail merge" && !flags.some((word) => word === "--force" || word.startsWith("--force="));
 }
 
 // No --help or --dry-run shortcut: a string flag takes the next word as its
@@ -894,6 +941,8 @@ function entireKind(words: string[]): EntireKind | undefined {
   if (cmd === "agent") return sub === "list" ? "read" : "person";
   if (cmd === "repo")
     return sub === "view" || sub === "list" || (sub === "mirror" && third === "list") ? "read" : "person";
+  if (cmd === "api" && words.some((word) => /merge|approv/i.test(word))) return "approve";
+  if (cmd === "api" && words.some((word) => /dismiss/i.test(word))) return "dismiss";
   if (cmd === "checkpoint") {
     if (among(sub, "list search tokens") || (sub === "explain" && !flag("--generate"))) return "read";
     return sub === "push" ? "push" : sub === "delete" ? "destroy" : "ask";
@@ -905,7 +954,8 @@ function entireKind(words: string[]): EntireKind | undefined {
   }
   if (cmd === "trail") {
     // Anywhere in the path: a value flag bercail does not know must not hide them.
-    if (path.includes("merge") || path.includes("approve")) return "merge";
+    if (path.includes("approve")) return "approve";
+    if (path.includes("merge")) return "merge";
     if (path.includes("finding") && path.includes("dismiss")) return "dismiss";
     if (among(sub, "approvals list sessions show stack timeline watch")) return "read";
     if (among(sub, "create link ci-pr update-branch")) return "push";
@@ -915,9 +965,19 @@ function entireKind(words: string[]): EntireKind | undefined {
   return "ask";
 }
 
-function decideEntire(kind: EntireKind, dir: string | undefined, input: GuardInput): GuardDecision {
+// Shep merges a trail when the person asks (bercail-wd0). It asks rather than
+// following a policy: a project trail can merge a change in another repo, so no
+// checkout's policy covers it. --force skips the trail's gates: the person's.
+function decideTrailMerge(words: string[], input: GuardInput): GuardDecision {
+  if (input.role !== "shep" || !input.hasUI) return block(entireMerge);
+  if (!plainTrailMerge(words)) return block(shepMerge);
+  return { action: "ask", reason: "Merge this Entire trail into its base? Say yes only if you asked Shep to." };
+}
+
+function decideEntire(kind: EntireKind, words: string[], dir: string | undefined, input: GuardInput): GuardDecision {
   if (kind === "read") return allow;
-  if (kind === "merge") return block(entireMerge);
+  if (kind === "approve") return block(entireMerge);
+  if (kind === "merge") return decideTrailMerge(words, input);
   if (kind === "person") return block(entirePerson);
   if (kind === "destroy") return block(entireDestroy);
   if (kind === "setup") return block(brainSetup);
@@ -928,7 +988,7 @@ function decideEntire(kind: EntireKind, dir: string | undefined, input: GuardInp
   if (kind === "push") return decidePush([], dir, input);
   if (kind === "write" || kind === "refresh") return allow;
   if (kind === "dismiss") {
-    if (input.role === "autopilot" || !input.hasUI) return block(entireDismiss);
+    if (input.role === "autopilot" || input.role === "shep" || !input.hasUI) return block(entireDismiss);
     return { action: "ask", reason: "Dismiss this trail finding? It can clear a merge gate." };
   }
   if (!input.hasUI) return block(entireUnknown);
@@ -1402,9 +1462,12 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     }
     const forge = forgeCall(words, gitEnv || gitConfigEnv ? undefined : here.cwd);
     if (isForgeMerge(forge.words)) return block(prMerge);
-    const entire = entireKind(forge.words);
-    if (entire) {
-      decision = worse(decision, decideEntire(entire, forge.dir, here));
+    // The words as written go last, so a block names what the agent wrote.
+    const valueReading =
+      forge.words[0] === "entire" && !pluginCall(forge.words) ? entireValueReading(forge.words) : undefined;
+    const kinds = [valueReading, forge.words].map((reading) => reading && entireKind(reading));
+    if (kinds[1]) {
+      for (const kind of kinds) if (kind) decision = worse(decision, decideEntire(kind, forge.words, forge.dir, here));
       // It runs them in --repo, which forgeCall left out of forge.dir.
       for (const script of pluginScripts(forge.words))
         decision = worse(decision, decideBash(script, { ...here, cwd: forge.dir }, depth + 1));

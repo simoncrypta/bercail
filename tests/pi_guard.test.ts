@@ -711,26 +711,85 @@ for (const command of [
     for (const role of roleNames) allowed(command, at(role, policies.default));
   });
 }
+// Roles the policy table leaves out: the builder sibling, background Shep
+// (BERCAIL_ROLE=shep-bg, tests/shep.bats), and Shep with nobody at its screen.
+const offTable: Record<string, GuardInput> = Object.fromEntries(
+  [
+    ["builder", "builder", true],
+    ["shep-bg", "shep-bg", true],
+    ["headless shep", "shep", false],
+  ].map(([name, role, hasUI]) => [
+    name,
+    { ...at("desk", policies.loosest), role: role as string, hasUI: hasUI as boolean },
+  ]),
+);
+const everyoneBut = (shep: boolean) => [
+  ...roleNames.filter((role) => shep || role !== "shep").map((role) => at(role, policies.loosest)),
+  ...Object.values(offTable),
+];
+// Shep merges a trail when the person asks: the guard asks, since a project
+// trail can merge a change in another repo, which no checkout's policy covers.
 for (const command of [
   "entire trail merge",
-  "entire trail merge 3 --force --yes",
-  "entire trail merge --dry-run --force",
-  "entire trail approve 3 -m ok",
+  "entire trail merge 3",
+  "entire trail merge lesentiel/1 --json",
   "entire --context work trail merge",
   "entire trail --branch feature merge",
+  "entire trail merge --repo gh/o/r 1",
   "entire trail merge --dry-run",
   "entire trail merge --help",
-  "entire trail merge 3 -- --dry-run",
+  "entire trail merge 3 -- --force",
+  "export GIT_TERMINAL_PROMPT=0\nentire trail merge",
+  "entire trail merge 3 2>&1",
+]) {
+  test(`only Shep merges a trail, and it asks: ${command}`, () => {
+    asked(command, at("shep", policies.loosest));
+    asked(command, at("shep", policies.default));
+    for (const input of everyoneBut(false)) blocked(command, input, /person's call/);
+  });
+}
+for (const [command, reason] of [
+  ["entire trail merge 3 --force --yes", /no --force/],
+  ["entire trail merge --dry-run --force", /no --force/],
+  ["entire trail merge 3 --force=false", /no --force/],
+  ["entire trail --unknown-flag merge 3", /no flag before merge/],
+  ["entire --json 3 trail merge", /no flag before merge/],
+  ["entire --json status trail merge 3", /no flag before merge/],
+  ["entire -v agent-help trail merge", /no flag before merge/],
+  ["entire trail --unknown-flag merge finding dismiss 2", /no flag before merge/],
+  ["entire trail finding dismiss 2 merge", /no flag before merge/],
+] as const) {
+  test(`a forced merge, or one a flag could hide, is blocked for Shep too: ${command}`, () => {
+    blocked(command, at("shep", policies.loosest), reason);
+    // The words as written may stop another role first, as an unknown command.
+    for (const input of everyoneBut(false)) blocked(command, input);
+  });
+}
+for (const command of [
+  "entire trail approve 3 -m ok",
   "entire trail approve 3 -m --help",
   "entire trail approve 3 -m -h",
   "entire trail --unknown-flag show approve",
+  "entire trail --unknown-flag merge approve 3",
+  "entire trail merge approve",
+  "entire --verbose agent-help trail approve 3",
   "/usr/local/bin/entire trail approve",
-  "export GIT_TERMINAL_PROMPT=0\nentire trail merge",
+  "entire api -X POST /api/v1/trails/3/merge",
+  "entire api -X PUT '/api/v1/repos/{owner}/{repo}/trails/3/approvals'",
+  "entire api /api/v1/trails/3 -f action=merge",
 ]) {
-  test(`entire merge and approve are the person's: ${command}`, () => {
-    for (const role of roleNames) blocked(command, at(role, policies.loosest), /person's call/);
+  test(`approving a trail, or merging it through entire api, is the person's: ${command}`, () => {
+    for (const input of everyoneBut(true)) blocked(command, input, /person's call/);
   });
 }
+test("Shep does not dismiss a finding; a desk still asks", () => {
+  for (const command of ["entire trail finding dismiss 2", "entire api -X POST /api/v1/trails/3/findings/2/dismiss"]) {
+    blocked(command, at("shep", policies.loosest), /only the person/);
+    asked(command, at("desk", policies.loosest));
+  }
+  asked("entire api /api/v1/clusters", at("shep", policies.loosest));
+  allowed("entire agent-help trail merge", at("desk", policies.loosest));
+});
 for (const [command, reason] of [
   ["entire enable --agent pi", /Suggest it to the person/],
   ["entire disable --uninstall", /Suggest it to the person/],

@@ -129,6 +129,11 @@ Report each event once; the same event id twice is a duplicate.
   repo's git policy says: straight to main or through a PR, who merges, how a
   release is cut, and the team's rules. Your guard follows the same policy, so
   what it allows goes through without a prompt.
+- An Entire trail is the repo's PR when its git backend is `entire`. Merge one
+  only when the person asks: `entire trail merge [<trail>]` from the repo's main
+  checkout, once `entire trail show` says its gates pass. The guard asks the
+  person first. Approving a trail, dismissing a finding, and `--force` past the
+  gates stay theirs.
 - A desk's work ships with the description its /validate wrote. Run
   `bercail describe check <worktree>`, then commit or open the PR with the text
   `bercail describe commit|title|body <worktree>` prints, the way the

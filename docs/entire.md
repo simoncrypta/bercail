@@ -77,7 +77,7 @@ The trail is the PR.
 | Open | `bercail describe commit \| git commit -F -`, then `entire trail create --title "$(bercail describe title)" --body "$(bercail describe body)"`, which publishes the branch |
 | Update | commit, `git push`, then `entire trail update --body "$(bercail describe body)"` |
 | Ready for review | `entire trail ready` |
-| Merge | you: `entire trail merge`, once the trail's gates pass |
+| Merge | you, or Shep when you ask: `entire trail merge`, once the trail's gates pass |
 
 Supported so far:
 
@@ -144,11 +144,22 @@ On top of the repo's policy, for every role:
   and `checkpoint push` count as pushes. The policy's `push` decides.
 - **Trail writes:** `trail update`, `trail ready`, `trail comment`, and finding
   replies or resolves are allowed, except for read-only roles.
-- **Dismissing a finding:** only you. A desk asks, and autopilot and headless
-  runs are blocked.
-- **Blocked:** `trail approve` and `trail merge`, setup (`enable`, `configure`,
-  `agent`, `login`, `repo …`), and commands that amend, reset or delete
+- **Dismissing a finding:** only you, through the CLI or `entire api`. A desk
+  asks, and Shep, autopilot and headless runs are blocked.
+- **Merging a trail:** you, or Shep when you ask. Shep's
+  `entire trail merge [<trail>]` asks you first and the trail's gates decide
+  the rest. It asks rather than following the repo's policy, because a project
+  trail can merge a change in another repo. Shep's merge is blocked with
+  `--force`, which skips the gates, or with a flag before `merge` that bercail
+  does not know. Every other role is blocked: the lead, its siblings,
+  autopilot, headless runs, and background Shep.
+- **Blocked:** `trail approve`, `entire api` calls whose path or fields name a
+  merge or an approval, setup (`enable`, `configure`, `agent`, `login`,
+  `repo …`), and commands that amend, reset or delete
   (`session attach --force`, `checkpoint delete`).
+- **A flag bercail does not know** may take the next word as its value, the way
+  cobra reads it, so `entire --json 3 trail merge` merges trail 3.
+  The guard decides both readings and takes the stricter.
 - **Brain and Graph**, as `entire brain|graph` or as `entire-brain|entire-graph`:
   - Reads (`brief`, `recall`, `query`, `status`, `inspect`, Graph's queries,
     `entire plugin list|info`) are open to anyone.

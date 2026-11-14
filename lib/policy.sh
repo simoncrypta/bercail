@@ -177,7 +177,7 @@ policy_json() {
           "- Release: " + (if $p.release != "" then $p.release + " " else "" end)
             + (if $p.agent_may_release then "Agents may tag and release." else "Agents do not tag or release unless the person asks; the guard asks first." end),
           (if $p.rules != "" then "- Team rules:\n" + ($p.rules | sub("\n+$"; "") | split("\n") | map("  " + .) | join("\n")) else empty end),
-          "Commit, push, open a PR, or release only when the person or your job asks for it; this policy says how. The guard checks recognized git, gt, gh, origin, and entire commands: force-push flags, + refspecs, --mirror, deleting main, --no-verify, PR merges (gh pr merge, gt merge, gh api writes to /pulls/N/merge), and trail approvals and merges (entire trail approve, entire trail merge) are blocked regardless of policy.",
+          "Commit, push, open a PR, or release only when the person or your job asks for it; this policy says how. The guard checks recognized git, gt, gh, origin, and entire commands: force-push flags, + refspecs, --mirror, deleting main, --no-verify, PR merges (gh pr merge, gt merge, gh api writes to /pulls/N/merge), trail approvals (entire trail approve), and trail merges (entire trail merge) are blocked regardless of policy; Shep alone may merge a trail, and the guard asks the person first.",
           "The guard is a seatbelt, not a sandbox. Commands launched inside another program (python -c, a script file) are not seen; the same rules still apply."
         ] | join("\n"))
       }'
