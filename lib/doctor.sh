@@ -326,10 +326,12 @@ doctor_entire() {
     return 0
   fi
   ver="$(entire version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-  if version_at_least "${ver:-0}" 0.13.0; then
+  # 0.13.3 keeps capturing a Pi session across /reload, /new and /resume;
+  # 0.13.4 stops the pre-push hook panicking in repos with config.worktree.
+  if version_at_least "${ver:-0}" 0.13.4; then
     log "  ok  entire $ver"
   else
-    log "  old  entire ${ver:-(unknown version)}; bercail is tested with 0.13 (entire update)"
+    log "  old  entire ${ver:-(unknown version)}; bercail needs 0.13.4: older ones stop capturing a desk after /reload, /new or /resume, and panic on pre-push with config.worktree (you run: entire update)"
   fi
   hooks="$(git rev-parse --path-format=absolute --git-path hooks)"
   for hook in prepare-commit-msg commit-msg post-commit post-rewrite pre-push; do

@@ -93,6 +93,15 @@ enabled() {
   grep -qF 'ok  checkpoints stay in this clone (push_sessions: false)' <<<"$out" || fail "local only: $out"
 }
 
+@test "entire 0.13.3 is old and says why; 0.13.4 is ok" {
+  enabled
+  out="$(ENTIRE_FAKE_VERSION=0.13.3 GH_VISIBILITY=PRIVATE doctor_entire)" || fail "an old entire fails doctor: $out"
+  grep -qF 'old  entire 0.13.3; bercail needs 0.13.4: older ones stop capturing a desk after /reload, /new or /resume, and panic on pre-push with config.worktree (you run: entire update)' <<<"$out" \
+    || fail "0.13.3: $out"
+  out="$(ENTIRE_FAKE_VERSION=0.13.4 GH_VISIBILITY=PRIVATE doctor_entire)"
+  grep -qF 'ok  entire 0.13.4' <<<"$out" || fail "0.13.4: $out"
+}
+
 @test "no entire, a missing hook, an old entire, an untracked extension and no trust are said, and never fail doctor" {
   enabled
   rm .git/hooks/pre-push
