@@ -95,16 +95,29 @@ shep_run() {
 }
 
 shep_status() {
-  local state pending=0 delivered=0 last
+  local state queued=0 pending=0 persisted=0 uncertain=0 quarantined=0 file row last=""
   state="$(shep_state_dir)"
   printf 'pi sessions: %s\n' "$state/pi-sessions"
-  [[ -d "$state/inbox" ]] && pending="$(find "$state/inbox" -maxdepth 1 -name '*.json' | wc -l)"
-  [[ -d "$state/delivered" ]] && delivered="$(find "$state/delivered" -maxdepth 1 -name '*.json' | wc -l)"
-  printf 'desk events: %s waiting, %s delivered\n' "$((pending))" "$((delivered))"
-  if ((delivered > 0)); then
-    last="$(find "$state/delivered" -maxdepth 1 -name '*.json' -printf '%T@ %p\n' | sort -n | tail -n 1 | cut -d' ' -f2-)"
-    jq -r '"last delivered: \(.event_id) at \(.delivered_at // "?")"' "$last" 2>/dev/null || true
+  [[ -d "$state/inbox" ]] && queued="$(find "$state/inbox" -maxdepth 1 -name '*.json' | wc -l)"
+  if [[ -d "$state/delivered" ]]; then
+    while IFS= read -r -d '' file; do
+      if row="$(jq -er 'select(.persisted_entry_id | type == "string" and length > 0)
+        | [.persisted_at, (.event_id // .notice_id)] | @tsv' "$file" 2>/dev/null)"; then
+        persisted=$((persisted + 1))
+        [[ "$row" > "$last" ]] && last="$row"
+      else
+        pending=$((pending + 1))
+        if jq -e '.delivery_error | type == "string" and length > 0' "$file" >/dev/null 2>&1; then
+          uncertain=$((uncertain + 1))
+        fi
+      fi
+    done < <(find "$state/delivered" -maxdepth 1 -name '*.json' -print0)
+    quarantined="$(find "$state/delivered" -maxdepth 1 -name '*.invalid' | wc -l)"
   fi
+  printf 'desk notices: %s queued, %s awaiting persistence (%s uncertain), %s persisted to session\n' \
+    "$((queued))" "$pending" "$uncertain" "$persisted"
+  [[ -z "$last" ]] || printf 'last persisted: %s at %s\n' "${last#*$'\t'}" "${last%%$'\t'*}"
+  printf 'quarantined: %s\nPersistence is not handled, action-completed, or read by the person.\n' "$((quarantined))"
   shep_bg_list
   return 0
 }

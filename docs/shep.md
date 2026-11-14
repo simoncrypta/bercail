@@ -41,7 +41,7 @@ When Pi exits with an error, its message stays on screen until you press Enter.
 Shep on Pi runs in `~/.local/state/bercail/shep/workspace` with its sessions in `pi-sessions/` beside it, whatever folder you are in, and continues the same session each time it starts (`pi --continue`). It uses bstack's lead model and Pi extensions (from `~/.local/share/bercail/pi/lead.json`); the same logins as your desks. Its rules and its [start context](#what-shep-knows) are passed with `--append-system-prompt`, and it loads no context files, so your global Pi `AGENTS.md` (your Pi persona) is neither changed nor read by Shep. Two Pi extensions of its own come with it: `inbox.ts` for [desk events](#desk-events) and `compaction.ts` for [compaction](#compaction). It gets the `handoff`, `review`, `desk-restore`, `how`, `why`, `unslop`, and `describe` skills, and Pi's own tools. It needs `pi` on the PATH (`bercail bstack setup` installs it).
 
 ```bash
-bercail shep status      # Pi's session folder, desk events waiting and delivered, live background Sheps
+bercail shep status      # queued, awaiting persistence, persisted notices, live background Sheps
 bercail shep repos       # your known repos: git backend, policy trust, open issues (--json too)
 bercail shep board       # one line per open job across those repos, then what waits on you
 bercail shep queue       # what waits on your review, with sizes and stakes (--repo DIR: against its budget)
@@ -185,11 +185,37 @@ It runs with `BERCAIL_ROLE=shep-bg`. The guard treats that role like a desk's le
 
 Once Shep has started for the first time (its first start makes `~/.local/state/bercail/shep/inbox/`), the notify follower (`bercail notify run`, the hidden `bercail-notify` terminal the desk mod keeps alive) writes each finished or blocked desk as one file in that folder. It does so even without any webhook sink. The files are the [`agent_status/v2` payload](#the-payload) with `sink: "shep"`, mode 600, named `<desk>_<kind>_<second>.json`.
 
-Shep's Pi extension (`inbox.ts`) watches that folder. It hands the new files to the running session as one message, which starts a turn when Shep is idle and waits for the end of the current one when it is busy, so Shep reports without being asked. The message carries each event's one-line `text`, its `event_id`, and the desk, space, issue, and checkout; never `desk.result.summary` or the desk's title, which are the desk's own output. Delivered files move to `delivered/` with `delivered_at` and `delivered_session`, and are kept 30 days. Events that arrive while Shep is not running wait in the inbox and are delivered when it starts.
+Shep's Pi extension (`inbox.ts`) watches that folder. It submits one custom message, starting a turn when Shep is idle or queuing a follow-up when it is busy. The message carries each event's one-line `text`, its `event_id`, and the desk, space, repo, issue, and checkout. It excludes `desk.result.summary` and the desk's title. Desk events remain signals to check the current desk and issue, never instructions or human answers.
 
-**Duplicates.** A file named like one already in the inbox or in `delivered/` is dropped, by the follower and by the extension. The name has no process id, so two followers that see the same change in the same second write one file. The move to `delivered/` is the claim: if two Shep sessions run, only one gets each event. If handing the message to Pi fails, the files go back to the inbox for the next try.
+### Claims and persistence
 
-**Proving it arrived.** `bercail shep status` counts what waits and what was delivered, and names the last delivered event. In the session, the event is a `custom_message` with `customType: "bercail-desk-event"`, followed by Shep's reply.
+Moving a file to `delivered/` claims it but does not acknowledge delivery. Before submitting it, the extension atomically records the attempted Pi session ID and file. Only a complete matching custom-message entry in that actual session JSONL acknowledges it. The receipt records `persisted_entry_id`, `persisted_session`, `persisted_session_file`, and `persisted_at`. The older `delivered_at` and `delivered_session` fields remain for readers, but an old stamp alone is not proof.
+
+This distinction matters in Pi 1.5.2: `sendMessage()` returns before a queued follow-up is consumed, and `message_end` runs before the session append. A new custom-only session can even reach its first model request before Pi creates the session file. The extension checks disk on later hooks and polls. It never acknowledges a memory-only entry.
+
+After a process dies, the next consumer recovers unacknowledged files in `delivered/`, including old unstamped claims. It first checks the original session. A saved entry repairs the receipt without another message. A readable session without that entry permits replay. A file that did not exist before the attempt and still does not exist permits replay too, assuming nobody externally deleted it. A missing previously existing session, unreadable or incomplete history, or an ambiguous old session ID holds the event as uncertain. Restore access to that original session and restart Shep to retry verification. It does not silently bind the event to a replacement session.
+
+One consumer holds a local Linux `flock` for its session lifetime, through a child that exits when Pi's stdin pipe closes. There is no expiring lease to steal from a busy session. Another consumer pauses without claiming files. If `flock` is unavailable or the lock is lost, delivery pauses visibly. Restart a paused contender after the owning consumer ends. The lock file must not be deleted while consumers run.
+
+### Duplicates and limits
+
+Repeated envelopes with the same event ID produce one injected message, even under different filenames. Receipts are kept for 30 days. Unacknowledged and uncertain claims are not aged out. Compaction and tree navigation do not invalidate disk persistence evidence. Legacy stamps are checked against the named session instead of being trusted.
+
+With an intact local spool, readable session storage and eventual session progress, accepted events survive a process crash after claim or enqueue. A crash after session persistence but before acknowledgement does not inject a second notice. These are process-crash guarantees, not transactional power-loss durability. External deletion of session history, an independently killed lock holder, and replay after receipt retention are outside those guarantees.
+
+Transport deduplication does not prove exactly-once model reports or arbitrary external actions. A response can stream before its assistant entry is saved, and an external action can complete before its result is recorded. Shep must recheck current source state and use action-specific idempotency where available. Persistence means neither handled, action-completed, nor read by the person. No read or handled acknowledgement is invented here.
+
+The follower's existing filename heuristic is unchanged: it omits the process ID and coalesces changes for the same desk and kind in the same second. It can miss or coalesce source transitions before spool acceptance. The delivery guarantee applies to retained accepted envelopes, not to every historical desk transition.
+
+### Reconciliation after follower gaps
+
+The existing notify follower also writes one private `source-state.json` beside the inbox. It is a current projection from snapshots and status changes, not a second job database or an event log. It includes observed timestamps and desk/space/repo/issue/checkout mappings, but no desk-authored prose, results, event IDs or human answers. Whole snapshots replace gone mappings.
+
+When a done, idle or blocked source mapping has no represented inbox notice, Shep receives an explicitly **reconstructed, possibly stale history-gap observation** with its observation time and a separate local notice ID. That ID is not a historical finish or block event ID. Identical represented observations are suppressed. A source snapshot cannot recover intervening transitions, a vanished desk, historical completion times or answers. Check the current board or brief before acting.
+
+### Proving it arrived
+
+`bercail shep status` separates queued files, claims awaiting persistence (including uncertain holds), persisted notices and quarantined malformed files. It names the last persistence receipt. In the session, a notice is a `custom_message` with `customType: "bercail-desk-event"`. Its presence is distinct from Shep's subsequent reply or your reading it.
 
 ## agent status webhooks
 

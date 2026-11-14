@@ -151,6 +151,171 @@ team_and_other() {
   add_team
 }
 
+# Reconciliation is a current projection beside the inbox, never a historical event.
+source_state() {
+  printf '%s/source-state.json' "$(shep_state_dir)"
+}
+
+start_source_inbox() {
+  mkdir -p "$(shep_state_dir)/inbox"
+}
+
+@test "first-seen terminal states reconcile for Shep without invented events or webhook changes" {
+  local state status
+  start_source_inbox
+  mkdir -p "$desk/.bercail"
+  printf '{"issue":"myapp-1","summary":"untrusted-answer","status":"ready"}\n' >"$desk/.bercail/handoff-result.json"
+  for status in done idle blocked; do
+    event "$status" | jq -c '.terminals[1].title = "untrusted-title"
+      | .terminals[1].labels += {"bercail.issue":"bg-2","bercail.issue_title":"untrusted-issue-title","bercail.shep":"bg"}' \
+      | notify_follow
+    state="$(source_state)"
+    [[ -f "$state" ]] || fail "no source projection for first-seen $status"
+    jq -e --arg p "$desk" --arg s "$status" '
+      .source == "bercail" and .schema == "bercail.source_state/v1" and .kind == "reconciliation"
+      and (.observed_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T"))
+      and .history_gap == true and .possibly_stale == true and (has("event_id") | not)
+      and (.desks | length) == 1 and (.desks[0] | .observed_at != null
+        and .agent == {address:"t9",app:"pi",status:$s,role:"shep-bg"}
+        and .space.id == "sp1" and .space.repo == "myapp" and .space.checkout_path == $p
+        and .desk.issue == "bg-2" and .desk.branch == "feat" and .desk.stage == null)
+      and ([.. | objects | has("event_id") or has("title") or has("issue_title") or has("result")] | any | not)
+    ' "$state" >/dev/null || fail "bad $status projection: $(<"$state")"
+  done
+  [[ "$(kinds)" == '[]' ]] || fail "first-seen snapshots changed webhook semantics: $(kinds)"
+  [[ -z "$(find "$(shep_state_dir)/inbox" -type f -print)" ]] || fail "invented source event"
+  [[ "$(stat -c %a "$state")" == 600 ]] || fail "source projection is not private"
+  if grep -q 'untrusted-' "$state"; then fail "source projection contains desk-authored prose"; fi
+  [[ -z "$(find "$(shep_state_dir)" -maxdepth 1 -name '.source-state.*' -print)" ]] || fail "source temp file leaked"
+}
+
+@test "notify run keeps ordinary events separate from current source reconciliation" {
+  start_source_inbox
+  { event working; status_event done; } >"$BATS_TEST_TMPDIR/source-stream.jsonl"
+  cat >"$BATS_TEST_TMPDIR/bin/hc" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >>"$BATS_TEST_TMPDIR/source-hc.log"
+[[ "\$1" == events ]] || exit 1
+cat "$BATS_TEST_TMPDIR/source-stream.jsonl"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/hc"
+  HC_BIN="$BATS_TEST_TMPDIR/bin/hc" notify_run
+  [[ -f "$(source_state)" ]] || fail "notify run did not publish source reconciliation"
+  jq -e '.desks[0].agent.status == "done"' "$(source_state)" >/dev/null || fail "source not current"
+  [[ "$(kinds)" == '["finished"]' ]] || fail "webhook did not keep ordinary event semantics"
+  [[ "$(find "$(shep_state_dir)/inbox" -name '*.json' | wc -l)" -eq 1 ]] || fail "source became an inbox event"
+  jq -e '.kind == "finished" and (.event_id | startswith("t9:finished:"))' \
+    "$(shep_state_dir)/inbox/"*.json >/dev/null || fail "ordinary source event lost its identity"
+  grep -qx 'events --json --label bercail.role=agent' "$BATS_TEST_TMPDIR/source-hc.log" || fail "did not use fake hc events"
+}
+
+@test "missed snapshots replace source mappings and status deltas clear stale terminal observations" {
+  start_source_inbox
+  { event working
+    event done | jq -c '.terminals[1].address = "t12"
+      | .terminals[1].labels += {"bercail.issue":"other-2","bercail.space":"sp2"}
+      | {jsonrpc:"2.0",method:"missed",params:.}'
+    status_event working t12
+  } | notify_follow
+  [[ -f "$(source_state)" ]] || fail "no missed-snapshot projection"
+  jq -e '.desks | length == 1 and .[0].agent.address == "t12" and .[0].agent.status == "working"
+    and .[0].space.id == "sp2" and .[0].desk.issue == "other-2"' "$(source_state)" >/dev/null \
+    || fail "missed snapshot retained old mapping or stale done status: $(<"$(source_state)")"
+  [[ "$(kinds)" == '[]' ]] || fail "first-seen missed snapshot fabricated a transition"
+}
+
+@test "reconciliation survives follower restart and malformed source does not erase valid state" {
+  start_source_inbox
+  event done | notify_follow
+  [[ -f "$(source_state)" ]] || fail "no initial source projection"
+  event blocked | notify_follow
+  jq -e '.desks[0].agent.status == "blocked"' "$(source_state)" >/dev/null || fail "restart missed blocked"
+  cp "$(source_state)" "$BATS_TEST_TMPDIR/source.before"
+  printf '%s\n' 'not json' '{"method":"missed","params":{}}' '{"terminals":null}' \
+    '{"terminals":[null]}' '{"terminals":[{"address":"bad","state":"live","labels":{},"status":"bad"}]}' \
+    '{"terminals":[{"address":"t9","state":"live","labels":{"bercail.role":"agent"},"status":{"state":{}}}]}' \
+    | notify_follow
+  cmp -s "$(source_state)" "$BATS_TEST_TMPDIR/source.before" || fail "malformed snapshot erased source"
+}
+
+@test "malformed status deltas do not replace a valid source observation" {
+  start_source_inbox
+  { event blocked
+    printf '%s\n' '{"method":"event","params":{"terminal":"t9","type":"status","data":{"status":"bad"}}}' \
+      '{"method":"event","params":{"terminal":"t9","type":"status","data":{"status":{"state":{}}}}}'
+  } | notify_follow
+  [[ -f "$(source_state)" ]] || fail "no source projection"
+  jq -e '.desks[0].agent.status == "blocked"' "$(source_state)" >/dev/null || fail "malformed delta replaced source status"
+}
+
+@test "whole empty snapshots and gone terminal events remove source mappings" {
+  local gone
+  start_source_inbox
+  for gone in finished removed lost; do
+    { event done
+      jq -nc --arg type "$gone" '{method:"event",params:{terminal:"t9",type:$type,data:{}}}'
+    } | notify_follow
+    [[ -f "$(source_state)" ]] || fail "no source projection"
+    jq -e '.desks == []' "$(source_state)" >/dev/null || fail "$gone retained source mapping"
+  done
+  { event done; printf '{"terminals":[]}\n'; } | notify_follow
+  jq -e '.desks == []' "$(source_state)" >/dev/null || fail "whole empty snapshot retained gone desk"
+}
+
+@test "failed label and restart lookups discard the old source mapping" {
+  local type
+  start_source_inbox
+  cat >"$BATS_TEST_TMPDIR/bin/hc-gone" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >>"$BATS_TEST_TMPDIR/source-hc.log"
+exit 1
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/hc-gone"
+  for type in labels restarted; do
+    { event done
+      jq -nc --arg type "$type" '{method:"event",params:{terminal:"t9",type:$type,data:{}}}'
+    } | HC_BIN="$BATS_TEST_TMPDIR/bin/hc-gone" notify_follow
+    [[ -f "$(source_state)" ]] || fail "no source projection"
+    jq -e '.desks == []' "$(source_state)" >/dev/null || fail "$type lookup failure retained old mapping"
+  done
+  [[ "$(grep -c '^get t9 --json$' "$BATS_TEST_TMPDIR/source-hc.log")" -eq 2 ]] || fail "did not use fake hc lookup"
+}
+
+@test "empty missed snapshots forget all mapping before a terminal address is reused" {
+  local next="$BATS_TEST_TMPDIR/new-app"
+  start_source_inbox
+  git init -q "$next"
+  git -C "$next" commit -q --allow-empty -m init
+  cat >"$BATS_TEST_TMPDIR/bin/hc-reused" <<EOF
+#!/usr/bin/env bash
+printf '%s\\n' "\$*" >>"$BATS_TEST_TMPDIR/source-hc.log"
+[[ "\$1 \$2" == 'get t9' ]] || exit 1
+jq -nc --arg cwd "$next" '{address:"t9",state:"live",cwd:\$cwd,title:"Replacement desk",
+  status:{state:"working",app:"pi"},labels:{"bercail.role":"agent","bercail.space":"new-space",
+    "bercail.issue":"new-2","bercail.issue_title":"Replacement job","bercail.shep":"bg"}}'
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/hc-reused"
+  { event done
+    printf '{"method":"missed","params":{"terminals":[]}}\n'
+    status_event working
+    status_event blocked
+  } | HC_BIN="$BATS_TEST_TMPDIR/bin/hc-reused" notify_follow
+  [[ -f "$BATS_TEST_TMPDIR/source-hc.log" ]] || fail "reused address skipped hc lookup after empty snapshot"
+  [[ "$(grep -c '^get t9 --json$' "$BATS_TEST_TMPDIR/source-hc.log")" -eq 1 ]] || fail "replacement mapping not looked up once"
+  jq -e --arg p "$next" '.desks | length == 1 and (.[0] | .agent.address == "t9"
+    and .agent.status == "blocked" and .agent.role == "shep-bg" and .space.id == "new-space"
+    and .space.checkout_path == $p and .space.repo == "new-app" and .desk.issue == "new-2")' \
+    "$(source_state)" >/dev/null || fail "reused address retained source mapping"
+  jq -e --arg p "$next" '.kind == "blocked" and .space.id == "new-space" and .space.checkout_path == $p
+    and .desk.issue == "new-2" and .desk.issue_title == "Replacement job" and .agent.title == "Replacement desk"' \
+    "$(shep_state_dir)/inbox/"*.json >/dev/null || fail "reused address retained event mapping"
+}
+
+@test "source reconciliation creates no inbox before Shep first starts" {
+  event done | notify_follow
+  [[ ! -e "$(shep_state_dir)" ]] || fail "source reconciliation started an unused Shep inbox"
+}
+
 @test "a desk seen done first is not reported; working->done, blocked once, blocked->done are" {
   local got
   follow_session

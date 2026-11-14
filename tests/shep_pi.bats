@@ -16,3 +16,12 @@ setup() {
   command -v script >/dev/null 2>&1 || fail "script (util-linux) is required for the live proof"
   node "$ROOT/tests/shep_pi_live.ts" "$ROOT" "$pi"
 }
+
+# bats test_tags=live
+@test "live: Shep inbox survives SIGKILL at real Pi delivery boundaries offline" {
+  local pi
+  pi="$(real_pi)"
+  [[ -n "$pi" ]] || skip "Pi not found; live proof not run"
+  need flock
+  node "$ROOT/tests/shep_inbox_live.ts" "$ROOT" "$pi"
+}

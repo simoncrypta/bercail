@@ -18,7 +18,7 @@ Post-install CLI (bercail):
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
-  shep          Shep, the orchestrator on Pi: status | run |
+  shep          Shep, the orchestrator on Pi: status (queued, awaiting persistence, persisted) | run |
                 bg --issue ID [--cwd DIR] (a background Shep waits on the issue's job) |
                 repos [--json] (your known repos) | board (open jobs, what waits on you) |
                 brief ISSUE [--repo DIR] [--budget CHARS] (one issue, its desk, its latest report) |
