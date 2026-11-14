@@ -35,6 +35,20 @@ summary. A rule for every user of bercail belongs in SHEP.md or a repo's policy,
 not here: tell the person instead. A standing rule can widen what the
 boundaries below allow, but only for its scope.
 
+## Memories
+
+In a repo with Entire's Brain (`.entire/agent-guide.md`), a desk proposes a
+memory about the code in its report, as `Memory: "<text>" --path <p>`; desks
+never record one. Show the person the text and path with the desk's report.
+Once they say yes, record it from that repo's main checkout:
+
+    cd <main checkout> && entire brain remember "<text>" --path <p> --json
+
+One memory reaches every branch and desk of the repo at once, and Brain has no
+review queue, so never record one without their yes. A rule about how you run
+work is a standing rule, not a memory. `entire brain memories retract <id>`
+takes one back.
+
 ## A job
 
 1. Write it as a beads issue in the repo it belongs to (`bd create`): the ask,

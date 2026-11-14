@@ -86,6 +86,12 @@ const entirePerson =
 const entireDestroy =
   "This entire command amends a commit, resets git state, or deletes checkpoints. Ask the person to run it.";
 const entireUnknown = "A headless run only uses entire commands bercail knows. Leave this one to the person.";
+const brainSetup =
+  "This Brain or Graph command sets it up, syncs memories, runs background work, or runs a binary it names. Suggest it to the person; do not run it.";
+const brainSpend =
+  "This Brain command calls a model on the person's tokens (distill, recall --expand, remember without --path, refresh --agent). Leave it to the person.";
+const brainRemember =
+  'A memory reaches every branch and desk at once. Propose it in your report as Memory: "<text>" --path <p>, and Shep records it once the person agrees.';
 const unclosedSub =
   "The guard cannot find where this $( or backtick ends (a heredoc with an apostrophe inside $( ) does that). Write the body to a file first, then pass its path.";
 
@@ -731,7 +737,10 @@ function forgePublish(words: string[]): "commit" | "push" | undefined {
 // What an entire command does: a read, a publish like gh pr create, a trail
 // write like gh pr edit, or one that is the person's (bercail-znd's classes,
 // starting from `entire agent-help`).
-type EntireKind = "read" | "push" | "write" | "ask" | "dismiss" | "merge" | "person" | "destroy";
+type EntireKind = "read" | "push" | "write" | "ask" | "dismiss" | "merge" | "person" | "destroy" | BrainKind;
+// Brain and Graph (bercail-shr): a local index rebuild, a repository memory, a
+// model call on the person's tokens, and setup, sync or background work.
+type BrainKind = "refresh" | "remember" | "spend" | "setup";
 
 // entire's flags that take a value, so the value is not read as a subcommand.
 const entireValueFlags = new Set(
@@ -758,7 +767,119 @@ function entirePath(words: string[]): string[] {
 // value, so `trail approve 3 -m --help` is a real approval.
 const entireAliases: Record<string, string> = { cp: "checkpoint", checkpoints: "checkpoint", sessions: "session" };
 
+// Brain's and Graph's flags that take a value. A set of their own, so Brain's
+// --path does not change how a trail command parses.
+const pluginValueFlags = new Set(
+  [
+    "--path --kind --locus --k --source --query --dir --output -o --test --setup --report --graph-binary",
+    "--agent-command --profile-json --entire-binary --branch --agent --model --limit -n --number --session",
+    "--scope --format --profile --cache-dir --after --before --concept --sessions --max-bytes --effort",
+  ]
+    .join(" ")
+    .split(" "),
+);
+
+// Subcommands by dotted path. A group's next word is its subcommand; a leaf's
+// next words are its arguments. A group alone prints its help. A flag before a
+// subcommand leaves it unknown: cobra takes an unknown flag's next word as its
+// value, so `entire-brain --workspace status setup` runs setup.
+const pluginGroups = new Set(
+  "brain graph brain.inspect brain.entities brain.memories brain.memories.storage brain.patterns brain.patterns.skills brain.webhook brain.docs brain.config brain.workspace brain.workspace.patterns brain.memory brain.refresh".split(
+    " ",
+  ),
+);
+const pluginKinds: [EntireKind, string, string][] = [
+  [
+    "read",
+    "brain",
+    ". version agent-guide capabilities overview brief query search vsearch get multi-get recall status stats doctor verify path show review help inspect inspect.blame inspect.boundaries inspect.changes inspect.code inspect.context inspect.dead-code inspect.graph-schema inspect.impact inspect.query-graph inspect.regressions inspect.search-graph inspect.snippet inspect.tests inspect.trace-path entities entities.history entities.show memories memories.status memories.tree memories.global memories.vitality memories.map memories.storage memories.storage.status patterns patterns.status webhook webhook.status webhook.events docs docs.extract docs.formats config config.show config.path workspace workspace.list workspace.query workspace.search workspace.get workspace.vsearch workspace.inspect workspace.review memory memory.status memory.jobs",
+  ],
+  [
+    "refresh",
+    "brain",
+    "refresh refresh.delta refresh.history refresh.index refresh.seed refresh.sessions entities.backfill patterns.refresh repair memory.rebuild memory.repair memory.reconcile memory.retry",
+  ],
+  [
+    "spend",
+    "brain",
+    "distill patterns.verify patterns.skills.form memories.outline memory.abstract memory.configure workspace.patterns.verify",
+  ],
+  ["remember", "brain", "remember memories.retract"],
+  [
+    "setup",
+    "brain",
+    "setup add connect disconnect memories.sync memories.import memories.gc memories.reclassify memories.storage.migrate memory.push-work memory.notify watch workspace.watch workspace.create workspace.add workspace.remove workspace.refresh stop start reset config.init init daemon-reregister init-agents publish bundle webhook.test viz dash",
+  ],
+  [
+    "read",
+    "graph",
+    ". query neighbors impact def explain symbols edges snapshot snapshot-query commit diff checkpoint health doctor version capabilities context store agent-guide stats verify help",
+  ],
+  ["refresh", "graph", "index"],
+  ["setup", "graph", "setup"],
+];
+const pluginKind = new Map(
+  pluginKinds.flatMap(([kind, name, paths]) =>
+    paths.split(" ").map((path) => [path === "." ? name : `${name}.${path}`, kind] as const),
+  ),
+);
+
+type PluginCall = { key: string; flags: Map<string, string> };
+
+// entire brain …, entire graph …, or the plugin binary itself (entire-brain …):
+// the subcommand's dotted path and the flags it was given.
+function pluginCall(words: string[]): PluginCall | undefined {
+  let args: string[] | undefined;
+  let key = /^entire-(brain|graph)$/.exec(words[0])?.[1];
+  if (key) args = words.slice(1);
+  else if (words[0] === "entire") {
+    for (let i = 1; i < words.length && words[i] !== "--" && args === undefined; i++) {
+      if (!words[i].startsWith("-")) {
+        if (words[i] !== "brain" && words[i] !== "graph") return undefined;
+        key = words[i];
+        args = words.slice(i + 1);
+      } else if (entireValueFlags.has(words[i])) i++;
+    }
+  }
+  if (key === undefined || args === undefined) return undefined;
+  const flags = new Map<string, string>();
+  let leaf = false;
+  for (let i = 0; i < args.length && args[i] !== "--"; i++) {
+    const word = args[i];
+    const eq = word.indexOf("=");
+    const group = !leaf && pluginGroups.has(key);
+    if (!word.startsWith("-")) {
+      if (group && flags.size > 0) return { key: `${key}.?`, flags };
+      if (group) key += `.${word}`;
+      else leaf = true;
+    } else if (eq > 0) flags.set(word.slice(0, eq), word.slice(eq + 1));
+    else flags.set(word, pluginValueFlags.has(word) ? (args[++i] ?? "") : "");
+  }
+  return { key, flags };
+}
+
+function pluginCallKind({ key, flags }: PluginCall): EntireKind {
+  const flag = (name: string) => flags.has(name);
+  if (["--agent-command", "--graph-binary", "--profile-json", "--entire-binary"].some(flag)) return "setup";
+  if (key === "brain.remember") return flag("--global") ? "setup" : flags.get("--path") ? "remember" : "spend";
+  if (key === "brain.memories.retract" && flag("--global")) return "setup";
+  if (key === "brain.repo-identity" && flag("--keep")) return "setup";
+  if (key === "brain.recall" && flag("--expand")) return "spend";
+  if (key.startsWith("brain.refresh") && flag("--agent") && flags.get("--agent") !== "none") return "spend";
+  if (key === "graph.index" && flag("--report")) return "ask";
+  return pluginKind.get(key) ?? "ask";
+}
+
+// The commands graph verify runs: decided like bash -c.
+function pluginScripts(words: string[]): string[] {
+  const call = pluginCall(words);
+  if (call?.key !== "graph.verify") return [];
+  return [call.flags.get("--test"), call.flags.get("--setup")].filter((script) => script !== undefined);
+}
+
 function entireKind(words: string[]): EntireKind | undefined {
+  const plugin = pluginCall(words);
+  if (plugin) return pluginCallKind(plugin);
   if (words[0] !== "entire") return undefined;
   const path = entirePath(words);
   const [cmd, sub, third] = [entireAliases[path[0]] ?? path[0], path[1], path[2]];
@@ -767,7 +888,8 @@ function entireKind(words: string[]): EntireKind | undefined {
   if (cmd === undefined || among(cmd, "status why blame search activity labs recap version agent-help help"))
     return "read";
   if (cmd === "auth" && sub === "status") return "read";
-  if (among(cmd, "enable disable configure clean login logout auth cluster org project service-account plugin"))
+  if (cmd === "plugin") return among(sub, "list info search doctor") ? "read" : "person";
+  if (among(cmd, "enable disable configure clean login logout auth cluster org project service-account"))
     return "person";
   if (cmd === "agent") return sub === "list" ? "read" : "person";
   if (cmd === "repo")
@@ -798,9 +920,13 @@ function decideEntire(kind: EntireKind, dir: string | undefined, input: GuardInp
   if (kind === "merge") return block(entireMerge);
   if (kind === "person") return block(entirePerson);
   if (kind === "destroy") return block(entireDestroy);
+  if (kind === "setup") return block(brainSetup);
+  if (kind === "spend") return block(brainSpend);
+  // Memories go through Shep and the person, as standing rules do.
+  if (kind === "remember") return input.role === "shep" ? allow : block(brainRemember);
   if (readOnlyRole(input.role)) return block(readOnly);
   if (kind === "push") return decidePush([], dir, input);
-  if (kind === "write") return allow;
+  if (kind === "write" || kind === "refresh") return allow;
   if (kind === "dismiss") {
     if (input.role === "autopilot" || !input.hasUI) return block(entireDismiss);
     return { action: "ask", reason: "Dismiss this trail finding? It can clear a merge gate." };
@@ -1279,6 +1405,9 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     const entire = entireKind(forge.words);
     if (entire) {
       decision = worse(decision, decideEntire(entire, forge.dir, here));
+      // It runs them in --repo, which forgeCall left out of forge.dir.
+      for (const script of pluginScripts(forge.words))
+        decision = worse(decision, decideBash(script, { ...here, cwd: forge.dir }, depth + 1));
       const path = entirePath(forge.words);
       if (path.includes("checkout") || path.includes("resume") || forge.words.includes("--checkout"))
         branchMoved = true;

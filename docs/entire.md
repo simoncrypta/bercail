@@ -91,6 +91,45 @@ Supported so far:
 - **Trails next to GitHub PRs** for a mirrored repo: not built yet. It will be
   opt-in per repo.
 
+## Brain
+
+[Brain](https://docs.entire.com/guides/brain/overview.md) is an Entire plugin:
+a local memory of the repo built from checkpointed sessions, docs, git history,
+and Graph's code index. There is one store per repository, keyed by its origin,
+so every worktree and desk shares it. Pi uses it through the CLI alone; setup's
+hooks are Claude Code's. These are your commands, in a clean main checkout:
+
+```sh
+entire plugin install brain --yes       # installs entire-graph too
+ENTIRE_BRAIN_NO_EGRESS=1 entire brain setup --no-backfill --no-daemon --no-agent-hooks
+entire graph setup --repo . --no-claude-hook
+echo '.entire/agent-guide.md linguist-generated=true' >> .gitattributes
+git add AGENTS.md CLAUDE.md .entire/agent-guide.md .gitattributes && git commit
+```
+
+Setup writes a managed block into `AGENTS.md`, a `CLAUDE.md`, and
+`.entire/agent-guide.md`. Commit them on main, on their own: they are
+working-tree files, so a worktree sees them only once its branch has the commit.
+Setup does not need a clean tree, and in a desk's worktree its files would land
+in the review diff. `linguist-generated` keeps the guide's regenerations out of
+the diff budget.
+
+`--no-backfill` and `--no-daemon` keep it from spending tokens.
+Backfill and the watcher send transcript chunks to the `claude` or `codex` CLI
+on your login, and the watcher ignores `ENTIRE_BRAIN_NO_EGRESS` in your shell.
+`entire brain connect` uploads the repo's memories to Entire. Do not connect a
+public repo whose checkpoints go to a private one, such as bercail.
+
+Pi loads `AGENTS.md` but not the guide it imports, so bstack's instructions
+tell each desk to run `entire brain brief` at the start of a job and `recall`
+before it changes a rule. A desk proposes a memory in its report, and Shep
+records it with `entire brain remember` once you agree.
+
+When the plugin is installed, `bercail doctor`'s Entire section also checks
+Brain's and Graph's versions, that the guide and the `AGENTS.md` block are
+committed, that no watcher is installed, and that a public repo's memories are
+not synced to Entire.
+
 ## The guard
 
 On top of the repo's policy, for every role:
@@ -110,6 +149,19 @@ On top of the repo's policy, for every role:
 - **Blocked:** `trail approve` and `trail merge`, setup (`enable`, `configure`,
   `agent`, `login`, `repo …`), and commands that amend, reset or delete
   (`session attach --force`, `checkpoint delete`).
+- **Brain and Graph**, as `entire brain|graph` or as `entire-brain|entire-graph`:
+  - Reads (`brief`, `recall`, `query`, `status`, `inspect`, Graph's queries,
+    `entire plugin list|info`) are open to anyone.
+  - A local refresh (`refresh`, `graph index`, `repair`) is allowed, except for
+    read-only roles.
+  - `remember` with `--path` and `memories retract` are Shep's alone.
+  - Model calls (`distill`, `recall --expand`, `remember` without `--path`,
+    `refresh … --agent`) are blocked, and so are setup, `connect`, sync, the
+    watcher, `plugin install|upgrade`, and any flag that names a binary to run.
+  - A flag before a subcommand, or a subcommand bercail does not know, asks a
+    desk and is blocked elsewhere.
+  - `graph verify --test|--setup` commands are checked like `bash -c`, in its
+    `--repo`.
 - **Other entire commands:** a desk asks, and a headless run is blocked.
 - **`git push --all`** (or `--branches`, or a glob refspec) is blocked in an
   Entire repo. It would also push Entire's shadow branches, which hold

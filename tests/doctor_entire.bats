@@ -35,6 +35,7 @@ printf '%s\n' "\$*" >>"$BATS_TEST_TMPDIR/gh.log"
 EOF
   chmod +x "$BIN/entire" "$BIN/gh"
   export PATH="$BIN:/usr/bin:/bin"
+  unset ENTIRE_PLUGIN_DIR
   REPO="$BATS_TEST_TMPDIR/work/repo"
   git_init "$REPO"
   cd "$REPO" || return 1
@@ -126,4 +127,79 @@ enabled() {
   printf '{"enabled": false}\n' >.entire/settings.local.json
   out="$(doctor_entire)" || fail "rc"
   grep -qF 'ok  off here (enabled: false)' <<<"$out" || fail "off: $out"
+}
+
+# Brain and Graph stand-ins in Entire's plugin dir: a version, and the status
+# JSON in BRAIN_STATUS. Each logs its arguments, so a test sees doctor only read.
+brain() {
+  local plugins="$HOME/.local/share/entire/plugins/bin"
+  mkdir -p "$plugins"
+  cat >"$plugins/entire-brain" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >>"$BATS_TEST_TMPDIR/brain.log"
+quiet='{"hosted":{"repo_state":"disconnected"},"onboarding":{"daemon":{"installed":false}}}'
+case "\$1" in
+  version) echo "\${BRAIN_FAKE_VERSION:-0.5.1}" ;;
+  status) printf '%s\n' "\${BRAIN_STATUS:-\$quiet}" ;;
+  *) exit 2 ;;
+esac
+EOF
+  printf '#!/bin/sh\necho v0.6.0\n' >"$plugins/entire-graph"
+  chmod +x "$plugins/entire-brain" "$plugins/entire-graph"
+}
+
+# What entire brain setup leaves in a repo: the guide, and the AGENTS.md block.
+brain_files() {
+  mkdir -p .entire
+  printf '# Agent guide\n' >.entire/agent-guide.md
+  printf '# repo\n\n<!-- entire-agent:begin -->\n@.entire/agent-guide.md\n<!-- entire-agent:end -->\n' >AGENTS.md
+}
+
+@test "without Brain installed the Entire section says nothing of it" {
+  enabled
+  out="$(GH_VISIBILITY=PRIVATE doctor_entire)" || fail "rc: $out"
+  grep -qi 'brain' <<<"$out" && fail "said: $out"
+  return 0
+}
+
+@test "Brain set up and committed, with no watcher and no sync, is ok; doctor only reads it" {
+  enabled
+  brain
+  brain_files
+  git add .entire AGENTS.md && git commit -qm brain
+  out="$(GH_VISIBILITY=PUBLIC doctor_entire)" || fail "rc: $out"
+  grep -qF 'ok  Brain 0.5.1' <<<"$out" || fail "version: $out"
+  grep -qF "ok  Brain's agent guide and AGENTS.md block are committed" <<<"$out" || fail "files: $out"
+  grep -iE '  (hint|warning|missing|old)  .*(brain|graph)' <<<"$out" && fail "nothing to fix: $out"
+  [[ "$(sort -u "$BATS_TEST_TMPDIR/brain.log")" == $'status --json\nversion' ]] || fail "ran: $(cat "$BATS_TEST_TMPDIR/brain.log")"
+}
+
+@test "Brain not set up hints; uncommitted files warn; an old Brain and a missing Graph are said" {
+  enabled
+  brain
+  rm "$HOME/.local/share/entire/plugins/bin/entire-graph"
+  out="$(BRAIN_FAKE_VERSION=0.4.9 GH_VISIBILITY=PRIVATE doctor_entire)" || fail "rc: $out"
+  grep -qF 'hint  Brain is not set up here (you run, in a clean main checkout: entire brain setup --no-backfill --no-daemon --no-agent-hooks)' <<<"$out" \
+    || fail "not set up: $out"
+  grep -qF 'old  Brain 0.4.9' <<<"$out" || fail "version: $out"
+  grep -qF 'missing  entire-graph' <<<"$out" || fail "graph: $out"
+  brain_files
+  out="$(GH_VISIBILITY=PRIVATE doctor_entire)"
+  grep -qF "warning  Brain's .entire/agent-guide.md or AGENTS.md block is not committed" <<<"$out" || fail "uncommitted: $out"
+  git add .entire/agent-guide.md && git commit -qm guide
+  out="$(GH_VISIBILITY=PRIVATE doctor_entire)"
+  grep -qF "warning  Brain's .entire/agent-guide.md or AGENTS.md block is not committed" <<<"$out" || fail "block uncommitted: $out"
+}
+
+@test "Brain's watcher hints; hosted sync of a public repo warns, of a private one does not" {
+  enabled
+  brain
+  git remote add origin https://github.com/acme/widgets.git
+  export BRAIN_STATUS='{"hosted":{"repo_state":"connected"},"onboarding":{"daemon":{"installed":true}}}'
+  out="$(GH_VISIBILITY=PUBLIC doctor_entire)" || fail "a warning does not fail doctor: $out"
+  grep -qF "hint  Brain's watcher is installed" <<<"$out" || fail "watcher: $out"
+  grep -qF "warning  Brain syncs this repo's memories to Entire, and acme/widgets is public" <<<"$out" || fail "public sync: $out"
+  out="$(GH_VISIBILITY=PRIVATE doctor_entire)"
+  grep -qF 'Brain syncs' <<<"$out" && fail "private: $out"
+  return 0
 }

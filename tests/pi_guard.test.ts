@@ -805,6 +805,93 @@ test("entire --repo does not lend cwd trust, and a trail checkout moves the bran
   asked("entire trail create --title x --checkout && git push", at("desk", policies.branch));
 });
 
+// Brain and Graph, as entire brain …, entire graph …, or the plugin binary itself.
+for (const command of [
+  'entire brain brief "fix the lease gate" --json',
+  "entire brain recall retry --json --k 5",
+  "entire-brain recall retry --locus src/lease.ts",
+  "/home/u/.local/share/entire/plugins/bin/entire-brain status --json",
+  "entire brain query --source history retries",
+  "entire brain inspect code runPiDesk",
+  "entire brain memories storage status",
+  "entire brain memories tree --path preferences",
+  "entire graph query 'where is the retry policy'",
+  "entire-graph impact runPiDesk --repo .",
+  "entire plugin list",
+  "entire plugin info brain",
+]) {
+  test(`brain and graph read: ${command}`, () => {
+    for (const role of roleNames) allowed(command, at(role, policies.default));
+  });
+}
+for (const command of ["entire brain refresh delta", "entire-brain refresh seed --agent none", "entire graph index"]) {
+  test(`a local brain refresh is a write, not a read: ${command}`, () => {
+    for (const role of ["desk", "shep", "headless", "autopilot"] as const) allowed(command, at(role, policies.default));
+    for (const role of ["judge", "council"] as const) blocked(command, at(role, policies.default), /read-only/);
+  });
+}
+for (const command of [
+  'entire brain remember "retries back off" --path conventions.retry',
+  'entire-brain remember "retries back off" --path=conventions.retry --json',
+  "entire brain memories retract 01JX",
+]) {
+  test(`only Shep records a memory; everyone else proposes it: ${command}`, () => {
+    allowed(command, at("shep", policies.loosest));
+    for (const role of roleNames.filter((r) => r !== "shep"))
+      blocked(command, at(role, policies.loosest), /Propose it/);
+  });
+}
+for (const [command, reason] of [
+  ['entire brain remember "retries back off"', /tokens/],
+  ["entire brain remember x --kind --path", /tokens/],
+  ["entire brain distill --dry-run", /tokens/],
+  ["entire brain recall retry --expand", /tokens/],
+  ["entire-brain refresh seed --agent claude-code", /tokens/],
+  ["entire brain patterns skills form 3", /tokens/],
+  ["entire brain setup --no-backfill --no-daemon", /Suggest it/],
+  ["entire-brain setup", /Suggest it/],
+  ["entire-brain connect", /Suggest it/],
+  ["entire-graph setup --repo .", /Suggest it/],
+  ["entire brain memories sync", /Suggest it/],
+  ["entire brain remember x --path p --global", /Suggest it/],
+  ["entire brain brief x --graph-binary ./evil", /Suggest it/],
+  ["entire brain recall x --agent command --agent-command sh", /Suggest it/],
+  ["entire brain workspace watch", /Suggest it/],
+  ["entire plugin install brain --yes", /Suggest it/],
+  ["entire plugin upgrade brain", /Suggest it/],
+] as const) {
+  test(`brain setup, sync and model calls are the person's: ${command}`, () => {
+    for (const role of roleNames) blocked(command, at(role, policies.loosest), reason);
+  });
+}
+test("an unknown brain or graph command, or a flag before its subcommand, asks a desk", () => {
+  for (const command of [
+    "entire brain inspect graph-ui",
+    "entire brain hook pre-edit src/a.ts",
+    "entire brain memories bogus",
+    "entire graph index --report GRAPH_REPORT.md",
+    "entire-brain --workspace status setup --backfill --yes",
+    "entire brain --json status setup",
+    "entire brain memories --json status sync",
+  ]) {
+    asked(command, at("desk", policies.loosest));
+    for (const role of ["headless", "autopilot", "council"] as const) blocked(command, at(role, policies.loosest));
+  }
+});
+test("graph verify's --test and --setup are checked as bash, in its --repo", () => {
+  for (const role of roleNames) {
+    allowed("entire graph verify --test 'npm test' --setup 'npm ci'", at(role, policies.loosest));
+    blocked("entire graph verify --test 'git push --force'", at(role, policies.loosest), /Force-push/);
+    blocked(
+      "entire-graph verify --setup='entire-brain connect' --test 'npm test'",
+      at(role, policies.loosest),
+      /Suggest it/,
+    );
+  }
+  allowed("entire graph verify --test 'git push origin main'", at("desk", policies.main, "main"));
+  asked("entire graph verify --repo /other --test 'git push origin main'", at("desk", policies.main, "main"));
+});
+
 test("in an Entire repo, pushing every branch is blocked: shadow branches hold unredacted snapshots", () => {
   for (const role of ["desk", "shep", "headless"] as const) {
     for (const command of ["git push --all origin", "git push --branches", "git push origin 'refs/heads/*'"]) {

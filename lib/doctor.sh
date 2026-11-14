@@ -265,6 +265,48 @@ _doctor_gh_visibility() {
   _git_backend_bounded 10 gh repo view "$1" --json visibility --jq .visibility </dev/null 2>/dev/null || true
 }
 
+# Entire's Brain plugin, when installed: its version, whether setup's files reach
+# every worktree, and what runs or leaves the machine unasked (the watcher, hosted
+# sync). It only runs version and status. Silent without the plugin.
+_doctor_entire_brain() {
+  local top="$1" bin brain graph ver status url slug=""
+  bin="${ENTIRE_PLUGIN_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/entire/plugins}/bin"
+  brain="$bin/entire-brain" graph="$bin/entire-graph"
+  [[ -x "$brain" ]] || brain="$(command -v entire-brain)" || return 0
+  [[ -x "$graph" ]] || graph="$(command -v entire-graph || true)"
+  ver="$("$brain" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if version_at_least "${ver:-0}" 0.5.1; then
+    log "  ok  Brain $ver"
+  else
+    log "  old  Brain ${ver:-(unknown version)}; bercail is tested with 0.5.1 (you run: entire plugin upgrade brain)"
+  fi
+  ver=""
+  [[ -z "$graph" ]] || ver="$("$graph" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  if [[ -z "$graph" ]]; then
+    log "  missing  entire-graph, which Brain's code answers need (you run: entire plugin install graph)"
+  elif ! version_at_least "${ver:-0}" 0.5.0; then
+    log "  old  Graph ${ver:-(unknown version)}; Brain needs 0.5.0 (you run: entire plugin upgrade graph)"
+  fi
+  if git -C "$top" cat-file -e HEAD:.entire/agent-guide.md 2>/dev/null \
+    && git -C "$top" show HEAD:AGENTS.md 2>/dev/null | grep -qF '<!-- entire-agent:begin -->'; then
+    log "  ok  Brain's agent guide and AGENTS.md block are committed, so every worktree's desk has them"
+  elif [[ -f "$top/.entire/agent-guide.md" ]]; then
+    log "  warning  Brain's .entire/agent-guide.md or AGENTS.md block is not committed: desks in other worktrees miss it. Commit them on main, on their own"
+  else
+    log "  hint  Brain is not set up here (you run, in a clean main checkout: entire brain setup --no-backfill --no-daemon --no-agent-hooks)"
+  fi
+  status="$(cd "$top" && _git_backend_bounded 10 "$brain" status --json </dev/null 2>/dev/null)" || status='{}'
+  jq -e '.onboarding.daemon.installed == true' <<<"$status" >/dev/null 2>&1 \
+    && log "  hint  Brain's watcher is installed: it refreshes in the background and, unless its agent is none, distills sessions daily on your tokens (you run: entire brain setup --uninstall-daemon)"
+  jq -e '(.hosted.repo_state // "disconnected") != "disconnected"' <<<"$status" >/dev/null 2>&1 || return 0
+  url="$(git -C "$top" remote get-url origin 2>/dev/null || true)"
+  [[ ! "$url" =~ github\.com[:/]([^/]+/[^/]+)$ ]] || slug="${BASH_REMATCH[1]%.git}"
+  if [[ -n "$slug" && "$(_doctor_gh_visibility "$slug")" == PUBLIC ]]; then
+    log "  warning  Brain syncs this repo's memories to Entire, and $slug is public: memories distilled from private checkpoints may be readable there (you run: entire brain disconnect)"
+  fi
+  return 0
+}
+
 # Entire in the repo doctor runs from: what desks need for their sessions to be
 # captured, and where the transcripts go. Silent outside an Entire repo. Never
 # fails doctor: whoever clones a repo that uses Entire may not use it.
@@ -316,6 +358,7 @@ doctor_entire() {
   else
     log "  hint  not logged in to Entire; only trails need it (you run: entire login)"
   fi
+  _doctor_entire_brain "$top"
 
   files=("$top/.entire/settings.json")
   [[ ! -f "$top/.entire/settings.local.json" ]] || files+=("$top/.entire/settings.local.json")

@@ -37,6 +37,11 @@ Follow these sources in turn:
   branch of each agent job.
 - **In the repo:** comments next to the code, README, CHANGELOG, docs, tests
   named after a bug.
+- **Entire's Brain**, in a repo with `.entire/agent-guide.md`:
+  `entire brain recall "<question>" --json` for recorded decisions, and
+  `entire brain query --source history "<question>" --json` for past sessions.
+  A memory is **said** only with the commit or checkpoint
+  `entire brain inspect blame <id>` gives it; otherwise it is **inferred**.
 - **Elsewhere:** whatever the harness can reach (an issue tracker, chat, error
   tracking). Say which ones you could not reach.
 
