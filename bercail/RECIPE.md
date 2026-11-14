@@ -55,7 +55,7 @@ Second choice, the layout on its own, when the person says no:
   `ctrl-shift-l`.
 - Tell the person what they won't have. The desk runs plain `pi`, which must
   be on PATH; there is no bstack. Review needs
-  [tuicr](https://github.com/agavra/tuicr) (≥ 0.20) installed separately,
+  [tuicr](https://github.com/agavra/tuicr) (≥ 0.26) installed separately,
   and the Shep view needs bercail (`bercail shep run` starts Shep); without
   it the view says so and the spaces work.
   There are no worktree spaces (`dev`, `wtc`, `wtd`), no handoff, skills or
@@ -337,7 +337,7 @@ is which of `shep` and `work` is hidden.
   `TERM=xterm-256color`: `hc run` passes on the caller's environment, and a
   headless caller's `TERM=dumb` leaves the agent without colors or key
   handling. The mod's own start runs inside the app and doesn't set it.
-- Review assumes [tuicr](https://github.com/agavra/tuicr) (≥ 0.20); set
+- Review assumes [tuicr](https://github.com/agavra/tuicr) (≥ 0.26); set
   `[layout] review` in `~/.config/bercail/config.toml` to use another tool,
   or `auto_review = false` to open Review only by key.
 - Without a Shell terminal in the space's first tab, no desk can start (the

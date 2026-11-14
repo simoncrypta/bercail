@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-TUICR_MIN_VERSION=0.20.0
+# q_quits in config/tuicr/config.toml arrived in 0.26.0; older tuicr ignores the key.
+TUICR_MIN_VERSION=0.26.0
 # `wt list --format=json` is {schema, items: [...]} from 0.80.0 on; the shell block reads that shape.
 WORKTRUNK_MIN_VERSION=0.80.0
 TUICR_MISE_SPEC="github:agavra/tuicr"

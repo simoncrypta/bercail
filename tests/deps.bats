@@ -184,6 +184,28 @@ doctor_with_wt() {
   grep -q "^  ok  wt (.*; found 0.80.0, required >=0.80.0)$" <<<"$out" || fail "wt 0.80.0 must be ok: $out"
 }
 
+# doctor_dependencies with a tuicr that reports version $1. Sets out and rc.
+doctor_with_tuicr() {
+  local bin="$BATS_TEST_TMPDIR/tuicr-bin"
+  mkdir -p "$bin"
+  printf '#!/bin/sh\necho "tuicr %s"\n' "$1" >"$bin/tuicr"
+  chmod +x "$bin/tuicr"
+  if out="$(PATH="$bin:$PATH" doctor_dependencies 2>&1)"; then rc=0; else rc=$?; fi
+}
+
+@test "doctor flags a tuicr too old to read bercail's q_quits" {
+  doctor_with_tuicr 0.25.0
+  grep -q "^  outdated  tuicr (.*; found 0.25.0, required >=0.26.0) (configured review)$" <<<"$out" ||
+    fail "tuicr 0.25.0 must be outdated: $out"
+  [[ "$rc" -ne 0 ]] || fail "an old tuicr must count as a failure"
+}
+
+@test "doctor accepts tuicr at its minimum" {
+  doctor_with_tuicr 0.26.0
+  grep -q "^  ok  tuicr (.*; found 0.26.0, required >=0.26.0) (configured review)$" <<<"$out" ||
+    fail "tuicr 0.26.0 must be ok: $out"
+}
+
 @test "check_herdr_app tells the herdr terminal from the app" {
   check_herdr_app_with herdr
   assert_contains "$out" "found herdr, the Herdr terminal: bercail needs the Herdr app" \
