@@ -1,4 +1,5 @@
 // Decision table for bercail's Pi guard. No Pi process.
+import { spawnSync } from "node:child_process";
 import { expect, test } from "vite-plus/test";
 import guard, {
   type GuardInput,
@@ -126,6 +127,46 @@ test("a heredoc body is data, but a command substitution in it runs", () => {
   allowed('cat <<-"END" >x\n\tgit commit --no-verify\n\tEND', headless);
   blocked("cat <<EOF\n$(git push --force)\nEOF", auto, /Force-push/);
   blocked("cat <<'EOF' >x\ntext\nEOF\ngit push --force", auto, /Force-push/);
+});
+
+// A test cannot stop a loop in its own process, so this one runs the guard in a
+// child node killed after 5 seconds: a hang fails the case instead of the run.
+function decideInChild(command: string, input: GuardInput): Decision {
+  const guardUrl = new URL("../bstack/pi/extensions/guard.ts", import.meta.url).href;
+  const script = `import { readFileSync } from "node:fs";
+    const { decideBash } = await import(${JSON.stringify(guardUrl)});
+    const { command, input } = JSON.parse(readFileSync(0, "utf8"));
+    process.stdout.write(JSON.stringify(decideBash(command, input)));`;
+  const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+    input: JSON.stringify({ command, input }),
+    encoding: "utf8",
+    timeout: 5000,
+  });
+  assertEqual(run.signal, null, `${command} hung the guard`);
+  assertEqual(run.status, 0, run.stderr);
+  return JSON.parse(run.stdout);
+}
+
+test("a $( or backtick the tokenizer can't close is blocked, and does not hang", () => {
+  // Seen live: Shep froze on id=$(bd create --body-file - <<'EOF' with an apostrophe
+  // in the body; readBalanced gave up and tokenize spun on the $ forever.
+  const unclosed = [
+    "id=$(bd create --body-file - <<'EOF'\nit's here\nEOF\n); echo $id",
+    "echo `git status",
+    // Bash runs each of these. Checking the rest as the sub's body read main) for main.
+    "x=$(echo \\'; git push origin main)",
+    "x=$(cat <<'EOF'\nit's\nEOF\ngit push origin main)",
+    "x=$(echo \\'; gh pr merge 1)",
+    "x=$(echo \\'; git push --no-verify)",
+    "x=$(echo \\'; git push origin --delete main)",
+    "x=$(echo \\'; bercail policy trust)",
+  ];
+  for (const command of unclosed) {
+    const got = decideInChild(command, auto);
+    assertEqual(got.action, "block", `${command} → ${JSON.stringify(got)}`);
+    assertMatch(got.reason ?? "", /Write the body to a file/);
+  }
+  allowed("id=$(bd create --body-file - <<'EOF'\nit is here\nEOF\n); echo $id", headless);
 });
 
 test("edit and write are blocked for read-only roles only", () => {

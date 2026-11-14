@@ -86,6 +86,8 @@ const entirePerson =
 const entireDestroy =
   "This entire command amends a commit, resets git state, or deletes checkpoints. Ask the person to run it.";
 const entireUnknown = "A headless run only uses entire commands bercail knows. Leave this one to the person.";
+const unclosedSub =
+  "The guard cannot find where this $( or backtick ends (a heredoc with an apostrophe inside $( ) does that). Write the body to a file first, then pass its path.";
 
 const allow: GuardDecision = { action: "allow" };
 const block = (reason: string): GuardDecision => ({ action: "block", reason });
@@ -213,8 +215,13 @@ function placeIn(base: string | undefined, target: string): string | undefined {
 const literalDollar = "\u0001";
 const literal = (text: string) => text.replaceAll("$", literalDollar);
 
-// A shell word, an operator that ends a command, or a command substitution's body.
-type Token = { kind: "op"; op: string } | { kind: "word"; value: string } | { kind: "sub"; value: string };
+// A shell word, an operator that ends a command, a command substitution's body,
+// or a $( or backtick the guard cannot find the end of.
+type Token =
+  | { kind: "op"; op: string }
+  | { kind: "word"; value: string }
+  | { kind: "sub"; value: string }
+  | { kind: "unclosed" };
 
 // tag keeps the mktemp -d dirs of nested commands apart.
 function tokenize(command: string, tag = ""): Token[] {
@@ -306,8 +313,16 @@ function tokenize(command: string, tag = ""): Token[] {
     while (i < command.length) {
       const ch = command[i];
       if (" \t\n;|&".includes(ch)) break;
+      // readBalanced gives up on a $( it can't close, like one around a heredoc
+      // whose body has an apostrophe. Breaking on an empty word would leave i
+      // where it is and loop forever, so the rest is left unchecked and blocked.
       if (ch === "$" && command[i + 1] === "(") {
         const inner = readBalanced(command, i + 1);
+        if (!inner && !word) {
+          tokens.push({ kind: "unclosed" });
+          i = command.length;
+          break;
+        }
         if (!inner || !makesTempDir(inner.body)) break;
         word += tempDir();
         i = inner.end;
@@ -315,6 +330,11 @@ function tokenize(command: string, tag = ""): Token[] {
       }
       if (ch === "`") {
         const end = command.indexOf("`", i + 1);
+        if (end < 0 && !word) {
+          tokens.push({ kind: "unclosed" });
+          i = command.length;
+          break;
+        }
         if (end < 0 || !makesTempDir(command.slice(i + 1, end))) break;
         word += tempDir();
         i = end + 1;
@@ -379,17 +399,25 @@ function tokenize(command: string, tag = ""): Token[] {
 
 // One simple command, with the operators before and after it ("" at either end).
 // marked keeps literalDollar where words has the $ back.
-type Segment = { words: string[]; marked: string[]; subs: string[]; before: string; after: string };
+type Segment = {
+  words: string[];
+  marked: string[];
+  subs: string[];
+  before: string;
+  after: string;
+  unclosed: boolean;
+};
 
 function segmentsOf(command: string, tag = ""): Segment[] {
   const out: Segment[] = [];
   let words: string[] = [];
   let subs: string[] = [];
   let before = "";
+  let unclosed = false;
   const flush = (op: string) => {
-    if (words.length || subs.length) {
+    if (words.length || subs.length || unclosed) {
       const plain = words.map((word) => word.replaceAll(literalDollar, "$"));
-      out.push({ words: plain, marked: words, subs, before, after: op });
+      out.push({ words: plain, marked: words, subs, before, after: op, unclosed });
     }
     words = [];
     subs = [];
@@ -397,6 +425,7 @@ function segmentsOf(command: string, tag = ""): Segment[] {
   };
   for (const token of tokenize(command, tag)) {
     if (token.kind === "op") flush(token.op);
+    else if (token.kind === "unclosed") unclosed = true;
     else if (token.kind === "sub") subs.push(token.value);
     else words.push(token.value);
   }
@@ -1198,6 +1227,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   const vars: TempVars = new Map();
   let straight = true;
   for (const segment of segmentsOf(command, `${depth}`)) {
+    if (segment.unclosed) return block(unclosedSub);
     // export GIT_DIR=... holds for the rest of the command, so it counts from here on.
     if (segment.words.some((word) => gitPlace.test(word))) gitEnv = true;
     if (segment.words.some((word) => gitConfigVar.test(word))) gitConfigEnv = true;
