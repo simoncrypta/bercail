@@ -77,6 +77,7 @@ function deps(over: Record<string, unknown> = {}) {
     },
     log: (line: string) => logs.push(line),
     now: () => new Date("2026-11-12T03:00:00.000Z"),
+    questions: () => "Q42@3 pending — proposed yes (unverified; no authority)",
     ...over,
   };
 }
@@ -126,6 +127,15 @@ describe("the summary is the board, the rules, and the model's decisions only", 
     expect(sent).not.toContain("# old");
     expect(c.calls[0].options.maxTokens).toBe(900);
     expect(c.calls[0].options.signal).toBe(ev.signal);
+  });
+
+  test("reloads durable question revisions rather than reconstructing authority from prose", async () => {
+    const { s, c } = await run();
+    expect(s).toContain("Q42@3 pending — proposed yes (unverified; no authority)");
+    expect(s).toContain("Narrative is not approval authority");
+    expect(c.calls[0].context.messages[0].content[0].text).toContain(
+      "Do not reconstruct question state or approval authority",
+    );
   });
 
   test("nothing is logged on success", async () => {
@@ -197,7 +207,9 @@ describe("earlier decisions, rules, new days, and the rollover seed", () => {
 
   test("rules are the bullet lines; no rules says so", () => {
     expect(rulesOf("# head\n\n- a\nnot a rule\n- b\n")).toEqual(["- a", "- b"]);
-    expect(assemble({ board: "b", rules: [], decisions: "d", at: "t" })).toContain("- none yet");
+    expect(assemble({ board: "b", rules: [], decisions: "d", at: "t", questions: "Q1@1 pending" })).toContain(
+      "- none yet",
+    );
   });
 
   test("a new day is a different local date", () => {
@@ -208,7 +220,7 @@ describe("earlier decisions, rules, new days, and the rollover seed", () => {
   });
 
   test("the seed names the previous session, /resume, the board and the rules", () => {
-    const s = seed({ board: "B", rules: RULES, previous: "/s/old.jsonl", at: "t" });
+    const s = seed({ board: "B", rules: RULES, previous: "/s/old.jsonl", at: "t", questions: "Q1@1 pending" });
     expect(s).toContain("/s/old.jsonl");
     expect(s).toContain("/resume");
     expect(s).toContain("B");

@@ -1,0 +1,40 @@
+// Real separate writers and process death at the filesystem commit boundary.
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import { QuestionStore, type QuestionSpec } from "../shep/pi/questions.ts";
+
+const [dir, mode, payload] = process.argv.slice(2);
+const input = JSON.parse(payload);
+if (mode === "crash-write") {
+  const write = fs.writeFileSync;
+  fs.writeFileSync = (file, data, options) => {
+    if (typeof data !== "string") throw new Error("fault injection expects a JSON string write");
+    write(file, data.slice(0, 32), options);
+    fs.writeSync(1, "commit-boundary\n");
+    process.kill(process.pid, "SIGSTOP");
+  };
+  syncBuiltinESMExports();
+}
+if (mode === "crash-before" || mode === "crash-after") {
+  const rename = fs.renameSync;
+  fs.renameSync = (...args: Parameters<typeof fs.renameSync>) => {
+    if (mode === "crash-after") rename(...args);
+    fs.writeSync(1, "commit-boundary\n");
+    process.kill(process.pid, "SIGSTOP");
+    if (mode === "crash-before") rename(...args);
+  };
+  syncBuiltinESMExports();
+}
+const store = new QuestionStore(dir);
+const run = () => {
+  if (mode === "reply") store.propose(input.requestId, input.token, input.answer, "worker");
+  else store.create(input.requestId, input.spec as QuestionSpec, (spec) => spec);
+};
+if (mode === "create" || mode === "reply") {
+  // The parent releases all writers together, without timing sleeps.
+  fs.writeSync(1, "ready\n");
+  process.stdin.once("data", () => {
+    run();
+    process.stdin.destroy();
+  });
+} else run();

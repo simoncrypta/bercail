@@ -85,7 +85,8 @@ async function body(run: string): Promise<void> {
   const share = join(home, ".local/share/bercail/shep");
   copyFileSync(join(ROOT, "shep/SHEP.md"), join(share, "SHEP.md"));
   copyFileSync(join(ROOT, "shep/pi/inbox.ts"), join(share, "pi/inbox.ts"));
-  copyFileSync(join(ROOT, "shep/pi/compaction.ts"), join(share, "pi/compaction.ts"));
+  for (const file of ["compaction.ts", "questions.ts", "question-commands.ts", "question-target.ts", "question-cli.ts"])
+    copyFileSync(join(ROOT, "shep/pi", file), join(share, "pi", file));
   // bstack's lead: the fake model, as lead.json names a model and its extensions.
   writeFileSync(
     join(home, ".local/share/bercail/pi/lead.json"),

@@ -19,7 +19,7 @@ setup() {
   STATE="$XDG_STATE_HOME/bercail/shep"
   SHARE="$HOME/.local/share/bercail/shep"
   cp "$ROOT/shep/SHEP.md" "$ROOT/shep/BACKGROUND.md" "$SHARE/"
-  cp "$ROOT/shep/pi/inbox.ts" "$ROOT/shep/pi/compaction.ts" "$SHARE/pi/"
+  cp "$ROOT/shep/pi/"*.ts "$SHARE/pi/"
   # bstack's lead, as deploy writes it.
   jq -n '["pi","--model","fake/lead:high","-e","npm:pi-claude-bridge@0.12.0","-e","/x/fallback.ts","--append-system-prompt","/x/instructions.md","--skill","/x/bstack"]' \
     >"$HOME/.local/share/bercail/pi/lead.json"
@@ -110,7 +110,7 @@ EOF
   grep -qx "pi cwd=$STATE/workspace inbox=$STATE/inbox role=shep anthropic=unset" "$LOG" || fail "Pi env: $(grep '^pi cwd' "$LOG")"
   args="$(sed -n 's/^pi-arg //p' "$LOG" | tr '\n' ' ')"
   for want in "--model fake/lead:high" "-e npm:pi-claude-bridge@0.12.0" "-e /x/fallback.ts" "-e $SHARE/pi/inbox.ts" \
-    "-e $SHARE/pi/compaction.ts" "--append-system-prompt $SHARE/SHEP.md" "--append-system-prompt $STATE/context.md" \
+    "-e $SHARE/pi/compaction.ts" "-e $SHARE/pi/question-commands.ts" "--append-system-prompt $SHARE/SHEP.md" "--append-system-prompt $STATE/context.md" \
     "--no-context-files" "--approve" "--session-dir $STATE/pi-sessions" "--continue" \
     "--skill $HOME/.agents/skills/handoff" "--skill $HOME/.agents/skills/review" "--skill $HOME/.agents/skills/describe"; do
     [[ "$args" == *"$want "* ]] || fail "Pi argv lacks '$want': $args"
@@ -131,7 +131,7 @@ EOF
 @test "the shep usage names every subcommand" {
   local out
   out="$(shep unknown </dev/null 2>&1)" && fail "an unknown subcommand passed"
-  [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list' ]] \
+  [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list | questions [--json] | question create|revise|reply|check|thread' ]] \
     || fail "shep usage: $out"
 }
 
@@ -240,12 +240,24 @@ EOF
   if grep -q 'sk-ant-test' "$LOG"; then fail "the Anthropic key reached a command"; fi
 }
 
+@test "question commands use Shep's scratch state and never infer an answer" {
+  run shep questions --json
+  [[ "$status" == 0 ]] || fail "question snapshot failed: $output"
+  jq -e '.version == 1 and .questions == [] and .selected == null' <<<"$output" >/dev/null
+  [[ -f "$STATE/questions.lock" ]] || fail "question state did not use XDG_STATE_HOME"
+  run shep questions
+  [[ "$status" == 0 && "$output" == *'no action authority'* && "$output" == *'0 pending'* ]] || fail "$output"
+  run shep question check Q1@1
+  [[ "$status" == 1 && "$output" == *'unknown question revision'* ]] || fail "$output"
+  [[ ! -f "$STATE/questions.json" ]] || fail "a read created question authority"
+}
+
 @test "deploy installs Shep rules, the background brief and Pi extensions" {
   local rel
   reset
   rm -rf "$SHARE"
   INSTALL_SRC="$ROOT" bash -c 'set -euo pipefail; for l in common config bstack shep; do source "$1/lib/$l.sh"; done; deploy_shep' _ "$ROOT" >/dev/null
-  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts; do
+  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts; do
     cmp -s "$ROOT/shep/$rel" "$SHARE/$rel" || fail "deploy did not install shep/$rel"
   done
 }

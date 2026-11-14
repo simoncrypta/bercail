@@ -87,7 +87,15 @@ async function body(dir: string): Promise<void> {
   ])
     mkdirSync(p, { recursive: true });
   symlinkSync(PI, join(binp, "pi"));
-  for (const rel of ["SHEP.md", "pi/inbox.ts", "pi/compaction.ts"])
+  for (const rel of [
+    "SHEP.md",
+    "pi/inbox.ts",
+    "pi/compaction.ts",
+    "pi/questions.ts",
+    "pi/question-commands.ts",
+    "pi/question-target.ts",
+    "pi/question-cli.ts",
+  ])
     copyFileSync(join(ROOT, "shep", rel), join(share, rel));
   writeFileSync(
     join(home, ".local/share/bercail/pi/lead.json"),

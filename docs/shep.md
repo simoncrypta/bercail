@@ -38,7 +38,7 @@ When Pi exits with an error, its message stays on screen until you press Enter.
 
 ## Shep on Pi
 
-Shep on Pi runs in `~/.local/state/bercail/shep/workspace` with its sessions in `pi-sessions/` beside it, whatever folder you are in, and continues the same session each time it starts (`pi --continue`). It uses bstack's lead model and Pi extensions (from `~/.local/share/bercail/pi/lead.json`); the same logins as your desks. Its rules and its [start context](#what-shep-knows) are passed with `--append-system-prompt`, and it loads no context files, so your global Pi `AGENTS.md` (your Pi persona) is neither changed nor read by Shep. Two Pi extensions of its own come with it: `inbox.ts` for [desk events](#desk-events) and `compaction.ts` for [compaction](#compaction). It gets the `handoff`, `review`, `desk-restore`, `how`, `why`, `unslop`, and `describe` skills, and Pi's own tools. It needs `pi` on the PATH (`bercail bstack setup` installs it).
+Shep on Pi runs in `~/.local/state/bercail/shep/workspace` with its sessions in `pi-sessions/` beside it, whatever folder you are in, and continues the same session each time it starts (`pi --continue`). It uses bstack's lead model and Pi extensions (from `~/.local/share/bercail/pi/lead.json`); the same logins as your desks. Its rules and its [start context](#what-shep-knows) are passed with `--append-system-prompt`, and it loads no context files, so your global Pi `AGENTS.md` (your Pi persona) is neither changed nor read by Shep. Its Pi extensions include `inbox.ts` for [desk events](#desk-events), `compaction.ts` for [compaction](#compaction), and `question-commands.ts` for [targeted questions](#targeted-questions). It gets the `handoff`, `review`, `desk-restore`, `how`, `why`, `unslop`, and `describe` skills, and Pi's own tools. It needs `pi` on the PATH (`bercail bstack setup` installs it).
 
 ```bash
 bercail shep status      # queued, awaiting persistence, persisted notices, live background Sheps
@@ -126,6 +126,79 @@ A key is a-z, 0-9 and `-`, the same each time. When a key reaches its second tim
 
 Each `bercail shep run` writes `~/.local/state/bercail/shep/context.md` and hands it to Pi with `--append-system-prompt`: the known repos, one short line each, and the standing rules. A restart picks up repos and rules that changed while Shep was down.
 
+## Targeted questions
+
+Questions have durable tokens such as `Q42@3`, independent of the conversation.
+In text-only Shep:
+
+```text
+/questions                 list pending questions, choices and exact targets
+/reply Q42@3 yes           propose an answer to that revision only
+/thread release-plan       return to that topic's question context
+/thread all                clear the selected topic
+```
+
+A bare `yes`, `1` or `LGTM` answers nothing, even when one question is pending.
+An omitted or stale revision is rejected; a conflicting answer is retained as
+rejected rather than overwriting the first proposal. Repeated request IDs are
+idempotent; reusing an ID with different content is an error. New notices never
+select a thread or change focus. This remains one Pi conversation with shared
+context, not separate threads with isolated histories.
+
+**Replies are unverified proposals, not approvals.** Pi commands can be called
+by extensions; `interactive`, RPC and terminal keystrokes are not proof of a
+human sender. This slice has no trusted confirmation channel and no public
+`approve` or `--confirmed` switch. All replies leave the question pending.
+`answered` is reserved for a future verified ingress. A proposal never permits
+a desk prompt, guard approval, commit, merge, publication, spend or scope change.
+Use existing human review/guard procedures separately; a narrative summary
+cannot upgrade a proposal into permission.
+
+Shep's `shep_question` tool creates or revises a question after verifying the
+explicit checkout/job and desk session against existing beads, hc and
+`desk-sessions` records. It does not discover jobs from a bare issue ID. Repo
+identity is the canonical local git common-directory path, shared across its
+worktrees; another clone is a separate local identity. Review/action questions
+record desk, space, session, worktree, intended action, head, staged tree, and
+resolved base plus its ref. Changed intent or candidate supersedes the old
+revision; prior proposals remain in history.
+
+The CLI works without Pi or a mod too:
+
+```bash
+bercail shep questions              # bounded pending projection
+bercail shep questions --json       # full snapshot and retained revisions
+bercail shep question check Q42@3   # recheck candidate/mapping and current policy
+bercail shep question thread release-plan
+```
+
+`question create`, `revise` and `reply` read JSON on stdin. For example, a
+planning topic without a desk:
+
+```bash
+printf '%s\n' '{"requestId":"plan-1","kind":"planning","prompt":"Which approach?","options":["small","full"],"origin":{"event":"conversation:entry-7","session":"shep-session","entry":"entry-7"},"repo":"/path/to/repo","issue":null,"topic":"release-plan","desk":null,"base":null,"action":null}' | bercail shep question create
+printf '%s\n' '{"requestId":"answer-1","token":"Q1@1","answer":"small","source":"local-cli:unverified"}' | bercail shep question reply
+```
+
+For a job, provide its issue and exact desk address; review/action also require
+an action and base ref. `revise` uses the same fields plus `token` and a new
+request ID. A revision cannot change repo, job or topic: create another question
+instead. `check` always reports `authority: false`, including when fresh. Recheck
+target and policy again through existing procedures before an authorized action;
+this helper does not execute one or close a race with a separate shipping command.
+
+State lives in `~/.local/state/bercail/shep/questions.json` (or under
+`$XDG_STATE_HOME`). Kernel `flock` serializes read/modify/write across processes;
+fsync plus atomic rename preserves the previous complete snapshot on interruption.
+Process death releases the lock. A corrupt store fails closed and is not
+replaced. Selected topic persists separately from incoming notices. Before each
+model run and in compaction/rollover, Shep reloads this store rather than
+reconstructing question state from narrative. The bounded projection shows up
+to 20 pending questions; the JSON snapshot contains the full history.
+
+A read-only Herdr board, unread/reconciliation UI, isolated conversation views
+and a provenance-checked confirmation channel are not part of this slice.
+
 ## Compaction
 
 Pi compacts a session when its context passes `window - reserveTokens`: it summarizes the older part and keeps the most recent `keepRecentTokens` word for word. Pi's defaults (16384 and 20000) let Shep's 1M-token window fill to about 984k tokens first, which Shep's single session never reached. Shep gets its own numbers, and its own summary.
@@ -152,17 +225,18 @@ rollover = false      # true: a fresh session instead of a threshold compaction,
 
 ### The summary
 
-`compaction.ts` builds the summary Pi saves, for `/compact` and for automatic compaction alike, from three parts:
+`compaction.ts` builds the summary Pi saves, for `/compact` and for automatic compaction alike, from four parts:
 
 1. **The job board**, from `bercail shep board` at that moment. It replaces whatever the old messages said about jobs.
 2. **The standing rules**, from `preferences.md`.
-3. **Decisions and open questions** from the part being compacted, written by the lead model from Pi's `serializeConversation` text. It is told to leave out job state, which the board covers, and to carry over the previous summary's decisions unless they were settled.
+3. **Durable questions**, reloaded from the ledger with IDs/revisions and unverified proposals. This is a snapshot; `/questions` reloads it.
+4. **Narrative decisions and discussion** from Pi's `serializeConversation` text. The model is told not to reconstruct question state or approval authority. This rationale is not permission to act.
 
 If any part fails (the board, the model, an empty answer), it returns nothing and Pi compacts the default way: the session is never lost. Each compaction, each fallback with its reason, and each failed compaction (`session_compact_failed`) is a line in `~/.local/state/bercail/shep/compaction.log`.
 
 ### Rollover
 
-With `rollover = true`, Shep does not compact forever. When the context passes `compact_at`, it skips that compaction and, as soon as Shep is idle, starts a fresh session whose first message is the board and the rules and names the previous session's file. The first turn on a new day does the same. `/shep-rollover` in Shep does it by hand, whatever the setting. A rollover that fails (the board does not build, say) is logged, and compaction takes over again until Shep restarts.
+With `rollover = true`, Shep does not compact forever. When the context passes `compact_at`, it skips that compaction and, as soon as Shep is idle, starts a fresh session whose first message is the board, rules and durable questions and names the previous session's file. The first turn on a new day does the same. `/shep-rollover` in Shep does it by hand, whatever the setting. A rollover that fails (the board does not build, say) is logged, and compaction takes over again until Shep restarts.
 
 To go back to the old session, run `/resume` in Shep and pick it; the rollover's first message names its file. Once you write in it, it is the most recent session in `pi-sessions/`, so `bercail shep run` continues it from then on.
 

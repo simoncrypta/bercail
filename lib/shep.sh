@@ -12,7 +12,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
 SHEP_SKILLS=(handoff review desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list"
+SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | questions [--json] | question create|revise|reply|check|thread"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -57,7 +57,7 @@ shep_pi_argv() {
       [[ -n "$ext" ]] && SHEP_PI_ARGV+=(-e "$ext")
     done < <(jq -r '. as $a | range(0; length) | select($a[.] == "-e") | $a[. + 1]' "$lead" 2>/dev/null || true)
   fi
-  SHEP_PI_ARGV+=(-e "$share/pi/inbox.ts" -e "$share/pi/compaction.ts" --append-system-prompt "$share/SHEP.md"
+  SHEP_PI_ARGV+=(-e "$share/pi/inbox.ts" -e "$share/pi/compaction.ts" -e "$share/pi/question-commands.ts" --append-system-prompt "$share/SHEP.md"
     --append-system-prompt "$state/context.md" --no-context-files --approve
     --session-dir "$state/pi-sessions" --continue --name Shep)
   for id in "${SHEP_SKILLS[@]}"; do
@@ -209,9 +209,17 @@ shep_bg() {
 deploy_shep() {
   local share rel
   share="$(shep_share_dir)"
-  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts; do
+  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts; do
     deploy_install_file "shep/$rel" "$share/$rel"
   done
+}
+
+# Use this checkout's helper, or the deployed sibling of lib/ for an installed CLI.
+shep_question() {
+  local script
+  script="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/shep/pi/question-cli.ts"
+  command -v node >/dev/null 2>&1 || { _shep_err "question commands need Node (installed with Pi)"; return 1; }
+  BERCAIL_SHEP_STATE="$(shep_state_dir)" BERCAIL_SHEP_BIN="${BERCAIL_SELF:-bercail}" node "$script" "$@"
 }
 
 cmd_shep() {
@@ -227,6 +235,8 @@ cmd_shep() {
     forget) shift; shep_forget "$@" ;;
     list) shift; shep_list "$@" ;;
     mistake) shift; shep_mistake "$@" ;;
+    questions) shift; if [[ "${1:-}" == --json ]]; then shep_question json; else shep_question list "$@"; fi ;;
+    question) shift; shep_question "$@" ;;
     *) _shep_err "$SHEP_USAGE"; return 1 ;;
   esac
 }
