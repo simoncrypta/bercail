@@ -79,10 +79,10 @@ const trustCommand =
 const protectedFile = "This file decides what bercail's guard lets through. Ask the person to edit it.";
 const pushAllEntire =
   "In an Entire repo, pushing every branch (--all, --branches, a refs/heads/* glob) would also push Entire's shadow branches, which hold unredacted snapshots. Push the branch by name.";
-const entireMerge = "Approving or merging an Entire trail is the person's call. Do not approve or merge it.";
+const entireMerge =
+  "Approving or merging an Entire trail, or dismissing its findings, is the person's call. Do not do it.";
 const shepMerge =
   "Shep merges a trail only as a plain entire trail merge [<trail>], when the person asks: no --force, which skips the trail's gates, and no flag before merge that bercail does not know.";
-const entireDismiss = "Dismissing a trail finding can clear a merge gate; only the person does that.";
 const entirePerson =
   "This entire command changes Entire's setup, hooks, login, or repositories. Suggest it to the person; do not run it.";
 const entireDestroy =
@@ -740,17 +740,7 @@ function forgePublish(words: string[]): "commit" | "push" | undefined {
 // What an entire command does: a read, a publish like gh pr create, a trail
 // write like gh pr edit, or one that is the person's (bercail-znd's classes,
 // starting from `entire agent-help`).
-type EntireKind =
-  | "read"
-  | "push"
-  | "write"
-  | "ask"
-  | "dismiss"
-  | "merge"
-  | "approve"
-  | "person"
-  | "destroy"
-  | BrainKind;
+type EntireKind = "read" | "push" | "write" | "ask" | "merge" | "approve" | "person" | "destroy" | BrainKind;
 // Brain and Graph (bercail-shr): a local index rebuild, a repository memory, a
 // model call on the person's tokens, and setup, sync or background work.
 type BrainKind = "refresh" | "remember" | "spend" | "setup";
@@ -942,8 +932,8 @@ function entireKind(words: string[]): EntireKind | undefined {
   if (cmd === "agent") return sub === "list" ? "read" : "person";
   if (cmd === "repo")
     return sub === "view" || sub === "list" || (sub === "mirror" && third === "list") ? "read" : "person";
-  if (cmd === "api" && words.some((word) => /merge|approv/i.test(word))) return "approve";
-  if (cmd === "api" && words.some((word) => /dismiss/i.test(word))) return "dismiss";
+  // A dismissed finding can clear a merge gate, so it counts as an approval.
+  if (cmd === "api" && words.some((word) => /merge|approv|dismiss/i.test(word))) return "approve";
   if (cmd === "checkpoint") {
     if (among(sub, "list search tokens") || (sub === "explain" && !flag("--generate"))) return "read";
     return sub === "push" ? "push" : sub === "delete" ? "destroy" : "ask";
@@ -957,10 +947,10 @@ function entireKind(words: string[]): EntireKind | undefined {
     // Anywhere in the path: a value flag bercail does not know must not hide them.
     if (path.includes("approve")) return "approve";
     if (path.includes("merge")) return "merge";
-    if (path.includes("finding") && path.includes("dismiss")) return "dismiss";
+    if (path.includes("finding") && path.includes("dismiss")) return "approve";
     if (among(sub, "approvals list sessions show stack timeline watch")) return "read";
     if (among(sub, "create link ci-pr update-branch")) return "push";
-    if (sub === "finding") return among(third, "list show") ? "read" : third === "dismiss" ? "dismiss" : "write";
+    if (sub === "finding") return among(third, "list show") ? "read" : "write";
     if (among(sub, "update ready retarget comment rerun-review unlink attachment")) return "write";
   }
   return "ask";
@@ -988,10 +978,6 @@ function decideEntire(kind: EntireKind, words: string[], dir: string | undefined
   if (readOnlyRole(input.role)) return block(readOnly);
   if (kind === "push") return decidePush([], dir, input);
   if (kind === "write" || kind === "refresh") return allow;
-  if (kind === "dismiss") {
-    if (input.role === "autopilot" || input.role === "shep" || !input.hasUI) return block(entireDismiss);
-    return { action: "ask", reason: "Dismiss this trail finding? It can clear a merge gate." };
-  }
   if (!input.hasUI) return block(entireUnknown);
   return { action: "ask", reason: "Allow this entire command? bercail does not know it to be read-only." };
 }

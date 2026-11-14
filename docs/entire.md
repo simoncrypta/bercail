@@ -144,8 +144,9 @@ On top of the repo's policy, for every role:
   and `checkpoint push` count as pushes. The policy's `push` decides.
 - **Trail writes:** `trail update`, `trail ready`, `trail comment`, and finding
   replies or resolves are allowed, except for read-only roles.
-- **Dismissing a finding:** only you, through the CLI or `entire api`. A desk
-  asks, and Shep, autopilot and headless runs are blocked.
+- **Dismissing a finding:** only you. It can clear a merge gate, so the guard
+  blocks it for every role, through the CLI or `entire api`, as it blocks an
+  approval.
 - **Merging a trail:** you, or Shep when you ask. Shep's
   `entire trail merge [<trail>]` asks you first and the trail's gates decide
   the rest. It asks rather than following the repo's policy, because a project
@@ -153,10 +154,10 @@ On top of the repo's policy, for every role:
   `--force`, which skips the gates, or with a flag before `merge` that bercail
   does not know. Every other role is blocked: the lead, its siblings,
   autopilot, headless runs, and background Shep.
-- **Blocked:** `trail approve`, `entire api` calls whose path or fields name a
-  merge or an approval, setup (`enable`, `configure`, `agent`, `login`,
-  `repo …`), and commands that amend, reset or delete
-  (`session attach --force`, `checkpoint delete`).
+- **Blocked:** `trail approve`, `trail finding dismiss`, `entire api` calls
+  whose path or fields name a merge, an approval or a dismissal, setup
+  (`enable`, `configure`, `agent`, `login`, `repo …`), and commands that
+  amend, reset or delete (`session attach --force`, `checkpoint delete`).
 - **A flag bercail does not know** may take the next word as its value, the way
   cobra reads it, so `entire --json 3 trail merge` merges trail 3.
   The guard decides both readings and takes the stricter.

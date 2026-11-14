@@ -28,8 +28,8 @@ review amends the PR's commit (`gt m -a`, then `gt submit`). On `gh` and
 description as the message; bercail never force-pushes there. On `entire` a
 fix is a new commit too, and the person, or Shep when they ask, merges with
 `entire trail merge` once the trail's gates pass. A direct-to-main repo gets one
-commit per finished job. Desks never approve or merge a trail: the guard stops
-them, and asks the person before a desk dismisses a finding.
+commit per finished job. Desks never approve or merge a trail, or dismiss its
+findings: the guard stops them.
 
 Do not commit/submit unless the user asked. When asked, follow the repo's git
 policy (`bercail policy show`): a PR or straight to main, drafts, how a release

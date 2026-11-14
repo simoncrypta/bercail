@@ -783,16 +783,19 @@ for (const command of [
   "entire api -X POST /api/v1/trails/3/merge",
   "entire api -X PUT '/api/v1/repos/{owner}/{repo}/trails/3/approvals'",
   "entire api /api/v1/trails/3 -f action=merge",
+  // A dismissed finding can clear a merge gate (bercail-1vv).
+  "entire trail finding dismiss 2",
+  "entire trail finding dismiss 2 -m -h",
+  "entire trail finding dismiss 2 -m --help",
+  "entire trail --unknown-flag finding dismiss 2",
+  "entire api -X POST /api/v1/trails/3/findings/2/dismiss",
+  "entire api /api/v1/trails/3/findings/2 -f status=dismissed",
 ]) {
-  test(`approving a trail, or merging it through entire api, is the person's: ${command}`, () => {
+  test(`approving a trail, dismissing a finding, or merging through entire api, is the person's: ${command}`, () => {
     for (const input of everyoneBut(true)) blocked(command, input, /person's call/);
   });
 }
-test("Shep does not dismiss a finding; a desk still asks", () => {
-  for (const command of ["entire trail finding dismiss 2", "entire api -X POST /api/v1/trails/3/findings/2/dismiss"]) {
-    blocked(command, at("shep", policies.loosest), /only the person/);
-    asked(command, at("desk", policies.loosest));
-  }
+test("unclassified entire api calls ask, but agent-help stays a read", () => {
   asked("entire api /api/v1/clusters", at("shep", policies.loosest));
   allowed("entire agent-help trail merge", at("desk", policies.loosest));
 });
@@ -838,7 +841,7 @@ for (const command of [
     }
   });
 }
-test("entire trail writes are like gh pr edit; dismissing a finding is the person's; unknown commands ask", () => {
+test("entire trail writes are like gh pr edit; unknown commands ask", () => {
   for (const command of [
     "entire trail update --body x",
     "entire trail ready",
@@ -848,20 +851,12 @@ test("entire trail writes are like gh pr edit; dismissing a finding is the perso
     for (const role of ["desk", "shep", "headless", "autopilot"] as const) allowed(command, at(role, policies.default));
     blocked(command, at("judge", policies.default), /read-only/);
   }
-  for (const command of [
-    "entire trail finding dismiss 2",
-    "entire trail finding dismiss 2 -m -h",
-    "entire checkpoint explain 01M7 --generate",
-    "entire dispatch",
-    "entire session stop",
-  ]) {
+  for (const command of ["entire checkpoint explain 01M7 --generate", "entire dispatch", "entire session stop"]) {
     asked(command, at("desk", policies.loosest));
     blocked(command, at("headless", policies.loosest));
     blocked(command, at("autopilot", policies.loosest));
     blocked(command, at("council", policies.loosest));
   }
-  blocked("entire trail finding dismiss 2", at("autopilot", policies.loosest), /only the person/);
-  blocked("entire trail finding dismiss 2 -m --help", at("autopilot", policies.loosest), /only the person/);
 });
 test("entire --repo does not lend cwd trust, and a trail checkout moves the branch", () => {
   asked("entire trail create --repo gh/o/r --title x", at("desk", policies.loosest));
