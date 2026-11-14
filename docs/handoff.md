@@ -45,12 +45,13 @@ Each `--branch` spawn appends one line to `${XDG_STATE_HOME:-~/.local/state}/ber
 
 For changing `handoff-spawn`; agents follow the [handoff skill](../skills/handoff/SKILL.md) and do not assemble these steps.
 
-1. `wt switch --create <branch> --no-cd` (`--base` when given). worktrunk's post-start hook opens a Herdr app space on the sibling. `WT_HERDR_NO_DESK=1` keeps the hook from starting a desk, and `WT_HERDR_KEEP_FOCUS` brings the person's shown space back.
-2. The dirty copy, when the main checkout is dirty or `--dirty` is given, and not with `--clean`: `git -C main diff HEAD --binary | git -C sibling apply` (no `--index`), then `cp -a` of each `git ls-files --others --exclude-standard` path. The sibling's index stays empty.
-3. The branch is registered with the [git backend](#git-backend): `gt track`, or for a `--base` dependent `gh stack init`/`add` or `origin stack track --onto`.
-4. The `bd comment` on the issue: the worktree, stage and do not commit, the backend and its stack commands.
-5. The desk: `wt_herdr_handoff_agent` runs `hc run --bg --keep --outlive-parent` of `bercail-desk-agent --prompt <the one line>` under the space's first terminal, labelled `bercail.role=agent`, `bercail.space`, and the issue when known. It replaces a live desk in that space. A failed start keeps the worktree.
-6. The spawn JSON on stdout, appended to `handoffs.jsonl`.
+1. A space on the main checkout, when no space sits there: one made on that folder (on any machine), or one whose first terminal is there now. It is a plain shell named as `wts` names it (`<Branch>_<Repo>`), with no desk, and the person's shown space stays. The bercail-spaces mod nests the desk's space under it. Nothing happens when the Herdr app is closed.
+2. `wt switch --create <branch> --no-cd` (`--base` when given). worktrunk's post-start hook opens a Herdr app space on the sibling. `WT_HERDR_NO_DESK=1` keeps the hook from starting a desk, and `WT_HERDR_KEEP_FOCUS` brings the person's shown space back.
+3. The dirty copy, when the main checkout is dirty or `--dirty` is given, and not with `--clean`: `git -C main diff HEAD --binary | git -C sibling apply` (no `--index`), then `cp -a` of each `git ls-files --others --exclude-standard` path. The sibling's index stays empty.
+4. The branch is registered with the [git backend](#git-backend): `gt track`, or for a `--base` dependent `gh stack init`/`add` or `origin stack track --onto`.
+5. The `bd comment` on the issue: the worktree, stage and do not commit, the backend and its stack commands.
+6. The desk: `wt_herdr_handoff_agent` runs `hc run --bg --keep --outlive-parent` of `bercail-desk-agent --prompt <the one line>` under the space's first terminal, labelled `bercail.role=agent`, `bercail.space`, and the issue when known. It replaces a live desk in that space. A failed start keeps the worktree.
+7. The spawn JSON on stdout, appended to `handoffs.jsonl`.
 
 ## Git backend
 

@@ -117,6 +117,8 @@ reads `lead.json`) with a one-line prompt pointing at the issue as its first mes
 it in the desk column. `--stage` is required; bercail has no default stage.
 A missing lead profile fails before any worktree is made. A desk already running in
 that space is replaced. `wt remove <branch>` closes the space and its desk.
+When no space sits on the repo's main checkout, the spawn first opens one there
+(a plain shell, no desk), so the sidebar nests the desk's space under its repo.
 
 ## Another model
 

@@ -865,6 +865,7 @@ _wt_generate_session_name() { printf 'Lbl'; }
 wt_herdr_handoff_agent() { : >"$BATS_TEST_TMPDIR/$name-desk-started"; }
 _wt_herdr_space_by_folder() { printf 'sp1'; }
 _wt_herdr_space_desk() { printf 'desk1'; }
+wt_herdr_main_space() { :; }
 HELPER
   _bd_stub
   : >"$BD_COMMENTS"
@@ -1168,7 +1169,9 @@ STUB
 }
 
 # A --branch spawn through the real herdr-layout.sh, with fake wt, Herdr app and
-# hc. hc run's argv lands in $DESK_ARGV, its calls in $DESK_HC_LOG.
+# hc. hc run's argv lands in $DESK_ARGV, its calls in $DESK_HC_LOG. wt and the
+# app log to $DESK_HERDR_LOG; the shown space is in $DESK_SHOWN (sp-keep first),
+# and space.new shows the new space, as the app does.
 _desk_fixture() {
   local name="$1"
   DESK_REPO="$BATS_TEST_TMPDIR/$name"
@@ -1187,14 +1190,17 @@ while [[ $# -gt 0 ]]; do
     *) shift ;;
   esac
 done
+printf 'wt %s\n' "$*" >>"$DESK_HERDR_LOG"
 main="$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
 git -C "$main" worktree add -q -b "$branch" "$main.$branch" HEAD
 printf '%s' "$(cd "$main.$branch" && pwd -P)" >"$DESK_FOLDER"
 WT
   cat >"$DESK_BIN/herdr-app" <<'HERDR'
 #!/usr/bin/env bash
+printf 'herdr-app %s\n' "$*" >>"$DESK_HERDR_LOG"
+[[ -f "$DESK_SHOWN" ]] || printf 'sp-keep' >"$DESK_SHOWN"
 case "$1 ${2:-}" in
-  "status ") printf '{"space":"sp-keep"}\n' ;;
+  "status ") printf '{"space":"%s"}\n' "$(cat "$DESK_SHOWN")" ;;
   "ls ")
     f=""
     [[ -f "$DESK_FOLDER" ]] && f="$(cat "$DESK_FOLDER")"
@@ -1206,8 +1212,10 @@ case "$1 ${2:-}" in
     ;;
   "do space.new")
     printf '%s' "$6" >"$DESK_FOLDER"
+    printf 'sp1' >"$DESK_SHOWN"
     printf '{"space":"sp1"}\n'
     ;;
+  "do space.select") printf '%s' "$4" >"$DESK_SHOWN"; printf '{"ok":true}\n' ;;
   *) printf '{"ok":true}\n' ;;
 esac
 HERDR
@@ -1227,6 +1235,7 @@ HC
   _pi_ready
   export DESK_FOLDER="$BATS_TEST_TMPDIR/$name-folder" DESK_HC_LOG="$BATS_TEST_TMPDIR/$name-hc.log"
   export DESK_ARGV="$BATS_TEST_TMPDIR/$name-hc.argv"
+  export DESK_HERDR_LOG="$BATS_TEST_TMPDIR/$name-herdr.log" DESK_SHOWN="$BATS_TEST_TMPDIR/$name-shown"
   : >"$DESK_HC_LOG"
 }
 
@@ -1253,6 +1262,21 @@ _desk_spawn() {
   jq -e --arg issue "bercail.issue=$ISSUE" --arg titled "bercail.issue_title=$title" \
     'index($issue) and index($titled)' "$DESK_ARGV" >/dev/null \
     || fail "hc run labels: $(cat "$DESK_ARGV" 2>/dev/null) log=$(cat "$DESK_HC_LOG")"
+}
+
+@test "a --branch spawn first opens a plain space on a main checkout with none, and keeps the shown space" {
+  local out main first
+  _desk_fixture mainspace
+  git -C "$DESK_REPO" branch -M trunk
+  main="$(cd "$DESK_REPO" && pwd -P)"
+  out="$(_desk_spawn 2>"$BATS_TEST_TMPDIR/mainspace.err")" \
+    || fail "branch spawn failed: $out $(cat "$BATS_TEST_TMPDIR/mainspace.err")"
+  first="$(grep -m1 -E '^(herdr-app do space.new|wt )' "$DESK_HERDR_LOG")"
+  [[ "$first" == "herdr-app do space.new --name Trunk_Mainspace --folder $main --tab Shell" ]] \
+    || fail "the main checkout's space comes before the desk's: $(cat "$DESK_HERDR_LOG")"
+  [[ "$(grep -c '^run ' "$DESK_HC_LOG")" -eq 1 ]] && grep -q "^run .*--cwd $main.feat " "$DESK_HC_LOG" \
+    || fail "one desk, in the worktree, none on main: $(cat "$DESK_HC_LOG")"
+  [[ "$(cat "$DESK_SHOWN")" == sp-keep ]] || fail "the shown space changed to $(cat "$DESK_SHOWN")"
 }
 
 # A Pi whose --list-models knows claude-bridge/fable and logs its argv.

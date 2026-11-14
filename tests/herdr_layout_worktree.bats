@@ -66,7 +66,9 @@ case "$1" in
     if [[ "$2" == t5 ]]; then
       echo '{"address":"t5","labels":{"bercail.role":"agent","bercail.space":"sp-child"}}'
     else
-      echo '{"address":"'"$2"'","labels":{}}'
+      # A terminal's live folder, when $FAKE_STATE/cwd-<address> names one.
+      jq -nc --arg a "$2" --arg c "$(cat "$FAKE_STATE/cwd-$2" 2>/dev/null)" \
+        '{address: $a, labels: {}} + (if $c == "" then {} else {cwd: $c} end)'
     fi ;;
   *) echo '{}' ;;
 esac
@@ -256,5 +258,51 @@ open_space() {
     || fail "post-start must not fail wt when the app is closed"
   if WT_HERDR_AGENT_PROMPT=x wt_herdr_handoff_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" 2>/dev/null; then
     fail "handoff must fail when the app is closed"
+  fi
+}
+
+# A main checkout on branch trunk, which bercail labels Trunk_Repo.
+main_repo() {
+  REPO="$BATS_TEST_TMPDIR/repo"
+  git init -q -b trunk "$REPO"
+  REPO="$(cd "$REPO" && pwd -P)"
+}
+
+@test "a main checkout with no space gets a plain shell space, and the shown space stays" {
+  main_repo
+  : >"$CALL_LOG"
+  # From inside the checkout: a terminal hc knows no folder for is not on it.
+  (cd "$REPO" && wt_herdr_main_space "$REPO") || fail "main space failed; log=$(cat "$CALL_LOG")"
+  grep -qxF "herdr-app do space.new --name Trunk_Repo --folder $REPO --tab Shell" "$CALL_LOG" \
+    || fail "expected space.new on the main checkout; log=$(cat "$CALL_LOG")"
+  if grep -q '^hc run' "$CALL_LOG"; then
+    fail "the main checkout's space is a plain shell, no desk; log=$(cat "$CALL_LOG")"
+  fi
+  [[ "$(cat "$FAKE_STATE/shown")" == sp-parent ]] || fail "the shown space must stay sp-parent"
+}
+
+@test "a space made on the main checkout, on any machine, or whose shell is there now, is kept" {
+  main_repo
+  local layout
+  for layout in \
+    '[{"id":"sp-r","name":"Repo","folder":"'"$REPO"'","machine":"box","tabs":[{"terminals":[{"terminal":"t1"}]}]}]' \
+    '[{"id":"sp-h","name":"repo","folder":"/home","machine":null,"tabs":[{"terminals":[{"terminal":"t1"}]}]}]'; do
+    printf '%s' "$layout" >"$FAKE_STATE/spaces.json"
+    printf '%s' "$REPO" >"$FAKE_STATE/cwd-t1"
+    : >"$CALL_LOG"
+    wt_herdr_main_space "$REPO" || fail "main space failed for $layout"
+    if grep -q 'space.new' "$CALL_LOG"; then
+      fail "a space already sits on the main checkout ($layout); log=$(cat "$CALL_LOG")"
+    fi
+  done
+}
+
+@test "a closed app gets no main checkout space and no error" {
+  main_repo
+  touch "$FAKE_STATE/down"
+  : >"$CALL_LOG"
+  wt_herdr_main_space "$REPO" || fail "a closed app must not fail the spawn"
+  if grep -q 'space.new' "$CALL_LOG"; then
+    fail "a closed app gets no space; log=$(cat "$CALL_LOG")"
   fi
 }

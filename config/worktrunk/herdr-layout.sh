@@ -170,6 +170,30 @@ wt_herdr_layout_create() {
   [[ -n "$(_wt_herdr_space_desk "$space")" ]] || _wt_herdr_start_desk "$space" "$workdir" || true
 }
 
+# A space sits on folder $1: it was made there (on any machine), or its first
+# terminal is there now, as the bercail-spaces mod places a space. Only local
+# terminals are in hc.
+_wt_herdr_space_on() {
+  local want ls terminal
+  want="$(_wt_realpath "$1")"
+  ls="$("$HERDR_APP" ls 2>/dev/null)" || return 1
+  jq -e --arg want "$want" 'any(.spaces[]; .folder == $want)' <<<"$ls" >/dev/null && return 0
+  while IFS= read -r terminal; do
+    [[ "$(_wt_realpath "$("$HC" get "$terminal" --json 2>/dev/null | jq -r '.cwd // empty')")" != "$want" ]] \
+      || return 0
+  done < <(jq -r '.spaces[] | select(.machine == null) | .tabs[0].terminals[0].terminal // empty' <<<"$ls")
+  return 1
+}
+
+# handoff-spawn: a space on the repo's main checkout, a plain shell, when none
+# sits there, so the bercail-spaces mod nests the new desk's space under it.
+wt_herdr_main_space() {
+  local main="$1"
+  _wt_herdr_app_running || return 0
+  ! _wt_herdr_space_on "$main" || return 0
+  WT_HERDR_NO_DESK=1 wt_herdr_layout_create "$(_wt_generate_session_name "$main")" "$main"
+}
+
 # Clear session of the desk agent (d / dev / apply). Ignores any
 # inherited handoff prompt, issue labels, or model.
 wt_herdr_start_default_agent() {

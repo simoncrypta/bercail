@@ -149,6 +149,7 @@ _wt_generate_session_name() { printf 'Feat_Repo'; }
 wt_herdr_handoff_agent() { return 0; }
 _wt_herdr_space_by_folder() { printf 'sp1'; }
 _wt_herdr_space_desk() { printf 'desk1'; }
+wt_herdr_main_space() { :; }
 HELPER
   mkdir -p "$HOME/.local/share/bercail/pi/extensions"
   printf '// guard\n' >"$HOME/.local/share/bercail/pi/extensions/guard.ts"

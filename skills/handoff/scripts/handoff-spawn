@@ -536,6 +536,9 @@ handoff_spawn_main() {
   if [[ -n "$keep_space" ]]; then
     export WT_HERDR_KEEP_FOCUS="$keep_space"
   fi
+  # Before the desk's space, so the sidebar nests it under its repo from the start.
+  wt_herdr_main_space "$main" \
+    || echo "handoff-spawn: could not open a space on the main checkout $main; the desk's space shows top-level" >&2
   # The post-start hook makes the space only: this starts the desk below.
   if [[ -n "$base" ]]; then
     git -C "$main" rev-parse --verify --quiet "$base^{commit}" >/dev/null \
