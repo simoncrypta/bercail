@@ -14,12 +14,15 @@ export default defineConfig({
       // Copies of Herdr's own mods (mod.json `cloned_from`): kept diffable against upstream.
       "bercail/mods/bercail-agents/**",
       "bercail/mods/bercail-spaces/**",
+      // Written by `entire enable --agent pi` and overwritten on each install: not ours to format.
+      ".pi/extensions/entire/**",
     ],
   },
   lint: {
     // The Herdr mods get their own pass (tests/lint.sh): the jsconfig.json that
     // `herdr-app check` writes beside a mod would type-check it here and not in CI.
-    ignorePatterns: ["bercail/mods/**"],
+    // Entire's generated Pi extension is overwritten on each install, so it is not ours to lint.
+    ignorePatterns: ["bercail/mods/**", ".pi/extensions/entire/**"],
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: { "vite-plus/prefer-vite-plus-imports": "error" },
     options: { typeAware: true, typeCheck: true },
