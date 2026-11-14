@@ -88,6 +88,39 @@ function check(label) {
 }
 let d;
 const expect = (got, want, what) => { if (got !== want) fail(`${what}: ${got}, want ${want}`); };
+// The layout as Herdr saved it on 2026-11-02: the panel column gone, panel-body in its place.
+function collapsePanel(tree, body) {
+  const work = find(tree, "work-body"), i = work.children.findIndex((c) => c.id === "panel");
+  work.children[i] = { ...find(work.children[i], "panel-body"), ...body };
+}
+// Ctrl+Shift+F/G and the tab bar's Files/Changes buttons, in turn: one panel state.
+async function panelSteps(d) {
+  const state = () => {
+    const panel = find(globalThis.herdr.layout, "panel");
+    return panel.hidden ? "hidden" : find(panel, "panel-body").active;
+  };
+  // What a click on Files/Changes runs (Herdr's tabs mod).
+  const click = (id) => {
+    const root = globalThis.herdr.layout;
+    const panel = find(root, "panel"), body = find(root, "panel-body");
+    const on = panel && !panel.hidden && body?.active === id;
+    if (on) run("layout.hide", { id: "panel" });
+    else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
+  };
+  const steps = [
+    ["key", "files", "files"], ["key", "files", "hidden"], ["key", "changes", "changes"],
+    ["key", "files", "files"], ["click", "files", "hidden"], ["click", "changes", "changes"],
+    ["key", "changes", "hidden"], ["click", "files", "files"], ["key", "changes", "changes"],
+    ["click", "changes", "hidden"], ["key", "changes", "changes"], ["click", "files", "files"],
+  ];
+  for (const [how, id, want] of steps) {
+    if (how === "key") await d.command(id); else click(id);
+    if (state() !== want) fail(`${how} ${id}: panel is ${state()}, want ${want}`);
+  }
+  if (globalThis.herdr.toasts?.length) fail(`toasts: ${globalThis.herdr.toasts}`);
+  check("panel");
+  if (calls("layout.show").concat(calls("layout.hide")).some(([, a]) => a.id !== "panel")) fail("keys must show and hide the panel");
+}
 EOF
   cat >"$BATS_TEST_TMPDIR/sidebar.mjs" <<'EOF'
 // Space grouping, as the sidebar nests it.
@@ -301,15 +334,18 @@ EOF
 EOF
 }
 
-@test "the shipped layout has a panel column holding panel-body" {
+@test "the shipped layout has a panel stack holding panel-body" {
   mod_case <<'EOF'
 // The panel: Herdr's tab bar finds a "panel" node holding the "panel-body" stack.
+// A stack: Herdr has saved the layout without the one-child panel column it had.
 {
   const panel = find(shipped, "panel");
-  if (panel?.type !== "column") fail("the shipped layout has no panel column");
-  if (find(panel, "panel-body")?.type !== "stack") fail("panel-body is not inside the panel column");
+  if (panel?.type !== "stack") fail("the shipped layout has no panel stack");
+  if (JSON.stringify(panel.children.map((c) => c.id)) !== '["panel-body"]' || panel.active !== "panel-body") fail("the panel stack must show panel-body");
+  if (find(panel, "panel-body")?.type !== "stack") fail("panel-body is not inside the panel stack");
   if (JSON.stringify(find(panel, "panel-body").children.map((c) => c.id)) !== '["files","changes"]') fail("panel-body must hold files and changes");
   if (find(shipped, "work-body").children.at(-1).id !== "panel") fail("the panel must be work-body's last child");
+  if (panel.min !== 280 || panel.max !== 900) fail(`panel min/max ${panel.min}/${panel.max}, want 280/900`);
   if (!(panel.size?.px >= panel.min)) fail(`panel width ${panel.size?.px} is under its min ${panel.min}`);
 }
 EOF
@@ -317,39 +353,56 @@ EOF
 
 @test "the panel keys and the tab bar's buttons open, switch and close one panel" {
   mod_case <<'EOF'
-// Ctrl+Shift+F/G and the tab bar's Files/Changes buttons share one panel state.
 {
-  globalThis.herdr = {
-    layout: structuredClone(shipped), calls: [], toasts: [],
-    focused: { space: "s1", pane: "p1" }, spaces: [{ id: "s1", tabs: [], folder: "/w" }], terminals: [],
-  };
-  const d = new Desk();
-  Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {}, hadDesk: new Set() });
-  const state = () => {
-    const panel = find(globalThis.herdr.layout, "panel");
-    return panel.hidden ? "hidden" : find(panel, "panel-body").active;
-  };
-  // What a click on Files/Changes runs (Herdr's tabs mod).
-  const click = (id) => {
-    const root = globalThis.herdr.layout;
-    const panel = find(root, "panel"), body = find(root, "panel-body");
-    const on = panel && !panel.hidden && body?.active === id;
-    if (on) run("layout.hide", { id: "panel" });
-    else { run("layout.select", { stack: "panel-body", child: id }); run("layout.show", { id: "panel" }); }
-  };
-  const steps = [
-    ["key", "files", "files"], ["key", "files", "hidden"], ["key", "changes", "changes"],
-    ["key", "files", "files"], ["click", "files", "hidden"], ["click", "changes", "changes"],
-    ["key", "changes", "hidden"], ["click", "files", "files"], ["key", "changes", "changes"],
-    ["click", "changes", "hidden"], ["key", "changes", "changes"], ["click", "files", "files"],
-  ];
-  for (const [how, id, want] of steps) {
-    if (how === "key") await d.command(id); else click(id);
-    if (state() !== want) fail(`${how} ${id}: panel is ${state()}, want ${want}`);
-  }
-  if (globalThis.herdr.toasts.length) fail(`toasts: ${globalThis.herdr.toasts}`);
-  check("panel");
-  if (calls("layout.show").concat(calls("layout.hide")).some(([, a]) => a.id !== "panel")) fail("keys must show and hide the panel column");
+  const d = setup({ terminals: [] });
+  const before = JSON.stringify(globalThis.herdr.layout);
+  show(d, "s1");
+  if (calls("layout.set").length || JSON.stringify(globalThis.herdr.layout) !== before) fail("an intact layout must be left as it is");
+  await panelSteps(d);
+}
+EOF
+}
+
+@test "a saved layout that lost its panel gets it back, and Files/Changes work on it" {
+  mod_case <<'EOF'
+for (const [body, want] of [
+  [{ size: { px: 24 } }, { px: 280, hidden: undefined }], // as after the 2026-11-02 reboot: under the min
+  [{ size: { px: 420 }, hidden: true }, { px: 420, hidden: true }],
+]) {
+  const d = setup({ terminals: [] });
+  collapsePanel(globalThis.herdr.layout, body);
+  show(d, "s1");
+  const panel = find(globalThis.herdr.layout, "panel");
+  if (panel?.type !== "stack" || panel.active !== "panel-body") fail(`no panel stack after the repair: ${JSON.stringify(panel)}`);
+  const inner = find(panel, "panel-body");
+  if (inner.size || inner.hidden) fail("the panel, not panel-body, must hold the width and visibility");
+  if (panel.size.px !== want.px || panel.min !== 280 || panel.max !== 900) fail(`panel ${JSON.stringify(panel)}, want ${want.px}px, min 280, max 900`);
+  if (panel.hidden !== want.hidden) fail(`panel hidden ${panel.hidden}, want ${want.hidden}`);
+  if (calls("layout.set").length !== 1) fail(`the repair must be saved once, not ${calls("layout.set").length} times`);
+  // The app reloads the saved file: nothing is left to repair.
+  globalThis.herdr.layout = JSON.parse(JSON.stringify(globalThis.herdr.layout));
+  show(d, "s1");
+  if (calls("layout.set").length !== 1) fail("a repaired layout must not be repaired again");
+  await panelSteps(d);
+}
+EOF
+}
+
+@test "repairing the panel keeps the desk shown" {
+  mod_case <<'EOF'
+// The repair lands on the same render as a new desk block, or before selecting a
+// desk already in the layout: either way the desk shows.
+{
+  d = setup({ terminals: [D("t7", "s1"), D("t8", "s2")] });
+  collapsePanel(globalThis.herdr.layout, { size: { px: 24 } });
+  show(d, "s1");
+  const shown = () => `panel ${Boolean(find(globalThis.herdr.layout, "panel"))}, shown ${stack().active}`;
+  if (!find(globalThis.herdr.layout, "panel") || stack().active !== "desk-t7") fail(`new desk: ${shown()}`);
+  show(d, "s2");
+  collapsePanel(globalThis.herdr.layout, { size: { px: 24 } });
+  show(d, "s1", 1); // on the render that repairs, not a later one
+  if (!find(globalThis.herdr.layout, "panel") || stack().active !== "desk-t7") fail(`known desk: ${shown()}`);
+  check("desk");
 }
 EOF
 }

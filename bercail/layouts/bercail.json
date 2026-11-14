@@ -259,7 +259,7 @@
             },
             {
               "id": "panel",
-              "type": "column",
+              "type": "stack",
               "children": [
                 {
                   "id": "panel-body",
@@ -283,6 +283,7 @@
                   "active": "changes"
                 }
               ],
+              "active": "panel-body",
               "size": {
                 "px": 280
               },

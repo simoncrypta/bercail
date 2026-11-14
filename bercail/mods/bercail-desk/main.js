@@ -51,6 +51,29 @@ function findNode(node, id) {
   return null;
 }
 
+// Herdr has saved this layout with the "panel" column gone and panel-body in its
+// place (its one single-child column; the single-child stacks stayed), and the tab
+// bar's Files/Changes buttons show and hide "panel". Put it back, as the stack
+// bercail ships now.
+function restorePanel(tree) {
+  if (findNode(tree, "panel")) return false;
+  const work = findNode(tree, "work-body");
+  const i = work?.children?.findIndex((c) => c.id === "panel-body") ?? -1;
+  if (i < 0) return false;
+  const { size, hidden, ...body } = work.children[i];
+  work.children[i] = {
+    id: "panel",
+    type: "stack",
+    children: [body],
+    active: "panel-body",
+    size: { px: Math.max(280, size?.px ?? 0) }, // the collapsed copy kept no min
+    min: 280,
+    max: 900,
+    ...(hidden && { hidden }),
+  };
+  return true;
+}
+
 // Tiny TOML reader for the keys bercail needs: [layout] review and auto_review.
 export function readConfig(text) {
   const cfg = { review: "tuicr", autoReview: true };
@@ -514,6 +537,7 @@ export default class BercailDesk extends View {
     // not a throw, and this runs on every render.
     try {
       const tree = layout();
+      if (restorePanel(tree)) run("layout.set", { layout: tree });
       const stack = findNode(tree, "agent-stack");
       if (stack) {
         this.added ??= new Set(); // desk block ids this copy added

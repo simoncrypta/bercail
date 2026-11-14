@@ -141,7 +141,7 @@ app_edits_then_update() {
       and .active == "desk-t5p" and .children[2].content.terminal == "t5p"' "$APP/layouts/bercail.json" >/dev/null \
     || fail "the desk blocks must come back: $(jq -c '.. | objects | select(.id == "agent-stack")' "$APP/layouts/bercail.json")"
   jq -e '.. | objects | select(.id == "panel") | any(.children[]; .id == "panel-body")' "$APP/layouts/bercail.json" >/dev/null \
-    || fail "the new layout's panel column must be installed"
+    || fail "the new layout's panel must be installed"
   [[ "$(_herdr_app_layout_shape "$APP/layouts/bercail.json")" == "$(_herdr_app_layout_shape "$ROOT/bercail/layouts/bercail.json")" ]] \
     || fail "only the desk blocks may differ from the shipped layout"
   cmp -s "$ROOT/bercail/layouts/bercail.json" "$BERCAIL_SHARE_DIR/herdr-app/layouts/bercail.json" \

@@ -98,7 +98,7 @@ is which of `shep` and `work` is hidden.
   - **The tabs**, weight 1, so desk and tabs split the width evenly: the
     shown tab's panes as cards (radius 10, 1px `border`, `accent` on focus,
     8px gaps, a 30px `pane` header always shown, also on a lone pane).
-  - **Files / Changes**, a 280px `panel` column (280–900px, Herdr's limits)
+  - **Files / Changes**, a 280px `panel` (280–900px, Herdr's limits)
     showing Herdr's `files` or `changes` panel.
 - Terminal text padding is 14×12px. Colors come from the user's theme; the
   layout sets none.
@@ -183,8 +183,10 @@ is which of `shep` and `work` is hidden.
   block = `bercail-desk` mod; `agent-stack` stack of `empty`, the
   `bercail-desk` mod with `props: {role: "empty"}`, plus one
   `{terminal: …}` block per desk, `desk-<address>`, that the mod adds), `main` block `{tab: "active", pane: {...}}`,
-  `panel` column holding the `panel-body` stack of `files` and `changes`
-  (the ids Herdr's `tabs` mod shows and hides).
+  `panel` stack holding the `panel-body` stack of `files` and `changes`
+  (the ids Herdr's `tabs` mod shows and hides). `panel` is a stack: Herdr
+  has saved the layout with the one-child `panel` column gone, keeping the
+  one-child stacks.
 - Shipped mods used: `workspace-chrome`, `tabs`, `pane`, `files`,
   `changes`, `workspace-status`.
 - `mods/bercail-spaces`: Herdr's `spaces` mod (0.1.15) copied with
@@ -230,7 +232,9 @@ is which of `shep` and `work` is hidden.
   - `header` (default): draws the header row, takes the key commands
     (`nextCommand()`), and on every render shows the space's desk: the first
     time, it adds the desk's block with `layout.set` (already selected);
-    after that, it only picks the stack child with `layout.select`.
+    after that, it only picks the stack child with `layout.select`. A saved
+    layout whose `panel` column Herdr dropped gets it back, as the stack,
+    with `layout.set`.
   - `empty`: the empty desk, with one button that starts the agent.
   - `keys`: draws nothing. In the Shep column, so it is the copy shown in
     the Shep view: it sends each key to `bercail-shep.desk:<command>`, and
