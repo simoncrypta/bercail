@@ -1,9 +1,21 @@
 {
   "enabled": true,
-  "telemetry": true,
+  "strategy_options": {
+    "checkpoint_remote": {
+      "provider": "github",
+      "repo": "simoncrypta/bercail-checkpoints"
+    }
+  },
+  "telemetry": false,
   "checkpoints": {
     "primary": {
       "type": "git-refs"
+    }
+  },
+  "commit_linking": "always",
+  "redaction": {
+    "pii": {
+      "enabled": true
     }
   }
 }
