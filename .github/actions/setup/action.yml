@@ -13,7 +13,7 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-node@v4
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
         node-version: 26
         cache: npm
@@ -22,7 +22,7 @@ runs:
     # The action caches mise's data dir under a key with the tool specs in it,
     # so a pin change installs fresh. Saved in the post step, after `mise use`.
     - if: inputs.tools != ''
-      uses: jdx/mise-action@v5
+      uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
       with:
         cache_key_prefix: mise-${{ inputs.tools }}
         cache_save_post: true

@@ -27,7 +27,7 @@ jobs:
       id-token: write      # Sign with the workflow's identity.
       attestations: write  # Attest the archive.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build the release archive
         run: |
@@ -57,7 +57,7 @@ jobs:
             gh release create "$TAG" dist/bercail.tar.gz --verify-tag --generate-notes
           fi
 
-      - uses: jdx/packslip@v1
+      - uses: jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564 # v1.11.4
         with:
           artifacts: dist/bercail.tar.gz
           manifest: packaging/packslip.toml

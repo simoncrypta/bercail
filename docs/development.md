@@ -47,6 +47,8 @@ The Pi extensions' unit tests and the Worker's are Vitest (`tests/*.test.ts`, ru
 
 `deploy` runs only for a `v*` tag, after both jobs pass, and deploys the site and the Workers when `CLOUDFLARE_API_TOKEN` is set. A newer push to the same branch or PR cancels the older run, on master too, so several merges in a row test only the last one. A tag run is never cancelled.
 
+Every action is pinned by its full commit SHA, with the release tag in a comment beside it (`actions/checkout@<sha> # v7.0.1`), so a moved tag cannot change what runs. To update one, take the new tag's commit SHA and change both.
+
 The caches: setup-node caches npm's download cache, keyed on `package-lock.json`. mise-action caches mise's data dir under a key that holds the job's tool specs, so changing a pin installs fresh, and it saves the cache after the job installs the tools. A hit saves 5 to 10 seconds of setup. Vite+ has no cache in CI. On the runner, `vp check` takes about a second and `vp test` under one, so its task cache, or the Oxlint and Vitest caches, would save at most a second or two on a run that waits about 2 minutes for bats.
 
 ### A bigger test runner
