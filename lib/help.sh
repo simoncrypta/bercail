@@ -133,7 +133,10 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   Claude Code refuses a prompt near the window. Every role loads the
   bridge, the rate-limit fallback, and bercail's guard, which follows each repo's
   trusted git policy (bercail policy show). The guard also blocks op secret reads
-  piped into commands or used before an empty-value check, for every role.
+  piped into commands or used before an empty-value check, for every role. In a
+  repo with [desk_secrets."<repo>"], the lead, builder, autopilot and headless
+  runs get an op shim that hands op a service-account token from a 0600 file,
+  and the guard keeps that file, the token and the vault's contents off screen.
   [bstack] fallback sets candidate order: families or Pi model ids
   (default ["claude", "gpt", "grok"]).
   The fallback skips limited models and dead providers (402, no credits), keeps

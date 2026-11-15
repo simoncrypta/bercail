@@ -2,6 +2,7 @@
 // tool_call, the repo's git policy (bercail policy show), and the approval log.
 import { appendFileSync, mkdirSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /** The part of a repo's effective policy (lib/policy.sh) the guard enforces. */
@@ -17,6 +18,9 @@ export type Policy = {
   repo: string;
   from: Record<string, string>;
 };
+
+/** A repo's desk secret (lib/desk-secret.sh): its token file, and the worktree the agent works in. */
+export type DeskSecret = { file: string; root: string };
 
 export const defaultPolicy: Policy = {
   commit: "ask",
@@ -48,6 +52,10 @@ export type GuardInput = {
   fresh?: ReadonlySet<string>;
   /** Within one command: an earlier part may have switched the branch. */
   branchMoved?: boolean;
+  /** The repo has a desk secret: the guard keeps its file, the token and the vault out of sight. */
+  deskSecret?: DeskSecret;
+  /** Within one command: this text runs in a $( ), so what it prints is captured, not shown. */
+  captured?: boolean;
 };
 
 export type GuardDecision =
@@ -102,6 +110,12 @@ const brainRemember =
   'A memory reaches every branch and desk at once. Propose it in your report as Memory: "<text>" --path <p>, and Shep records it once the person agrees.';
 const emptySecret =
   'A command fed by op read, op inject or op item get --fields still runs on an empty value when 1Password fails or its prompt is dismissed. Read the secret into a variable, check it is not empty, then use it: set -o pipefail; pw="$(op read \'op://…\')"; : "${pw:?op read failed}"; then pass "$pw". Or write a small script that starts with set -euo pipefail and does the same.';
+const secretFile =
+  "This repo's desk secret is for bercail's op shim alone. Run op, which reads it for you; do not read, copy or decrypt the file.";
+const printsToken =
+  "In a repo with a desk secret, printing the environment or OP_SERVICE_ACCOUNT_TOKEN is blocked. Name the variable you need (printenv HOME), or run op.";
+const vaultShown =
+  'In a repo with a desk secret, listing the vault or printing a secret is blocked. Read the one field you need into a variable and check it: pw="$(op read \'op://…\')"; : "${pw:?op read failed}". Or write it with -o to a file outside the worktree.';
 const unclosedSub =
   "The guard cannot find where this $( or backtick ends (a heredoc with an apostrophe inside $( ) does that). Write the body to a file first, then pass its path.";
 
@@ -1470,14 +1484,106 @@ function expandTemps(word: string, vars: TempVars): string {
 // op's global flags that take a value.
 const opValue = new Set(["--account", "--config", "--encoding", "--format", "--session"]);
 
-// op read, op inject, and op item get with --fields, --otp or --reveal print a secret.
-function readsSecret(words: string[]): boolean {
+// op's words from its subcommand on, past the global flags; undefined when it is not op,
+// or asks for help, which prints no secret. A --help after op run's -- is its command's.
+function opArgs(words: string[]): string[] | undefined {
   const cmd = commandWords(words);
-  if (cmd.length === 0 || basename(cmd[0]) !== "op") return false;
+  if (cmd.length === 0 || basename(cmd[0]) !== "op") return undefined;
+  const own = cmd.includes("--") ? cmd.slice(0, cmd.indexOf("--")) : cmd;
+  if (own.some((word) => word === "--help" || word === "-h")) return undefined;
   let i = 1;
   while (i < cmd.length && cmd[i].startsWith("-")) i += opValue.has(cmd[i]) ? 2 : 1;
-  if (cmd[i] === "read" || cmd[i] === "inject") return true;
-  return cmd[i] === "item" && cmd.includes("get") && cmd.some((word) => /^--(fields|otp|reveal)(=|$)/.test(word));
+  return cmd.slice(i);
+}
+
+// op read, op inject, and op item get with --fields, --otp or --reveal print a secret.
+function readsSecret(words: string[]): boolean {
+  const args = opArgs(words);
+  if (!args) return false;
+  if (args[0] === "read" || args[0] === "inject") return true;
+  return args[0] === "item" && args.includes("get") && args.some((word) => /^--(fields|otp|reveal)(=|$)/.test(word));
+}
+
+// op that lists or reveals the vault wherever its output goes: item or vault list,
+// item get --reveal or as JSON (concealed fields not shown masked there), op run
+// --no-masking, and service accounts. RAW has the assignments before op.
+function revealsVault(words: string[], raw: string[]): boolean {
+  const args = opArgs(words);
+  if (!args) return false;
+  const [group, verb] = args;
+  const item = group === "item" || group === "items";
+  if ((item || group === "vault" || group === "vaults") && (verb === "list" || verb === "ls")) return true;
+  if (group === "service-account" || group === "sa") return true;
+  const all = commandWords(words);
+  const own = all.includes("--") ? all.slice(0, all.indexOf("--")) : all;
+  if (group === "run") return own.includes("--no-masking");
+  const json =
+    raw.some((word) => /^OP_FORMAT=json$/i.test(word)) ||
+    own.some((word, i) => /^--format=json$/i.test(word) || (word === "--format" && /^json$/i.test(own[i + 1] ?? "")));
+  return item && verb === "get" && (json || own.some((word) => /^--reveal(=|$)/.test(word)));
+}
+
+// Where op read or op inject sends the secret when it shows it: no -o, or an -o
+// the guard cannot place outside the worktree, and stdout not sent to /dev/null.
+function showsSecret(words: string[], input: GuardInput): boolean {
+  const args = opArgs(words);
+  if (!args || !(args[0] === "read" || args[0] === "inject") || input.captured || !input.deskSecret) return false;
+  const at = args.findIndex((word) => /^(-o|--out-file)(=|$)/.test(word));
+  if (at < 0) {
+    const quiet = words.some(
+      (word, i) =>
+        /^(1|&)?>\/dev\/null$/.test(word) || ([">", "1>", "&>"].includes(word) && words[i + 1] === "/dev/null"),
+    );
+    return !quiet;
+  }
+  let out = args[at].includes("=") ? args[at].slice(args[at].indexOf("=") + 1) : (args[at + 1] ?? "");
+  if (out.startsWith("~/") && input.home) out = join(input.home, out.slice(2));
+  const path = placeIn(input.cwd, out);
+  if (path === undefined) return true;
+  if (tempRoot(path)) return false;
+  const root = input.deskSecret.root;
+  return [root, "/dev", "/proc"].some((dir) => path === dir || path.startsWith(`${dir}/`));
+}
+
+// The segment prints the environment, or the token's variable by name: a bare env,
+// printenv, set, export or declare. $OP_SERVICE_ACCOUNT_TOKEN itself is decideBash's.
+function printsEnv(words: string[], raw: string[]): boolean {
+  if (words.length === 0) return raw.some((word) => basename(word) === "env");
+  const cmd = basename(words[0]);
+  const names = words.slice(1).filter((word) => !word.startsWith("-") && !word.startsWith("+"));
+  if (cmd === "set") return words.length === 1;
+  if (!["printenv", "export", "declare", "typeset"].includes(cmd)) return false;
+  return names.length === 0 || names.some((name) => name.split("=")[0] === "OP_SERVICE_ACCOUNT_TOKEN");
+}
+
+// The ways a command can spell PATH under HOME.
+function spellings(path: string, home: string | undefined): string[] {
+  if (!home || !path.startsWith(`${home}/`)) return [path];
+  const rest = path.slice(home.length);
+  return [path, `~${rest}`, `$HOME${rest}`, `\${HOME}${rest}`];
+}
+
+// The secret's folder, when it is one of its own: not HOME, not above it.
+function secretDir(secret: DeskSecret, home: string | undefined): string | undefined {
+  const dir = dirname(secret.file);
+  return dir === "/" || (home && (home === dir || home.startsWith(`${dir}/`))) ? undefined : dir;
+}
+
+// The command names the secret file, its folder, or the shim's variable, or decrypts
+// a systemd credential.
+function namesSecret(command: string, secret: DeskSecret, home: string | undefined): boolean {
+  const dir = secretDir(secret, home);
+  const names = [...spellings(secret.file, home), `/${basename(secret.file)}`, "BERCAIL_OP_SERVICE_ACCOUNT"];
+  if (dir) names.push(...spellings(dir, home));
+  return names.some((name) => command.includes(name)) || /systemd-creds\b[^\n;|&]*\bdecrypt\b/.test(command);
+}
+
+// A tool's PATH is the secret file or in its folder. For grep, which reads what is
+// under PATH, so is a folder above it below HOME (~/.config, ~/.config/bercail).
+function inSecret(tool: string, path: string, secret: DeskSecret, home: string | undefined): boolean {
+  const dir = secretDir(secret, home);
+  if (path === secret.file || (dir !== undefined && (path === dir || path.startsWith(`${dir}/`)))) return true;
+  return tool === "grep" && !!home && path.startsWith(`${home}/`) && secret.file.startsWith(`${path}/`);
 }
 
 // segmentsOf, with the & of >&2, 2>&1 and &>file put back in its command: the
@@ -1655,6 +1761,10 @@ function feedsEmptySecret(command: string): boolean {
 export function decideBash(command: string, input: GuardInput, depth = 0): GuardDecision {
   if (depth > 4) return block("This command is nested too deep to check. Split it into a simpler command.");
   if (feedsEmptySecret(command)) return block(emptySecret);
+  const secret = input.deskSecret;
+  if (secret && namesSecret(command, secret, input.home)) return block(secretFile);
+  if (secret && (/\$\{?OP_SERVICE_ACCOUNT_TOKEN/.test(command) || /\/proc\/\S*environ/.test(command)))
+    return block(printsToken);
   let decision: GuardDecision = allow;
   let cwd = input.cwd;
   let gitEnv = input.gitEnv ?? false;
@@ -1699,10 +1809,14 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       vars.clear();
     }
     const here = { ...input, cwd, gitEnv, gitConfigEnv, branchMoved, fresh };
-    for (const sub of segment.subs) decision = worse(decision, decideBash(sub, here, depth + 1));
+    for (const sub of segment.subs) decision = worse(decision, decideBash(sub, { ...here, captured: true }, depth + 1));
     const raw = bare.map((word) => expandTemps(word, vars).replaceAll(literalDollar, "$"));
     if (straight) recordTemps(command, segment, raw, vars);
     const words = commandWords(raw);
+    if (secret) {
+      if (printsEnv(words, raw)) return block(printsToken);
+      if (revealsVault(words, raw) || showsSecret(words, here)) return block(vaultShown);
+    }
     if (words.length === 0) continue;
     // /usr/bin/git is git.
     if (words[0].includes("/")) words[0] = basename(words[0]);
@@ -1789,6 +1903,11 @@ export function decideTool(tool: string, command: string | undefined, input: Gua
     if (full && input.cwd !== undefined && input.protectedFiles?.includes(resolve(input.cwd, full)))
       return block(protectedFile);
   }
+  // read, edit, write, grep, find and ls all take a path.
+  if (input.deskSecret && path) {
+    const full = path.startsWith("~/") && input.home ? join(input.home, path.slice(2)) : path;
+    if (inSecret(tool, resolve(input.cwd ?? "/", full), input.deskSecret, input.home)) return block(secretFile);
+  }
   if (tool === "bash") return input.role === "discuss" ? block(discussOnly) : decideBash(command ?? "", input);
   return allow;
 }
@@ -1804,6 +1923,10 @@ async function branchAt(pi: ExtensionAPI, dir: string, signal: AbortSignal | und
 
 type PolicyJson = {
   repo: string;
+  /** The checkout's top folder: this worktree. */
+  root?: string;
+  /** [desk_secrets] in config.toml: the token file, and why it cannot be used, if so. */
+  desk_secret?: { file: string; problem: string } | null;
   scratch: boolean;
   /** Entire captures sessions in this checkout (git_backend_entire_capture). */
   entire?: boolean;
@@ -1841,6 +1964,40 @@ export function policyFromJson(json: PolicyJson | undefined): Policy {
     repo: json.repo,
     from: json.sources ?? {},
   };
+}
+
+// The repo's desk secret, for the guard's rules: every role gets them, even when
+// the file is unusable.
+export function deskSecretOf(json: PolicyJson | undefined): DeskSecret | undefined {
+  const file = json?.desk_secret?.file;
+  return file ? { file, root: json.root ?? json.repo } : undefined;
+}
+
+// A desk's lead, a builder, autopilot and a headless run may use the desk secret.
+// Shep, Discuss, judge and council may not.
+const secretRoles = new Set(["", "lead", "builder", "autopilot"]);
+
+// For a role that may use it, puts the op shim in SHIM first on ENV's PATH and
+// names the file for it there; the token stays in the file. Any other role, or
+// a Pi started from a desk's shell, loses the shim it inherited. Returns what to
+// tell the person when the secret is there but unusable.
+export function useDeskSecret(
+  json: PolicyJson | undefined,
+  role: string,
+  env: NodeJS.ProcessEnv,
+  shim: string,
+): string | undefined {
+  const secret = json?.desk_secret;
+  const dirs = (env.PATH ?? "").split(":");
+  const path = dirs.filter((dir) => dir !== shim);
+  if (path.length < dirs.length) env.PATH = path.join(":");
+  delete env.BERCAIL_OP_SERVICE_ACCOUNT;
+  if (!json || !secret?.file || !secretRoles.has(role)) return undefined;
+  if (secret.problem)
+    return `bercail: ${json.repo}'s desk secret is not used: ${secret.problem}. op asks the 1Password app instead.`;
+  env.PATH = [shim, ...path].join(":");
+  env.BERCAIL_OP_SERVICE_ACCOUNT = secret.file;
+  return undefined;
 }
 
 // A review worktree (<repo>.review-<n>, from bercail review-pr) holds someone
@@ -1889,8 +2046,28 @@ export default function (pi: ExtensionAPI) {
       join(process.env.XDG_CONFIG_HOME || join(home ?? "", ".config"), "bercail/config.toml"),
   ];
 
+  const shim = resolve(dirname(fileURLToPath(import.meta.url)), "../op-shim");
+  // The desk secret of the folder the agent started in, once a lookup works. No
+  // abort signal, and a failed lookup is not kept: either would leave the session
+  // without its rules.
+  let secretLookup: { cwd: string; json: PolicyJson } | undefined;
+  const secretJson = async (cwd: string) => {
+    if (secretLookup?.cwd === cwd) return secretLookup.json;
+    const json = await policyJson(pi, cwd, undefined);
+    if (json) secretLookup = { cwd, json };
+    return json;
+  };
+
   // A PR head's .pi/ extensions never load, whatever trust.json says of the parent.
   pi.on("project_trust", async (event) => ({ trusted: isReviewWorktree(event.cwd) ? "no" : "undecided" }));
+
+  // Before the first command: Pi's bash tool runs with this process's environment.
+  pi.on("session_start", async (_event, ctx) => {
+    const note = useDeskSecret(await secretJson(ctx.cwd), process.env.BERCAIL_ROLE ?? "", process.env, shim);
+    if (!note) return;
+    if (ctx.hasUI) ctx.ui.notify(note, "warning");
+    else console.error(note);
+  });
 
   // Each run starts with the policy of the repo this agent works in.
   pi.on("before_agent_start", async (event, ctx) => {
@@ -1910,6 +2087,7 @@ export default function (pi: ExtensionAPI) {
       cwd: ctx.cwd,
       home,
       protectedFiles,
+      deskSecret: deskSecretOf(await secretJson(ctx.cwd)),
     };
     let decision = decideTool(event.toolName, command, guardInput, input.path);
     for (let i = 0; i < 8 && (decision.action === "need-branch" || decision.action === "need-policy"); i++) {

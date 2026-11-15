@@ -329,6 +329,9 @@ _bstack_deploy_pi() {
   copy_file "$work/src/pi/extensions/provider-error.ts" "$BSTACK_PI_DIR/extensions/provider-error.ts"
   copy_file "$work/src/pi/extensions/guard.ts" "$BSTACK_PI_DIR/extensions/guard.ts"
   copy_file "$work/src/pi/extensions/review.ts" "$BSTACK_PI_DIR/extensions/review.ts"
+  # The guard puts it first on PATH in a repo with a desk secret (lib/desk-secret.sh).
+  copy_file "$work/src/pi/op-shim/op" "$BSTACK_PI_DIR/op-shim/op"
+  run chmod 755 "$BSTACK_PI_DIR/op-shim/op"
   bstack_pi_fallback >"$work/fallback" || return 1
   copy_file "$work/fallback" "$BSTACK_PI_DIR/fallback"
   # The desk's lead, as a JSON argv: bercail-desk-agent runs it with the
