@@ -8,10 +8,13 @@
 // - shepShown, spaceView, select, newSpace: in the bercail layout a click on a space, or
 //   a new space, also leaves the Shep view for the space view.
 // - while Shep shows, no space reads as selected (row and the narrow rail's cell).
+// - review marks, from `bercail shep queue --json` (see "review marks" below): a mark
+//   after a space's name, a count in the header that opens the Review list (this mod
+//   with props.role "reviews", as a dialog), and review-next (Ctrl+Shift+J).
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout } from "herdr";
+import { spaces, machines, panes, run, openOverlay, closeOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, focused, home, nextCommand, notify, props, terminals } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -63,8 +66,100 @@ export function tone(t, status) {
   return t[status] ?? t.unknown;
 }
 
+// --- review marks ---------------------------------------------------------------
+// bercail's queue is the source: this reads `bercail shep queue --json` (about eight
+// seconds of bd and gh) every five minutes, and after a desk's status changes at most
+// every 30 seconds, and shares it as REVIEW for every copy. It never decides what
+// waits, and nothing it reads moves the view or the keyboard: only review-next and a
+// click do.
+const BERCAIL_PATH = 'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"';
+const QUEUE = `${BERCAIL_PATH}; exec bercail shep queue --json`;
+const REVIEW = "bercail.review"; // { q: the last queue read, or null; error: the last read's; missing: no bercail }
+const REVIEW_EVERY = 300000;
+const REVIEW_SOON = 30000;
+// A queue older than this reads as stale: three reads missed.
+export const STALE = 3 * REVIEW_EVERY;
+
+const lines = (item) => item.lines ?? item.change?.lines ?? 0;
+// Waits on your LGTM: its policy says so, whatever bd could tell of its state.
+const lgtm = (item) => Boolean(item.counts && item.change?.review === "required");
+const size = (n) => (n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k` : String(n));
+
+// How long since an ISO time, shortly: 5m, 3h, 2d.
+export function ago(iso, now) {
+  const ms = now - Date.parse(iso ?? "");
+  if (!(ms >= 0)) return "";
+  const m = Math.floor(ms / 60000);
+  return m < 1 ? "now" : m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h` : `${Math.floor(m / 1440)}d`;
+}
+
+// The queue's items in its order, each with its space: the desk's or the handoff's
+// space id, else the space whose folder is the item's worktree. `ps`: panes().
+export function reviewRows(q, sp, ps) {
+  return (q?.items ?? []).map((item) => ({
+    item,
+    space:
+      (item.space && sp.find((s) => s.id === item.space)) ||
+      (item.path && sp.find((s) => !s.machine && (place(s, ps) === item.path || s.folder === item.path))) ||
+      null,
+  }));
+}
+
+// space id -> what waits there: counted lines and changes, whether one needs an LGTM
+// or has an unknown state; else `quiet`, the state of what does not count.
+// A space on another machine is never matched by folder: the queue is this one's.
+export function marks(rows) {
+  const out = {};
+  for (const { item, space } of rows) {
+    if (!space) continue;
+    const m = (out[space.id] ??= { lines: 0, waits: 0, lgtm: false, unknown: false, quiet: null, items: [] });
+    m.items.push(item);
+    if (item.counts) {
+      m.waits++;
+      m.lines += lines(item);
+      m.lgtm ||= lgtm(item);
+      m.unknown ||= item.state === "unknown";
+    } else m.quiet ??= item.state;
+  }
+  return out;
+}
+
+// The space after `current` among the spaces with work that waits, in queue order;
+// the first when `current` has none. null when nothing waits in a space.
+export function nextReview(rows, current) {
+  const ids = [...new Set(rows.filter((r) => r.item.counts && r.space).map((r) => r.space.id))];
+  return ids.length ? ids[(ids.indexOf(current) + 1) % ids.length] : null;
+}
+
+// The color of what waits: red when one item needs your LGTM, else the accent.
+// Not by color alone: the tooltip and the list say "needs your LGTM".
+const waitColor = (t, needsLgtm) => (needsLgtm ? t.ansi1 : t.accent);
+
+// One line on an item, for tooltips and the list.
+export function itemLabel(item) {
+  const head = item.kind === "pr" ? `PR #${item.number}` : item.issue ?? item.path;
+  const title = item.title ? `: ${item.title}` : "";
+  const state = [lgtm(item) && "needs your LGTM", item.state === "unknown" ? `state unknown: ${item.why}` : item.why]
+    .filter(Boolean)
+    .join(" · ");
+  return `${head}${title} · ${size(lines(item))} lines${state ? ` · ${state}` : ""}`;
+}
+
+// Where the queue stands, for the header and the list: "as of 14:02", stale, or the error.
+export function reviewStatus(r, now) {
+  if (!r?.q) return { text: r?.error ? `queue unread: ${r.error}` : "queue not read yet", bad: Boolean(r?.error) };
+  const at = Date.parse(r.q.at);
+  const d = new Date(at);
+  const time = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  const old = !(now - at <= STALE);
+  const text = `as of ${time}` + (old ? `, stale (${ago(r.q.at, now)} old)` : "") + (r.error ? `; last read failed: ${r.error}` : "");
+  return { text, bad: old || Boolean(r.error) };
+}
+
 export default class Spaces extends View {
   init(_props, cx) {
+    this.role = props()?.role ?? "list";
+    if (this.role === "reviews") return;
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
     this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
@@ -87,6 +182,57 @@ export default class Spaces extends View {
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
     cx.timer.every(250, (cx) => this.checkNew(cx));
+    this.desks = null; // the desks' statuses at the last look: a change reads the queue again
+    this.reviewAt = 0; // when the queue was last read
+    cx.timer.every(REVIEW_EVERY, (cx) => this.readQueue(cx));
+    cx.spawn(async (cx) => {
+      for (;;) {
+        const c = await nextCommand();
+        if (c === "review-next") this.reviewNext();
+        cx.notify();
+      }
+    });
+  }
+
+  // One read at a time; a change meanwhile reads again after it.
+  readQueue(cx) {
+    this.reviewAt = Date.now();
+    if (this.reading) {
+      this.readAgain = true;
+      return;
+    }
+    this.reading = true;
+    cx.spawn(async (cx) => {
+      do {
+        this.readAgain = false;
+        const was = shared(REVIEW) ?? {};
+        let next;
+        try {
+          const r = await exec("bash", ["-lc", QUEUE], { timeout: 90000 });
+          if (r.code === 127) next = { q: null, error: null, missing: true };
+          else {
+            if (r.code !== 0) throw new Error(r.stderr.trim().split("\n").at(-1) || `bercail shep queue exited ${r.code}`);
+            const q = JSON.parse(r.stdout);
+            if (q?.schema !== "bercail.queue/v1") throw new Error("this bercail has no review queue JSON: run bercail update");
+            next = { q, error: null };
+          }
+        } catch (e) {
+          next = { q: was.q ?? null, error: String(e?.message ?? e) };
+        }
+        setShared(REVIEW, next);
+      } while (this.readAgain);
+      this.reading = false;
+      cx.notify();
+    });
+  }
+
+  // Ctrl+Shift+J: the next space whose work waits on review, as a click on it would.
+  reviewNext() {
+    const r = shared(REVIEW);
+    const id = nextReview(reviewRows(r?.q, spaces(), panes()), focused()?.space);
+    if (id) select(id);
+    else if (!r?.q) notify({ title: "bercail", body: `The review queue is not read: ${reviewStatus(r, Date.now()).text}`, level: "warning" });
+    else notify({ title: "bercail", body: "Nothing in a space waits on your review.", level: "info" });
   }
 
   checkNew(cx) {
@@ -95,6 +241,15 @@ export default class Spaces extends View {
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
     const due = this.due(now, sp, panes());
     if (due.size) this.refreshGit(due, cx);
+    const desks = terminals().filter((t) => t.labels?.["bercail.role"] === "agent").map((t) => `${t.address}:${t.status}`).join(" ");
+    if (desks !== this.desks) {
+      this.desks = desks;
+      this.reviewDue = true;
+    }
+    if (this.reviewDue && now - this.reviewAt >= REVIEW_SOON) {
+      this.reviewDue = false;
+      this.readQueue(cx);
+    }
     if (sp.some((s) => !this.shown.has(s.id)) || this.orderingDue(now)) cx.notify();
   }
 
@@ -453,8 +608,17 @@ export default class Spaces extends View {
           .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
           .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
-          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1()),
+          .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
+          .when(Boolean(this.marks?.[w.id]), (el) => el.child(this.reviewMark(w.id, this.marks[w.id], t))),
       );
+  }
+
+  // After the name: what waits on review here and its size, red when it needs your
+  // LGTM (waitColor); a cleanup candidate or superseded work, quietly.
+  reviewMark(id, m, t) {
+    const mark = div().id(`review-${id}`).flex_none().text_size(11).tooltip(m.items.map(itemLabel).join("\n"));
+    if (!m.waits) return mark.text_color(t.dim).child(m.quiet);
+    return mark.font_medium().text_color(waitColor(t, m.lgtm)).child(`◆ ${size(m.lines)}${m.unknown ? "?" : ""}`);
   }
 
   compact({ w, i }, t) {
@@ -469,13 +633,144 @@ export default class Spaces extends View {
       .when(w.active && !shepShown(), (el) => el.bg(t.selected))
       .when(!w.active || shepShown(), (el) => el.hover((s) => s.bg(t.hover)))
       .on_click(() => select(w.id))
-      .child(div().text_color(w.active && !shepShown() ? t.foreground : t.muted).child(String(i + 1)))
+      .when(Boolean(this.marks?.[w.id]?.waits), (el) => el.tooltip(this.marks[w.id].items.map(itemLabel).join("\n")))
+      .child(div().text_color(this.marks?.[w.id]?.waits ? waitColor(t, this.marks[w.id].lgtm) : w.active && !shepShown() ? t.foreground : t.muted).child(String(i + 1)))
       .child(div().absolute().right(5).text_color(tone(t, w.status)).child(glyph(w.status))));
+  }
+
+  // The header's count of what waits on review; a click opens the Review list.
+  reviewBadge(r, rows, t) {
+    const box = h_flex().flex_1().min_w(0).justify_end().pr(4);
+    if (!r || r.missing) return box;
+    const waits = rows.filter((x) => x.item.counts);
+    const quiet = rows.length - waits.length;
+    const st = reviewStatus(r, Date.now());
+    const text = waits.length ? `◆ ${waits.length} to review` : quiet ? `${quiet} to clean up` : r.q ? "" : "review ?";
+    if (!text) return box;
+    const total = waits.reduce((n, x) => n + lines(x.item), 0);
+    return box.child(
+      div()
+        .id("review-list")
+        .px(6)
+        .py(2)
+        .rounded(5)
+        .truncate()
+        .cursor_pointer()
+        .text_color(waits.length ? waitColor(t, waits.some((x) => lgtm(x.item))) : t.dim)
+        .hover((s) => s.bg(t.hover))
+        .tooltip(`${size(total)} lines wait on your review, ${st.text}. Click for the list; Ctrl+Shift+J goes to the next.`)
+        .on_click(() => openOverlay({ mod: "bercail-spaces", kind: "dialog", width: 780, height: 480, props: { role: "reviews" } }))
+        .child(text + (st.bad ? " (stale)" : "")),
+    );
+  }
+
+  // The Review list (props.role "reviews", a dialog): the queue across repos, read-only.
+  // Its targets show the space or open its review; nothing here merges, commits,
+  // gives an LGTM or answers a desk.
+  reviewList(t) {
+    const r = shared(REVIEW) ?? {};
+    const rows = reviewRows(r.q, spaces(), panes());
+    const now = Date.now();
+    const st = reviewStatus(r, now);
+    const waits = rows.filter((x) => x.item.counts);
+    const quiet = rows.filter((x) => !x.item.counts);
+    const total = waits.reduce((n, x) => n + lines(x.item), 0);
+    const overlay = props()?.overlay;
+    const tilde = (p) => (p && p.startsWith(`${home()}/`) ? `~${p.slice(home().length)}` : (p ?? ""));
+    const target = (id, label, f) =>
+      div()
+        .id(id)
+        .flex_none()
+        .px(8)
+        .py(2)
+        .rounded(5)
+        .text_color(t.muted)
+        .cursor_pointer()
+        .hover((s) => s.bg(t.hover).text_color(t.foreground))
+        .on_click(f)
+        .child(label);
+    const row = ({ item, space }, n) => {
+      const heading =
+        item.kind === "pr"
+          ? `PR #${item.number}: ${item.title ?? ""}`
+          : item.issue
+            ? `${item.issue}${item.title ? `: ${item.title}` : ""}`
+            : (item.title ?? "no issue");
+      const by = item.by?.startsWith("/") ? ` (${tilde(item.by)})` : "";
+      const state = { unknown: `unknown: ${item.why}`, cleanup: `${item.why}: clean up`, superseded: `${item.why}${by}` }[item.state];
+      const facts = [item.kind === "pr" ? "PR" : `stakes ${item.change?.stakes ?? "?"}`, lgtm(item) && "needs your LGTM", state]
+        .filter(Boolean)
+        .join(" · ");
+      const targets = [];
+      if (space) targets.push(target(`review-space-${n}`, "Open space", () => { closeOverlay(overlay); select(space.id); }));
+      if (space && item.kind === "staged") {
+        targets.push(target(`review-open-${n}`, "Open review", () => {
+          closeOverlay(overlay);
+          run("space.select", { id: space.id });
+          // bercail-shep shows the space view first when Shep shows, then bercail-desk opens Review.
+          run("bercail-shep.desk:review");
+        }));
+      }
+      if (item.kind === "pr" && item.url) targets.push(target(`review-pr-${n}`, "Open PR", (_e, cx) => cx.open_url(item.url)));
+      if (!targets.length) targets.push(div().flex_none().px(8).text_color(t.dim).child("no space"));
+      return h_flex()
+        .id(`review-row-${n}`)
+        .px(12)
+        .py(6)
+        .gap(10)
+        .items_center()
+        .rounded(6)
+        .hover((s) => s.bg(t.hover))
+        .child(
+          v_flex()
+            .flex_1()
+            .min_w(0)
+            .child(div().truncate().text_color(t.foreground).child(space?.name ?? tilde(item.kind === "pr" ? item.repo : item.path)))
+            .child(div().truncate().text_size(11.5).text_color(t.dim).child(heading)),
+        )
+        .child(div().flex_none().w(72).text_color(t.muted).child(`${size(lines(item))} lines`))
+        .child(div().flex_none().w(190).truncate().text_color(lgtm(item) ? t.ansi1 : item.counts ? t.muted : t.dim).child(facts))
+        .child(div().flex_none().w(40).text_color(t.dim).child(ago(item.since, now) || "–"))
+        .child(h_flex().flex_none().gap(2).children(targets));
+    };
+    const section = (text) => div().px(12).pt(10).pb(2).text_size(11).text_color(t.dim).child(text);
+    return v_flex()
+      .size_full()
+      .bg(t.background)
+      .text_size(12.5)
+      .child(
+        h_flex()
+          .h(36)
+          .flex_none()
+          .px(12)
+          .gap(10)
+          .items_center()
+          .border_b(1)
+          .border_color(t.border)
+          .child(div().flex_none().font_semibold().text_color(t.foreground).child("Review"))
+          .child(div().flex_none().text_color(t.muted).child(`${waits.length} waiting · ${size(total)} lines`))
+          .child(div().flex_1().truncate().text_color(st.bad ? t.blocked : t.dim).child(st.text))
+          .child(target("review-close", "✕", () => closeOverlay(overlay))),
+      )
+      .child(
+        v_flex()
+          .flex_1()
+          .min_h(0)
+          .py(4)
+          .overflow_y_scrollbar()
+          .when(!rows.length, (el) => el.child(div().px(12).py(10).text_color(t.dim).child(r.q ? "Nothing waits on your review." : st.text)))
+          .children(waits.map(row))
+          .when(quiet.length > 0, (el) => el.child(section("Not counted against the review budget")).children(quiet.map((x, i) => row(x, waits.length + i)))),
+      );
   }
 
   render() {
     const t = theme();
+    if (this.role === "reviews") return this.reviewList(t);
     const collapsed = narrow();
+    const review = shared(REVIEW);
+    const rows = reviewRows(review?.q, spaces(), panes());
+    this.marks = marks(rows);
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
     const sp = spaces();
     const ids = new Set(sp.map(p => p.id));
@@ -492,6 +787,7 @@ export default class Spaces extends View {
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
         .when(!collapsed, el => el.child("Spaces"))
+        .when(!collapsed, el => el.child(this.reviewBadge(review, rows, t)))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => newSpace()).child(svg("mods/workspace-chrome/plus.svg").size(14))))
       .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always")

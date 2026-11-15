@@ -22,7 +22,7 @@ Post-install CLI (bercail):
                 bg --issue ID [--cwd DIR] (a background Shep waits on the issue's job) |
                 repos [--json] (your known repos) | board (open jobs, what waits on you) |
                 brief ISSUE [--repo DIR] [--budget CHARS] (one issue, its desk, its latest report) |
-                queue [--repo DIR] (what waits on your review, against the review budget) |
+                queue [--repo DIR] [--json] (what waits on your review, against the review budget) |
                 remember "RULE" [--scope SCOPE] | list | forget N (Shep's standing rules) |
                 mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list (the mistakes ledger) |
                 questions [--json] (pending targeted questions; replies are unverified) |

@@ -12,7 +12,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
 SHEP_SKILLS=(handoff review desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | questions [--json] | question create|revise|reply|check|thread"
+SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | questions [--json] | question create|revise|reply|check|thread"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"

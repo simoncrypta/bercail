@@ -1,0 +1,270 @@
+#!/usr/bin/env bats
+# bercail-spaces' review marks, against stubbed herdr and gpui modules and a fixed
+# `bercail shep queue --json`: the marks and header count, review-next's order, the
+# Review list, and that reading the queue never moves the view or the keyboard.
+
+setup() {
+  load test_helper
+  isolate
+  need node jq
+  export TZ=UTC
+  cat >"$BATS_TEST_TMPDIR/herdr.mjs" <<'EOF'
+const h = () => globalThis.herdr;
+const find = (n, id) => n?.id === id ? n : (n?.children ?? []).map((c) => find(c, id)).find(Boolean);
+export const layout = () => structuredClone(h().layout);
+export const run = (name, args) => {
+  h().calls.push([name, args]);
+  if (name === "layout.show" || name === "layout.hide") find(h().layout, args.id).hidden = name === "layout.hide";
+};
+export const spaces = () => h().spaces;
+export const focused = () => h().focused;
+export const terminals = () => h().terminals;
+export const panes = () => h().panes ?? [];
+export const machines = () => [];
+export const notify = (n) => h().notes.push(n);
+export const theme = () => new Proxy({}, { get: (_t, k) => String(k) });
+export const props = () => h().props ?? {};
+export const shared = (k) => h().shared[k] ?? null;
+export const setShared = (k, v) => { h().shared[k] = v; };
+export const openOverlay = (spec) => { h().calls.push(["openOverlay", spec]); return "o1"; };
+export const closeOverlay = (id) => h().calls.push(["closeOverlay", id]);
+export const exec = async (cmd, args) => { h().execs.push([cmd, ...args]); return h().exec(cmd, args); };
+export const hc = async () => ({ code: 1, stdout: "", stderr: "" });
+export const watchFolder = () => new Promise(() => {});
+export const window = () => ({ active: true });
+export const home = () => "/home/me";
+// The commands the test sends with h().send(c).
+export const nextCommand = () => new Promise((resolve) => { h().send = resolve; });
+EOF
+  cat >"$BATS_TEST_TMPDIR/gpui.mjs" <<'EOF'
+// An element records its id, text, children, tooltip and click handler.
+const el = () => {
+  const e = { kids: [] };
+  const p = new Proxy(e, {
+    get: (t, k) => k === "__el" ? t : (...a) => {
+      if (k === "id") t.id = a[0];
+      if (k === "on_click") t.click = a[0];
+      if (k === "tooltip") t.tip = a[0];
+      if (k === "text_color") t.color = a[0];
+      if (k === "child") t.kids.push(a[0]);
+      if (k === "children") t.kids.push(...a[0]);
+      if (k === "when" && a[0]) a[1](p);
+      return p;
+    },
+  });
+  return p;
+};
+export class View {}
+export const div = el, svg = el, h_flex = el, v_flex = el;
+export const E = (n) => n?.__el ?? n;
+// The text under a node, depth first, one string per element with text.
+export function text(n, out = []) {
+  const e = E(n);
+  if (e == null || typeof e !== "object") { if (e != null) out.push(String(e)); return out; }
+  const own = e.kids.filter((k) => typeof k !== "object").join("");
+  if (own) out.push(own);
+  for (const k of e.kids) if (k && typeof k === "object") text(k, out);
+  return out;
+}
+export function all(n, out = []) {
+  const e = E(n);
+  if (!e || typeof e !== "object") return out;
+  out.push(e);
+  for (const k of e.kids) all(k, out);
+  return out;
+}
+EOF
+  sed -e 's|from "herdr"|from "./herdr.mjs"|' -e 's|from "gpui-kit"|from "./gpui.mjs"|' \
+    -e 's|from "gpui-base"|from "./gpui.mjs"|' "$ROOT/bercail/mods/bercail-spaces/main.js" >"$BATS_TEST_TMPDIR/main.mjs"
+  cp "$ROOT/bercail/layouts/bercail.json" "$BATS_TEST_TMPDIR/layout.json"
+  # The queue, oldest first: s1's high-stakes job, a PR, s2's big job, s3's unknown
+  # (found by its folder; high-stakes), and work in no space (a space on another
+# machine has its folder); then s4's cleanup (high-stakes too) and s5's superseded.
+  jq -n '{schema: "bercail.queue/v1", at: "2026-11-14T12:00:00Z", items: [
+    {kind: "staged", path: "/w/app.one", issue: "app-1", title: "Export", space: "s1", since: "2026-11-14T09:00:00Z",
+     state: "lgtm", counts: true, change: {lines: 6, stakes: "high", review: "required"}},
+    {kind: "pr", repo: "/w/app", number: 12, title: "Teammate fix", url: "https://github.com/o/app/pull/12", lines: 4,
+     since: "2026-11-13T12:00:00Z", state: "review", counts: true},
+    {kind: "staged", path: "/w/app.two", issue: "app-2", title: "Sessions", space: "s2", since: "2026-11-14T11:30:00Z",
+     state: "review", counts: true, change: {lines: 1234, stakes: "low"}},
+    {kind: "staged", path: "/w/web.x", issue: "web-7", space: "gone-id", since: "2026-11-14T11:58:00Z",
+     state: "unknown", why: "bd does not answer for web-7", counts: true, change: {lines: 7, stakes: "high", review: "required"}},
+    {kind: "staged", path: "/w/far", issue: null, since: null, state: "review", counts: true, change: {lines: 2, stakes: "low"}},
+    {kind: "staged", path: "/w/app.three", issue: "app-3", title: "Old", space: "s4", since: "2026-11-10T12:00:00Z",
+     state: "cleanup", why: "issue closed", counts: false, change: {lines: 40, stakes: "high", review: "required"}},
+    {kind: "staged", path: "/w/app.four", issue: "app-4", space: "s5", since: "2026-11-11T12:00:00Z",
+     state: "superseded", why: "its job moved to another worktree", by: "/home/me/w/app.five", counts: false, change: {lines: 9, stakes: "low"}}],
+    repos: []}' >"$BATS_TEST_TMPDIR/queue.json"
+  cat >"$BATS_TEST_TMPDIR/prelude.mjs" <<'EOF'
+import { readFileSync } from "node:fs";
+import Spaces, { reviewRows, nextReview, marks, reviewStatus, ago, STALE } from "./main.mjs";
+import { E, text, all } from "./gpui.mjs";
+
+const shipped = JSON.parse(readFileSync(new URL("./layout.json", import.meta.url)));
+const queue = readFileSync(new URL("./queue.json", import.meta.url), "utf8");
+const Q = JSON.parse(queue);
+const NOW = Date.parse(Q.at) + 60000;
+const fail = (msg) => { console.error(`FAIL: ${msg}`); process.exit(1); };
+const expect = (got, want, what) => { if (JSON.stringify(got) !== JSON.stringify(want)) fail(`${what}: ${JSON.stringify(got)}, want ${JSON.stringify(want)}`); };
+const tick = () => new Promise((r) => setImmediate(r));
+const DESK = (address, space, status) => ({ address, state: "live", status, labels: { "bercail.role": "agent", "bercail.space": space } });
+const S = (id, name, folder = `/w/${id}`) => ({ id, name, folder, tabs: [{ id: `tab-${id}` }] });
+Date.now = () => NOW;
+const store = {};
+globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } };
+
+globalThis.herdr = {
+  layout: structuredClone(shipped), calls: [], execs: [], notes: [], shared: {},
+  spaces: [S("s0", "home"), S("s1", "export"), S("s2", "sessions"), S("s3", "web-x", "/w/web.x"), S("s4", "old"), S("s5", "four"),
+    { ...S("s6", "far-box", "/w/far"), machine: "box" }],
+  focused: { space: "s0", pane: "p0" },
+  terminals: [DESK("t1", "s1", "done"), DESK("t2", "s2", "idle")],
+  exec: (cmd, args) => cmd === "bash" && /bercail shep queue --json$/.test(args.at(-1))
+    ? { code: 0, stdout: queue, stderr: "" } : { code: 1, stdout: "", stderr: "" },
+};
+// As in gpui: a timer callback and a task each get a cx.
+const timers = [];
+const cx = () => ({ timer: { every: (ms, f) => timers.push({ ms, f }) }, spawn: (f) => f(cx()), notify() {}, open_url: (u) => herdr.calls.push(["open_url", u]) });
+const views = (id) => (n) => all(n).find((e) => e.id === id);
+const viewCalls = () => herdr.calls.filter(([n]) => n !== "openOverlay");
+EOF
+}
+
+mod_case() {
+  cat "$BATS_TEST_TMPDIR/prelude.mjs" - >"$BATS_TEST_TMPDIR/test.mjs"
+  node "$BATS_TEST_TMPDIR/test.mjs"
+}
+
+@test "review-next order: spaces whose work waits, in queue order, wrapping; cleanup, superseded and spaceless work are skipped" {
+  mod_case <<'EOF'
+const rows = reviewRows(Q, herdr.spaces, []);
+expect(rows.map((r) => r.space?.id ?? null), ["s1", null, "s2", "s3", null, "s4", "s5"], "spaces: by id, else by folder, this machine's only");
+const walk = [];
+let at = "s0";
+for (let i = 0; i < 4; i++) walk.push((at = nextReview(rows, at)));
+expect(walk, ["s1", "s2", "s3", "s1"], "next review from a space with nothing waiting");
+expect(nextReview(rows, "s4"), "s1", "from a cleanup candidate's space: the first");
+expect(nextReview(reviewRows({ items: Q.items.filter((i) => !i.counts) }, herdr.spaces, []), "s0"), null, "nothing waits");
+const m = marks(rows);
+expect([m.s1.lines, m.s1.lgtm, m.s2.lines, m.s2.lgtm, m.s3.unknown, m.s3.lgtm, m.s4.waits, m.s4.lgtm, m.s4.quiet, m.s5.quiet, "s0" in m],
+  [6, true, 1234, false, true, true, 0, false, "cleanup", "superseded", false], "marks");
+expect(ago("2026-11-14T09:00:00Z", NOW), "3h", "waited");
+EOF
+}
+
+@test "reading the queue marks spaces and the header, and never moves the view or the keyboard" {
+  mod_case <<'EOF'
+const v = new Spaces();
+v.init({}, cx());
+const tick250 = timers.find((t) => t.ms === 250).f;
+tick250(cx());
+await tick();
+const reads = () => herdr.execs.filter(([c, , s]) => c === "bash" && /shep queue --json/.test(s)).length;
+expect(reads(), 1, "the first look reads the queue");
+expect(herdr.shared["bercail.review"].q.at, Q.at, "the queue is shared");
+tick250(cx());
+await tick();
+expect(reads(), 1, "no desk changed: no read");
+herdr.terminals = [DESK("t1", "s1", "idle"), DESK("t2", "s2", "working")];
+tick250(cx());
+await tick();
+expect(reads(), 1, "a desk changed within 30s of a read: not yet");
+Date.now = () => NOW + 30000;
+tick250(cx());
+await tick();
+expect(reads(), 2, "a desk's status changed: read again, 30s after the last");
+tick250(cx());
+await tick();
+expect(reads(), 2, "one read per change");
+timers.find((t) => t.ms === 300000).f(cx());
+await tick();
+expect(reads(), 3, "the five-minute timer reads it");
+Date.now = () => NOW;
+expect(viewCalls(), [], "reading the queue ran commands");
+
+const tree = v.render();
+const mark = (id) => views(`review-${id}`)(tree);
+const look = (id) => [text(mark(id)), E(mark(id)).color];
+expect(look("s1"), [["◆ 6"], "ansi1"], "s1: needs your LGTM, red");
+expect(look("s2"), [["◆ 1.2k"], "accent"], "s2: optional review, the accent");
+expect(look("s3"), [["◆ 7?"], "ansi1"], "s3: unknown state, still high-stakes");
+if (text(tree).some((s) => /LGTM/.test(s))) fail(`the sidebar says LGTM: ${text(tree).filter((s) => /LGTM/.test(s))}`);
+expect([text(mark("s4")), E(mark("s4")).color], [["cleanup"], "dim"], "s4: quiet cleanup mark");
+expect(text(mark("s5")), ["superseded"], "s5: quiet superseded mark");
+expect(mark("s0"), undefined, "s0: nothing waits, no mark");
+if (!E(mark("s1")).tip.includes("app-1: Export · 6 lines · needs your LGTM")) fail(`s1 tooltip: ${E(mark("s1")).tip}`);
+const badge = views("review-list")(tree);
+expect([text(badge), E(badge).color], [["◆ 5 to review"], "ansi1"], "header count, red while one needs your LGTM");
+E(badge).click();
+expect(herdr.calls.at(-1)[1].props, { role: "reviews" }, "the badge opens the Review list");
+
+// Shown three missed reads later, the queue reads as stale.
+Date.now = () => NOW + STALE + 60000;
+expect(text(views("review-list")(v.render())), ["◆ 5 to review (stale)"], "stale header");
+expect(viewCalls(), [], "rendering ran commands");
+EOF
+}
+
+@test "review-next goes to the next space that waits, from either view; with nothing waiting it says so" {
+  mod_case <<'EOF'
+const v = new Spaces();
+v.init({}, cx());
+herdr.shared["bercail.review"] = { q: Q, error: null };
+const press = async () => { herdr.calls = []; herdr.send("review-next"); await tick(); return herdr.calls; };
+// From the Shep view: the space is selected and the space view shows, as a click on it does.
+let c = await press();
+expect(c, [["space.select", { id: "s1" }], ["layout.hide", { id: "shep" }], ["layout.show", { id: "work" }]], "from Shep");
+herdr.focused = { space: "s1", pane: "p1" };
+c = await press();
+expect(c.filter(([n]) => n === "space.select"), [["space.select", { id: "s2" }]], "s1 to s2");
+herdr.shared["bercail.review"] = { q: { ...Q, items: Q.items.filter((i) => !i.counts) } };
+c = await press();
+expect([c, herdr.notes.at(-1)?.body], [[], "Nothing in a space waits on your review."], "nothing waits");
+herdr.shared["bercail.review"] = { q: null, error: "bercail shep queue exited 1" };
+c = await press();
+expect([c, herdr.notes.at(-1)?.body, herdr.notes.at(-1)?.level],
+  [[], "The review queue is not read: queue unread: bercail shep queue exited 1", "warning"], "an unread queue is not \"nothing waits\"");
+EOF
+}
+
+@test "the Review list: every item with space, title, size, stakes, LGTM and wait; open targets only; stale and failed reads show" {
+  mod_case <<'EOF'
+herdr.props = { role: "reviews", overlay: "o7" };
+herdr.shared["bercail.review"] = { q: Q, error: null };
+const v = new Spaces();
+v.init({}, cx());
+if (timers.length) fail("the list copy reads the queue itself");
+const tree = v.render();
+const row = (n) => text(views(`review-row-${n}`)(tree));
+expect(text(tree).slice(0, 3), ["Review", "5 waiting · 1.3k lines", "as of 12:00"], "header");
+expect(row(0), ["export", "app-1: Export", "6 lines", "stakes high · needs your LGTM", "3h", "Open space", "Open review"], "lgtm row");
+expect(row(1), ["/w/app", "PR #12: Teammate fix", "4 lines", "PR", "1d", "Open PR"], "PR row");
+expect(row(3), ["web-x", "web-7", "7 lines", "stakes high · needs your LGTM · unknown: bd does not answer for web-7", "3m", "Open space", "Open review"], "unknown row, found by folder, keeps its LGTM");
+const facts = (n) => all(views(`review-row-${n}`)(tree)).find((e) => typeof e.kids[0] === "string" && e.kids[0].startsWith("stakes"));
+expect([facts(0).color, facts(2).color, facts(5).color], ["ansi1", "muted", "dim"], "the list: needs your LGTM in red, optional muted, not counted dim");
+expect(row(4), ["/w/far", "no issue", "2 lines", "stakes low", "–", "no space"], "no space");
+if (!text(tree).includes("Not counted against the review budget")) fail("no section for what does not count");
+expect(row(5).slice(0, 4), ["old", "app-3: Old", "40 lines", "stakes high · issue closed: clean up"], "cleanup row: no LGTM for what does not count");
+expect(row(6)[3], "stakes low · its job moved to another worktree (~/w/app.five)", "superseded row");
+const clickable = all(tree).filter((e) => e.click).map((e) => e.id.replace(/-[0-9]+$/, ""));
+expect([...new Set(clickable)].sort(), ["review-close", "review-open", "review-pr", "review-space"], "only open targets and close");
+E(views("review-open-0")(tree)).click();
+expect(herdr.calls, [["closeOverlay", "o7"], ["space.select", { id: "s1" }], ["bercail-shep.desk:review", undefined]], "open review");
+herdr.calls = [];
+E(views("review-pr-1")(tree)).click({}, cx());
+expect(herdr.calls, [["open_url", "https://github.com/o/app/pull/12"]], "open PR");
+
+herdr.shared["bercail.review"] = { q: Q, error: "bd: database locked" };
+Date.now = () => NOW + STALE + 60000;
+const head = all(v.render()).find((e) => typeof e.kids[0] === "string" && e.kids[0].startsWith("as of"));
+expect([head.kids[0], head.color], ["as of 12:00, stale (17m old); last read failed: bd: database locked", "blocked"], "stale and failed");
+herdr.shared["bercail.review"] = { q: null, error: "bercail shep queue exited 1" };
+if (!text(v.render()).includes("queue unread: bercail shep queue exited 1")) fail("an unread queue is not shown");
+EOF
+}
+
+@test "Ctrl+Shift+J is review-next in the bercail layout, and docs/keys.md says so" {
+  jq -e '.["layout:bercail"]["ctrl-shift-j"] == "bercail-spaces.review-next"' "$ROOT/bercail/keys.json" >/dev/null \
+    || fail "keys.json: $(jq -c '.["layout:bercail"]' "$ROOT/bercail/keys.json")"
+  grep -q '^| `Ctrl+Shift+J` |' "$ROOT/docs/keys.md" || fail "docs/keys.md does not list Ctrl+Shift+J"
+}

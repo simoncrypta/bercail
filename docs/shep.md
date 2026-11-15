@@ -90,14 +90,33 @@ The repo is `--repo DIR`, else the issue's handoff record, its live desk, or the
 When anything waits on your review, the board ends with the **review queue**, which `bercail shep queue` prints on its own:
 
 ```
-Review queue: 15 lines in 4 changes
-~/Work/app: 15 of 10 lines, over its review budget
+Review queue: 13 lines in 3 changes
+~/Work/app: 13 of 10 lines, over its review budget
 - app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · ~/Work/app.export
-- app-3: Old job · 2 lines staged in 1 file · stakes low · ~/Work/app.old
 - PR #12: Teammate fix · 4 lines · https://github.com/o/app/pull/12
+- PR #15: Old job PR · 3 lines · https://github.com/o/app/pull/15
+- not counted: app-3: Old job · 2 lines staged in 1 file · stakes low · issue closed, a cleanup candidate · ~/Work/app.old
 ```
 
-A staged change counts when its desk is not working (done, idle, blocked, or gone); a desk still working is not waiting on you yet. On a repo with a GitHub remote, an open PR counts when it is not a draft, not approved, and either asks you for a review or comes from a handoff's branch. A staged change's lines leave out lockfiles, generated and binary files; a PR's leave out lockfiles. Each repo's total is weighed against its policy's [`review_budget`](config.md#review-by-stakes-and-size). Before Shep starts a desk it runs `bercail shep queue --repo <checkout>`; when that repo is over budget, Shep tells you what waits and asks whether to start it anyway.
+A staged change is on the queue when its desk is not working (done, idle, blocked, or gone); a desk still working is not waiting on you yet. Each one has a state, read from records, never from prose:
+
+- **review**: it waits on you. **lgtm**: the same, and its policy wants your LGTM (it touches a `high_stakes` path).
+- **superseded**: `bd supersede` or `bd duplicate` names its issue's replacement, or the issue's latest handoff went to another worktree that is still there (the job moved to a fresh one).
+- **cleanup**: its issue is closed. The worktree is left over; remove it, don't review it.
+- **unknown**: bd cannot say (the repo has no beads, or bd does not answer for the issue). It still counts, and the line says why.
+
+Superseded and cleanup work is listed last as `not counted` and stays out of the budget. Parent and child links are not read: a child issue does not say it replaces its parent. A change with no issue is review. On a repo with a GitHub remote, an open PR counts when it is not a draft, not approved, and either asks you for a review or comes from a handoff's branch. A staged change's lines leave out lockfiles, generated and binary files; a PR's leave out lockfiles. Each repo's total is weighed against its policy's [`review_budget`](config.md#review-by-stakes-and-size). Before Shep starts a desk it runs `bercail shep queue --repo <checkout>`; when that repo is over budget, Shep tells you what waits and asks whether to start it anyway.
+
+`bercail shep queue --json` is the same queue as data (`schema: "bercail.queue/v1"`), for the Herdr app: `at`, when it was read; `items`, what waits first, the longest waiting first (`since`: when a worktree's changes were last staged, or when a PR was opened), each with its `state`, `why`, `by` (the replacement), `counts`, its `space` (the desk's or the handoff's Herdr space) and its `change` (size and stakes); and `repos`, each repo's counted lines against its budget.
+
+### Review in the Herdr app
+
+The bercail layout's spaces list reads that JSON every five minutes, and after a desk's status changes (at most every 30 seconds). It only shows what bercail says; nothing it reads switches your view or moves the keyboard.
+
+- A space whose work waits on you has a mark after its name: `◆` and the lines that wait, with `?` when its state is unknown. The mark is red when a change there needs your LGTM, and the theme's accent color when review is optional. A cleanup candidate's space says `cleanup`, and superseded work `superseded`, in a dim color. Hover a mark for each item; the tooltip says "needs your LGTM" where it applies, so the red is not the only cue. In the narrow rail, the space's number takes the same color.
+- The Spaces header counts what waits (`◆ 3 to review`, red while one needs your LGTM, or `2 to clean up` when only that is left), and adds `(stale)` when the last good read is more than 15 minutes old or the last read failed.
+- `Ctrl+Shift+J` goes to the next space that waits, in queue order, from either view ([keys](keys.md)).
+- A click on the count opens the **Review** list over either view: each item's space (as Herdr names it), issue and title, lines, stakes, whether it needs your LGTM, how long it has waited, and its state, then what does not count. The header says when bercail read the queue, and whether that is stale or the last read failed. **Open space** shows the space; **Open review** shows it and opens its Review tab; **Open PR** opens a PR in the browser. There is no merge, commit or LGTM button, and nothing answers a desk.
 
 ### Standing rules
 

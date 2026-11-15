@@ -193,7 +193,11 @@ is which of `shep` and `work` is hidden.
   `mod.clone {"name":"spaces","as":"bercail-spaces"}`. Changed only so a
   click on a space, + or a machine's + also runs `layout.hide {id: "shep"}`
   and `layout.show {id: "work"}` (in a layout with both), and so no space
-  reads as selected while `shep` shows.
+  reads as selected while `shep` shows. bercail's review marks are added on
+  top: it reads `bercail shep queue --json`, marks the spaces whose work
+  waits on review, counts them in its header (a click opens the Review list,
+  the same mod with `props.role: "reviews"`, as a dialog), and takes
+  `review-next` (`Ctrl+Shift+J`).
 - `mods/bercail-shep` (`place: "none"`), one script, four roles:
   - `nav` (default): the Shep row. It is always shown, so it holds the logic:
     on its first render of the app session (a flag on `globalThis`, which a

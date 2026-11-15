@@ -308,8 +308,8 @@ Waiting on the person:
 
 # The review queue's fixture in ~/Work/app, a GitHub repo whose policy marks
 # lib/*.sh high-stakes and allows 10 lines of review: app-2's desk is done with
-# 6 lines staged (and a lockfile), app-3's desk is gone with 2 lines staged,
-# and app-4's desk is still working on 3. gh lists 5 open PRs.
+# 6 lines staged (and a lockfile), app-3's desk is gone with 2 lines staged and
+# its issue closed, and app-4's desk is still working on 3. gh lists 5 open PRs.
 queue_fixture() {
   repo app
   repo docs
@@ -319,9 +319,9 @@ queue_fixture() {
   git -C "$HOME/Work/app" add .bercail/policy.toml
   git -C "$HOME/Work/app" -c user.name=t -c user.email=t@example.invalid commit -q -m policy
   printf '%s\n' "$HOME/Work/app" "$HOME/Work/docs" >"$STATE/repos"
-  # app-3 is closed, so the queue knows no title for it.
   issues app 'app-2|Add the export|in_progress' 'app-3|Old job|closed' 'app-4|Still going|in_progress'
   jq -n '{id: "app-2", title: "Add the export", status: "in_progress", labels: []}' >"$HOME/Work/app/.beads/fake/app-2.json"
+  jq -n '{id: "app-3", title: "Old job", status: "closed", labels: []}' >"$HOME/Work/app/.beads/fake/app-3.json"
   worktree app export
   worktree app old
   worktree app busy
@@ -365,13 +365,13 @@ GH
   local out want
   queue_fixture
   out="$(shep queue --repo "$HOME/Work/app.export")" || fail "queue: $out"
-  want="Review queue: 15 lines in 4 changes
-~/Work/app: 15 of 10 lines, over its review budget
+  want="Review queue: 13 lines in 3 changes
+~/Work/app: 13 of 10 lines, over its review budget
 - app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · ~/Work/app.export
-- app-3 · 2 lines staged in 1 file · stakes low · ~/Work/app.old
 - PR #12: Teammate fix · 4 lines · https://github.com/o/app/pull/12
 - PR #15: Old job PR · 3 lines · https://github.com/o/app/pull/15
-~/Work/app is over its review budget: 15 lines wait on the person, the budget is 10. Tell them what waits and ask before you start another desk there."
+- not counted: app-3: Old job · 2 lines staged in 1 file · stakes low · issue closed, a cleanup candidate · ~/Work/app.old
+~/Work/app is over its review budget: 13 lines wait on the person, the budget is 10. Tell them what waits and ask before you start another desk there."
   [[ "$out" == "$want" ]] || fail "queue: $(diff <(printf '%s\n' "$want") <(printf '%s\n' "$out"))"
   if grep -q "^gh .* in $HOME/Work/docs\$" "$LOG"; then fail "gh ran in a repo with no GitHub remote: $(cat "$LOG")"; fi
 }
@@ -380,7 +380,7 @@ GH
   local out
   queue_fixture
   out="$(shep queue --repo "$HOME/Work/docs")"
-  [[ "$out" == "Review queue: 15 lines in 4 changes"*$'\n'"~/Work/docs: 0 of 1000 lines wait on the person; a new desk fits its review budget." ]] \
+  [[ "$out" == "Review queue: 13 lines in 3 changes"*$'\n'"~/Work/docs: 0 of 1000 lines wait on the person; a new desk fits its review budget." ]] \
     || fail "a repo with nothing waiting: $out"
   git -C "$HOME/Work/app.export" reset -q
   git -C "$HOME/Work/app.old" reset -q
@@ -394,12 +394,128 @@ GH
   local out
   queue_fixture
   out="$(shep board)" || fail "board: $out"
-  [[ "$out" == *$'\nWaiting on the person:\n'*$'\nReview queue: 15 lines in 4 changes\n~/Work/app: 15 of 10 lines, over its review budget\n- app-2: '* ]] \
+  [[ "$out" == *$'\nWaiting on the person:\n'*$'\nReview queue: 13 lines in 3 changes\n~/Work/app: 13 of 10 lines, over its review budget\n- app-2: '* ]] \
     || fail "the board does not end with the queue: $out"
   git -C "$HOME/Work/app.export" reset -q
   git -C "$HOME/Work/app.old" reset -q
   printf '[]\n' >"$HC_DATA/prs.json"
   [[ "$(shep board)" != *"Review queue"* ]] || fail "an empty queue is on the board: $(shep board)"
+}
+
+# A worktree of ~/Work/web on branch $1 with $2 lines staged in $1.md, last
+# staged at epoch $3. Its files are older, as git add leaves them, or git
+# status would rewrite the index.
+staged() {
+  local wt="$HOME/Work/web.$1"
+  worktree web "$1"
+  seq 1 "$2" >"$wt/$1.md"
+  stage_at "$wt" "$3"
+}
+
+# git add in worktree $1 at epoch $2: every file a minute older than the index.
+stage_at() {
+  find "$1" -name .git -prune -o -type f -exec touch -d "@$(($2 - 60))" {} +
+  git -C "$1" add -A
+  touch -d "@$2" "$(git -C "$1" rev-parse --path-format=absolute --git-path index)"
+}
+
+# bd show's answer for web-$1: STATUS, and a dependency of TYPE on web-$4.
+bd_issue() {
+  jq -n --arg id "web-$1" --arg s "$2" --arg t "${3:-}" --arg to "web-${4:-}" \
+    '{id: $id, title: "Job \($id)", status: $s,
+      dependencies: (if $t == "" then null else [{id: $to, title: "new", status: "open", dependency_type: $t}] end)}' \
+    >"$HOME/Work/web/.beads/fake/web-$1.json"
+}
+
+@test "shep queue --json: each staged worktree's state from beads and the handoff records; only review, LGTM and unknown count; an unknown one keeps its LGTM" {
+  local out
+  repo web
+  mkdir -p "$HOME/Work/web/.bercail"
+  printf 'high_stakes = ["ops/*"]\nreview_budget = 100\n' >"$HOME/Work/web/.bercail/policy.toml"
+  git -C "$HOME/Work/web" add .bercail/policy.toml
+  git -C "$HOME/Work/web" -c user.name=t -c user.email=t@example.invalid commit -q -m policy
+  printf '%s\n' "$HOME/Work/web" >"$STATE/repos"
+  issues web 'web-1|Job web-1|in_progress' 'web-5|Job web-5|open' 'web-6|Job web-6|in_progress' 'web-8|Job web-8|open'
+  staged one 1 1700000500
+  mkdir -p "$HOME/Work/web.one/ops"
+  seq 1 4 >"$HOME/Work/web.one/ops/deploy"
+  stage_at "$HOME/Work/web.one" 1700000500
+  bd_issue 1 in_progress
+  staged two 20 1700000100
+  bd_issue 2 closed supersedes 5
+  staged three 30 1700000200
+  bd_issue 3 closed duplicates 5
+  staged four 40 1700000300
+  bd_issue 4 closed
+  # web-6 moved to a fresh worktree; its old desk still sits idle on the old one.
+  staged old 60 1700000050
+  worktree web new
+  bd_issue 6 in_progress
+  # web-7: bd does not answer, and it touches a high-stakes path.
+  worktree web seven
+  seq 1 7 >"$HOME/Work/web.seven/seven.md"
+  mkdir -p "$HOME/Work/web.seven/ops"
+  seq 1 3 >"$HOME/Work/web.seven/ops/run"
+  stage_at "$HOME/Work/web.seven" 1700000400
+  staged eight 8 1700000600
+  bd_issue 8 open
+  staged mine 9 1700000000
+  record --arg p "$HOME/Work/web.one" '{path: $p, branch: "one", issue: "web-1", desk: "t1", space: "sp1"}'
+  record --arg p "$HOME/Work/web.two" '{path: $p, branch: "two", issue: "web-2", desk: "t2"}'
+  record --arg p "$HOME/Work/web.three" '{path: $p, branch: "three", issue: "web-3", desk: "t3"}'
+  record --arg p "$HOME/Work/web.four" '{path: $p, branch: "four", issue: "web-4", desk: "t4"}'
+  record --arg p "$HOME/Work/web.old" '{path: $p, branch: "old", issue: "web-6", desk: "t5"}'
+  record --arg p "$HOME/Work/web.new" '{path: $p, branch: "new", issue: "web-6", desk: "t6"}'
+  record --arg p "$HOME/Work/web.seven" '{path: $p, branch: "seven", issue: "web-7", desk: "t7"}'
+  record --arg p "$HOME/Work/web.eight" '{path: $p, branch: "eight", issue: "web-8", desk: "t8"}'
+  desk t5 "$HOME/Work/web.old" idle '{"bercail.issue": "web-6", "bercail.space": "sp5"}'
+  desk t9 "$HOME/Work/web.mine" "done" '{"bercail.space": "sp9"}'
+
+  out="$(shep queue --json)" || fail "queue --json: $out"
+  jq -e '.schema == "bercail.queue/v1" and (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$"))' <<<"$out" >/dev/null \
+    || fail "no schema or source time: $out"
+  # Counted first, the longest waiting first; then what does not count.
+  jq -e --arg h "$REAL_HOME" '[.items[] | [(.issue // (.path | ltrimstr($h))), .state, .counts, (.by // "" | ltrimstr($h)), .space, .since]] == [
+    ["/Work/web.mine", "review", true, "", "sp9", "2023-11-14T22:13:20Z"],
+    ["web-7", "unknown", true, "", null, "2023-11-14T22:20:00Z"],
+    ["web-1", "lgtm", true, "", "sp1", "2023-11-14T22:21:40Z"],
+    ["web-8", "review", true, "", null, "2023-11-14T22:23:20Z"],
+    ["web-6", "superseded", false, "/Work/web.new", "sp5", "2023-11-14T22:14:10Z"],
+    ["web-2", "superseded", false, "web-5", null, "2023-11-14T22:15:00Z"],
+    ["web-3", "superseded", false, "web-5", null, "2023-11-14T22:16:40Z"],
+    ["web-4", "cleanup", false, "", null, "2023-11-14T22:18:20Z"]]' <<<"$out" >/dev/null \
+    || fail "states: $(jq -c --arg h "$REAL_HOME" '[.items[] | [(.issue // (.path | ltrimstr($h))), .state, .counts, (.by // "" | ltrimstr($h)), .space, .since]]' <<<"$out")"
+  jq -e '.repos == [{path: .repos[0].path, lines: 32, changes: 4, budget: 100, over: false}]' <<<"$out" >/dev/null \
+    || fail "the budget counts cleanup or superseded work: $(jq -c .repos <<<"$out")"
+  jq -e '[.items[] | select(.issue == "web-4" or .issue == "web-1") | .title] == ["Job web-1", "Job web-4"]' <<<"$out" >/dev/null \
+    || fail "a closed issue's title is not read from bd: $(jq -c '[.items[] | .title]' <<<"$out")"
+
+  out="$(shep queue)" || fail "queue: $out"
+  [[ "$out" == "Review queue: 32 lines in 4 changes
+~/Work/web: 32 of 100 lines
+- ~/Work/web.mine · 9 lines staged in 1 file · stakes low
+- web-7 · 10 lines staged in 2 files · stakes high, needs the person's LGTM · state unknown: bd does not answer for web-7 · ~/Work/web.seven
+- web-1: Job web-1 · 5 lines staged in 2 files · stakes high, needs the person's LGTM · ~/Work/web.one
+- web-8: Job web-8 · 8 lines staged in 1 file · stakes low · ~/Work/web.eight
+- not counted: web-6: Job web-6 · 60 lines staged in 1 file · stakes low · its job moved to another worktree (~/Work/web.new) · ~/Work/web.old
+- not counted: web-2: Job web-2 · 20 lines staged in 1 file · stakes low · superseded by web-5 · ~/Work/web.two
+- not counted: web-3: Job web-3 · 30 lines staged in 1 file · stakes low · a duplicate of web-5 · ~/Work/web.three
+- not counted: web-4: Job web-4 · 40 lines staged in 1 file · stakes low · issue closed, a cleanup candidate · ~/Work/web.four" ]] \
+    || fail "queue text: $out"
+}
+
+@test "shep queue: only cleanup left says nothing waits, and still lists it" {
+  local out
+  repo web
+  printf '%s\n' "$HOME/Work/web" >"$STATE/repos"
+  staged four 4 1700000300
+  bd_issue 4 closed
+  record --arg p "$HOME/Work/web.four" '{path: $p, branch: "four", issue: "web-4", desk: "t4"}'
+  out="$(shep queue --repo "$HOME/Work/web")" || fail "queue: $out"
+  [[ "$out" == "Review queue: nothing waits on the person.
+~/Work/web: nothing waits
+- not counted: web-4: Job web-4 · 4 lines staged in 1 file · stakes low · issue closed, a cleanup candidate · ~/Work/web.four
+~/Work/web: 0 of 1000 lines wait on the person; a new desk fits its review budget." ]] || fail "cleanup only: $out"
 }
 
 @test "shep brief shows the job's staged size and stakes" {

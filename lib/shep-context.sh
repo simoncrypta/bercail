@@ -8,7 +8,7 @@
 #   bercail shep repos [--json]
 #   bercail shep brief ISSUE [--repo DIR] [--budget CHARS]
 #   bercail shep board
-#   bercail shep queue [--repo DIR]
+#   bercail shep queue [--repo DIR] [--json]
 #   bercail shep remember "RULE" [--scope SCOPE] | forget N | list
 #   bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list
 
@@ -308,39 +308,103 @@ _shep_queue_prs() {
   local main="$1" login="$2" branches="$3" raw
   grep -q 'github\.com[:/]' <<<"$(git -C "$main" remote -v 2>/dev/null)" || { printf '[]'; return 0; }
   raw="$(cd "$main" && _git_backend_bounded 10 "${GH_BIN:-gh}" pr list --state open --limit 100 \
-    --json number,title,url,isDraft,reviewDecision,headRefName,reviewRequests,files </dev/null 2>/dev/null)" \
+    --json number,title,url,isDraft,reviewDecision,headRefName,reviewRequests,files,createdAt </dev/null 2>/dev/null)" \
     || { printf '[]'; return 0; }
   jq -c --arg repo "$main" --arg login "$login" --argjson branches "$branches" --arg locks "$DESC_LOCKFILES" '
     ($locks | split(" ")) as $l
     | [.[]? | select((.isDraft | not) and .reviewDecision != "APPROVED"
         and (([.reviewRequests[]?.login] | index($login)) or (.headRefName | IN($branches[]))))
-      | {kind: "pr", repo: $repo, number, title, url, branch: .headRefName,
+      | {kind: "pr", repo: $repo, number, title, url, branch: .headRefName, state: "review", since: .createdAt,
          lines: ([.files[]? | select(.path | split("/") | last | IN($l[]) | not) | .additions + .deletions] | add // 0)}]' \
     <<<"$raw" 2>/dev/null || printf '[]'
 }
 
-# What waits on the person's review, as JSON: {items, repos}. An item is a
-# worktree with staged changes whose desk is not working (done, idle, blocked,
-# or gone), or an open PR that waits on them. repos has each
-# repo's lines against its policy's review_budget, for the repos with items.
+# The issue as bd prints it from MAIN, given at most 10 seconds; fails when the
+# repo has no beads or bd does not answer.
+_shep_queue_issue() {
+  local raw
+  [[ -d "$1/.beads" ]] || return 1
+  raw="$(cd "$1" && _git_backend_bounded 10 bd show "$2" --json </dev/null 2>/dev/null)" || return 1
+  jq -ce 'if type == "array" then .[0] else . end | select(type == "object" and .id)' <<<"$raw" 2>/dev/null
+}
+
+# A folder's checkout, resolved: two spellings of one worktree compare equal.
+_shep_top() {
+  (cd "$1" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null) || return 1
+}
+
+# When the worktree's changes were last staged: its index's mtime, in seconds.
+_shep_staged_at() {
+  local index
+  index="$(cd "$1" && git rev-parse --path-format=absolute --git-path index 2>/dev/null)" || return 1
+  stat -c %Y "$index" 2>/dev/null || stat -f %m "$index" 2>/dev/null
+}
+
+# What a staged worktree is to the person, from records only: {state, why, by,
+# title}. state: review, or lgtm when its policy wants the person's LGTM (an
+# unknown one may want it too: change.review says);
+# superseded when bd supersede or bd duplicate names a replacement, or the
+# issue's latest handoff went to another worktree that is still there; cleanup
+# when the issue is closed; unknown when bd cannot say. Parent and child links
+# are not read: a child does not say it replaces its parent.
+_shep_queue_state() {
+  local main="$1" issue="$2" path="$3" change="$4" records="$5" bd=null moved="" latest top
+  if [[ -n "$issue" ]]; then
+    bd="$(_shep_queue_issue "$main" "$issue")" || bd=null
+    latest="$(jq -r --arg id "$issue" '.[$id].path // empty' <<<"$records")"
+    if [[ -n "$latest" ]] && top="$(_shep_top "$path")" && latest="$(_shep_top "$latest")" && [[ "$latest" != "$top" ]]; then
+      moved="$latest"
+    fi
+  fi
+  jq -nc --arg issue "$issue" --argjson bd "$bd" --arg moved "$moved" --argjson change "$change" \
+    --arg beads "$([[ -d "$main/.beads" ]] && echo 1)" '
+    (if $change.review == "required" then {state: "lgtm"} else {state: "review"} end) as $waits
+    | if $issue == "" then $waits
+      elif $bd == null then {state: "unknown", why: (if $beads == "" then "the repo has no beads" else "bd does not answer for \($issue)" end)}
+      else ([$bd.dependencies[]? | {to: (.depends_on_id // .id), type: (.dependency_type // .type)}
+              | select(.type == "supersedes" or .type == "duplicates")] | first) as $d
+        | {title: $bd.title}
+          + if $d then {state: "superseded", by: $d.to,
+                        why: (if $d.type == "supersedes" then "superseded by \($d.to)" else "a duplicate of \($d.to)" end)}
+            elif $bd.status == "closed" then {state: "cleanup", why: "issue closed"}
+            elif $moved != "" then {state: "superseded", by: $moved, why: "its job moved to another worktree"}
+            else $waits end
+      end'
+}
+
+# What waits on the person's review, as JSON: {schema, at, items, repos}. An
+# item is a worktree with staged changes whose desk is not working (done, idle,
+# blocked, or gone), or an open PR that waits on them. Each has a state (see
+# _shep_queue_state; a PR is review) and counts against the review budget
+# unless it is cleanup or superseded. Counted items come first, the longest
+# waiting first. repos has each repo's counted lines against its policy's
+# review_budget, for the repos with items.
 _shep_queue_json() {
-  local repos="$1" desks="$2" records="$3" path issue title desk main change gh_repos branches start login="" items='[]'
+  local repos="$1" desks="$2" records="$3" path issue title desk space main change state since gh_repos branches start login="" items='[]'
   local -A policies=()
   # \x1f, not a tab: read would merge an empty title's two tabs into one.
-  while IFS=$'\x1f' read -r path issue title desk; do
+  while IFS=$'\x1f' read -r path issue title desk space; do
     main="$(_shep_main_of "$path")" || continue
     [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
     change="$(desc_change "$path" 2>/dev/null)" || continue
     jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || continue
-    items="$(jq -c --arg repo "$main" --arg path "$path" --arg issue "$issue" --arg title "$title" --arg desk "$desk" --argjson change "$change" '
-      . + [{kind: "staged", repo: $repo, path: $path, issue: (if $issue == "" then null else $issue end),
-            title: (if $title == "" then null else $title end), desk: (if $desk == "" then null else $desk end), change: $change}]' <<<"$items")"
+    state="$(_shep_queue_state "$main" "$issue" "$path" "$change" "$records")"
+    since="$(_shep_staged_at "$path")" || since=""
+    items="$(jq -c --arg repo "$main" --arg path "$path" --arg issue "$issue" --arg title "$title" --arg desk "$desk" \
+      --arg space "$space" --arg since "$since" --argjson change "$change" --argjson state "$state" '
+      def opt: if . == "" then null else . end;
+      . + [{kind: "staged", repo: $repo, path: $path, issue: ($issue | opt),
+            title: (($title | opt) // $state.title), desk: ($desk | opt), space: ($space | opt),
+            since: (if $since == "" then null else ($since | tonumber | todate) end),
+            state: $state.state, why: $state.why, by: $state.by, change: $change}]' <<<"$items")"
   done < <(jq -nr --argjson repos "$repos" --argjson desks "$desks" --argjson rec "$records" '
+    def one(f): map(f | select(. != null and . != "")) | first // "";
     ([$repos[].issues // [] | .[] | {key: .id, value: .title}] | from_entries) as $titles
-    | ([$desks[] | select(.bg | not) | select(.cwd) | {path: .cwd, issue, title, desk: .address, state}]
-       + [$rec | to_entries[] | select(.value.path) | {path: .value.path, issue: .key, title: null, desk: .value.desk, state: "gone"}]) as $all
-    | ($all | group_by(.path)[] | select(all(.[]; .state != "working")) | .[0])
-    | [.path, (.issue // ""), (.title // $titles[.issue // ""] // ""), (.desk // "")] | join("\u001f")')
+    | ([$desks[] | select(.bg | not) | select(.cwd) | {path: .cwd, issue, title, desk: .address, space, state}]
+       + [$rec | to_entries[] | select(.value.path) | {path: .value.path, issue: .key, title: null, desk: .value.desk, space: .value.space, state: "gone"}]) as $all
+    | ($all | group_by(.path)[] | select(all(.[]; .state != "working")))
+    | one(.issue) as $issue
+    | [.[0].path, $issue, (one(.title) | if . == "" then $titles[$issue] // "" else . end), one(.desk), one(.space)] | join("\u001f")')
   gh_repos="$(jq -r '.[] | select(.backend == "gh") | .path' <<<"$repos")"
   if [[ -n "$gh_repos" ]]; then
     # Shep's compaction gives the board 60 seconds: no new gh call after 20.
@@ -356,32 +420,43 @@ _shep_queue_json() {
   fi
   for main in "${!policies[@]}"; do
     printf '%s\t%s\n' "$main" "${policies[$main]:-$POLICY_DEFAULTS}"
-  done | jq -nRc --argjson items "$items" --argjson defaults "$POLICY_DEFAULTS" '
+  done | jq -nRc --argjson items "$items" --argjson defaults "$POLICY_DEFAULTS" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
     ([inputs | split("\t") | {key: .[0], value: (.[1] | fromjson? // $defaults)}] | from_entries) as $p
-    | {items: $items,
-       repos: [$items | group_by(.repo)[] | .[0].repo as $r
-         | ([.[] | .lines // .change.lines] | add) as $lines
-         | {path: $r, lines: $lines, changes: length, budget: ($p[$r].review_budget // $defaults.review_budget),
+    | ($items | map(.counts = (.state | IN("cleanup", "superseded") | not))
+        | sort_by([(if .counts then 0 else 1 end), (.since // "~")])) as $items
+    | {schema: "bercail.queue/v1", at: $at, items: $items,
+       repos: [$items | group_by(.repo)[] | .[0].repo as $r | map(select(.counts)) as $w
+         | ([$w[] | .lines // .change.lines] | add // 0) as $lines
+         | {path: $r, lines: $lines, changes: ($w | length),
+            budget: ($p[$r].review_budget // $defaults.review_budget),
             over: ($lines > ($p[$r].review_budget // $defaults.review_budget))}]}'
 }
 
-# The queue for a person to read. With .repo (shep queue --repo), a last line
-# says whether that repo is over its review budget, so Shep asks before
-# another desk there.
+# The queue for a person to read: what waits, by repo, then each repo's
+# cleanup and superseded worktrees, which do not count. With .repo (shep queue
+# --repo), a last line says whether that repo is over its review budget, so
+# Shep asks before another desk there.
 _shep_queue_text() {
   jq -nr --arg home "$HOME" --argjson q "$1" "$SHEP_JQ_DEFS"'
     def size: (.lines // .change.lines) as $n | "\($n) line\(if $n == 1 then "" else "s" end)";
-    if ($q.items | length) == 0 then (if $q.repo then "Review queue: nothing waits on the person." else empty end)
+    def line:
+      if .kind == "pr" then "PR #\(.number): \(.title // "" | flat | cut(70)) · \(size) · \(.url)"
+      else (if .issue then .issue + (if .title then ": \(.title | flat | cut(70))" else "" end) else (.path | tilde) end)
+        + ((.change.files - .change.left_out.files) as $n | " · \(size) staged in \($n) file\(if $n == 1 then "" else "s" end)")
+        + " · stakes \(.change.stakes)" + (if .counts and .change.review == "required" then ", needs the person'"'"'s LGTM" else "" end)
+        + ({unknown: " · state unknown: \(.why)", cleanup: " · \(.why), a cleanup candidate",
+            superseded: " · \(.why)" + (if (.by // "") | startswith("/") then " (\(.by | tilde))" else "" end)}[.state] // "")
+        + (if .issue then " · \(.path | tilde)" else "" end) end;
+    ($q.items | map(select(.counts))) as $w
+    | if ($q.items | length) == 0 then (if $q.repo then "Review queue: nothing waits on the person." else empty end)
     else
-      "Review queue: \([$q.repos[].lines] | add) lines in \($q.items | length) change\(if ($q.items | length) == 1 then "" else "s" end)",
+      (if ($w | length) == 0 then "Review queue: nothing waits on the person."
+       else "Review queue: \([$q.repos[].lines] | add) lines in \($w | length) change\(if ($w | length) == 1 then "" else "s" end)" end),
       ($q.repos[] | . as $r
-        | "\($r.path | tilde): \($r.lines) of \($r.budget) lines" + (if $r.over then ", over its review budget" else "" end),
-          ($q.items[] | select(.repo == $r.path)
-            | if .kind == "pr" then "- PR #\(.number): \(.title // "" | flat | cut(70)) · \(size) · \(.url)"
-              else "- " + (if .issue then .issue + (if .title then ": \(.title | flat | cut(70))" else "" end) else (.path | tilde) end)
-                + ((.change.files - .change.left_out.files) as $n | " · \(size) staged in \($n) file\(if $n == 1 then "" else "s" end)")
-                + " · stakes \(.change.stakes)" + (if .change.review == "required" then ", needs the person'"'"'s LGTM" else "" end)
-                + (if .issue then " · \(.path | tilde)" else "" end) end))
+        | (if $r.changes > 0 then "\($r.path | tilde): \($r.lines) of \($r.budget) lines" + (if $r.over then ", over its review budget" else "" end)
+           else "\($r.path | tilde): nothing waits" end),
+          ($w[] | select(.repo == $r.path) | "- " + line),
+          ($q.items[] | select(.repo == $r.path and (.counts | not)) | "- not counted: " + line))
     end,
     ($q.repo // empty
       | if .over then
@@ -390,12 +465,13 @@ _shep_queue_text() {
 }
 
 shep_queue() {
-  local repo="" main="" queue budget
-  local usage="usage: bercail shep queue [--repo DIR]"
+  local repo="" main="" queue budget json=0
+  local usage="usage: bercail shep queue [--repo DIR] [--json]"
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --repo) repo="${2:-}"; shift 2 || shift $# ;;
       --repo=*) repo="${1#*=}"; shift ;;
+      --json) json=1; shift ;;
       *) _shep_err "$usage"; return 1 ;;
     esac
   done
@@ -408,6 +484,10 @@ shep_queue() {
     budget="$(policy_json "$main" 2>/dev/null | jq -r .policy.review_budget)" || budget=""
     queue="$(jq -c --arg m "$main" --argjson b "${budget:-$(jq .review_budget <<<"$POLICY_DEFAULTS")}" '
       . + {repo: ((.repos[] | select(.path == $m)) // {path: $m, lines: 0, changes: 0} | .budget = $b | .over = (.lines > $b))}' <<<"$queue")"
+  fi
+  if ((json)); then
+    jq . <<<"$queue"
+    return 0
   fi
   _shep_queue_text "$queue"
 }
