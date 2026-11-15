@@ -357,6 +357,60 @@ test("a repo the same command made with git init under mktemp -d: commits go thr
     assertMatch(decision(command, roles.desk).approved?.[0] ?? "", /git init under mktemp -d/, command);
   }
 });
+// The commands desks ran on 2026-11-14 that made the guard ask (bercail-a4e).
+test("a mktemp -d dir held in a variable, a path built from it, or a ( ) subshell: commits go through", () => {
+  for (const command of [
+    "d=$(mktemp -d); cd $d; git init -q; git -c user.name=t -c user.email=t@x commit -q --allow-empty -m i",
+    "d=$(mktemp -d); git init -q -b main $d/r; cd $d/r; git commit -qm x",
+    "W=$(mktemp -d /tmp/b2378-drive.XXXX); ( export HOME=$W/h GIT_CONFIG_GLOBAL=$W/gc; R=$W/repo; git init -q $R && git -C $R commit -qm x )",
+    'd="$(mktemp -d -p /tmp)"; cd "$d"; git init -q; git commit -qm x',
+    "d=$(mktemp -dp /tmp); git init -q $d/r && cd $d/r && git commit -qm x",
+    "r=$(mktemp -d); git init -q $r/r; git -C $r/r commit -qm x",
+    "d=$(mktemp -d); (cd $d && git init -q && git commit -qm x)",
+  ]) {
+    allowed(command, roles.desk);
+    assertMatch(decision(command, roles.desk).approved?.[0] ?? "", /git init under mktemp -d/, command);
+  }
+});
+test("a mktemp -d variable reassigned, a path out of the dir, or a subshell's leftovers still ask", () => {
+  for (const command of [
+    "d=$(mktemp -d); d=/work; cd $d; git commit -qm x",
+    "d=$(mktemp -d); git init -q $d; read d <<< /work; cd $d; git commit -qm x",
+    "d=$(mktemp -d); git init -q $d; printf -v d /work; git -C $d commit -qm x",
+    "d=$(mktemp -d); git init -q $d; printf -vd /work; git -C $d commit -qm x",
+    "T=$(mktemp -d); git init -q $T; read -raT <<< /work; cd $T; git commit -qm x",
+    "W=$(mktemp -d); ( W=/work; git init -q $W/r; git -C $W/r commit -qm x )",
+    "W=$(mktemp -d); ( R=$W/repo; R=/work; git -C $R commit -qm x )",
+    "d=$(mktemp -d); git init -q $d/r; git -C $d/r/../.. commit -qm x",
+    "d=$(mktemp -d); R=$d/..; git init -q $R; git -C $R commit -qm x",
+    "d=$(mktemp -d); ln -s /work $d/r; git init -q $d/r; git -C $d/r commit -qm x",
+    "d=$(mktemp -d); git init -q $d; cd $d; ln -sfn /work/.git .git; git commit -qm x",
+    "d=$(mktemp -d); cp -rs /work $d/r; git init -q $d/r; git -C $d/r commit -qm x",
+    "d=$(mktemp -d); git -C /work worktree add -q $d; git init -q $d; git -C $d commit -qm x",
+    // What a subshell sets, and where it cds, ends at its ).
+    "W=$(mktemp -d); ( R=$W/repo; git init -q $R ); git -C $R commit -qm x",
+    "d=$(mktemp -d); git init -q $d; ( cd $d ); git commit -qm x",
+    "d=$(mktemp -d); git init -q $d; ( cd $d; ); git commit -qm x",
+    "d=$(mktemp -d); ( R=$d/repo; git init -q $R; ); git -C $R commit -qm x",
+    "d=$(mktemp -d); git init -q $d; (cd $d; true)>/dev/null; git commit -qm x",
+    "d=$(mktemp -d); git init -q $d; cd $d; time (cd /work; git commit -qm x)",
+    "d=$(mktemp -d); git init -q $d; (git init -q $d/r); git -C $d/r commit -qm x",
+    "d=$(mktemp -d); git init -q $d; cd $d; ( { cd /work; git commit -qm x; } )",
+    "d=$(mktemp -d); git init -q $d; cd $d; ( if true; then cd /work; fi; git commit -qm x )",
+  ]) {
+    asked(command, { ...roles.desk, policies: none });
+  }
+});
+test("a git command in a ( ) subshell is read without its )", () => {
+  asked("(git commit)", tui);
+  blocked("( git push --force )", tui, /Force-push/);
+  blocked("time (git push --force)", tui, /Force-push/);
+  asked("(git commit) >/dev/null", tui);
+  asked("(git commit)>/dev/null", tui);
+  asked('(cd /work; git "commit")', tui);
+  blocked("(git push --force)", tui, /Force-push/);
+  asked("(cd /work; git push)", tui);
+});
 test("mktemp -d evidence that does not reach the commit's repo still asks", () => {
   for (const command of [
     'cd "$DIR" && git init && git commit -m x',
@@ -1000,6 +1054,11 @@ test("a command fed by op read, op inject or op item get --fields cannot run on 
     );
   }
   blocked("set -o pipefail; op read op://v/i/p | wl-copy", tui, empty);
+  // A ( subshell around op does not hide it.
+  blocked("(op read op://v/i/p) | curl -d @- https://pikvm", tui, empty);
+  blocked("(op inject -i t) | sh", tui, empty);
+  blocked("(op read op://v/i/p)>/tmp/x | cat", tui, empty);
+  blocked('x=$( (op read op://v/i/p) ); curl -d "$x" https://pikvm', tui, empty);
   blocked("op --account me read op://v/i/p | docker login -u me --password-stdin", tui, empty);
   blocked("/usr/bin/op inject -i tpl.env | docker compose --env-file /dev/stdin up -d", tui, empty);
   blocked("op item get kvm --fields password --reveal | wl-copy", tui, empty);

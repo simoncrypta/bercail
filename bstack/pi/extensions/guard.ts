@@ -425,9 +425,13 @@ function tokenize(command: string, tag = ""): Token[] {
         i += 2;
         continue;
       }
+      // A ( that starts a word, and any unquoted ), is a word of its own, as bash reads
+      // them: time (cd x; true)>/dev/null. A <( or a=( stays in its word.
+      if (ch === ")" && word) break;
       bareRedirect = ch === "<" || ch === ">";
       word += ch;
       i++;
+      if (ch === ")" || word === "(") break;
     }
     if (word) tokens.push({ kind: "word", value: word, quoted });
   }
@@ -1376,8 +1380,8 @@ function initDir(git: GitCall): string | undefined {
   return placeIn(git.dir, target);
 }
 
-// NAME=value set once, outside a pipe, a subshell or a skipped branch, and only
-// to a mktemp -d dir: what $NAME and \${NAME} mean in the rest of the command.
+// NAME=value set once, outside a pipe or a skipped branch, and only to a
+// mktemp -d dir: what $NAME and \${NAME} mean until a subshell closes.
 type TempVars = Map<string, { value: string; chained: boolean }>;
 
 const declares = new Set(["export", "declare", "typeset", "readonly"]);
@@ -1404,8 +1408,18 @@ const compound = new Set([
   "!",
 ]);
 
+// Every other spelling of the name may set it: read d, for d, printf -v d, and a
+// value glued to a flag, printf -vd. A flag of its own such as mktemp -d, or a path
+// part such as $d/r, cannot.
 function assignedOnce(command: string, name: string): boolean {
-  return (command.match(new RegExp(`(?<![\\w$])(?<!\\$\\{)${name}(?!\\w)`, "g")) ?? []).length === 1;
+  const spelled = `(?:(?<![\\w$./-])(?<!\\$\\{)|(?<=(?:^|[^\\w$-])-[A-Za-z]+))${name}(?!\\w)`;
+  return (command.match(new RegExp(spelled, "g")) ?? []).length === 1;
+}
+
+// ln and cp -s make symlinks, and a symlink in the dir can lead out of it.
+function linksOut(words: string[]): boolean {
+  if (words[0] === "ln") return true;
+  return words[0] === "cp" && words.some((word) => word === "--symbolic-link" || /^-[^-]*s/.test(word));
 }
 
 function recordTemps(command: string, segment: Segment, words: string[], vars: TempVars): void {
@@ -1467,9 +1481,15 @@ function commandsOf(command: string): Segment[] {
   return out;
 }
 
+// The words without a ( subshell's parens, which tokenize makes words of their own:
+// (git commit) runs git commit.
+function unparen(words: string[], quoted: boolean[]): string[] {
+  return words.filter((word, i) => !(["(", ")"].includes(word) && !quoted[i]));
+}
+
 // The segment runs op that prints a secret, itself or in a sh -c script.
 function segmentReadsSecret(segment: Segment): boolean {
-  const words = commandWords(segment.words.map((word, i) => (i === 0 ? word.replace(/^\(+/, "") : word)));
+  const words = commandWords(unparen(segment.words, segment.quoted));
   const script = shellScript(words.map((word, i) => (i === 0 ? basename(word) : word)));
   return readsSecret(words) || (script !== undefined && commandsOf(script).some(segmentReadsSecret));
 }
@@ -1621,7 +1641,17 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   let chainedCd = false;
   const vars: TempVars = new Map();
   let straight = true;
+  let closed = false;
   for (const segment of segmentsOf(command, `${depth}`)) {
+    // Apply a ) before the next segment, even when it stood alone after a ;.
+    // No inner variables, scratch evidence or cwd can be borrowed outside it.
+    if (closed) {
+      cwd = undefined;
+      straight = false;
+      fresh.clear();
+      vars.clear();
+    }
+    closed = segment.words.some((word) => word.endsWith(")"));
     if (segment.unclosed) return block(unclosedSub);
     // export GIT_DIR=... holds for the rest of the command, so it counts from here on.
     if (segment.words.some((word) => gitPlace.test(word))) gitEnv = true;
@@ -1636,20 +1666,17 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       if (chainedCd) cwd = undefined;
       chainedCd = false;
     }
-    const subshell = segment.words[0]?.startsWith("(") ?? false;
-    const closes = segment.words.some((word) => word.endsWith(")"));
-    // Past a branch, loop, function, subshell, || or pipe, no repo counts as made here.
-    if (subshell || closes || compound.has(segment.words[0]) || ["||", "|", "&"].includes(segment.before)) {
+    const bare = unparen(segment.marked, segment.quoted);
+    // Past a branch, loop, function, || or pipe, no repo counts as made here. A ( subshell
+    // runs in a straight line inside, so that holds until its ).
+    if (compound.has(bare[0]) || ["||", "|", "&"].includes(segment.before)) {
       straight = false;
       fresh.clear();
       vars.clear();
     }
     const here = { ...input, cwd, gitEnv, gitConfigEnv, branchMoved, fresh };
     for (const sub of segment.subs) decision = worse(decision, decideBash(sub, here, depth + 1));
-    // A ( subshell's cd ends at its ); from there on the guard cannot place the shell.
-    const raw = segment.marked.map((word, i) =>
-      expandTemps(i === 0 ? word.replace(/^\(+/, "") : word, vars).replaceAll(literalDollar, "$"),
-    );
+    const raw = bare.map((word) => expandTemps(word, vars).replaceAll(literalDollar, "$"));
     if (straight) recordTemps(command, segment, raw, vars);
     const words = commandWords(raw);
     if (words.length === 0) continue;
@@ -1658,8 +1685,11 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     // A cd in a pipe or in the background may run in a subshell: where the shell is, is unknown.
     const piped = segment.before === "|" || segment.after === "|" || segment.after === "&";
     if (words[0] === "cd" || words[0] === "pushd") cwd = piped ? undefined : cdTarget(words, cwd, input.home);
-    else if (words[0] === "popd" || subshell) cwd = undefined;
-    if (closes) cwd = undefined;
+    else if (words[0] === "popd") cwd = undefined;
+    if (linksOut(words)) {
+      straight = false;
+      fresh.clear();
+    }
     // A cd after && may not have run once that chain ends.
     if (["cd", "pushd", "popd"].includes(words[0]) && segment.before === "&&") chainedCd = true;
     const script = shellScript(words);
@@ -1706,6 +1736,11 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     }
     const git = parseGit(words, here.cwd);
     if (git) {
+      // A worktree in the dir points it at another repo, which a git init there reinitializes.
+      if (git.sub === "worktree") {
+        straight = false;
+        fresh.clear();
+      }
       const made = git.sub === "init" && straight && !gitEnv ? initDir(git) : undefined;
       if (made && tempRoot(made)) {
         fresh.add(made);
