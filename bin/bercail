@@ -54,8 +54,35 @@ load_libs() {
   done
 }
 
+# A client holds the Herdr app half only: its mods, and the backend they reach.
+cmd_doctor_client() {
+  local failures=0 cmd
+  log "bercail doctor (v${BERCAIL_VERSION}, client install)"
+  log ""
+  log "Dependencies:"
+  for cmd in herdr-app hc jq; do
+    if dep_present "$cmd"; then
+      log "  ok  $cmd ($(command -v "$cmd"))"
+    else
+      log "  missing  $cmd"
+      failures=1
+    fi
+  done
+  log ""
+  log "Herdr app:"
+  doctor_herdr_app || failures=1
+  log ""
+  log "Backend:"
+  doctor_backend || failures=1
+  return "$failures"
+}
+
 cmd_doctor() {
   local failures=0 shell_rc
+  if is_client_install; then
+    cmd_doctor_client
+    return
+  fi
   log "bercail doctor (v${BERCAIL_VERSION})"
   log ""
   log "Platform: $(detect_platform)"
@@ -105,6 +132,11 @@ cmd_install() {
 }
 
 cmd_update() {
+  if is_client_install; then
+    deploy_client
+    show_client_summary
+    return
+  fi
   deploy_configs
   deploy_omarchy_integration
   install_shell_integration || true
@@ -113,6 +145,8 @@ cmd_update() {
 }
 
 cmd_reconfigure() {
+  ! is_client_install \
+    || die "this is a client install: skills, Pi and bstack live on the backend; run bercail reconfigure there"
   # shellcheck disable=SC2034 # read by lib/omarchy.sh
   RECONFIGURE=1
   prompt_user_config
@@ -226,6 +260,11 @@ main() {
       load_libs
       # shellcheck disable=SC2034 # both read by lib/common.sh
       DRY_RUN=1 YES=1
+      if is_client_install; then
+        install_client_dependencies
+        deploy_client
+        exit 0
+      fi
       install_dependencies
       deploy_configs
       deploy_omarchy_integration

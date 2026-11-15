@@ -393,3 +393,44 @@ doctor_entire() {
     *) log "  unknown  checkpoints go to $dest; check that it is private before you push (they are full agent transcripts)" ;;
   esac
 }
+
+# A client's backend: hc reaches it, and the bercail there is this one's version,
+# since the mods here speak to it. `bercail help` prints the version on its first
+# line in every release, so an older backend answers too.
+doctor_backend() {
+  local backend err out status=0 found message
+  # shellcheck source=lib/toml.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
+  backend="$(toml_value "$BERCAIL_USER_CONFIG" herdr backend "" 2>/dev/null || true)"
+  if [[ -z "$backend" ]]; then
+    log "  missing  [herdr] backend in $BERCAIL_USER_CONFIG (run: bercail install --client <machine>)"
+    return 1
+  fi
+  if ! dep_present hc; then
+    log "  unchecked  backend $backend: no hc here to reach it"
+    return 1
+  fi
+  err="$(mktemp)"
+  # The PATH the mods give bercail there: a login shell may not have ~/.local/bin.
+  # shellcheck disable=SC2016 # expanded on the backend
+  out="$(hc exec --on "$backend" --timeout 30 bash -lc \
+    'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"; bercail help' \
+    2>"$err" </dev/null)" || status=$?
+  message="$(jq -r '.error.message // empty' "$err" 2>/dev/null || true)"
+  rm -f "$err"
+  if [[ -n "$message" ]]; then
+    log "  unreachable  backend $backend: $message (hc machine ls shows the machines added here)"
+    return 1
+  fi
+  if [[ "$status" -ne 0 ]]; then
+    log "  missing  bercail on $backend (exit $status; install bercail there)"
+    return 1
+  fi
+  # A login shell there may print first; only a version reaches this terminal.
+  found="$(sed -n 's/^bercail v\([0-9A-Za-z.+-]*\)$/\1/p' <<<"$out" | sed -n 1p)"
+  if [[ "$found" != "$BERCAIL_VERSION" ]]; then
+    log "  outdated  bercail on $backend is v${found:-unknown}, this computer's is v${BERCAIL_VERSION} (bercail update on the older one)"
+    return 1
+  fi
+  log "  ok  backend $backend runs bercail v${found}"
+}

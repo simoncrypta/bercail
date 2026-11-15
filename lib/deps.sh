@@ -431,6 +431,15 @@ install_dependencies() {
   install_dep jq || true
 }
 
+# A client runs only the Herdr app and the mods; jq merges their keys.
+install_client_dependencies() {
+  info "checking dependencies..."
+  ensure_brew_on_path || true
+  ensure_mise_shims
+  install_herdr_app || true
+  install_dep jq || true
+}
+
 _doctor_configured_bin() {
   local cmd="$1" role="$2"
   local path

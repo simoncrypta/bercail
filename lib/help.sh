@@ -7,13 +7,16 @@ help_commands() {
   cat <<'EOF'
 Post-install CLI (bercail):
   help          This help
-  install       Full install from the release mise or packslip unpacked
-  doctor        Check dependencies and integration (and Entire, run inside a repo that uses it)
+  install       Full install from the release mise or packslip unpacked;
+                --client MACHINE installs only the Herdr app half, for bercail on MACHINE
+  doctor        Check dependencies and integration (and Entire, run inside a repo that uses it);
+                on a client, the Herdr app half and that the backend runs this version
   bstack        bercail's Pi setup: status | setup
   config        A config.toml value as bercail reads it: config get <section> <key>
   desk          Desk agents: restore [--dry-run] (bring back what a reboot took) |
                 model DESK PROVIDER/MODEL[:thinking] (switch a live desk's model)
-  update        Re-sync configs, Herdr layout and mod, helper, and skills
+  update        Re-sync configs, Herdr layout and mod, helper, and skills (a client: the
+                Herdr layout, mods and keys, and the CLI)
   reconfigure   Refresh skills from config.toml (not a full redeploy)
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
@@ -62,6 +65,9 @@ Install (curl, still supported):
 install.sh options:
   -h, --help   Show this help
   -y, --yes    Non-interactive (existing/default config)
+  --client MACHINE
+               Only the Herdr app half (CLI, layout, mods, keys) and [herdr] backend =
+               MACHINE, its name in hc machine ls; later updates stay client-only
 
 EOF
   help_commands
@@ -181,5 +187,16 @@ show_summary() {
   log ""
   log "Try: dev"
   log "Help: bercail help"
+  log ""
+}
+
+show_client_summary() {
+  log ""
+  log "bercail client installed (v${BERCAIL_VERSION})"
+  log ""
+  log "Backend: $(toml_value "$BERCAIL_USER_CONFIG" herdr backend "" 2>/dev/null || true) ([herdr] backend in ${BERCAIL_USER_CONFIG})"
+  log "Herdr app: the bercail layout, its mods and keys in ${HERDR_APP_CONFIG_DIR}"
+  log ""
+  log "Check: bercail doctor"
   log ""
 }

@@ -87,7 +87,7 @@ A swarm of desks can stage more in a day than you can review. Four policy keys s
 
 ## bercail on another machine
 
-A Herdr window on one computer (a laptop) can use bercail on another, added there with `hc machine add`. Shep, the desks, repos, logins, beads and bercail's state stay on that machine. In the laptop's `config.toml`, `[herdr] backend` names it as `hc machine ls` does. Empty, or no `[herdr]`, means this computer: bercail on its own machine works as before.
+A Herdr window on one computer (a laptop) can use bercail on another, added there with `hc machine add`. Shep, the desks, repos, logins, beads and bercail's state stay on that machine. In the laptop's `config.toml`, `[herdr] backend` names it as `hc machine ls` does. Empty, or no `[herdr]`, means this computer: bercail on its own machine works as before. `bercail install --client <machine>` sets it, and installs nothing else bercail runs; [install](install.md#a-laptop-with-bercail-on-another-machine) walks through the laptop's setup.
 
 With a backend, the layout's mods:
 
@@ -99,7 +99,7 @@ With or without one, a space's desk (`Ctrl+Shift+A`, Start the agent) starts on 
 
 A desk's labels are written on its own machine and name that machine's ids: `bercail.space=sp1` on `box` is the space `box/sp1` in the laptop's window. The mods add and remove only that machine's prefix, and never run on the laptop a path that came from the other machine.
 
-Not yet: the worktrunk hook and `handoff-spawn --branch` open a new space only in a window on bercail's machine; a desk does not start on its own in a space on another machine; `bercail review-pr` needs a window on bercail's machine; and `bercail install` and `update` have no laptop-only mode.
+Not yet: the worktrunk hook and `handoff-spawn --branch` open a new space only in a window on bercail's machine; a desk does not start on its own in a space on another machine; and `bercail review-pr` needs a window on bercail's machine.
 
 ## Files bercail manages
 
@@ -112,6 +112,8 @@ Not yet: the worktrunk hook and `handoff-spawn --branch` open a new space only i
 - The Pi extension `~/.local/share/bercail/pi-extensions/bercail-desk.ts` that every Pi desk loads with `-e`.
 - `diff_watch_interval_ms` in `~/.config/tuicr/config.toml`, unless you set it already.
 - On Linux and Omarchy, the extras in [platforms](development.md#platforms).
+
+A client install (`--client`) writes only the layout, mods and keys above, `~/.local/bin/bercail` with `~/.local/share/bercail/lib/`, `[herdr] backend` in `config.toml`, and `~/.local/share/bercail/install-mode`, which keeps later updates client-only.
 
 ## Desks after a reboot
 

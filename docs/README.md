@@ -2,7 +2,7 @@
 
 The [README](../README.md) is the tour. These pages are the reference.
 
-- [install](install.md): mise + packslip, curl, what the installer touches, coming from 0.8, first run.
+- [install](install.md): mise + packslip, curl, what the installer touches, a laptop with bercail on another machine, coming from 0.8, first run.
 - [commands](cli.md): the `bercail` CLI, the shell helpers (`dev`, `wtc`, …), and the skills.
 - [keys](keys.md): the layout's two views at a glance and every key.
 - [config](config.md): `config.toml`, each repo's git policy, and the other files bercail manages.

@@ -657,6 +657,96 @@ deploy_finalize_permissions() {
   find "${BERCAIL_SHARE_DIR}/lib" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 }
 
+is_client_install() {
+  [[ "$(cat "$BERCAIL_INSTALL_MODE_FILE" 2>/dev/null)" == client ]]
+}
+
+# A name hc machine ls shows, and nothing that would break the TOML string or the
+# box/<id> prefix the mods put on that machine's ids.
+valid_machine_name() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+}
+
+# Set [herdr] backend in config.toml to $1, keeping every other line: the old
+# backend line goes, the new one goes right under [herdr], or a new [herdr] ends the file.
+set_herdr_backend() {
+  local dest="$BERCAIL_USER_CONFIG" src=/dev/null tmp
+  [[ ! -f "$dest" ]] || src="$dest"
+  tmp="$(mktemp)"
+  awk -v v="$1" '
+    function section(line) {
+      sub(/#.*/, "", line)
+      gsub(/[[:space:]"\047]/, "", line)
+      return line
+    }
+    /^[[:space:]]*\[/ {
+      sec = section($0)
+      print
+      if (sec == "[herdr]" && !done) { print "backend = \"" v "\""; done = 1 }
+      next
+    }
+    sec == "[herdr]" && /^[[:space:]]*backend[[:space:]]*=/ { next }
+    { print }
+    END { if (!done) { if (NR) print ""; print "[herdr]"; print "backend = \"" v "\"" } }
+  ' "$src" >"$tmp"
+  # Hand-written TOML the scan does not follow (a [herdr] inside a multi-line
+  # string) reads back otherwise: leave the file as it is.
+  if [[ "$(toml_value "$tmp" herdr backend "" 2>/dev/null)" != "$1" ]]; then
+    rm -f "$tmp"
+    warn "could not set [herdr] backend in $dest; set backend = \"$1\" under [herdr] by hand"
+    return 1
+  fi
+  if [[ -f "$dest" ]] && cmp -s "$tmp" "$dest"; then
+    rm -f "$tmp"
+    info "unchanged: $dest ([herdr] backend = \"$1\")"
+    return 0
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    rm -f "$tmp"
+    info "[dry-run] would set [herdr] backend = \"$1\" in $dest"
+    return 0
+  fi
+  ensure_dir "$BERCAIL_CONFIG_DIR"
+  # Written through, not moved over: the file may be a link into someone's dotfiles.
+  cat "$tmp" >"$dest"
+  rm -f "$tmp"
+  info "set [herdr] backend = \"$1\" in $dest"
+}
+
+# The client install: the bercail CLI, so update and doctor run here, and the
+# Herdr app's layout, mods and keys. None of the shell, worktrunk, skills, Pi,
+# Shep, tuicr or Omarchy parts: they run on the backend. $1: the backend to set,
+# or empty to keep the one config.toml names.
+deploy_client() {
+  local backend="${1:-}"
+  # shellcheck source=lib/toml.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
+  describe_install_source
+  if [[ -n "$backend" ]]; then
+    set_herdr_backend "$backend" || return 1
+  else
+    backend="$(toml_value "$BERCAIL_USER_CONFIG" herdr backend "" 2>/dev/null || true)"
+    [[ -n "$backend" ]] || warn "no [herdr] backend in $BERCAIL_USER_CONFIG: the mods run bercail on this computer, which has none. Set it with: bercail install --client <machine>"
+  fi
+  ensure_dir "$BERCAIL_SHARE_DIR"
+  if [[ "${BERCAIL_PACKAGED:-0}" == 1 ]]; then
+    info "keeping bercail from mise/packslip on PATH; not copying $LOCAL_BIN/bercail"
+  else
+    deploy_install_file bin/bercail "$LOCAL_BIN/bercail"
+    run chmod +x "$LOCAL_BIN/bercail"
+    detach_running_bercail
+  fi
+  deploy_lib
+  find "${BERCAIL_SHARE_DIR}/lib" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+  deploy_herdr_app
+  record_install_source
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "[dry-run] would record a client install in $BERCAIL_INSTALL_MODE_FILE"
+  else
+    printf 'client\n' >"$BERCAIL_INSTALL_MODE_FILE"
+  fi
+}
+
 deploy_configs() {
   local -a files=(
     "config/shell/bercail.inc.sh|${BERCAIL_SHELL_DIR}/bercail.inc.sh"

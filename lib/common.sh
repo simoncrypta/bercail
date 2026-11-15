@@ -24,6 +24,9 @@ skill_canonical_dir() {
 }
 BERCAIL_SHARE_DIR="${HOME}/.local/share/bercail"
 BERCAIL_SOURCE_PATH_FILE="${BERCAIL_SHARE_DIR}/source-path"
+# "client" on a client install: only the Herdr app half is here, and the machine
+# [herdr] backend names runs the rest. It keeps a later update client-only.
+BERCAIL_INSTALL_MODE_FILE="${BERCAIL_SHARE_DIR}/install-mode"
 # The tree a curl install deploys from: its release, unpacked (fetch_release_tree).
 BERCAIL_RELEASE_DIR="${BERCAIL_SHARE_DIR}/release"
 # The libs every command loads after this file, in order, for install.sh and

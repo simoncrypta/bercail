@@ -71,6 +71,31 @@ The shell block no longer defines `t` (open the Herdr app) and `d` (short for `d
 
 Nothing stops an older release's `bercail update` from going straight to this one: it copies the new CLI with its own code and file lists, and this release takes the update over from there. That path is not tested, and the steps that carried older installs forward (the `agentic-dev` directories and shell markers, the 0.9 keys, old worktrunk config lines) are gone. From 0.8 (the Herdr terminal and its layout plugin), the full install above also adds the Herdr app. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them.
 
+## A laptop, with bercail on another machine
+
+A Herdr window on a laptop can drive bercail on another machine (here `box`): Shep, the desks, repos, Pi and its logins, beads, tuicr and worktrunk all stay on `box`, and the laptop gets only the Herdr app half. [bercail on another machine](config.md#bercail-on-another-machine) says what the mods then do, and what does not work across machines yet.
+
+1. On `box`, install bercail as above, if it is not there yet.
+2. On the laptop, install the [Herdr app](https://herdr.dev) and add `box`: `hc machine add box` (any target ssh reaches, `--name box` to choose the name). `hc machine ls` shows it. Herdr puts `hc` on `box` if it has none.
+3. On the laptop, get bercail's files at the version `box` runs, and install the client half from them:
+
+   ```bash
+   git clone https://github.com/simoncrypta/bercail ~/Work/bercail
+   git -C ~/Work/bercail switch --detach v<version>   # or the commit box runs
+   ~/Work/bercail/install.sh --client box
+   ```
+
+   Or from the release `box` runs: `curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/v<version>/install.sh | BERCAIL_REF=v<version> bash -s -- --client box`, or `mise use -g packslip:github.com/simoncrypta/bercail@<version> && bercail install --client box`. Without the version, both take the latest release.
+4. `bercail doctor` on the laptop checks the Herdr app, the layout, mods and keys, that `hc` reaches `box`, and that `box` runs the same bercail version. Open the window, switch to the bercail layout (`Ctrl+Shift+L`), and `box`'s spaces, Shep and desks are there.
+
+`--client box` installs the `bercail` command (`~/.local/bin/bercail` and its `lib/`), the layout, the five mods, the `layout:bercail` keys, and `[herdr] backend = "box"` in `~/.config/bercail/config.toml`, keeping anything else in that file. It installs the Herdr app and `jq` if they are missing, and nothing else: no shell block, worktrunk hooks, skills, Pi, bstack, Shep, tuicr or Omarchy extras. It removes nothing an earlier full install left, and a client doctor does not look at those parts: on a laptop that had one, run `bercail uninstall` first (answer no to removing `~/.config/bercail`), then `--client`.
+
+It records the mode in `~/.local/share/bercail/install-mode`. From then on, `bercail update`, `install.sh` without `--client`, and `bercail dry-run` stay client-only, `bercail doctor` checks only the above, and `bercail reconfigure` refuses (it belongs on `box`). `--client <other>` points the laptop at another machine. To make the laptop a full install, delete that file and `[herdr] backend` from `config.toml`, then install again.
+
+Update both together: `bercail update` on `box`, then on the laptop (after `git pull` or a checkout of the same tag, for a clone). The mods on the laptop call `box`'s bercail, so a version apart can break them; doctor says when the versions differ. Two clones of master both report master's version, so doctor cannot tell their commits apart: pull both.
+
+**Why a clone, not a copy from `box`.** The laptop could copy bercail's files from `box` over `hc`, and always match it. Then `box` would choose the code the laptop runs: the mods are unrestricted code with the laptop's access to every machine it added. Today trust goes one way, the laptop runs things on `box` and nothing on `box` reaches the laptop; a copy from `box` would turn that around. A clone or a release comes from the same source `box` was installed from, and doctor catches a version apart.
+
 ## First run
 
 Then, in a repo:

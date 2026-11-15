@@ -71,6 +71,12 @@ parse_install_args() {
         YES=1
         shift
         ;;
+      --client)
+        [[ $# -ge 2 ]] || die "--client needs the backend's name in hc machine ls"
+        valid_machine_name "$2" || die "--client $2: not a machine name (letters, digits, '.', '_' and '-'; see hc machine ls)"
+        CLIENT_BACKEND="$2"
+        shift 2
+        ;;
       *)
         die "unknown option: $1 (try --help)"
         ;;
@@ -79,6 +85,7 @@ parse_install_args() {
 }
 
 main() {
+  CLIENT_BACKEND=""
   parse_install_args "$@"
 
   log "bercail v${BERCAIL_VERSION}"
@@ -88,6 +95,14 @@ main() {
   is_debian && ! is_ubuntu && info "debian detected"
   if [[ "${BERCAIL_PACKAGED:-0}" != 1 ]]; then
     info "recommended install: mise use -g packslip:github.com/simoncrypta/bercail && bercail install (signed release); this curl/clone install stays supported"
+  fi
+
+  # A client stays one: a plain install over it does not add the rest.
+  if [[ -n "$CLIENT_BACKEND" ]] || is_client_install; then
+    install_client_dependencies
+    deploy_client "$CLIENT_BACKEND"
+    show_client_summary
+    return
   fi
 
   install_dependencies
