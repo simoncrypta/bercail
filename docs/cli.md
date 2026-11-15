@@ -12,7 +12,7 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 | `./install.sh --client <machine>` (`bercail install --client <machine>`) | Only the Herdr app half, for a laptop whose bercail runs on `<machine>` (its name in `hc machine ls`): the CLI, the layout, the mods, the keys and `[herdr] backend`. `update`, `dry-run` and `doctor` stay client-only after it; `reconfigure` refuses. See [install](install.md#a-laptop-with-bercail-on-another-machine) |
 | `./install.sh --help` | Installer help |
 | `bercail help` | This reference |
-| `bercail doctor` | Deps, Herdr layout, mod and keys, skills, webhook sinks and follower, and each [desk secret](config.md#a-desk-secret-per-repo) (`present, 0600, service account`, never the token). On a client: the Herdr app, the layout, mods and keys, and that the backend answers with this bercail's version |
+| `bercail doctor` | Deps, Herdr layout, mod and keys, skills, webhook sinks and follower, each [desk secret](config.md#a-desk-secret-per-repo) (`present, 0600, service account`, never the token), and the [todo backend](config.md#todos) and whether it is logged in. On a client: the Herdr app, the layout, mods and keys, and that the backend answers with this bercail's version |
 | `bercail bstack setup` / `status` | [bstack](bstack.md): Pi on your own plans. No subcommand = `status` |
 | `bercail config get <section> <key>` | A `config.toml` value as bercail reads it: `bercail config get layout review`, `bercail config get 'policy."~/Work/some-repo"' commit`. An array prints as JSON. Prints nothing and exits 1 when the key is not set |
 | `bercail desk restore` / `--dry-run` | Bring back the desk agents a reboot or a core restart took, each on its session in its own space. See [desks after a reboot](config.md#desks-after-a-reboot). `--dry-run` lists each desk and what would happen to it |
@@ -28,6 +28,7 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 | `bercail shep repos [--json]` / `board` / `brief ISSUE [--repo DIR] [--budget CHARS]` | [What Shep knows](shep.md#what-shep-knows): your known repos, one line per open job and what waits on you, and one issue's desk, state and latest report, cut short |
 | `bercail shep queue [--repo DIR] [--json]` | [What waits on your review](shep.md#briefs-and-the-board): staged desks and PRs, their size, stakes and state (review, LGTM, cleanup, superseded, unknown), each repo against its review budget; `--json` for the Herdr app |
 | `bercail shep remember "RULE" [--scope SCOPE]` / `list` / `forget N` | Shep's [standing rules](shep.md#standing-rules), kept across sessions and compactions |
+| `bercail todo add "TITLE" [--notes TEXT] [--due YYYY-MM-DD] [--issue ID] [--repo DIR]` / `list [--json]` / `show ID` / `done ID` | What only you can do, on your [todo list](shep.md#todos-for-the-person) (Basecamp, `[todo]` in [config](config.md#todos)). `add` prints the todo's link; `--issue` comments it on that beads issue. Shep adds them; the guard blocks the writes from desks |
 | `bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID]` / `mistake list` | Shep's [mistakes ledger](shep.md#mistakes): the second time a key is recorded, it asks for a guardrail |
 
 ## shell

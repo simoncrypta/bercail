@@ -116,6 +116,12 @@ const printsToken =
   "In a repo with a desk secret, printing the environment or OP_SERVICE_ACCOUNT_TOKEN is blocked. Name the variable you need (printenv HOME), or run op.";
 const vaultShown =
   'In a repo with a desk secret, listing the vault or printing a secret is blocked. Read the one field you need into a variable and check it: pw="$(op read \'op://…\')"; : "${pw:?op read failed}". Or write it with -o to a file outside the worktree.';
+const basecampWrite =
+  "Writing to Basecamp, or to the person's todos, is Shep's. When the person has to do something themselves, put it in your report as Todo: \"<text>\", and Shep adds it. Reads still work: basecamp todos list, show, search.";
+const basecampAuth =
+  "Logging Basecamp in or out (auth, login, logout, setup, profile create or delete), and its token, are the person's. They run basecamp auth login --device-code in their own shell.";
+const basecampFlags =
+  "Put basecamp's flags after its command and action (basecamp todos list --in 1), so the guard can tell what it runs.";
 const unclosedSub =
   "The guard cannot find where this $( or backtick ends (a heredoc with an apostrophe inside $( ) does that). Write the body to a file first, then pass its path.";
 
@@ -1115,6 +1121,81 @@ function fakesInput(words: string[], raw: string[]): boolean {
   return words[0] === "hyprctl" && hyprInput.test(words.slice(1).join(" "));
 }
 
+// basecamp's flags that may come before its command or action: the ones that
+// take a value, and the switches. Cobra reads any other flag there as taking
+// the next word, so the guard could not tell which word is the command.
+const basecampValue = new Set([
+  "-a",
+  "--account",
+  "-p",
+  "--project",
+  "--in",
+  "--jq",
+  "-P",
+  "--profile",
+  "--cache-dir",
+  "--todolist",
+]);
+const basecampSwitch = new Set(["-j", "--json", "-m", "--md", "-q", "--quiet", "-v", "--verbose", "--version"]);
+// Commands that only read, and the resource commands whose list and show actions read.
+const basecampReads = new Set(["search", "show", "url", "me", "version", "commands", "help", "timeline"]);
+const basecampResources = new Set(
+  (
+    "projects todos subtasks todolists todosets hillcharts gauges todolistgroups messages chat pings cards files " +
+    "schedule uploads vaults docs assignments calendars bookmarks people templates webhooks lineup messageboards " +
+    "messagetypes forwards subscriptions attachments embeds comments boost notifications recordings filings " +
+    "accounts profile tools doors drafts notes"
+  ).split(" "),
+);
+const basecampListing = new Set(["todos", "projects", "todolists"]);
+const basecampLogin = new Set(["login", "logout", "setup", "quick-start"]);
+
+// basecamp's command and action, past the known flags before them; undefined
+// when another flag comes first.
+function basecampCall(words: string[]): string[] | undefined {
+  const out: string[] = [];
+  for (let i = 1; i < words.length && out.length < 2; i++) {
+    const word = words[i];
+    const flag = word.split("=")[0];
+    if (!word.startsWith("-")) out.push(word);
+    else if (basecampValue.has(flag)) i += word.includes("=") ? 0 : 1;
+    else if (!basecampSwitch.has(word)) return undefined;
+  }
+  return out;
+}
+
+// Its login and token are the person's in every role. Shep may write; any other
+// role may only read, and what bercail does not know as a read is a write.
+function decideBasecamp(words: string[], role: string): GuardDecision {
+  if (words[0] !== "basecamp") return allow;
+  const call = basecampCall(words);
+  if (!call) return block(basecampFlags);
+  const [command, action] = call;
+  // profile create logs a new profile in; profile delete revokes its credential.
+  const login =
+    basecampLogin.has(command) ||
+    (command === "auth" && action !== "status") ||
+    (command === "profile" && (action === "create" || action === "delete"));
+  if (login) return block(basecampAuth);
+  if (role === "shep") return allow;
+  const reads =
+    command === undefined ||
+    basecampReads.has(command) ||
+    (basecampResources.has(command) && (action === "list" || action === "show")) ||
+    (action === undefined && basecampListing.has(command)) ||
+    (command === "auth" && action === "status") ||
+    (command === "config" && action === "show");
+  return reads ? allow : block(basecampWrite);
+}
+
+// bercail todo add or done: a write to the person's todo backend.
+function writesTodo(words: string[]): boolean {
+  const plain = plainWords(words);
+  return plain.some(
+    (word, i) => basename(word) === "bercail" && plain[i + 1] === "todo" && ["add", "done"].includes(plain[i + 2]),
+  );
+}
+
 function isPolicyTrust(words: string[]): boolean {
   const plain = plainWords(words);
   return plain.some((word, i) => word === "policy" && plain[i + 1] === "trust");
@@ -1867,6 +1948,8 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (sync && readOnlyRole(input.role)) decision = worse(decision, block(readOnly));
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
     if (isAnswer(words)) decision = worse(decision, block(answerCommand));
+    if (writesTodo(words) && input.role !== "shep") decision = worse(decision, block(basecampWrite));
+    decision = worse(decision, decideBasecamp(words, input.role));
     if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
     if (writesProtected(words, raw, input.protectedFiles)) decision = worse(decision, block(protectedFile));
     if (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout"))

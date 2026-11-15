@@ -230,7 +230,7 @@ shep_brief() {
       else (($n * 2 / 3) | floor) as $h | ($n - $h) as $t
         | .[0:$h] + "\n[… \(length - $n) characters cut; the whole comment: bd comments \($id)]\n" + .[(length - $t):] end;
     ($issue.id) as $id
-    | ([$comments | to_entries[] | select((.value.text // "") | startswith("bercail handoff:") | not)]) as $reports
+    | ([$comments | to_entries[] | select((.value.text // "") | startswith("bercail handoff:") or startswith("bercail todo:") | not)]) as $reports
     | "\($id): \($issue.title // "" | flat)",
       ([$issue.status, (if $issue.priority != null then "P\($issue.priority)" else empty end), $issue.issue_type]
         | map(select(. != null and . != "")) | join(" "))
@@ -242,6 +242,7 @@ shep_brief() {
          (if ($rec.path // $desk.cwd) then "worktree \(($rec.path // $desk.cwd) | tilde)" else empty end),
          ((if $desk then $desk.model else $rec.model end) | if . then "model \(.)" else empty end) ] | join(" · ")),
       (if $staged != "" then $staged else empty end),
+      ($comments[] | (.text // "") | select(startswith("bercail todo:")) | "todo:" + ltrimstr("bercail todo:") | flat),
       (if $screen != "" then "\(who) is blocked; its screen ends with:", ($screen | split("\n")[] | "  | " + .),
         "(the whole screen: hc read \($desk.address) --lines 60)" else empty end),
       (if ($reports | length) == 0 then
@@ -252,18 +253,23 @@ shep_brief() {
        end)'
 }
 
-# One line per open job across the known repos, then what waits on the person.
-# A job is an issue that is not closed and has a live desk or status
-# in_progress or blocked. The rest of a repo's open issues are a count, with
-# how many of them were handed off to a desk that is gone.
+# One line per open job across the known repos, then what waits on the person:
+# desks, and the todos only they can do. A job is an issue that is not closed
+# and has a live desk or status in_progress or blocked. The rest of a repo's
+# open issues are a count, with how many of them were handed off to a desk
+# that is gone.
 shep_board() {
-  local repos desks records
+  local repos desks records todos
   [[ $# -eq 0 ]] || { _shep_err "usage: bercail shep board"; return 1; }
   _shep_need_policy
   repos="$(_shep_repos_json)"
   desks="$(_shep_desks_json)"
   records="$(_shep_records_json)"
-  jq -nr --arg home "$HOME" --argjson repos "$repos" --argjson desks "$desks" --argjson rec "$records" "$SHEP_JQ_DEFS"'
+  # shellcheck source=lib/todo.sh
+  declare -F todo_board_json >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/todo.sh"
+  todos="$(todo_board_json)"
+  jq -nr --arg home "$HOME" --argjson repos "$repos" --argjson desks "$desks" --argjson rec "$records" \
+    --argjson todos "$todos" "$SHEP_JQ_DEFS"'
     def who($d): if $d.bg then "background Shep \($d.name // $d.address)" else "desk \($d.address)" end;
     def head($j): "\($j.id): \($j.title // "" | flat | cut(70))";
     ($desks | map(select(.issue)) | map({key: .issue, value: .}) | from_entries) as $live
@@ -293,7 +299,13 @@ shep_board() {
              elif (.desk.state == "done" or .desk.state == "idle") then
                "- " + head($j) + ": \(who(.desk)) finished; " + (if .desk.bg then "report it, then hc kill \(.desk.name // .desk.address)" else "review its staged changes in its space" end)
              else empty end),
-         ($desks[] | select((.issue | not) and .state == "blocked") | "- \(who(.)) (\(.cwd // "?" | tilde)) is blocked") ]
+         ($desks[] | select((.issue | not) and .state == "blocked") | "- \(who(.)) (\(.cwd // "?" | tilde)) is blocked"),
+         ($todos // empty | . as $t | def tag: if .issue then " for \(.issue)" else "" end;
+           if .error then "- todos: \(.error)"
+           else (.open[] | "- todo\(tag): \(.title | flat | cut(70))" + (if .due then " · due \(.due)" else "" end)
+                  + " · open in \($t.backend)" + (if .url then " · \(.url)" else "" end)),
+                (.finished[] | "- todo\(tag): \(.title // "" | flat | cut(70)) · done in \($t.backend); "
+                  + (if .issue then "continue \(.issue), then " else "" end) + "bercail todo done \(.id)") end) ]
        | if length > 0 then .[] else "- nothing" end)'
   _shep_queue_text "$(_shep_queue_json "$repos" "$desks" "$records")"
 }

@@ -115,6 +115,9 @@ cmd_doctor() {
   doctor_bstack || failures=1
   doctor_desk_secrets || failures=1
   doctor_desk_restore || failures=1
+  # shellcheck source=/dev/null
+  source "$(find_lib_dir)/todo.sh"
+  doctor_todo
   doctor_entire
   return "$failures"
 }
@@ -223,6 +226,12 @@ main() {
       # shellcheck source=/dev/null
       source "$(find_lib_dir)/policy.sh"
       cmd_policy "$@"
+      ;;
+    todo)
+      load_libs
+      # shellcheck source=/dev/null
+      source "$(find_lib_dir)/todo.sh"
+      cmd_todo "$@"
       ;;
     describe)
       load_libs

@@ -1195,6 +1195,92 @@ test("a Discuss branch runs no commands and edits nothing", () => {
   assertEqual(decideTool("read", undefined, discuss, "/work/a.ts").action, "allow");
 });
 
+test("only Shep writes to Basecamp or the person's todos; every role reads, and no role logs in or prints the token", () => {
+  const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
+  const builder = { ...tui, role: "builder" };
+  const shepBg = { ...headless, role: "shep-bg" };
+  for (const input of [tui, headless, auto, builder, judge, council, shepBg]) {
+    for (const command of [
+      'basecamp todos create "Create the tailnet login" --in 1 --list 2',
+      "printf x | basecamp todos create - --in 1",
+      "basecamp -p 1 todos complete 900",
+      "basecamp --account 1 todos update 900 --due 2026-11-20",
+      "basecamp todos trash 900",
+      "basecamp messages create 'hi' --in 1",
+      "basecamp chat post hi",
+      "basecamp api post buckets/1/todos.json",
+      "basecamp upload a.png",
+      "/home/me/.local/bin/basecamp todos create x",
+      "FOO=1 basecamp todos create x",
+      "sh -c 'basecamp todos create x'",
+      'bercail todo add "Create the tailnet login" --issue app-7',
+      "bin/bercail todo done 900",
+      "basecamp todos create x --description --help --in 1 --list 2",
+      "basecamp todos create --in 1 -- --help",
+      "basecamp upload show --in 1",
+      "basecamp attach list",
+      "basecamp api get buckets/1/todos.json",
+      "basecamp --todolist search todos create x",
+      "basecamp --cache-dir show todos create x",
+    ])
+      blocked(
+        command,
+        input,
+        /Shep's\. When the person has to do something themselves, put it in your report as Todo:/,
+      );
+    for (const command of [
+      "basecamp todos list --in 1 --list 2 --json",
+      "basecamp todos",
+      "basecamp -p 1 todos show 900",
+      "basecamp todolists list --in 1",
+      "basecamp projects",
+      "basecamp show https://3.basecamp.com/1/buckets/2/todos/3",
+      "basecamp search 'tailnet' --json",
+      "basecamp url https://3.basecamp.com/1/buckets/2/todolists/3",
+      "basecamp auth status --json",
+      "basecamp config show",
+      "basecamp help todos create",
+      "basecamp --account=1 todos list",
+      "basecamp -j -p 1 todos show 900",
+      "basecamp --version",
+      "bercail todo list --json",
+      "bercail todo show 900",
+    ])
+      allowed(command, input);
+  }
+  for (const command of [
+    'basecamp todos create "Create the tailnet login" --in 1 --list 2',
+    "basecamp todos complete 900",
+    'bercail todo add "Create the tailnet login" --issue app-7 --repo ~/Work/app',
+    "bercail todo done 900",
+  ])
+    allowed(command, shep);
+  for (const input of [tui, auto, shep]) {
+    for (const command of [
+      "basecamp auth login --device-code",
+      "basecamp auth token",
+      "basecamp -a 1 auth logout",
+      "basecamp --cache-dir=/tmp/c auth token",
+      "basecamp --cache-dir show auth token",
+      "basecamp --todolist x login",
+      "basecamp login",
+      "basecamp setup",
+      "basecamp profile create bot --device-code",
+      "basecamp -P bot profile delete default",
+    ])
+      blocked(command, input, /person's\. They run basecamp auth login --device-code/);
+    // Cobra reads an unknown flag before the command or action as taking the next word.
+    for (const command of [
+      "basecamp --styled show todos create x",
+      "basecamp todos --description list create x",
+      "basecamp -- auth token",
+    ])
+      blocked(command, input, /flags after its command and action/);
+  }
+  const discuss = { role: "discuss", hasUI: true, cwd: "/work", policies: none };
+  assertMatch((decideTool("bash", "basecamp todos create x", discuss) as Decision).reason ?? "", /Discuss branch/);
+});
+
 test("op --help prints no secret, so a pipe after it is not an empty-secret risk", () => {
   allowed("op inject --help | head", tui);
   allowed("op read --help | grep -- --out-file", tui);

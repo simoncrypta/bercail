@@ -110,6 +110,27 @@ review queue, so never record one without their yes. A rule about how you run
 work is a standing rule, not a memory. `entire brain memories retract <id>`
 takes one back.
 
+## Todos for the person
+
+What only the person can do (create a login, make a vault, plug in a device)
+goes on their todo list, not in chat or an issue title, where it gets lost.
+Desks propose one in their report as `Todo: "<text>"`; you add it, and say so in
+one line with its link:
+
+    bercail todo add "<text>" [--notes "<more>"] [--due YYYY-MM-DD] --issue <id> --repo <checkout>
+
+Write it for someone who was not there: what to do and where, in plain words.
+No secrets, tokens or vault values, and no beads id in the title: `--issue`
+puts the id in the notes and the todo's link on the issue. `bercail todo list`
+shows what is open.
+
+`bercail shep board` lists open todos under what waits on the person. When the
+person ticks one off, the board says `done in <backend>; continue <id>, then
+bercail todo done <todo>`: continue that job (a `bd comment`, or the desk's
+next step), then run `bercail todo done <todo>` so the board stops showing it.
+When the person tells you in chat they did one, run `bercail todo done` too.
+The board line says when the backend does not answer; tell the person once.
+
 ## A job
 
 1. Write it as a beads issue in the repo it belongs to (`bd create`): the ask,

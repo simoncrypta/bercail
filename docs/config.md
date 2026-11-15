@@ -31,11 +31,19 @@ compact_at = 250000                  # context tokens at which Pi compacts Shep
 keep_recent = 50000                  # recent tokens kept word for word
 rollover = false                     # true: a fresh session instead, and each new day
 
+[todo]                               # optional: where bercail todo puts what only you can do
+backend = "basecamp"                 # the one backend for now
+
+[todo.basecamp]                      # the to-do list's URL: https://3.basecamp.com/<account>/buckets/<project>/todolists/<todolist>
+account = "1234567"
+project = "2345678"
+todolist = "3456789"
+
 [herdr]                              # optional: bercail on another Herdr machine
 backend = ""                         # its name in `hc machine ls`; empty: this computer
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start; `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start; `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
 
 Those are all the keys bercail reads. `bercail doctor` names any other key in the file (`unknown  [shep] session (nothing reads it)`), a `[git]` value that is not a backend, and a line it cannot read; none of them counts as a failure. `bercail config get <section> <key>` prints one value as bercail reads it. The file is read as a subset of TOML: quoted and `"""` strings, `true` and `false`, whole numbers, and one-line arrays.
 
@@ -103,6 +111,21 @@ bercail doctor                                                             # ok 
   - `op item list`, `op vault list`, `op item get` with `--reveal` or as JSON, `op run --no-masking`, `op service-account …`, and `op read` or `op inject` that prints to the screen: not inside a `$( )`, with no `-o` file, or an `-o` inside the worktree, `/dev` or `/proc`. `pw="$(op read 'op://…')"; : "${pw:?op read failed}"` and `op read -o /tmp/k op://…` still work, and so does `>/dev/null`. Only op's own `--help`, before `--`, skips these checks.
 - **Known gaps.** A `grep -r` or `rg` in bash over a folder above the secret's, the `grep` tool on HOME itself, an `OP_FORMAT=json` exported in an earlier command, and `op document get` are not blocked.
 - **The limit.** This is a seatbelt. A desk runs as you and can read the file from a script the guard never sees. What contains a leak is the token itself: read-only, one vault of dev-grade secrets, an expiry, and revoking it in 1Password the moment you need to.
+
+## Todos
+
+`bercail todo` puts what only you can do on a to-do list of yours ([how Shep uses it](shep.md#todos-for-the-person)). `[todo] backend` picks the tool; each backend has its own table. Basecamp is the only one for now. A backend is one file, `lib/todo/<name>.sh`, that defines `todo_<name>_check`, `_add`, `_list`, `_show` and `_complete`. Adding one changes no caller, only the list of keys `bercail doctor` knows (`BERCAIL_CONFIG_KEYS` in `lib/config.sh`). An unknown name fails every `bercail todo` command with the names bercail has.
+
+For Basecamp, bercail runs the `basecamp` CLI (0.30.0; on Omarchy it comes with the system's mise tools). Make a to-do list for bercail in one of your projects, open it, and copy the three numbers from its URL into `[todo.basecamp]`: `https://3.basecamp.com/<account>/buckets/<project>/todolists/<todolist>`. `basecamp projects list` and `basecamp todolists list --in <project>` show them too. Todos land on that list unassigned, so read the list, not My Assignments. Then log in once, as yourself, in your own shell:
+
+```sh
+basecamp auth login --device-code   # prints a link and a one-time code; approve it in any browser
+bercail doctor                      # ok  todos: basecamp, logged in; to-do list 3456789 in project 2345678
+```
+
+- **From your laptop, over a remote Herdr shell.** That works. The shell runs on the machine bercail runs on, so the login is stored there, where Shep and the desks use it. `--device-code` never opens a browser on that machine; open the printed link on your laptop or phone. Without the flag, the CLI may open a browser on the machine's own screen when the shell has a display.
+- **Where the login goes.** The basecamp CLI keeps it in the system keyring when one answers, else in `credentials.json` (mode 0600) in its config folder. bercail never reads, prints or passes it. `bercail doctor` asks `basecamp auth status`, which reads only what is stored, and prints `logged in` or `not logged in`, never the token.
+- **Who may use it.** Shep adds and completes todos. Desks, builders, the judge, the council, autopilot and background Sheps may only read; Discuss runs no commands. In every role, Shep's included, the guard blocks basecamp's login, logout and token commands; it does not stop a command that reads the keyring or `credentials.json`. [What the guard counts as a read](shep.md#todos-for-the-person).
 
 ## Review by stakes and size
 
