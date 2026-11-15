@@ -14,6 +14,9 @@ export default function (pi: ExtensionAPI) {
   let calls = 0;
   let toolSent = false;
   let userTurns = 0;
+  pi.on("session_start", (_event, ctx) => {
+    if (process.env.BERCAIL_RESULT_PATH) process.env.BERCAIL_SESSION_ID = ctx.sessionManager.getSessionId();
+  });
   pi.on("before_agent_start", () => {
     userTurns++;
   });
@@ -121,7 +124,7 @@ export default function (pi: ExtensionAPI) {
             error = "429 rate_limit_error";
             status = 429;
           }
-          if (scenario === "role-exhaustion") error = "429 rate_limit_error";
+          if (["role-exhaustion", "judge-exhaustion"].includes(scenario)) error = "429 rate_limit_error";
           if (first && scenario === "bridge") {
             error = "Claude Code turn failed";
             status = 200;
@@ -153,6 +156,35 @@ export default function (pi: ExtensionAPI) {
             error = calls === 1 ? "429 rate_limit_error" : "unrelated failure";
             status = calls === 1 ? 429 : 200;
           }
+          if (first && scenario.startsWith("safety-")) {
+            error = "content was flagged for possible cybersecurity risk";
+            status = Number(scenario.slice(7)) || 200;
+            if (scenario === "safety-429") error += "; 429 rate_limit_error";
+            if (scenario === "safety-quota") error += "; quota exceeded";
+            if (scenario === "safety-header") headers = { "anthropic-ratelimit-unified-status": "rejected" };
+            if (scenario === "safety-secret")
+              error += "; Authorization: Bearer secret-canary-237; request body private";
+            if (scenario === "safety-retry-success") {
+              error = calls === 1 ? `${error}; 429 rate_limit_error` : undefined;
+            }
+            if (scenario === "safety-stream") {
+              error = "opaque upstream failure";
+              await options?.onProviderStreamEvent?.(
+                { type: "error", error: { code: "content_policy_violation" } },
+                model,
+              );
+            }
+            if (scenario === "safety-sensitive") error = "Provider stopped with: sensitive";
+            if (scenario === "safety-content-filter") error = "opaque upstream failure";
+          }
+          if (first && scenario === "refusal-error") {
+            error = "model_refusal";
+            status = 200;
+          }
+          if (first && ["refusal-stop", "refusal-stream", "harmless-quote", "ordinary-refusal"].includes(scenario)) {
+            error = undefined;
+            status = 200;
+          }
           const toolScenario = ["tool-no-loop", "user-reset", "followup-reset"].includes(scenario);
           const emitTool = toolScenario && model.provider === "fake-b" && !toolSent;
           if (toolScenario && model.provider === "fake-b") {
@@ -175,7 +207,8 @@ export default function (pi: ExtensionAPI) {
             messages: context.messages,
           });
           // The stale case deliberately omits the next response hook entirely.
-          if (!(scenario === "stale" && calls > 1)) await options?.onResponse?.({ status, headers }, model);
+          if (!(scenario === "stale" && calls > 1) && scenario !== "safety-absent")
+            await options?.onResponse?.({ status, headers }, model);
           const output: any = {
             role: "assistant",
             content: error ? [] : [{ type: "text", text: "PI_FALLBACK_OK" }],
@@ -194,6 +227,19 @@ export default function (pi: ExtensionAPI) {
             timestamp: Date.now(),
             ...(error ? { errorMessage: error } : {}),
           };
+          if (scenario === "refusal-stop") output.rawStopReason = "refusal";
+          if (scenario === "safety-content-filter") output.rawStopReason = "incomplete.content_filter";
+          if (scenario === "refusal-stream")
+            await options?.onProviderStreamEvent?.({ type: "response.refusal.delta", delta: "I cannot help" }, model);
+          if (scenario === "harmless-quote")
+            output.content = [
+              {
+                type: "text",
+                text: 'The log says "content was flagged for possible cybersecurity risk"; this is a quotation.',
+              },
+            ];
+          if (scenario === "ordinary-refusal")
+            output.content = [{ type: "text", text: "I cannot help with that request." }];
           if (emitTool) {
             toolSent = true;
             output.stopReason = "toolUse";

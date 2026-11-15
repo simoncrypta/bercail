@@ -326,6 +326,7 @@ _bstack_deploy_pi() {
     copy_file "$work/pi-rendered" "$BSTACK_PI_DIR/$rel"
   done
   copy_file "$work/src/pi/extensions/fallback.ts" "$BSTACK_PI_DIR/extensions/fallback.ts"
+  copy_file "$work/src/pi/extensions/provider-error.ts" "$BSTACK_PI_DIR/extensions/provider-error.ts"
   copy_file "$work/src/pi/extensions/guard.ts" "$BSTACK_PI_DIR/extensions/guard.ts"
   copy_file "$work/src/pi/extensions/review.ts" "$BSTACK_PI_DIR/extensions/review.ts"
   bstack_pi_fallback >"$work/fallback" || return 1
@@ -507,7 +508,7 @@ doctor_bstack() {
   else
     log "  --  Claude auth: no subscription login (claude auth login)"
   fi
-  for rel in "${BSTACK_PI_RENDERED[@]}" extensions/fallback.ts extensions/guard.ts extensions/review.ts \
+  for rel in "${BSTACK_PI_RENDERED[@]}" extensions/fallback.ts extensions/provider-error.ts extensions/guard.ts extensions/review.ts \
     models fallback lead.json review.json; do
     if [[ ! -f "$BSTACK_PI_DIR/$rel" ]]; then
       log "  missing  bstack $BSTACK_PI_DIR/$rel (bercail update)"

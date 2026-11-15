@@ -34,6 +34,7 @@ STUB
 
   local profile="$BATS_TEST_TMPDIR/pi-profile" guard
   mkdir -p "$profile/extensions" "$profile/agents"
+  cp "$ROOT/bstack/pi/extensions/provider-error.ts" "$profile/extensions/"
   guard="$profile/extensions/guard.ts"
   printf '// guard\n' >"$guard"
   jq -n --arg guard "$guard" --arg model "claude-bridge/lead-model:high" \

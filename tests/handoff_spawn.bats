@@ -353,6 +353,7 @@ STUB
 _pi_ready() {
   local profile="$BATS_TEST_TMPDIR/pi-profile" guard="$BATS_TEST_TMPDIR/pi-profile/extensions/guard.ts"
   mkdir -p "$profile/extensions" "$profile/agents" "$BATS_TEST_TMPDIR/bin"
+  cp "$ROOT/bstack/pi/extensions/provider-error.ts" "$profile/extensions/"
   printf '// guard\n' >"$guard"
   jq -n --arg guard "$guard" --arg model "claude-bridge/lead-model:high" \
     '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.12.0","-e",$guard]' >"$profile/lead.json"
@@ -1374,6 +1375,7 @@ STUB
 _pi_profile() {
   local profile="$BATS_TEST_TMPDIR/pi-profile" guard="$BATS_TEST_TMPDIR/pi-profile/extensions/guard.ts"
   mkdir -p "$profile/extensions" "$profile/agents"
+  cp "$ROOT/bstack/pi/extensions/provider-error.ts" "$profile/extensions/"
   printf '// guard\n' >"$guard"
   jq -n --arg guard "$guard" --arg model "claude-bridge/lead-model:high" \
     --arg prompts "$profile/prompts" --arg instructions "$profile/instructions.md" \

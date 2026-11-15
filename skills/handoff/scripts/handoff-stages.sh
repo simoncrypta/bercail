@@ -117,18 +117,19 @@ handoff_issue_prompt() {
   fi
 }
 
-# reason is optional. Empty omits the field; Shep reads it, and unknown fields
-# do not fail handoff_result_ok. The only value the runner writes is usage-limit.
+# Keep the legacy plan-limit reason; typed provider failures are also projected below.
 handoff_write_result() {
-  local dest="$1" status="$2" summary="$3" session="$4" reason="${5:-}"
+  local dest="$1" status="$2" summary="$3" session="$4" reason="${5:-}" prior="${6:-}"
   mkdir -p "$(dirname "$dest")"
   jq -nc \
     --arg status "$status" \
     --arg summary "$summary" \
     --arg session_id "$session" \
     --arg reason "$reason" \
+    --arg prior "$prior" \
     '{status:$status, summary:$summary, session_id:$session_id}
-     + if $reason == "" then {} else {reason:$reason} end' >"$dest"
+     + (if $reason == "" then {} else {reason:$reason} end)
+     + (if $prior == "" then {} else {prior_result:$prior} end)' >"$dest"
 }
 
 # issue, and issue_title when known, on a result file. Other fields stay.
@@ -178,9 +179,28 @@ handoff_bin_present() {
   command -v "$bin" >/dev/null 2>&1
 }
 
+# Keep one invocation's result beside its log so relative evidence pointers still resolve.
+handoff_preserve_result() {
+  local dest="$1" dir log history prior=''
+  dir="$(dirname "$dest")"
+  log="$dir/start.log"
+  [[ -f "$dest" || -f "$log" ]] || return 0
+  mkdir -p "$dir/handoff-history" || return 1
+  history="$(mktemp -d "$dir/handoff-history/run.XXXXXX")" || return 1
+  if [[ -f "$dest" ]]; then
+    prior="$history/handoff-result.json"
+    mv -- "$dest" "$prior" || return 1
+  fi
+  if [[ -f "$log" ]]; then
+    mv -- "$log" "$history/start.log" || return 1
+  fi
+  printf '%s' "$prior"
+}
+
 handoff_block() {
-  local dest="$1" summary="$2" session="$3"
-  handoff_write_result "$dest" blocked "$summary" "$session"
+  local dest="$1" summary="$2" session="$3" prior
+  prior="$(handoff_preserve_result "$dest")" || handoff_die "could not preserve prior handoff evidence; no replacement result was written"
+  handoff_write_result "$dest" blocked "$summary" "$session" '' "$prior"
   printf 'handoff: %s\n' "$summary" >&2
   return 1
 }
@@ -188,6 +208,9 @@ handoff_block() {
 # The last assistant message_end decides. A plain 429 is not a plan limit.
 handoff_pi_usage_limit_reason() {
   local log="$1"
+  local failure
+  failure="$(handoff_pi_provider_error "$log")"
+  [[ "$(jq -r '.reason // empty' <<<"$failure")" == usage_limit ]] || return 0
   local phrase="You've hit your (5-hour|weekly|Opus|Sonnet|Fable) limit|You've hit your usage limit|You've hit your limit|You've reached your Fable limit|You're out of usage credits|Third-party apps now draw from your extra usage, not your plan limits|Claude quota exceeded — rate limit|You're out of extra usage|You have hit your ChatGPT usage limit|You've reached your ChatGPT workspace's usage limit|subscription_sharing_usage_limit_exceeded"
   if jq -e -s -R --arg phrase "$phrase" '
     [ split("\n")[] | fromjson? | select(type == "object" and .type == "message_end" and (.message.role == "assistant")) ] as $ends
@@ -198,6 +221,11 @@ handoff_pi_usage_limit_reason() {
   ' "$log" >/dev/null 2>&1; then
     printf 'usage-limit'
   fi
+}
+
+# Use the same classifier as the extension; this helper ships with the required Pi profile.
+handoff_pi_provider_error() {
+  node "$(handoff_pi_profile)/extensions/provider-error.ts" "$1"
 }
 
 handoff_pi_session_id() {
@@ -297,6 +325,14 @@ handoff_pi_prepare() {
     HANDOFF_PI_BLOCK="Pi lead profile has no guard (${guard}). Run bercail update."
     return 1
   fi
+  if [[ ! -r "$(handoff_pi_profile)/extensions/provider-error.ts" ]]; then
+    HANDOFF_PI_BLOCK="Pi provider-error helper is missing. Run bercail update."
+    return 1
+  fi
+  if ! command -v node >/dev/null 2>&1 || ! node "$(handoff_pi_profile)/extensions/provider-error.ts" --check >/dev/null 2>&1; then
+    HANDOFF_PI_BLOCK="Node.js with built-in TypeScript support is required for provider-error classification. Install Node.js 22.19 or newer, then retry."
+    return 1
+  fi
   HANDOFF_PI_LEAD="$lead"
   HANDOFF_PI_MODEL="$(handoff_pi_lead_model "$lead")"
 }
@@ -362,6 +398,7 @@ handoff_run_headless() {
   local stage="$1" worktree="$2" issue="$3" resume="$4" dry="$5" want="${6:-}"
   local model session="" resumed=0 prompt bd
   local result log bin="${HANDOFF_PI_BIN:-pi}" cmd_json out rc=0 tid present=false bd_present=false reason="" issue_title="" turn_failed=false
+  local provider_error='null' incomplete=false prior_result='' role="${BERCAIL_ROLE:-lead}" phase="${BERCAIL_PHASE:-$stage}" candidate="${BERCAIL_CANDIDATE:-unknown}"
 
   command -v jq >/dev/null 2>&1 || handoff_die "jq is required"
 
@@ -456,9 +493,10 @@ handoff_run_headless() {
     "$(handoff_headless_comment_text "$stage" pi "$worktree" "$result" "$session" "$resumed")"
 
   mkdir -p "$worktree/.bercail"
-  rm -f -- "$result"
+  prior_result="$(handoff_preserve_result "$result")" || handoff_die "could not preserve prior handoff evidence; no provider command was started"
   log="$worktree/.bercail/start.log"
   export BERCAIL_ISSUE="$issue"
+  export BERCAIL_ISSUE_TITLE="$issue_title"
   export BERCAIL_RESULT_PATH="$result"
   export BERCAIL_SESSION_ID="$session"
   export BERCAIL_STAGE="$stage"
@@ -475,6 +513,23 @@ handoff_run_headless() {
   if pi_turn_failed "$log"; then
     rc=1
     turn_failed=true
+  fi
+  provider_error="$(handoff_pi_provider_error "$log")"
+  # Structured refusal/safety may normalize to a clean stop. The extension projects it before exit.
+  if [[ -f "$result" ]] && [[ "$(jq -r --arg session "$session" '
+    .provider_error | select(.session_id == $session and (.reason | IN("provider_safety_block", "auth_expired_or_denied", "usage_limit", "transient_transport", "model_refusal", "unknown_provider_error"))) | .reason
+  ' "$result" 2>/dev/null)" != "" ]]; then
+    if [[ "$(jq -r '.reason // empty' <<<"$provider_error")" != provider_safety_block || "$(jq -r '.provider_error.reason' "$result")" == provider_safety_block ]]; then
+      provider_error="$(jq -c '.provider_error' "$result")"
+    fi
+  fi
+  if [[ "$provider_error" != null ]]; then
+    provider_error="$(jq -c --arg role "$role" --arg phase "$phase" --arg candidate "$candidate" \
+      --arg session "$session" --arg issue "$issue" '{role:$role,phase:$phase,candidate:$candidate,session_id:$session,issue:$issue} + .' <<<"$provider_error")"
+    if [[ "$(jq -r .reason <<<"$provider_error")" == provider_safety_block || "$(jq -r .reason <<<"$provider_error")" == model_refusal ]]; then
+      incomplete=true
+      rc=1
+    fi
   fi
   # The exhausted plan cannot be trusted to name its own limit. Classify the CLI
   # log and stamp reason; do not start another command.
@@ -503,6 +558,18 @@ handoff_run_headless() {
     [[ "$rc" -eq 0 ]] && rc=1
     [[ -n "$session" ]] || session="$HANDOFF_NO_SESSION"
     handoff_write_result "$result" failed "headless stage exited ${rc} without a result file" "$session" "$reason"
+  fi
+  if [[ "$provider_error" != null ]]; then
+    local projected
+    projected="$(jq --argjson failure "$provider_error" --argjson incomplete "$incomplete" --arg prior "$prior_result" '
+      .provider_error = $failure
+      | if $incomplete then
+          .status = "blocked" | .completion = "incomplete" | .reason = $failure.reason
+          | .summary = ("Provider stop: " + $failure.reason + "; " + $failure.role + "; phase " + $failure.phase + "; candidate " + $failure.candidate + ". Work is incomplete; prior candidate evidence is not approval for this phase. Human review is required.")
+        else . end
+      | if $prior != "" then .prior_result = $prior else . end
+    ' "$result")"
+    printf '%s\n' "$projected" >"$result"
   fi
   handoff_stamp_issue "$result" "$issue" "$issue_title"
   if [[ "$rc" -ne 0 ]]; then

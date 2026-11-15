@@ -179,7 +179,8 @@ notify_desk_info() {
       [[ -n "$handoff" ]] || handoff='{}'
     fi
     if [[ -r "$path/.bercail/handoff-result.json" ]]; then
-      result="$(jq -c '{status, summary:((.summary // "") | .[0:500]), session_id, issue}' \
+      result="$(jq -c '{status, summary:((.summary // "") | .[0:500]), session_id, issue}
+        + (if .provider_error then {provider_error, reason, completion, prior_result} else {} end)' \
         "$path/.bercail/handoff-result.json" 2>/dev/null || printf 'null')"
     fi
   fi
@@ -340,6 +341,12 @@ notify_desk_changed() {
   # Same id for every sink and retry, so receivers can dedupe.
   local event_id
   event_id="$address:$kind:$(_notify_now):$$"
+  local episode
+  if jq -e '.result.provider_error.completion == "incomplete"' <<<"$desk_json" >/dev/null; then
+    kind=blocked
+    episode="$(jq -r '.result.provider_error.episode_id // empty' <<<"$desk_json")"
+    [[ -z "$episode" ]] || event_id="provider-error:$episode:blocked"
+  fi
   notify_deliver_all "$kind" "$agent_json" "$space_json" "$desk_json" "$event_id"
   notify_shep_enqueue "$kind" "$agent_json" "$space_json" "$desk_json" "$event_id"
 }

@@ -127,7 +127,10 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   candidate order: families or Pi model ids (default ["claude", "gpt", "grok"]).
   The fallback skips limited models and dead providers (402, no credits), keeps
   the desk's thinking level, and goes back to the desk's model once its limit
-  lifts. The lead starts roles as hc siblings.
+  lifts. Safety blocks take precedence over quota hints: the unfinished role
+  stays incomplete, with sanitized reason data and no fallback or self-approval.
+  Pi's native/provider retries run before final settlement and are not suppressed
+  by this extension. The lead starts roles as hc siblings.
 
 Config:
   ~/.config/bercail/config.toml               review, [bstack], [git], [policy."<repo>"]
@@ -158,7 +161,9 @@ Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`
   prompt is one line pointing at it. Headless runs (\`pi -p\`) write
   .bercail/handoff-result.json; --branch starts a Pi desk instead.
   --model provider/id[:thinking] runs one of them on another Pi model; the
-  rest of the lead, and the sibling roles' models, stay.
+  rest of the lead, and the sibling roles' models, stay. Headless runs require
+  Node.js with built-in TypeScript support (22.19+ recommended); the runtime
+  and deployed provider-error helper are checked before Pi starts.
 EOF
 }
 

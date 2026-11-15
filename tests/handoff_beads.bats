@@ -104,6 +104,7 @@ spawn_headless() {
     || fail "precondition: copied store should shadow the main beads dir"
   mkdir -p "${stub%/*}" "$profile/extensions" "$profile/agents"
   printf '// guard\n' >"$profile/extensions/guard.ts"
+  cp "$ROOT/bstack/pi/extensions/provider-error.ts" "$profile/extensions/"
   jq -n --arg guard "$profile/extensions/guard.ts" --arg model "claude-bridge/lead-model:high" \
     '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.12.0","-e",$guard]' >"$profile/lead.json"
   cat >"$stub" <<'STUB'
@@ -153,6 +154,7 @@ wt_herdr_main_space() { :; }
 HELPER
   mkdir -p "$HOME/.local/share/bercail/pi/extensions"
   printf '// guard\n' >"$HOME/.local/share/bercail/pi/extensions/guard.ts"
+  cp "$ROOT/bstack/pi/extensions/provider-error.ts" "$HOME/.local/share/bercail/pi/extensions/"
   jq -n --arg guard "$HOME/.local/share/bercail/pi/extensions/guard.ts" --arg model "claude-bridge/lead-model:high" \
     '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.12.0","-e",$guard]' \
     >"$HOME/.local/share/bercail/pi/lead.json"

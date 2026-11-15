@@ -59,6 +59,15 @@ EOF
   : >"$BATS_TEST_TMPDIR/bodies.jsonl"
 }
 
+@test "an incomplete provider review projects a stable blocked episode rather than a new finish" {
+  mkdir -p "$desk/.bercail"
+  printf '%s\n' '{"status":"blocked","summary":"review incomplete","session_id":"session-237","issue":"myapp-1","completion":"incomplete","reason":"provider_safety_block","provider_error":{"reason":"provider_safety_block","completion":"incomplete","episode_id":"session-237:user-1","candidate":"tree-237","phase":"final-review","role":"judge"}}' >"$desk/.bercail/handoff-result.json"
+  notify_desk_changed t9 working done pi sp1 "$desk" 'Review' myapp-1 'Fix the login'
+  notify_desk_changed t9 working done pi sp1 "$desk" 'Review' myapp-1 'Fix the login'
+  jq -es 'length == 2 and all(.[]; .kind == "blocked" and .event_id == "provider-error:session-237:user-1:blocked"
+    and .desk.result.provider_error.candidate == "tree-237" and (.text | contains("is blocked")))' "$BATS_TEST_TMPDIR/bodies.jsonl"
+}
+
 # One `hc events` line: every terminal, the desk with STATUS.
 event() {
   jq -nc --arg s "$1" --arg cwd "$desk" '{seq:1, terminals:[

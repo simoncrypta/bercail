@@ -28,7 +28,17 @@ type SessionEntry = {
   customType?: string;
   display?: unknown;
   content?: unknown;
-  data?: { text?: string };
+  data?: {
+    text?: string;
+    reason?: string;
+    completion?: string;
+    episode_id?: string;
+    attempt_id?: string;
+    role?: string;
+    phase?: string;
+    candidate?: string;
+    issue?: string;
+  };
   details?: { dead?: Record<string, unknown>; skipped?: string[] };
 };
 type Dead = { provider?: string; model?: string };
@@ -79,12 +89,34 @@ try {
     "plan-window",
     "model-window",
     "role-exhaustion",
-  ]) {
+    "safety-absent",
+    "safety-200",
+    "safety-400",
+    "safety-403",
+    "safety-429",
+    "safety-402",
+    "safety-header",
+    "safety-quota",
+    "safety-secret",
+    "safety-retry-success",
+    "safety-stream",
+    "safety-sensitive",
+    "safety-content-filter",
+    "safety-labels",
+    "refusal-error",
+    "refusal-stop",
+    "refusal-stream",
+    "harmless-quote",
+    "ordinary-refusal",
+    "judge-exhaustion",
+  ].filter((name) => !process.env.PI_FALLBACK_FILTER || new RegExp(process.env.PI_FALLBACK_FILTER).test(name))) {
     const dir = join(tmp, scenario);
     mkdirSync(join(dir, "profile/extensions"), { recursive: true });
     mkdirSync(join(dir, "agent"), { recursive: true });
     mkdirSync(join(dir, "bin"));
     copyFileSync(join(root, "bstack/pi/extensions/fallback.ts"), join(dir, "profile/extensions/fallback.ts"));
+    const helper = join(root, "bstack/pi/extensions/provider-error.ts");
+    if (existsSync(helper)) copyFileSync(helper, join(dir, "profile/extensions/provider-error.ts"));
     // The desk runs fake-a at high; the fallback models carry other levels, which must not win.
     const deskFirst = [
       "tool-no-loop",
@@ -129,23 +161,38 @@ try {
     // A stand-in hc: the child's parent is t-lead, and every call is logged.
     writeFileSync(
       join(dir, "bin/hc"),
-      `#!/bin/sh\nprintf '%s\\n' "$*" >>'${join(dir, "hc.log")}'\n[ "$1" = get ] && printf '%s\\n' '{"parent":"t-lead"}'\nexit 0\n`,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >>'${join(dir, "hc.log")}'\n[ "$1" = get ] && printf '%s\\n' '{"parent":"t-lead","labels":{"bercail.issue":"example-237","bercail.issue_title":"Offline review","bercail.phase":"final-delta-review","bercail.candidate":"tree-237"}}'\nexit 0\n`,
       { mode: 0o755 },
     );
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       HOME: dir,
       XDG_STATE_HOME: join(dir, "state"),
+      XDG_CONFIG_HOME: join(dir, "config"),
+      XDG_DATA_HOME: join(dir, "data"),
+      XDG_CACHE_HOME: join(dir, "cache"),
+      XDG_RUNTIME_DIR: join(dir, "run"),
+      TMPDIR: dir,
       PI_CODING_AGENT_DIR: join(dir, "agent"),
       PI_FALLBACK_CASE: scenario,
       PI_FALLBACK_LOG: join(dir, "events.jsonl"),
       PI_OFFLINE: "1",
       PATH: `${dir}/bin:${process.env.PATH}`,
     };
-    delete env.HC_TERMINAL_ID;
+    for (const key of Object.keys(env))
+      if (/^(HC_|HERDR_|BERCAIL_|BEADS_|BD_)/.test(key) || key === "BASH_ENV") delete env[key];
     delete env.PI_FALLBACK_MISSING_KEY;
-    delete env.BERCAIL_ROLE;
     if (scenario === "role-exhaustion") Object.assign(env, { BERCAIL_ROLE: "builder", HC_TERMINAL_ID: "t-child" });
+    if (scenario === "judge-exhaustion") Object.assign(env, { BERCAIL_ROLE: "judge", HC_TERMINAL_ID: "t-child" });
+    if (scenario.startsWith("safety-")) Object.assign(env, { BERCAIL_ROLE: "judge", HC_TERMINAL_ID: "t-child" });
+    if (scenario.startsWith("safety-") || scenario === "refusal-stream") {
+      env.BERCAIL_RESULT_PATH = join(dir, "handoff-result.json");
+      writeFileSync(
+        env.BERCAIL_RESULT_PATH,
+        JSON.stringify({ status: "ready", verification: [{ candidate: "old-tree", evidence: "proof.txt" }] }),
+      );
+      writeFileSync(join(dir, "proof.txt"), "candidate-specific proof");
+    }
     const args = [
       "--offline",
       "--no-extensions",
@@ -205,23 +252,26 @@ try {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    const noSwitch = [
-      "401",
-      "403",
-      "400",
-      "500",
-      "context",
-      "bridge-auth",
-      "bridge-success",
-      "bridge-warning",
-      "retry-success",
-      "stale",
-      "abort",
-      "empty-order",
-      "status-only-400",
-      "status-only-401",
-      "status-only-403",
-    ].includes(scenario);
+    const noSwitch =
+      [
+        "401",
+        "403",
+        "400",
+        "500",
+        "context",
+        "bridge-auth",
+        "bridge-success",
+        "bridge-warning",
+        "retry-success",
+        "stale",
+        "abort",
+        "empty-order",
+        "status-only-400",
+        "status-only-401",
+        "status-only-403",
+      ].includes(scenario) ||
+      scenario.startsWith("safety-") ||
+      ["refusal-error", "refusal-stop", "refusal-stream", "harmless-quote", "ordinary-refusal"].includes(scenario);
     if (noSwitch) assert.equal(switches.length, 0, `${scenario}: must not switch`);
     else {
       assert.ok(switches.length > 0, `${scenario}: must switch; ${result.stderr}`);
@@ -252,7 +302,7 @@ try {
         session.some((e) => e.type === "custom_message" && e.customType === "bercail-fallback" && e.display),
         `${scenario}: visible session note`,
       );
-      if (!["exhaustion", "role-exhaustion"].includes(scenario))
+      if (!["exhaustion", "role-exhaustion", "judge-exhaustion"].includes(scenario))
         assert.match(result.stdout, /PI_FALLBACK_OK/, `${scenario}: turn finishes`);
     }
     if (["429", "stale", "retry-success", "exhaustion"].includes(scenario)) {
@@ -261,6 +311,79 @@ try {
         scenario === "retry-success" ? 2 : scenario === "stale" ? 2 : 3,
         `${scenario}: native retry budget`,
       );
+    }
+    if (scenario.startsWith("safety-")) {
+      // Pi retries text containing 429 before extensions reach final settlement.
+      const nativeRequests = scenario === "safety-429" ? 3 : scenario === "safety-retry-success" ? 2 : 1;
+      const failedAttempts = scenario === "safety-retry-success" ? 1 : nativeRequests;
+      assert.equal(requests.length, nativeRequests, `${scenario}: only native attempts, no fallback continuation`);
+      const failures = session.filter((e) => e.type === "custom" && e.customType === "bercail-provider-error");
+      assert.equal(failures.length, failedAttempts, `${scenario}: retain each native failure attempt`);
+      assert.ok(
+        failures.every((e) => e.data?.reason === "provider_safety_block" && e.data.completion === "incomplete"),
+      );
+      assert.equal(new Set(failures.map((e) => e.data?.episode_id)).size, 1, "one blocked episode");
+      assert.equal(new Set(failures.map((e) => e.data?.attempt_id)).size, failedAttempts, "distinct attempts");
+      assert.ok(
+        failures.every(
+          (e) =>
+            e.data?.candidate === "tree-237" &&
+            e.data.phase === "final-delta-review" &&
+            e.data.role === "judge" &&
+            e.data.issue === "example-237",
+        ),
+      );
+      const hc = readFileSync(join(dir, "hc.log"), "utf8");
+      assert.equal(hc.split("\n").filter((line) => line.startsWith("send ")).length, 1, "one parent notice");
+      assert.match(hc, /example-237: Offline review/);
+      assert.match(hc, /final-delta-review.*tree-237/);
+      assert.match(hc, /incomplete/);
+      assert.doesNotMatch(hc, /do this part yourself|approved|secret-canary-237|request body private/i);
+      assert.doesNotMatch(JSON.stringify(failures), /secret-canary-237|request body private/);
+      assert.equal(
+        session.some((e) => e.customType === "bercail-fallback"),
+        false,
+        "no rewritten continuation",
+      );
+      const artifact = JSON.parse(readFileSync(join(dir, "handoff-result.json"), "utf8"));
+      assert.equal(artifact.status, "blocked", "native success cannot approve a safety-blocked phase");
+      assert.equal(artifact.completion, "incomplete");
+      assert.equal(artifact.verification[0].candidate, "old-tree");
+      assert.equal(readFileSync(join(dir, "proof.txt"), "utf8"), "candidate-specific proof");
+    }
+    const expectedReason: Record<string, string> = {
+      "401": "auth_expired_or_denied",
+      "403": "auth_expired_or_denied",
+      "400": "unknown_provider_error",
+      "500": "transient_transport",
+      usage: "usage_limit",
+      "bridge-auth": "auth_expired_or_denied",
+      "bridge-warning": "unknown_provider_error",
+      "429": "usage_limit",
+    };
+    if (expectedReason[scenario])
+      assert.ok(
+        session.some(
+          (entry) => entry.customType === "bercail-provider-error" && entry.data?.reason === expectedReason[scenario],
+        ),
+        `${scenario}: typed failure persisted`,
+      );
+    if (["refusal-error", "refusal-stop", "refusal-stream"].includes(scenario)) {
+      assert.ok(session.some((e) => e.customType === "bercail-provider-error" && e.data?.reason === "model_refusal"));
+      assert.equal(requests.length, 1);
+      if (scenario === "refusal-stream") {
+        const artifact = JSON.parse(readFileSync(join(dir, "handoff-result.json"), "utf8"));
+        assert.equal(artifact.provider_error.reason, "model_refusal");
+        assert.equal(artifact.completion, "incomplete");
+      }
+    }
+    if (["harmless-quote", "ordinary-refusal"].includes(scenario)) {
+      assert.equal(
+        session.some((e) => e.customType === "bercail-provider-error"),
+        false,
+        "no prose inference",
+      );
+      assert.equal(requests.length, 1);
     }
     if (scenario === "tui-status") {
       // oxlint-disable-next-line no-control-regex -- an OSC 7501 record is ESC ] ... BEL or ST.
@@ -447,6 +570,12 @@ try {
         /^send t-lead builder t-child stopped: Rate limit: fallback exhausted .*Do this part yourself\.$/m,
         "tells the lead it stopped",
       );
+    }
+    if (scenario === "judge-exhaustion") {
+      const hc = readFileSync(join(dir, "hc.log"), "utf8");
+      assert.match(hc, /Unfinished review cannot approve shipping or be replaced by parent self-approval/);
+      assert.match(hc, /example-237: Offline review/);
+      assert.doesNotMatch(hc, /Do this part yourself/);
     }
     if (scenario === "exhaustion") assert.equal(existsSync(join(dir, "hc.log")), false, "the lead tells no one");
     console.log(`PASS: real Pi ${scenario} (${requests.length} requests, ${switches.length} switches)`);

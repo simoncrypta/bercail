@@ -1,9 +1,10 @@
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { classifyProviderError, providerEventReason, type ProviderErrorReason } from "./provider-error.ts";
 
 type Level = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 
@@ -41,6 +42,140 @@ export default function (pi: ExtensionAPI) {
   let response: { status: number; rejected: boolean } | undefined;
   let rejection: { claim?: string; reset?: number } | undefined;
   let assistant: AssistantMessage | undefined;
+  let structuredReason: ProviderErrorReason | undefined;
+  type Failure = {
+    reason: ProviderErrorReason;
+    completion: "incomplete";
+    episode_id: string;
+    attempt_id: string;
+    session_id: string;
+    provider: string;
+    model: string;
+    role: string;
+    phase: string;
+    candidate: string;
+    issue?: string;
+    issue_title?: string;
+    evidence: { source: string; status?: number; message_entry_id: string; response_id?: string };
+  };
+  let safety: Failure | undefined;
+  let latestFailure: Failure | undefined;
+  let labels: Record<string, string> = {};
+  const token = (value: string | undefined) => (value && /^[\w./:@#-]{1,200}$/.test(value) ? value : undefined);
+  const noticed = new Set<string>();
+  const attempts = new Set<string>();
+  const binding = () => ({
+    role: token(process.env.BERCAIL_ROLE) ?? "lead",
+    phase: token(labels["bercail.phase"] ?? process.env.BERCAIL_PHASE ?? process.env.BERCAIL_STAGE) ?? "unknown",
+    candidate: token(labels["bercail.candidate"] ?? process.env.BERCAIL_CANDIDATE) ?? "unknown",
+    issue: token(labels["bercail.issue"] ?? process.env.BERCAIL_ISSUE),
+    issue_title: (labels["bercail.issue_title"] ?? process.env.BERCAIL_ISSUE_TITLE)
+      ?.replace(/[\r\n\t]/g, " ")
+      .slice(0, 160),
+  });
+  const episode = (ctx: ExtensionContext) => {
+    const user = [...ctx.sessionManager.getBranch()]
+      .reverse()
+      .find((entry) => entry.type === "message" && entry.message.role === "user");
+    return `${ctx.sessionManager.getSessionId()}:${user?.id ?? "unknown"}`;
+  };
+  const restoreFailures = (ctx: ExtensionContext) => {
+    safety = undefined;
+    latestFailure = undefined;
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type !== "custom") continue;
+      if (entry.customType === "bercail-provider-notice")
+        noticed.add((entry.data as { episode_id: string }).episode_id);
+      if (entry.customType !== "bercail-provider-error") continue;
+      const failure = entry.data as Failure;
+      attempts.add(failure.attempt_id);
+      if (failure.episode_id !== episode(ctx)) continue;
+      latestFailure = failure;
+      if (failure.reason === "provider_safety_block") safety = failure;
+    }
+  };
+  const recordFailure = (message: AssistantMessage, entryId: string, ctx: ExtensionContext) => {
+    const reason = classifyProviderError(message, { ...response, reason: structuredReason });
+    if (!reason) {
+      latestFailure = undefined;
+      return;
+    }
+    const failure: Failure = {
+      ...binding(),
+      reason,
+      completion: "incomplete",
+      episode_id: episode(ctx),
+      attempt_id: entryId,
+      session_id: ctx.sessionManager.getSessionId(),
+      provider: message.provider,
+      model: message.model,
+      evidence: {
+        source: structuredReason ? "provider_code" : "assistant_message",
+        status: response?.status,
+        message_entry_id: entryId,
+        response_id: token(message.responseId),
+      },
+    };
+    latestFailure = failure;
+    if (reason === "provider_safety_block") safety = failure;
+    if (attempts.has(entryId)) return;
+    attempts.add(entryId);
+    pi.appendEntry("bercail-provider-error", failure);
+  };
+  const stopFailure = async (failure: Failure, ctx: ExtensionContext) => {
+    const { reason, role, phase, candidate, issue, issue_title, session_id, episode_id } = failure;
+    const job = issue ? `${issue}: ${issue_title || "title unknown"}; ` : "job unknown; ";
+    const recovery =
+      reason === "provider_safety_block"
+        ? "Human review of legitimate scope/authorization or the provider access/review process is needed. Do not replay, rewrite, switch models, or substitute parent approval."
+        : "Human attention is needed; no automatic continuation for this stop.";
+    const review = /judge|council/.test(role)
+      ? " Unfinished review cannot approve shipping or be replaced by parent self-approval."
+      : "";
+    const text = `${job}${role} ${process.env.HC_TERMINAL_ID ?? "headless"} stopped: ${reason}; phase ${phase}; candidate ${candidate}; session ${session_id}; episode ${episode_id}. Work is incomplete; prior evidence retains its original candidate. ${recovery}${review}`;
+    ctx.ui.setStatus("bercail-fallback", `${reason}: incomplete`);
+    ctx.ui.notify(text, "error");
+    // Print-mode JSON does not emit custom session entries. Preserve structured stops in its existing result.
+    const result = process.env.BERCAIL_RESULT_PATH;
+    if (result && process.env.BERCAIL_SESSION_ID === session_id) {
+      try {
+        let current = {};
+        try {
+          current = JSON.parse(readFileSync(result, "utf8"));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        mkdirSync(dirname(result), { recursive: true });
+        writeFileSync(
+          `${result}.tmp`,
+          JSON.stringify({
+            ...current,
+            status: "blocked",
+            summary: text,
+            session_id,
+            completion: "incomplete",
+            provider_error: failure,
+          }),
+          { mode: 0o600 },
+        );
+        renameSync(`${result}.tmp`, result);
+      } catch {
+        ctx.ui.notify("Could not project provider stop to the handoff result; session evidence is retained.", "error");
+      }
+    }
+    if (!noticed.has(episode_id) && process.env.BERCAIL_ROLE && process.env.HC_TERMINAL_ID) {
+      // Claim before external delivery: restart cannot send this episode twice. A crash here may lose the notice.
+      pi.appendEntry("bercail-provider-notice", { episode_id, reason, completion: "incomplete" });
+      noticed.add(episode_id);
+      try {
+        const self = await pi.exec("hc", ["get", process.env.HC_TERMINAL_ID, "--json"], { timeout: 5000 });
+        const parent = self.code === 0 ? JSON.parse(self.stdout).parent : undefined;
+        if (parent) await pi.exec("hc", ["send", parent, text], { timeout: 5000 });
+      } catch {
+        // Durable failure evidence remains in the session even when parent delivery is unavailable.
+      }
+    }
+  };
 
   const blocked = (name: string) => {
     const provider = name.split("/")[0];
@@ -79,10 +214,14 @@ export default function (pi: ExtensionAPI) {
   };
 
   // A sibling role that runs out of models tells the agent that started it.
-  const tellParent = async (text: string) => {
+  const tellParent = async (text: string, ctx: ExtensionContext) => {
     const role = process.env.BERCAIL_ROLE;
     const me = process.env.HC_TERMINAL_ID;
     if (!role || !me) return;
+    if (/judge|council/.test(role) && latestFailure) {
+      await stopFailure(latestFailure, ctx);
+      return;
+    }
     try {
       const self = await pi.exec("hc", ["get", me, "--json"], { timeout: 5000 });
       const parent = self.code === 0 ? JSON.parse(self.stdout).parent : undefined;
@@ -95,9 +234,19 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (_event, ctx) => {
+    if (process.env.HC_TERMINAL_ID) {
+      try {
+        const self = await pi.exec("hc", ["get", process.env.HC_TERMINAL_ID, "--json"], { timeout: 5000 });
+        if (self.code === 0) labels = JSON.parse(self.stdout).labels ?? {};
+      } catch {
+        // Unknown ownership stays explicit rather than inferred from provider text.
+      }
+    }
     if (ctx.model) desk = { name: `${ctx.model.provider}/${ctx.model.id}`, level: pi.getThinkingLevel() };
+    restoreFailures(ctx);
   });
+  pi.on("session_tree", (_event, ctx) => restoreFailures(ctx));
   // A switch the person makes moves the desk; the fallback's own do not.
   pi.on("model_select", (event) => {
     if (!switching && desk) desk.name = `${event.model.provider}/${event.model.id}`;
@@ -107,7 +256,7 @@ export default function (pi: ExtensionAPI) {
   });
   // Back to the desk's model once its limit has lifted, before the next request.
   const restore = async (ctx: any) => {
-    if (!desk || !ctx.model) return;
+    if (safety || !desk || !ctx.model) return;
     const from = `${ctx.model.provider}/${ctx.model.id}`;
     if (from === desk.name || attempted.has(desk.name) || blocked(desk.name)) return;
     const model = find(ctx, desk.name);
@@ -122,12 +271,15 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_start", async (event, ctx) => {
     if (event.message.role !== "user") return;
     attempted.clear();
+    safety = undefined;
+    latestFailure = undefined;
     await restore(ctx);
   });
   pi.on("turn_start", async (_event, ctx) => {
     response = undefined;
     rejection = undefined;
     assistant = undefined;
+    structuredReason = undefined;
     await restore(ctx);
   });
   pi.on("after_provider_response", (event) => {
@@ -143,44 +295,36 @@ export default function (pi: ExtensionAPI) {
       };
     }
   });
-  pi.on("turn_end", (event) => {
+  pi.on("provider_stream_event", (event) => {
+    const reason = providerEventReason(event.data);
+    if (reason && structuredReason !== "provider_safety_block") structuredReason = reason;
+  });
+  pi.on("turn_end", (event, ctx) => {
     assistant = event.message.role === "assistant" ? event.message : undefined;
+    if (assistant) recordFailure(assistant, event.messageEntryId, ctx);
   });
 
   pi.on("agent_before_settle", async (event, ctx) => {
-    if (event.outcome !== "error" || assistant?.stopReason !== "error" || ctx.signal?.aborted) return;
+    if (ctx.signal?.aborted) return;
+    // This is after Pi's native retries. A later native success must not erase an earlier safety stop.
+    const failure = safety ?? latestFailure;
+    if (failure && failure.reason !== "usage_limit") {
+      await stopFailure(failure, ctx);
+      return { continue: false };
+    }
+    if (event.outcome !== "error" || assistant?.stopReason !== "error" || failure?.reason !== "usage_limit") return;
     const error = assistant.errorMessage ?? "";
-    if (response && [400, 401, 403].includes(response.status)) return;
     if (isContextOverflow(assistant, ctx.model?.contextWindow)) return;
-    // Explicit request errors win over transport signals, including bridge headers.
-    if (
-      /\b(?:400|401|403)\b|unauthenticated|unauthorized|not.authorized|authenticat|invalid.api.key|permission.denied|access.denied|forbidden|invalid_request_error|bad.request|context.{0,30}(?:overflow|length|window|exceed|limit)|prompt.{0,20}(?:too.long|exceed)|too.many.tokens|request.{0,10}abort/i.test(
-        error,
-      )
-    )
-      return;
     // No credits or no subscription does not reset on its own: skip it for the session.
     const isDead =
       response?.status === 402 ||
       /\b402\b|payment.required|out of credits|insufficient.(?:credits|balance|funds)|need an? [\w-]+(?: [\w-]+)? subscription|no active subscription/i.test(
         error,
       );
-    if (
-      !isDead &&
-      !(
-        response?.status === 429 ||
-        response?.rejected ||
-        /\b429\b|rate[_ -]?limit|usage[_ -]?limit|usage cap|quota (?:exceeded|exhausted)|hit your limit|out of usage/i.test(
-          error,
-        )
-      )
-    )
-      return;
-
     const current = `${assistant.provider}/${assistant.model}`;
     attempted.add(current);
     if (isDead) {
-      const reason = error.replace(/\s+/g, " ").slice(0, 160);
+      const reason = "usage_limit: credits or subscription unavailable";
       const known = dead.has(assistant.provider);
       dead.set(assistant.provider, reason);
       if (!known) {
@@ -306,7 +450,7 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.setStatus("bercail-fallback", "fallback exhausted");
     ctx.ui.notify(text, "error");
     noteSession(current);
-    await tellParent(text);
+    await tellParent(text, ctx);
     return {
       entries: [
         ...event.entries,

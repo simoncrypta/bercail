@@ -349,6 +349,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   grep -q 'Work single-agent' "$p/agents/bstack-headless.md" || fail "the headless brief is single-agent"
   grep -q -- '--branch NAME --stage bstack --issue ID' "$p/prompts/handoff.md" || fail "handoff opens a desk"
   cmp "$ROOT/bstack/pi/extensions/fallback.ts" "$p/extensions/fallback.ts" || fail "managed fallback extension"
+  cmp "$ROOT/bstack/pi/extensions/provider-error.ts" "$p/extensions/provider-error.ts" || fail "managed provider-error helper"
   cmp "$ROOT/bstack/pi/extensions/guard.ts" "$p/extensions/guard.ts" || fail "managed guard extension"
   cmp "$ROOT/bstack/pi/extensions/review.ts" "$p/extensions/review.ts" || fail "managed review-pr extension"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
