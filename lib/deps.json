@@ -139,7 +139,7 @@
     "source": "npm:wrangler",
     "min": null,
     "why": null,
-    "known": "4.107.0",
+    "known": "4.162.0",
     "pinned_in": ["package-lock.json"],
     "notes": "package.json allows ^4.0.0; the lockfile holds the version. site/wrangler.jsonc's compatibility_date can move with it."
   },
@@ -148,7 +148,7 @@
     "source": "npm:astro",
     "min": null,
     "why": null,
-    "known": "7.4.4",
+    "known": "7.4.12",
     "pinned_in": ["package-lock.json"],
     "notes": "package.json allows ^7.4.4; the lockfile holds the version."
   },
