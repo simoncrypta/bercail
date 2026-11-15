@@ -94,6 +94,8 @@ const brainSpend =
   "This Brain command calls a model on the person's tokens (distill, recall --expand, remember without --path, refresh --agent). Leave it to the person.";
 const brainRemember =
   'A memory reaches every branch and desk at once. Propose it in your report as Memory: "<text>" --path <p>, and Shep records it once the person agrees.';
+const emptySecret =
+  'A command fed by op read, op inject or op item get --fields still runs on an empty value when 1Password fails or its prompt is dismissed. Read the secret into a variable, check it is not empty, then use it: set -o pipefail; pw="$(op read \'op://…\')"; : "${pw:?op read failed}"; then pass "$pw". Or write a small script that starts with set -euo pipefail and does the same.';
 const unclosedSub =
   "The guard cannot find where this $( or backtick ends (a heredoc with an apostrophe inside $( ) does that). Write the body to a file first, then pass its path.";
 
@@ -224,11 +226,12 @@ const literalDollar = "\u0001";
 const literal = (text: string) => text.replaceAll("$", literalDollar);
 
 // A shell word, an operator that ends a command, a command substitution's body,
-// or a $( or backtick the guard cannot find the end of.
+// a line of an unquoted heredoc, or a $( or backtick the guard cannot find the end of.
 type Token =
-  | { kind: "op"; op: string }
-  | { kind: "word"; value: string }
+  | { kind: "op"; op: string; redirect?: boolean }
+  | { kind: "word"; value: string; quoted: boolean }
   | { kind: "sub"; value: string }
+  | { kind: "doc"; value: string }
   | { kind: "unclosed" };
 
 // tag keeps the mktemp -d dirs of nested commands apart.
@@ -239,9 +242,11 @@ function tokenize(command: string, tag = ""): Token[] {
   // Heredocs opened on the current line; their bodies start after its newline.
   const heredocs: { delim: string; strip: boolean; quoted: boolean }[] = [];
   let i = 0;
+  let bareRedirect = false;
   while (i < command.length) {
     const c = command[i];
     if (c === " " || c === "\t") {
+      bareRedirect = false;
       i++;
       continue;
     }
@@ -276,11 +281,13 @@ function tokenize(command: string, tag = ""): Token[] {
       }
       if (delim) {
         heredocs.push({ delim, strip, quoted });
+        bareRedirect = false;
         i = j;
         continue;
       }
     }
     if (c === "\n" && heredocs.length) {
+      bareRedirect = false;
       tokens.push({ kind: "op", op: "\n" });
       i++;
       for (const doc of heredocs.splice(0)) {
@@ -290,20 +297,28 @@ function tokenize(command: string, tag = ""): Token[] {
           const line = command.slice(i, end);
           i = end + 1;
           if ((doc.strip ? line.replace(/^\t+/, "") : line) === doc.delim) break;
-          if (!doc.quoted) for (const sub of subsIn(line)) tokens.push({ kind: "sub", value: sub });
+          if (doc.quoted) continue;
+          tokens.push({ kind: "doc", value: line });
+          for (const sub of subsIn(line)) tokens.push({ kind: "sub", value: sub });
         }
       }
       continue;
     }
     if (c === "\n" || c === ";" || c === "|" || c === "&") {
       const double = (c === "|" && command[i + 1] === "|") || (c === "&" && command[i + 1] === "&");
-      tokens.push({ kind: "op", op: double ? c + c : c });
+      // Backslash-newline disappears before bash reads >&2, 2>&1 or &>file.
+      let next = i + 1;
+      while (command[next] === "\\" && command[next + 1] === "\n") next += 2;
+      const redirect = c === "&" && !double && (bareRedirect || command[next] === ">");
+      bareRedirect = false;
+      tokens.push({ kind: "op", op: double ? c + c : c, redirect });
       i += double ? 2 : 1;
       continue;
     }
     if (c === "$" && command[i + 1] === "(") {
       const inner = readBalanced(command, i + 1);
       if (inner && !makesTempDir(inner.body)) {
+        bareRedirect = false;
         tokens.push({ kind: "sub", value: inner.body });
         i = inner.end;
         continue;
@@ -312,12 +327,14 @@ function tokenize(command: string, tag = ""): Token[] {
     if (c === "`") {
       const end = command.indexOf("`", i + 1);
       if (end > i && !makesTempDir(command.slice(i + 1, end))) {
+        bareRedirect = false;
         tokens.push({ kind: "sub", value: command.slice(i + 1, end) });
         i = end + 1;
         continue;
       }
     }
     let word = "";
+    let quoted = false;
     while (i < command.length) {
       const ch = command[i];
       if (" \t\n;|&".includes(ch)) break;
@@ -332,6 +349,7 @@ function tokenize(command: string, tag = ""): Token[] {
           break;
         }
         if (!inner || !makesTempDir(inner.body)) break;
+        bareRedirect = false;
         word += tempDir();
         i = inner.end;
         continue;
@@ -344,11 +362,14 @@ function tokenize(command: string, tag = ""): Token[] {
           break;
         }
         if (end < 0 || !makesTempDir(command.slice(i + 1, end))) break;
+        bareRedirect = false;
         word += tempDir();
         i = end + 1;
         continue;
       }
       if (ch === "'") {
+        bareRedirect = false;
+        quoted = true;
         const end = command.indexOf("'", i + 1);
         if (end < 0) {
           word += literal(command.slice(i + 1));
@@ -360,6 +381,8 @@ function tokenize(command: string, tag = ""): Token[] {
         continue;
       }
       if (ch === '"') {
+        bareRedirect = false;
+        quoted = true;
         i++;
         while (i < command.length && command[i] !== '"') {
           if (command[i] === "\\" && i + 1 < command.length) {
@@ -393,49 +416,68 @@ function tokenize(command: string, tag = ""): Token[] {
         continue;
       }
       if (ch === "\\") {
+        if (command[i + 1] === "\n") {
+          i += 2;
+          continue;
+        }
+        bareRedirect = false;
         if (i + 1 < command.length) word += literal(command[i + 1]);
         i += 2;
         continue;
       }
+      bareRedirect = ch === "<" || ch === ">";
       word += ch;
       i++;
     }
-    if (word) tokens.push({ kind: "word", value: word });
+    if (word) tokens.push({ kind: "word", value: word, quoted });
   }
   return tokens;
 }
 
 // One simple command, with the operators before and after it ("" at either end).
-// marked keeps literalDollar where words has the $ back.
+// marked keeps literalDollar where words has the $ back; quoted: each word had quotes.
+// redirect: the & after it belongs to a redirect such as >&2.
+// docs: unquoted heredoc lines read just before these words; they belong to an earlier command.
 type Segment = {
   words: string[];
   marked: string[];
+  quoted: boolean[];
   subs: string[];
+  docs: string[];
   before: string;
   after: string;
+  redirect: boolean;
   unclosed: boolean;
 };
 
 function segmentsOf(command: string, tag = ""): Segment[] {
   const out: Segment[] = [];
   let words: string[] = [];
+  let quoted: boolean[] = [];
   let subs: string[] = [];
+  let docs: string[] = [];
   let before = "";
   let unclosed = false;
-  const flush = (op: string) => {
-    if (words.length || subs.length || unclosed) {
+  const flush = (op: string, redirect = false) => {
+    if (words.length || subs.length || docs.length || unclosed) {
       const plain = words.map((word) => word.replaceAll(literalDollar, "$"));
-      out.push({ words: plain, marked: words, subs, before, after: op, unclosed });
+      out.push({ words: plain, marked: words, quoted, subs, docs, before, after: op, redirect, unclosed });
     }
     words = [];
+    quoted = [];
     subs = [];
+    docs = [];
     before = op;
   };
   for (const token of tokenize(command, tag)) {
-    if (token.kind === "op") flush(token.op);
+    if (token.kind === "op") flush(token.op, token.redirect);
     else if (token.kind === "unclosed") unclosed = true;
     else if (token.kind === "sub") subs.push(token.value);
-    else words.push(token.value);
+    else if (token.kind === "doc") docs.push(token.value);
+    else {
+      words.push(token.value);
+      quoted.push(token.quoted);
+    }
   }
   flush("");
   return out;
@@ -1387,8 +1429,188 @@ function expandTemps(word: string, vars: TempVars): string {
   );
 }
 
+// op's global flags that take a value.
+const opValue = new Set(["--account", "--config", "--encoding", "--format", "--session"]);
+
+// op read, op inject, and op item get with --fields, --otp or --reveal print a secret.
+function readsSecret(words: string[]): boolean {
+  const cmd = commandWords(words);
+  if (cmd.length === 0 || basename(cmd[0]) !== "op") return false;
+  let i = 1;
+  while (i < cmd.length && cmd[i].startsWith("-")) i += opValue.has(cmd[i]) ? 2 : 1;
+  if (cmd[i] === "read" || cmd[i] === "inject") return true;
+  return cmd[i] === "item" && cmd.includes("get") && cmd.some((word) => /^--(fields|otp|reveal)(=|$)/.test(word));
+}
+
+// segmentsOf, with the & of >&2, 2>&1 and &>file put back in its command: the
+// tokenizer ends a segment there, as if it ran in the background.
+function commandsOf(command: string): Segment[] {
+  const out: Segment[] = [];
+  for (const segment of segmentsOf(command, "secret")) {
+    const last = out.at(-1);
+    if (!last?.redirect) {
+      out.push(segment);
+      continue;
+    }
+    out[out.length - 1] = {
+      words: [...last.words, ...segment.words],
+      marked: [...last.marked, ...segment.marked],
+      quoted: [...last.quoted, ...segment.quoted],
+      subs: [...last.subs, ...segment.subs],
+      docs: [...last.docs, ...segment.docs],
+      before: last.before,
+      after: segment.after,
+      redirect: segment.redirect,
+      unclosed: last.unclosed || segment.unclosed,
+    };
+  }
+  return out;
+}
+
+// The segment runs op that prints a secret, itself or in a sh -c script.
+function segmentReadsSecret(segment: Segment): boolean {
+  const words = commandWords(segment.words.map((word, i) => (i === 0 ? word.replace(/^\(+/, "") : word)));
+  const script = shellScript(words.map((word, i) => (i === 0 ? basename(word) : word)));
+  return readsSecret(words) || (script !== undefined && commandsOf(script).some(segmentReadsSecret));
+}
+
+// 2>&1 in $(op read ...): op's error text becomes the value, and passes a check.
+function joinsErrors(segment: Segment): boolean {
+  return segment.words.some((word, i) => word === "2>" && segment.words[i + 1] === "1");
+}
+
+// The segment's command reads op's secret from a <( ).
+function readsSecretFrom(segment: Segment): boolean {
+  const at = segment.words.findIndex((word) => word.includes("<("));
+  const word = segment.words[at] ?? "";
+  return at >= 0 && readsSecret([word.slice(word.indexOf("<(") + 2), ...segment.words.slice(at + 1)]);
+}
+
+// The names a plain assignment sets, export and local included; undefined when it runs a command.
+function assignedNames(segment: Segment): { names: string[]; exported: boolean } | undefined {
+  let words = segment.words;
+  while (shellPrefixes.has(words[0])) words = words.slice(1);
+  const head = declares.has(words[0]) || words[0] === "local";
+  const flags = head ? words.slice(1).filter((word) => word.startsWith("-")) : [];
+  const rest = head ? words.slice(1).filter((word) => !word.startsWith("-")) : words;
+  if (rest.length === 0 || !rest.every((word) => assign.test(word))) return undefined;
+  const exported = words[0] === "export" || flags.some((flag) => /^-\w*x/.test(flag));
+  return { names: rest.map((word) => word.slice(0, word.indexOf("="))), exported };
+}
+
+// The segment at j runs exit, or opens a { } or then body that does. return is no
+// check: at a script's top level it fails and the shell goes on. Neither is an exit
+// in a pipe or behind &, which ends only a subshell.
+function exits(segments: Segment[], j: number): boolean {
+  let found = false;
+  for (let k = j; k < segments.length; k++) {
+    const segment = segments[k];
+    if (["|", "&"].includes(segment.after) || segment.before === "|") return false;
+    let words = segment.words;
+    const opens = ["then", "{"].includes(words[0]);
+    while (["then", "{"].includes(words[0])) words = words.slice(1);
+    if (words[0] === "exit") found = true;
+    if (k === j && !opens) return found;
+    if (words.some((word) => ["}", "fi", "else", "elif", "if", "while", "until", "for", "case"].includes(word)))
+      return found;
+  }
+  return false;
+}
+
+// [ -n "$X" ], [[ -z $X ]] or test -n "$X", maybe after if, where a skipped test
+// cannot hide: its flag and name. [ and test need "$X" quoted, since an empty X
+// leaves [ -n ], which is true.
+function testOf(segment: Segment): { flag: string; name: string; inIf: boolean } | undefined {
+  if (!["", ";", "\n", "&&"].includes(segment.before)) return undefined;
+  const at = segment.marked[0] === "if" ? 1 : 0;
+  const words = segment.marked.slice(at);
+  const brackets = words.length === 4 && words[0] === "[[" && words[3] === "]]";
+  const single =
+    (words.length === 4 && words[0] === "[" && words[3] === "]") || (words.length === 3 && words[0] === "test");
+  const name = /^\$(?:([A-Za-z_]\w*)|\{([A-Za-z_]\w*)\})$/.exec(words[2] ?? "");
+  if (!name || !["-n", "-z"].includes(words[1])) return undefined;
+  if (!brackets && !(single && segment.quoted[at + 2])) return undefined;
+  return { flag: words[1], name: name[1] ?? name[2], inIf: at === 1 };
+}
+
+// [ -n "$X" ] || exit, [ -z "$X" ] && exit, test -n "$X" || { ...; exit; },
+// if [ -z "$X" ]; then ...; exit; fi: the name it stops the shell on when empty.
+// After &&, only the || form: when what came before fails, its exit still runs.
+function checkedName(segments: Segment[], i: number): string | undefined {
+  const segment = segments[i];
+  const test = testOf(segment);
+  if (!test) return undefined;
+  const orExit = !test.inIf && test.flag === "-n" && segment.after === "||";
+  const stops =
+    orExit ||
+    (segment.before !== "&&" &&
+      (test.inIf
+        ? test.flag === "-z" && segments[i + 1]?.words[0] === "then"
+        : test.flag === "-z" && segment.after === "&&"));
+  return stops && exits(segments, i + 1) ? test.name : undefined;
+}
+
+function refersTo(text: string, name: string): boolean {
+  return new RegExp(String.raw`\$\{?${name}(?!\w)`).test(text);
+}
+
+// Shep's mistake secret-pipe-no-pipefail, twice: op failed or its prompt was dismissed,
+// and what it fed still ran, typing or sending an empty password. True when, in this command,
+// op's secret goes into a pipe or straight into a command, or a variable that holds
+// it is used, or exported, before a check stops the shell when it is empty.
+function feedsEmptySecret(command: string): boolean {
+  const segments = commandsOf(command);
+  // Names that hold op's secret and are not checked yet; true when exported.
+  const unchecked = new Map<string, boolean>();
+  // Names a [ -n "$X" ] && earlier in this && chain vouches for.
+  const guarded = new Set<string>();
+  let read = false;
+  for (let i = 0; i < segments.length; i++) {
+    const segment = segments[i];
+    if (segment.before !== "&&") guarded.clear();
+    read ||= segmentReadsSecret(segment);
+    if ((segmentReadsSecret(segment) && segment.after === "|") || readsSecretFrom(segment)) return true;
+    // { op read; } | curl: the group's output, op's included, goes into the pipe.
+    const closes = segment.words.some((word) => ["}", "done", "fi", "esac"].includes(word) || word.endsWith(")"));
+    if (read && closes && segment.after === "|") return true;
+    for (const name of unchecked.keys()) if (segment.docs.some((line) => refersTo(line, name))) return true;
+    const checked = checkedName(segments, i);
+    if (checked) {
+      unchecked.delete(checked);
+      continue;
+    }
+    const test = testOf(segment);
+    if (test && !test.inIf && test.flag === "-n" && segment.after === "&&") {
+      guarded.add(test.name);
+      continue;
+    }
+    // ${X:?} stops the shell on an empty X, unless a pipe, a & or a ( runs it in a subshell.
+    const ownShell =
+      ["", ";", "\n", "&&"].includes(segment.before) &&
+      !["|", "&"].includes(segment.after) &&
+      !segment.words[0]?.startsWith("(");
+    if (ownShell)
+      for (const name of unchecked.keys())
+        if (segment.marked.some((word) => word.includes(`\${${name}:?`))) unchecked.delete(name);
+    for (const [name, exported] of unchecked) {
+      if (guarded.has(name)) continue;
+      const named = declares.has(segment.words[0]) && segment.words.includes(name);
+      const used = [...segment.marked, ...segment.subs].some((text) => refersTo(text, name));
+      if (exported || named || used) return true;
+    }
+    const readers = segment.subs.flatMap((sub) => commandsOf(sub).filter(segmentReadsSecret));
+    if (readers.some(joinsErrors)) return true;
+    if (readers.length === 0) continue;
+    const assigned = assignedNames(segment);
+    if (!assigned) return true;
+    for (const name of assigned.names) unchecked.set(name, assigned.exported);
+  }
+  return false;
+}
+
 export function decideBash(command: string, input: GuardInput, depth = 0): GuardDecision {
   if (depth > 4) return block("This command is nested too deep to check. Split it into a simpler command.");
+  if (feedsEmptySecret(command)) return block(emptySecret);
   let decision: GuardDecision = allow;
   let cwd = input.cwd;
   let gitEnv = input.gitEnv ?? false;

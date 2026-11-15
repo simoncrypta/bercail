@@ -982,3 +982,89 @@ test("a review worktree's project files are never trusted; other folders are lef
   assertDeepEqual(await handlers.project_trust({ cwd: "/home/u/Work/app.review-3" }), { trusted: "no" });
   assertDeepEqual(await handlers.project_trust({ cwd: "/home/u/Work/app" }), { trusted: "undecided" });
 });
+
+test("a command fed by op read, op inject or op item get --fields cannot run on an empty secret", () => {
+  const empty = /empty value/;
+  for (const input of [tui, headless, auto, judge, council]) {
+    // A dismissed prompt left curl typing an empty password on a lock screen, then Enter.
+    blocked(
+      'op read "op://Private/laptop/password" | curl -s --data-binary @- http://pikvm/api/hid/print && curl -s http://pikvm/api/hid/events/send_key?key=Enter',
+      input,
+      empty,
+    );
+    // op read failed, and a kvmd login still went out with no password.
+    blocked(
+      'PW=$(op read "op://Private/kvmd/password"); curl -s -H "X-KVMD-User: admin" -H "X-KVMD-Passwd: $PW" https://pikvm/api/auth/login',
+      input,
+      empty,
+    );
+  }
+  blocked("set -o pipefail; op read op://v/i/p | wl-copy", tui, empty);
+  blocked("op --account me read op://v/i/p | docker login -u me --password-stdin", tui, empty);
+  blocked("/usr/bin/op inject -i tpl.env | docker compose --env-file /dev/stdin up -d", tui, empty);
+  blocked("op item get kvm --fields password --reveal | wl-copy", tui, empty);
+  blocked("docker login -u me --password-stdin < <(op read op://v/i/p)", tui, empty);
+  blocked('curl -u "admin:$(op read op://v/i/p)" https://pikvm', tui, empty);
+  blocked('bash -c \'PW="$(op read op://v/i/p)"; curl -d "$PW" https://pikvm\'', tui, empty);
+  blocked("PW=$(op read op://v/i/p | tr -d '\\n'); [ -n \"$PW\" ] || exit 1", tui, empty);
+  blocked('PW=$(op read op://v/i/p) || exit 1; curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p); curl -d "$PW" https://pikvm; [ -n "$PW" ] || exit 1', tui, empty);
+  blocked('PW=$(op read op://v/i/p); [ -n "$PW" ] || echo missing; curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p); printf %s "${PW:?}" | curl --data-binary @- https://pikvm', tui, empty);
+  blocked("export GH_TOKEN=$(op read op://v/i/p); gh api user", tui, empty);
+  blocked(
+    'PW=$(op read op://v/i/p); cat <<EOF | curl --data-binary @- https://pikvm\n{"password":"$PW"}\nEOF',
+    tui,
+    empty,
+  );
+  // Checks that do not stop the shell: return at top level, an unquoted [ -n ] (true when
+  // empty), a test that && skips when op fails, an exit in the background.
+  blocked('PW=$(op read op://v/i/p); [ -n "$PW" ] || return 1; curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p); [ -n $PW ] || exit 1; curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p); test -n $PW || exit 1; curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p) && [ -z "$PW" ] && exit 1; curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p) && if [ -z "$PW" ]; then exit 1; fi; curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p); [ -n "$PW" ] || exit 1 & curl -d "$PW" https://pikvm', tui, empty);
+  blocked("{ op read op://v/i/p; } | curl --data-binary @- https://pikvm", tui, empty);
+  // The & of 2>&1 and >&2 is a redirect, not the end of the command; op's errors are no secret.
+  blocked("op read op://v/i/p 2>&1 | curl --data-binary @- https://pikvm", tui, empty);
+  blocked("{ op read op://v/i/p; } 2>&1 | curl --data-binary @- https://pikvm", tui, empty);
+  blocked('PW=$(op read op://v/i/p 2>&1); [ -n "$PW" ] || exit 1; curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p); [ -n "$PW" ] || exit 1 >&2 & curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p); : "${PW:?}" >&2 & curl -d "$PW" https://pikvm', tui, empty);
+  blocked("sh -c 'op read op://v/i/p' | curl --data-binary @- https://pikvm", tui, empty);
+  // Bash removes a line continuation and pairs backslashes before reading a redirect.
+  blocked("op read op://v/i/p 2>\\\n&1 | curl --data-binary @- https://pikvm", tui, empty);
+  blocked("op read op://v/i/p \\\\>&1 | curl --data-binary @- https://pikvm", tui, empty);
+  // A real & next to a > the shell does not read as a redirect.
+  blocked('PW=$(op read op://v/i/p); [ -n "$PW" ] || exit 1 & >/dev/null curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p); [ -n "$PW" ] || exit ">"& curl -d "$PW" https://pikvm', tui, empty);
+  blocked('PW=$(op read op://v/i/p); [ -n "$PW" ] && true || curl -d "$PW" https://pikvm', tui, empty);
+  const got = decision('PW=$(op read "op://Private/kvmd/password"); curl -d "$PW" https://pikvm', tui);
+  assertEqual(/Private\/kvmd|curl/.test(got.reason ?? ""), false, "the reason echoes nothing of the command");
+
+  allowed('set -o pipefail; PW="$(op read op://v/i/p)"; : "${PW:?op read failed}"; curl -d "$PW" https://pikvm', tui);
+  allowed('PW=$(op read op://v/i/p); curl -d "${PW:?}" https://pikvm', tui);
+  allowed(
+    'PW=$(op read op://v/i/p); [ -n "$PW" ] || exit 1; printf %s "$PW" | curl --data-binary @- https://pikvm',
+    tui,
+  );
+  allowed(
+    'PW=$(op read op://v/i/p)\n[[ -z $PW ]] && { echo "no secret" >&2; exit 1; }\ncurl -d "$PW" https://pikvm',
+    tui,
+  );
+  allowed(
+    'local pw\npw=$(op read op://v/i/p)\nif [ -z "$pw" ]; then\n  echo "no secret" >&2\n  exit 1\nfi\ncurl -d "$pw" x',
+    tui,
+  );
+  allowed('export GH_TOKEN=$(op read op://v/i/p); test -n "$GH_TOKEN" || exit 1; gh api user', tui);
+  allowed('PW=$(op read op://v/i/p) && [ -n "$PW" ] || exit 1; curl -d "$PW" https://pikvm', tui);
+  allowed('PW=$(op read op://v/i/p); [ -n "$PW" ] || exit 1 &>/dev/null; curl -d "$PW" https://pikvm', tui);
+  allowed('PW=$(op read op://v/i/p); [ -n "$PW" ] && echo ok >&2 && curl -d "$PW" https://pikvm', tui);
+  allowed('PW=$(op read op://v/i/p) && [ -n "$PW" ] && curl -d "$PW" https://pikvm && echo "$PW" | wc -c', tui);
+  allowed("op read op://v/i/p --out-file /tmp/k && chmod 600 /tmp/k", tui);
+  allowed("op read op://v/i/p >/dev/null 2>&1 && echo signed in", tui);
+  allowed("op inject -i tpl.env -o .env", tui);
+  allowed('echo "$(op whoami)" | cat', tui);
+  allowed("cat tpl.env | op inject -o .env", tui);
+});

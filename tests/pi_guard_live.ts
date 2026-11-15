@@ -81,6 +81,13 @@ try {
   assert.doesNotMatch(result.stdout, /No configured push destination|Everything up-to-date/, "the push must not run");
   console.log("PASS: real Pi blocked git push --force");
 
+  // op read piped into a command: with no op here the pipe would still run it.
+  const fed = join(dir, "fed");
+  result = runPi(dir, [`op read op://v/i/p | touch ${fed}`]);
+  assert.match(result.stdout, /still runs on an empty value/, `stdout: ${result.stdout}\nstderr: ${result.stderr}`);
+  assert.equal(existsSync(fed), false, "the consumer must not run");
+  console.log("PASS: real Pi blocked op read piped into a command");
+
   // A repo whose policy lets commits and branch pushes through, with a local bare remote.
   const repo = join(dir, "repo");
   const remote = join(dir, "remote.git");
