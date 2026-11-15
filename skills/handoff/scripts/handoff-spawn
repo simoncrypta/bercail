@@ -24,7 +24,8 @@ usage: handoff-spawn --info
 
   --info          print JSON facts and exit
   --issue ID      beads issue to work (bd show ID). It holds the detail. The
-                  agent's whole prompt is the id and its short title.
+                  agent's whole prompt is one line: the id, its short title,
+                  and run bd show ID.
   --stage NAME    required; bstack or autopilot (see handoff-stages.sh). Both
                   run Pi (the lead profile). autopilot may commit and push a
                   PR's fixes; headless only, --worktree on the PR's checkout.

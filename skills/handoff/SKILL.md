@@ -42,7 +42,7 @@ Shep writes the job as a beads issue first (`bd create`, `bd show <id>`). The
 issue holds the ask, the repo, links, and any plan-only note. There are no
 prompt files, briefs, or pending prompts. The agent's whole prompt is one line
 pointing at the issue (`Your job is beads issue <id>: <title>. Run bd show <id> …`,
-or the id alone when bd has no title). Shep owns the workflow
+without the `: <title>` when bd has no title). Shep owns the workflow
 (planning, review, which stage); bercail has no default stage.
 
 Each real handoff adds a `bd comment` to the issue with what the agent needs

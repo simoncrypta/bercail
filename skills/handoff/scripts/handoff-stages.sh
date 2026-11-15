@@ -104,7 +104,7 @@ handoff_policy_line() {
 
 # The whole agent prompt: one line pointing at the beads issue. TITLE, when
 # set, is named after the id; its own "." or a truncation's "…" ends the
-# clause. A bare id stays the old sentence.
+# clause.
 # Shep owns the workflow; bercail adds no per-stage mode.
 handoff_issue_prompt() {
   local id="$1" title="${2:-}" stop="."
