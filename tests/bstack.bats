@@ -197,6 +197,7 @@ EOF
 }
 
 @test "handoff stages bstack and autopilot run Pi on the lead and resume by its uuid" {
+  need node
   reset_home
   write_config <<'EOF'
 [bstack]

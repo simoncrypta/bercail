@@ -241,6 +241,7 @@ EOF
 }
 
 @test "question commands use Shep's scratch state and never infer an answer" {
+  need node
   run shep questions --json
   [[ "$status" == 0 ]] || fail "question snapshot failed: $output"
   jq -e '.version == 1 and .questions == [] and .selected == null' <<<"$output" >/dev/null

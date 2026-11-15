@@ -105,6 +105,7 @@ assert_preflight_evidence_preserved() {
 }
 
 @test "headless safety leaves a prewritten ready review incomplete and preserves candidate evidence" {
+  need node
   local wt="$BATS_TEST_TMPDIR/review" rc=0 result
   mkdir -p "$wt/.bercail"
   printf '// guard\n' >"$HANDOFF_PI_PROFILE/extensions/guard.ts"
@@ -132,6 +133,7 @@ STUB
 }
 
 @test "resumed safety with no new result keeps earlier candidate evidence as a non-authoritative snapshot" {
+  need node
   local wt="$BATS_TEST_TMPDIR/resume" rc=0 result prior sid=11111111-2222-4333-8444-555555555555
   mkdir -p "$wt/.bercail"
   printf '// guard\n' >"$HANDOFF_PI_PROFILE/extensions/guard.ts"

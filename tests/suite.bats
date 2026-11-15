@@ -41,6 +41,31 @@ FIXTURE
   grep -q 'no-such-tool-here not found; CI must provide it' <<<"$out" || fail "the failure does not name the tool: $out"
 }
 
+# A dev box has node in /usr/bin and the runner does not: a test that leans on
+# that passes here and fails in CI unless it fails here too.
+@test "a test runs Node only once it says need node, even with /usr/bin on PATH" {
+  local dir="$BATS_TEST_TMPDIR/nested" out
+  mkdir -p "$dir"
+  cat >"$dir/node.bats" <<FIXTURE
+setup() {
+  load "$ROOT/tests/test_helper"
+  isolate
+  export PATH="\$BATS_TEST_TMPDIR/bin:/usr/bin:/bin"
+}
+@test "undeclared" {
+  node -e 0
+}
+@test "declared" {
+  need node
+  node -e 0
+}
+FIXTURE
+  out="$("$ROOT/node_modules/.bin/bats" "$dir/node.bats" 2>&1)" && fail "a test ran Node without need node: $out"
+  grep -qx 'not ok 1 undeclared' <<<"$out" || fail "the undeclared test did not fail: $out"
+  grep -q 'add need node to it' <<<"$out" || fail "the failure does not name the fix: $out"
+  grep -qx 'ok 2 declared' <<<"$out" || fail "need node did not give the test Node: $out"
+}
+
 # bats loses the watchdog's pid before a failed test's exit trap reads it;
 # isolate keeps it. Without that, under set -u (lib/common.sh) the failure
 # prints nothing, and a serial run waits out the whole BATS_TEST_TIMEOUT.

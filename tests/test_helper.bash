@@ -6,6 +6,8 @@ ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
 export ROOT
 
 isolate() {
+  # need node looks for the real node with these: a mise shim reads HOME.
+  TEST_REAL_HOME="$HOME" TEST_REAL_PATH="$PATH"
   export HOME="$BATS_TEST_TMPDIR/home"
   export XDG_STATE_HOME="$HOME/.local/state" XDG_CONFIG_HOME="$HOME/.config"
   export XDG_DATA_HOME="$HOME/.local/share" XDG_CACHE_HOME="$HOME/.cache"
@@ -17,6 +19,13 @@ isolate() {
   # a failed test's exit trap reads it: the watchdog outlives the test, and under
   # set -u (lib/common.sh) the trap dies before it prints the failure.
   [[ -z "${BATS_killer_pid:-}" ]] || declare -g BATS_killer_pid="$BATS_killer_pid"
+  # A dev box has node in /usr/bin and the runner does not, so a test that puts
+  # its stand-ins before /usr/bin:/bin finds Node here and fails in CI. This
+  # stand-in fails it here too, until the test says need node.
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/sh\necho "node: this test did not ask for Node; add need node to it (tests/test_helper.bash)" >&2\nexit 127\n' \
+    >"$BATS_TEST_TMPDIR/bin/node"
+  chmod +x "$BATS_TEST_TMPDIR/bin/node"
 }
 
 fail() {
@@ -41,8 +50,22 @@ git_init() {
 need() {
   local tool
   for tool in "$@"; do
-    command -v "$tool" >/dev/null 2>&1 || unavailable "$tool not found"
+    if [[ "$tool" == node ]]; then
+      need_node || return
+    else
+      command -v "$tool" >/dev/null 2>&1 || unavailable "$tool not found"
+    fi
   done
+}
+
+# Swap isolate's node stand-in for one that runs the real node. A wrapper, not
+# a symlink: a test that later writes its own bin/node must not write through.
+need_node() {
+  local node
+  node="$(HOME="$TEST_REAL_HOME" PATH="$TEST_REAL_PATH" mise which node 2>/dev/null ||
+    PATH="$TEST_REAL_PATH" command -v node || true)"
+  [[ -n "$node" ]] || unavailable "node not found" || return
+  printf '#!/bin/sh\nexec %q "$@"\n' "$node" >"$BATS_TEST_TMPDIR/bin/node"
 }
 
 # The same rule for a need that is not one command on PATH.
