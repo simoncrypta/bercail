@@ -12,6 +12,8 @@
 //   after a space's name, a count in the header that opens the Review list (this mod
 //   with props.role "reviews", as a dialog), and review-next (Ctrl+Shift+J). With a
 //   backend in config.toml ([herdr] backend), the queue is read there and names its spaces.
+// - adoptedNames: a space bercail made with no window on its machine gets the name
+//   on its Shell's bercail.space_name label, and its first tab is called Shell.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -84,6 +86,7 @@ export function backendOf(text) {
 // Ids across machines: a terminal on box is box/t3 here, and the labels written there
 // name ids as box does (sp1 there is box/sp1 here).
 export const qualify = (raw, machine) => (machine && raw ? `${machine}/${raw}` : raw);
+export const machineOf = (address) => (address?.includes("/") ? address.slice(0, address.indexOf("/")) : null);
 
 // --- review marks ---------------------------------------------------------------
 // bercail's queue is the source: this reads `bercail shep queue --json` (about eight
@@ -178,6 +181,20 @@ export function reviewStatus(r, now) {
   return { text, bad: old || Boolean(r.error) };
 }
 
+// Spaces bercail made with no window on their machine (config/worktrunk/herdr-layout.sh):
+// a kept Shell labelled herdr.space=<id there> and bercail.space_name=<name>, which Herdr
+// adopts and calls after its folder. The ones nobody has named yet, with that name.
+export function adoptedNames(sp, ts) {
+  const out = [];
+  for (const s of sp) {
+    if (s.named) continue;
+    const shell = ts.find((t) => t.state === "live" && t.labels?.["bercail.space_name"]
+      && qualify(t.labels["herdr.space"], machineOf(t.address)) === s.id);
+    if (shell) out.push({ space: s, name: shell.labels["bercail.space_name"] });
+  }
+  return out;
+}
+
 export default class Spaces extends View {
   init(_props, cx) {
     this.role = props()?.role ?? "list";
@@ -205,6 +222,7 @@ export default class Spaces extends View {
     // Refresh only when the refs could have changed (see `due`).
     cx.timer.every(250, (cx) => this.checkNew(cx));
     this.desks = null; // the desks' statuses at the last look: a change reads the queue again
+    this.naming = {}; // space -> when it was last renamed from its label, so a slow echo is not renamed again
     this.reviewAt = 0; // when the queue was last read
     this.config = readTextFile(home() + "/.config/bercail/config.toml")
       .catch(() => null)
@@ -264,6 +282,13 @@ export default class Spaces extends View {
   checkNew(cx) {
     const now = Date.now();
     const sp = spaces();
+    for (const { space, name } of adoptedNames(sp, terminals())) {
+      if (now - (this.naming[space.id] ?? 0) < 5000) continue;
+      this.naming[space.id] = now;
+      run("space.rename", { id: space.id, name });
+      const first = space.tabs[0];
+      if (first && !first.named) run("tab.rename", { id: first.id, name: "Shell" });
+    }
     for (const s of sp) if (!this.shown.has(s.id)) this.born[s.id] ??= now;
     const due = this.due(now, sp, panes());
     if (due.size) this.refreshGit(due, cx);

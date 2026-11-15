@@ -252,13 +252,114 @@ open_space() {
   [[ "$(cat "$FAKE_STATE/shown")" == sp-parent ]] || fail "close must keep the user's space shown"
 }
 
-@test "a closed app skips the space on post-start and fails a handoff" {
+@test "with neither a window nor hc, post-start skips the space and a handoff fails" {
   touch "$FAKE_STATE/down"
+  printf '#!/bin/sh\nexit 1\n' >"$FAKE_BIN/hc"
   wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" 2>/dev/null \
-    || fail "post-start must not fail wt when the app is closed"
+    || fail "post-start must not fail wt when nothing answers"
   if WT_HERDR_AGENT_PROMPT=x wt_herdr_handoff_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" 2>/dev/null; then
-    fail "handoff must fail when the app is closed"
+    fail "handoff must fail when nothing answers"
   fi
+  if grep -q '^herdr-app do\|^hc run' "$CALL_LOG"; then
+    fail "nothing answers, nothing is made; log=$(cat "$CALL_LOG")"
+  fi
+}
+
+# No window on this machine: the app answers nothing, and hc is a stand-in core
+# whose terminals are in $HC_STATE (tests/fixtures/hc-core).
+headless() {
+  touch "$FAKE_STATE/down"
+  cp "$ROOT/tests/fixtures/hc-core" "$FAKE_BIN/hc"
+  export HC_STATE="$FAKE_STATE/hc.json" HC_LOG="$CALL_LOG"
+}
+
+# The live terminals of the stand-in core carrying label $1 (=$2 when given).
+live_with() {
+  jq -c --arg k "$1" --arg v "${2:-}" \
+    '[.[] | select(.state == "live" and .labels[$k] != null and ($v == "" or .labels[$k] == $v))]' "$HC_STATE"
+}
+
+@test "with no window, post-start makes the space a kept labelled Shell and starts the desk under it" {
+  local shells shell space desks
+  headless
+  wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" \
+    || fail "headless post-start failed; log=$(cat "$CALL_LOG")"
+  shells="$(live_with herdr.space)"
+  [[ "$(jq length <<<"$shells")" -eq 1 ]] || fail "one Shell for the space: $(cat "$HC_STATE")"
+  shell="$(jq -r '.[0].address' <<<"$shells")"
+  space="$(jq -r '.[0].labels["herdr.space"]' <<<"$shells")"
+  [[ "$space" =~ ^sp[0-9a-f]{32}$ ]] || fail "the space id looks like the app's: $space"
+  jq -e --arg f "$FEATURE" '.[0] | .cwd == $f and .parent == null
+    and (.labels["herdr.tab"] | test("^tb[0-9a-f]{32}$")) and .labels["bercail.space_name"] == "Main_Feature"' \
+    <<<"$shells" >/dev/null || fail "the Shell: in the checkout, no parent, a tab, the space's name: $shells"
+  grep -q "^run --bg --keep --no-parent --no-notify --cwd $FEATURE --label herdr.space=$space " "$CALL_LOG" \
+    || fail "the Shell is kept and outlives the caller; log=$(cat "$CALL_LOG")"
+  desks="$(live_with bercail.role agent)"
+  jq -e --arg p "$shell" --arg s "$space" --arg f "$FEATURE" \
+    'length == 1 and .[0].parent == $p and .[0].labels["bercail.space"] == $s and .[0].cwd == $f' <<<"$desks" >/dev/null \
+    || fail "one desk, a sub-agent of the Shell, labelled with the raw space id: $desks"
+  if grep -q '^herdr-app do' "$CALL_LOG"; then
+    fail "no window, no app commands, no focus change; log=$(cat "$CALL_LOG")"
+  fi
+}
+
+@test "with no window, post-start again on the checkout reuses its space and desk, and a handoff replaces only the desk" {
+  local space desk
+  headless
+  wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" || fail "first post-start"
+  space="$(live_with herdr.space | jq -r '.[0].labels["herdr.space"]')"
+  desk="$(live_with bercail.role agent | jq -r '.[0].address')"
+  wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" || fail "second post-start"
+  [[ "$(live_with herdr.space | jq length)" -eq 1 && "$(live_with bercail.role agent | jq -r '.[].address')" == "$desk" ]] \
+    || fail "the second post-start must reuse both: $(cat "$HC_STATE")"
+  WT_HERDR_AGENT_PROMPT=bercail-0s1 wt_herdr_handoff_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" \
+    || fail "headless handoff failed; log=$(cat "$CALL_LOG")"
+  [[ "$(live_with herdr.space | jq length)" -eq 1 ]] || fail "a handoff keeps the space: $(cat "$HC_STATE")"
+  live_with bercail.role agent | jq -e --arg d "$desk" --arg s "$space" \
+    'length == 1 and .[0].address != $d and .[0].labels["bercail.space"] == $s' >/dev/null \
+    || fail "the handoff's desk replaces the old one in the same space: $(cat "$HC_STATE")"
+  grep -q -- "--prompt bercail-0s1$" "$CALL_LOG" || fail "the handoff desk gets its prompt; log=$(cat "$CALL_LOG")"
+}
+
+@test "with no window, two post-starts at once on one checkout make one space and one desk" {
+  need flock
+  headless
+  export HC_RUN_DELAY=0.5
+  local a b
+  wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" &
+  a=$!
+  wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" &
+  b=$!
+  # Not a bare wait: with BATS_TEST_TIMEOUT set, bats's watchdog is a child too.
+  wait "$a" "$b"
+  [[ "$(live_with herdr.space | jq length)" -eq 1 ]] || fail "one Shell: $(cat "$HC_STATE")"
+  [[ "$(live_with bercail.role agent | jq length)" -eq 1 ]] || fail "one desk: $(cat "$HC_STATE")"
+}
+
+@test "with no window, a terminal of any space or a desk on the main checkout keeps it from another; a helper there does not" {
+  local folder t
+  headless
+  folder="$(cd "$BATS_TEST_TMPDIR/main" && pwd -P)"
+  for t in '{"labels":{"herdr.space":"sp1","herdr.tab":"tb1"}}' '{"labels":{"bercail.role":"agent","bercail.space":"sp2"}}'; do
+    jq -n --arg f "$folder" --argjson t "$t" '[{address:"t1",cwd:$f,parent:null,state:"live"} + $t]' >"$HC_STATE"
+    : >"$CALL_LOG"
+    wt_herdr_main_space "$folder" || fail "main space failed for $t"
+    if grep -q '^run ' "$CALL_LOG"; then
+      fail "a space already sits on the main checkout ($t); log=$(cat "$CALL_LOG")"
+    fi
+  done
+  jq -n --arg f "$folder" '[{address:"t1",cwd:$f,parent:"t0",labels:{"bercail.role":"bstack-builder"},state:"live"}]' >"$HC_STATE"
+  wt_herdr_main_space "$folder" || fail "main space failed"
+  live_with herdr.space | jq -e 'length == 1 and .[0].labels["bercail.space_name"] == "_Main"' >/dev/null \
+    || fail "a helper in the folder does not stop the main checkout's Shell space: $(cat "$HC_STATE")"
+}
+
+@test "with no window, a window's Shell someone cd'd into the checkout does not get its desk" {
+  headless
+  jq -n --arg f "$FEATURE" '[{address:"t1",cwd:$f,parent:null,state:"live",labels:{"herdr.space":"sp-main","herdr.tab":"tb1"}}]' >"$HC_STATE"
+  wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" || fail "post-start failed; log=$(cat "$CALL_LOG")"
+  live_with bercail.role agent | jq -e 'length == 1 and .[0].labels["bercail.space"] != "sp-main" and .[0].parent != "t1"' >/dev/null \
+    || fail "the desk goes to a space of its own, not the cd'd Shell's: $(cat "$HC_STATE")"
 }
 
 # A main checkout on branch trunk, which bercail labels Trunk_Repo.
@@ -297,12 +398,11 @@ main_repo() {
   done
 }
 
-@test "a closed app gets no main checkout space and no error" {
+@test "with no window, a main checkout with no space gets a plain Shell space through hc" {
   main_repo
-  touch "$FAKE_STATE/down"
-  : >"$CALL_LOG"
-  wt_herdr_main_space "$REPO" || fail "a closed app must not fail the spawn"
-  if grep -q 'space.new' "$CALL_LOG"; then
-    fail "a closed app gets no space; log=$(cat "$CALL_LOG")"
-  fi
+  headless
+  wt_herdr_main_space "$REPO" || fail "headless main space failed; log=$(cat "$CALL_LOG")"
+  live_with herdr.space | jq -e --arg r "$REPO" 'length == 1 and .[0].cwd == $r and .[0].labels["bercail.space_name"] == "Trunk_Repo"' >/dev/null \
+    || fail "one Shell space on the main checkout, named Trunk_Repo: $(cat "$HC_STATE")"
+  [[ "$(live_with bercail.role agent | jq length)" -eq 0 ]] || fail "the main checkout's space has no desk: $(cat "$HC_STATE")"
 }

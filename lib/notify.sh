@@ -148,12 +148,19 @@ notify_classify() {
   esac
 }
 
-# The desk's space: its id, and its name and folder when the Herdr app answers.
+# The desk's space: its id, its name, and its folder. The name is the Herdr
+# app's, else (no window here) the one bercail gave a space it made through hc.
 notify_space_info() {
-  local id="$1" path="$2" name="" repo="" main linked=false
+  local id="$1" path="$2" name="" repo="" main linked=false shell
   if [[ -n "$id" ]]; then
     name="$("${HERDR_APP_BIN:-herdr-app}" ls 2>/dev/null </dev/null \
       | jq -r --arg id "$id" '.spaces[]? | select(.id == $id) | .name' 2>/dev/null | head -n 1)"
+  fi
+  if [[ -n "$id" && -z "$name" ]]; then
+    shell="$("$(notify_hc)" ls --json --label "herdr.space=$id" 2>/dev/null </dev/null \
+      | jq -r '.terminals[0].address // empty' 2>/dev/null)"
+    [[ -z "$shell" ]] || name="$("$(notify_hc)" get "$shell" --json 2>/dev/null </dev/null \
+      | jq -r '.labels["bercail.space_name"] // empty' 2>/dev/null)"
   fi
   if [[ -n "$path" && -d "$path" ]]; then
     main="$(git -C "$path" worktree list --porcelain 2>/dev/null | awk '/^worktree / { print substr($0, 10); exit }')"

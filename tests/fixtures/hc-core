@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# A stand-in for hc with a core behind it: terminals live in $HC_STATE (a JSON
+# array of {address, cwd, parent, labels, state}), and each call is logged to
+# $HC_LOG. ls takes --label K=V filters, as hc's does. HC_RUN_DELAY: seconds a
+# run takes before its terminal exists, so two callers can race.
+set -euo pipefail
+printf '%s\n' "$*" >>"$HC_LOG"
+state="$HC_STATE"
+[[ -f "$state" ]] || printf '[]' >"$state"
+cmd="$1"
+shift
+case "$cmd" in
+  ls)
+    filter='[]'
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --label) filter="$(jq -c --arg kv "$2" '. + [$kv]' <<<"$filter")"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    jq -c --argjson f "$filter" '{terminals: [.[] | select(.state == "live")
+      | select(. as $t | all($f[]; ($t.labels // {})[split("=")[0]] == (split("=")[1:] | join("="))))
+      | {address, cwd, state}]}' "$state"
+    ;;
+  get) jq -ce --arg a "$1" '.[] | select(.address == $a)' "$state" ;;
+  run)
+    labels='{}' cwd="$PWD" parent="${HC_TERMINAL_ID:-}"
+    while [[ $# -gt 0 ]]; do
+      case "$1" in
+        --label) labels="$(jq -c --arg kv "$2" '. + {($kv | split("=")[0]): ($kv | split("=")[1:] | join("="))}' <<<"$labels")"; shift 2 ;;
+        --cwd) cwd="$2"; shift 2 ;;
+        --parent) parent="$2"; shift 2 ;;
+        --no-parent) parent=""; shift ;;
+        --name | --on | --timeout) shift 2 ;;
+        --*) shift ;;
+        *) break ;;
+      esac
+    done
+    sleep "${HC_RUN_DELAY:-0}"
+    (
+      flock 8
+      address="t$((100 + $(jq length "$state")))"
+      jq --arg a "$address" --arg c "$cwd" --arg p "$parent" --argjson l "$labels" \
+        '. + [{address: $a, cwd: $c, parent: (if $p == "" then null else $p end), labels: $l, state: "live"}]' \
+        "$state" >"$state.tmp"
+      mv "$state.tmp" "$state"
+      printf '{"address":"%s"}\n' "$address"
+    ) 8>"$state.lock"
+    ;;
+  kill | rm)
+    (
+      flock 8
+      jq --arg a "$1" 'map(if .address == $a then .state = "exited" else . end)' "$state" >"$state.tmp"
+      mv "$state.tmp" "$state"
+    ) 8>"$state.lock"
+    printf '{}\n'
+    ;;
+  *) printf '{}\n' ;;
+esac

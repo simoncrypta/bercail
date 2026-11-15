@@ -99,7 +99,7 @@ EOF
     repos: []}' >"$BATS_TEST_TMPDIR/queue.json"
   cat >"$BATS_TEST_TMPDIR/prelude.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
-import Spaces, { reviewRows, nextReview, marks, reviewStatus, ago, STALE } from "./main.mjs";
+import Spaces, { reviewRows, nextReview, marks, reviewStatus, ago, STALE, adoptedNames } from "./main.mjs";
 import { E, text, all } from "./gpui.mjs";
 
 const shipped = JSON.parse(readFileSync(new URL("./layout.json", import.meta.url)));
@@ -298,6 +298,29 @@ const head = all(v.render()).find((e) => typeof e.kids[0] === "string" && e.kids
 expect([head.kids[0], head.color], ["as of 12:00, stale (17m old); last read failed: bd: database locked", "blocked"], "stale and failed");
 herdr.shared["bercail.review"] = { q: null, error: "bercail shep queue exited 1" };
 if (!text(v.render()).includes("queue unread: bercail shep queue exited 1")) fail("an unread queue is not shown");
+EOF
+}
+
+@test "a space bercail made with no window is named from its Shell's label, once, on its own machine, without moving the view" {
+  mod_case <<'EOF'
+const SHELL = (address, space, name) => ({ address, state: "live", labels: { "herdr.space": space, "bercail.space_name": name } });
+herdr.spaces = [S("s0", "home"), S("sp-l", "app.feat"), { ...S("box/sp7", "api.fix"), machine: "box" },
+  { ...S("box/sp8", "Mine"), machine: "box", named: true }, { ...S("box/sp9", "api"), machine: "box" }];
+// box/t2 is a window's terminal in box/sp7: herdr.space, no name. It comes first.
+herdr.terminals = [{ address: "box/t2", state: "live", labels: { "herdr.space": "sp7" } },
+  SHELL("t5", "sp-l", "Feat_App"), SHELL("box/t3", "sp7", "Fix_Api"), SHELL("box/t4", "sp8", "Other_Api"),
+  SHELL("t6", "sp9", "Wrong_Machine"), { ...SHELL("box/t9", "sp9", "Gone_Api"), state: "exited" }];
+expect(adoptedNames(herdr.spaces, herdr.terminals).map(({ space, name }) => [space.id, name]),
+  [["sp-l", "Feat_App"], ["box/sp7", "Fix_Api"]], "unnamed spaces whose live Shell on their machine carries a name");
+const v = new Spaces();
+v.init({}, cx());
+const tick250 = timers.find((t) => t.ms === 250).f;
+tick250(cx());
+expect(viewCalls(), [["space.rename", { id: "sp-l", name: "Feat_App" }], ["tab.rename", { id: "tab-sp-l", name: "Shell" }],
+  ["space.rename", { id: "box/sp7", name: "Fix_Api" }], ["tab.rename", { id: "tab-box/sp7", name: "Shell" }]],
+  "renames only, no select: the view and the keyboard stay");
+tick250(cx());
+expect(viewCalls().length, 4, "a rename the app has not echoed yet is not sent again at once");
 EOF
 }
 

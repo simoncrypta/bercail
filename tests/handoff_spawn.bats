@@ -1280,6 +1280,56 @@ _desk_spawn() {
   [[ "$(cat "$DESK_SHOWN")" == sp-keep ]] || fail "the shown space changed to $(cat "$DESK_SHOWN")"
 }
 
+# _desk_fixture with no window on this machine: the app answers nothing (each
+# call still logged), and hc is a stand-in core (tests/fixtures/hc-core).
+_desk_headless() {
+  _desk_fixture "$1"
+  printf '#!/bin/sh\nprintf "herdr-app %%s\\n" "$*" >>"$DESK_HERDR_LOG"\nexit 1\n' >"$DESK_BIN/herdr-app"
+  cp "$ROOT/tests/fixtures/hc-core" "$DESK_BIN/hc"
+  export HC_STATE="$BATS_TEST_TMPDIR/$1-hc.json" HC_LOG="$DESK_HC_LOG"
+}
+
+@test "with no window, a --branch spawn makes the main checkout's space, then the desk's, through hc" {
+  local out main shells desk
+  _desk_headless headless
+  git -C "$DESK_REPO" branch -M trunk
+  main="$(cd "$DESK_REPO" && pwd -P)"
+  out="$(_desk_spawn 2>"$BATS_TEST_TMPDIR/headless.err")" \
+    || fail "headless spawn failed: $out $(cat "$BATS_TEST_TMPDIR/headless.err")"
+  shells="$(jq -c '[.[] | select(.labels["herdr.space"] != null)]' "$HC_STATE")"
+  jq -e --arg m "$main" 'length == 2
+    and .[0].cwd == $m and .[0].labels["bercail.space_name"] == "Trunk_Headless"
+    and .[1].cwd == ($m + ".feat") and .[1].labels["bercail.space_name"] == "Feat_Headless"' <<<"$shells" >/dev/null \
+    || fail "the main checkout's Shell first, then the desk's, each named: $shells"
+  desk="$(jq -c '[.[] | select(.labels["bercail.role"] == "agent")]' "$HC_STATE")"
+  jq -e --argjson sh "$shells" --arg id "$ISSUE" 'length == 1 and .[0].parent == $sh[1].address
+    and .[0].labels["bercail.space"] == $sh[1].labels["herdr.space"] and .[0].labels["bercail.issue"] == $id' <<<"$desk" >/dev/null \
+    || fail "one desk, under the worktree's Shell, labelled with its space and issue: $desk"
+  jq -e --argjson sh "$shells" --argjson d "$desk" \
+    '.agent_started and .space == $sh[1].labels["herdr.space"] and .desk == $d[0].address' <<<"$out" >/dev/null \
+    || fail "the spawn JSON names the space and desk: $out"
+  if grep -q '^herdr-app do' "$DESK_HERDR_LOG"; then
+    fail "no window: no app commands, so no focus change; log=$(cat "$DESK_HERDR_LOG")"
+  fi
+}
+
+@test "with no window, two --branch spawns at once from one main checkout make one space on it" {
+  need flock
+  _desk_headless twice
+  export HC_RUN_DELAY=0.3
+  local a b
+  _desk_spawn >"$BATS_TEST_TMPDIR/twice-1.out" 2>&1 &
+  a=$!
+  _desk_spawn --branch other >"$BATS_TEST_TMPDIR/twice-2.out" 2>&1 &
+  b=$!
+  # Not a bare wait: with BATS_TEST_TIMEOUT set, bats's watchdog is a child too.
+  wait "$a" "$b"
+  jq -e --arg m "$(cd "$DESK_REPO" && pwd -P)" '[.[] | select(.labels["herdr.space"] != null and .cwd == $m)] | length == 1' \
+    "$HC_STATE" >/dev/null || fail "one Shell space on the main checkout: $(cat "$HC_STATE")"
+  [[ "$(jq '[.[] | select(.labels["bercail.role"] == "agent")] | length' "$HC_STATE")" -eq 2 ]] \
+    || fail "a desk for each branch: $(cat "$HC_STATE") $(cat "$BATS_TEST_TMPDIR"/twice-*.out)"
+}
+
 # A Pi whose --list-models knows claude-bridge/fable and logs its argv.
 _pi_lists_models() {
   local stub="$BATS_TEST_TMPDIR/bin/pi-lists"

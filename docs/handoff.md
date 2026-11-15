@@ -47,13 +47,21 @@ Each `--branch` spawn appends one line to `${XDG_STATE_HOME:-~/.local/state}/ber
 
 For changing `handoff-spawn`; agents follow the [handoff skill](../skills/handoff/SKILL.md) and do not assemble these steps.
 
-1. A space on the main checkout, when no space sits there: one made on that folder (on any machine), or one whose first terminal is there now. It is a plain shell named as `wts` names it (`<Branch>_<Repo>`), with no desk, and the person's shown space stays. The bercail-spaces mod nests the desk's space under it. Nothing happens when the Herdr app is closed.
+1. A space on the main checkout, when no space sits there: one made on that folder (on any machine), or one whose first terminal is there now. It is a plain shell named as `wts` names it (`<Branch>_<Repo>`), with no desk, and the person's shown space stays. The bercail-spaces mod nests the desk's space under it. With no window here, see [No window on this machine](#no-window-on-this-machine).
 2. `wt switch --create <branch> --no-cd` (`--base` when given). worktrunk's post-start hook opens a Herdr app space on the sibling. `WT_HERDR_NO_DESK=1` keeps the hook from starting a desk, and `WT_HERDR_KEEP_FOCUS` brings the person's shown space back.
 3. The dirty copy, when the main checkout is dirty or `--dirty` is given, and not with `--clean`: `git -C main diff HEAD --binary | git -C sibling apply` (no `--index`), then `cp -a` of each `git ls-files --others --exclude-standard` path. The sibling's index stays empty.
 4. The branch is registered with the [git backend](#git-backend): `gt track`, or for a `--base` dependent `gh stack init`/`add` or `origin stack track --onto`.
 5. The `bd comment` on the issue: the worktree, stage and do not commit, the backend and its stack commands.
 6. The desk: `wt_herdr_handoff_agent` runs `hc run --bg --keep --outlive-parent` of `bercail-desk-agent --prompt <the one line>` under the space's first terminal, labelled `bercail.role=agent`, `bercail.space`, and the issue when known. It replaces a live desk in that space. A failed start keeps the worktree.
 7. The spawn JSON on stdout, appended to `handoffs.jsonl`.
+
+Steps 1, 2 and 6 hold a lock per checkout (`flock` on `bercail-space-<hash>.lock` in `$XDG_RUNTIME_DIR`), so two spawns or hooks at once on one checkout make one space and one desk.
+
+### No window on this machine
+
+When `herdr-app status` fails here but hc answers (a laptop's window shows this machine's spaces, or no window is open at all), `--branch` and worktrunk's hooks still make spaces, through hc alone. A space is then a kept Shell, `hc run --bg --keep --no-parent` in the checkout, labelled `herdr.space` and `herdr.tab` with new ids and `bercail.space_name=<Branch>_<Repo>`. The desk is started under it as above. Any Herdr window connected to this machine, now or later, adopts the Shell into a space without showing it. The bercail-spaces mod there names the space from `bercail.space_name` and its first tab `Shell`, until someone renames it.
+
+Without a window here, a checkout's space is found through hc: the Shell bercail made there, else a desk there. A main checkout already has a space when a terminal of any space (they all carry `herdr.space`) or a desk is in it. `wt remove` does not close a space with no window here; close it from the window. With neither a window nor hc, the hook skips the space and `--branch` exits 1 before making a worktree.
 
 ## Git backend
 

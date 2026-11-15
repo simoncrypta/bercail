@@ -26,8 +26,8 @@ That JSON is the only context you need: `herdr` (the Herdr app answers),
 captures the agents' sessions here), `default_copy`, `helper`,
 `space` (the app space the user is looking at), `beads`.
 
-- If `herdr` is false and you need `--branch`, report that the Herdr app is not open and stop.
-  Headless stages do not need it.
+- `herdr` false does not stop `--branch`: with no window here, hc makes the space and any
+  connected window (a laptop's) shows it. If hc does not answer either, the spawn says so; report that.
 - If `beads` is false, report that bd is missing and stop.
 - If `main_checkout` is false, report that and stop (do not spawn from a linked worktree).
 - `main_checkout` means the primary git worktree, not “on trunk”.
@@ -174,7 +174,7 @@ terminal labelled `bercail.space=<space>` in `hc ls`).
 ## When not to use
 
 - Ordinary coding in the **current** worktree with no handoff.
-- `--branch` while the Herdr app is not open (`herdr` is false).
+- `--branch` when neither the Herdr app nor hc answers (the spawn exits 1 and says so).
 - Pure Worktrunk config/hook questions — escalate hook approvals to the user.
 
 ## Other Worktrunk control

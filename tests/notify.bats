@@ -9,7 +9,7 @@ setup() {
   isolate
   # As in the old set -euo pipefail: a pipeline that fails anywhere fails the test.
   set -o pipefail
-  export HERDR_APP_BIN="$BATS_TEST_TMPDIR/no-herdr-app"
+  export HERDR_APP_BIN="$BATS_TEST_TMPDIR/no-herdr-app" HC_BIN="$BATS_TEST_TMPDIR/no-hc"
   export NOTIFY_RETRY_SLEEP=0
   export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
   export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
@@ -441,6 +441,16 @@ EOF
   [[ "$out" == "work-shep HTTP 200 event test:"[0-9]* ]] || fail "test output: $out"
   jq -e 'select(.kind == "test") | .desk.issue_title == null and .text == "Test from bercail (sink work-shep)."' \
     "$BATS_TEST_TMPDIR/bodies.jsonl" >/dev/null || fail "test payload: $(jq -c 'select(.kind == "test")' "$BATS_TEST_TMPDIR/bodies.jsonl")"
+}
+
+@test "with no window here, a desk's space is named from the Shell bercail made for it" {
+  local got
+  export HC_STATE="$BATS_TEST_TMPDIR/hc.json" HC_LOG="$BATS_TEST_TMPDIR/hc.log"
+  printf '[{"address":"t3","cwd":"/w","parent":null,"state":"live","labels":{"herdr.space":"sp9","bercail.space_name":"Feat_Myapp"}}]' >"$HC_STATE"
+  got="$(HC_BIN="$ROOT/tests/fixtures/hc-core" notify_space_info sp9 "")"
+  jq -e '.id == "sp9" and .name == "Feat_Myapp"' <<<"$got" >/dev/null || fail "space info: $got"
+  got="$(HC_BIN="$ROOT/tests/fixtures/hc-core" notify_space_info sp-other "")"
+  jq -e '.id == "sp-other" and .name == null' <<<"$got" >/dev/null || fail "a space hc has no Shell for has no name: $got"
 }
 
 @test "payload text names the issue and the desk" {

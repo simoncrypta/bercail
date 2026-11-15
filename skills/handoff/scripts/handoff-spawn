@@ -41,7 +41,9 @@ usage: handoff-spawn --info
                   the lead stays. A :thinking suffix is kept; without one it
                   gets the lead's. An unknown model is refused before anything
                   starts. Sibling roles (builder, judge, council) keep theirs.
-  --branch NAME   feature branch for a new space with a desk agent
+  --branch NAME   feature branch for a new space with a desk agent. With no
+                  Herdr window here, hc makes the spaces and any connected
+                  window (a laptop's) shows them, without taking focus.
   --dirty         copy uncommitted main changes into the sibling as a working tree
                   (default when main is dirty)
   --clean         HEAD only; leave uncommitted files on main
@@ -292,6 +294,11 @@ handoff_herdr_app_ok() {
   "$(handoff_herdr_app_bin)" status >/dev/null 2>&1
 }
 
+# A window here, else hc's core, which makes the space for any window to adopt.
+handoff_herdr_ok() {
+  handoff_herdr_app_ok || "${HC_BIN:-hc}" ls --json >/dev/null 2>&1
+}
+
 # The space to keep shown: --space, else the one the user is looking at.
 handoff_shown_space() {
   local ws="${HANDOFF_SPACE:-}"
@@ -516,8 +523,8 @@ handoff_spawn_main() {
   handoff_issue_exists "$main" "$issue" || handoff_die "beads issue $issue not found (bd show $issue)"
   issue_title="$(handoff_issue_title "$main" "$issue")"
 
-  handoff_herdr_app_ok \
-    || handoff_die "cannot reach the Herdr app (herdr-app status failed); open it first"
+  handoff_herdr_ok \
+    || handoff_die "cannot reach the Herdr app or hc (herdr-app status and hc ls failed); open the app or run: hc server start"
   keep_space="$(handoff_shown_space || true)"
 
   handoff_is_main_checkout "$main" \
@@ -616,7 +623,7 @@ handoff_spawn_main() {
     echo "handoff-spawn: the desk agent did not start; worktree is still $sibling ($label)" >&2
   fi
 
-  space="$(_wt_herdr_space_by_folder "$sibling" 2>/dev/null || true)"
+  space="$(_wt_herdr_find_space "$sibling" 2>/dev/null || true)"
   [[ -z "$space" ]] || desk="$(_wt_herdr_space_desk "$space" 2>/dev/null || true)"
   json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$backend" "$stage" pi "$space" "$desk" "$issue_title")"
   [[ -z "$base" ]] || json="$(jq -c --arg base "$base" '. + {base:$base}' <<<"$json")"
