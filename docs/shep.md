@@ -32,6 +32,7 @@ The bercail layout opens on Shep: its terminal fills the window, with the spaces
 - **Start.** The app starts Shep once per session as one hc terminal, `bercail-shep` (label `bercail.role=shep`), outside every space. The terminal runs `bercail shep run`, which starts Shep on Pi. A Shep that is already running, after a window restart for example, is shown again rather than started twice. Quit it and it stays quit until you click **Start Shep**.
 - **Spaces.** Click a space to see it, or press `Ctrl+Space` and search for it: the navigator moves left and the space's desk, tabs and panels fill the rest. **Back to Shep** at the top of the navigator, or `Ctrl+Shift+H`, returns to the same Shep session. Nothing is started or stopped by switching, and the keyboard goes back where it was in each view.
 - **Agents.** Click an agent or a desk in the agents list to open its own terminal in a dialog over either view. While it is open, what you type goes to that agent; nothing is sent for you. ✕ or a click beside the dialog closes it and puts the keyboard back where it was; **Show in space** goes to its space.
+- **Decisions.** **Decisions N** in Shep's header shows or hides the [Decisions panel](#the-decisions-panel): what Shep asks you, a card each, read-only, with **Discuss** to take it up in Shep. A new card changes the count, nothing else.
 - **Authority.** The view only shows things. Shep's tools and approvals are Pi's with bercail's guard, the same as in any other terminal, and the desks' rules don't change. Shep loads the same guard as the desks, so a repo's trusted [git policy](config.md#git-policy-per-repo) lets Shep's commits and pushes there through as it does a desk's. Shep sits in its own folder, not a repo, so instead of a policy in its prompt it runs `bercail policy show <repo>` before it commits, merges, pushes, or releases. It commits or opens a PR with the description the desk's `/validate` wrote (`bercail describe commit|body`), never one of its own; a stale one goes back to the desk. A [high-stakes](config.md#review-by-stakes-and-size) change waits for your LGTM before Shep commits or merges it, even in a repo that integrates straight to main and even under a standing rule to merge without asking.
 
 When Pi exits with an error, its message stays on screen until you press Enter.
@@ -179,8 +180,40 @@ explicit checkout/job and desk session against existing beads, hc and
 identity is the canonical local git common-directory path, shared across its
 worktrees; another clone is a separate local identity. Review/action questions
 record desk, space, session, worktree, intended action, head, staged tree, and
-resolved base plus its ref. Changed intent or candidate supersedes the old
+resolved base plus its ref. A planning question records no head or staged tree,
+so new commits leave it fresh. Changed intent or candidate supersedes the old
 revision; prior proposals remain in history.
+
+### The Decisions panel
+
+Every decision Shep asks you is also a card in the Shep view. **Decisions N**
+in Shep's header counts the pending ones; click it to show or hide the panel
+under Shep's terminal. A new card only changes the count: nothing opens, moves
+or takes the keyboard.
+
+Each card says, in words, where (the desk's space as Herdr names it), what (a
+change's lines and stakes), what Shep asks, its choices, and when it was asked;
+the panel says when it last checked. A card whose candidate changed since Shep
+asked (new commits, a new staged tree, another base, or the desk) says
+**stale** and what changed: Shep must ask again. One it cannot check (the desk
+ended, the policy could not be read) says **unknown** and why. Question tokens
+are the ledger's keys and never show. The panel reloads when the ledger
+changes, and every 30 seconds while it shows. With a
+[`[herdr] backend`](config.md#bercail-on-another-machine), it reads the
+questions on that machine every 30 seconds, shown or not.
+
+The panel is read-only: you answer in Shep's chat. **Discuss** selects the
+question's topic (as `/thread` does) and puts the keyboard in Shep's terminal,
+so Shep's next turn has that topic's questions. The topic stays selected, and
+Shep's question state stays that topic's, until another Discuss or `/thread all`.
+
+Why no answer buttons: a click there would have to count as your decision, and
+nothing on a desktop like this one can show a click came from you. Herdr's own
+scripted paths cannot click (keys, the palette, `herdr-app do` and toasts reach
+a mod's commands, never its click handlers), but any program running as you
+can: `/dev/uinput` is often writable by the logged-in user, `wtype` types, and
+Hyprland gives every client a virtual pointer. Herdr sees those events exactly
+as yours. The ledger is also a plain file every desk can write.
 
 The CLI works without Pi or a mod too:
 
@@ -189,6 +222,7 @@ bercail shep questions              # bounded pending projection
 bercail shep questions --json       # full snapshot and retained revisions
 bercail shep question check Q42@3   # recheck candidate/mapping and current policy
 bercail shep question thread release-plan
+bercail shep question panel         # the Decisions panel's JSON: pending questions, each checked
 ```
 
 `question create`, `revise` and `reply` read JSON on stdin. For example, a

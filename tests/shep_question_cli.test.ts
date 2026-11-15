@@ -248,6 +248,16 @@ test("changed staged tree makes an old question stale without granting any actio
   expect(JSON.stringify(result)).toContain("stagedTree");
 });
 
+test("a new commit leaves a planning question fresh but makes a review question stale", () => {
+  const plan = ok("create", spec({ requestId: "plan", kind: "planning", topic: "plan", base: null, action: null }));
+  const review = ok("create", spec());
+  expect(plan.target).toMatchObject({ head: null, stagedTree: null });
+  writeFileSync(join(repo, "file"), "two\n");
+  git("commit", "-qam", "later");
+  expect(ok("check", undefined, [`${plan.id}@${plan.revision}`])).toMatchObject({ fresh: true, status: "fresh" });
+  expect(ok("check", undefined, [`${review.id}@${review.revision}`])).toMatchObject({ fresh: false, status: "stale" });
+});
+
 test("a moved base ref is stale even when head and candidate stay unchanged", () => {
   git("branch", "review-base");
   const q = ok("create", spec({ base: "review-base" }));
@@ -258,6 +268,43 @@ test("a moved base ref is stale even when head and candidate stay unchanged", ()
   ).trim();
   git("update-ref", "refs/heads/review-base", newCommit);
   expect(ok("check", undefined, [`${q.id}@${q.revision}`])).toMatchObject({ fresh: false, authority: false });
+});
+
+test("panel shows each pending question with its live state and size, and answers nothing", () => {
+  writeFileSync(
+    join(dir, "bin/bercail"),
+    `#!/bin/sh\ncase "$1 $2" in\n"policy show") /bin/cat '${dir}/policy.json' ;;\n` +
+      `"describe check") printf '{"change":{"files":2,"lines":347,"stakes":"high","review":"required"}}'; exit 1 ;;\n*) exit 2 ;;\nesac\n`,
+    { mode: 0o755 },
+  );
+  const old = ok("create", spec({ requestId: "old" }));
+  writeFileSync(join(repo, "file"), "two\n");
+  git("add", "file");
+  const current = ok("create", spec({ requestId: "current", topic: "login-2" }));
+  ok(
+    "create",
+    spec({ requestId: "plan", kind: "planning", topic: "plan", issue: null, desk: null, base: null, action: null }),
+  );
+  const before = readFileSync(join(env.BERCAIL_SHEP_STATE!, "questions.json"), "utf8");
+  const view = ok("panel");
+  expect(view).toMatchObject({ state: env.BERCAIL_SHEP_STATE, at: expect.any(String) });
+  expect(view.cards.map((c: any) => [c.token, c.kind, c.status])).toEqual([
+    ["Q1@1", "review", "stale"],
+    ["Q2@1", "review", "fresh"],
+    ["Q3@1", "planning", "fresh"],
+  ]);
+  expect(view.cards[0].reasons).toContain("stagedTree changed");
+  expect(view.cards[1]).toMatchObject({
+    prompt: "Review this candidate?",
+    options: ["yes", "no"],
+    target: { topic: "login-2", space: "sp1", worktree: repo },
+    change: { lines: 347, stakes: "high" },
+  });
+  expect(view.cards[2].change).toBeNull();
+  terminal({ state: "dead" });
+  expect(ok("panel").cards.map((c: any) => c.status)).toEqual(["unavailable", "unavailable", "fresh"]);
+  expect(readFileSync(join(env.BERCAIL_SHEP_STATE!, "questions.json"), "utf8")).toBe(before);
+  expect([old.id, current.id]).toEqual(["Q1", "Q2"]);
 });
 
 test("reports current policy without granting authority, and never calls unavailable policy checked", () => {

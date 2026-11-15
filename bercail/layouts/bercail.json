@@ -44,6 +44,21 @@
                 }
               ],
               "active": "shep-empty"
+            },
+            {
+              "id": "shep-decisions",
+              "type": "block",
+              "content": {
+                "mod": "bercail-shep",
+                "props": {
+                  "role": "decisions"
+                }
+              },
+              "size": {
+                "px": 260
+              },
+              "min": 120,
+              "hidden": true
             }
           ],
           "background": "background",

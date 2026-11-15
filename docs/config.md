@@ -93,6 +93,7 @@ With a backend, the layout's mods:
 
 - find Shep there and start it there, in that machine's home, and keep the notifier (`bercail-notify`) running there, whichever window is open;
 - read the review queue (`bercail shep queue`) there, and match its items to that machine's spaces;
+- read the [Decisions panel](shep.md#the-decisions-panel)'s questions (`bercail shep question panel`) there every 30 seconds instead of watching the ledger, and run its Discuss (`bercail shep question thread`) there;
 - run the Stack tab's `bercail review-pr` and its jobs there, and read its run dir every 5 seconds instead of watching it.
 
 With or without one, a space's desk (`Ctrl+Shift+A`, Start the agent) starts on the space's machine, under its Shell, and git and gh for a space run there too.

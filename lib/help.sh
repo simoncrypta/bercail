@@ -29,7 +29,7 @@ Post-install CLI (bercail):
                 remember "RULE" [--scope SCOPE] | list | forget N (Shep's standing rules) |
                 mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list (the mistakes ledger) |
                 questions [--json] (pending targeted questions; replies are unverified) |
-                question create|revise|reply (JSON on stdin) | check TOKEN | thread TOPIC
+                question create|revise|reply (JSON on stdin) | check TOKEN | thread TOPIC | panel (the Decisions panel's JSON)
   policy        A repo's git policy (.bercail/policy.toml): show [--json] [repo] |
                 trust [repo] (its looser values count until the file changes) | untrust [repo]
   describe      A change's description (.bercail/description.md, written by /validate):

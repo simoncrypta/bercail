@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
@@ -15,6 +16,7 @@ async function main() {
     return;
   }
   if (op === "json") result = store.snapshot();
+  else if (op === "panel") result = await panel(store, state);
   else if (op === "thread") {
     if (args.length !== 1) throw new Error("thread requires a topic (or - to clear)");
     store.select(args[0] === "-" ? null : args[0]!);
@@ -54,8 +56,46 @@ async function main() {
           : store.revise(requestId, token, intent, resolveSpec);
     }
   } else
-    throw new Error("usage: question-cli.ts list | json | create | revise | reply | thread TOPIC | check Qn@revision");
+    throw new Error(
+      "usage: question-cli.ts list | json | panel | create | revise | reply | thread TOPIC | check Qn@revision",
+    );
   console.log(JSON.stringify(result));
+}
+
+// What the Decisions panel shows: each pending question with its live check, and
+// the staged change's size and stakes for a review or action. Read-only: no answers.
+async function panel(store: QuestionStore, state: string) {
+  const bin = process.env.BERCAIL_SHEP_BIN || "bercail";
+  const cards = [];
+  for (const q of store.snapshot().questions.filter((x) => x.status === "pending")) {
+    const check = await checkQuestion(q);
+    let change = null;
+    if (q.kind !== "planning" && q.target.worktree) {
+      // describe check exits 1 while the change has no description; its JSON still holds the size.
+      const r = spawnSync(bin, ["describe", "check", "--json", q.target.worktree], {
+        cwd: q.target.worktree,
+        encoding: "utf8",
+        timeout: 10000,
+      });
+      try {
+        const c = JSON.parse(r.stdout).change;
+        change = { lines: c.lines, stakes: c.stakes };
+      } catch {}
+    }
+    const { repo, topic, worktree, space } = q.target;
+    cards.push({
+      token: tokenOf(q),
+      kind: q.kind,
+      prompt: q.prompt,
+      options: q.options,
+      createdAt: q.createdAt,
+      target: { repo, topic, worktree, space },
+      status: check.status,
+      reasons: check.reasons,
+      change,
+    });
+  }
+  return { state, at: new Date().toISOString(), cards };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

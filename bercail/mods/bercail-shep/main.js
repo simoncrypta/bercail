@@ -22,6 +22,8 @@
 //   launch view, Shep's block in `shep-stack`, where the keyboard is, key commands.
 // - "header": the bar above Shep's terminal.
 // - "empty": the placeholder in `shep-stack` while Shep isn't running.
+// - "decisions": the Decisions panel under Shep's terminal (`shep-decisions`, hidden
+//   until the header's Decisions toggle shows it): Shep's pending questions in words.
 // - "modal": the bar of an agent's terminal opened over either view (bercail-agents
 //   opens it); props.terminal is the agent, props.back where the keyboard was.
 import { View, div, image, svg } from "gpui-kit";
@@ -42,6 +44,7 @@ import {
   spaces,
   terminals,
   theme,
+  watchFolder,
 } from "herdr";
 
 const NAME = "bercail-shep";
@@ -72,6 +75,12 @@ export function backendOf(text) {
 // name ids as box does (sp1 there is box/sp1 here).
 export const machineOf = (address) => (address?.includes("/") ? address.slice(0, address.indexOf("/")) : null);
 export const qualify = (raw, machine) => (machine && raw ? `${machine}/${raw}` : raw);
+// The Decisions panel reads Shep's question ledger through bercail and never answers:
+// a desk can synthesize a click this app cannot tell from the person's (docs/shep.md,
+// "The Decisions panel"). Discuss selects the question's topic for Shep's next turn.
+const PANEL = `${BERCAIL_PATH}; exec bercail shep question panel`;
+const THREAD = `${BERCAIL_PATH}; exec bercail shep question thread "$1"`;
+const PANEL_ID = "shep-decisions";
 
 export function find(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -182,6 +191,136 @@ function readBackend() {
   return S.config;
 }
 
+// Shared by every copy: the last panel JSON, its error, the load in flight (and whether
+// the ledger changed during it), and the copies waiting to redraw.
+const D = { view: null, error: null, loading: null, again: false, waiters: [], note: null };
+
+function decisionsChanged() {
+  const waiting = D.waiters;
+  D.waiters = [];
+  for (const wake of waiting) wake();
+}
+const nextDecisions = () => new Promise((wake) => D.waiters.push(wake));
+
+function decisionsShown(tree = layout()) {
+  const node = find(tree, PANEL_ID);
+  return viewOf(tree) === "shep" && Boolean(node) && !node.hidden;
+}
+
+export function loadDecisions() {
+  // A change during a load may not be in what it read: load once more after it.
+  if (D.loading) {
+    D.again = true;
+    return D.loading;
+  }
+  // Shep's ledger is where bercail runs: on the backend when there is one.
+  D.loading = readBackend()
+    .then(() => exec("bash", ["-lc", PANEL], { timeout: 60000, on: S.backend }))
+    .then((r) => {
+      if (r.code !== 0) throw new Error(r.stderr.trim() || `bercail shep question panel exited ${r.code}`);
+      D.view = JSON.parse(r.stdout);
+      D.error = null;
+    })
+    .catch((e) => {
+      D.error = String(e?.message ?? e);
+    })
+    .finally(() => {
+      D.loading = null;
+      decisionsChanged();
+      if (D.again) {
+        D.again = false;
+        loadDecisions();
+      }
+    });
+  return D.loading;
+}
+
+// Each header and Decisions copy watches on its own cx, so one closing stops no other;
+// loads in flight are shared. A new question rewrites questions.json; a staged tree or
+// a desk changes elsewhere, so the open panel also looks again every 30 seconds. A
+// ledger on the backend can't be watched from here: the count looks every 30 seconds.
+// Data never moves the view or the keyboard: only the count and the cards change.
+function watchDecisions(cx) {
+  cx.spawn(async (cx) => {
+    for (;;) {
+      await nextDecisions();
+      cx.notify();
+    }
+  });
+  cx.timer.every(30000, () => {
+    if (S.backend || decisionsShown()) loadDecisions();
+  });
+  cx.spawn(async (cx) => {
+    await (D.loading ?? loadDecisions()); // the other copy's first load will do
+    for (;;) {
+      const dir = S.backend ? null : D.view?.state; // a backend's path is not this computer's
+      let paths = null;
+      try {
+        if (dir) paths = await watchFolder(dir);
+      } catch {}
+      // Shep's session files change all the time: only the ledger reloads (and redraws).
+      if (paths?.some((p) => p === dir || p.endsWith("/questions.json"))) {
+        await loadDecisions();
+        cx.notify(); // also ends this loop once a newer mod version runs
+      } else if (!paths) await nextDecisions();
+    }
+  });
+}
+
+const REASONS = {
+  "repo changed": "the repo",
+  "head changed": "new commits",
+  "stagedTree changed": "the staged change",
+  "base changed": "the base",
+  "space changed": "the desk's space",
+  "session changed": "the desk's session",
+  "worktree changed": "the worktree",
+};
+
+function clock(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "at an unknown time";
+  const pad = (n) => String(n).padStart(2, "0");
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const today = new Date();
+  return d.toDateString() === today.toDateString()
+    ? time
+    : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
+}
+
+// A card in words: where (the space as Herdr names it), what (size and stakes), its state.
+// Question tokens are the ledger's keys, never shown.
+export function cardWords(card, all = spaces(), backend = S.backend) {
+  const t = card.target ?? {};
+  const space = all.find((x) => x.id === qualify(t.space, backend)); // the backend's sp1 is box/sp1 here
+  const folder = (t.worktree || t.repo || "")
+    .replace(/\/\.git$/, "")
+    .split("/")
+    .filter(Boolean)
+    .pop();
+  const where = space?.name || (t.space ? `${folder || "a desk"} (its space is closed)` : folder || t.topic);
+  const change = card.change;
+  const what = [
+    where,
+    change ? `${change.lines} ${change.lines === 1 ? "line" : "lines"}` : null,
+    change?.stakes === "high" ? "high-stakes" : null,
+  ].filter(Boolean);
+  const reasons = (card.reasons ?? []).map((r) =>
+    r.startsWith("target unavailable: ")
+      ? r.slice(20).replace(/^Question target: /, "")
+      : r === "policy unavailable; not checked"
+        ? "the repo's policy could not be read"
+        : (REASONS[r] ?? r),
+  );
+  const state =
+    card.status === "fresh"
+      ? { word: "open", why: null }
+      : card.status === "stale"
+        ? { word: "stale", why: `Changed since Shep asked: ${reasons.join(", ")}. Shep must ask again.` }
+        : { word: "unknown", why: `Can't check it now: ${reasons.join("; ") || "no answer from bercail"}.` };
+  return { title: what.join(", "), ...state, asked: `asked ${clock(card.createdAt)}` };
+}
+
 function checkBercail() {
   S.check ??= readBackend()
     .then(() =>
@@ -258,6 +397,7 @@ export default class BercailShep extends View {
       await checkBercail();
       cx.notify();
     });
+    if (this.role === "header" || this.role === "decisions") watchDecisions(cx);
     if (this.role !== "nav") return;
     this.added = new Set(); // Shep block ids this copy added
     this.back = {}; // space id -> { pane } or { terminal }: where the keyboard was
@@ -379,6 +519,8 @@ export default class BercailShep extends View {
         return this.header(t);
       case "empty":
         return this.empty(t);
+      case "decisions":
+        return this.decisions(t);
       case "modal":
         return this.modal(t);
     }
@@ -464,7 +606,138 @@ export default class BercailShep extends View {
           .child(shep?.title || "the orchestrator for every desk"),
       )
       .child(div().text_color(color).child(word))
+      .child(this.decisionsToggle(t))
       .child(div().text_size(11).text_color(t.dim).child(`${KEY} spaces`));
+  }
+
+  // In the header: the count of open decisions, and the person's click shows or hides
+  // the panel. A new decision changes the count only.
+  decisionsToggle(t) {
+    const n = D.view?.cards?.length ?? 0;
+    const open = decisionsShown();
+    return (
+      div()
+        .id("shep-decisions-toggle")
+        .flex_none()
+        .px(8)
+        .py(2)
+        .rounded(5)
+        .cursor_pointer()
+        .text_color(n ? t.foreground : t.dim)
+        .when(open, (el) => el.bg(t.selected))
+        .when(!open, (el) => el.hover((s) => s.bg(t.hover)))
+        .tooltip(open ? "Hide decisions" : "Show what Shep asks you")
+        // The header drags the window; a press on the toggle doesn't.
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click(() => {
+          if (!find(layout(), PANEL_ID)) return;
+          run(open ? "layout.hide" : "layout.show", { id: PANEL_ID });
+          if (!open) loadDecisions();
+        })
+        .child(n ? `Decisions ${n}` : "Decisions")
+    );
+  }
+
+  // The Decisions panel. Read-only: the person answers in Shep; Discuss takes them there.
+  decisions(t) {
+    const cards = D.view?.cards ?? [];
+    const checked = D.view?.at ? `checked ${clock(D.view.at)}` : D.loading ? "checking…" : "";
+    const list = v_flex().id("decision-list").flex_1().min_h(0).px(10).pb(10).gap(8).overflow_y_scrollbar();
+    const say = (text, color = t.dim) => div().px(12).py(6).text_color(color).child(text);
+    return v_flex()
+      .size_full()
+      .bg(t.background)
+      .border_t(1)
+      .border_color(t.border)
+      .text_size(12.5)
+      .text_color(t.muted)
+      .child(
+        h_flex()
+          .h(32)
+          .flex_none()
+          .px(12)
+          .gap(8)
+          .items_center()
+          .child(div().text_color(t.foreground).font_semibold().child("Decisions"))
+          .child(
+            div()
+              .flex_1()
+              .truncate()
+              .text_color(t.dim)
+              .child(cards.length ? `${cards.length} waiting on you` : ""),
+          )
+          .child(div().text_size(11).text_color(t.dim).child(checked)),
+      )
+      .when(Boolean(D.error), (el) => el.child(say(`Can't read Shep's questions: ${D.error}`, t.blocked)))
+      .when(Boolean(D.note), (el) => el.child(say(D.note, t.blocked)))
+      .when(!cards.length && !D.error, (el) => el.child(say(D.view ? "Nothing waits on you." : "Loading…")))
+      .child(list.children(cards.map((c) => this.card(t, c))));
+  }
+
+  card(t, c) {
+    const w = cardWords(c);
+    const color = w.word === "open" ? t.dim : w.word === "stale" ? t.blocked : t.unknown;
+    return v_flex()
+      .id(`decision-${c.token}`)
+      .flex_none()
+      .p(10)
+      .gap(6)
+      .rounded(8)
+      .border(1)
+      .border_color(t.border)
+      .bg(t.chrome)
+      .child(
+        h_flex()
+          .gap(8)
+          .child(div().flex_1().truncate().font_semibold().text_color(t.foreground).child(w.title))
+          .child(div().flex_none().text_size(11).text_color(color).child(w.word)),
+      )
+      .child(div().text_color(t.foreground).child(c.prompt))
+      .when(c.options?.length > 0, (el) =>
+        el.child(
+          div()
+            .text_color(t.dim)
+            .child(`Choices: ${c.options.join(" · ")}. Answer in Shep.`),
+        ),
+      )
+      .when(Boolean(w.why), (el) => el.child(div().text_color(color).child(w.why)))
+      .child(
+        h_flex()
+          .gap(8)
+          .items_center()
+          .child(div().flex_1().text_size(11).text_color(t.dim).child(w.asked))
+          .child(
+            div()
+              .id(`decision-discuss-${c.token}`)
+              .px(10)
+              .py(3)
+              .rounded(5)
+              .bg(t.raised)
+              .text_color(t.foreground)
+              .cursor_pointer()
+              .hover((s) => s.bg(t.hover))
+              .tooltip("Talk it over with Shep: its next turn is about this")
+              .on_click((_e, cx) => this.discuss(c, cx))
+              .child("Discuss"),
+          ),
+      );
+  }
+
+  // The person's click: select the question's topic, then put the keyboard in Shep's
+  // terminal (the panel is in the Shep view, so the view stays).
+  discuss(c, cx) {
+    cx.spawn(async (cx) => {
+      let r;
+      try {
+        r = await exec("bash", ["-lc", THREAD, "bercail-shep", c.target.topic], { on: S.backend });
+      } catch (e) {
+        r = { code: 1, stderr: String(e?.message ?? e) };
+      }
+      D.note = r.code === 0 ? null : `Shep could not open that question: ${r.stderr.trim() || `exit ${r.code}`}`;
+      const shep = shepTerminal();
+      if (shep) run("pane.focus", { terminal: shep.address });
+      cx.notify();
+    });
   }
 
   empty(t) {

@@ -127,8 +127,9 @@ export function captureTarget(input: TargetInput): QuestionTarget {
     desk: input.desk,
     space,
     session,
-    head: commit(worktree, "HEAD"),
-    stagedTree: git(worktree, "write-tree"),
+    // A planning question is about the plan, not a commit: new commits leave it fresh.
+    head: input.kind === "planning" ? null : commit(worktree, "HEAD"),
+    stagedTree: input.kind === "planning" ? null : git(worktree, "write-tree"),
     baseRef: input.base,
     base: input.base === null ? null : commit(worktree, input.base),
     action: input.action,

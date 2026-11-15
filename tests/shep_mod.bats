@@ -30,14 +30,15 @@ export const shared = () => null;
 export const setShared = () => {};
 export const openOverlay = () => "o1";
 export const closeOverlay = (id) => h().calls.push(["closeOverlay", id]);
-export const exec = async (cmd, args) => { h().execs.push([cmd, ...args]); return h().exec(cmd, args); };
+// A call's argv; .on: the machine it ran on (null: here).
+export const exec = async (cmd, args, opts) => { h().execs.push(Object.assign([cmd, ...args], { on: opts?.on ?? null })); return h().exec(cmd, args); };
 export const hc = async () => ({ code: 0, stdout: "", stderr: "" });
-export const watchFolder = () => new Promise(() => {});
+export const watchFolder = (path) => ((h().watched ??= []).push(path), new Promise(() => {}));
 export const window = () => ({ platform: "linux", active: true });
 export const home = () => "/home/me";
 // The files a test puts in h().files, by path; else absent.
 export const readTextFile = async (path) => h().files?.[path] ?? null;
-export const nextCommand = () => new Promise(() => {});
+export const nextCommand = () => (h().nextCommand ?? (() => new Promise(() => {})))();
 EOF
   cat >"$BATS_TEST_TMPDIR/gpui.mjs" <<'EOF'
 // An element records its id and click handler; every other method chains.
@@ -69,7 +70,7 @@ EOF
   cp "$ROOT/bercail/keys.json" "$BATS_TEST_TMPDIR/keys.json"
   cat >"$BATS_TEST_TMPDIR/prelude.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
-import Shep, { find, viewOf, stackPlan, focusPlan, withView } from "./bercail-shep.mjs";
+import Shep, { find, viewOf, stackPlan, focusPlan, withView, loadDecisions, cardWords } from "./bercail-shep.mjs";
 import Spaces from "./bercail-spaces.mjs";
 import { els } from "./gpui.mjs";
 
@@ -93,7 +94,7 @@ function setup(state = {}) {
     exec: okExec, ...state,
   };
 }
-const cx = { spawn: (f) => f(cx), notify: () => {}, timer: { every: () => {} } };
+const cx = { spawn: (f) => f(cx), notify: () => {}, timer: { every: (_ms, f) => (globalThis.herdr.timers ??= []).push(f) } };
 function nav() {
   const v = new Shep();
   v.init({}, cx);
@@ -104,6 +105,30 @@ let v;
 const shep = SHEP("t9");
 const f = (o) => ({ space: "s1", pane: null, terminal: null, ...o });
 const eq = (a, b, label) => { if (JSON.stringify(a) !== JSON.stringify(b)) fail(`${label}: ${JSON.stringify(a)}`); };
+// Shep's ledger as `bercail shep question panel` prints it: one card fresh, one stale, one unknown.
+const card = (token, extra = {}) => ({
+  token, kind: "review", prompt: "LGTM to land it?", options: ["LGTM", "Not yet"],
+  createdAt: "2026-11-14T20:58:00.000Z", status: "fresh", reasons: [],
+  target: { repo: "/w/bercail/.git", topic: `topic-${token}`, worktree: "/w/bercail.guard", space: "sp1" },
+  change: { lines: 347, stakes: "high" }, ...extra,
+});
+const PANEL_VIEW = { state: "/state/shep", at: "2026-11-14T21:00:00.000Z", cards: [
+  card("Q1@1"),
+  card("Q2@3", { status: "stale", reasons: ["stagedTree changed", "head changed"] }),
+  card("Q3@1", { kind: "planning", prompt: "Which job first?", options: [], change: null,
+    target: { repo: "/w/app/.git", topic: "plan", worktree: "/w/app", space: null },
+    status: "unavailable", reasons: ["policy unavailable; not checked"] }),
+] };
+// bash -lc SCRIPT bercail-shep ARGS: the panel answers with the view; anything else succeeds.
+const panelExec = (view) => (cmd, args) =>
+  cmd === "bash" && /question panel/.test(args[1]) ? { code: 0, stdout: JSON.stringify(view), stderr: "" } : okExec();
+const texts = () => els.flatMap((e) => e.text ?? []);
+const copy = (role) => {
+  globalThis.herdr.props = { role };
+  const c = new Shep();
+  c.init({}, cx);
+  return c;
+};
 // Later copies: the first nav() of the app session already launched. A case that
 // is that first copy deletes this.
 globalThis.bercailShep = { launched: true };
@@ -512,5 +537,164 @@ setup({ layout: { id: "root", children: [{ id: "sidebar", size: { px: 268 } }] }
 rowEl["on_mouse_down:left"]();
 rowEl["on_mouse_up:left"](null, cx);
 if (calls("layout.hide").length || calls("layout.show").length) fail("a layout without the views got layout commands");
+EOF
+}
+
+@test "the Decisions panel shows each open decision in words, its state and times, with no answer button" {
+  mod_case <<'EOF'
+// Cards from a fixed ledger: the space as Herdr names it, size and stakes, the ask, the
+// choices as text, stale and unknown said plainly, and when it was asked and checked.
+setup({ exec: panelExec(PANEL_VIEW), spaces: [{ id: "sp1", name: "Guard-empty-secret_Bercail", tabs: [] }] });
+const d = copy("decisions");
+await tick();
+els.length = 0;
+d.render(cx);
+const all = texts();
+for (const want of [
+  "Guard-empty-secret_Bercail, 347 lines, high-stakes", "LGTM to land it?", "Choices: LGTM · Not yet. Answer in Shep.",
+  "open", "stale", "Changed since Shep asked: the staged change, new commits. Shep must ask again.",
+  "app", "unknown", "Can't check it now: the repo's policy could not be read.", "3 waiting on you",
+]) if (!all.includes(want)) fail(`missing "${want}" in ${JSON.stringify(all)}`);
+if (!all.some((x) => /^asked (2026-11-14 )?\d\d:\d\d$/.test(x)) || !all.some((x) => /^checked (2026-11-14 )?\d\d:\d\d$/.test(x)))
+  fail(`no asked/checked times in ${JSON.stringify(all)}`);
+// Tokens are the ledger's keys, never something to read.
+if (all.some((x) => /Q\d+@\d+/.test(x))) fail(`a token is shown: ${all.filter((x) => /Q\d+@/.test(x))}`);
+// The only buttons on cards are Discuss: no click records a choice.
+const buttons = els.filter((e) => e.click).map((e) => e.id);
+eq(buttons, ["decision-discuss-Q1@1", "decision-discuss-Q2@3", "decision-discuss-Q3@1"], "card buttons");
+// A space Herdr no longer shows is said so.
+eq(cardWords(card("Q4@1"), []).title, "bercail.guard (its space is closed), 347 lines, high-stakes", "closed space");
+EOF
+}
+
+@test "a new decision changes the header's count and nothing else" {
+  mod_case <<'EOF'
+// Data never moves the view, the panel, or the keyboard: only the count changes.
+setup({ terminals: [shep], exec: panelExec({ ...PANEL_VIEW, cards: PANEL_VIEW.cards.slice(0, 1) }) });
+const h = copy("header");
+await tick();
+els.length = 0;
+h.render(cx);
+if (!texts().includes("Decisions 1")) fail(`header: ${JSON.stringify(texts())}`);
+globalThis.herdr.exec = panelExec(PANEL_VIEW);
+await loadDecisions();
+els.length = 0;
+h.render(cx);
+if (!texts().includes("Decisions 3")) fail(`header after a new decision: ${JSON.stringify(texts())}`);
+eq(globalThis.herdr.calls, [], "commands run by a data change");
+if (!find(globalThis.herdr.layout, "shep-decisions")?.hidden) fail("the panel must start hidden");
+EOF
+}
+
+@test "the header's Decisions toggle shows and hides the panel on a click" {
+  mod_case <<'EOF'
+setup({ terminals: [shep], exec: panelExec(PANEL_VIEW) });
+const h = copy("header");
+await tick();
+const toggle = () => {
+  els.length = 0;
+  h.render(cx);
+  return els.find((e) => e.id === "shep-decisions-toggle");
+};
+let stopped = false;
+toggle()["on_mouse_down:left"](null, { stop_propagation: () => (stopped = true) });
+if (!stopped) fail("a press on the toggle must not drag the window");
+toggle().click();
+if (find(globalThis.herdr.layout, "shep-decisions").hidden) fail("a click must show the panel");
+toggle().click();
+if (!find(globalThis.herdr.layout, "shep-decisions").hidden) fail("a second click must hide it");
+eq(globalThis.herdr.calls.map(([n, a]) => `${n} ${a.id}`), ["layout.show shep-decisions", "layout.hide shep-decisions"], "toggle commands");
+EOF
+}
+
+@test "Discuss selects the question's topic and puts the keyboard in Shep, answering nothing" {
+  mod_case <<'EOF'
+setup({ terminals: [shep], exec: panelExec(PANEL_VIEW) });
+const d = copy("decisions");
+await tick();
+globalThis.herdr.execs = [];
+els.length = 0;
+d.render(cx);
+els.find((e) => e.id === "decision-discuss-Q2@3").click(null, cx);
+await tick();
+eq(globalThis.herdr.execs.map((e) => e.slice(3)), [["bercail-shep", "topic-Q2@3"]], "Discuss's arguments");
+if (!/exec bercail shep question thread "\$1"$/.test(globalThis.herdr.execs[0][2])) fail(`Discuss ran ${globalThis.herdr.execs[0][2]}`);
+eq(globalThis.herdr.calls, [["pane.focus", { terminal: "t9" }]], "Discuss's commands");
+EOF
+}
+
+@test "no key or scripted command reaches the Decisions panel" {
+  mod_case <<'EOF'
+// keys.json, the palette, herdr-app do and toasts all arrive through nextCommand. The nav
+// copy takes them; none, made up or real, runs a question command or opens the panel.
+setup({ terminals: [shep], exec: panelExec(PANEL_VIEW) });
+let waits = 0;
+globalThis.herdr.nextCommand = () => (waits++, new Promise(() => {}));
+copy("decisions");
+copy("header");
+if (waits) fail("a Decisions or header copy waits for commands");
+globalThis.herdr.props = {};
+v = nav();
+if (waits !== 1) fail(`the nav copy must wait for commands (${waits})`);
+for (let i = 0; i < 5; i++) await tick(); // the copies' first loads
+globalThis.herdr.execs = [];
+globalThis.herdr.calls = [];
+const made = ["answer:Q1@1:LGTM", "decisions", "discuss:Q1@1", "reply:Q1@1 yes", "thread:topic-Q1@1", "desk:discuss"];
+for (const c of [...Object.values(keys).filter((a) => a.startsWith("bercail-shep.")).map((a) => a.slice(13)), ...made])
+  await v.command(c);
+if (globalThis.herdr.execs.some((e) => e.join(" ").includes("question"))) fail(`a command ran ${JSON.stringify(globalThis.herdr.execs)}`);
+if (globalThis.herdr.calls.some(([, a]) => a?.id === "shep-decisions")) fail("a command opened the panel");
+EOF
+}
+
+@test "a ledger change during a load is read by one more load" {
+  mod_case <<'EOF'
+// A question written while a load runs may not be in what it read: the count must not
+// stay behind until some later write.
+setup({ terminals: [shep] });
+let release;
+globalThis.herdr.exec = () => new Promise((r) => (release = () => r({ code: 0, stdout: JSON.stringify({ ...PANEL_VIEW, cards: [] }), stderr: "" })));
+const h = copy("header");
+for (let i = 0; i < 5; i++) await tick(); // its first load reaches exec
+loadDecisions(); // the watch saw questions.json change mid-load
+globalThis.herdr.exec = panelExec(PANEL_VIEW);
+release();
+for (let i = 0; i < 5; i++) await tick();
+const loads = globalThis.herdr.execs.filter((e) => /question panel/.test(e[2] ?? "")).length;
+if (loads !== 2) fail(`expected two loads, got ${loads}`);
+els.length = 0;
+h.render(cx);
+if (!texts().includes("Decisions 3")) fail(`the count stayed behind: ${JSON.stringify(texts())}`);
+EOF
+}
+
+@test "with a backend, the Decisions panel reads and discusses on it" {
+  mod_case <<'EOF'
+// [herdr] backend = "box": Shep's ledger is on box, so the panel and Discuss run there,
+// a card finds box's space as box/sp1, and box's state path is never watched here.
+setup({
+  files: { "/home/me/.config/bercail/config.toml": '[herdr]\nbackend = "box"\n' },
+  terminals: [SHEP("box/t9")], exec: panelExec(PANEL_VIEW),
+  spaces: [{ id: "sp1", name: "a local space", tabs: [] }, { id: "box/sp1", name: "Guard-empty-secret_Bercail", tabs: [] }],
+});
+const d = copy("decisions");
+for (let i = 0; i < 5; i++) await tick();
+const panels = () => globalThis.herdr.execs.filter((e) => /question panel/.test(e[2] ?? ""));
+if (!panels().length || panels().some((e) => e.on !== "box")) fail(`panel ran on ${panels().map((e) => e.on)}`);
+if ((globalThis.herdr.watched ?? []).length) fail(`watched ${globalThis.herdr.watched} here`);
+els.length = 0;
+d.render(cx);
+if (!texts().includes("Guard-empty-secret_Bercail, 347 lines, high-stakes")) fail(`no box space name: ${JSON.stringify(texts())}`);
+// Hidden, the count still follows box's ledger on the timer.
+const before = panels().length;
+for (const f of globalThis.herdr.timers) f(cx);
+for (let i = 0; i < 5; i++) await tick();
+if (panels().length !== before + 1) fail("the timer did not look at box's ledger with the panel hidden");
+globalThis.herdr.execs = [];
+els.find((e) => e.id === "decision-discuss-Q1@1").click(null, cx);
+for (let i = 0; i < 5; i++) await tick();
+const thread = globalThis.herdr.execs.find((e) => /question thread/.test(e[2] ?? ""));
+if (thread?.on !== "box") fail(`Discuss ran on ${thread?.on}`);
+eq(calls("pane.focus").at(-1)?.[1], { terminal: "box/t9" }, "Discuss focuses box's Shep");
 EOF
 }
