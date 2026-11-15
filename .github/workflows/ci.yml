@@ -24,6 +24,10 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # actions: read lets the tracker check below list deps.yml's runs.
+    permissions:
+      contents: read
+      actions: read
     env:
       SHELLCHECK_VERSION: 0.11.0
     steps:
@@ -35,6 +39,12 @@ jobs:
           tools: shellcheck@${{ env.SHELLCHECK_VERSION }}
       - name: Lint (shellcheck, vp check, mods)
         run: bash tests/lint.sh
+      # A warning, never a failure: the scheduled tracker has gone quiet.
+      - name: Dependency tracker ran in the last 3 days
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/deps-track.sh stale
 
   test:
     # The repo variable CI_TEST_RUNNER names a bigger runner's label; unset,

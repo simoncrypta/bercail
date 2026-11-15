@@ -12,7 +12,7 @@ The [README](../README.md) is the tour. These pages are the reference.
 - [bstack](bstack.md): Pi on your own Claude, ChatGPT, and X plans.
   - [the bstack guide](bstack/README.md): a walk-through, with prompts to copy.
 - [Shep](shep.md): the orchestrator on Pi, the Shep view, what Shep knows (repos, briefs, standing rules), its compaction, desk events, and agent status webhooks.
-- [development](development.md): hacking on bercail, dependencies, platforms.
+- [development](development.md): hacking on bercail, dependencies and the tracker that watches them, platforms.
 - [Herdr agents and subagents](herdr-agents-subagents.md): a proposal for Herdr, so desks get their own row in the agents list.
 
 ## Principles

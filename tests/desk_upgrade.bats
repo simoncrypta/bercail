@@ -282,6 +282,8 @@ SH
     || fail "the update did not fail on the download: $(tail -5 "$box/update.log")"
   grep -qx "BERCAIL_VERSION=\"$new_version\"" "$home/.local/share/bercail/lib/common.sh" \
     || fail "v0.14.0 did not copy the new libs"
+  cmp -s "$ROOT/lib/deps.json" "$home/.local/share/bercail/lib/deps.json" \
+    || fail "restart_update did not fetch lib/deps.json, where doctor reads the minimums"
   # No live terminals, as at boot before Herdr starts its desks.
   cat >"$TOOLS/hc" <<'SH'
 #!/bin/sh

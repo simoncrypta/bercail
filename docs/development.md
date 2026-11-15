@@ -42,12 +42,12 @@ The Pi extensions' unit tests and the Worker's are Vitest (`tests/*.test.ts`, ru
 
 `.github/workflows/ci.yml` runs on each push to master, each PR, and each `v*` tag. Two jobs run side by side, and each starts with the setup in `.github/actions/setup` (Node 26, `npm ci`, and the mise tools the job names):
 
-- `lint` runs `tests/lint.sh`: shellcheck, at the version pinned in `SHELLCHECK_VERSION`, then `vp check` and the mods' lint. It takes about 50 seconds, most of it shellcheck.
+- `lint` runs `tests/lint.sh`: shellcheck, at the version pinned in `SHELLCHECK_VERSION`, then `vp check` and the mods' lint. It takes about 50 seconds, most of it shellcheck. It then warns, without failing, when the [dependency tracker](#dependency-tracker) has not succeeded in 3 days.
 - `test` runs `tests/run.sh` with GNU parallel: the bats suite, then `vp test`. It takes 2.5 to 3.5 minutes on the free 4-vCPU runner, nearly all of it the bats run. bd comes from mise at the version pinned in `BD_VERSION`, and the checkout has full history for `tests/desk_upgrade.bats`.
 
 `deploy` runs only for a `v*` tag, after both jobs pass, and deploys the site and the Workers when `CLOUDFLARE_API_TOKEN` is set. A newer push to the same branch or PR cancels the older run, on master too, so several merges in a row test only the last one. A tag run is never cancelled.
 
-Every action is pinned by its full commit SHA, with the release tag in a comment beside it (`actions/checkout@<sha> # v7.0.1`), so a moved tag cannot change what runs. To update one, take the new tag's commit SHA and change both.
+Every action is pinned by its full commit SHA, with the release tag in a comment beside it (`actions/checkout@<sha> # v7.0.1`), so a moved tag cannot change what runs. To update one, take the new tag's commit SHA and change both; the dependency tracker's issue for it names the SHA.
 
 The caches: setup-node caches npm's download cache, keyed on `package-lock.json`. mise-action caches mise's data dir under a key that holds the job's tool specs, so changing a pin installs fresh, and it saves the cache after the job installs the tools. A hit saves 5 to 10 seconds of setup. Vite+ has no cache in CI. On the runner, `vp check` takes about a second and `vp test` under one, so its task cache, or the Oxlint and Vitest caches, would save at most a second or two on a run that waits about 2 minutes for bats.
 
@@ -75,6 +75,23 @@ Installed if missing: the [Herdr app](https://herdr.dev) with herdr-core (`herdr
 worktrunk and beads install the same way: skip if present, else mise, else Homebrew (`brew install worktrunk` / `brew install beads`), else upstream (worktrunk's GitHub release; the [beads installer](https://raw.githubusercontent.com/gastownhall/beads/main/scripts/install.sh), which puts `bd` in `/usr/local/bin` when writable, else `~/.local/bin`).
 
 The desk agent: [Pi](https://pi.dev) (mise), 1.5.1+, with `npm:pi-claude-bridge@0.12.0`; the bridge runs `claude` on your Claude plan, so a Claude plan needs `claude` installed and signed in too.
+
+### Dependency tracker
+
+`lib/deps.json` lists each tool bercail installs or pins, plus jq and fzf, the CI tools, the npm devDependencies and the actions. Each entry has:
+
+- `name`, which names the tool's issue and its label.
+- `source`, where its releases are read: `github:<owner>/<repo>` (releases/latest, which skips prereleases and drafts), `action:<owner>/<repo>` (the same, plus the tag's commit), `npm:<package>`, `herdr:app` or `herdr:core` (`releases.herdr.dev/<app|core>/latest.json`), `node:<major>` (`nodejs.org/dist/index.json`), or `none` for a pin with no feed.
+- `min` and `why`: the oldest version bercail works with, and the reason. `bercail doctor` and bstack read it from here (`dep_min` in `lib/deps.sh`), so a minimum changes in this file only. The docs and `lib/help.sh` name some minimums in prose; change those with it.
+- `known`: the version bercail was last checked against.
+- `pinned_in`: the files that pin it. An entry `path:KEY` says the version is written on each line of `path` that holds `KEY` (`.github/workflows/ci.yml:BD_VERSION`, `.github/workflows/ci.yml:actions/checkout`), and each must equal `known`. A bare path is a pointer for the issue body.
+- `notes`, for whoever takes the issue: a one-way migration, a version to wait for.
+
+`.github/workflows/deps.yml` runs `.github/scripts/deps-track.sh check` daily at 07:17 UTC, or by hand from the Actions tab. It uses the workflow's own token, with `issues: write`. For each tool, once a stable release newer than `known` is a day old, it keeps one open issue titled `deps: <tool> <version>` and labelled `deps` and `deps:<tool>`. The issue gives the change from `known`, a link to the release notes, `pinned_in`, the minimum, the notes, and a checklist (new features, workarounds, breaking changes, the minimum). An action's issue also names the commit to pin. A newer release retitles the open issue and comments on it. Setting `known` to the issue's version closes it on the next run. An issue closed by hand while `known` is behind comes back the next day: to hold a version (a one-way migration, say), leave its issue open. A release under a day old waits, because mise holds it back that long too. A Herdr release's age comes from its `latest.json`'s Last-Modified. A `none` entry is listed in the run summary, to check by hand.
+
+A lookup that fails does not stop the others. The run then opens or updates one `deps: tracker failing` issue (label `deps:tracker`), naming each source and its error, and exits 1. The next run where every lookup works closes that issue.
+
+`deps-track.sh pins` checks, offline, that each entry has every field and that every `path:KEY` pin agrees with `known`. `tests/deps_track.bats` runs it on this tree, so CI fails when, say, `BD_VERSION` moves without `known`. `check` prints the same warnings. `check --dry-run` does the lookups and prints the issue writes instead of making them; with `GH_REPO=simoncrypta/bercail` and your gh login, it shows what the next run would do. To take a new version, read its notes, make the change it needs, then set `known` (and the pin, for a `path:KEY`) in the same commit.
 
 ## platforms
 

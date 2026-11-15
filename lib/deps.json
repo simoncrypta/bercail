@@ -1,0 +1,222 @@
+[
+  {
+    "name": "pi",
+    "source": "npm:@earendil-works/pi-coding-agent",
+    "min": "1.5.1",
+    "why": "pi-claude-bridge 0.12.0 declares it in its peerDependencies.",
+    "known": "1.5.2",
+    "pinned_in": ["package.json"],
+    "notes": "mise installs it as pi. @earendil-works/pi-ai, also a devDependency for the extensions' types, moves with it. docs/bstack.md, docs/bstack/01-setup.md, docs/development.md and lib/help.sh name the minimum."
+  },
+  {
+    "name": "pi-claude-bridge",
+    "source": "npm:pi-claude-bridge",
+    "min": null,
+    "why": null,
+    "known": "0.12.0",
+    "pinned_in": ["lib/bstack.sh:BSTACK_PI_BRIDGE"],
+    "notes": "An exact pin. Its peerDependencies set pi's minimum. docs/bstack.md, docs/development.md and lib/help.sh name the version."
+  },
+  {
+    "name": "herdr-app",
+    "source": "herdr:app",
+    "min": null,
+    "why": null,
+    "known": "0.1.15",
+    "pinned_in": [],
+    "notes": "It updates itself. bercail/mods/bercail-spaces and bercail-agents are copies of its mods: they need the Herdr in their mod.json's cloned_from, or newer, and a changed mod upstream means a rebase (docs/development.md)."
+  },
+  {
+    "name": "herdr-core",
+    "source": "herdr:core",
+    "min": null,
+    "why": null,
+    "known": "0.1.21",
+    "pinned_in": [],
+    "notes": "hc: desks, siblings and notify."
+  },
+  {
+    "name": "worktrunk",
+    "source": "github:max-sixty/worktrunk",
+    "min": "0.80.0",
+    "why": "`wt list --format=json` is {schema, items: [...]} from 0.80.0 on; the shell block reads that shape.",
+    "known": "0.81.0",
+    "pinned_in": [],
+    "notes": "The install fallback downloads releases/latest (lib/deps.sh)."
+  },
+  {
+    "name": "tuicr",
+    "source": "github:agavra/tuicr",
+    "min": "0.26.0",
+    "why": "q_quits in config/tuicr/config.toml arrived in 0.26.0; older tuicr ignores the key.",
+    "known": "0.28.0",
+    "pinned_in": [],
+    "notes": "tuicr ignores config keys it does not know, so a key bercail ships that needs a newer tuicr fails silently: raise the minimum with it."
+  },
+  {
+    "name": "beads",
+    "source": "github:gastownhall/beads",
+    "min": null,
+    "why": null,
+    "known": "1.3.4",
+    "pinned_in": [".github/workflows/ci.yml:BD_VERSION"],
+    "notes": "1.4.0 migrates the store one way, and 1.3.x cannot read it after: back up the store, migrate it, and bump BD_VERSION in one job. bd's doctor ranks an rc above the final release."
+  },
+  {
+    "name": "entire",
+    "source": "github:entireio/cli",
+    "min": "0.13.4",
+    "why": "0.13.3 keeps capturing a Pi session across /reload, /new and /resume; 0.13.4 stops the pre-push hook panicking in repos with config.worktree.",
+    "known": "0.13.4",
+    "pinned_in": [],
+    "notes": "Nightlies are tagged prerelease. A settings key a newer CLI adds (redaction.drop_images in 0.13.4) makes older CLIs reject .entire/settings.json: commit one only once the minimum has it."
+  },
+  {
+    "name": "entire-brain",
+    "source": "github:entireio/entire-brain",
+    "min": "0.5.1",
+    "why": "bercail's guard rules, doctor check and desk steps are tested with 0.5.1.",
+    "known": "0.5.1",
+    "pinned_in": [],
+    "notes": "An Entire plugin (entire plugin upgrade brain)."
+  },
+  {
+    "name": "entire-graph",
+    "source": "github:entireio/entire-graph",
+    "min": "0.5.0",
+    "why": "Brain's code answers need Graph 0.5.0.",
+    "known": "0.6.0",
+    "pinned_in": [],
+    "notes": "An Entire plugin (entire plugin upgrade graph)."
+  },
+  {
+    "name": "jq",
+    "source": "github:jqlang/jq",
+    "min": null,
+    "why": null,
+    "known": "1.8.2",
+    "pinned_in": [],
+    "notes": "Its tags are jq-<version>."
+  },
+  {
+    "name": "fzf",
+    "source": "github:junegunn/fzf",
+    "min": null,
+    "why": null,
+    "known": "0.75.0",
+    "pinned_in": [],
+    "notes": "The worktree picker (config/shell/bercail.inc.sh)."
+  },
+  {
+    "name": "node",
+    "source": "node:26",
+    "min": null,
+    "why": null,
+    "known": "26.13.1",
+    "pinned_in": [".github/workflows/ci.yml", ".github/actions/setup/action.yml"],
+    "notes": "CI takes the newest 26.x (node-version: 26), and docs/development.md asks for Node 26. A new major is a separate move: @types/node follows it."
+  },
+  {
+    "name": "vite-plus",
+    "source": "npm:vite-plus",
+    "min": null,
+    "why": null,
+    "known": "1.6.0",
+    "pinned_in": ["package.json:vite-plus"],
+    "notes": "An exact pin, with the vite override in package.json at the same version."
+  },
+  {
+    "name": "bats",
+    "source": "npm:bats",
+    "min": null,
+    "why": null,
+    "known": "1.13.0",
+    "pinned_in": ["package.json:bats"],
+    "notes": "An exact pin that follows npm: GitHub has releases npm does not (1.14.0). 1.14.0's run honours set -e in the functions it runs, and an empty suite fails without --allow-empty-suite."
+  },
+  {
+    "name": "wrangler",
+    "source": "npm:wrangler",
+    "min": null,
+    "why": null,
+    "known": "4.107.0",
+    "pinned_in": ["package-lock.json"],
+    "notes": "package.json allows ^4.0.0; the lockfile holds the version. site/wrangler.jsonc's compatibility_date can move with it."
+  },
+  {
+    "name": "astro",
+    "source": "npm:astro",
+    "min": null,
+    "why": null,
+    "known": "7.4.4",
+    "pinned_in": ["package-lock.json"],
+    "notes": "package.json allows ^7.4.4; the lockfile holds the version."
+  },
+  {
+    "name": "@types/node",
+    "source": "npm:@types/node",
+    "min": null,
+    "why": null,
+    "known": "26.6.6",
+    "pinned_in": ["package-lock.json"],
+    "notes": "Follows the Node major CI runs."
+  },
+  {
+    "name": "shellcheck",
+    "source": "github:koalaman/shellcheck",
+    "min": null,
+    "why": null,
+    "known": "0.11.0",
+    "pinned_in": [".github/workflows/ci.yml:SHELLCHECK_VERSION"],
+    "notes": "A newer shellcheck warns about more: bump it on its own, with the warnings it finds fixed."
+  },
+  {
+    "name": "actions/checkout",
+    "source": "action:actions/checkout",
+    "min": null,
+    "why": null,
+    "known": "7.0.1",
+    "pinned_in": [
+      ".github/workflows/ci.yml:actions/checkout",
+      ".github/workflows/release.yml:actions/checkout",
+      ".github/workflows/deps.yml:actions/checkout"
+    ],
+    "notes": null
+  },
+  {
+    "name": "actions/setup-node",
+    "source": "action:actions/setup-node",
+    "min": null,
+    "why": null,
+    "known": "7.1.0",
+    "pinned_in": [".github/workflows/ci.yml:actions/setup-node", ".github/actions/setup/action.yml:actions/setup-node"],
+    "notes": null
+  },
+  {
+    "name": "jdx/mise-action",
+    "source": "action:jdx/mise-action",
+    "min": null,
+    "why": null,
+    "known": "5.2.8",
+    "pinned_in": [".github/actions/setup/action.yml:jdx/mise-action"],
+    "notes": null
+  },
+  {
+    "name": "jdx/packslip",
+    "source": "action:jdx/packslip",
+    "min": null,
+    "why": null,
+    "known": "1.11.4",
+    "pinned_in": [".github/workflows/release.yml:jdx/packslip"],
+    "notes": "Signs the release bundle."
+  },
+  {
+    "name": "workers-compatibility-date",
+    "source": "none",
+    "min": null,
+    "why": null,
+    "known": "2026-07-01",
+    "pinned_in": ["site/wrangler.jsonc:compatibility_date"],
+    "notes": "No feed: check https://developers.cloudflare.com/workers/configuration/compatibility-flags/ when wrangler moves."
+  }
+]

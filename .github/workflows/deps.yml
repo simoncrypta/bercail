@@ -1,0 +1,32 @@
+name: deps
+
+# The dependency tracker: once a day, each tool in lib/deps.json against its
+# newest stable release, and one issue per tool that has moved on
+# (docs/development.md#dependency-tracker). The default token is enough: it
+# reads public releases and writes this repo's issues. CI's lint job warns when
+# this has not succeeded in 3 days.
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# Two runs at once could each open the same issue.
+concurrency:
+  group: deps
+  cancel-in-progress: false
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check each tracked tool
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/deps-track.sh check

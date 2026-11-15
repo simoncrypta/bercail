@@ -1,11 +1,17 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 
-# q_quits in config/tuicr/config.toml arrived in 0.26.0; older tuicr ignores the key.
-TUICR_MIN_VERSION=0.26.0
-# `wt list --format=json` is {schema, items: [...]} from 0.80.0 on; the shell block reads that shape.
-WORKTRUNK_MIN_VERSION=0.80.0
+# The tools bercail tracks: each one's minimum and why, and the version bercail was
+# last checked against. .github/workflows/deps.yml opens an issue when one moves on.
+BERCAIL_DEPS_JSON="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/deps.json"
 TUICR_MISE_SPEC="github:agavra/tuicr"
+
+# The minimum lib/deps.json sets for tool $1; nothing when it sets none. Never
+# fails: doctor runs under set -e and should still report a missing jq.
+dep_min() {
+  jq -r --arg name "$1" '.[] | select(.name == $name) | .min // empty' "$BERCAIL_DEPS_JSON" \
+    || warn "cannot read the minimums in $BERCAIL_DEPS_JSON: it needs jq, and the file comes with bercail update"
+}
 
 dep_present() {
   command -v "$1" >/dev/null 2>&1
@@ -463,7 +469,7 @@ doctor_dependencies() {
   local missing=0 cmd
   for cmd in herdr-app hc git wt bd fzf jq; do
     if [[ "$cmd" == wt ]]; then
-      _doctor_versioned_bin wt "$WORKTRUNK_MIN_VERSION" || missing=$((missing + 1))
+      _doctor_versioned_bin wt "$(dep_min worktrunk)" || missing=$((missing + 1))
     elif dep_present "$cmd"; then
       log "  ok  $cmd ($(command -v "$cmd"))"
     else
@@ -478,7 +484,7 @@ doctor_dependencies() {
   review_bin="$(_layout_review_bin)"
   case "$review_bin" in
     tuicr|"")
-      _doctor_versioned_bin tuicr "$TUICR_MIN_VERSION" review || missing=$((missing + 1))
+      _doctor_versioned_bin tuicr "$(dep_min tuicr)" review || missing=$((missing + 1))
       ;;
     *)
       _doctor_configured_bin "$review_bin" review || missing=$((missing + 1))

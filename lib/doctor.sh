@@ -269,23 +269,25 @@ _doctor_gh_visibility() {
 # every worktree, and what runs or leaves the machine unasked (the watcher, hosted
 # sync). It only runs version and status. Silent without the plugin.
 _doctor_entire_brain() {
-  local top="$1" bin brain graph ver status url slug=""
+  local top="$1" bin brain graph ver min status url slug=""
   bin="${ENTIRE_PLUGIN_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/entire/plugins}/bin"
   brain="$bin/entire-brain" graph="$bin/entire-graph"
   [[ -x "$brain" ]] || brain="$(command -v entire-brain)" || return 0
   [[ -x "$graph" ]] || graph="$(command -v entire-graph || true)"
   ver="$("$brain" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-  if version_at_least "${ver:-0}" 0.5.1; then
+  min="$(dep_min entire-brain)"
+  if version_at_least "${ver:-0}" "$min"; then
     log "  ok  Brain $ver"
   else
-    log "  old  Brain ${ver:-(unknown version)}; bercail is tested with 0.5.1 (you run: entire plugin upgrade brain)"
+    log "  old  Brain ${ver:-(unknown version)}; bercail is tested with $min (you run: entire plugin upgrade brain)"
   fi
   ver=""
   [[ -z "$graph" ]] || ver="$("$graph" version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  min="$(dep_min entire-graph)"
   if [[ -z "$graph" ]]; then
     log "  missing  entire-graph, which Brain's code answers need (you run: entire plugin install graph)"
-  elif ! version_at_least "${ver:-0}" 0.5.0; then
-    log "  old  Graph ${ver:-(unknown version)}; Brain needs 0.5.0 (you run: entire plugin upgrade graph)"
+  elif ! version_at_least "${ver:-0}" "$min"; then
+    log "  old  Graph ${ver:-(unknown version)}; Brain needs $min (you run: entire plugin upgrade graph)"
   fi
   if git -C "$top" cat-file -e HEAD:.entire/agent-guide.md 2>/dev/null \
     && git -C "$top" show HEAD:AGENTS.md 2>/dev/null | grep -qF '<!-- entire-agent:begin -->'; then
@@ -311,7 +313,7 @@ _doctor_entire_brain() {
 # captured, and where the transcripts go. Silent outside an Entire repo. Never
 # fails doctor: whoever clones a repo that uses Entire may not use it.
 doctor_entire() {
-  local top hooks hook ver settings trust dest slug url vis
+  local top hooks hook ver min settings trust dest slug url vis
   local -a files=() gone=()
   top="$(git rev-parse --show-toplevel 2>/dev/null)" || return 0
   [[ -f "$top/.entire/settings.json" ]] || return 0
@@ -326,12 +328,11 @@ doctor_entire() {
     return 0
   fi
   ver="$(entire version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-  # 0.13.3 keeps capturing a Pi session across /reload, /new and /resume;
-  # 0.13.4 stops the pre-push hook panicking in repos with config.worktree.
-  if version_at_least "${ver:-0}" 0.13.4; then
+  min="$(dep_min entire)"
+  if version_at_least "${ver:-0}" "$min"; then
     log "  ok  entire $ver"
   else
-    log "  old  entire ${ver:-(unknown version)}; bercail needs 0.13.4: older ones stop capturing a desk after /reload, /new or /resume, and panic on pre-push with config.worktree (you run: entire update)"
+    log "  old  entire ${ver:-(unknown version)}; bercail needs $min: older ones stop capturing a desk after /reload, /new or /resume, and panic on pre-push with config.worktree (you run: entire update)"
   fi
   hooks="$(git rev-parse --path-format=absolute --git-path hooks)"
   for hook in prepare-commit-msg commit-msg post-commit post-rewrite pre-push; do

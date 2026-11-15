@@ -14,9 +14,8 @@ BSTACK_ROLES=(lead build judge)
 # and every launch names this dir with flags.
 BSTACK_PI_DIR="${BERCAIL_SHARE_DIR}/pi"
 BSTACK_PI_TEMPLATES="${XDG_CONFIG_HOME:-$HOME/.config}/herdr-core/templates"
-# The bridge declares the Pi it needs (peerDependencies); BSTACK_PI_MIN follows it.
+# The bridge declares the Pi it needs (peerDependencies); pi's min in lib/deps.json follows it.
 BSTACK_PI_BRIDGE="npm:pi-claude-bridge@0.12.0"
-BSTACK_PI_MIN=1.5.1
 # Claude Code refuses a prompt within min(max output, 20k) + 3k tokens of the
 # window, so Pi's default 16384 reserve compacts too late on the bridge. 40k
 # compacts first, with room for the tool results Pi only estimates.
@@ -185,9 +184,10 @@ bstack_pi_dead() {
 }
 
 _bstack_pi_version_ok() {
-  local v
+  local v min
   v="$(pi --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1)"
-  [[ -n "$v" && "$(printf '%s\n' "$BSTACK_PI_MIN" "$v" | sort -V | head -1)" == "$BSTACK_PI_MIN" ]]
+  min="$(dep_min pi)"
+  [[ -n "$v" && -n "$min" && "$(printf '%s\n' "$min" "$v" | sort -V | head -1)" == "$min" ]]
 }
 
 _bstack_pi_bridge_present() {
@@ -410,7 +410,7 @@ _bstack_pi_bridge_compaction() {
 # Install Pi and the Claude bridge.
 _bstack_install_pi() {
   maybe_mise_install pi pi || return 1
-  _bstack_pi_version_ok || { warn "bstack needs Pi >=$BSTACK_PI_MIN"; return 1; }
+  _bstack_pi_version_ok || { warn "bstack needs Pi >=$(dep_min pi)"; return 1; }
   _bstack_pi_bridge_present || run pi install "$BSTACK_PI_BRIDGE"
 }
 
@@ -494,7 +494,7 @@ doctor_bstack() {
   if _bstack_pi_version_ok; then
     log "  ok  pi $(pi --version 2>/dev/null)"
   else
-    log "  old  pi $(pi --version 2>/dev/null) (bstack needs >=$BSTACK_PI_MIN)"
+    log "  old  pi $(pi --version 2>/dev/null) (bstack needs >=$(dep_min pi))"
     missing=1
   fi
   if _bstack_pi_bridge_present; then
