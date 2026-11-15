@@ -324,6 +324,80 @@ expect(viewCalls().length, 4, "a rename the app has not echoed yet is not sent a
 EOF
 }
 
+@test "36 spaces on another machine nest under their checkouts within its core's 16 execs; a refused look is retried in seconds and keeps what it showed" {
+  mod_case <<'EOF'
+// box's core runs 16 execs at once and refuses the rest (exit 5), as hc 0.1.21 does.
+// Six repos there, each a checkout and five worktrees, listed worktrees first.
+const repos = ["a", "b", "c", "d", "e", "f"];
+const dirs = [...[1, 2, 3, 4, 5].flatMap((n) => repos.map((r) => `/w/${r}.w${n}`)), ...repos.map((r) => `/w/${r}`)];
+herdr.spaces = dirs.map((d) => ({ ...S(`box/${d.slice(3)}`, d.slice(3), d), machine: "box" }));
+let running = 0, most = 0, refuse = () => false;
+herdr.exec = async (cmd, args, opts) => {
+  if (cmd !== "git") return { code: 1, stdout: "", stderr: "" };
+  if (running >= 16 || refuse(opts.cwd)) return { code: 5, stdout: "", stderr: '{"error":{"kind":"unavailable","message":"16 execs are running already"}}' };
+  most = Math.max(most, ++running);
+  for (let i = 0; i < 3; i++) await tick();
+  running--;
+  const top = opts.cwd, repo = top.replace(/\.w\d$/, "");
+  const out = { "--show-toplevel": top, "--git-common-dir": `${repo}/.git` }[args.at(-1)];
+  if (out) return { code: 0, stdout: `${out}\n`, stderr: "" };
+  if (args[0] === "symbolic-ref") return { code: 0, stdout: `refs/heads/${top === repo ? "main" : top.slice(-2)}\n`, stderr: "" };
+  return { code: 128, stdout: "", stderr: "fatal: no upstream configured" };
+};
+const v = new Spaces();
+v.init({}, cx());
+const tick250 = timers.find((t) => t.ms === 250).f;
+const settle = async () => { tick250(cx()); for (let i = 0; i < 500 && (v.refreshing || i < 2); i++) await tick(); };
+const unnested = () => v.ordered().filter((r) => /\.w\d$/.test(r.w.folder) && !r.tree).map((r) => r.w.name);
+// /w/c.w3's first look is refused: another mod holds the core's slots then.
+let refused = 0;
+refuse = (cwd) => cwd === "/w/c.w3" && refused++ === 0;
+await settle();
+expect(unnested(), ["c.w3"], "one refused look leaves only its space out");
+if (most > 8) fail(`${most} execs on box at once, want at most 8 (four places, two each)`);
+Date.now = () => NOW + 2500;
+await settle();
+expect(unnested(), [], "the refused place is asked again within seconds and nests");
+expect(v.ordered().map((r) => r.w.name).slice(0, 6), ["a", "a.w1", "a.w2", "a.w3", "a.w4", "a.w5"], "a's worktrees under it");
+// A minute on, every place is looked at again and box refuses them all: what they showed stays.
+refuse = () => true;
+Date.now = () => NOW + 2500 + 61000;
+await settle();
+expect(unnested(), [], "refused looks keep each space's nesting");
+EOF
+}
+
+@test "a window still waiting on a place on another machine leaves that machine's order alone, and sorts its own" {
+  mod_case <<'EOF'
+// Here: a worktree listed before its checkout. On box the same, plus box/x, whose first look box refuses.
+herdr.spaces = [S("l.w1", "l.w1", "/l.w1"), S("l", "l", "/l"),
+  ...[["a.w1", "/b/a.w1"], ["a", "/b/a"], ["x", "/b/x"]].map(([id, d]) => ({ ...S(`box/${id}`, id, d), machine: "box" }))];
+let refused = 0;
+herdr.exec = async (cmd, args, opts) => {
+  if (cmd !== "git") return { code: 1, stdout: "", stderr: "" };
+  if (opts.cwd === "/b/x" && refused++ === 0) return { code: 5, stdout: "", stderr: "16 execs are running already" };
+  await tick();
+  const top = opts.cwd, repo = top.replace(/\.w\d$/, "");
+  const out = { "--show-toplevel": top, "--git-common-dir": `${repo}/.git` }[args.at(-1)];
+  return out ? { code: 0, stdout: `${out}\n`, stderr: "" } : { code: 128, stdout: "", stderr: "" };
+};
+const v = new Spaces();
+v.init({}, cx());
+const tick250 = timers.find((t) => t.ms === 250).f;
+const settle = async () => { tick250(cx()); for (let i = 0; i < 100 && (v.refreshing || i < 2); i++) await tick(); };
+await settle();
+const moves = () => herdr.calls.filter(([n]) => n === "space.move").map(([, a]) => a.id);
+expect(v.ordered().map((r) => [r.w.id, r.tree]), [["l", null], ["l.w1", "└─"], ["box/a", null], ["box/a.w1", "└─"], ["box/x", null]],
+  "both machines' worktrees show under their checkouts");
+expect(moves(), ["l"], "only this computer's spaces move while box/x waits for an answer");
+Date.now = () => NOW + 2500;
+await settle();
+herdr.calls = [];
+v.ordered();
+expect(moves(), ["l", "box/a"], "box/x answered: box's spaces are sorted too");
+EOF
+}
+
 @test "Ctrl+Shift+J is review-next in the bercail layout, and docs/keys.md says so" {
   jq -e '.["layout:bercail"]["ctrl-shift-j"] == "bercail-spaces.review-next"' "$ROOT/bercail/keys.json" >/dev/null \
     || fail "keys.json: $(jq -c '.["layout:bercail"]' "$ROOT/bercail/keys.json")"

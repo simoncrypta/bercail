@@ -14,6 +14,10 @@
 //   backend in config.toml ([herdr] backend), the queue is read there and names its spaces.
 // - adoptedNames: a space bercail made with no window on its machine gets the name
 //   on its Shell's bercail.space_name label, and its first tab is called Shell.
+// - another machine's git (AT_ONCE, RETRY, limited, tries; check, due, refreshGit, ordered):
+//   its core runs 16 execs at once and refuses the rest, so its places are looked at four
+//   at a time, a refused look keeps what it showed and is asked again within seconds, and
+//   its spaces are not reordered while one of its places has no answer yet.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
@@ -55,6 +59,19 @@ const base = (path) => path.replace(/\/+$/, "").split("/").pop();
 // Changes made outside Herdr (an editor's save, a commit in another app): looked
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
+// Another machine's core runs at most 16 execs at once, for every mod, and turns the
+// rest away: look at this many of its places at a time (two execs each).
+const AT_ONCE = 4;
+// A place git couldn't answer for is asked again after this, doubling up to FALLBACK.
+const RETRY = 2000;
+
+// Runs f on each item, at most n at a time.
+async function limited(items, n, f) {
+  const queue = [...items];
+  await Promise.all(Array.from({ length: Math.min(n, queue.length) }, async () => {
+    while (queue.length) await f(queue.shift());
+  }));
+}
 
 // What a stored color name looks like on an avatar (the same in every mod
 // that draws space avatars): one strong color per hue, light and dark alike.
@@ -201,7 +218,8 @@ export default class Spaces extends View {
     if (this.role === "reviews") return;
     this.git = {}; // where() -> { name, branch, ahead, behind, repo, linked }, null: not a repo
     this.checked = {}; // where() -> when it was last looked at
-    this.unsure = new Set(); // where()s git couldn't answer for (a machine away)
+    this.unsure = new Set(); // where()s git couldn't answer for (a machine away or busy)
+    this.tries = {}; // where() -> unanswered looks in a row
     this.pending = new Set(); // where()s to look at next
     this.busy = {}; // pane -> an agent working or a program in front of its shell
     this.ready = {}; // machine -> its layout was readable at the last look
@@ -332,7 +350,8 @@ export default class Spaces extends View {
     if (window().active) {
       for (const k of keys) {
         const asks = this.git[k] || this.unsure.has(k);
-        if (asks && !this.folded.has(JSON.parse(k)[0]) && now - (this.checked[k] ?? 0) > FALLBACK) due.add(k);
+        const wait = this.unsure.has(k) ? Math.min(FALLBACK, RETRY * 2 ** (this.tries[k] - 1)) : FALLBACK;
+        if (asks && !this.folded.has(JSON.parse(k)[0]) && now - (this.checked[k] ?? 0) > wait) due.add(k);
       }
     }
     return due;
@@ -407,7 +426,9 @@ export default class Spaces extends View {
       while (this.pending.size) {
         const keys = [...this.pending];
         this.pending.clear();
-        await Promise.all(keys.map((key) => this.check(key, cx)));
+        const by = {};
+        for (const key of keys) (by[JSON.parse(key)[0] ?? ""] ??= []).push(key);
+        await Promise.all(Object.entries(by).map(([on, ks]) => limited(ks, on ? AT_ONCE : ks.length, (key) => this.check(key, cx))));
       }
       const used = new Set(Object.values(this.git).filter(Boolean).map((g) => JSON.parse(g.repo)).filter(([on]) => !on).map(([, repo]) => repo));
       for (const repo of this.watching) if (!used.has(repo)) this.watching.delete(repo);
@@ -429,9 +450,14 @@ export default class Spaces extends View {
         exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on }),
       ]);
       if (r.code !== 0 || common.code !== 0) {
-        // Only git's own "no" is remembered as no repo; anything else is asked again.
-        if (!/not a git repository/i.test(r.code !== 0 ? r.stderr : common.stderr)) this.unsure.add(key);
-        this.git[key] = null;
+        // Only git's own "no" is remembered as no repo; anything else (a busy core) keeps
+        // what it showed and is asked again.
+        if (/not a git repository/i.test(r.code !== 0 ? r.stderr : common.stderr)) {
+          this.git[key] = null;
+        } else {
+          this.git[key] ??= null;
+          this.unsure.add(key);
+        }
         return;
       }
       // The repo's own .git folder names it; a worktree's top differs from it.
@@ -449,6 +475,9 @@ export default class Spaces extends View {
       // Couldn't ask (the machine is away): keep what it showed, look again later.
       this.git[key] ??= null;
       this.unsure.add(key);
+    } finally {
+      if (this.unsure.has(key)) this.tries[key] = (this.tries[key] ?? 0) + 1;
+      else delete this.tries[key];
     }
   }
 
@@ -494,21 +523,30 @@ export default class Spaces extends View {
       const kids = list.filter((k) => nested(k) && k.g.repo === r.g.repo);
       kids.forEach((k, n) => out.push({ ...k, tree: n === kids.length - 1 ? "└─" : "├─" }));
     }
+    // Another machine with a place this window has no answer for yet (not looked at, or
+    // refused and still retried sooner than FALLBACK) keeps its spaces' order in their
+    // slots: windows share that order, and a partial view would undo another's.
+    const waiting = (k) => {
+      const [on, cwd] = JSON.parse(k);
+      return on && cwd && (!(k in this.git) || (!this.git[k] && this.unsure.has(k) && RETRY * 2 ** this.tries[k] < FALLBACK));
+    };
+    const unknown = new Set(list.filter((r) => waiting(where(r.w, ps))).map((r) => r.w.machine));
+    const kept = sp.filter((w) => unknown.has(w.machine ?? null)).map((w) => w.id);
     // Simulate the batch so later indexes include earlier moves. An attempted
     // write can lose a sync conflict: allow the echo to settle before retrying.
     const order = sp.map(w => w.id);
-    const target = out.map(r => r.w.id);
+    const target = out.map(r => (unknown.has(r.w.machine ?? null) ? kept.shift() : r.w.id));
     const key = JSON.stringify([order, target, machines()]);
     if (order.every((id, i) => id === target[i])) {
       this.ordering = null;
     } else if (this.ordering?.key !== key || this.orderingDue(Date.now())) {
       const moved = new Set();
       this.ordering = { key, at: Date.now(), machines: [] };
-      for (let i = 0; i < out.length; i++) {
-        const from = order.indexOf(out[i].w.id);
+      for (let i = 0; i < target.length; i++) {
+        const from = order.indexOf(target[i]);
         if (from === i) continue;
-        run("space.move", { id: out[i].w.id, index: i + 1 });
-        moved.add(out[i].w.machine ?? null);
+        run("space.move", { id: target[i], index: i + 1 });
+        moved.add(sp.find((w) => w.id === target[i]).machine ?? null);
         order.splice(i, 0, order.splice(from, 1)[0]);
       }
       this.ordering.machines = [...moved];
