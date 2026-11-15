@@ -82,12 +82,16 @@ is which of `shep` and `work` is hidden.
   `foreground` when any wait; `selected` fill while the panel shows): a click
   shows or hides `shep-decisions`, 260px (min 120) under the terminal, hidden
   at first. It has a 1px `border` top, a 32px row ("Decisions", "N waiting on
-  you", "checked HH:MM"), then a card per pending question (`chrome` fill, 1px
-  `border`, radius 8): the space's name with lines and "high-stakes", "open",
-  "stale" (`blocked`) or "unknown" (`unknown`), the question, "Choices: … Answer
-  in Shep.", why a card is stale or unknown, "asked HH:MM" and a **Discuss**
-  button (`raised`). No card answers; Discuss selects the question's topic
-  and puts the keyboard in Shep.
+  you" with the keys hint, "checked HH:MM"), then a card per pending question
+  (`chrome` fill, 1px `border`, `solid` border on the card the keys are on,
+  radius 8): the space's name with lines and "high-stakes", "open", "stale"
+  (`blocked`) or "unknown" (`unknown`), the question, Shep's brief in `muted`,
+  "Shep recommends X: why" in `dim`, the choices as numbered chips ("1 LGTM ★",
+  the picked one filled `solid`; dimmed on a stale card), why a card is stale or
+  unknown, "asked HH:MM", a **Discuss** (or **Continue discussion**) button and
+  an **Answer X** button (`raised`; "Pick a choice" until one is picked).
+  Discuss opens a modal dialog (86%): a 34px bar ("Discuss", the question in
+  `dim`, "read-only branch · /pick answers", ✕) over the branch's terminal.
 - **Sidebar**, 268px wide (min 44, max 480, not resizable), `chrome`
   background. Herdr's own brand row (46px); the **Shep row** (44px): in the
   Shep view a selected (`selected`) row with an 18px `solid` tile "S",

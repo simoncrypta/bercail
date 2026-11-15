@@ -23,6 +23,7 @@ Post-install CLI (bercail):
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
   shep          Shep, the orchestrator on Pi: status (queued, awaiting persistence, persisted) | run |
                 bg --issue ID [--cwd DIR] (a background Shep waits on the issue's job) |
+                discuss TOKEN (a read-only Pi on the question's branch: what Discuss runs) |
                 repos [--json] (your known repos) | board (open jobs, what waits on you) |
                 brief ISSUE [--repo DIR] [--budget CHARS] (one issue, its desk, its latest report) |
                 queue [--repo DIR] [--json] (what waits on your review, against the review budget) |
@@ -30,7 +31,8 @@ Post-install CLI (bercail):
                 mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list (the mistakes ledger) |
                 diagram [FILE] (a Mermaid diagram without its click and link statements) |
                 questions [--json] (pending targeted questions; replies are unverified) |
-                question create|revise|reply (JSON on stdin) | check TOKEN | thread TOPIC | panel (the Decisions panel's JSON)
+                question create|revise|reply|answer|withdraw (JSON on stdin) | check TOKEN | thread TOPIC |
+                panel (the Decisions panel's JSON) | discuss TOKEN (make or find its branch) | closed TOKEN OPENING
   policy        A repo's git policy (.bercail/policy.toml): show [--json] [repo] |
                 trust [repo] (its looser values count until the file changes) | untrust [repo]
   describe      A change's description (.bercail/description.md, written by /validate):

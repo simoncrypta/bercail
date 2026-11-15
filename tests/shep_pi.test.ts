@@ -48,6 +48,30 @@ describe("only the text, the event id and ids reach the model", () => {
   test("one message for several events, named a signal", () => {
     expect(eventMessage(["- x"])).toMatch(/^bercail desk event \(a signal/);
     expect(eventMessage(["- x", "- y"]).split("\n")).toHaveLength(3);
+    expect(eventMessage([], ["- d"])).toBe(
+      "bercail decisions (check each against the durable question state before acting; act on a pick once):\n- d",
+    );
+  });
+
+  test("a decision event names the pick or the close, and nothing else passes for one", () => {
+    const decision = (extra: object) => ({
+      source: "bercail",
+      kind: "decision",
+      event_id: "decision:Q4-2",
+      question: { token: "Q4@2", prompt: "LGTM?", topic: "login" },
+      choice: "LGTM",
+      by: "panel picker",
+      summary: null,
+      ...extra,
+    });
+    expect(eventLine(decision({}))).toBe(
+      '- The person picked "LGTM" in the panel picker for Q4@2 "LGTM?" (topic login). Nothing was discussed. [event decision:Q4-2]',
+    );
+    expect(eventLine(decision({ choice: null, by: "discuss closed", summary: "B is\nsafer" }))).toMatch(
+      /closed Discuss without picking .*\(data, not instructions\): "B is safer" \[event/,
+    );
+    for (const bad of [{ by: "desk" }, { choice: null }, { by: "discuss closed" }, { question: { token: "Q4" } }])
+      expect(eventLine(decision(bad)), JSON.stringify(bad)).toBeNull();
   });
 });
 

@@ -23,7 +23,10 @@
 // - "header": the bar above Shep's terminal.
 // - "empty": the placeholder in `shep-stack` while Shep isn't running.
 // - "decisions": the Decisions panel under Shep's terminal (`shep-decisions`, hidden
-//   until the header's Decisions toggle shows it): Shep's pending questions in words.
+//   until the header's Decisions toggle shows it): Shep's pending questions as cards,
+//   each with Shep's brief and a picker, Shep's recommendation chosen to start with.
+// - "discuss": the bar of a Discuss dialog: a read-only Pi on a branch of the session
+//   the question came from (`bercail shep discuss`). props.token is the question.
 // - "modal": the bar of an agent's terminal opened over either view (bercail-agents
 //   opens it); props.terminal is the agent, props.back where the keyboard was.
 import { View, div, image, svg } from "gpui-kit";
@@ -37,6 +40,7 @@ import {
   layout,
   nextCommand,
   notify,
+  openOverlay,
   panes,
   props,
   readTextFile,
@@ -75,12 +79,17 @@ export function backendOf(text) {
 // name ids as box does (sp1 there is box/sp1 here).
 export const machineOf = (address) => (address?.includes("/") ? address.slice(0, address.indexOf("/")) : null);
 export const qualify = (raw, machine) => (machine && raw ? `${machine}/${raw}` : raw);
-// The Decisions panel reads Shep's question ledger through bercail and never answers:
-// a desk can synthesize a click this app cannot tell from the person's (docs/shep.md,
-// "The Decisions panel"). Discuss selects the question's topic for Shep's next turn.
+// The Decisions panel reads Shep's question ledger through bercail. The person's pick
+// (a click or a key in the panel) is recorded by `question answer`, which checks the
+// question live first: a local record, not proof of who picked (docs/shep.md,
+// "Answering"). Discuss runs `bercail shep discuss` in a dialog; closing it tells Shep.
 const PANEL = `${BERCAIL_PATH}; exec bercail shep question panel`;
-const THREAD = `${BERCAIL_PATH}; exec bercail shep question thread "$1"`;
+const ANSWER = `${BERCAIL_PATH}; exec bercail shep question answer <<<"$1"`;
+const DISCUSS = `${BERCAIL_PATH}; exec bercail shep discuss "$1"`;
+const CLOSED = `${BERCAIL_PATH}; exec bercail shep question closed "$1" "$2"`;
 const PANEL_ID = "shep-decisions";
+const DISCUSS_ROLE = "shep-discuss";
+const KEYS_HINT = "↑↓ card · ←→ or 1-9 choice · Enter answers · d discusses";
 
 export function find(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -321,6 +330,84 @@ export function cardWords(card, all = spaces(), backend = S.backend) {
   return { title: what.join(", "), ...state, asked: `asked ${clock(card.createdAt)}` };
 }
 
+// A card can be answered when the live check found nothing changed and it has choices.
+export const answerable = (card) => card.status === "fresh" && card.options?.length > 0;
+
+// The choice a card starts on: Shep's recommendation, else none (Enter waits for a pick).
+export function startChoice(card) {
+  const i = card.options?.indexOf(card.recommendation?.choice) ?? -1;
+  return i >= 0 ? i : null;
+}
+
+// The question's Discuss terminal, while one runs (with a backend, only there).
+export function discussTerminal(token, all = terminals(), backend = S.backend) {
+  return (
+    all.find(
+      (t) =>
+        t.state === "live" &&
+        t.labels?.["bercail.role"] === DISCUSS_ROLE &&
+        t.labels?.["bercail.question"] === token &&
+        (!backend || machineOf(t.address) === backend),
+    ) ?? null
+  );
+}
+
+// The branch's terminal in a dialog that a click beside it doesn't close: closing
+// tells Shep, so only ✕ (or the branch ending after /pick) does.
+export function discussDialog(address, token, opening, f) {
+  const back = { pane: f?.pane ?? null, terminal: f?.terminal ?? null };
+  return {
+    kind: "dialog",
+    modal: true,
+    width: 0.86,
+    height: 0.86,
+    layout: {
+      type: "column",
+      children: [
+        {
+          type: "block",
+          size: { px: 34 },
+          content: { mod: NAME, props: { role: "discuss", terminal: address, token, opening, back } },
+        },
+        { type: "block", content: { terminal: address }, padding: [6, 6] },
+      ],
+    },
+  };
+}
+
+// Starts the question's branch (or finds the one running) and opens it in a dialog.
+async function openDiscuss(card) {
+  await readBackend();
+  let address = discussTerminal(card.token)?.address;
+  if (!address) {
+    const r = await exec("hc", [
+      "run",
+      "--bg",
+      "--json",
+      "--no-parent",
+      "--no-notify",
+      "--rm",
+      "--name",
+      `shep-discuss-${card.token.replace("@", "-").toLowerCase()}`,
+      ...(S.backend ? ["--on", S.backend] : ["--cwd", home()]),
+      "--label",
+      `bercail.role=${DISCUSS_ROLE}`,
+      "--label",
+      `bercail.question=${card.token}`,
+      "bash",
+      "-lc",
+      DISCUSS,
+      NAME,
+      card.token,
+    ]);
+    if (r.code !== 0) throw new Error((r.stderr || r.stdout).trim() || `hc run exited ${r.code}`);
+    const raw = JSON.parse(r.stdout).address;
+    address = raw.includes("/") ? raw : qualify(raw, S.backend);
+  }
+  const opening = `o${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  openOverlay(discussDialog(address, card.token, opening, focused()));
+}
+
 function checkBercail() {
   S.check ??= readBackend()
     .then(() =>
@@ -392,12 +479,18 @@ function icon(p, size, color) {
 export default class BercailShep extends View {
   init(_props, cx) {
     this.role = props()?.role ?? "nav";
-    if (this.role === "modal") return;
+    if (this.role === "modal" || this.role === "discuss") return;
     cx.spawn(async (cx) => {
       await checkBercail();
       cx.notify();
     });
     if (this.role === "header" || this.role === "decisions") watchDecisions(cx);
+    if (this.role === "decisions") {
+      this.h = cx.focus_handle();
+      this.sel = 0; // the card the keys act on
+      this.picked = {}; // token -> the choice's index, once the person moved it
+      this.busy = new Set(); // tokens whose answer is on its way
+    }
     if (this.role !== "nav") return;
     this.added = new Set(); // Shep block ids this copy added
     this.back = {}; // space id -> { pane } or { terminal }: where the keyboard was
@@ -523,6 +616,8 @@ export default class BercailShep extends View {
         return this.decisions(t);
       case "modal":
         return this.modal(t);
+      case "discuss":
+        return this.discussBar(t);
     }
     const view = this.sync();
     const shep = shepTerminal();
@@ -638,19 +733,25 @@ export default class BercailShep extends View {
     );
   }
 
-  // The Decisions panel. Read-only: the person answers in Shep; Discuss takes them there.
+  // The Decisions panel: the keyboard is here once the person clicks in it, or opens it
+  // from the header. Keys never come from a command (nextCommand): only this panel.
   decisions(t) {
     const cards = D.view?.cards ?? [];
+    this.sel = Math.max(0, Math.min(cards.length - 1, this.sel));
     const checked = D.view?.at ? `checked ${clock(D.view.at)}` : D.loading ? "checking…" : "";
     const list = v_flex().id("decision-list").flex_1().min_h(0).px(10).pb(10).gap(8).overflow_y_scrollbar();
     const say = (text, color = t.dim) => div().px(12).py(6).text_color(color).child(text);
     return v_flex()
+      .id("decisions-root")
       .size_full()
       .bg(t.background)
       .border_t(1)
       .border_color(t.border)
       .text_size(12.5)
       .text_color(t.muted)
+      .track_focus(this.h)
+      .on_key_down((e, cx) => this.key(e, cx))
+      .on_mouse_down("left", () => this.h.focus())
       .child(
         h_flex()
           .h(32)
@@ -664,19 +765,80 @@ export default class BercailShep extends View {
               .flex_1()
               .truncate()
               .text_color(t.dim)
-              .child(cards.length ? `${cards.length} waiting on you` : ""),
+              .child(cards.length ? `${cards.length} waiting on you · ${KEYS_HINT}` : ""),
           )
           .child(div().text_size(11).text_color(t.dim).child(checked)),
       )
       .when(Boolean(D.error), (el) => el.child(say(`Can't read Shep's questions: ${D.error}`, t.blocked)))
       .when(Boolean(D.note), (el) => el.child(say(D.note, t.blocked)))
       .when(!cards.length && !D.error, (el) => el.child(say(D.view ? "Nothing waits on you." : "Loading…")))
-      .child(list.children(cards.map((c) => this.card(t, c))));
+      .child(list.children(cards.map((c, i) => this.card(t, c, i === this.sel, i))));
   }
 
-  card(t, c) {
+  choiceOf(c) {
+    return this.picked[c.token] ?? startChoice(c);
+  }
+
+  key(e, cx) {
+    const cards = D.view?.cards ?? [];
+    const c = cards[this.sel];
+    const k = e.keystroke;
+    const n = c?.options?.length ?? 0;
+    const choose = (i) => {
+      if (c && answerable(c)) this.picked[c.token] = i;
+    };
+    if (k === "down" || k === "j") this.sel = Math.min(cards.length - 1, this.sel + 1);
+    else if (k === "up" || k === "k") this.sel = Math.max(0, this.sel - 1);
+    else if (k === "right" && n) choose(((this.choiceOf(c) ?? -1) + 1) % n);
+    else if (k === "left" && n) choose(((this.choiceOf(c) ?? 0) - 1 + n) % n);
+    else if (/^[1-9]$/.test(k) && Number(k) <= n) choose(Number(k) - 1);
+    else if (k === "enter" && c) this.accept(c, cx);
+    else if (k === "d" && c) this.discuss(c, cx);
+    else return;
+    cx.stop_propagation();
+    cx.notify();
+  }
+
+  card(t, c, on, i) {
     const w = cardWords(c);
     const color = w.word === "open" ? t.dim : w.word === "stale" ? t.blocked : t.unknown;
+    const can = answerable(c) && !this.busy.has(c.token);
+    const at = this.choiceOf(c);
+    const rec = c.recommendation;
+    const button = (id, label, enabled, onClick) =>
+      div()
+        .id(id)
+        .px(10)
+        .py(3)
+        .rounded(5)
+        .bg(t.raised)
+        .text_color(enabled ? t.foreground : t.dim)
+        .when(enabled, (el) =>
+          el
+            .cursor_pointer()
+            .hover((s) => s.bg(t.hover))
+            .on_click(onClick),
+        )
+        .child(label);
+    const chip = (o, j) =>
+      div()
+        .id(`decision-choice-${c.token}-${j}`)
+        .px(9)
+        .py(2)
+        .rounded(5)
+        .border(1)
+        .border_color(t.border)
+        .when(j === at && answerable(c), (el) => el.bg(t.solid).text_color(t.solid_foreground))
+        .when(j !== at || !answerable(c), (el) => el.text_color(answerable(c) ? t.foreground : t.dim))
+        .when(can, (el) =>
+          el.cursor_pointer().on_click((_e, cx) => {
+            this.sel = i;
+            this.picked[c.token] = j;
+            this.h.focus();
+            cx.notify();
+          }),
+        )
+        .child(`${j + 1} ${o}${o === rec?.choice ? " ★" : ""}`);
     return v_flex()
       .id(`decision-${c.token}`)
       .flex_none()
@@ -684,7 +846,7 @@ export default class BercailShep extends View {
       .gap(6)
       .rounded(8)
       .border(1)
-      .border_color(t.border)
+      .border_color(on ? t.solid : t.border)
       .bg(t.chrome)
       .child(
         h_flex()
@@ -693,13 +855,10 @@ export default class BercailShep extends View {
           .child(div().flex_none().text_size(11).text_color(color).child(w.word)),
       )
       .child(div().text_color(t.foreground).child(c.prompt))
-      .when(c.options?.length > 0, (el) =>
-        el.child(
-          div()
-            .text_color(t.dim)
-            .child(`Choices: ${c.options.join(" · ")}. Answer in Shep.`),
-        ),
-      )
+      .when(Boolean(c.brief), (el) => el.child(div().text_color(t.muted).child(c.brief)))
+      .when(Boolean(rec), (el) => el.child(div().text_color(t.dim).child(`Shep recommends ${rec.choice}: ${rec.why}`)))
+      .when(c.options?.length > 0, (el) => el.child(h_flex().gap(6).flex_wrap().children(c.options.map(chip))))
+      .when(!c.options?.length, (el) => el.child(div().text_color(t.dim).child("No choices: answer Shep in chat.")))
       .when(Boolean(w.why), (el) => el.child(div().text_color(color).child(w.why)))
       .child(
         h_flex()
@@ -707,37 +866,106 @@ export default class BercailShep extends View {
           .items_center()
           .child(div().flex_1().text_size(11).text_color(t.dim).child(w.asked))
           .child(
-            div()
-              .id(`decision-discuss-${c.token}`)
-              .px(10)
-              .py(3)
-              .rounded(5)
-              .bg(t.raised)
-              .text_color(t.foreground)
-              .cursor_pointer()
-              .hover((s) => s.bg(t.hover))
-              .tooltip("Talk it over with Shep: its next turn is about this")
-              .on_click((_e, cx) => this.discuss(c, cx))
-              .child("Discuss"),
+            button(`decision-discuss-${c.token}`, c.discussed ? "Continue discussion" : "Discuss", true, (_e, cx) =>
+              this.discuss(c, cx),
+            ),
+          )
+          .when(c.options?.length > 0, (el) =>
+            el.child(
+              button(
+                `decision-accept-${c.token}`,
+                this.busy.has(c.token) ? "Answering…" : at === null ? "Pick a choice" : `Answer ${c.options[at]}`,
+                can && at !== null,
+                (_e, cx) => this.accept(c, cx),
+              ),
+            ),
           ),
       );
   }
 
-  // The person's click: select the question's topic, then put the keyboard in Shep's
-  // terminal (the panel is in the Shep view, so the view stays).
-  discuss(c, cx) {
+  // The person's pick: once per card at a time, recorded on the machine with the ledger.
+  accept(c, cx) {
+    const at = this.choiceOf(c);
+    if (!answerable(c) || at === null || this.busy.has(c.token)) return;
+    this.busy.add(c.token);
+    const input = JSON.stringify({
+      requestId: `panel-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+      token: c.token,
+      choice: c.options[at],
+      source: "panel picker",
+    });
     cx.spawn(async (cx) => {
       let r;
       try {
-        r = await exec("bash", ["-lc", THREAD, "bercail-shep", c.target.topic], { on: S.backend });
+        r = await readBackend().then(() =>
+          exec("bash", ["-lc", ANSWER, NAME, input], { timeout: 60000, on: S.backend }),
+        );
       } catch (e) {
-        r = { code: 1, stderr: String(e?.message ?? e) };
+        r = { code: 1, stdout: "", stderr: String(e?.message ?? e) };
       }
-      D.note = r.code === 0 ? null : `Shep could not open that question: ${r.stderr.trim() || `exit ${r.code}`}`;
-      const shep = shepTerminal();
-      if (shep) run("pane.focus", { terminal: shep.address });
+      let out = null;
+      try {
+        out = JSON.parse(r.stdout);
+      } catch {}
+      D.note =
+        r.code !== 0
+          ? `Not recorded: ${r.stderr.trim() || `exit ${r.code}`}`
+          : out?.accepted
+            ? null
+            : `Not recorded: ${out?.reason ?? "no answer from bercail"}.`;
+      this.busy.delete(c.token);
+      await loadDecisions();
       cx.notify();
     });
+  }
+
+  // The person's click or d: the question's branch, in a dialog over the window.
+  discuss(c, cx) {
+    cx.spawn(async (cx) => {
+      try {
+        await openDiscuss(c);
+        D.note = null;
+      } catch (e) {
+        D.note = `Discuss did not open: ${String(e?.message ?? e)}`;
+      }
+      cx.notify();
+    });
+  }
+
+  // The Discuss dialog's bar: which question, how to answer, and ✕.
+  discussBar(t) {
+    const { token, overlay } = props() ?? {};
+    const c = (D.view?.cards ?? []).find((x) => x.token === token);
+    return h_flex()
+      .size_full()
+      .px(12)
+      .gap(8)
+      .items_center()
+      .bg(t.chrome)
+      .border_b(1)
+      .border_color(t.border)
+      .text_size(12.5)
+      .text_color(t.muted)
+      .child(div().flex_none().font_semibold().text_color(t.foreground).child("Discuss"))
+      .child(
+        div()
+          .flex_1()
+          .truncate()
+          .text_color(t.dim)
+          .child(c?.prompt ?? ""),
+      )
+      .child(div().flex_none().text_size(11).text_color(t.dim).child("read-only branch · /pick answers"))
+      .child(
+        div()
+          .id("discuss-close")
+          .px(8)
+          .py(2)
+          .rounded(5)
+          .cursor_pointer()
+          .hover((s) => s.bg(t.hover).text_color(t.foreground))
+          .on_click(() => closeOverlay(overlay))
+          .child("✕"),
+      );
   }
 
   empty(t) {
@@ -868,11 +1096,33 @@ export default class BercailShep extends View {
   // The dialog closed (✕, a click beside it, its terminal ended): the keyboard goes
   // back where it was, unless "Show in space" took it elsewhere.
   async close() {
+    if (this.role === "discuss") return this.discussClosed();
     if (this.role !== "modal" || this.left) return;
+    this.restoreFocus();
+  }
+
+  // The keyboard back where it was before the dialog opened.
+  restoreFocus() {
     const back = props()?.back;
     if (back?.pane && panes().some((p) => p.pane === back.pane)) run("pane.focus", { pane: back.pane });
     else if (back?.terminal && terminals().some((x) => x.address === back.terminal && x.state === "live")) {
       run("pane.focus", { terminal: back.terminal });
     }
+  }
+
+  // The Discuss dialog closed (✕, or its Pi ended after /pick): end the branch's Pi
+  // (it continues on the next open) and tell Shep, which the closed op skips when a
+  // pick already did. Both run where the branch and the ledger are.
+  async discussClosed() {
+    const { terminal, token, opening } = props() ?? {};
+    await readBackend();
+    try {
+      await exec("hc", ["kill", terminal], { timeout: 10000 });
+    } catch {}
+    try {
+      await exec("bash", ["-lc", CLOSED, NAME, token, opening], { timeout: 30000, on: S.backend });
+    } catch {}
+    loadDecisions();
+    this.restoreFocus();
   }
 }

@@ -148,6 +148,22 @@ describe("question text commands", () => {
     expect(fixtureGit("-C", repo, "rev-parse", "--show-toplevel").toString().trim()).toBe(repo);
   });
 
+  test("Shep withdraws a question that no longer applies with its own tool, and it is not an answer", async () => {
+    const tool = pi.tools.find((tool) => tool.name === "shep_question_withdraw");
+    const out = await tool.execute("call-1", { requestId: "w", token: "Q1@1", reason: "desk already stopped" });
+    expect(out.content[0].text).toBe("Q1@1 withdrawn: desk already stopped");
+    const [q1, q2] = new QuestionStore(dir).snapshot().questions;
+    expect([q1?.status, q1?.withdrawal?.reason, q1?.answer, q2?.status]).toEqual([
+      "withdrawn",
+      "desk already stopped",
+      undefined,
+      "pending",
+    ]);
+    const prompt = pi.handlers.before_agent_start!({ systemPrompt: "base" }).systemPrompt;
+    expect(prompt).not.toContain("Q1@1");
+    expect(prompt).toContain("Q2@1");
+  });
+
   test("tool retries return the first receipt despite a changed session leaf or missing checkout", async () => {
     const repo = join(dir, "repo");
     initRepo(repo);

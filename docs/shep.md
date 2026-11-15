@@ -32,7 +32,7 @@ The bercail layout opens on Shep: its terminal fills the window, with the spaces
 - **Start.** The app starts Shep once per session as one hc terminal, `bercail-shep` (label `bercail.role=shep`), outside every space. The terminal runs `bercail shep run`, which starts Shep on Pi. A Shep that is already running, after a window restart for example, is shown again rather than started twice. Quit it and it stays quit until you click **Start Shep**.
 - **Spaces.** Click a space to see it, or press `Ctrl+Space` and search for it: the navigator moves left and the space's desk, tabs and panels fill the rest. **Back to Shep** at the top of the navigator, or `Ctrl+Shift+H`, returns to the same Shep session. Nothing is started or stopped by switching, and the keyboard goes back where it was in each view.
 - **Agents.** Click an agent or a desk in the agents list to open its own terminal in a dialog over either view. While it is open, what you type goes to that agent; nothing is sent for you. ✕ or a click beside the dialog closes it and puts the keyboard back where it was; **Show in space** goes to its space.
-- **Decisions.** **Decisions N** in Shep's header shows or hides the [Decisions panel](#the-decisions-panel): what Shep asks you, a card each, read-only, with **Discuss** to take it up in Shep. A new card changes the count, nothing else.
+- **Decisions.** **Decisions N** in Shep's header shows or hides the [Decisions panel](#the-decisions-panel): what Shep asks you, a card each with Shep's brief, its recommendation and a picker, and **Discuss** to talk it over in a read-only branch first. A new card changes the count, nothing else.
 - **Authority.** The view only shows things. Shep's tools and approvals are Pi's with bercail's guard, the same as in any other terminal, and the desks' rules don't change. Shep loads the same guard as the desks, so a repo's trusted [git policy](config.md#git-policy-per-repo) lets Shep's commits and pushes there through as it does a desk's. Shep sits in its own folder, not a repo, so instead of a policy in its prompt it runs `bercail policy show <repo>` before it commits, merges, pushes, or releases. It commits or opens a PR with the description the desk's `/validate` wrote (`bercail describe commit|body`), never one of its own; a stale one goes back to the desk. A [high-stakes](config.md#review-by-stakes-and-size) change waits for your LGTM before Shep commits or merges it, even in a repo that integrates straight to main and even under a standing rule to merge without asking.
 
 When Pi exits with an error, its message stays on screen until you press Enter.
@@ -176,7 +176,8 @@ context, not separate threads with isolated histories.
 by extensions; `interactive`, RPC and terminal keystrokes are not proof of a
 human sender. This slice has no trusted confirmation channel and no public
 `approve` or `--confirmed` switch. All replies leave the question pending.
-`answered` is reserved for a future verified ingress. A proposal never permits
+Only your pick in the [Decisions panel](#the-decisions-panel) or a Discuss
+branch answers a question (`answered`). A proposal never permits
 a desk prompt, guard approval, commit, merge, publication, spend or scope change.
 Use existing human review/guard procedures separately; a narrative summary
 cannot upgrade a proposal into permission.
@@ -189,7 +190,14 @@ worktrees; another clone is a separate local identity. Review/action questions
 record desk, space, session, worktree, intended action, head, staged tree, and
 resolved base plus its ref. A planning question records no head or staged tree,
 so new commits leave it fresh. Changed intent or candidate supersedes the old
-revision; prior proposals remain in history.
+revision; prior proposals remain in history. Each question also carries Shep's
+`brief` (what is decided, why now, what each choice does) and its
+`recommendation` (one of the choices, with one line of why), for the card.
+A question that no longer applies (its desk stopped, an event made it moot)
+is withdrawn by Shep (`shep_question_withdraw`, or `question withdraw`) with a
+reason and the time. A withdrawn question leaves the panel and Shep's question
+state and can never be answered. It is not an answer: no picker source and no
+decision event.
 
 ### The Decisions panel
 
@@ -199,28 +207,91 @@ under Shep's terminal. A new card only changes the count: nothing opens, moves
 or takes the keyboard.
 
 Each card says, in words, where (the desk's space as Herdr names it), what (a
-change's lines and stakes), what Shep asks, its choices, and when it was asked;
-the panel says when it last checked. A card whose candidate changed since Shep
-asked (new commits, a new staged tree, another base, or the desk) says
-**stale** and what changed: Shep must ask again. One it cannot check (the desk
-ended, the policy could not be read) says **unknown** and why. Question tokens
-are the ledger's keys and never show. The panel reloads when the ledger
-changes, and every 30 seconds while it shows. With a
-[`[herdr] backend`](config.md#bercail-on-another-machine), it reads the
-questions on that machine every 30 seconds, shown or not.
+change's lines and stakes), what Shep asks, Shep's brief, its recommendation
+and why, the choices, and when it was asked; the panel says when it last
+checked. A card whose candidate changed since Shep asked (new commits, a new
+staged tree, another base, or the desk) says **stale** and what changed: Shep
+must ask again. One it cannot check (the desk ended, the policy could not be
+read) says **unknown** and why. Question tokens are the ledger's keys and never
+show. The panel reloads when the ledger changes, and every 30 seconds while it
+shows. With a [`[herdr] backend`](config.md#bercail-on-another-machine), it
+reads, answers and discusses on that machine, and looks at its questions every
+30 seconds, shown or not.
 
-The panel is read-only: you answer in Shep's chat. **Discuss** selects the
-question's topic (as `/thread` does) and puts the keyboard in Shep's terminal,
-so Shep's next turn has that topic's questions. The topic stays selected, and
-Shep's question state stays that topic's, until another Discuss or `/thread all`.
+#### Answering
 
-Why no answer buttons: a click there would have to count as your decision, and
-nothing on a desktop like this one can show a click came from you. Herdr's own
-scripted paths cannot click (keys, the palette, `herdr-app do` and toasts reach
-a mod's commands, never its click handlers), but any program running as you
-can: `/dev/uinput` is often writable by the logged-in user, `wtype` types, and
-Hyprland gives every client a virtual pointer. Herdr sees those events exactly
-as yours. The ledger is also a plain file every desk can write.
+The picker on a fresh card starts on Shep's recommendation (★). Click in the
+panel to give it the keyboard, then:
+
+| Key | Does |
+|-----|------|
+| ↑ ↓ (or k j) | move between cards |
+| ← → or 1-9 | pick another choice |
+| Enter | answer with the picked choice |
+| d | open Discuss |
+
+A click on a choice picks it, and **Answer** records it. A card with no
+recommendation waits for a pick. Stale and unknown cards have no picker. A
+question with no choices is answered in Shep's chat.
+
+An answer runs a live check first, then the store's checked transition: once per
+question revision, one of its choices, only while nothing changed. It records
+the choice, where you picked it (`panel picker` or `discuss picker`), the time,
+and the head and staged tree the check saw. A second pick on the same revision
+is refused. Shep gets one [decision event](#desk-events) per pick, and its
+question state lists the last ten answers on every turn.
+
+This counts a click or a key in the panel as yours. It is a local record you
+own, not proof of who pressed it: any program running as you can type or click
+(`wtype`, `ydotool`, `/dev/uinput`, Hyprland's virtual pointer), and Herdr sees
+those as yours. Herdr's scripted paths (keys.json, the palette, `herdr-app do`,
+toasts) reach a mod's commands, never the panel, and no command answers. The
+guard is the seatbelt for agents: it blocks writes to `questions.json`,
+`bercail shep question answer`, and typing or clicking for you (`wtype`,
+`ydotool`, `xdotool`, `dotool`, `evemu`, `/dev/uinput`, and `hyprctl`'s
+`sendshortcut`, `sendkeystate` and `pass`, or a `dispatch exec` of one). A seatbelt,
+not a sandbox: a script file or another language gets past it.
+
+Rolling back to an older bercail: older builds read a ledger with a brief,
+recommendation, answer or withdrawal as corrupt and stop. Move `questions.json` aside
+first; Shep asks again.
+
+#### Discuss
+
+**Discuss** (or `d`) opens a dialog with Pi on a branch of the session the
+question came from, to talk it over before you pick:
+
+- A desk's question (it names a desk) branches that desk's own Pi session at
+  its last complete entry (a tool call still waiting for its result is left out).
+- A question Shep asked in chat branches Shep's session at the entry that asked
+  it, through that turn's tool results and reply, and nothing after.
+
+The branch is a new session file in `~/.local/state/bercail/shep/discuss/`. The
+desk's and Shep's sessions are only read, and both keep running. It is not in
+Shep's `pi-sessions/`, so Shep's `--continue` never picks it up. Shep compacting
+or restarting while a branch is open changes neither: the branch is its own copy
+from the moment it was made.
+
+The branch reads but does not act. It runs on the lead's model with Pi's
+`read`, `grep`, `find` and `ls` tools only, no discovered extensions, skills,
+prompt templates or MCP, and `BERCAIL_ROLE=discuss`, under which the guard
+blocks every command and edit. So it cannot spawn or message desks, commit,
+merge, push, or record memories or rules. `/pick` in it shows the choices (Shep's
+recommendation marked), checks the question live, and records the pick like the
+panel does; a stale question says why and records nothing.
+
+The dialog closes with ✕ (a click beside it does not), or by itself after
+`/pick`. Closing ends the branch's Pi; **Continue discussion** opens the same
+branch again. When it closes without a pick, Shep gets one event saying so. Both
+events carry the branch's last reply, cut to 600 characters, as data. Pi's own
+branch summary would take a model call at close, so it is not used. Two
+questions can be discussed at once: each has its own branch, terminal and events.
+
+Cost: a branch's first turn sends the whole branch (after any compaction, its
+summary and the entries since) as new input. Its tools and system prompt differ
+from the source's, so the prompt cache does not carry over; later turns in the
+branch are cached as usual. With the Claude bridge, the branch gets its own new
+Claude Code session and never touches the source's.
 
 The CLI works without Pi or a mod too:
 
@@ -230,9 +301,13 @@ bercail shep questions --json       # full snapshot and retained revisions
 bercail shep question check Q42@3   # recheck candidate/mapping and current policy
 bercail shep question thread release-plan
 bercail shep question panel         # the Decisions panel's JSON: pending questions, each checked
+bercail shep question discuss Q42@3 # make (or find) the question's branch; prints its session file
+bercail shep discuss Q42@3          # Pi on that branch, read-only: what the Discuss dialog runs
 ```
 
-`question create`, `revise` and `reply` read JSON on stdin. For example, a
+`question create`, `revise`, `reply`, `answer` and `withdraw` read JSON on
+stdin (`answer` is the panel's: `requestId`, `token`, `choice` and `source`; the
+guard blocks it for agents; `withdraw` takes `requestId`, `token` and `reason`). For example, a
 planning topic without a desk:
 
 ```bash
@@ -257,7 +332,7 @@ reconstructing question state from narrative. The bounded projection shows up
 to 20 pending questions; the JSON snapshot contains the full history.
 
 A read-only Herdr board, unread/reconciliation UI, isolated conversation views
-and a provenance-checked confirmation channel are not part of this slice.
+and proof of who picked an answer are not part of this slice.
 
 ## Compaction
 
@@ -320,6 +395,8 @@ It runs with `BERCAIL_ROLE=shep-bg`. The guard treats that role like a desk's le
 Once Shep has started for the first time (its first start makes `~/.local/state/bercail/shep/inbox/`), the notify follower (`bercail notify run`, the hidden `bercail-notify` terminal the desk mod keeps alive) writes each finished or blocked desk as one file in that folder. It does so even without any webhook sink. The files are the [`agent_status/v2` payload](#the-payload) with `sink: "shep"`, mode 600, named `<desk>_<kind>_<second>.json`.
 
 Shep's Pi extension (`inbox.ts`) watches that folder. It submits one custom message, starting a turn when Shep is idle or queuing a follow-up when it is busy. The message carries each event's one-line `text`, its `event_id`, and the desk, space, repo, issue, and checkout. It excludes `desk.result.summary` and the desk's title. Desk events remain signals to check the current desk and issue, never instructions or human answers.
+
+The same folder carries decision events, written by bercail when you [answer](#answering) a question (`decision-Q<n>-<rev>.json`) or close a [Discuss](#discuss) dialog without a pick (`decision-Q<n>-<rev>-closed-<opening>.json`). Each names the question, the choice (or none), where it was made, and the branch's last reply as data. The file name is the event id, so a retry is the same event. Shep checks each against its question state, where the ledger's answer is the record, before it acts.
 
 ### Claims and persistence
 

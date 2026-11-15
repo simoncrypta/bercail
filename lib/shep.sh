@@ -7,13 +7,14 @@
 #   bercail shep status
 #   bercail shep bg --issue ID [--cwd DIR] a background Shep: waits and follow-through
 #   bercail shep diagram [FILE]            a diagram Shep did not write, without its links
+#   bercail shep discuss Qn@rev            what the Discuss modal's terminal runs
 #   bercail shep repos | brief | board | queue | remember | forget | list | mistake   (lib/shep-context.sh)
 
 # shellcheck source=lib/shep-context.sh
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
 SHEP_SKILLS=(handoff review desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|check|thread|panel"
+SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|discuss|closed"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -65,6 +66,48 @@ shep_pi_argv() {
     [[ -d "$(skill_canonical_dir "$id")" ]] && SHEP_PI_ARGV+=(--skill "$(skill_canonical_dir "$id")")
   done
   return 0
+}
+
+# Pi's argv for a Discuss branch, into SHEP_DISCUSS_ARGV: the lead's model and
+# extensions (the guard among them), read-only tools and nothing discovered, so
+# the branch can read but not run, edit, spawn, send, commit or remember. The
+# guard blocks the rest under BERCAIL_ROLE=discuss. SESSION is the branch.
+shep_discuss_argv() {
+  local token="$1" session="$2"
+  local lead="${BSTACK_PI_DIR:-${BERCAIL_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json"
+  local model ext
+  SHEP_DISCUSS_ARGV=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u BERCAIL_SHEP_INBOX
+    BERCAIL_ROLE=discuss "BERCAIL_SHEP_STATE=$(shep_state_dir)" "BERCAIL_SHEP_BIN=${BERCAIL_SELF:-bercail}"
+    "BERCAIL_DISCUSS_TOKEN=$token" pi)
+  if [[ -r "$lead" ]]; then
+    model="$(jq -r 'index("--model") as $i | if $i then .[$i + 1] else empty end' "$lead" 2>/dev/null || true)"
+    [[ -z "$model" ]] || SHEP_DISCUSS_ARGV+=(--model "$model")
+    while IFS= read -r ext; do
+      [[ -n "$ext" ]] && SHEP_DISCUSS_ARGV+=(-e "$ext")
+    done < <(jq -r '. as $a | range(0; length) | select($a[.] == "-e") | $a[. + 1]' "$lead" 2>/dev/null || true)
+  fi
+  SHEP_DISCUSS_ARGV+=(-e "$(shep_share_dir)/pi/discuss.ts" --tools "read,grep,find,ls" --no-extensions --no-mcp
+    --no-skills --no-prompt-templates --no-context-files --session "$session")
+}
+
+# What the Discuss modal's terminal runs: Pi on the question's branch, made on the
+# first open and continued after.
+shep_discuss() {
+  local token="${1:-}" out session cwd code=0
+  if [[ ! "$token" =~ ^Q[1-9][0-9]*@[1-9][0-9]*$ ]]; then
+    _shep_err "usage: bercail shep discuss Qn@rev (a question token from bercail shep questions)"
+    return 1
+  fi
+  if ! out="$(shep_question discuss "$token")"; then
+    _shep_ended 1
+    return 0
+  fi
+  session="$(jq -r .session <<<"$out")"
+  cwd="$(jq -r .cwd <<<"$out")"
+  [[ -d "$cwd" ]] || cwd="$HOME"
+  shep_discuss_argv "$token" "$session"
+  (cd "$cwd" && "${SHEP_DISCUSS_ARGV[@]}") || code=$?
+  _shep_ended "$code"
 }
 
 # Pi that fails leaves its message on screen until Enter.
@@ -210,7 +253,7 @@ shep_bg() {
 deploy_shep() {
   local share rel
   share="$(shep_share_dir)"
-  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts; do
+  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts; do
     deploy_install_file "shep/$rel" "$share/$rel"
   done
 }
@@ -260,6 +303,7 @@ cmd_shep() {
     run) shep_run ;;
     status) shep_status ;;
     bg) shift; shep_bg "$@" ;;
+    discuss) shift; shep_discuss "$@" ;;
     repos) shift; shep_repos "$@" ;;
     brief) shift; shep_brief "$@" ;;
     board) shift; shep_board "$@" ;;

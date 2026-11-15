@@ -113,6 +113,24 @@ export default function (pi: ExtensionAPI) {
     };
   });
   pi.registerTool({
+    name: "shep_question_withdraw",
+    label: "Withdraw Shep question",
+    description:
+      "Withdraw a pending question that no longer applies (its desk stopped, events made it moot). It leaves the Decisions panel and can never be answered. Not an answer.",
+    parameters: Type.Object({
+      requestId: Type.String(),
+      token: Type.String({ description: "The pending Qn@revision" }),
+      reason: Type.String({ description: "One line: why it no longer applies" }),
+    }),
+    async execute(_toolCallId, input) {
+      const question = store.withdraw(input.requestId, input.token, input.reason);
+      return {
+        content: [{ type: "text", text: `${tokenOf(question)} withdrawn: ${input.reason}` }],
+        details: { question },
+      };
+    },
+  });
+  pi.registerTool({
     name: "shep_question",
     label: "Shep question",
     description:
@@ -122,6 +140,17 @@ export default function (pi: ExtensionAPI) {
       kind: Type.Union([Type.Literal("planning"), Type.Literal("review"), Type.Literal("action")]),
       prompt: Type.String(),
       options: Type.Array(Type.String()),
+      brief: Type.String({
+        description:
+          "The card's decision brief: what is decided, why now, and what each choice does. Two to four lines.",
+      }),
+      recommendation: Type.Union([
+        Type.Object({
+          choice: Type.String({ description: "One of options" }),
+          why: Type.String({ description: "One line" }),
+        }),
+        Type.Null(),
+      ]),
       repo: Type.String({ description: "Explicit checkout path, never a bare issue lookup" }),
       issue: Type.Union([Type.String(), Type.Null()]),
       topic: Type.String(),
@@ -139,6 +168,8 @@ export default function (pi: ExtensionAPI) {
         kind: input.kind,
         prompt: input.prompt,
         options: input.options,
+        ...(input.brief === undefined ? {} : { brief: input.brief }),
+        ...(input.recommendation ? { recommendation: input.recommendation } : {}),
         origin: {
           event: input.originEvent,
           session: ctx.sessionManager.getSessionId(),

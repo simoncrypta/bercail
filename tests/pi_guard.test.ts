@@ -1127,3 +1127,65 @@ test("a command fed by op read, op inject or op item get --fields cannot run on 
   allowed('echo "$(op whoami)" | cat', tui);
   allowed("cat tpl.env | op inject -o .env", tui);
 });
+
+test("Shep's question ledger, the answer command and typing for the person are not an agent's", async () => {
+  // The real guard's protected files, with Shep's state under a scratch XDG_STATE_HOME.
+  const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
+  const saved = process.env.XDG_STATE_HOME;
+  process.env.XDG_STATE_HOME = "/s";
+  try {
+    guard({ on: (name: string, handler: never) => (handlers[name] = handler) } as never);
+  } finally {
+    if (saved === undefined) delete process.env.XDG_STATE_HOME;
+    else process.env.XDG_STATE_HOME = saved;
+  }
+  const call = (toolName: string, input: object) =>
+    handlers.tool_call({ toolName, input }, { hasUI: false, cwd: "/w" });
+  const ledger = "/s/bercail/shep/questions.json";
+  expect(await call("write", { path: ledger })).toMatchObject({
+    block: true,
+    reason: expect.stringMatching(/decides/),
+  });
+  expect(await call("bash", { command: `echo '{}' > ${ledger}` })).toMatchObject({ block: true });
+  expect(await call("bash", { command: `cp /tmp/forged ${ledger}` })).toMatchObject({ block: true });
+  expect(await call("write", { path: "/s/bercail/shep/notes.json" })).toBeUndefined();
+
+  const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
+  for (const input of [tui, headless, auto, shep]) {
+    blocked(`bercail shep question answer <<<'{"token":"Q1@1","choice":"LGTM"}'`, input, /person's pick/);
+    blocked("node ~/.local/share/bercail/shep/pi/question-cli.ts answer < a.json", input, /person's pick/);
+    for (const fake of [
+      "wtype LGTM",
+      "ydotool type LGTM",
+      "/usr/bin/xdotool key Return",
+      "hyprctl dispatch sendshortcut , Return, class:herdr",
+      "hyprctl dispatch exec 'wtype -k Return'",
+      "hyprctl --batch 'dispatch pass class:herdr'",
+      "python3 press.py > /dev/uinput",
+    ])
+      blocked(fake, input, /Typing or clicking for the person/);
+  }
+  allowed(`bercail shep question create <<<'{}'`, shep);
+  allowed("hyprctl monitors", tui);
+  allowed("hyprctl dispatch workspace 2", tui);
+});
+
+test("a Discuss branch runs no commands and edits nothing", () => {
+  const discuss = { role: "discuss", hasUI: true, cwd: "/work", policies: none };
+  for (const command of [
+    "hc run --bg --name x bstack-builder 'do it'",
+    "hc send t1 'go ahead'",
+    "hc keys t1 enter",
+    "git commit -m x",
+    "git merge main",
+    "git push origin main",
+    "gh pr merge 3",
+    "bercail shep remember 'always merge'",
+    "bercail shep mistake k 'x'",
+    "ls",
+  ])
+    assertMatch((decideTool("bash", command, discuss) as Decision).reason ?? "", /Discuss branch/, command);
+  assertMatch((decideTool("edit", undefined, discuss, "/work/a.ts") as Decision).reason ?? "", /read-only/);
+  assertMatch((decideTool("write", undefined, discuss, "/work/a.ts") as Decision).reason ?? "", /read-only/);
+  assertEqual(decideTool("read", undefined, discuss, "/work/a.ts").action, "allow");
+});

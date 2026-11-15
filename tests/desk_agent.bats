@@ -180,6 +180,15 @@ arrange_lead() {
   expect "$(record .cwd | jq -r .)" "$PWD" "the record has the folder"
 }
 
+@test "a child issue's record keeps its dotted id, and a sentence's period is not part of it" {
+  arrange_record
+  printf '{"labels":{"bercail.role":"agent","bercail.space":"sp1","bercail.issue":"bercail-237.15","bercail.issue_title":"Discuss"}}\n' >"$BATS_TEST_TMPDIR/terminal.json"
+  desk --prompt 'Your job is beads issue bercail-237.15: Discuss. Run it.' pi >/dev/null
+  expect "$(record '[.issue, .issue_title]')" '["bercail-237.15","Discuss"]' "the record names the child issue, as its label does"
+  desk --prompt 'Your job is beads issue bercail-237.15. Run it.' pi >/dev/null
+  expect "$(record .issue)" '"bercail-237.15"' "the period that ends the sentence is not in the id"
+}
+
 @test "a resume keeps session, flags and issue" {
   seed_issue
   desk pi --session-id 0199-given --verbose >/dev/null

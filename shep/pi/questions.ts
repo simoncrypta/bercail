@@ -28,11 +28,37 @@ export interface QuestionSpec {
   options: string[];
   origin: QuestionOrigin;
   target: QuestionTarget;
+  /** What is decided and why now, in Shep's words, for the card. */
+  brief?: string;
+  /** Shep's pick among options, with one line of why. */
+  recommendation?: { choice: string; why: string };
+}
+/** Who recorded an answer: the person's pick on a card or in a Discuss branch. */
+export const ANSWER_SOURCES = ["panel picker", "discuss picker"] as const;
+export interface QuestionAnswer {
+  requestId: string;
+  choice: string;
+  source: (typeof ANSWER_SOURCES)[number];
+  at: string;
+  /** The candidate the live check saw when the person picked. */
+  head: string | null;
+  stagedTree: string | null;
+}
+/** Shep's: the question no longer applies. Not an answer. */
+export interface QuestionWithdrawal {
+  requestId: string;
+  reason: string;
+  at: string;
+}
+export interface AnswerResult {
+  question: Question;
+  accepted: boolean;
+  reason?: string;
 }
 export interface Question extends QuestionSpec {
   id: string;
   revision: number;
-  status: "pending" | "answered" | "superseded";
+  status: "pending" | "answered" | "superseded" | "withdrawn";
   createdAt: string;
   proposals: {
     requestId: string;
@@ -43,6 +69,10 @@ export interface Question extends QuestionSpec {
     accepted: boolean;
     reason?: string;
   }[];
+  /** Present once answered, and only then. */
+  answer?: QuestionAnswer;
+  /** Present once withdrawn, and only then. */
+  withdrawal?: QuestionWithdrawal;
 }
 export interface QuestionSnapshot {
   version: 1;
@@ -55,7 +85,8 @@ export interface ProposalResult {
   accepted: boolean;
   reason?: string;
 }
-type Receipt = { requestId: string; payload: string; result: Question | ProposalResult };
+type Receipt = { requestId: string; payload: string; result: Question | ProposalResult | AnswerResult };
+const STATUSES = ["pending", "answered", "superseded", "withdrawn"];
 type State = QuestionSnapshot & { requests: Receipt[] };
 
 function fail(message: string): never {
@@ -73,12 +104,21 @@ function shape(value: unknown, keys: string[]): asserts value is Record<string, 
   )
     fail("invalid fields");
 }
+// Keys an older ledger may lack: present with a value, or absent.
+const optional = (value: Record<string, unknown>, keys: string[]) => keys.filter((key) => value[key] !== undefined);
 function spec(value: unknown): asserts value is QuestionSpec {
-  shape(value, ["kind", "prompt", "options", "origin", "target"]);
+  const v = value as Record<string, unknown>;
+  shape(value, ["kind", "prompt", "options", "origin", "target", ...optional(v ?? {}, ["brief", "recommendation"])]);
   if (!["planning", "review", "action"].includes(value.kind as string)) fail("invalid kind");
   text(value.prompt);
   if (!Array.isArray(value.options)) fail("invalid options");
   value.options.forEach(text);
+  if (value.brief !== undefined) text(value.brief);
+  if (value.recommendation !== undefined) {
+    shape(value.recommendation, ["choice", "why"]);
+    text(value.recommendation.why);
+    if (!value.options.includes(value.recommendation.choice)) fail("recommendation must be one of the options");
+  }
   shape(value.origin, ["event", "session", "entry"]);
   text(value.origin.event);
   text(value.origin.session);
@@ -107,8 +147,10 @@ function spec(value: unknown): asserts value is QuestionSpec {
   if (value.target.worktree !== null && !isAbsolute(value.target.worktree as string)) fail("worktree must be absolute");
 }
 function question(value: unknown): asserts value is Question {
-  shape(value, ["id", "revision", "status", "createdAt", "proposals", "kind", "prompt", "options", "origin", "target"]);
-  const { id, revision, status, createdAt, proposals, ...fields } = value;
+  const v = value as Record<string, unknown>;
+  const keys = ["id", "revision", "status", "createdAt", "proposals", "kind", "prompt", "options", "origin", "target"];
+  shape(value, [...keys, ...optional(v ?? {}, ["brief", "recommendation", "answer", "withdrawal"])]);
+  const { id, revision, status, createdAt, proposals, answer, withdrawal, ...fields } = value;
   spec(fields);
   if (
     typeof id !== "string" ||
@@ -118,7 +160,7 @@ function question(value: unknown): asserts value is Question {
     (revision as number) < 1
   )
     fail("invalid question revision");
-  if (!["pending", "answered", "superseded"].includes(status as string)) fail("invalid status");
+  if (!STATUSES.includes(status as string)) fail("invalid status");
   text(createdAt);
   if (!Number.isFinite(Date.parse(createdAt)) || !Array.isArray(proposals)) fail("invalid question history");
   for (const p of proposals) {
@@ -138,6 +180,24 @@ function question(value: unknown): asserts value is Question {
     if (p.verified !== false || typeof p.accepted !== "boolean" || !Number.isFinite(Date.parse(p.at)))
       fail("invalid unverified proposal");
     if (!p.accepted) text(p.reason);
+  }
+  if ((status === "answered") !== (answer !== undefined)) fail("an answered question needs its answer, and only it");
+  if (answer !== undefined) {
+    shape(answer, ["requestId", "choice", "source", "at", "head", "stagedTree"]);
+    text(answer.requestId);
+    text(answer.at);
+    if (!fields.options.includes(answer.choice as string)) fail("answer is not one of the options");
+    if (!ANSWER_SOURCES.includes(answer.source as QuestionAnswer["source"])) fail("unknown answer source");
+    for (const key of ["head", "stagedTree"]) if (answer[key] !== null) text(answer[key]);
+    if (!Number.isFinite(Date.parse(answer.at as string))) fail("invalid answer time");
+  }
+  if ((status === "withdrawn") !== (withdrawal !== undefined))
+    fail("a withdrawn question needs its withdrawal, and only it");
+  if (withdrawal !== undefined) {
+    shape(withdrawal, ["requestId", "reason", "at"]);
+    text(withdrawal.requestId);
+    text(withdrawal.reason);
+    if (!Number.isFinite(Date.parse(withdrawal.at as string))) fail("invalid withdrawal time");
   }
 }
 function validate(value: unknown): asserts value is State {
@@ -168,9 +228,12 @@ function validate(value: unknown): asserts value is State {
     ids.add(r.requestId);
     if (r.result && typeof r.result === "object" && "question" in r.result) {
       const result = r.result as ProposalResult;
-      shape(result, ["question", "duplicate", "accepted", ...(result.reason === undefined ? [] : ["reason"])]);
+      // An answer receipt has no duplicate flag; a reply receipt has one.
+      const keys = ["question", "accepted", ...optional(result as never, ["duplicate", "reason"])];
+      shape(result, keys);
       question(result.question);
-      if (typeof result.duplicate !== "boolean" || typeof result.accepted !== "boolean") fail("invalid reply receipt");
+      if (typeof result.accepted !== "boolean" || !["undefined", "boolean"].includes(typeof result.duplicate))
+        fail("invalid reply receipt");
       if (!result.accepted) text(result.reason);
     } else question(r.result);
   }
@@ -262,7 +325,7 @@ export class QuestionStore {
     }, true);
   }
 
-  private request<T extends Question | ProposalResult>(
+  private request<T extends Question | ProposalResult | AnswerResult>(
     requestId: string,
     payload: unknown,
     apply: (state: State) => T,
@@ -273,7 +336,7 @@ export class QuestionStore {
       const old = state.requests.find((r) => r.requestId === requestId);
       if (old) {
         if (old.payload !== encoded) fail("request id reused with different payload");
-        return ("question" in old.result ? { ...old.result, duplicate: true } : old.result) as T;
+        return ("duplicate" in old.result ? { ...old.result, duplicate: true } : old.result) as T;
       }
       const result = apply(state);
       state.requests.push({ requestId, payload: encoded, result: structuredClone(result) });
@@ -350,6 +413,55 @@ export class QuestionStore {
       return { question: q, duplicate, accepted: !reason, ...(reason ? { reason } : {}) };
     });
   }
+
+  // Shep's: a pending question that no longer applies (its desk stopped, events made it
+  // moot) leaves the panel and can never be answered. It records no answer and no event.
+  withdraw(requestId: string, token: string, reason: string): Question {
+    text(reason);
+    return this.request(requestId, ["withdraw", token, reason], (state) => {
+      const q = this.find(state, token);
+      if (q.status !== "pending") fail(`question is ${q.status}; only a pending question can be withdrawn`);
+      q.status = "withdrawn";
+      q.withdrawal = { requestId, reason, at: new Date().toISOString() };
+      return q;
+    });
+  }
+
+  // The person's pick: once per revision, one of its options, and only when the live
+  // check the caller ran just before found the candidate unchanged (fresh). A local
+  // user-owned record, not proof of who picked (docs/shep.md, "Answering").
+  answer(
+    requestId: string,
+    token: string,
+    choice: string,
+    source: QuestionAnswer["source"],
+    check: { status: string; reasons: string[]; current: Pick<QuestionTarget, "head" | "stagedTree"> | null },
+  ): AnswerResult {
+    if (!ANSWER_SOURCES.includes(source)) fail("unknown answer source");
+    text(choice);
+    return this.request(requestId, ["answer", token, choice, source], (state) => {
+      const q = this.find(state, token);
+      const reason =
+        q.status !== "pending"
+          ? `question is ${q.status}`
+          : !q.options.includes(choice)
+            ? "not one of the question's choices"
+            : check.status !== "fresh" || !check.current
+              ? `changed since Shep asked: ${check.reasons.join(", ") || "not checked"}`
+              : undefined;
+      if (reason) return { question: q, accepted: false, reason };
+      q.status = "answered";
+      q.answer = {
+        requestId,
+        choice,
+        source,
+        at: new Date().toISOString(),
+        head: check.current!.head,
+        stagedTree: check.current!.stagedTree,
+      };
+      return { question: q, accepted: true };
+    });
+  }
 }
 
 export function projection(snapshot: QuestionSnapshot): string {
@@ -376,5 +488,17 @@ export function projection(snapshot: QuestionSnapshot): string {
     `${pending.length} pending; ${pending.length - lines.length + 1} omitted. Reply with /reply Qn@revision answer; bare replies never select a target.`,
     "Shortened fields end in …; full targets and history: bercail shep questions --json.",
   );
+  // The person's picks, newest first: the record of an answer, whatever became of its event.
+  const answered = snapshot.questions
+    .filter((q) => q.answer)
+    .sort((a, b) => b.answer!.at.localeCompare(a.answer!.at))
+    .slice(0, 10);
+  if (answered.length) {
+    lines.push("Answered by the person's pick (a local record, not proof of identity; act on it once):");
+    for (const q of answered)
+      lines.push(
+        `${tokenOf(q)} ${line(q.prompt, 120)} -> ${line(q.answer!.choice, 80)} (${q.answer!.source}, ${q.answer!.at}) topic=${line(q.target.topic, 64)}`,
+      );
+  }
   return lines.join("\n");
 }

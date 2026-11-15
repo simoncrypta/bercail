@@ -369,6 +369,54 @@ describe("durable targeted questions", () => {
     expect(readFileSync(join(state, "questions.json"), "utf8")).toBe(raw);
   });
 
+  test("only a whole answer of one of the options, from a known source, reads as answered", () => {
+    const q = store.create("q", { ...fields(), recommendation: { choice: "yes", why: "w" } }, (f) => f);
+    const check = { status: "fresh", reasons: [], current: { head: "h", stagedTree: "t" } };
+    expect(store.answer("a", tokenOf(q), "yes", "panel picker", check).accepted).toBe(true);
+    const good = readFileSync(join(state, "questions.json"), "utf8");
+    for (const forged of [
+      good.replace(/,"answer":\{[^}]*\}/, ""), // answered with no answer
+      good.replace('"choice":"yes","source"', '"choice":"merge it","source"'), // not an option
+      good.replace('"source":"panel picker"', '"source":"desk"'), // an unknown source
+      good.replace('"status":"answered"', '"status":"pending"'), // an answer on a pending question
+    ]) {
+      expect(forged).not.toBe(good);
+      writeFileSync(join(state, "questions.json"), forged);
+      expect(() => store.snapshot()).toThrow(/corrupt/);
+    }
+    writeFileSync(join(state, "questions.json"), good);
+    expect(() =>
+      store.create("bad", {}, () => ({ ...fields("b"), recommendation: { choice: "maybe", why: "w" } })),
+    ).toThrow(/recommendation must be one of the options/);
+  });
+
+  test("a withdrawn question keeps Shep's reason, leaves the projection, and can never be answered", () => {
+    const q = store.create("q", fields(), resolveSpec);
+    const fresh = { status: "fresh", reasons: [], current: { head: "h", stagedTree: "t" } };
+    expect(store.withdraw("w", tokenOf(q), "the desk was already stopped")).toMatchObject({
+      status: "withdrawn",
+      withdrawal: { requestId: "w", reason: "the desk was already stopped", at: expect.any(String) },
+    });
+    expect(store.withdraw("w", tokenOf(q), "the desk was already stopped").status).toBe("withdrawn");
+    expect(() => store.withdraw("w2", tokenOf(q), "again")).toThrow(/question is withdrawn/);
+    expect(store.answer("a", tokenOf(q), "yes", "panel picker", fresh)).toMatchObject({
+      accepted: false,
+      reason: "question is withdrawn",
+    });
+    expect(() => store.revise("r", tokenOf(q), {}, () => fields())).toThrow(/stale or closed/);
+    const [saved] = store.snapshot().questions;
+    expect(saved).not.toHaveProperty("answer");
+    expect(projection(store.snapshot())).toMatch(/^0 pending/m);
+    expect(projection(store.snapshot())).not.toContain("Answered by");
+    // An answered question cannot be withdrawn; a forged withdrawal without its record fails closed.
+    const b = store.create("b", fields("beta"), resolveSpec);
+    store.answer("a2", tokenOf(b), "yes", "panel picker", fresh);
+    expect(() => store.withdraw("w3", tokenOf(b), "moot")).toThrow(/question is answered/);
+    const raw = readFileSync(join(state, "questions.json"), "utf8");
+    writeFileSync(join(state, "questions.json"), raw.replace(/,"withdrawal":\{[^}]*\}/, ""));
+    expect(() => store.snapshot()).toThrow(/corrupt/);
+  });
+
   test("lock acquisition failure never falls back to an unlocked write", () => {
     writeFileSync(join(dir, "bin/flock"), "#!/bin/sh\nexit 1\n", { mode: 0o700 });
     expect(() => store.create("q", fields(), resolveSpec)).toThrow(/cannot acquire lock/);

@@ -77,6 +77,12 @@ const unknownBranch = "Could not read the current branch, so this push is blocke
 const trustCommand =
   "Trusting a repo's policy is the person's call. Ask them to run bercail policy trust in their own shell.";
 const protectedFile = "This file decides what bercail's guard lets through. Ask the person to edit it.";
+const answerCommand =
+  "Answering one of Shep's questions is the person's pick, on a Decisions card or in Discuss. Leave it to them.";
+const syntheticInput =
+  "Typing or clicking for the person (wtype, ydotool, xdotool, /dev/uinput, hyprctl's key dispatchers) is blocked: it could answer for them.";
+const discussOnly =
+  "A Discuss branch is for talking a question over: it runs no commands and changes nothing. Say what you would do instead.";
 const pushAllEntire =
   "In an Entire repo, pushing every branch (--all, --branches, a refs/heads/* glob) would also push Entire's shadow branches, which hold unredacted snapshots. Push the branch by name.";
 const entireMerge =
@@ -104,7 +110,7 @@ const block = (reason: string): GuardDecision => ({ action: "block", reason });
 const approve = (reason: string): GuardDecision => ({ action: "allow", approved: [reason] });
 
 function readOnlyRole(role: string): boolean {
-  return role === "judge" || role === "council";
+  return role === "judge" || role === "council" || role === "discuss";
 }
 
 function isMainRef(ref: string): boolean {
@@ -1077,6 +1083,24 @@ function isGhApiRelease(words: string[]): boolean {
   );
 }
 
+// bercail shep question answer, or the question helper's answer op run directly.
+function isAnswer(words: string[]): boolean {
+  const plain = plainWords(words);
+  return plain.some(
+    (word, i) => (word === "question" || word.endsWith("question-cli.ts")) && plain[i + 1] === "answer",
+  );
+}
+
+// Programs that type or click as the person, and the kernel's input device. Through
+// hyprctl: its key dispatchers, or a dispatch exec or --batch that runs one.
+const inputFakers = new Set(["wtype", "ydotool", "dotool", "dotoolc", "xdotool", "evemu-play", "evemu-event"]);
+const hyprInput = /\b(sendshortcut|sendkeystate|pass|wtype|ydotool|dotoolc?|xdotool)\b/;
+
+function fakesInput(words: string[], raw: string[]): boolean {
+  if (inputFakers.has(words[0]) || raw.some((word) => word.includes("/dev/uinput"))) return true;
+  return words[0] === "hyprctl" && hyprInput.test(words.slice(1).join(" "));
+}
+
 function isPolicyTrust(words: string[]): boolean {
   const plain = plainWords(words);
   return plain.some((word, i) => word === "policy" && plain[i + 1] === "trust");
@@ -1728,6 +1752,8 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     }
     if (sync && readOnlyRole(input.role)) decision = worse(decision, block(readOnly));
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
+    if (isAnswer(words)) decision = worse(decision, block(answerCommand));
+    if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
     if (writesProtected(words, raw, input.protectedFiles)) decision = worse(decision, block(protectedFile));
     if (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout"))
       branchMoved = true;
@@ -1763,7 +1789,7 @@ export function decideTool(tool: string, command: string | undefined, input: Gua
     if (full && input.cwd !== undefined && input.protectedFiles?.includes(resolve(input.cwd, full)))
       return block(protectedFile);
   }
-  if (tool === "bash") return decideBash(command ?? "", input);
+  if (tool === "bash") return input.role === "discuss" ? block(discussOnly) : decideBash(command ?? "", input);
   return allow;
 }
 
@@ -1857,6 +1883,8 @@ export default function (pi: ExtensionAPI) {
   const home = process.env.HOME;
   const protectedFiles = [
     join(stateDir(), "policy-trust.json"),
+    // Shep's question ledger: an answered question in it is the person's pick.
+    join(stateDir(), "shep/questions.json"),
     process.env.BERCAIL_CONFIG ||
       join(process.env.XDG_CONFIG_HOME || join(home ?? "", ".config"), "bercail/config.toml"),
   ];

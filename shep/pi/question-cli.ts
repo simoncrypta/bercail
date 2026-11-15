@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { QuestionStore, projection, tokenOf, type QuestionSpec } from "./questions.ts";
 import { captureTarget, checkQuestion } from "./question-target.ts";
+import { closed, discussionOf, openDiscussion, pick } from "./discuss.ts";
 
 async function main() {
   const state = process.env.BERCAIL_SHEP_STATE;
@@ -27,11 +28,28 @@ async function main() {
     const question = store.snapshot().questions.find((q) => tokenOf(q) === args[0]);
     if (!question) throw new Error("unknown question revision");
     result = await checkQuestion(question);
-  } else if (["create", "revise", "reply"].includes(op ?? "")) {
+  } else if (op === "discuss") {
+    if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
+      throw new Error("discuss requires a Qn@revision token");
+    const question = store.snapshot().questions.find((q) => tokenOf(q) === args[0]);
+    if (!question) throw new Error("unknown question revision");
+    result = openDiscussion(state, question);
+  } else if (op === "closed") {
+    if (args.length !== 2) throw new Error("closed requires a Qn@revision token and the opening's id");
+    result = { told: closed(state, args[0]!, args[1]!) };
+  } else if (["create", "revise", "reply", "answer", "withdraw"].includes(op ?? "")) {
     if (args.length) throw new Error(`${op} reads JSON from stdin, not argv`);
     const input = JSON.parse(readFileSync(0, "utf8"));
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("expected a JSON object");
-    if (op === "reply") {
+    if (op === "withdraw") {
+      if (Object.keys(input).sort().join() !== "reason,requestId,token")
+        throw new Error("withdraw fields must be requestId, token and reason only");
+      result = store.withdraw(input.requestId, input.token, input.reason);
+    } else if (op === "answer") {
+      if (Object.keys(input).sort().join() !== "choice,requestId,source,token")
+        throw new Error("answer fields must be requestId, token, choice and source only");
+      result = await pick(state, input.requestId, input.token, input.choice, input.source);
+    } else if (op === "reply") {
       if (Object.keys(input).sort().join() !== "answer,requestId,source,token")
         throw new Error("reply fields must be requestId, token, answer and source only; no verification flags");
       result = store.propose(input.requestId, input.token, input.answer, input.source);
@@ -47,6 +65,8 @@ async function main() {
         kind: input.kind,
         prompt: input.prompt,
         options: input.options,
+        ...(input.brief === undefined ? {} : { brief: input.brief }),
+        ...(input.recommendation == null ? {} : { recommendation: input.recommendation }),
         origin: input.origin,
         target: captureTarget(input),
       });
@@ -57,13 +77,14 @@ async function main() {
     }
   } else
     throw new Error(
-      "usage: question-cli.ts list | json | panel | create | revise | reply | thread TOPIC | check Qn@revision",
+      "usage: question-cli.ts list | json | panel | create | revise | reply | answer | withdraw | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING",
     );
   console.log(JSON.stringify(result));
 }
 
-// What the Decisions panel shows: each pending question with its live check, and
-// the staged change's size and stakes for a review or action. Read-only: no answers.
+// What the Decisions panel shows: each pending question with its brief, Shep's
+// recommendation and live check, and the staged change's size and stakes for a review
+// or action. Answering is `answer`; this only reads.
 async function panel(store: QuestionStore, state: string) {
   const bin = process.env.BERCAIL_SHEP_BIN || "bercail";
   const cards = [];
@@ -87,7 +108,10 @@ async function panel(store: QuestionStore, state: string) {
       token: tokenOf(q),
       kind: q.kind,
       prompt: q.prompt,
+      brief: q.brief ?? null,
       options: q.options,
+      recommendation: q.recommendation ?? null,
+      discussed: discussionOf(state, q) !== null,
       createdAt: q.createdAt,
       target: { repo, topic, worktree, space },
       status: check.status,

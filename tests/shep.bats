@@ -34,7 +34,7 @@ if [[ " $* " == *" --list-models "* ]]; then
   exit 0
 fi
 {
-  printf 'pi cwd=%s inbox=%s role=%s anthropic=%s\n' "$PWD" "${BERCAIL_SHEP_INBOX:-}" "${BERCAIL_ROLE:-}" "${ANTHROPIC_API_KEY:-unset}"
+  printf 'pi cwd=%s inbox=%s role=%s anthropic=%s discuss=%s\n' "$PWD" "${BERCAIL_SHEP_INBOX:-}" "${BERCAIL_ROLE:-}" "${ANTHROPIC_API_KEY:-unset}" "${BERCAIL_DISCUSS_TOKEN:-}"
   printf 'pi-arg %s\n' "$@"
 } >>"$LOG"
 EOF
@@ -107,7 +107,7 @@ EOF
 @test "Pi runs in its own folder and sessions on the lead model, with Shep rules and inbox only" {
   local args want
   start_pi
-  grep -qx "pi cwd=$STATE/workspace inbox=$STATE/inbox role=shep anthropic=unset" "$LOG" || fail "Pi env: $(grep '^pi cwd' "$LOG")"
+  grep -qx "pi cwd=$STATE/workspace inbox=$STATE/inbox role=shep anthropic=unset discuss=" "$LOG" || fail "Pi env: $(grep '^pi cwd' "$LOG")"
   args="$(sed -n 's/^pi-arg //p' "$LOG" | tr '\n' ' ')"
   for want in "--model fake/lead:high" "-e npm:pi-claude-bridge@0.12.0" "-e /x/fallback.ts" "-e $SHARE/pi/inbox.ts" \
     "-e $SHARE/pi/compaction.ts" "-e $SHARE/pi/question-commands.ts" "--append-system-prompt $SHARE/SHEP.md" "--append-system-prompt $STATE/context.md" \
@@ -131,7 +131,7 @@ EOF
 @test "the shep usage names every subcommand" {
   local out
   out="$(shep unknown </dev/null 2>&1)" && fail "an unknown subcommand passed"
-  [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|check|thread|panel' ]] \
+  [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|discuss|closed' ]] \
     || fail "shep usage: $out"
 }
 
@@ -302,7 +302,42 @@ EOF
   reset
   rm -rf "$SHARE"
   INSTALL_SRC="$ROOT" bash -c 'set -euo pipefail; for l in common config bstack shep; do source "$1/lib/$l.sh"; done; deploy_shep' _ "$ROOT" >/dev/null
-  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts; do
+  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts; do
     cmp -s "$ROOT/shep/$rel" "$SHARE/$rel" || fail "deploy did not install shep/$rel"
   done
+}
+
+@test "Discuss runs a read-only Pi on a branch of Shep's session at the question, and reopens on it" {
+  local repo="$BATS_TEST_TMPDIR/repo" args branch want
+  need node
+  reset
+  git init -q "$repo"
+  # Shep's session: the turn that asked (a1), then something later that is not in the branch.
+  mkdir -p "$STATE/pi-sessions" "$STATE/workspace"
+  {
+    printf '%s\n' '{"type":"session","version":3,"id":"shep-1","timestamp":"2026-11-15T12:00:00Z","cwd":"/w"}'
+    printf '%s\n' '{"type":"message","id":"u1","parentId":null,"timestamp":"t","message":{"role":"user","content":"next?"}}'
+    printf '%s\n' '{"type":"message","id":"a1","parentId":"u1","timestamp":"t","message":{"role":"assistant","content":[{"type":"text","text":"A or B?"}]}}'
+    printf '%s\n' '{"type":"message","id":"u2","parentId":"a1","timestamp":"t","message":{"role":"user","content":"later"}}'
+  } >"$STATE/pi-sessions/2026-11-15T12-00-00-000Z_shep-1.jsonl"
+  jq -n --arg repo "$repo" '{requestId:"r1", kind:"planning", prompt:"Which first?", options:["A","B"],
+    origin:{event:"chat", session:"shep-1", entry:"a1"}, repo:$repo, issue:null, topic:"plan", desk:null, base:null, action:null}' \
+    | shep question create >/dev/null || fail "no question"
+  shep discuss Q1@1 </dev/null >/dev/null 2>&1 || fail "discuss failed: $(cat "$LOG")"
+  grep -qx "pi cwd=$STATE/workspace inbox= role=discuss anthropic=unset discuss=Q1@1" "$LOG" || fail "Pi env: $(grep '^pi cwd' "$LOG")"
+  args="$(sed -n 's/^pi-arg //p' "$LOG" | tr '\n' ' ')"
+  for want in "--model fake/lead:high" "-e npm:pi-claude-bridge@0.12.0" "-e /x/fallback.ts" "-e $SHARE/pi/discuss.ts" \
+    "--tools read,grep,find,ls" "--no-extensions" "--no-mcp" "--no-skills" "--no-prompt-templates" "--no-context-files" \
+    "--session $STATE/discuss/sessions/"; do
+    [[ "$args" == *"$want"* ]] || fail "Pi argv lacks '$want': $args"
+  done
+  for want in inbox.ts question-commands.ts compaction.ts --continue --session-dir --skill --append-system-prompt --approve; do
+    [[ "$args" != *"$want"* ]] || fail "the branch got '$want': $args"
+  done
+  branch="$(sed -n 's/^pi-arg \(.*discuss\/sessions\/.*\)/\1/p' "$LOG")"
+  [[ "$(jq -r .id "$branch" | tail -1)" == a1 ]] || fail "the branch does not end at the question: $(cat "$branch")"
+  [[ "$(find "$STATE/pi-sessions" -type f | wc -l)" == 1 ]] || fail "the branch went where Shep's --continue looks"
+  : >"$LOG"
+  shep discuss Q1@1 </dev/null >/dev/null 2>&1
+  grep -qx "pi-arg $branch" "$LOG" || fail "the reopen did not continue the branch: $(cat "$LOG")"
 }

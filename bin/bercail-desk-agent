@@ -133,7 +133,8 @@ remember_desk() {
   hcjson="$(hc get "$HC_TERMINAL_ID" --json 2>/dev/null)" || return 0
   space="$(jq -r 'select(.labels["bercail.role"] == "agent") | .labels["bercail.space"] // empty' <<<"$hcjson")" || return 0
   [[ -n "$space" ]] || return 0
-  [[ "$prompt" =~ beads\ issue\ ([A-Za-z0-9_-]+) ]] && issue="${BASH_REMATCH[1]}"
+  # A child id has dots (bercail-237.15); the period that ends the sentence is not in it.
+  [[ "$prompt" =~ beads\ issue\ ([A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*) ]] && issue="${BASH_REMATCH[1]}"
   # Private only when we create it. An existing dir keeps its mode, and this
   # does not change the process umask the harness inherits. Parents, if missing,
   # keep that umask too.
