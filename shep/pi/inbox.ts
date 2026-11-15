@@ -257,8 +257,9 @@ function legacyAttempt(ev: any, dir: string): Attempt | undefined {
     attempted_at: ev.delivered_at ?? "",
   };
 }
-function reconcile(inbox: string, delivered: string) {
-  const snapshot = readJSON(join(inbox, "..", "source-state.json"));
+// Status transitions enqueue their event before publishing their source state.
+// Read the snapshot before claim() so that race cannot also create a gap notice.
+function reconcile(delivered: string, snapshot: any) {
   if (
     snapshot?.schema !== "bercail.source_state/v1" ||
     snapshot.source !== "bercail" ||
@@ -385,11 +386,12 @@ export default function (pi: ExtensionAPI) {
     soon = null;
     if (!active) return;
     try {
+      const snapshot = readJSON(join(inbox, "..", "source-state.json"));
       claim(inbox, delivered);
       verify();
       if (!active) return;
       prune(delivered, Date.now());
-      reconcile(inbox, delivered);
+      reconcile(delivered, snapshot);
       const ready = records(delivered).filter((t) => !receipt(t.ev) && !t.ev.delivery_error && !pending.has(id(t.ev)));
       if (!ready.length) return;
       const sessionFile = ctx.sessionManager.getSessionFile();

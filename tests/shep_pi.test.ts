@@ -600,4 +600,27 @@ describe("recoverable inbox delivery uses persisted session evidence", () => {
     await start();
     expect(send.mock.calls[0][0].details.events).toEqual([ev().event_id]);
   });
+
+  test("a finish the follower writes mid-drain reaches Shep once, as its event, with no reconstructed notice", async () => {
+    // The drain's first status update runs after claim() listed the inbox and
+    // before reconcile(): the follower writes the event, then the source state.
+    ui.setStatus.mockImplementationOnce(() => {
+      put();
+      writeFileSync(
+        join(dir, "source-state.json"),
+        JSON.stringify({
+          schema: "bercail.source_state/v1",
+          source: "bercail",
+          kind: "reconciliation",
+          observed_at: "2026-11-13T23:00:00Z",
+          desks: [{ agent: { address: "t9", status: "done" }, space: ev().space, desk: ev().desk }],
+        }),
+      );
+    });
+    header();
+    await start();
+    await tick();
+    expect(send.mock.calls.map(([message]) => message.details)).toEqual([{ events: [ev().event_id], notices: [] }]);
+    expect(readdirSync(delivered).filter((name) => name.startsWith("notice-"))).toEqual([]);
+  });
 });

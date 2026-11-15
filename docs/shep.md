@@ -338,7 +338,7 @@ The follower's existing filename heuristic is unchanged: it omits the process ID
 
 The existing notify follower also writes one private `source-state.json` beside the inbox. It is a current projection from snapshots and status changes, not a second job database or an event log. It includes observed timestamps and desk/space/repo/issue/checkout mappings, but no desk-authored prose, results, event IDs or human answers. Whole snapshots replace gone mappings.
 
-When a done, idle or blocked source mapping has no represented inbox notice, Shep receives an explicitly **reconstructed, possibly stale history-gap observation** with its observation time and a separate local notice ID. That ID is not a historical finish or block event ID. Identical represented observations are suppressed. A source snapshot cannot recover intervening transitions, a vanished desk, historical completion times or answers. Check the current board or brief before acting.
+When a done, idle or blocked source mapping has no represented inbox notice, Shep receives an explicitly **reconstructed, possibly stale history-gap observation** with its observation time and a separate local notice ID. That ID is not a historical finish or block event ID. Identical represented observations are suppressed. For status transitions that enqueue an event, the follower queues it before publishing that transition's source state. Shep reads `source-state.json` before claiming the inbox so those writes landing mid-drain cannot also produce a reconstructed notice. A source snapshot cannot recover intervening transitions, a vanished desk, historical completion times or answers. Check the current board or brief before acting.
 
 ### Proving it arrived
 
