@@ -6,13 +6,14 @@
 #   bercail shep run                       what the Shep view's terminal runs
 #   bercail shep status
 #   bercail shep bg --issue ID [--cwd DIR] a background Shep: waits and follow-through
+#   bercail shep diagram [FILE]            a diagram Shep did not write, without its links
 #   bercail shep repos | brief | board | queue | remember | forget | list | mistake   (lib/shep-context.sh)
 
 # shellcheck source=lib/shep-context.sh
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
 SHEP_SKILLS=(handoff review desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | questions [--json] | question create|revise|reply|check|thread|panel"
+SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|check|thread|panel"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -222,6 +223,38 @@ shep_question() {
   BERCAIL_SHEP_STATE="$(shep_state_dir)" BERCAIL_SHEP_BIN="${BERCAIL_SELF:-bercail}" node "$script" "$@"
 }
 
+# Prints Mermaid source (FILE or stdin) without its click and link statements,
+# which Pi turns into live links. It errs toward dropping, because Pi's renderer
+# deletes controls and splits on Unicode spaces first (docs/shep.md#diagrams-in-chat).
+shep_diagram() {
+  local src="${1:--}"
+  [[ $# -le 1 ]] || { _shep_err "usage: bercail shep diagram [FILE] (stdin without one)"; return 1; }
+  [[ "$src" == - || -r "$src" ]] || { _shep_err "cannot read $src; pass a Mermaid file, or the diagram on stdin"; return 1; }
+  cat -- "$src" | LC_ALL=C tr -d '\000-\010\013\014\016-\037\177' | LC_ALL=C awk '
+    function add(st,   w) {
+      w = st; sub(/^([ \t\r\v\f]|[\200-\377])+/, "", w)
+      if (tolower(w) ~ /^(click|link)[^a-z0-9_]/) { n++; cut = 1; return }
+      gsub(/^[ \t]+|[ \t]+$/, "", st)
+      if (st != "") out = out (out == "" ? "" : "; ") st
+    }
+    {
+      gsub(/\302[\200-\237]/, "")
+      match($0, /^[ \t]*/); ind = substr($0, 1, RLENGTH)
+      cur = ""; tail = ""; out = ""; q = 0; cut = 0
+      for (i = 1; i <= length($0); i++) {
+        c = substr($0, i, 1)
+        if (c == "\"") q = !q
+        if (!q && c == "%" && substr($0, i + 1, 1) == "%") { tail = substr($0, i); break }
+        if (!q && c == ";") { add(cur); cur = ""; continue }
+        cur = cur c
+      }
+      add(cur)
+      if (!cut) print
+      else if (out tail != "") print ind out (out != "" && tail != "" ? " " : "") tail
+    }
+    END { if (n) printf "bercail shep: dropped %d click/link statement(s)\n", n > "/dev/stderr" }'
+}
+
 cmd_shep() {
   case "${1:-status}" in
     run) shep_run ;;
@@ -235,6 +268,7 @@ cmd_shep() {
     forget) shift; shep_forget "$@" ;;
     list) shift; shep_list "$@" ;;
     mistake) shift; shep_mistake "$@" ;;
+    diagram) shift; shep_diagram "$@" ;;
     questions) shift; if [[ "${1:-}" == --json ]]; then shep_question json; else shep_question list "$@"; fi ;;
     question) shift; shep_question "$@" ;;
     *) _shep_err "$SHEP_USAGE"; return 1 ;;

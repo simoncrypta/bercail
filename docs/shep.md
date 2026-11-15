@@ -49,9 +49,16 @@ bercail shep queue       # what waits on your review, with sizes and stakes (--r
 bercail shep brief ID    # one issue: its desk and state, the question it is blocked on, the latest report
 bercail shep list        # Shep's standing rules: remember "RULE" [--scope S] adds one, forget N drops one
 bercail shep mistake list  # the mistakes ledger: mistake KEY "WHAT" [--repo DIR] [--issue ID] records one
+bercail shep diagram FILE  # a Mermaid diagram without its click and link statements (stdin without FILE)
 ```
 
 An older `~/.config/bercail/config.toml` may still have `backend` and `session` under `[shep]`. bercail no longer reads them; delete them whenever you like. The keys `[shep]` holds now are for [compaction](#compaction).
+
+## Diagrams in chat
+
+Pi draws a `mermaid` code block in Shep's replies as Unicode box art (Pi's `markdown.mermaid` setting, on by default; Shep leaves it so). Shep draws one only when a flow has three or more states or branches, as a `stateDiagram-v2` or `flowchart TD` of about 15 nodes at most, with no deep nesting. Past that the art stops being readable: a 40-state graph with cross jumps came out four screens tall with its labels cut. Edge labels stay under about 20 characters, and only one edge is labeled where a state branches, because labels on edges leaving the same row print over each other. Other guards go in the text. Every diagram is followed by its transitions as a plain list, which is what you read when the art degrades and what a screen reader gets. A diagram too wide for the pane, or over 128 nodes, shows as its source instead.
+
+Pi turns a diagram's `click` and `link` targets into terminal hyperlinks, `javascript:` ones included. HTML labels, `%%{init}%%` directives and `url(...)` styles print as text or are ignored, and nothing is fetched. So a diagram Shep did not write, such as a PR's `chart.mmd` or one in a desk's report, goes through `bercail shep diagram` before Shep pastes it. It prints the diagram without its `click` and `link` statements (`click A href "url"` is one), and says on stderr how many it dropped. It errs toward dropping. The renderer deletes control characters before it parses and splits words on Unicode spaces, so `cl\x01ick` or a no-break space before `click` still makes a link. The helper deletes the same control characters from every line, splits statements on `;` outside double quotes, and skips any leading space or non-ASCII character before it looks for the word, in any case. A statement that merely starts with the word, such as a state named `link`, goes too. Other lines are printed as they were, less those control characters.
 
 ## What Shep knows
 

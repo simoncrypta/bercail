@@ -28,6 +28,7 @@ Post-install CLI (bercail):
                 queue [--repo DIR] [--json] (what waits on your review, against the review budget) |
                 remember "RULE" [--scope SCOPE] | list | forget N (Shep's standing rules) |
                 mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list (the mistakes ledger) |
+                diagram [FILE] (a Mermaid diagram without its click and link statements) |
                 questions [--json] (pending targeted questions; replies are unverified) |
                 question create|revise|reply (JSON on stdin) | check TOKEN | thread TOPIC | panel (the Decisions panel's JSON)
   policy        A repo's git policy (.bercail/policy.toml): show [--json] [repo] |

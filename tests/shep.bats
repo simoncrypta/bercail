@@ -131,8 +131,52 @@ EOF
 @test "the shep usage names every subcommand" {
   local out
   out="$(shep unknown </dev/null 2>&1)" && fail "an unknown subcommand passed"
-  [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list | questions [--json] | question create|revise|reply|check|thread|panel' ]] \
+  [[ "$out" == 'bercail shep: usage: bercail shep run | status | bg --issue ID [--cwd DIR] | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|check|thread|panel' ]] \
     || fail "shep usage: $out"
+}
+
+@test "shep diagram drops click and link statements, after a ; and in any case too" {
+  local out err
+  out="$(printf '%s\n' 'flowchart TD' \
+    '  A["go; click A"] --> B; click A "https://evil.example/a"' \
+    '  CLICK B href "https://evil.example/b" %% why' \
+    '  click C call cb()' \
+    '  B --> C' \
+    '  linkStyle 0 stroke:red' \
+    'classDiagram' \
+    '  link K "https://evil.example/k"' \
+    | shep diagram 2>"$BATS_TEST_TMPDIR/err")"
+  err="$(cat "$BATS_TEST_TMPDIR/err")"
+  [[ "$out" == "$(printf '%s\n' 'flowchart TD' \
+    '  A["go; click A"] --> B' \
+    '  %% why' \
+    '  B --> C' \
+    '  linkStyle 0 stroke:red' \
+    'classDiagram')" ]] || fail "cleaned: $out"
+  [[ "$err" == 'bercail shep: dropped 4 click/link statement(s)' ]] || fail "stderr: $err"
+}
+
+@test "shep diagram drops a click behind a control character or a Unicode space, which Pi's renderer still reads" {
+  local out err
+  # NBSP, a C1 control, U+3000, a BOM, C0 controls (NUL too), and a carriage return:
+  # Pi's renderer deletes the controls and splits words on the spaces, so each is a click.
+  out="$( { printf '%s\n' 'flowchart TD' '  A --> B' \
+    $'  \xc2\xa0click A "u"' $'  cl\xc2\x85ick A "u"' $'  \xe3\x80\x80click A "u"' \
+    $'\xef\xbb\xbfclick A "u"' $'  cl\x01ick A "u"' $'  click\rA "u"'; printf '  cl\0ick A "u"\n'; } \
+    | shep diagram 2>"$BATS_TEST_TMPDIR/err")"
+  err="$(cat "$BATS_TEST_TMPDIR/err")"
+  [[ "$out" == "$(printf '%s\n' 'flowchart TD' '  A --> B')" ]] || fail "cleaned: $(od -c <<<"$out")"
+  [[ "$err" == 'bercail shep: dropped 7 click/link statement(s)' ]] || fail "stderr: $err"
+}
+
+@test "shep diagram prints a file with no links as it is, and says how to pass one it cannot read" {
+  local out err file="$BATS_TEST_TMPDIR/a=chart.mmd"
+  printf '%s\n' 'stateDiagram-v2' '  [*] --> Idle' '  Idle --> Run : start; Run --> [*]' '  Run --> clickable' '  %%{init: {"theme": "dark"}}%%' >"$file"
+  # Relative, so a name awk could read as a variable assignment is read as a file.
+  out="$(cd "$BATS_TEST_TMPDIR" && shep diagram a=chart.mmd 2>"$BATS_TEST_TMPDIR/err")"
+  [[ "$out" == "$(cat "$file")" && ! -s "$BATS_TEST_TMPDIR/err" ]] || fail "changed: $out / $(cat "$BATS_TEST_TMPDIR/err")"
+  err="$(shep diagram "$BATS_TEST_TMPDIR/none.mmd" 2>&1)" && fail "a missing file passed"
+  [[ "$err" == "bercail shep: cannot read $BATS_TEST_TMPDIR/none.mmd; pass a Mermaid file, or the diagram on stdin" ]] || fail "missing: $err"
 }
 
 @test "shep bg runs the lead Pi with the background brief and a one-line prompt in a labelled background terminal" {
