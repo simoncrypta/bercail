@@ -19,6 +19,10 @@
 // computer's first and then each machine's, a linked worktree's space nested under the
 // first space of its repo's main checkout. space-next/prev walk the spaces that aren't
 // nested; subspace-next/prev walk the current repo's (main checkout and worktrees).
+//
+// Across machines: a desk in a space on another machine runs there (hc run --on), its
+// labels naming that machine's ids, and git and gh for a space run on its machine. The
+// notifier runs on the backend ([herdr] backend in config.toml), or here without one.
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import {
@@ -40,6 +44,32 @@ import {
 
 const CONFIG = "/.config/bercail/config.toml";
 const DESK_AGENT = "/.local/bin/bercail-desk-agent";
+// The same wrapper in another machine's home: its path is never built here.
+const REMOTE_AGENT = 'test -x "$HOME/.local/bin/bercail-desk-agent"';
+const REMOTE_AGENT_RUN = 'exec "$HOME/.local/bin/bercail-desk-agent"';
+
+// [herdr] backend in this computer's config.toml: the Herdr machine bercail runs on
+// (a name from `hc machine ls`), or null for this computer.
+export function backendOf(text) {
+  let section = "";
+  for (const raw of String(text ?? "").split("\n")) {
+    const line = raw.replace(/#.*$/, "").trim();
+    const sec = line.match(/^\[(.+)\]$/);
+    if (sec) section = sec[1].trim();
+    const kv = section === "herdr" && line.match(/^backend\s*=\s*"([^"]*)"$/);
+    if (kv) return kv[1] || null;
+  }
+  return null;
+}
+
+// Ids across machines: a terminal on box is box/t3 here, and the labels written there
+// name ids as box does (sp1 there is box/sp1 here). Only that machine's prefix is stripped.
+export const machineOf = (address) => (address?.includes("/") ? address.slice(0, address.indexOf("/")) : null);
+export const qualify = (raw, machine) => (machine && raw ? `${machine}/${raw}` : raw);
+export const strip = (id, machine) => (machine && id?.startsWith(`${machine}/`) ? id.slice(machine.length + 1) : id);
+
+// The space a desk's bercail.space label names, as this client's spaces() name it.
+const deskSpace = (t) => qualify(t.labels?.["bercail.space"], machineOf(t.address));
 
 function findNode(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -96,9 +126,8 @@ export function readConfig(text) {
 
 function deskFor(spaceId) {
   return (
-    terminals().find(
-      (t) => t.state === "live" && t.labels?.["bercail.role"] === "agent" && t.labels?.["bercail.space"] === spaceId,
-    ) ?? null
+    terminals().find((t) => t.state === "live" && t.labels?.["bercail.role"] === "agent" && deskSpace(t) === spaceId) ??
+    null
   );
 }
 
@@ -109,7 +138,7 @@ function spaceOfTerminal(address) {
   let t = terminals().find((x) => x.address === address);
   while (t && !seen.has(t.address)) {
     seen.add(t.address);
-    const label = t.labels?.["bercail.space"];
+    const label = deskSpace(t);
     if (label) return spaces().find((s) => s.id === label) ?? null;
     const tab = panes().find((p) => p.terminal === t.address)?.tab;
     if (tab) return spaces().find((s) => s.tabs.some((x) => x.id === tab)) ?? null;
@@ -118,13 +147,13 @@ function spaceOfTerminal(address) {
   return null;
 }
 
-// Someone else's PR on this checkout: its number, for `tuicr pr`.
-async function foreignPr(folder) {
+// Someone else's PR on this checkout (on machine `on`): its number, for `tuicr pr`.
+async function foreignPr(folder, on) {
   try {
-    const pr = await exec("gh", ["pr", "view", "--json", "number,author"], { cwd: folder });
+    const pr = await exec("gh", ["pr", "view", "--json", "number,author"], { cwd: folder, on });
     if (pr.code !== 0) return null;
     const { number, author } = JSON.parse(pr.stdout);
-    const me = await exec("gh", ["api", "user", "--jq", ".login"], { cwd: folder });
+    const me = await exec("gh", ["api", "user", "--jq", ".login"], { cwd: folder, on });
     if (me.code !== 0 || !me.stdout.trim() || author?.login === me.stdout.trim()) return null;
     return number ?? null;
   } catch {
@@ -135,11 +164,11 @@ async function foreignPr(folder) {
 // What Review runs. `review = "tuicr"`: own work is the uncommitted tree, watched
 // (agents stage and never commit unreviewed work); someone else's PR is `tuicr pr N`.
 // Any other `review` is run as written.
-async function reviewArgv(review, folder) {
+async function reviewArgv(review, folder, on) {
   const argv = review.split(/\s+/).filter(Boolean);
   if (argv[0] !== "tuicr") return argv;
   if (argv.length === 1) {
-    const pr = await foreignPr(folder);
+    const pr = await foreignPr(folder, on);
     argv.push(...(pr ? ["pr", String(pr)] : ["-w"]));
   }
   if (!argv.includes("--no-update-check")) argv.push("--no-update-check");
@@ -230,12 +259,18 @@ export default class BercailDesk extends View {
     this.lastPane = null; // the pane the keyboard was last in, to come back from the desk
     this.git = {}; // [machine, folder] -> { at, git: { repo, linked } | null }
     this.hadDesk = new Set(); // space ids that had a desk or got one started: no auto-start again
-    cx.spawn(async (cx) => {
+    this.backend = null; // [herdr] backend: where the notifier runs
+    this.loaded = (async () => {
       try {
-        this.cfg = readConfig(await readTextFile(home() + CONFIG));
+        const text = await readTextFile(home() + CONFIG);
+        this.cfg = readConfig(text);
+        this.backend = backendOf(text);
       } catch {
         /* defaults */
       }
+    })();
+    cx.spawn(async (cx) => {
+      await this.loaded;
       cx.notify();
     });
     if (this.role === "keys") {
@@ -254,8 +289,9 @@ export default class BercailDesk extends View {
     // must come back after it exits.
     // Only with bercail installed: the layout also works on its own.
     cx.spawn(async () => {
+      await this.loaded;
       try {
-        const r = await exec("bash", ["-lc", `${NOTIFIER_PATH}; command -v bercail`]);
+        const r = await exec("bash", ["-lc", `${NOTIFIER_PATH}; command -v bercail`], { on: this.backend });
         this.hasBercail = r.code === 0;
       } catch {
         this.hasBercail = false;
@@ -433,9 +469,15 @@ export default class BercailDesk extends View {
     }
     this.starting[space.id] = true;
     this.hadDesk.add(space.id);
+    // On another machine: started there, under its Shell, labelled with its ids.
+    const on = space.machine ?? null;
     try {
       const wrapper = home() + DESK_AGENT;
-      const argv = (await exec("test", ["-x", wrapper])).code === 0 ? [wrapper] : ["pi"];
+      const found = on
+        ? (await exec("bash", ["-lc", REMOTE_AGENT], { on })).code === 0
+        : (await exec("test", ["-x", wrapper])).code === 0;
+      const agent = on ? ["bash", "-lc", REMOTE_AGENT_RUN] : [wrapper];
+      const argv = found ? agent : ["pi"];
       const r = await exec("hc", [
         "run",
         "--bg",
@@ -443,14 +485,15 @@ export default class BercailDesk extends View {
         "--keep",
         "--outlive-parent",
         "--no-notify",
+        ...(on ? ["--on", on] : []),
         "--parent",
-        shell,
+        strip(shell, on),
         "--cwd",
         placeOf(space, panes()),
         "--label",
         "bercail.role=agent",
         "--label",
-        `bercail.space=${space.id}`,
+        `bercail.space=${strip(space.id, on)}`,
         ...argv,
       ]);
       if (r.code !== 0) throw new Error(r.stderr || r.stdout);
@@ -479,25 +522,30 @@ export default class BercailDesk extends View {
       run("tab.close", { id: tab.id, confirmed: true });
     }
     try {
+      const on = space.machine ?? null;
       if (!always) {
-        const st = await exec("git", ["status", "--porcelain"], { cwd: folder });
+        const st = await exec("git", ["status", "--porcelain"], { cwd: folder, on });
         if (st.code !== 0 || !st.stdout.trim()) return;
       }
-      run("tab.new", { space: space.id, name: "Review", folder, argv: await reviewArgv(this.cfg.review, folder) });
+      run("tab.new", { space: space.id, name: "Review", folder, argv: await reviewArgv(this.cfg.review, folder, on) });
     } catch (e) {
       notify({ title: "bercail: Review did not open", body: String(e?.message ?? e), level: "error" });
     }
   }
 
+  // With a backend, the one there counts and a new one starts there: it follows the
+  // desks where they run, whichever window is open.
   ensureNotifier() {
     if (!this.hasBercail) return;
-    if (terminals().some((t) => t.name === NOTIFIER && t.state === "live")) return;
+    const here = (t) => !this.backend || machineOf(t.address) === this.backend;
+    if (terminals().some((t) => t.name === NOTIFIER && t.state === "live" && here(t))) return;
     exec("hc", [
       "run",
       "--bg",
       "--no-parent",
       "--no-notify",
       "--rm",
+      ...(this.backend ? ["--on", this.backend] : []),
       "--name",
       NOTIFIER,
       "--label",
@@ -572,7 +620,7 @@ export default class BercailDesk extends View {
       this.prev[t.address] = t.status;
       const finished = (t.status === "done" && before !== "done") || (before === "working" && t.status === "idle");
       if (finished && this.cfg.autoReview) {
-        this.pendingReview[t.labels["bercail.space"]] = t.cwd;
+        this.pendingReview[deskSpace(t)] = t.cwd;
       }
     }
     const folder = this.pendingReview[space.id];

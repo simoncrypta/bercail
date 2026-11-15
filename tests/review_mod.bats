@@ -75,6 +75,7 @@ import { spawnSync } from "child_process";
 import { readFileSync } from "fs";
 export const exec = async (cmd, args, opts) => {
   h().execs.push([cmd, ...(args ?? [])]);
+  (h().ons ??= []).push(opts?.on ?? null);
   if (args?.[0] === "review-pr" && args[1] === "state") return { code: 0, stdout: h().state, stderr: "" };
   if (args?.[0] === "review-pr" && args[1] === "checkout") return h().checkout(args[2]);
   // The detach wrapper and its cleanup run for real; /bin/bercail is the fake bercail.
@@ -93,7 +94,7 @@ export const run = (name, args) => h().runs.push([name, args]);
 export const theme = () => new Proxy({}, { get: (_t, k) => String(k) });
 export const readTextFile = async (path) => { try { return readFileSync(path, "utf8"); } catch { return null; } };
 // The test wakes the watch loop with h().wake(paths).
-export const watchFolder = () => new Promise((resolve) => { h().wake = resolve; });
+export const watchFolder = (dir) => { (h().watched ??= []).push(dir); return new Promise((resolve) => { h().wake = resolve; }); };
 EOF
   cat >"$BATS_TEST_TMPDIR/gpui.mjs" <<'EOF'
 // An element records its text children, nested elements and handlers, in order. A
@@ -547,4 +548,53 @@ EOF
     || fail "state JSON: $(cat "$BATS_TEST_TMPDIR/state.json")"
   jq '.current = 8' "$BATS_TEST_TMPDIR/state.json" >"$BATS_TEST_TMPDIR/state8.json"
   METHODS="$BATS_TEST_TMPDIR/methods.json" node "$BATS_TEST_TMPDIR/test.mjs" "$BATS_TEST_TMPDIR/state8.json" "$BATS_TEST_TMPDIR/render8.txt"
+}
+
+@test "with a backend, the Stack tab runs bercail and its jobs there, and polls the run dir" {
+  arrange_mod
+  "$ROOT/bin/bercail" review-pr state --stack "$S" >"$BATS_TEST_TMPDIR/state.json" || fail "review-pr state"
+  mkdir -p "$FAKE_HOME/.config/bercail"
+  printf '[herdr]\nbackend = "box"\n' >"$FAKE_HOME/.config/bercail/config.toml"
+  cat >"$BATS_TEST_TMPDIR/remote.mjs" <<'EOF'
+// props.stack and props.bercail are box's paths: they run on box, never here. The
+// run dir there can't be watched from here, so the tab looks again every 5 s; job
+// status files live under box's home (a path relative to it, exec's cwd there).
+import { readFileSync } from "fs";
+import Review from "./main.mjs";
+const state = readFileSync(process.argv[2], "utf8");
+const S = JSON.parse(state);
+const fail = (m) => { console.error(`FAIL: ${m}`); process.exit(1); };
+globalThis.herdr = { state, execs: [], runs: [], notes: [], props: { stack: S.stack, bercail: "/bin/bercail" } };
+const context = () => ({ timer: { every: (_ms, f) => { herdr.timer = f; } }, focus_handle: () => ({ focus() {} }),
+  spawn: (f) => f(context()), notify() {}, stop_propagation() {} });
+const tick = () => new Promise((r) => setTimeout(r, 5));
+const v = new Review();
+v.init({}, context());
+await tick();
+const on = (cmd) => herdr.execs.map((e, i) => [e, herdr.ons[i]]).filter(([e]) => e[0] === cmd);
+const states = () => herdr.execs.filter((e) => e[1] === "review-pr" && e[2] === "state").length;
+if (!v.state) fail(`no state: ${v.error}`);
+if (JSON.stringify(on("/bin/bercail").map(([, m]) => m)) !== '["box"]') fail(`review-pr state on box: ${JSON.stringify(on("/bin/bercail"))}`);
+if (JSON.stringify(on("find")) !== JSON.stringify([[["find", ".cache/bercail/review-jobs", "-type", "f", "-mmin", "+1440", "-delete"], "box"]]))
+  fail(`old status files are cleaned on box: ${JSON.stringify(on("find"))}`);
+if (herdr.watched?.length) fail(`a run dir on box is not watched here: ${herdr.watched}`);
+const before = states();
+herdr.timer(context());
+await tick();
+if (states() !== before) fail("polled before 5 s");
+v.loaded = Date.now() - 6000;
+herdr.timer(context());
+await tick();
+if (states() !== before + 1) fail("the run dir is read again after 5 s");
+// c: the detached job starts on box, its status file under box's home.
+herdr.reject = "stop before the wrapper runs";
+v.key({ keystroke: "c" }, context());
+await tick();
+const [job, m] = on("sh").at(-1) ?? [];
+if (m !== "box" || !job.includes("/bin/bercail") || !job.some((a) => /^\.cache\/bercail\/review-jobs\//.test(a))) fail(`c on box: ${JSON.stringify([job, m])}`);
+delete herdr.reject;
+await v.readStatus(".cache/bercail/review-jobs/x");
+if (JSON.stringify(on("cat").at(-1)) !== JSON.stringify([["cat", ".cache/bercail/review-jobs/x"], "box"])) fail(`a status file is read on box: ${JSON.stringify(on("cat"))}`);
+EOF
+  METHODS="$BATS_TEST_TMPDIR/methods.json" node "$BATS_TEST_TMPDIR/remote.mjs" "$BATS_TEST_TMPDIR/state.json"
 }

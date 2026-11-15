@@ -28,11 +28,13 @@ export const shared = (k) => h().shared[k] ?? null;
 export const setShared = (k, v) => { h().shared[k] = v; };
 export const openOverlay = (spec) => { h().calls.push(["openOverlay", spec]); return "o1"; };
 export const closeOverlay = (id) => h().calls.push(["closeOverlay", id]);
-export const exec = async (cmd, args) => { h().execs.push([cmd, ...args]); return h().exec(cmd, args); };
+export const exec = async (cmd, args, opts) => { h().execs.push([cmd, ...args]); return h().exec(cmd, args, opts); };
 export const hc = async () => ({ code: 1, stdout: "", stderr: "" });
 export const watchFolder = () => new Promise(() => {});
 export const window = () => ({ active: true });
 export const home = () => "/home/me";
+// The files a test puts in h().files, by path; else absent.
+export const readTextFile = async (path) => h().files?.[path] ?? null;
 // The commands the test sends with h().send(c).
 export const nextCommand = () => new Promise((resolve) => { h().send = resolve; });
 EOF
@@ -202,6 +204,42 @@ expect(herdr.calls.at(-1)[1].props, { role: "reviews" }, "the badge opens the Re
 Date.now = () => NOW + STALE + 60000;
 expect(text(views("review-list")(v.render())), ["◆ 5 to review (stale)"], "stale header");
 expect(viewCalls(), [], "rendering ran commands");
+EOF
+}
+
+@test "with a backend, the queue is read there, and its space ids and folders are that machine's" {
+  mod_case <<'EOF'
+// [herdr] backend = "box": bercail shep queue runs on box. Its item in space sp1 is in
+// box/sp1 here, not in a space here that happens to be sp1; its worktree /w/far is box's
+// folder, so box/sp2 matches and a space here with that folder does not.
+herdr.files = { "/home/me/.config/bercail/config.toml": '[herdr]\nbackend = "box"\n' };
+const boxQ = { ...Q, items: [
+  { kind: "staged", path: "/w/a", issue: "a-1", space: "sp1", since: Q.at, state: "review", counts: true, change: { lines: 3, stakes: "low" } },
+  { kind: "staged", path: "/w/far", issue: "a-2", since: Q.at, state: "review", counts: true, change: { lines: 5, stakes: "low" } }] };
+const on = [];
+herdr.exec = (cmd, args, opts) => {
+  on.push([cmd, opts?.on ?? null]);
+  return { code: 0, stdout: JSON.stringify(boxQ), stderr: "" };
+};
+herdr.spaces = [S("sp1", "here-sp1"), { ...S("box/sp1", "far-one"), machine: "box" }, S("near", "near", "/w/far"),
+  { ...S("box/sp2", "far-two", "/w/far"), machine: "box" }];
+const v = new Spaces();
+v.init({}, cx());
+timers.find((t) => t.ms === 250).f(cx());
+for (let i = 0; i < 4; i++) await tick();
+expect(on.filter(([c]) => c === "bash"), [["bash", "box"]], "the queue is read on box");
+const r = herdr.shared["bercail.review"];
+expect(r.backend, "box", "the read says where it was made");
+expect(reviewRows(r.q, herdr.spaces, [], r.backend).map((x) => x.space?.id ?? null), ["box/sp1", "box/sp2"], "box's spaces");
+herdr.calls = [];
+herdr.send("review-next");
+await tick();
+expect(herdr.calls.find(([n]) => n === "space.select"), ["space.select", { id: "box/sp1" }], "review-next goes to box/sp1");
+// A failed read keeps the last queue with the machine it came from.
+herdr.exec = () => ({ code: 1, stdout: "", stderr: "box is away" });
+v.readQueue(cx());
+await tick();
+expect([herdr.shared["bercail.review"].backend, herdr.shared["bercail.review"].error], ["box", "box is away"], "a failed read");
 EOF
 }
 

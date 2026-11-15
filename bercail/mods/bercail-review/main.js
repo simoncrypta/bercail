@@ -9,6 +9,10 @@
 // c  Code review: a Review #N tab on tuicr pr N, seeded with the [AI Agent] questions.
 // r  Re-review: gather the stack again, then run this PR's decisions pass again.
 // o  Shell: the review worktree on the PR's branch, and a shell tab in it.
+//
+// With a backend in config.toml ([herdr] backend), the stack, props.bercail and the
+// jobs are that machine's: every command runs there, and the run dir is polled, since
+// watchFolder sees this computer only.
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { exec, focused, home, notify, props, readTextFile, run, theme, watchFolder } from "herdr";
@@ -21,6 +25,7 @@ const CI_ORDER = ["fail", "pending", "cancel", "pass", "skipping"];
 // Where a detached command leaves its exit code and its last output lines, one file
 // per job; the tab reads it and removes it. Not the run dir, which only bercail writes.
 const JOBS = "/.cache/bercail/review-jobs";
+const CONFIG = "/.config/bercail/config.toml";
 // $0 log, $1 status file, then the command. The log keeps the whole output, as before.
 const INNER =
   'log=$0; status=$1; shift; rc=0; out=$("$@" 2>&1 </dev/null) || rc=$?; printf "%s\\n" "$out" >>"$log"; ' +
@@ -30,6 +35,20 @@ const OUTER =
   'then setsid -f sh -c "$inner" "$@" >/dev/null 2>&1 </dev/null; ' +
   'else nohup sh -c "$inner" "$@" >/dev/null 2>&1 </dev/null & fi';
 let seq = 0;
+
+// [herdr] backend in this computer's config.toml: the Herdr machine bercail runs on
+// (a name from `hc machine ls`), or null for this computer.
+export function backendOf(text) {
+  let section = "";
+  for (const raw of String(text ?? "").split("\n")) {
+    const line = raw.replace(/#.*$/, "").trim();
+    const sec = line.match(/^\[(.+)\]$/);
+    if (sec) section = sec[1].trim();
+    const kv = section === "herdr" && line.match(/^backend\s*=\s*"([^"]*)"$/);
+    if (kv) return kv[1] || null;
+  }
+  return null;
+}
 
 export const loc = (e) =>
   !e?.file ? "" : e.file + (e.line ? `:${e.line}` + ((e.end_line ?? e.line) !== e.line ? `-${e.end_line}` : "") : "");
@@ -80,21 +99,31 @@ export default class Review extends View {
     this.message = "";
     this.sel = null;
     this.jobs = [];
+    this.backend = null;
+    this.config = readTextFile(home() + CONFIG)
+      .catch(() => null)
+      .then((text) => {
+        this.backend = backendOf(text);
+      });
     // Only while a detached command runs: its status file is outside the watched run dir.
     this.loaded = 0;
     cx.timer.every(1000, (cx) => {
       if (this.jobs.length && !this.checking) cx.spawn(async (cx) => this.ended(cx));
-      // A pass killed outside its traps leaves its lock and changes no file: look again now and then.
-      if (this.prs().some((p) => p.pass === "running") && Date.now() - this.loaded > 15000) {
+      // A pass killed outside its traps leaves its lock and changes no file: look again now
+      // and then. A stack on the backend is not watched: look every 5 s.
+      const poll = this.backend ? 5000 : this.prs().some((p) => p.pass === "running") ? 15000 : Infinity;
+      if (Date.now() - this.loaded > poll) {
         this.loaded = Date.now();
         cx.spawn(async (cx) => this.reload(cx));
       }
     });
-    // Status files of jobs a reload of this mod forgot.
-    exec("find", [`${home()}${JOBS}`, "-type", "f", "-mmin", "+1440", "-delete"]).catch(() => {});
     cx.spawn(async (cx) => {
+      await this.config;
+      // Status files of jobs a reload of this mod forgot.
+      exec("find", [this.jobsDir(), "-type", "f", "-mmin", "+1440", "-delete"], { on: this.backend }).catch(() => {});
       await this.reload(cx);
       this.h.focus();
+      if (this.backend) return;
       for (;;) {
         const changed = await watchFolder(props().stack);
         if (changed.some((p) => !NOISE.test(p))) await this.reload(cx);
@@ -102,10 +131,23 @@ export default class Review extends View {
     });
   }
 
+  // Where job status files go: on the backend, relative to its home (exec's cwd there).
+  jobsDir() {
+    return this.backend ? JOBS.slice(1) : `${home()}${JOBS}`;
+  }
+
+  // A job's status file, or null while it has none.
+  async readStatus(path) {
+    if (!this.backend) return readTextFile(path);
+    const r = await exec("cat", [path], { on: this.backend });
+    return r.code === 0 ? r.stdout : null;
+  }
+
   async reload(cx) {
+    await this.config;
     const { stack, bercail } = props();
     try {
-      const r = await exec(bercail || "bercail", ["review-pr", "state", "--stack", stack]);
+      const r = await exec(bercail || "bercail", ["review-pr", "state", "--stack", stack], { on: this.backend });
       if (r.code !== 0) throw new Error(r.stderr.trim() || `review-pr state exited ${r.code}`);
       const was = this.state?.current;
       this.state = JSON.parse(r.stdout);
@@ -142,10 +184,10 @@ export default class Review extends View {
 
   // Off the tab's exec (30 s limit): a pass, a gather or tuicr's wait takes longer.
   async detach(what, argv, log) {
-    const status = `${home()}${JOBS}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${++seq}`;
+    const status = `${this.jobsDir()}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${++seq}`;
     this.jobs.push({ what, status, at: Date.now() });
     try {
-      const r = await exec("sh", ["-c", OUTER, "sh", INNER, log, status, ...argv]);
+      const r = await exec("sh", ["-c", OUTER, "sh", INNER, log, status, ...argv], { on: this.backend });
       if (r.code !== 0) throw new Error(r.stderr.trim() || `exit ${r.code}`);
     } catch (e) {
       this.jobs = this.jobs.filter((j) => j.status !== status);
@@ -160,13 +202,13 @@ export default class Review extends View {
       for (const job of [...this.jobs]) {
         let text;
         try {
-          text = await readTextFile(job.status);
+          text = await this.readStatus(job.status);
         } catch (e) {
           text = `1\ncould not read ${job.status}: ${e?.message ?? e}`;
         }
         if (text == null) continue;
         this.jobs = this.jobs.filter((j) => j !== job);
-        await exec("rm", ["-f", job.status]).catch(() => {});
+        await exec("rm", ["-f", job.status], { on: this.backend }).catch(() => {});
         const [rc, ...lines] = text.split("\n");
         // review-pr run prints run.json last (blocked exits 0, with a reason); a re-review's
         // gather prints its own JSON before it. Other commands end on an error line.
@@ -235,7 +277,7 @@ export default class Review extends View {
         this.say(`checking out #${n}…`, cx);
         cx.spawn(async (cx) => {
           try {
-            const r = await exec(self, ["review-pr", "checkout", n, "--stack", s.stack]);
+            const r = await exec(self, ["review-pr", "checkout", n, "--stack", s.stack], { on: this.backend });
             if (r.code !== 0) throw new Error(r.stderr.trim().split("\n").at(-1) || `exit ${r.code}`);
             const out = JSON.parse(r.stdout);
             run("tab.new", { ...(space ? { space } : {}), name: `Shell #${n}`, folder: out.worktree });

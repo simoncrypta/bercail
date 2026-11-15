@@ -27,9 +27,12 @@ commit = "allow"
 compact_at = 250000                  # context tokens at which Pi compacts Shep
 keep_recent = 50000                  # recent tokens kept word for word
 rollover = false                     # true: a fresh session instead, and each new day
+
+[herdr]                              # optional: bercail on another Herdr machine
+backend = ""                         # its name in `hc machine ls`; empty: this computer
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start; `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
 
 Those are all the keys bercail reads. `bercail doctor` names any other key in the file (`unknown  [shep] session (nothing reads it)`), a `[git]` value that is not a backend, and a line it cannot read; none of them counts as a failure. `bercail config get <section> <key>` prints one value as bercail reads it. The file is read as a subset of TOML: quoted and `"""` strings, `true` and `false`, whole numbers, and one-line arrays.
 
@@ -81,6 +84,22 @@ A swarm of desks can stage more in a day than you can review. Four policy keys s
 - **Stakes.** `high_stakes` lists git glob pathspecs (`lib/policy.sh`, `workers/`, `site/worker*`; `*` stays inside a folder, `**` crosses folders, a folder name covers what is under it). A change that stages a matching path is high-stakes, and so is any edit to `.bercail/policy.toml` itself, staged or not, so a desk cannot lower its own change's stakes by editing the list on its branch. With `review = "by-stakes"` (the default) a high-stakes change waits for your LGTM before Shep commits or merges it, even in a repo that integrates straight to main; the rest keep their usual flow. `"always"` makes every change wait; `"none"` makes none wait, and needs trust. With no `high_stakes`, nothing is high-stakes. `/validate` records `stakes:` and `review:` in `.bercail/description.md`, `bercail describe check` prints them (measured from the commit the stamp saw, so a committed change keeps them), and in a repo that commits straight to main `bercail describe commit` refuses a change that waits for you until it gets `--reviewed-by`.
 - **Size.** `diff_budget` is how many lines one change may add and remove before `bercail describe check` warns (400 by default, past what a reviewer reads well in one sitting). Lockfiles (by name: `package-lock.json`, `yarn.lock`, `Cargo.lock`, `go.sum`, …), binaries, and files `.gitattributes` marks `linguist-generated` are left out. It is a warning, never a failure: the desk splits the change, or its description says why it is one.
 - **Queue.** `review_budget` is how many lines may wait on your review in the repo before Shep warns at a new desk there (1000 by default, about two hours of review). What waits: staged changes in worktrees whose desk is not working (done, idle, blocked, or gone), and, on GitHub, open PRs that ask you for a review or come from a handoff branch, not drafts and not approved. A worktree whose issue is closed or [superseded](shep.md#briefs-and-the-board) is listed but does not count. `bercail shep queue [--repo DIR]` lists them; `bercail shep board` ends with the same list. Shep tells you what waits and asks; it never refuses.
+
+## bercail on another machine
+
+A Herdr window on one computer (a laptop) can use bercail on another, added there with `hc machine add`. Shep, the desks, repos, logins, beads and bercail's state stay on that machine. In the laptop's `config.toml`, `[herdr] backend` names it as `hc machine ls` does. Empty, or no `[herdr]`, means this computer: bercail on its own machine works as before.
+
+With a backend, the layout's mods:
+
+- find Shep there and start it there, in that machine's home, and keep the notifier (`bercail-notify`) running there, whichever window is open;
+- read the review queue (`bercail shep queue`) there, and match its items to that machine's spaces;
+- run the Stack tab's `bercail review-pr` and its jobs there, and read its run dir every 5 seconds instead of watching it.
+
+With or without one, a space's desk (`Ctrl+Shift+A`, Start the agent) starts on the space's machine, under its Shell, and git and gh for a space run there too.
+
+A desk's labels are written on its own machine and name that machine's ids: `bercail.space=sp1` on `box` is the space `box/sp1` in the laptop's window. The mods add and remove only that machine's prefix, and never run on the laptop a path that came from the other machine.
+
+Not yet: the worktrunk hook and `handoff-spawn --branch` open a new space only in a window on bercail's machine; a desk does not start on its own in a space on another machine; `bercail review-pr` needs a window on bercail's machine; and `bercail install` and `update` have no laptop-only mode.
 
 ## Files bercail manages
 

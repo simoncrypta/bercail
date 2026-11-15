@@ -103,6 +103,17 @@ if (order.indexOf("t2") < 0) fail(`the desk is not in the list order: ${order}`)
 EOF
 }
 
+@test "a desk on another machine gets its row under its space there" {
+  mod_case <<'EOF'
+// box/t2's bercail.space=s1 is written on box: its space is box/s1 ("far"), not s1 here.
+const sps = [...spaces, { id: "box/s1", name: "far", tabs: [] }];
+const rows = deskRows([], [desk("box/t2", "s1", "box/t1")], sps, null);
+if (rows.length !== 1 || rows[0].space !== "box/s1" || rows[0].space_name !== "far") fail(`box's desk: ${JSON.stringify(rows)}`);
+const order = withDesks([agent("t9", "s1")], rows, sps).map((a) => a.address).join();
+if (order !== "t9,box/t2") fail(`box's desk sorts with box/s1, after s1's agents: ${order}`);
+EOF
+}
+
 @test "clicking a desk or an agent opens its terminal in a dialog and switches nothing" {
   mod_case <<'EOF'
 renderShellDesk();

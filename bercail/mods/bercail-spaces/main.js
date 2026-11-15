@@ -10,11 +10,12 @@
 // - while Shep shows, no space reads as selected (row and the narrow rail's cell).
 // - review marks, from `bercail shep queue --json` (see "review marks" below): a mark
 //   after a space's name, a count in the header that opens the Review list (this mod
-//   with props.role "reviews", as a dialog), and review-next (Ctrl+Shift+J).
+//   with props.role "reviews", as a dialog), and review-next (Ctrl+Shift+J). With a
+//   backend in config.toml ([herdr] backend), the queue is read there and names its spaces.
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { spaces, machines, panes, run, openOverlay, closeOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, focused, home, nextCommand, notify, props, terminals } from "herdr";
+import { spaces, machines, panes, run, openOverlay, closeOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, focused, home, nextCommand, notify, props, readTextFile, terminals } from "herdr";
 
 function find(node, id) {
   if (node?.id === id) return node;
@@ -66,15 +67,34 @@ export function tone(t, status) {
   return t[status] ?? t.unknown;
 }
 
+// [herdr] backend in this computer's config.toml: the Herdr machine bercail runs on
+// (a name from `hc machine ls`), or null for this computer.
+export function backendOf(text) {
+  let section = "";
+  for (const raw of String(text ?? "").split("\n")) {
+    const line = raw.replace(/#.*$/, "").trim();
+    const sec = line.match(/^\[(.+)\]$/);
+    if (sec) section = sec[1].trim();
+    const kv = section === "herdr" && line.match(/^backend\s*=\s*"([^"]*)"$/);
+    if (kv) return kv[1] || null;
+  }
+  return null;
+}
+
+// Ids across machines: a terminal on box is box/t3 here, and the labels written there
+// name ids as box does (sp1 there is box/sp1 here).
+export const qualify = (raw, machine) => (machine && raw ? `${machine}/${raw}` : raw);
+
 // --- review marks ---------------------------------------------------------------
 // bercail's queue is the source: this reads `bercail shep queue --json` (about eight
-// seconds of bd and gh) every five minutes, and after a desk's status changes at most
-// every 30 seconds, and shares it as REVIEW for every copy. It never decides what
+// seconds of bd and gh), on the backend when there is one, every five minutes, and
+// after a desk's status changes at most every 30 seconds, and shares it as REVIEW for
+// every copy. It never decides what
 // waits, and nothing it reads moves the view or the keyboard: only review-next and a
 // click do.
 const BERCAIL_PATH = 'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"';
 const QUEUE = `${BERCAIL_PATH}; exec bercail shep queue --json`;
-const REVIEW = "bercail.review"; // { q: the last queue read, or null; error: the last read's; missing: no bercail }
+const REVIEW = "bercail.review"; // { q: the last queue read, or null; backend: where q was read; error: the last read's; missing: no bercail }
 const REVIEW_EVERY = 300000;
 const REVIEW_SOON = 30000;
 // A queue older than this reads as stale: three reads missed.
@@ -95,19 +115,21 @@ export function ago(iso, now) {
 
 // The queue's items in its order, each with its space: the desk's or the handoff's
 // space id, else the space whose folder is the item's worktree. `ps`: panes().
-export function reviewRows(q, sp, ps) {
+// `backend`: the machine the queue was read on (null: this computer). Its ids and
+// folders are that machine's, so a space elsewhere is never matched by folder.
+export function reviewRows(q, sp, ps, backend = null) {
+  const there = (s) => (s.machine ?? null) === backend;
   return (q?.items ?? []).map((item) => ({
     item,
     space:
-      (item.space && sp.find((s) => s.id === item.space)) ||
-      (item.path && sp.find((s) => !s.machine && (place(s, ps) === item.path || s.folder === item.path))) ||
+      (item.space && sp.find((s) => s.id === qualify(item.space, backend))) ||
+      (item.path && sp.find((s) => there(s) && (place(s, ps) === item.path || s.folder === item.path))) ||
       null,
   }));
 }
 
 // space id -> what waits there: counted lines and changes, whether one needs an LGTM
 // or has an unknown state; else `quiet`, the state of what does not count.
-// A space on another machine is never matched by folder: the queue is this one's.
 export function marks(rows) {
   const out = {};
   for (const { item, space } of rows) {
@@ -184,6 +206,9 @@ export default class Spaces extends View {
     cx.timer.every(250, (cx) => this.checkNew(cx));
     this.desks = null; // the desks' statuses at the last look: a change reads the queue again
     this.reviewAt = 0; // when the queue was last read
+    this.config = readTextFile(home() + "/.config/bercail/config.toml")
+      .catch(() => null)
+      .then((text) => backendOf(text));
     cx.timer.every(REVIEW_EVERY, (cx) => this.readQueue(cx));
     cx.spawn(async (cx) => {
       for (;;) {
@@ -206,18 +231,19 @@ export default class Spaces extends View {
       do {
         this.readAgain = false;
         const was = shared(REVIEW) ?? {};
+        const backend = await this.config;
         let next;
         try {
-          const r = await exec("bash", ["-lc", QUEUE], { timeout: 90000 });
-          if (r.code === 127) next = { q: null, error: null, missing: true };
+          const r = await exec("bash", ["-lc", QUEUE], { timeout: 90000, on: backend });
+          if (r.code === 127) next = { q: null, error: null, missing: true, backend };
           else {
             if (r.code !== 0) throw new Error(r.stderr.trim().split("\n").at(-1) || `bercail shep queue exited ${r.code}`);
             const q = JSON.parse(r.stdout);
             if (q?.schema !== "bercail.queue/v1") throw new Error("this bercail has no review queue JSON: run bercail update");
-            next = { q, error: null };
+            next = { q, error: null, backend };
           }
         } catch (e) {
-          next = { q: was.q ?? null, error: String(e?.message ?? e) };
+          next = { q: was.q ?? null, backend: was.backend ?? null, error: String(e?.message ?? e) };
         }
         setShared(REVIEW, next);
       } while (this.readAgain);
@@ -229,7 +255,7 @@ export default class Spaces extends View {
   // Ctrl+Shift+J: the next space whose work waits on review, as a click on it would.
   reviewNext() {
     const r = shared(REVIEW);
-    const id = nextReview(reviewRows(r?.q, spaces(), panes()), focused()?.space);
+    const id = nextReview(reviewRows(r?.q, spaces(), panes(), r?.backend), focused()?.space);
     if (id) select(id);
     else if (!r?.q) notify({ title: "bercail", body: `The review queue is not read: ${reviewStatus(r, Date.now()).text}`, level: "warning" });
     else notify({ title: "bercail", body: "Nothing in a space waits on your review.", level: "info" });
@@ -669,7 +695,7 @@ export default class Spaces extends View {
   // gives an LGTM or answers a desk.
   reviewList(t) {
     const r = shared(REVIEW) ?? {};
-    const rows = reviewRows(r.q, spaces(), panes());
+    const rows = reviewRows(r.q, spaces(), panes(), r.backend);
     const now = Date.now();
     const st = reviewStatus(r, now);
     const waits = rows.filter((x) => x.item.counts);
@@ -769,7 +795,7 @@ export default class Spaces extends View {
     if (this.role === "reviews") return this.reviewList(t);
     const collapsed = narrow();
     const review = shared(REVIEW);
-    const rows = reviewRows(review?.q, spaces(), panes());
+    const rows = reviewRows(review?.q, spaces(), panes(), review?.backend);
     this.marks = marks(rows);
     const palette = ["ansi6", "ansi3", "ansi4", "ansi5", "ansi2", "ansi1"];
     const sp = spaces();

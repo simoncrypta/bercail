@@ -39,7 +39,8 @@ export const exec = async (cmd, args, opts) => h().exec?.(cmd, args, opts) ?? { 
 export const knownAgents = async () => [];
 // The keys the test queues in h().keys, then none.
 export const nextCommand = () => h().keys?.length ? Promise.resolve(h().keys.shift()) : new Promise(() => {});
-export const readTextFile = async () => "";
+// The files a test puts in h().files, by path; else an empty file.
+export const readTextFile = async (path) => h().files?.[path] ?? "";
 EOF
   printf 'export class View {}\nexport const div = () => ({});\n' >"$BATS_TEST_TMPDIR/gpui-kit.mjs"
   printf 'export const h_flex = () => ({});\nexport const v_flex = () => ({});\n' >"$BATS_TEST_TMPDIR/gpui-base.mjs"
@@ -475,6 +476,137 @@ EOF
   if (starts().length !== 3) fail("a space with no Shell must not start a desk");
   if (globalThis.herdr.notes[0]?.level !== "warning") fail("no Shell: the person is told why");
 }
+EOF
+}
+
+@test "every mod reads [herdr] backend and names ids across machines the same way" {
+  # The mods can't share a file: each has its own copy of these. They must not drift.
+  local name mod src
+  for name in backendOf machineOf qualify strip; do
+    src=""
+    for mod in "$ROOT"/bercail/mods/bercail-*/main.js; do
+      local def
+      # A function ends at its closing brace, a const at its first line's semicolon.
+      def="$(awk -v n="$name" '$0 ~ "^export (function|const) " n "[ (=]" { on = /^export function/ ? "fn" : "const" }
+        on { print } on == "fn" && /^}/ { exit } on == "const" && /;$/ { exit }' "$mod")"
+      [[ -n "$def" ]] || continue
+      [[ -z "$src" || "$def" == "$src" ]] || fail "$name in $mod differs from the other mods' copy"
+      src="$def"
+    done
+    [[ -n "$src" ]] || fail "no mod defines $name"
+  done
+  mod_case <<'EOF'
+import { backendOf, machineOf, qualify, strip } from "./main.mjs";
+const cases = [
+  ["", null], ['[herdr]\nbackend = "box"\n', "box"], ['[herdr]\nbackend = ""\n', null],
+  ['[layout]\nbackend = "box"\n', null], ['[herdr]\n# backend = "box"\n', null],
+  ['[herdr] # where bercail runs\nbackend = "box" # a Herdr machine\n', "box"],
+  [readFileSync(process.env.ROOT + "/docs/config.md", "utf8").match(/```toml\n([\s\S]*?)```/)[1], null],
+];
+for (const [text, want] of cases) expect(backendOf(text), want, `backendOf ${JSON.stringify(text.slice(0, 40))}`);
+expect(backendOf(null), null, "no config file");
+expect(machineOf("box/t3"), "box", "a terminal on box");
+expect(machineOf("t3"), null, "a terminal here");
+expect(qualify("sp1", "box"), "box/sp1", "box's label, here");
+expect(qualify("sp1", null), "sp1", "a label here stays");
+expect(strip("box/sp1", "box"), "sp1", "written back on box");
+expect(strip("vps/sp1", "box"), "vps/sp1", "only box's prefix goes");
+expect(strip("sp1", null), "sp1", "here, nothing to strip");
+EOF
+}
+
+@test "a desk on another machine shows in its space's column there" {
+  mod_case <<'EOF'
+// box/t5's bercail.space=sp1 is written on box: its space here is box/sp1.
+d = setup({ terminals: [D("box/t5", "sp1")] });
+globalThis.herdr.spaces.push({ id: "box/sp1", machine: "box", tabs: [], folder: "/w" });
+show(d, "box/sp1");
+expect(stack().active, "desk-box/t5", "box's desk in its space");
+show(d, "s1");
+expect(stack().active, "empty", "no desk in s1");
+check("remote desk");
+EOF
+}
+
+@test "Start the agent in a space on another machine starts it there, with that machine's ids" {
+  mod_case <<'EOF'
+// hc run --on box: its parent and bercail.space are box's own ids (t1, sp1), and the
+// wrapper is looked for in box's home, never this computer's.
+const ran = [];
+globalThis.herdr = {
+  layout: structuredClone(shipped), calls: [],
+  focused: { space: "box/sp1", pane: "box/p1" },
+  spaces: [{ id: "box/sp1", machine: "box", tabs: [{ id: "box/tab1", named: true }], folder: "/w" }],
+  panes: [{ pane: "box/p1", tab: "box/tab1", terminal: "box/t1", cwd: "/w/sub" }],
+  terminals: [{ address: "box/t1", state: "live", labels: {} }],
+  exec: (cmd, args, opts) => { ran.push([cmd, ...args, opts?.on ?? null]); return { code: 0, stdout: "{}", stderr: "" }; },
+};
+d = new Desk();
+Object.assign(d, { cfg: { autoReview: false }, prev: {}, pendingReview: {}, lastAuto: {}, starting: {}, hadDesk: new Set() });
+show(d, "box/sp1");
+await new Promise((r) => setImmediate(r));
+if (ran.some(([c]) => c === "hc")) fail("a space on another machine does not start its desk on its own");
+await d.command("agent");
+expect(JSON.stringify(ran.find(([c]) => c === "bash")), JSON.stringify(["bash", "-lc", 'test -x "$HOME/.local/bin/bercail-desk-agent"', "box"]), "the wrapper, on box");
+expect(JSON.stringify(ran.filter(([c]) => c === "hc")), JSON.stringify([["hc", "run", "--bg", "--json", "--keep", "--outlive-parent", "--no-notify",
+  "--on", "box", "--parent", "t1", "--cwd", "/w/sub", "--label", "bercail.role=agent", "--label", "bercail.space=sp1",
+  "bash", "-lc", 'exec "$HOME/.local/bin/bercail-desk-agent"', null]]), "Ctrl+Shift+A on box");
+if (ran.some((r) => r.join(" ").includes("/nonexistent"))) fail(`this computer's home went to box: ${JSON.stringify(ran)}`);
+EOF
+}
+
+@test "Review in a space on another machine: git and gh ask that machine, and a desk finishing there opens it" {
+  mod_case <<'EOF'
+// The desk box/t5 (bercail.space=sp1) finishes with changes: Review opens in box/sp1,
+// after git status and gh run on box, in the desk's folder there.
+const ran = [];
+globalThis.herdr = {
+  layout: structuredClone(shipped), calls: [],
+  focused: { space: "box/sp1", pane: "box/p1" },
+  spaces: [{ id: "box/sp1", machine: "box", tabs: [{ id: "box/tab1", named: true }], folder: "/w" }],
+  panes: [{ pane: "box/p1", tab: "box/tab1", terminal: "box/t1", cwd: "/w" }],
+  terminals: [{ ...D("box/t5", "sp1"), status: "working", cwd: "/w/job" }],
+  exec: (cmd, args, opts) => {
+    ran.push([cmd, args[0], opts?.cwd, opts?.on ?? null]);
+    return cmd === "git" ? { code: 0, stdout: " M a.txt\n", stderr: "" } : { code: 1, stdout: "", stderr: "" };
+  },
+};
+d = new Desk();
+Object.assign(d, { cfg: { review: "tuicr", autoReview: true }, prev: {}, pendingReview: {}, lastAuto: {}, starting: {}, hadDesk: new Set(["box/sp1"]) });
+show(d, "box/sp1", 1);
+globalThis.herdr.terminals[0].status = "done";
+show(d, "box/sp1", 1);
+for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+expect(JSON.stringify(ran), JSON.stringify([["git", "status", "/w/job", "box"], ["gh", "pr", "/w/job", "box"]]), "asked on box");
+expect(JSON.stringify(calls("tab.new")), JSON.stringify([["tab.new", { space: "box/sp1", name: "Review", folder: "/w/job",
+  argv: ["tuicr", "-w", "--no-update-check"] }]]), "Review opened in box/sp1");
+EOF
+}
+
+@test "with a backend, the notifier is kept running there, not here" {
+  mod_case <<'EOF'
+// [herdr] backend = "box": bercail is looked for on box, a notifier on this computer
+// does not count, and the one started is box's. One live on box is left alone.
+const ran = [];
+const start = async (terminals) => {
+  ran.length = 0;
+  globalThis.herdr = {
+    layout: structuredClone(shipped), calls: [], spaces: [], focused: null, terminals,
+    props: { role: "header" },
+    files: { "/nonexistent/.config/bercail/config.toml": '[layout]\nreview = "tuicr"\n\n[herdr]\nbackend = "box"\n' },
+    exec: (cmd, args, opts) => { ran.push([cmd, ...args, opts?.on ?? null]); return { code: 0, stdout: "", stderr: "" }; },
+  };
+  const d = new Desk();
+  const cx = { spawn: (f) => f(cx), notify: () => {}, timer: { every: () => {} } };
+  d.init({}, cx);
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+};
+await start([{ address: "t8", name: "bercail-notify", state: "live", labels: {} }]);
+expect(ran[0]?.at(-1), "box", "bercail is looked for on box");
+const hc = ran.filter(([c]) => c === "hc");
+if (hc.length !== 1 || hc[0][hc[0].indexOf("--on") + 1] !== "box") fail(`the notifier must start on box: ${JSON.stringify(ran)}`);
+await start([{ address: "box/t8", name: "bercail-notify", state: "live", labels: {} }]);
+if (ran.some(([c]) => c === "hc")) fail(`box's notifier is live: ${JSON.stringify(ran)}`);
 EOF
 }
 

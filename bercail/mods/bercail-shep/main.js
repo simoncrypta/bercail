@@ -14,6 +14,8 @@
 // It is found again by its label, so the same session shows after a restart and no
 // second one starts. It starts on its own once per app session; one the person quit
 // stays quit until "Start Shep". The terminal runs `bercail shep run`: Shep on Pi.
+// With a backend in config.toml ([herdr] backend, the Herdr machine bercail runs on),
+// Shep is looked for and started there, and desks' labels name that machine's ids.
 //
 // props.role:
 // - "nav" (default): the navigator's Shep row. Always shown, so it runs the logic: the
@@ -35,6 +37,7 @@ import {
   notify,
   panes,
   props,
+  readTextFile,
   run,
   spaces,
   terminals,
@@ -49,6 +52,26 @@ const ROLE = "shep";
 const BERCAIL_PATH = 'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"';
 const SHEP_RUN = `${BERCAIL_PATH}; exec bercail shep run`;
 const KEY = "Ctrl+Shift+H";
+const CONFIG = "/.config/bercail/config.toml";
+
+// [herdr] backend in this computer's config.toml: the Herdr machine bercail runs on
+// (a name from `hc machine ls`), or null for this computer.
+export function backendOf(text) {
+  let section = "";
+  for (const raw of String(text ?? "").split("\n")) {
+    const line = raw.replace(/#.*$/, "").trim();
+    const sec = line.match(/^\[(.+)\]$/);
+    if (sec) section = sec[1].trim();
+    const kv = section === "herdr" && line.match(/^backend\s*=\s*"([^"]*)"$/);
+    if (kv) return kv[1] || null;
+  }
+  return null;
+}
+
+// Ids across machines: a terminal on box is box/t3 here, and the labels written there
+// name ids as box does (sp1 there is box/sp1 here).
+export const machineOf = (address) => (address?.includes("/") ? address.slice(0, address.indexOf("/")) : null);
+export const qualify = (raw, machine) => (machine && raw ? `${machine}/${raw}` : raw);
 
 export function find(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -67,8 +90,14 @@ export function viewOf(tree) {
   return shep.hidden ? "space" : "shep";
 }
 
-export function shepTerminal(all = terminals()) {
-  return all.find((t) => t.state === "live" && t.labels?.["bercail.role"] === ROLE) ?? null;
+// With a backend, only the Shep there; before the config is read, or without one, any.
+export function shepTerminal(all = terminals(), backend = S.backend) {
+  return (
+    all.find(
+      (t) =>
+        t.state === "live" && t.labels?.["bercail.role"] === ROLE && (!backend || machineOf(t.address) === backend),
+    ) ?? null
+  );
 }
 
 function setView(view) {
@@ -132,16 +161,47 @@ export function focusPlan(view, was, f, shep, ready, back, ps, space) {
   return to;
 }
 
-// Shared by every copy: whether bercail is installed, and a start in flight.
-const S = { found: null, check: null, starting: false, error: null };
+// Shared by every copy: whether bercail is installed (and why a check could not tell),
+// a start in flight, and the backend (undefined until config.toml is read).
+const S = {
+  found: null,
+  checkError: null,
+  check: null,
+  starting: false,
+  error: null,
+  backend: undefined,
+  config: null,
+};
+
+function readBackend() {
+  S.config ??= readTextFile(home() + CONFIG)
+    .catch(() => null)
+    .then((text) => {
+      S.backend = backendOf(text);
+    });
+  return S.config;
+}
 
 function checkBercail() {
-  S.check ??= exec("hc", ["exec", "bash", "-lc", `${BERCAIL_PATH}; command -v bercail`])
+  S.check ??= readBackend()
+    .then(() =>
+      exec("hc", [
+        "exec",
+        ...(S.backend ? ["--on", S.backend] : []),
+        "bash",
+        "-lc",
+        `${BERCAIL_PATH}; command -v bercail`,
+      ]),
+    )
     .then((r) => {
       S.found = r.code === 0;
+      // hc's own error (an unknown machine, one that is away), not bercail missing.
+      const hcError = !S.found && r.stderr.trim().startsWith('{"error"') && JSON.parse(r.stderr).error?.message;
+      S.checkError = hcError || null;
     })
-    .catch(() => {
+    .catch((e) => {
       S.found = false;
+      S.checkError = String(e?.message ?? e);
     })
     .finally(() => {
       S.check = null;
@@ -152,6 +212,7 @@ function checkBercail() {
 // One Shep: none while one is live or starting. hc names are unique among live
 // terminals, so a start that races one the list doesn't show yet is refused: fine.
 async function startShep() {
+  await readBackend(); // which Shep counts depends on it
   if (S.starting || shepTerminal()) return;
   S.starting = true;
   S.error = null;
@@ -167,8 +228,8 @@ async function startShep() {
       "--rm",
       "--name",
       NAME,
-      "--cwd",
-      home(),
+      // On the backend, hc starts it in that machine's home.
+      ...(S.backend ? ["--on", S.backend] : ["--cwd", home()]),
       "--label",
       `bercail.role=${ROLE}`,
       "bash",
@@ -295,7 +356,7 @@ export default class BercailShep extends View {
           (t) =>
             t.address === f.terminal &&
             t.labels?.["bercail.role"] === "agent" &&
-            t.labels?.["bercail.space"] === f.space,
+            qualify(t.labels?.["bercail.space"], machineOf(t.address)) === f.space,
         );
       if (f.pane) this.back[f.space] = { pane: f.pane };
       else if (desk) this.back[f.space] = { terminal: f.terminal };
@@ -436,7 +497,12 @@ export default class BercailShep extends View {
       .text_size(13);
     if (missing) {
       return body
-        .child(div().text_color(t.foreground).font_semibold().child("bercail is not installed"))
+        .child(
+          div()
+            .text_color(t.foreground)
+            .font_semibold()
+            .child(S.backend ? `bercail is not installed on ${S.backend}` : "bercail is not installed"),
+        )
         .child(
           div()
             .max_w(460)
@@ -444,7 +510,10 @@ export default class BercailShep extends View {
             .child("Shep starts with bercail shep run. Install bercail (bercail.dev), then check again."),
         )
         .child(button("shep-check", "Check again", checkBercail))
-        .child(div().text_color(t.dim).text_size(12).child("Your spaces work without it: pick one on the right."));
+        .child(div().text_color(t.dim).text_size(12).child("Your spaces work without it: pick one on the right."))
+        .when(Boolean(S.checkError), (el) =>
+          el.child(div().max_w(460).text_center().text_color(t.blocked).text_size(12).child(S.checkError)),
+        );
     }
     if (busy) return body.child("Starting Shep…");
     return body
@@ -464,7 +533,7 @@ export default class BercailShep extends View {
     const a = agents().find((x) => x.address === terminal);
     const status = a?.status ?? (k?.status === "error" ? "blocked" : k?.status) ?? null;
     const color = t[status] ?? t.dim;
-    const spaceId = a?.space ?? k?.labels?.["bercail.space"] ?? null;
+    const spaceId = a?.space ?? qualify(k?.labels?.["bercail.space"], machineOf(k?.address)) ?? null;
     const space = spaces().find((s) => s.id === spaceId);
     const desk = k?.labels?.["bercail.role"] === "agent";
     const pic = icon(k?.program ?? a?.program, 14, t.foreground);

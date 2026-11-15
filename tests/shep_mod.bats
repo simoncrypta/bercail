@@ -35,6 +35,8 @@ export const hc = async () => ({ code: 0, stdout: "", stderr: "" });
 export const watchFolder = () => new Promise(() => {});
 export const window = () => ({ platform: "linux", active: true });
 export const home = () => "/home/me";
+// The files a test puts in h().files, by path; else absent.
+export const readTextFile = async (path) => h().files?.[path] ?? null;
 export const nextCommand = () => new Promise(() => {});
 EOF
   cat >"$BATS_TEST_TMPDIR/gpui.mjs" <<'EOF'
@@ -206,6 +208,91 @@ if (els.some((e) => e.id === "shep-setup") || !els.some((e) => e.text?.includes(
 els.find((e) => e.id === "shep-start").click(null, cx);
 await tick();
 if (runs().at(-1)?.at(-1) !== script) fail(`Start Shep ran ${JSON.stringify(runs())}`);
+EOF
+}
+
+@test "with a backend, Shep is looked for and started on it, in its home" {
+  mod_case <<'EOF'
+// [herdr] backend = "box": hc asks box whether bercail is there and starts Shep there,
+// with no --cwd (hc uses box's home; this computer's home means nothing there). A Shep
+// on this computer is not that one; a live box/ Shep is reused.
+const BOX = { "/home/me/.config/bercail/config.toml": '[herdr]\nbackend = "box" # bercail runs there\n' };
+delete globalThis.bercailShep;
+setup({ files: BOX, terminals: [SHEP("t9"), { address: "box/t1", state: "live", labels: {} }] });
+v = nav();
+v.sync();
+for (let i = 0; i < 4; i++) await tick();
+const probe = globalThis.herdr.execs.find((e) => e[1] === "exec");
+eq(probe?.slice(0, 5), ["hc", "exec", "--on", "box", "bash"], "bercail is looked for on box");
+const argv = runs()[0] ?? [];
+if (argv[argv.indexOf("--on") + 1] !== "box") fail(`Shep must start on box: ${argv}`);
+if (argv.includes("--cwd")) fail(`no --cwd from this computer: ${argv}`);
+delete globalThis.bercailShep;
+setup({ files: BOX, terminals: [SHEP("box/t4")] });
+v = nav();
+v.sync();
+for (let i = 0; i < 4; i++) await tick();
+if (runs().length) fail(`box's Shep is live: ${JSON.stringify(runs())}`);
+// box answers that it has no bercail: the view says where it looked.
+delete globalThis.bercailShep;
+setup({ files: BOX, terminals: [], props: { role: "empty" }, exec: () => ({ code: 1, stdout: "", stderr: "" }) });
+const empty = new Shep();
+empty.init({}, cx);
+for (let i = 0; i < 4; i++) await tick();
+els.length = 0;
+empty.render(cx);
+if (!els.some((e) => e.text?.includes("bercail is not installed on box"))) fail("the missing view must name box");
+EOF
+}
+
+@test "a desk on the backend: the keyboard comes back to it, and Show in space finds its space" {
+  mod_case <<'EOF'
+// box/t5's bercail.space=sp1 is written on box: here its space is box/sp1.
+const DESKBOX = DESK("box/t5", "sp1");
+const SP = [{ id: "box/sp1", name: "far", tabs: [{ id: "box/tab1", active: true }] }];
+setup({ spaces: SP, panes: [{ pane: "box/p1", tab: "box/tab1", terminal: "box/t1" }],
+  terminals: [shep, DESKBOX], focused: f({ space: "box/sp1", terminal: "box/t5" }) });
+globalThis.herdr.layout = withView(globalThis.herdr.layout, "space");
+v = nav();
+v.sync();
+v.sync();
+globalThis.herdr.layout = withView(globalThis.herdr.layout, "shep");
+globalThis.herdr.focused = f({ space: "box/sp1", pane: "box/p1" });
+v.sync();
+globalThis.herdr.layout = withView(globalThis.herdr.layout, "space");
+globalThis.herdr.calls = [];
+v.sync();
+eq(calls("pane.focus").at(-1)?.[1], { terminal: "box/t5" }, "back on box's desk");
+setup({ spaces: SP, terminals: [DESKBOX], props: { role: "modal", terminal: "box/t5", overlay: "o1" } });
+v = nav();
+els.length = 0;
+v.render(cx);
+const show = els.find((e) => e.id === "modal-space");
+if (!show) fail("the desk's dialog has no Show in space");
+show.click();
+eq(calls("space.select")[0]?.[1], { id: "box/sp1" }, "Show in space");
+EOF
+}
+
+@test "a failed start keeps its error under Start Shep when another copy checks for bercail" {
+  mod_case <<'EOF'
+// hc run refuses; the stopped view says why. A copy that opens later checks for bercail
+// again, which must not wipe that error.
+delete globalThis.bercailShep;
+setup({ terminals: [{ address: "t1", state: "live", labels: {} }], props: { role: "empty" },
+  exec: (_c, a) => (a[0] === "run" ? { code: 1, stdout: "", stderr: "no room for Shep" } : okExec()) });
+const empty = new Shep();
+empty.init({}, cx);
+await tick();
+els.length = 0;
+empty.render(cx);
+els.find((e) => e.id === "shep-start").click(null, cx);
+for (let i = 0; i < 4; i++) await tick();
+new Shep().init({}, cx);
+for (let i = 0; i < 4; i++) await tick();
+els.length = 0;
+empty.render(cx);
+if (!els.some((e) => e.text?.includes("no room for Shep"))) fail("the start's error is gone after another copy checked");
 EOF
 }
 

@@ -4,7 +4,8 @@
 // newer agents mod: take Herdr's file and put these back. bercail's changes, all of them:
 // - deskRows, withDesks: each space's desk gets a row. It is a sub-agent of the space's
 //   Shell, which agents() leaves out when the Shell isn't an agent
-//   (docs/herdr-agents-subagents.md).
+//   (docs/herdr-agents-subagents.md). A desk on another machine names its space as
+//   that machine does: box/t3's bercail.space=sp1 is space box/sp1 here.
 // - agentDialog, open: a click on a row or a sub-agent opens that agent's terminal in a
 //   dialog over the Shep or space view (bercail-shep draws its bar), where Herdr's
 //   focuses its pane or peeks.
@@ -63,20 +64,26 @@ const kidStatus = (k, listed) => {
   const s = listed.get(k.address) ?? k.status;
   return s === "error" ? "blocked" : s === "done" ? "idle" : s;
 };
+// Ids across machines: a terminal on box is box/t3 here, and the labels written there
+// name ids as box does (sp1 there is box/sp1 here).
+export const machineOf = (address) => (address?.includes("/") ? address.slice(0, address.indexOf("/")) : null);
+export const qualify = (raw, machine) => (machine && raw ? `${machine}/${raw}` : raw);
+
 // bercail desks (live terminals labelled bercail.role=agent) that agents() doesn't
 // list and that no listed agent draws as a sub-agent: a row each, shaped like AgentInfo.
 // No pane: `desk` marks the row, and a click asks bercail-desk to show it.
 export function deskRows(list, all, spaceList, f) {
   const listed = new Set(list.map((a) => a.address));
   const spaceOf = new Map(spaceList.map((s) => [s.id, s]));
+  const spaceId = (k) => qualify(k.labels["bercail.space"], machineOf(k.address));
   return all
     .filter((k) => k.state === "live" && k.labels?.["bercail.role"] === "agent" && !listed.has(k.address) && !listed.has(k.parent))
     .map((k) => ({
       address: k.address,
       pane: null,
       desk: true,
-      space: k.labels["bercail.space"],
-      space_name: spaceOf.get(k.labels["bercail.space"])?.name ?? "",
+      space: spaceId(k),
+      space_name: spaceOf.get(spaceId(k))?.name ?? "",
       tab: null,
       status: kidStatus(k, new Map()),
       app: k.report?.app ?? null,

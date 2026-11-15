@@ -87,6 +87,7 @@ bstack judge
 shep compact_at
 shep keep_recent
 shep rollover
+herdr backend
 policy commit
 policy push
 policy integrate
