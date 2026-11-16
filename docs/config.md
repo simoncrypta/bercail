@@ -31,19 +31,11 @@ compact_at = 250000                  # context tokens at which Pi compacts Shep
 keep_recent = 50000                  # recent tokens kept word for word
 rollover = false                     # true: a fresh session instead, and each new day
 
-[todo]                               # optional: where bercail todo puts what only you can do
-backend = "basecamp"                 # the one backend for now
-
-[todo.basecamp]                      # the to-do list's URL: https://3.basecamp.com/<account>/buckets/<project>/todolists/<todolist>
-account = "1234567"
-project = "2345678"
-todolist = "3456789"
-
 [herdr]                              # optional: bercail on another Herdr machine
 backend = ""                         # its name in `hc machine ls`; empty: this computer
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start; `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start; the old `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
 
 Those are all the keys bercail reads. `bercail doctor` names any other key in the file (`unknown  [shep] session (nothing reads it)`), a `[git]` value that is not a backend, and a line it cannot read; none of them counts as a failure. `bercail config get <section> <key>` prints one value as bercail reads it. The file is read as a subset of TOML: quoted and `"""` strings, `true` and `false`, whole numbers, and one-line arrays.
 
@@ -114,18 +106,43 @@ bercail doctor                                                             # ok 
 
 ## Todos
 
-`bercail todo` puts what only you can do on a to-do list of yours ([how Shep uses it](shep.md#todos-for-the-person)). `[todo] backend` picks the tool; each backend has its own table. Basecamp is the only one for now. A backend is one file, `lib/todo/<name>.sh`, that defines `todo_<name>_check`, `_add`, `_list`, `_show` and `_complete`. Adding one changes no caller, only the list of keys `bercail doctor` knows (`BERCAIL_CONFIG_KEYS` in `lib/config.sh`). An unknown name fails every `bercail todo` command with the names bercail has.
+`bercail todo` puts what only you can do on a to-do list of yours ([how Shep uses it](shep.md#todos-for-the-person)). You can have several, one per project or repo. Each is a **target**: a name for one list. A **route** sends a repo's todos to a target, and the **default** target takes the rest. Shep sets them from the CLI when you name a list, so you never paste numbers into a file:
 
-For Basecamp, bercail runs the `basecamp` CLI (0.30.0; on Omarchy it comes with the system's mise tools). Make a to-do list for bercail in one of your projects, open it, and copy the three numbers from its URL into `[todo.basecamp]`: `https://3.basecamp.com/<account>/buckets/<project>/todolists/<todolist>`. `basecamp projects list` and `basecamp todolists list --in <project>` show them too. Todos land on that list unassigned, so read the list, not My Assignments. Then log in once, as yourself, in your own shell:
+```sh
+bercail todo target add lesentiel https://app.basecamp.com/6317829/buckets/49568764/todolists/10511639538
+# added lesentiel: basecamp, to-do list "Lesentiel" in Show the vision · https://3.basecamp.com/…
+bercail todo route ~/Work/lesentiel lesentiel   # todos for jobs in that repo go there
+bercail todo route --default home               # and the rest to home
+bercail todo target list                        # every target, the default, and each one's routes
+```
+
+- **Adding a target** reads the list first, so a typo or a list your login cannot see fails before anything is kept. Paste the list's URL from either Basecamp host (`3.basecamp.com` or `app.basecamp.com`). A project's To-dos URL (`…/buckets/<project>/todosets/<id>`, or `…/projects/<project>`) is not one list: the error lists that project's lists with their URLs, and `--create "<list name>"` makes a new one there instead. Adding a name again points it at the new list and keeps its routes. `target rm` drops its routes, and the default if it was. `route --rm <repo>` sends a repo back to the default.
+- **Which target a todo goes to.** `bercail todo add --target <name>`, else the route of the job's repo (`--repo`, or the checkout of `--issue`), else the default. With none, it fails and says which of those to run. A route names the repo's main checkout, so its worktrees route with it. `show` and `done` find the target bercail added a todo to; `--target` names another.
+- **Where they live.** `~/.config/bercail/todo.json`, written only by `bercail todo target` and `route`. It is not in `config.toml` because Shep sets targets and the guard keeps Shep out of `config.toml`, rightly: that file decides what the guard lets through. A target does not. It decides which of your lists Shep writes to, with the Basecamp login you gave it, which can already write to every list it sees. So Shep may run `target` and `route`; every other role is blocked from them, Discuss runs no commands, and no role, Shep's included, may write `todo.json` by hand, which would skip the read that checks the list.
+- **Backends.** The backend comes from the URL, or `--backend`. Basecamp is the only one for now. A backend is one file, `lib/todo/<name>.sh`, that defines `todo_<name>_owns` (is this URL mine), `_target` (read the list a URL names, or make one), `_check`, `_add`, `_list`, `_show` and `_complete`, and reads its target's fields from `TODO_TARGET_JSON`. Adding one changes no caller.
+- **Before targets.** A `[todo]` table in `config.toml` still works: it is the target `config`, and the default when `todo.json` names none. `bercail doctor` prints a hint to move it: `target add` its list's URL under a name, `route --default` that name, then delete `[todo]` and `[todo.basecamp]`. Todos bercail added before targets count as `config`'s.
+
+  ```toml
+  [todo]
+  backend = "basecamp"
+  [todo.basecamp]          # https://3.basecamp.com/<account>/buckets/<project>/todolists/<todolist>
+  account = "1234567"
+  project = "2345678"
+  todolist = "3456789"
+  ```
+
+For Basecamp, bercail runs the `basecamp` CLI (0.30.0; on Omarchy it comes with the system's mise tools). Todos land on the list unassigned, so read the list, not My Assignments. Log in once, as yourself, in your own shell:
 
 ```sh
 basecamp auth login --device-code   # prints a link and a one-time code; approve it in any browser
-bercail doctor                      # ok  todos: basecamp, logged in; to-do list 3456789 in project 2345678
+bercail doctor                      # ok  todos lesentiel: basecamp, logged in; to-do list "Lesentiel" in Show the vision
 ```
 
+`bercail doctor` prints one line per target: `ok` when its list answers, `--` when you are logged out, `unreachable` with Basecamp's error when the list does not answer. It never prints the token.
+
 - **From your laptop, over a remote Herdr shell.** That works. The shell runs on the machine bercail runs on, so the login is stored there, where Shep and the desks use it. `--device-code` never opens a browser on that machine; open the printed link on your laptop or phone. Without the flag, the CLI may open a browser on the machine's own screen when the shell has a display.
-- **Where the login goes.** The basecamp CLI keeps it in the system keyring when one answers, else in `credentials.json` (mode 0600) in its config folder. bercail never reads, prints or passes it. `bercail doctor` asks `basecamp auth status`, which reads only what is stored, and prints `logged in` or `not logged in`, never the token.
-- **Who may use it.** Shep adds and completes todos. Desks, builders, the judge, the council, autopilot and background Sheps may only read; Discuss runs no commands. In every role, Shep's included, the guard blocks basecamp's login, logout and token commands; it does not stop a command that reads the keyring or `credentials.json`. [What the guard counts as a read](shep.md#todos-for-the-person).
+- **Where the login goes.** The basecamp CLI keeps it in the system keyring when one answers, else in `credentials.json` (mode 0600) in its config folder. bercail never reads, prints or passes it. `bercail doctor` asks `basecamp auth status`, which reads only what is stored, then reads each target's list, and prints `logged in` or `not logged in`, never the token.
+- **Who may use it.** Shep adds and completes todos, and sets targets and routes. Desks, builders, the judge, the council, autopilot and background Sheps may only read; Discuss runs no commands. In every role, Shep's included, the guard blocks basecamp's login, logout and token commands; it does not stop a command that reads the keyring or `credentials.json`. [What the guard counts as a read](shep.md#todos-for-the-person).
 
 ## Review by stakes and size
 

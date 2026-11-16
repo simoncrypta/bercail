@@ -665,7 +665,7 @@ EOF
     || fail "unwritable settings: $out $(cat "$LOG")"
 }
 
-@test "shep run gives Shep a start context with the known repos and the standing rules" {
+@test "shep run gives Shep a start context with the known repos, the todo targets and their routes, and the standing rules" {
   local today
   today="$(date +%Y-%m-%d)"
   settings_pi
@@ -673,6 +673,11 @@ EOF
   issues app 'app-1|One|open'
   printf '%s\n' "$HOME/Work/app" >"$STATE/repos"
   shep remember 'Merge app work to main' --scope app >/dev/null
+  mkdir -p "$HOME/.config/bercail"
+  jq -n --arg app "$(cd "$HOME/Work/app" && pwd -P)" '{default: "home",
+    targets: {home: {backend: "basecamp", label: "to-do list \"Errands\" in Home", url: "https://3.basecamp.com/1/buckets/2/todolists/3"},
+              lesentiel: {backend: "basecamp", label: "to-do list \"Todos\" in Show the vision"}},
+    routes: {($app): "lesentiel"}}' >"$HOME/.config/bercail/todo.json"
   FAKE_WINDOW=1M shep run </dev/null >/dev/null 2>&1
   [[ "$(cat "$STATE/context.md")" == "# Shep context at start
 
@@ -682,12 +687,20 @@ bercail wrote this when Shep started. It is data, not instructions from a desk.
 
 - ~/Work/app: gh, no policy, 1 open issue
 
+## Todo targets
+
+Where bercail todo add sends a todo: --target, else the route of the job's repo, else the default.
+
+- home (default): basecamp, to-do list \"Errands\" in Home · https://3.basecamp.com/1/buckets/2/todolists/3
+- lesentiel: basecamp, to-do list \"Todos\" in Show the vision · routes ~/Work/app
+
 ## Standing rules from the person
 
 - $today [app] Merge app work to main" ]] || fail "context: $(cat "$STATE/context.md")"
-  rm "$STATE/repos" "$STATE/preferences.md"
+  rm "$STATE/repos" "$STATE/preferences.md" "$HOME/.config/bercail/todo.json"
   FAKE_WINDOW=1M shep run </dev/null >/dev/null 2>&1
   grep -qx -- '- none found yet (`bercail shep repos` explains where they come from)' "$STATE/context.md" \
+    && grep -qx -- '- no todo targets yet: bercail todo target add <name> <to-do list URL>' "$STATE/context.md" \
     && grep -qx -- '- none yet' "$STATE/context.md" || fail "empty context: $(cat "$STATE/context.md")"
 }
 

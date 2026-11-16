@@ -33,9 +33,13 @@ Post-install CLI (bercail):
                 questions [--json] (pending targeted questions; replies are unverified) |
                 question create|revise|reply|answer|withdraw (JSON on stdin) | check TOKEN | thread TOPIC |
                 panel (the Decisions panel's JSON) | discuss TOKEN (make or find its branch) | closed TOKEN OPENING
-  todo          What only you can do, on your todo list ([todo] backend: basecamp):
-                add "TITLE" [--notes TEXT] [--due YYYY-MM-DD] [--issue ID] [--repo DIR] |
-                list [--json] | show ID | done ID. Shep adds them; desks propose Todo: "<text>"
+  todo          What only you can do, on one of your todo lists (targets; Basecamp for now):
+                add "TITLE" [--notes TEXT] [--due YYYY-MM-DD] [--issue ID] [--repo DIR] [--target NAME] |
+                list [--target NAME] [--json] | show ID | done ID. Shep adds them; desks propose Todo: "<text>".
+                add goes to --target, else the route of the job's repo, else the default.
+                target add NAME URL [--backend NAME] [--create "LIST"] [--json] (reads the list first) |
+                target list|show NAME [--json] | target rm NAME |
+                route REPO TARGET | route --default TARGET | route --rm REPO|--default
   policy        A repo's git policy (.bercail/policy.toml): show [--json] [repo] |
                 trust [repo] (its looser values count until the file changes) | untrust [repo]
   describe      A change's description (.bercail/description.md, written by /validate):
@@ -140,8 +144,9 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   repo with [desk_secrets."<repo>"], the lead, builder, autopilot and headless
   runs get an op shim that hands op a service-account token from a 0600 file,
   and the guard keeps that file, the token and the vault's contents off screen.
-  Only Shep writes to your todo list (bercail todo add|done, basecamp writes);
-  other roles may read it. No role runs basecamp's login, logout or token commands.
+  Only Shep writes to your todo lists (bercail todo add|done, basecamp writes) and
+  sets where they go (bercail todo target add|rm, route); other roles may read them.
+  No role writes todo.json by hand, or runs basecamp's login, logout or token commands.
   [bstack] fallback sets candidate order: families or Pi model ids
   (default ["claude", "gpt", "grok"]).
   The fallback skips limited models and dead providers (402, no credits), keeps
@@ -155,6 +160,7 @@ Config:
   ~/.config/bercail/config.toml               review, [bstack], [git], [policy."<repo>"]
   ~/.local/state/bercail/policy-trust.json    repos whose git policy you trusted
   ~/.local/state/bercail/guard-approvals.jsonl  what the guard let through, and why
+  ~/.config/bercail/todo.json                 todo targets, routes and the default (bercail todo target, route)
   ~/.local/state/bercail/todos.jsonl          the todos bercail added, and the ones Shep marked done
   ~/.config/herdr-app/layouts/bercail.json    the layout
   ~/.config/herdr-app/mods/bercail-desk/      the desk mod

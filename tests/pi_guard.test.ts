@@ -1281,6 +1281,46 @@ test("only Shep writes to Basecamp or the person's todos; every role reads, and 
   assertMatch((decideTool("bash", "basecamp todos create x", discuss) as Decision).reason ?? "", /Discuss branch/);
 });
 
+test("only Shep sets where the person's todos go, and no role writes todo.json by hand", () => {
+  const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
+  const builder = { ...tui, role: "builder" };
+  const shepBg = { ...headless, role: "shep-bg" };
+  const sets = [
+    "bercail todo route ~/Work/lesentiel lesentiel",
+    "bercail todo route --default lesentiel",
+    "bercail todo route --rm ~/Work/app",
+    "bercail todo target add lesentiel https://app.basecamp.com/6317829/buckets/49568764/todolists/10511639538",
+    "bin/bercail todo target rm lesentiel",
+    "cd /tmp && bercail todo target add x https://3.basecamp.com/1/buckets/2/todosets/3 --create Errands",
+  ];
+  for (const input of [tui, headless, auto, builder, judge, council, shepBg]) {
+    for (const command of sets) blocked(command, input, /Shep's\. Say in your report which list a todo belongs on/);
+    for (const command of ["bercail todo target list --json", "bercail todo target show lesentiel"])
+      allowed(command, input);
+  }
+  for (const command of sets) allowed(command, shep);
+  for (const input of [shep, tui]) {
+    const files = { ...input, home: "/h", todoFiles: ["/h/.config/bercail/todo.json"] };
+    blocked(`echo '{"default":"x"}' > ~/.config/bercail/todo.json`, files, /read the list before they keep it/);
+    blocked("sed -i s/home/lesentiel/ ~/.config/bercail/todo.json", files, /read the list before they keep it/);
+    assertMatch(
+      (decideTool("write", undefined, files, "~/.config/bercail/todo.json") as Decision).reason ?? "",
+      /read the list before they keep it/,
+    );
+    assertEqual(decideTool("edit", undefined, files, "/h/.config/bercail/todo.json").action, "block");
+    allowed("cat ~/.config/bercail/todo.json", files);
+  }
+  const discuss = { role: "discuss", hasUI: true, cwd: "/work", policies: none };
+  assertMatch(
+    (decideTool("bash", "bercail todo route --default x", discuss) as Decision).reason ?? "",
+    /Discuss branch/,
+  );
+  assertEqual(
+    decideTool("write", undefined, { ...discuss, home: "/h" }, "/h/.config/bercail/todo.json").action,
+    "block",
+  );
+});
+
 test("op --help prints no secret, so a pipe after it is not an empty-secret risk", () => {
   allowed("op inject --help | head", tui);
   allowed("op read --help | grep -- --out-file", tui);

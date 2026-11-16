@@ -119,6 +119,18 @@ one line with its link:
 
     bercail todo add "<text>" [--notes "<more>"] [--due YYYY-MM-DD] --issue <id> --repo <checkout>
 
+Pass the job's repo (`--repo`, with `--issue` when there is one): its route
+picks the person's list, and your start context lists the targets and routes.
+When a todo fits none (`no todo target for …`), ask the person which list it
+goes on before you add it. When they name one ("lesentiel todos go to the
+Lesentiel list"), set it so the next todo goes there by itself:
+
+    bercail todo target add <name> <the list's URL>     # reads the list first
+    bercail todo route <repo checkout> <name>           # or: route --default <name>
+
+A project's URL instead of a list's fails and lists its lists: ask which, or
+pass `--create "<list name>"` when they want a new one.
+
 Write it for someone who was not there: what to do and where, in plain words.
 No secrets, tokens or vault values, and no beads id in the title: `--issue`
 puts the id in the notes and the todo's link on the issue. `bercail todo list`

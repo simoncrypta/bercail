@@ -43,6 +43,8 @@ export type GuardInput = {
   policies?: Record<string, Policy>;
   /** Files that decide what the guard lets through: the person edits them. */
   protectedFiles?: string[];
+  /** Todo targets and routes: only bercail todo target and route write them. */
+  todoFiles?: string[];
   home?: string;
   /** Within one command: a GIT_* variable now points git somewhere the guard cannot place. */
   gitEnv?: boolean;
@@ -120,6 +122,10 @@ const basecampWrite =
   "Writing to Basecamp, or to the person's todos, is Shep's. When the person has to do something themselves, put it in your report as Todo: \"<text>\", and Shep adds it. Reads still work: basecamp todos list, show, search.";
 const basecampAuth =
   "Logging Basecamp in or out (auth, login, logout, setup, profile create or delete), and its token, are the person's. They run basecamp auth login --device-code in their own shell.";
+const todoTargets =
+  "Where the person's todos go (bercail todo target add|rm, bercail todo route) is Shep's. Say in your report which list a todo belongs on, and Shep sets it.";
+const todoFile =
+  "Todo targets and routes change only through bercail todo target and bercail todo route, which read the list before they keep it. Shep runs them.";
 const basecampFlags =
   "Put basecamp's flags after its command and action (basecamp todos list --in 1), so the guard can tell what it runs.";
 const unclosedSub =
@@ -1188,12 +1194,23 @@ function decideBasecamp(words: string[], role: string): GuardDecision {
   return reads ? allow : block(basecampWrite);
 }
 
+// The words after bercail todo, or undefined when the command is not one.
+function todoArgs(words: string[]): string[] | undefined {
+  const plain = plainWords(words);
+  const at = plain.findIndex((word, i) => basename(word) === "bercail" && plain[i + 1] === "todo");
+  return at < 0 ? undefined : plain.slice(at + 2);
+}
+
 // bercail todo add or done: a write to the person's todo backend.
 function writesTodo(words: string[]): boolean {
-  const plain = plainWords(words);
-  return plain.some(
-    (word, i) => basename(word) === "bercail" && plain[i + 1] === "todo" && ["add", "done"].includes(plain[i + 2]),
-  );
+  const args = todoArgs(words);
+  return args !== undefined && ["add", "done"].includes(args[0]);
+}
+
+// bercail todo route, or target add or rm: where Shep writes in the person's account.
+function setsTodoTarget(words: string[]): boolean {
+  const args = todoArgs(words);
+  return args !== undefined && (args[0] === "route" || (args[0] === "target" && ["add", "rm"].includes(args[1])));
 }
 
 function isPolicyTrust(words: string[]): boolean {
@@ -1949,9 +1966,11 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
     if (isAnswer(words)) decision = worse(decision, block(answerCommand));
     if (writesTodo(words) && input.role !== "shep") decision = worse(decision, block(basecampWrite));
+    if (setsTodoTarget(words) && input.role !== "shep") decision = worse(decision, block(todoTargets));
     decision = worse(decision, decideBasecamp(words, input.role));
     if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
     if (writesProtected(words, raw, input.protectedFiles)) decision = worse(decision, block(protectedFile));
+    if (writesProtected(words, raw, input.todoFiles)) decision = worse(decision, block(todoFile));
     if (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout"))
       branchMoved = true;
     if (isGhRelease(forge.words) || isGhApiRelease(forge.words)) {
@@ -1985,6 +2004,7 @@ export function decideTool(tool: string, command: string | undefined, input: Gua
     const full = path?.startsWith("~/") && input.home ? join(input.home, path.slice(2)) : path;
     if (full && input.cwd !== undefined && input.protectedFiles?.includes(resolve(input.cwd, full)))
       return block(protectedFile);
+    if (full && input.cwd !== undefined && input.todoFiles?.includes(resolve(input.cwd, full))) return block(todoFile);
   }
   // read, edit, write, grep, find and ls all take a path.
   if (input.deskSecret && path) {
@@ -2121,13 +2141,17 @@ const policySection = "bercail_git_policy";
 
 export default function (pi: ExtensionAPI) {
   const home = process.env.HOME;
+  const config =
+    process.env.BERCAIL_CONFIG ||
+    join(process.env.XDG_CONFIG_HOME || join(home ?? "", ".config"), "bercail/config.toml");
   const protectedFiles = [
     join(stateDir(), "policy-trust.json"),
     // Shep's question ledger: an answered question in it is the person's pick.
     join(stateDir(), "shep/questions.json"),
-    process.env.BERCAIL_CONFIG ||
-      join(process.env.XDG_CONFIG_HOME || join(home ?? "", ".config"), "bercail/config.toml"),
+    config,
   ];
+  // Not one of the guard's: a target decides where Shep writes, not what runs.
+  const todoFiles = [join(dirname(config), "todo.json")];
 
   const shim = resolve(dirname(fileURLToPath(import.meta.url)), "../op-shim");
   // The desk secret of the folder the agent started in, once a lookup works. No
@@ -2170,6 +2194,7 @@ export default function (pi: ExtensionAPI) {
       cwd: ctx.cwd,
       home,
       protectedFiles,
+      todoFiles,
       deskSecret: deskSecretOf(await secretJson(ctx.cwd)),
     };
     let decision = decideTool(event.toolName, command, guardInput, input.path);

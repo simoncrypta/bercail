@@ -300,11 +300,11 @@ shep_board() {
                "- " + head($j) + ": \(who(.desk)) finished; " + (if .desk.bg then "report it, then hc kill \(.desk.name // .desk.address)" else "review its staged changes in its space" end)
              else empty end),
          ($desks[] | select((.issue | not) and .state == "blocked") | "- \(who(.)) (\(.cwd // "?" | tilde)) is blocked"),
-         ($todos // empty | . as $t | def tag: if .issue then " for \(.issue)" else "" end;
-           if .error then "- todos: \(.error)"
+         ($todos // [] | .[] | . as $t | def tag: if .issue then " for \(.issue)" else "" end;
+           if .error then "- todos\(if .target then " in \(.target)" else "" end): \(.error)"
            else (.open[] | "- todo\(tag): \(.title | flat | cut(70))" + (if .due then " · due \(.due)" else "" end)
-                  + " · open in \($t.backend)" + (if .url then " · \(.url)" else "" end)),
-                (.finished[] | "- todo\(tag): \(.title // "" | flat | cut(70)) · done in \($t.backend); "
+                  + " · open in \($t.target)" + (if .url then " · \(.url)" else "" end)),
+                (.finished[] | "- todo\(tag): \(.title // "" | flat | cut(70)) · done in \($t.target); "
                   + (if .issue then "continue \(.issue), then " else "" end) + "bercail todo done \(.id)") end) ]
        | if length > 0 then .[] else "- nothing" end)'
   _shep_queue_text "$(_shep_queue_json "$repos" "$desks" "$records")"
@@ -644,6 +644,8 @@ shep_context_write() {
   local file="$1" repos tmp
   _shep_need_policy
   repos="$(_shep_repos_json 2>/dev/null)" || repos='[]'
+  # shellcheck source=lib/todo.sh
+  declare -F todo_target_list >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/todo.sh"
   tmp="$(mktemp "$file.XXXXXX")"
   {
     printf '# Shep context at start\n\n'
@@ -654,6 +656,9 @@ shep_context_write() {
       else .[] | "- \(.path | tilde): \(.backend // "?"), "
         + ({trusted: "policy trusted", untrusted: "policy not trusted", none: "no policy"}[.policy // ""] // "policy ?") + ", "
         + (if .open == null then "no beads" else "\(.open) open issue\(if .open == 1 then "" else "s" end)" end) end' <<<"$repos"
+    printf '\n## Todo targets\n\n'
+    printf "Where bercail todo add sends a todo: --target, else the route of the job's repo, else the default.\n\n"
+    todo_target_list 2>/dev/null | sed '/^- /!s/^/- /' || printf -- '- none readable (`bercail todo target list` says why)\n'
     printf '\n## Standing rules from the person\n\n'
     _shep_rules | grep '' || printf -- '- none yet\n'
   } >"$tmp" && mv "$tmp" "$file"
