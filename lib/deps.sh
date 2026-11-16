@@ -448,7 +448,7 @@ _statechart_java() {
   fi
   has_mise || return 1
   info "installing via mise: $STATECHART_JAVA_SPEC (no java 11 or later on PATH)" >&2
-  run mise install "$STATECHART_JAVA_SPEC" >&2 || return 1
+  run mise install --quiet "$STATECHART_JAVA_SPEC" >&2 || return 1
   [[ "$DRY_RUN" -eq 0 ]] || return 0
   mise which java --tool "$STATECHART_JAVA_SPEC" 2>/dev/null
 }
@@ -459,7 +459,7 @@ _statechart_tlc() {
   has_mise || return 1
   if ! dir="$(mise where "$STATECHART_TLC_SPEC" 2>/dev/null)" || [[ ! -r "$dir/tla2tools.jar" ]]; then
     info "installing via mise: tla2tools 1.7.4" >&2
-    run mise install "$STATECHART_TLC_SPEC" >&2 || return 1
+    run mise install --quiet "$STATECHART_TLC_SPEC" >&2 || return 1
     [[ "$DRY_RUN" -eq 0 ]] || return 0
     dir="$(mise where "$STATECHART_TLC_SPEC" 2>/dev/null)" || return 1
   fi

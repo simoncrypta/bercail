@@ -28,11 +28,21 @@ printf '%s\n' "$*" >>"$BATS_TEST_TMPDIR/mise.log"
 root="$BATS_TEST_TMPDIR/mise-installs"
 case "$1" in
   install)
+    shift
+    quiet=0
+    if [ "$1" = --quiet ]; then quiet=1; shift; fi
     for spec in "$@"; do
+      if [ "$spec" = "${MISE_FAIL_SPEC:-}" ]; then
+        echo "mise ERROR $spec download failed" >&2
+        exit 1
+      fi
       case "$spec" in
         http:tla2tools*) mkdir -p "$root/tla" && : >"$root/tla/tla2tools.jar" ;;
         java@temurin-25) mkdir -p "$root/temurin/bin" && printf '#!/bin/sh\n' >"$root/temurin/bin/java" && chmod +x "$root/temurin/bin/java" ;;
       esac
+      if [ "$quiet" -eq 0 ]; then
+        echo "mise WARN $spec installed but not activated — it is not in any config file." >&2
+      fi
     done ;;
   where) [ -d "$root/tla" ] && echo "$root/tla" ;;
   which) [ -x "$root/temurin/bin/java" ] && echo "$root/temurin/bin/java" ;;
@@ -77,8 +87,11 @@ java_on_path() {
   libs
   statechart_on
   java_on_path 21.0.2
-  PATH="$BIN:$SYS" ensure_statechart_tools
-  grep -qxF "install $STATECHART_TLC_SPEC" "$BATS_TEST_TMPDIR/mise.log" || fail "no TLC install: $(cat "$BATS_TEST_TMPDIR/mise.log")"
+  local output
+  output="$(PATH="$BIN:$SYS" ensure_statechart_tools 2>&1)"
+  [[ "$output" != *"mise WARN"* ]] || fail "activation warning: $output"
+  grep -qxF "install --quiet $STATECHART_TLC_SPEC" "$BATS_TEST_TMPDIR/mise.log" || fail "no TLC install: $(cat "$BATS_TEST_TMPDIR/mise.log")"
+  ! grep -q '^use' "$BATS_TEST_TMPDIR/mise.log" || fail "mise use changed the global tools"
   [[ "$STATECHART_TLC_SPEC" == *checksum=sha256:936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88* ]] \
     || fail "the TLC spec has no sha256"
   ! grep -q temurin "$BATS_TEST_TMPDIR/mise.log" || fail "mise installed a JDK beside java 21"
@@ -91,10 +104,33 @@ java_on_path() {
   statechart_on
   printf '#!/bin/sh\necho "java version \\"1.8.0_391\\"" >&2\n' >"$BIN/java"
   chmod +x "$BIN/java"
-  PATH="$BIN:$SYS" ensure_statechart_tools
-  grep -qx 'install java@temurin-25' "$BATS_TEST_TMPDIR/mise.log" || fail "no temurin install: $(cat "$BATS_TEST_TMPDIR/mise.log")"
+  local output
+  output="$(PATH="$BIN:$SYS" ensure_statechart_tools 2>&1)"
+  [[ "$output" != *"mise WARN"* ]] || fail "activation warning: $output"
+  grep -qx 'install --quiet java@temurin-25' "$BATS_TEST_TMPDIR/mise.log" || fail "no temurin install: $(cat "$BATS_TEST_TMPDIR/mise.log")"
   ! grep -q '^use' "$BATS_TEST_TMPDIR/mise.log" || fail "mise use changed the global tools"
   grep -qx "JAVA=$BATS_TEST_TMPDIR/mise-installs/temurin/bin/java" "$ENV_FILE" || fail "statechart.env: $(cat "$ENV_FILE")"
+}
+
+@test "a failed TLC install keeps mise's error visible and does not write statechart.env" {
+  statechart_on
+  java_on_path 21.0.2
+  run env PATH="$BIN:$SYS" \
+    bash -c 'for l in common detect deps config; do source "$1/lib/$l.sh"; done; export MISE_FAIL_SPEC="$STATECHART_TLC_SPEC"; ensure_statechart_tools' _ "$ROOT"
+  [[ "$status" -eq 1 ]] || fail "exit $status: $output"
+  [[ "$output" == *"mise ERROR http:tla2tools"*"download failed"* ]] || fail "no install error: $output"
+  [[ ! -e "$ENV_FILE" ]] || fail "statechart.env was written"
+  ! grep -q '^use' "$BATS_TEST_TMPDIR/mise.log" || fail "mise use changed the global tools"
+}
+
+@test "a failed Java install keeps mise's error visible and does not write statechart.env" {
+  statechart_on
+  run env PATH="$BIN:$SYS" MISE_FAIL_SPEC=java@temurin-25 \
+    bash -c 'for l in common detect deps config; do source "$1/lib/$l.sh"; done; ensure_statechart_tools' _ "$ROOT"
+  [[ "$status" -eq 1 ]] || fail "exit $status: $output"
+  [[ "$output" == *"mise ERROR java@temurin-25 download failed"* ]] || fail "no install error: $output"
+  [[ ! -e "$ENV_FILE" ]] || fail "statechart.env was written"
+  ! grep -q '^use' "$BATS_TEST_TMPDIR/mise.log" || fail "mise use changed the global tools"
 }
 
 @test "with statechart on and no mise, the warning says what to install and statechart.env is not written" {
