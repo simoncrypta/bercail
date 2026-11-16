@@ -701,6 +701,45 @@ for (const role of roleNames) {
   });
 }
 
+test.each(["branch-pr --backend gh", "branch-trail --backend entire"])(
+  "policy init %s cannot wrap trust or protected-file writes",
+  (choice) => {
+    const init = `bercail policy init --repo /work --profile ${choice} --verify example --write`;
+    for (const role of roleNames) {
+      const input = {
+        ...at(role, policies.loosest),
+        home: "/h",
+        protectedFiles: ["/h/.local/state/bercail/policy-trust.json", "/h/.config/bercail/config.toml"],
+      };
+      for (const command of [
+        `${init} && bercail policy trust /work`,
+        `env BERCAIL_ROLE=shep ${init}; command bercail policy trust /work`,
+        `bash -c '${init}; bercail policy trust /work'`,
+        `eval '${init}; bercail policy trust /work'`,
+        "bercail policy init policy trust /work",
+      ]) {
+        blocked(command, input, /person's call/);
+      }
+      blocked(`${init} > /h/.config/bercail/config.toml`, input, /decides what bercail's guard/);
+      blocked(`${init} | tee /h/.local/state/bercail/policy-trust.json`, input, /decides what bercail's guard/);
+    }
+  },
+);
+
+test.each(["branch-pr --backend gh", "branch-trail --backend entire"])(
+  "policy init %s preview and preparation carry no git approval",
+  (choice) => {
+    const init = `bercail policy init --repo /work --profile ${choice}`;
+    for (const input of [tui, headless, { ...tui, role: "builder" }, { ...tui, role: "shep" }]) {
+      allowed(init, input);
+      allowed(`${init} --verify example --write`, input);
+      assertEqual(decision(`${init} --write && git commit -m setup`, input).action, input.hasUI ? "ask" : "block");
+      assertEqual(decision(`${init} --write && git push origin main`, input).action, input.hasUI ? "ask" : "block");
+      assertEqual(decision(`${init} --write && git tag v1.0.0`, input).action, input.hasUI ? "ask" : "block");
+    }
+  },
+);
+
 test("an auto-approval says why, for the log", () => {
   // An auto-approval says why, for the log.
   const why = decision("git commit -m x", {

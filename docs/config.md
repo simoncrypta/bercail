@@ -82,6 +82,109 @@ With no file, the guard asks before a commit or push and no agent releases, as b
 - **The log.** Every command the guard lets through on a policy, the scratch rule, or autopilot's role is appended to `~/.local/state/bercail/guard-approvals.jsonl` with the time, terminal, role, folder, command (URL credentials masked), and why: `jq . ~/.local/state/bercail/guard-approvals.jsonl`.
 - **What agents read.** Every Pi agent that loads the guard gets the effective policy of its folder, rules included, as a `bercail_git_policy` section of its system prompt, refreshed at the start of each run. Text from a file you have not trusted is labeled as the repo's, not yours. The handoff comment names the policy in one line. Agents still stage and leave work uncommitted for review; the policy says how to commit, push, or release once someone asks.
 
+### Prepare a policy and verification starter
+
+`policy init` is a fixed file generator, not an installer or trust command. All
+three choices are required; without `--write` it only previews:
+
+```sh
+bercail policy init --repo /path/to/checkout --profile guarded --backend gh
+bercail policy init --repo /path/to/checkout --profile branch-pr --backend gh --verify my-repo --write
+bercail policy init --repo /path/to/entire-checkout --profile guarded --backend entire
+bercail policy init --repo /path/to/entire-checkout --profile branch-trail --backend entire --verify my-repo --write
+```
+
+It shows the exact target paths, proposed new-file diffs and SHA-256 hashes. Its
+only destinations are `.bercail/policy.toml` and, with `--verify NAME`,
+`.agents/skills/verify-NAME/SKILL.md`, under the **selected checkout's root**.
+A subdirectory resolves to that root. In a linked worktree it writes there,
+not in the main checkout or another desk. Names use lowercase letters, digits
+and single hyphens, without leading/trailing hyphens; `verify-NAME` must fit
+within 64 characters.
+
+| Profile | Proposed repo-file settings |
+| --- | --- |
+| `guarded` (either backend) | `commit = "ask"`, `push = "ask"`, `review = "always"`, `agent_may_release = false` |
+| `branch-pr` (`gh` only) | `commit = "allow"`, `push = "branch"`, `integrate = "pr"`, `pr_draft = true`, `review = "always"`, `agent_may_release = false` |
+| `branch-trail` (`entire` only) | `commit = "allow"`, `push = "branch"`, `review = "always"`, `agent_may_release = false`; no `integrate` or `pr_draft` keys |
+
+GitHub profiles retain their rule to use `gh`. Both Entire profiles prescribe
+integration through a **project-level Trail**, which may contain multiple branches
+and repositories. Reuse the appropriate Trail; ask the person when that is unclear.
+Create one only when asked. Use each change's true parent/base branch, not an
+assumed main branch (`entire trail create --base`, `entire trail retarget --base`).
+Keep the description current with `entire trail update` and reference full Trail
+and change URLs. Stage and leave work uncommitted until asked to commit or publish.
+Do not publish directly to main or master. Desks must not approve or merge Trails.
+Only the human, or Shep explicitly asked to merge, may merge after git permission,
+actual validation evidence and required human review pass independently. There is
+no GitHub PR or gh-stack workflow for Entire.
+
+**The Trail workflow is rules text, not a new policy enum or runtime enforcement.**
+The existing schema has only `pr` and `direct` integration values; Entire scaffolds
+omit `integrate` and `pr_draft` rather than inventing an enum. General scaffolds use
+`review = "always"`; they do not replace a repo's separately reviewed by-stakes policy.
+
+**`--backend gh|entire` declares scaffold intent, not runtime backend configuration.**
+No backend key is added to the policy and no global `[git]` entry changes. The
+existing override keyed by the canonical main checkout takes precedence when it
+matches the requested backend, even if offline evidence differs. A supported but
+mismatched override refuses. Multiple matching entries refuse, including duplicate
+keys or canonical aliases, rather than silently choosing one. Unknown or malformed
+matching `[git]` values also refuse rather than falling back; parser errors in `[git]` or unreadable table
+headers conservatively refuse because they cannot be safely matched.
+
+Without an override, offline Origin hosting or a Graphite config refuses for
+either backend. `entire` additionally requires an origin URL shaped like
+`entire://HOST/et/PROJECT/REPO`. A GitHub host, an Entire GitHub mirror
+(`entire://HOST/gh/OWNER/REPO`), capture settings alone or no hosting evidence is
+not enough for Entire setup. `gh` retains its no-evidence fallback, including
+GitHub mirrors, but refuses Entire `et/` hosting. Init never runs backend tools,
+network/ownership probes or initialization. A stale Graphite config can therefore
+refuse even when Graphite tracks nothing: use manual setup, or have the owner
+review their existing backend choice separately. Init never creates an override.
+
+Before writing anything, init checks **all** requested destinations. Existing
+byte-identical files are left untouched, including metadata. Any different file
+conflicts, even a policy with malformed or unknown schema; there is no merge,
+normalization, `--force`, custom output path or overwrite. Symlink components
+(including dangling links), hardlinked targets, non-regular files and
+non-directory parents refuse. Repo inputs through symlinks or containing control
+characters also refuse. Unset `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR` and
+`GIT_INDEX_FILE` before using init so they cannot redirect the explicit repo.
+
+Writes use no-clobber creation. Preexisting conflicts leave every destination
+unchanged, but this is **not a multi-file transaction**: an I/O failure or
+concurrent creator can leave partial output. Inspect it and retry; identical
+files are skipped. The path checks do not protect against a hostile same-user
+process replacing parent directories during the write.
+
+The starter is deliberately **INCOMPLETE**. Its normal skill frontmatter and
+repo-local location let Pi auto-discover it once the owner permits Pi project
+resources; `/validate` can locate it too. **Pi project-resource trust is separate
+from bercail policy trust; init grants neither.** Its first instruction
+stops validation until reviewed repo-specific commands and acceptance criteria
+replace the placeholders. No executable script, test result or validation
+description is generated, and init runs no checks.
+
+After preparation, keep the three gates separate:
+
+1. Review and deliberately adopt only the generated policy and optional skill.
+   Init does not stage them or change ignore rules; an ignored target still needs
+   deliberate adoption. A file on this branch is not installed or adopted on
+   every desk.
+2. Inspect effective permissions with `bercail policy show --json /path/to/checkout`.
+   Init **never creates or changes trust**. Existing matching main-checkout trust
+   and local overrides may already apply, so proposed settings are not a promise
+   of effective permissions. Only the owner, after reviewing the target bytes,
+   may separately run `bercail policy trust /path/to/checkout` in their own shell.
+3. Complete and review the verification skill, run real repo checks and keep
+   their output. Then obtain the required human review. Permission to publish
+   is neither validation evidence nor approval.
+
+There are no self-trust flags, grants, credential/model calls, global skill
+writes, installs, deployment, commits, pushes, releases or approvals in init.
+
 ## A desk secret per repo
 
 1Password's app approves `op` per terminal, for ten minutes. Pi's bash tool has no terminal of its own, so every `op` call from a desk asks you again. A repo can instead give its desks a read-only [service account](https://developer.1password.com/docs/service-accounts/) scoped to one vault made for agents, while your other secrets keep asking.

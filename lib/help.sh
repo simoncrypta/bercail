@@ -41,7 +41,13 @@ Post-install CLI (bercail):
                 target list|show NAME [--json] | target rm NAME |
                 route REPO TARGET | route --default TARGET | route --rm REPO|--default
   policy        A repo's git policy (.bercail/policy.toml): show [--json] [repo] |
-                trust [repo] (its looser values count until the file changes) | untrust [repo]
+                trust [repo] (its looser values count until the file changes) | untrust [repo] |
+                init --repo DIR --profile guarded|branch-pr|branch-trail --backend gh|entire [--verify NAME] [--write]
+                init previews fixed repo-local files; --write creates absent files, never overwrites.
+                guarded supports both backends; branch-pr requires gh, branch-trail requires entire.
+                Entire Trail workflow is rules text, not a new policy enum or runtime enforcement.
+                All profiles require human review and leave releases to the person. No trust or
+                backend configuration is changed. verify-NAME is an INCOMPLETE /validate starter.
   describe      A change's description (.bercail/description.md, written by /validate):
                 check [--json] (also its size and stakes) | stamp (record the staged tree) |
                 template | title | body | commit [--reviewed-by NAME] (the text for git and

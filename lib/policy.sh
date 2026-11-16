@@ -255,8 +255,12 @@ cmd_policy() {
   shift || true
   case "$sub" in
     show) _policy_show "$@" ;;
+    init)
+      # shellcheck source=lib/policy-init.sh
+      source "$(dirname "${BASH_SOURCE[0]}")/policy-init.sh"
+      _policy_init "$@" ;;
     trust) _policy_trust "$@" ;;
     untrust) _policy_untrust "$@" ;;
-    *) _policy_err "usage: bercail policy show [--json] [repo] | trust [repo] | untrust [repo]"; return 1 ;;
+    *) _policy_err "usage: bercail policy show [--json] [repo] | trust [repo] | untrust [repo] | init --repo DIR --profile guarded|branch-pr|branch-trail --backend gh|entire [--verify NAME] [--write]"; return 1 ;;
   esac
 }
