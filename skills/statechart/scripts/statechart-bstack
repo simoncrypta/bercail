@@ -1,0 +1,78 @@
+#!/bin/sh
+# bstack's entry to upstream's statechart: never an install, and a time bound.
+#   statechart-bstack SPEC.tla [--config F] [--view F] [--out DIR]   check and chart
+#   statechart-bstack graph SPEC.tla CONFIG.cfg OUT.json             TLC's state graph
+# bercail installs TLC and Java when [bstack] statechart = true and writes their
+# paths to statechart.env; TLA2TOOLS and JAVA in the environment win over it.
+set -eu
+here=$(dirname "$(readlink -f "$0")")
+env_file="$HOME/.local/share/bercail/statechart.env"
+
+# KEY from statechart.env, read as data: the file is never sourced.
+from_env_file() {
+  [ -r "$env_file" ] || return 0
+  sed -n "s/^$1=//p" "$env_file" | tail -n 1
+}
+
+TLA2TOOLS="${TLA2TOOLS:-$(from_env_file TLA2TOOLS)}"
+JAVA="${JAVA:-$(from_env_file JAVA)}"
+if [ -z "$TLA2TOOLS" ] || [ -z "$JAVA" ] || [ ! -r "$TLA2TOOLS" ] || [ ! -x "$JAVA" ]; then
+  cat >&2 <<EOF
+statechart: TLC and Java are not set up, and this command never installs them.
+Fix: set statechart = true under [bstack] in ~/.config/bercail/config.toml, then run
+bercail reconfigure (bercail doctor says what is missing when it is already on). Or set
+TLA2TOOLS to tla2tools.jar 1.7.4 and JAVA to java 11 or later.
+EOF
+  exit 2
+fi
+export TLA2TOOLS JAVA
+
+# A spec can make TLC run for hours: STATECHART_TIMEOUT seconds, 600 by default.
+limit="${STATECHART_TIMEOUT:-600}"
+timeout=$(command -v timeout || command -v gtimeout || true)
+if [ -z "$timeout" ]; then
+  echo "statechart: it bounds each run with timeout, from GNU coreutils. Fix: install coreutils (brew install coreutils)." >&2
+  exit 2
+fi
+bounded() {
+  "$timeout" --kill-after=10 "$limit" "$@"
+}
+over() {
+  if [ "$1" -eq 124 ] || [ "$1" -eq 137 ]; then
+    echo "statechart: stopped after ${limit}s (STATECHART_TIMEOUT). Make the constants smaller or add a CONSTRAINT." >&2
+    exit 2
+  fi
+}
+
+code=0
+if [ "${1:-}" = graph ]; then
+  shift
+  bounded node --disable-warning=ExperimentalWarning "$here/graph.ts" "$@" || code=$?
+  over "$code"
+  exit "$code"
+fi
+
+# Where upstream writes: --out, or SPEC-chart beside the spec.
+out="" spec="" prev=""
+for a in "$@"; do
+  case "$prev" in
+    --out) out=$a ;;
+    --config | --view) ;;
+    *)
+      case "$a" in
+        --out=*) out=${a#--out=} ;;
+        -*) ;;
+        *) spec=$a ;;
+      esac
+      ;;
+  esac
+  prev=$a
+done
+[ -n "$out" ] || out="${spec%.tla}-chart"
+
+bounded "$here/statechart" "$@" || code=$?
+over "$code"
+if [ "$code" -le 1 ] && [ -f "$out/chart.mmd" ]; then
+  node "$here/pi-chart.mjs" "$out/chart.mmd" "$out/chart.pi.md"
+fi
+exit "$code"

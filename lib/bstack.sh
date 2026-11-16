@@ -23,7 +23,7 @@ BSTACK_PI_BRIDGE_RESERVE=40000
 BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge.md
   agents/bstack-autopilot.md agents/bstack-headless.md agents/bstack-pr-review.md prompts/validate.md
   prompts/council.md prompts/handoff.md prompts/autopilot.md prompts/how.md prompts/why.md
-  prompts/unslop.md prompts/pr-review.md prompts/bstack-setup.md)
+  prompts/unslop.md prompts/pr-review.md prompts/bstack-setup.md prompts/statechart.md)
 
 # --- config.toml --------------------------------------------------------------
 
@@ -277,6 +277,9 @@ _bstack_pi_argv() {
   for id in "${BERCAIL_SKILL_IDS[@]}"; do
     BSTACK_PI_ARGV+=(--skill "$(skill_canonical_dir "$id")")
   done
+  if statechart_enabled; then
+    BSTACK_PI_ARGV+=(--skill "$(skill_canonical_dir statechart)")
+  fi
 }
 
 # bercail review-pr's reviewer, into BSTACK_PI_ARGV: the lead's model, the

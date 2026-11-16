@@ -417,6 +417,91 @@ ensure_pi() {
   dep_present pi || maybe_mise_install pi pi || warn "missing pi (install with: mise use -g pi)"
 }
 
+# The statechart skill checks TLA+ specs with TLC, which runs on Java. Both are
+# opt-in ([bstack] statechart = true): off, nothing is installed. On, bercail
+# writes their paths to STATECHART_ENV, where the skill's command reads them.
+# The TLC pin and its sha256 are upstream's (skills/statechart/scripts/run.ts).
+STATECHART_TLC_SPEC="http:tla2tools[url=https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar,checksum=sha256:936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88]@1.7.4"
+STATECHART_JAVA_SPEC="java@temurin-25"
+STATECHART_ENV="${BERCAIL_SHARE_DIR}/statechart.env"
+
+# The major version of java binary $1 (8 for 1.8.0), or nothing.
+_java_major() {
+  local v
+  v="$("$1" -version 2>&1 | sed -n 's/.* version "\([0-9][0-9._]*\)[^"]*".*/\1/p' | head -n 1)"
+  [[ "$v" != 1.* ]] || v="${v#1.}"
+  printf '%s' "${v%%[._]*}"
+}
+
+# A java of 11 or later: the one on PATH, else the pinned temurin through mise
+# (installed, never made the global java). A mise shim resolves here, so the
+# path does not depend on the repo the skill later runs in.
+_statechart_java() {
+  local java major
+  if java="$(command -v java 2>/dev/null)"; then
+    [[ "$java" != */mise/shims/* ]] || java="$(mise which java 2>/dev/null)" || java=""
+    major="$([[ -z "$java" ]] || _java_major "$java")"
+    if [[ "$major" =~ ^[0-9]+$ ]] && ((major >= 11)); then
+      printf '%s' "$java"
+      return 0
+    fi
+  fi
+  has_mise || return 1
+  info "installing via mise: $STATECHART_JAVA_SPEC (no java 11 or later on PATH)" >&2
+  run mise install "$STATECHART_JAVA_SPEC" >&2 || return 1
+  [[ "$DRY_RUN" -eq 0 ]] || return 0
+  mise which java --tool "$STATECHART_JAVA_SPEC" 2>/dev/null
+}
+
+# tla2tools.jar, through mise's http backend, which checks upstream's sha256.
+_statechart_tlc() {
+  local dir
+  has_mise || return 1
+  if ! dir="$(mise where "$STATECHART_TLC_SPEC" 2>/dev/null)" || [[ ! -r "$dir/tla2tools.jar" ]]; then
+    info "installing via mise: tla2tools 1.7.4" >&2
+    run mise install "$STATECHART_TLC_SPEC" >&2 || return 1
+    [[ "$DRY_RUN" -eq 0 ]] || return 0
+    dir="$(mise where "$STATECHART_TLC_SPEC" 2>/dev/null)" || return 1
+  fi
+  printf '%s/tla2tools.jar' "$dir"
+}
+
+# [bstack] statechart on: TLC and Java, and their paths in STATECHART_ENV. Off:
+# no file, so the skill's command says how to turn it on. What mise installed
+# stays until mise uninstall.
+ensure_statechart_tools() {
+  local java jar
+  if ! statechart_enabled; then
+    [[ ! -e "$STATECHART_ENV" ]] || run rm -f "$STATECHART_ENV"
+    return 0
+  fi
+  java="$(_statechart_java)" \
+    || { warn "statechart: no java 11 or later, and mise could not install $STATECHART_JAVA_SPEC: install a JDK, then run bercail reconfigure"; return 1; }
+  jar="$(_statechart_tlc)" \
+    || { warn "statechart: mise could not install tla2tools 1.7.4: install mise (https://mise.jdx.dev), then run bercail reconfigure"; return 1; }
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    info "[dry-run] would write $STATECHART_ENV"
+    return 0
+  fi
+  ensure_dir "$(dirname "$STATECHART_ENV")"
+  printf 'TLA2TOOLS=%s\nJAVA=%s\n' "$jar" "$java" >"$STATECHART_ENV"
+  info "statechart: TLC $jar, java $java"
+}
+
+# Only when [bstack] statechart is on: the paths the skill's command will use.
+_doctor_statechart() {
+  local jar java
+  statechart_enabled || return 0
+  jar="$(sed -n 's/^TLA2TOOLS=//p' "$STATECHART_ENV" 2>/dev/null)"
+  java="$(sed -n 's/^JAVA=//p' "$STATECHART_ENV" 2>/dev/null)"
+  if [[ -r "$jar" && -x "$java" ]]; then
+    log "  ok  statechart (TLC $jar, java $java)"
+    return 0
+  fi
+  log "  missing  statechart's TLC or java ([bstack] statechart = true; run bercail reconfigure)"
+  return 1
+}
+
 install_dependencies() {
   info "checking dependencies..."
   # Homebrew first (macOS fallback), then mise shims so they win on PATH.
@@ -505,5 +590,6 @@ doctor_dependencies() {
     log "  missing  pi (the desk agent; mise use -g pi)"
     missing=$((missing + 1))
   fi
+  _doctor_statechart || missing=$((missing + 1))
   return "$missing"
 }

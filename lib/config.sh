@@ -55,6 +55,9 @@ effort = "high"
 lead = "claude"
 build = "grok"
 judge = "claude"
+# true: the statechart skill, with the TLC and Java it needs (installed on the
+# next bercail reconfigure or update). It checks TLA+ models of stateful changes.
+statechart = false
 EOF
 }
 
@@ -71,6 +74,14 @@ read_layout_review() {
   printf '%s' "$review"
 }
 
+# [bstack] statechart = true: the statechart skill and its TLC and Java.
+statechart_enabled() {
+  [[ -r "$BERCAIL_USER_CONFIG" ]] || return 1
+  # shellcheck source=lib/toml.sh
+  source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
+  [[ "$(toml_value "$BERCAIL_USER_CONFIG" bstack statechart false)" == true ]]
+}
+
 # Every key bercail reads in config.toml, one "section key" a line; the example
 # in docs/config.md shows the same ones. [git] takes a repo path as its key,
 # and each [policy."<repo>"] and [desk_secrets."<repo>"] takes its own keys.
@@ -84,6 +95,7 @@ bstack effort
 bstack lead
 bstack build
 bstack judge
+bstack statechart
 shep compact_at
 shep keep_recent
 shep rollover
@@ -817,5 +829,6 @@ deploy_configs() {
   record_install_source
   ensure_pi
   ensure_tuicr
+  ensure_statechart_tools || true
   sync_omarchy_default_agent
 }

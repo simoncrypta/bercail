@@ -157,6 +157,7 @@ cmd_reconfigure() {
   deploy_skills
   ensure_pi
   ensure_tuicr
+  ensure_statechart_tools || true
   deploy_bstack
   sync_omarchy_default_agent
   info "the desk runs bstack's Pi lead  review=$(read_layout_review)"

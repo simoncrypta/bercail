@@ -4,8 +4,13 @@
 # Pi does not discover ~/.agents/skills: each skill gets a link in Pi's dir.
 PI_SKILLS_DIR="${HOME}/.pi/agent/skills"
 
+# The skills to deploy and give bstack's agents. statechart only when [bstack]
+# statechart = true, which also installs its TLC and Java.
 _skill_ids() {
   printf '%s\n' "${BERCAIL_SKILL_IDS[@]}"
+  if statechart_enabled; then
+    printf 'statechart\n'
+  fi
 }
 
 _skill_link_is_ours() {
@@ -57,7 +62,7 @@ scrub_managed_skill_extra_links() {
   while IFS= read -r skill_id; do
     [[ -n "$skill_id" ]] || continue
     remove_managed_skill_symlink "$PI_SKILLS_DIR" "$skill_id"
-  done < <(_skill_ids)
+  done < <(printf '%s\n' "${BERCAIL_SKILL_IDS[@]}")
 }
 
 deploy_skill_tree() {
@@ -86,9 +91,32 @@ deploy_skills() {
   run rm -f "$(skill_canonical_dir handoff)/resources/handoff.md" "$(skill_canonical_dir handoff)/resources/keys.md"
   while IFS= read -r skill_id; do
     [[ -n "$skill_id" ]] || continue
+    if [[ "$skill_id" == statechart ]] && ! _statechart_skill_ours; then
+      warn "keeping $(skill_canonical_dir statechart): another statechart skill is there; move it to use bercail's"
+      continue
+    fi
     deploy_skill_tree "$skill_id"
     ensure_skill_symlink "$PI_SKILLS_DIR" "$skill_id"
   done < <(_skill_ids)
+  statechart_enabled || remove_statechart_skill
+}
+
+# No statechart skill yet, or bercail's, found by bstack's wrapper in it.
+# Another one in the same place (pstack's own) is never written over or removed.
+_statechart_skill_ours() {
+  local dest
+  dest="$(skill_canonical_dir statechart)"
+  [[ ! -e "$dest" || -f "$dest/scripts/statechart-bstack" ]]
+}
+
+# bercail's statechart skill and its link.
+remove_statechart_skill() {
+  local dest
+  dest="$(skill_canonical_dir statechart)"
+  [[ -e "$dest" ]] && _statechart_skill_ours || return 0
+  remove_managed_skill_symlink "$PI_SKILLS_DIR" statechart
+  info "remove: $dest"
+  run rm -rf "$dest"
 }
 
 remove_managed_skills() {
@@ -101,5 +129,6 @@ remove_managed_skills() {
       info "remove: $dest"
       run rm -rf "$dest"
     fi
-  done < <(_skill_ids)
+  done < <(printf '%s\n' "${BERCAIL_SKILL_IDS[@]}")
+  remove_statechart_skill
 }

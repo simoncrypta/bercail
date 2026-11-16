@@ -1,0 +1,4 @@
+# Written by tests/statechart/shep-inbox/check.sh; review the spec, configs and view instead.
+tests/statechart/shep-inbox/graph.json linguist-generated=true
+tests/statechart/shep-inbox/sha256sums linguist-generated=true
+tests/statechart/shep-inbox/chart/** linguist-generated=true

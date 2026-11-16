@@ -90,6 +90,33 @@
     "notes": "An Entire plugin (entire plugin upgrade graph)."
   },
   {
+    "name": "tla2tools",
+    "source": "github:tlaplus/tlaplus",
+    "min": null,
+    "why": null,
+    "known": "1.7.4",
+    "pinned_in": ["lib/deps.sh:STATECHART_TLC_SPEC", "skills/statechart/scripts/run.ts:http:tla2tools"],
+    "notes": "TLC, for the statechart skill; installed only with [bstack] statechart = true, through mise's http backend with the jar's sha256. Both pins carry the sha256: move it with the version, and run tests/statechart/shep-inbox/check.sh."
+  },
+  {
+    "name": "java",
+    "source": "none",
+    "min": "11",
+    "why": "TLC 1.7.4 runs on Java 11 or later.",
+    "known": "25",
+    "pinned_in": ["lib/deps.sh"],
+    "notes": "Only with [bstack] statechart = true: any java of 11 or later on PATH, else mise installs java@temurin-25 (STATECHART_JAVA_SPEC in lib/deps.sh), never as the global java."
+  },
+  {
+    "name": "pstack-statechart",
+    "source": "none",
+    "min": null,
+    "why": null,
+    "known": "3dbd22ff12742fb28c9700b9760baa29ed41dc13",
+    "pinned_in": ["skills/statechart/UPSTREAM.md"],
+    "notes": "The statechart skill, vendored from cursor/plugins (pstack/skills/statechart, MIT). Upstream has no releases: compare its history since this commit by hand, and copy a newer commit in whole (skills/statechart/UPSTREAM.md)."
+  },
+  {
     "name": "jq",
     "source": "github:jqlang/jq",
     "min": null,

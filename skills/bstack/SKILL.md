@@ -56,12 +56,16 @@ each step ending in something you can check.
 ## feature
 
 1. Name the data shape first: the types, the state, who reads and writes it.
-2. Settle the interface from the caller's side before the inside. On a hard
+2. A change to a lifecycle, retry or resume, lock or lease, queue, recovery, or
+   concurrent writers: model it with the `statechart` skill when you have it
+   (`[bstack] statechart = true`), and get the owner's yes on its chart before
+   you build.
+3. Settle the interface from the caller's side before the inside. On a hard
    design fork, ask `bstack-judge`, or sketch two versions and compare.
-3. Build it in small steps that each end green (`bstack-builder`, with a brief per step).
+4. Build it in small steps that each end green (`bstack-builder`, with a brief per step).
    New behavior gets tests that follow the `unit-testing` skill.
-4. Drive the real path the user takes: the CLI, the app, the endpoint.
-5. Finish with `/validate`.
+5. Drive the real path the user takes: the CLI, the app, the endpoint.
+6. Finish with `/validate`.
 
 ## refactor
 

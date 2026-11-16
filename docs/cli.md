@@ -60,6 +60,7 @@ Call by name. Skills install to `~/.agents/skills`, with a link to each in `~/.p
 | `desk-restore` | Put a desk with no record back on its session by hand, matched by folder and content |
 | `unit-testing` | F.I.R.S.T. rules for writing and reviewing tests: a temp HOME, fakes on PATH, a run that fails without the change |
 | `describe` | Write, check and ship a change's description (the PR body or the commit message) to one standard and the repo's template |
+| `statechart` | Model a stateful change in TLA+, check it with TLC, chart it for the owner, and replay it on the real code. Only with `[bstack] statechart = true`. See [statecharts](bstack.md#statecharts) |
 
 autopilot's PR snapshot, `pr-state.sh`, is in [Ship with autopilot](bstack/06-autopilot.md#what-it-does). The review helpers:
 

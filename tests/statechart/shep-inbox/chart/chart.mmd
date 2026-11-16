@@ -1,0 +1,43 @@
+---
+title: "Shep inbox: one desk finish"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: before
+    lg1: flight
+    lg2: done
+  }
+  class lg0 blue
+  class lg1 orange
+  class lg2 teal
+  s0: desk working
+  s1: waiting in the inbox
+  s2: claimed, not sent yet
+  s3: claimed by a Shep that crashed
+  s4: queued for Shep's turn
+  s5: on screen, not saved yet
+  s6: sent, then lost in a crash
+  s7: saved in Shep's session
+  s8: acknowledged
+  [*] --> s0
+  s0 --> s1: desk finishes
+  s1 --> s2: Shep claims it
+  s2 --> s3: Shep crashes
+  s2 --> s4: Shep queues it
+  s4 --> s5: you see it, unsaved
+  s4 --> s6: Shep crashes
+  s4 --> s7: you see it, saved
+  s5 --> s6: Shep crashes
+  s5 --> s8: Shep replies
+  s7 --> s8: Shep claims it or Shep replies
+  s3 --> s4: Shep queues it
+  s6 --> s4: Shep queues it
+  class s0 blue
+  class s1 orange
+  class s2 orange
+  class s3 orange
+  class s4 orange
+  class s5 orange
+  class s6 orange
+  class s7 orange
+  class s8 teal

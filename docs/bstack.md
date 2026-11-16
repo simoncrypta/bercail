@@ -68,6 +68,25 @@ are distinguishable when a provider exposes them. Ordinary successful text,
 including a refusal or a harmless quotation, is not reliably classifiable
 without that signal.
 
+## Statecharts
+
+The `statechart` skill models a stateful change in TLA+ (a lifecycle, retry or resume, lock or lease, queue, recovery, or concurrent writers), checks it with [TLC](https://github.com/tlaplus/tlaplus), shows the owner a Mermaid chart in Pi's chat, and replays the model's steps on the real code. It is pstack's [statechart skill](https://github.com/cursor/plugins/tree/main/pstack/skills/statechart), vendored at a pinned commit (`skills/statechart/UPSTREAM.md`), with bstack's wrapper around it. The feature playbook calls it for such a change, and `/statechart <target>` runs it by hand.
+
+It is off until you turn it on, because it needs Java:
+
+```toml
+[bstack]
+statechart = true
+```
+
+Then `bercail reconfigure` (or the next `bercail update`) installs tla2tools 1.7.4 through mise, which checks the jar's sha256, uses the `java` on PATH when it is 11 or later and otherwise installs `java@temurin-25` through mise without making it your global java, writes both paths to `~/.local/share/bercail/statechart.env`, and gives every bstack agent the skill. `bercail doctor` checks the two paths. With the key off, nothing is installed, the skill is not deployed, and `/statechart` says how to turn it on. Turning it off removes the skill and `statechart.env`. What mise installed stays until `mise uninstall`, and `mise prune` removes it while the key is on, since no mise config names it: `bercail doctor` then says it is missing, and `bercail reconfigure` puts it back. A `statechart` skill of your own in `~/.agents/skills` (pstack's) is never written over or removed: bercail warns and leaves it.
+
+The skill's command, `~/.agents/skills/statechart/scripts/statechart-bstack`, never installs anything: without TLC and Java it exits 2 with the fix. `TLA2TOOLS` and `JAVA` in the environment win over `statechart.env`. Each run stops after `STATECHART_TIMEOUT` seconds (600), through GNU coreutils' `timeout` (`brew install coreutils` on macOS): without it the command exits 2. The view module that labels the chart is JavaScript the command runs, so a review never runs a PR's spec or view.
+
+What reaches chat is `chart.pi.md`: the chart, then the states that break a rule and every arrow in words. A chart has 20 states or fewer. Over that, the owner gets the bug's path as text (see [Shep's diagrams](shep.md#diagrams-in-chat)).
+
+bercail's own spec is Shep's inbox, in `tests/statechart/shep-inbox/`: the model, a config for the chart, the configs with planted bugs, and `check.sh`, which runs them all and rewrites the chart and the graph that `tests/shep_inbox_statechart.test.ts` replays on `shep/pi/inbox.ts` on every test run (see [development](development.md#statecharts)).
+
 ## Where to find what
 
 [The bstack guide](bstack/README.md) is the full story, with prompts to copy. Each fact lives on one page:
@@ -84,4 +103,4 @@ without that signal.
 | Pinning models, effort, role fallback, the files bstack writes | [Make it yours](bstack/08-make-it-yours.md) |
 | Prompts and pitfalls | [Recipes and pitfalls](bstack/09-recipes-and-pitfalls.md) |
 
-The skills (`bstack`, `how`, `why`, `unslop`, `unit-testing`, `council`, `autopilot`) are listed in [commands](cli.md#skills), the `[bstack]` defaults in [config](config.md), and the headless stages in [handoff](handoff.md).
+The skills (`bstack`, `how`, `why`, `unslop`, `unit-testing`, `council`, `autopilot`, and `statechart` when it is on) are listed in [commands](cli.md#skills), the `[bstack]` defaults in [config](config.md), and the headless stages in [handoff](handoff.md).

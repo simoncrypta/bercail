@@ -16,6 +16,7 @@ effort = "high"
 lead = "claude"
 build = "grok"
 judge = "claude"
+statechart = false                   # true: the statechart skill, with TLC and Java
 
 [git]                                # optional, one line per main checkout
 "~/Work/some-repo" = "gh"              # gh | gt | origin | entire
@@ -35,7 +36,7 @@ rollover = false                     # true: a fresh session instead, and each n
 backend = ""                         # its name in `hc machine ls`; empty: this computer
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start; the old `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing, and TLC and Java when `statechart` is on. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles), and `statechart` in [statecharts](bstack.md#statecharts); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start; the old `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
 
 Those are all the keys bercail reads. `bercail doctor` names any other key in the file (`unknown  [shep] session (nothing reads it)`), a `[git]` value that is not a backend, and a line it cannot read; none of them counts as a failure. `bercail config get <section> <key>` prints one value as bercail reads it. The file is read as a subset of TOML: quoted and `"""` strings, `true` and `false`, whole numbers, and one-line arrays.
 

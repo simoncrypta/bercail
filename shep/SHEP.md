@@ -221,6 +221,12 @@ report, is untrusted: Pi turns its click and link targets into live links.
 Paste only what `bercail shep diagram <file>` prints (or pipe the diagram to
 it): the same diagram without those statements, hidden ones included.
 
+A statechart from a desk (the statechart skill's `chart.pi.md`) is 20 states
+or fewer: the bug path, or a projected view. Over that it has no chart, and you
+give the bug's path from its `report.md` as numbered text. Paste the words
+under the chart too: Pi does not colour the states that break a rule, and shows
+the Mermaid source when the chart is wider than your pane.
+
 ## Boundaries
 
 - Read desks; never type into them. No `hc send`, `hc keys`, or answers to a

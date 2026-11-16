@@ -76,6 +76,8 @@ worktrunk and beads install the same way: skip if present, else mise, else Homeb
 
 The desk agent: [Pi](https://pi.dev) (mise), 1.5.1+, with `npm:pi-claude-bridge@0.12.0`; the bridge runs `claude` on your Claude plan, so a Claude plan needs `claude` installed and signed in too.
 
+Only with `[bstack] statechart = true`: tla2tools 1.7.4 (TLC) through mise, and a java of 11 or later (the one on PATH, else `java@temurin-25` through mise). See [statecharts](bstack.md#statecharts).
+
 ### Dependency tracker
 
 `lib/deps.json` lists each tool bercail installs or pins, plus jq and fzf, the CI tools, the npm devDependencies and the actions. Each entry has:
@@ -92,6 +94,12 @@ The desk agent: [Pi](https://pi.dev) (mise), 1.5.1+, with `npm:pi-claude-bridge@
 A lookup that fails does not stop the others. The run then opens or updates one `deps: tracker failing` issue (label `deps:tracker`), naming each source and its error, and exits 1. The next run where every lookup works closes that issue.
 
 `deps-track.sh pins` checks, offline, that each entry has every field and that every `path:KEY` pin agrees with `known`. `tests/deps_track.bats` runs it on this tree, so CI fails when, say, `BD_VERSION` moves without `known`. `check` prints the same warnings. `check --dry-run` does the lookups and prints the issue writes instead of making them; with `GH_REPO=simoncrypta/bercail` and your gh login, it shows what the next run would do. To take a new version, read its notes, make the change it needs, then set `known` (and the pin, for a `path:KEY`) in the same commit.
+
+## statecharts
+
+`skills/statechart/` is pstack's statechart skill, vendored at the commit in its `UPSTREAM.md`, which also says how to compare the copy with upstream and how to move it. Every file under `scripts/` and `references/` is upstream's, byte for byte, except bercail's `statechart-bstack`, `pi-chart.mjs` and `graph.ts`. Formatting and lint leave the upstream files alone (`vite.config.ts`).
+
+`tests/statechart/shep-inbox/` is the model of Shep's inbox (`shep/pi/inbox.ts` and the follower in `lib/notify.sh`). After a change to the spec, a config or the view, or to the inbox code it models, run its `check.sh` (it needs TLC and Java, so `[bstack] statechart = true`, about 35 seconds). It checks every config: the ones for the real code hold every rule, and each planted bug (`bug-*.cfg`) breaks the rule it targets. Then it rewrites `chart/` (what Simon checks), `graph.json` and `sha256sums`. `tests/shep_inbox_statechart.test.ts` runs on every `vp test`, with no Java. It replays every step of `graph.json` (`replay.cfg`: one Shep, two sessions, a notice) on the real `inbox.ts`, and after each one compares what `inbox.ts` decides with the model: where each event is, its delivery attempt and receipt, what it queues in Pi, and whether it runs or pauses. Two Sheps and the consumer lock are checked in the model only. It also fails when `sha256sums` no longer matches the spec, the configs or the view. A replay that fails after a change to `inbox.ts` means the code and the model disagree: fix the one that is wrong, then rerun `check.sh`.
 
 ## platforms
 

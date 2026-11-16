@@ -131,8 +131,10 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   Roles: lead (the bstack agent), build (bstack-builder), judge (bstack-judge);
   council: one read-only reviewer per provider. In Pi: /council, /validate, /handoff,
   /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green; pushes, never
-  merges), /pr-review (bercail review-pr's read-only decisions pass).
-  Settings: [bstack] in config.toml.
+  merges), /pr-review (bercail review-pr's read-only decisions pass), /statechart.
+  Settings: [bstack] in config.toml. statechart = true installs TLC (and Java
+  when there is no java 11 or later) and the statechart skill: TLA+ models of
+  stateful changes, checked with TLC and replayed on the real code.
   Pi >=1.5.1 with pi-claude-bridge@0.12.0. Claude uses claude auth login; GPT and
   Grok use /login openai and /login xai in pi. bercail update renders
   ~/.local/share/bercail/pi/ and herdr-core templates, and sets a 40k compaction
@@ -175,6 +177,8 @@ Config:
   ~/.agents/skills/desk-restore/              put a desk with no record back by hand
   ~/.agents/skills/unit-testing/              F.I.R.S.T. rules for writing and reviewing tests
   ~/.agents/skills/describe/                  the change description standard: PR body or commit message
+  ~/.agents/skills/statechart/                TLA+ statecharts with TLC ([bstack] statechart = true)
+  ~/.local/share/bercail/statechart.env       where TLC and java are, for the statechart skill
   ~/.local/state/bercail/desk-sessions/       which session runs in which desk
   ~/.local/share/bercail/pi/                  bstack's Pi profile
   ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates
