@@ -1,6 +1,6 @@
 // bercail's Pi guard. The decision functions are pure; the default export wires
 // tool_call, the repo's git policy (bercail policy show), and the approval log.
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -41,6 +41,8 @@ export type GuardInput = {
   branches?: Record<string, string>;
   /** Effective policy per git dir. Missing: not looked up. */
   policies?: Record<string, Policy>;
+  /** Graphite alias names from its config file. Missing: unknown; []: no aliases. */
+  graphiteAliases?: readonly string[];
   /** Files that decide what the guard lets through: the person edits them. */
   protectedFiles?: string[];
   /** Todo targets and routes: only bercail todo target and route write them. */
@@ -465,7 +467,7 @@ function tokenize(command: string, tag = ""): Token[] {
       i++;
       if (ch === ")" || word === "(") break;
     }
-    if (word) tokens.push({ kind: "word", value: word, quoted });
+    if (word || quoted) tokens.push({ kind: "word", value: word, quoted });
   }
   return tokens;
 }
@@ -583,6 +585,8 @@ const wrappers: Record<string, string[]> = {
 };
 
 function commandWords(words: string[]): string[] {
+  // Keep legacy conservative classification; help recognition uses the full raw argv.
+  words = words.filter((word) => word !== "");
   let i = 0;
   while (i < words.length) {
     const word = words[i];
@@ -635,6 +639,60 @@ const gitValue = new Set([
   "--exec-path",
   "--shallow-file",
 ]);
+
+// Only a bare builtin's sole --help: no aliases, selectors, wrappers or flag values.
+const gitHelpBuiltins = new Set([
+  "add",
+  "commit",
+  "push",
+  "restore",
+  "clean",
+  "rm",
+  "mv",
+  "merge",
+  "rebase",
+  "reset",
+  "checkout",
+  "switch",
+  "branch",
+  "tag",
+  "config",
+  "init",
+  "worktree",
+]);
+
+const staticArg = /^[\w./-]+$/;
+
+function cliHelp(words: string[], graphiteAliases: readonly string[] | undefined): boolean {
+  if (words.length !== 3 || words[2] !== "--help") return false;
+  const name = basename(words[0]);
+  if (name === "git") return gitHelpBuiltins.has(words[1]);
+  // Graphite expands aliases before parsing help, even aliases named submit or merge.
+  return (
+    name === "gt" &&
+    ["create", "modify", "submit", "merge"].includes(words[1]) &&
+    graphiteAliases !== undefined &&
+    !graphiteAliases.includes(words[1])
+  );
+}
+
+function readGraphiteAliases(): readonly string[] | undefined {
+  const home = process.env.HOME;
+  if (!home || !isAbsolute(home)) return undefined;
+  const config = process.env.XDG_CONFIG_HOME ?? join(home, ".config");
+  if (!isAbsolute(config)) return undefined;
+  try {
+    const path = join(config, "graphite/aliases");
+    if (!statSync(path).isFile()) return undefined;
+    return readFileSync(path, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"))
+      .map((line) => line.split(/\s+/)[0]);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? [] : undefined;
+  }
+}
 
 type GitCall = { sub: string; args: string[]; dir: string | undefined; config: string[] };
 
@@ -1868,13 +1926,20 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   let gitEnv = input.gitEnv ?? false;
   let gitConfigEnv = input.gitConfigEnv ?? false;
   let branchMoved = input.branchMoved ?? false;
+  const segments = segmentsOf(command, `${depth}`);
+  // Later-tokenized redirects/heredocs run first; pipe/background peers can change aliases concurrently.
+  let graphiteAliases = segments.some(
+    (segment) => ["|", "&"].includes(segment.after) || (segment.docs.length && segment.subs.length),
+  )
+    ? undefined
+    : input.graphiteAliases;
   const fresh = new Set(input.fresh);
   const chainedFresh = new Set<string>();
   let chainedCd = false;
   const vars: TempVars = new Map();
   let straight = true;
   let closed = false;
-  for (const segment of segmentsOf(command, `${depth}`)) {
+  for (const segment of segments) {
     // Apply a ) before the next segment, even when it stood alone after a ;.
     // No inner variables, scratch evidence or cwd can be borrowed outside it.
     if (closed) {
@@ -1906,10 +1971,25 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       fresh.clear();
       vars.clear();
     }
-    const here = { ...input, cwd, gitEnv, gitConfigEnv, branchMoved, fresh };
-    for (const sub of segment.subs) decision = worse(decision, decideBash(sub, { ...here, captured: true }, depth + 1));
+    const here = { ...input, cwd, gitEnv, gitConfigEnv, branchMoved, fresh, graphiteAliases };
+    for (const sub of segment.subs)
+      decision = worse(decision, decideBash(sub, { ...here, captured: true, graphiteAliases: undefined }, depth + 1));
+    if (segment.subs.length) here.graphiteAliases = graphiteAliases = undefined;
     const raw = bare.map((word) => expandTemps(word, vars).replaceAll(literalDollar, "$"));
     if (straight) recordTemps(command, segment, raw, vars);
+    // A substitution's output is not in raw and could add arguments that change help into a write.
+    const staticArgs =
+      !command.includes("\\") && !segment.quoted.some(Boolean) && raw.every((word) => staticArg.test(word));
+    const help = depth === 0 && staticArgs && segment.subs.length === 0 && cliHelp(raw, graphiteAliases);
+    // Only these bare reads and directory changes leave Graphite's alias proof intact.
+    const bareRead =
+      staticArgs &&
+      raw.length === 2 &&
+      basename(raw[0]) === "git" &&
+      ["status", "diff", "log", "show"].includes(raw[1]);
+    const bareCd =
+      staticArgs && raw.length <= 2 && ["cd", "pushd", "popd"].includes(raw[0]) && !raw[1]?.startsWith("-");
+    if (!help && !bareRead && !bareCd) graphiteAliases = undefined;
     const words = commandWords(raw);
     if (secret) {
       if (printsEnv(words, raw)) return block(printsToken);
@@ -1936,7 +2016,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       vars.clear();
     }
     const forge = forgeCall(words, gitEnv || gitConfigEnv ? undefined : here.cwd);
-    if (isForgeMerge(forge.words)) return block(prMerge);
+    if (!help && isForgeMerge(forge.words)) return block(prMerge);
     // The words as written go last, so a block names what the agent wrote.
     const valueReading =
       forge.words[0] === "entire" && !pluginCall(forge.words) ? entireValueReading(forge.words) : undefined;
@@ -1950,7 +2030,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       if (path.includes("checkout") || path.includes("resume") || forge.words.includes("--checkout"))
         branchMoved = true;
     }
-    const publishing = forgePublish(forge.words);
+    const publishing = help ? undefined : forgePublish(forge.words);
     const forgePlain = plainWords(forge.words);
     const sync = words[0] === "gh" && forgePlain[1] === "repo" && forgePlain[2] === "sync";
     if ((publishing === "push" || sync) && words.some((word) => word === "-f" || word.startsWith("--force")))
@@ -1971,13 +2051,13 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
     if (writesProtected(words, raw, input.protectedFiles)) decision = worse(decision, block(protectedFile));
     if (writesProtected(words, raw, input.todoFiles)) decision = worse(decision, block(todoFile));
-    if (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout"))
+    if (!help && (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout")))
       branchMoved = true;
     if (isGhRelease(forge.words) || isGhApiRelease(forge.words)) {
       decision = worse(decision, decideRelease(forge.dir, here));
     }
     const git = parseGit(words, here.cwd);
-    if (git) {
+    if (git && !help) {
       // A worktree in the dir points it at another repo, which a git init there reinitializes.
       if (git.sub === "worktree") {
         straight = false;
@@ -2195,6 +2275,7 @@ export default function (pi: ExtensionAPI) {
       home,
       protectedFiles,
       todoFiles,
+      graphiteAliases: event.toolName === "bash" ? readGraphiteAliases() : undefined,
       deskSecret: deskSecretOf(await secretJson(ctx.cwd)),
     };
     let decision = decideTool(event.toolName, command, guardInput, input.path);

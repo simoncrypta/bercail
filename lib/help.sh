@@ -141,7 +141,11 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   reserve per claude-bridge model in Pi's settings.json, so Pi compacts before
   Claude Code refuses a prompt near the window. Every role loads the
   bridge, the rate-limit fallback, and bercail's guard, which follows each repo's
-  trusted git policy (bercail policy show). The guard also blocks op secret reads
+  trusted git policy (bercail policy show). Direct, unquoted sole --help on recognized
+  git builtins and gt create/modify/submit/merge is a read, not a write approval. Graphite help
+  needs a known, unmodified alias configuration with no override of that command.
+  Wrappers, extra arguments and ambiguous forms keep the existing checks (docs/config.md).
+  The guard also blocks op secret reads
   piped into commands or used before an empty-value check, for every role. In a
   repo with [desk_secrets."<repo>"], the lead, builder, autopilot and headless
   runs get an op shim that hands op a service-account token from a 0600 file,
