@@ -3,7 +3,7 @@
 // its first terminal is in now, only where unusual: branch, ahead/behind. Agent state lives in the agents list, not here. Click to
 // switch, right-click for its menu, drag to reorder.
 //
-// bercail's copy of Herdr's spaces mod 0.1.15 (mod.clone). Rebase it when Herdr ships a
+// bercail's copy of Herdr's spaces mod 0.1.16 (mod.clone). Rebase it when Herdr ships a
 // newer spaces mod: take Herdr's file and put these back. bercail's changes, all of them:
 // - shepShown, spaceView, select, newSpace: in the bercail layout a click on a space, or
 //   a new space, also leaves the Shep view for the space view.
@@ -14,13 +14,13 @@
 //   backend in config.toml ([herdr] backend), the queue is read there and names its spaces.
 // - adoptedNames: a space bercail made with no window on its machine gets the name
 //   on its Shell's bercail.space_name label, and its first tab is called Shell.
-// - another machine's git (AT_ONCE, RETRY, limited, tries; check, due, refreshGit, ordered):
-//   its core runs 16 execs at once and refuses the rest, so its places are looked at four
-//   at a time, a refused look keeps what it showed and is asked again within seconds, and
-//   its spaces are not reordered while one of its places has no answer yet.
+// - git (AT_ONCE, RETRY, tries; check, due, ordered): four places at a time globally
+//   (Herdr uses six), leaving room in a remote core's 16 execs for other mods. A refused
+//   look keeps what it showed and is asked again within seconds; a machine's spaces
+//   are not reordered while one of its places has no answer yet.
 
 import { View, div, svg } from "gpui-kit";
-import { v_flex, h_flex } from "gpui-base";
+import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, closeOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, focused, home, nextCommand, notify, props, readTextFile, terminals } from "herdr";
 
 function find(node, id) {
@@ -53,24 +53,28 @@ function place(s, ps) {
 }
 const rowHeight = ({ tree }) => (tree ? 28 : 30);
 const RAIL_CELL = 32;
+// A space's name and its git tail never shrink below this, so a short one ("api")
+// stays readable instead of turning into an ellipsis next to a long branch.
+const SIDE_MIN = 48;
 const railCell = (el) => h_flex().flex_none().justify_center().child(el);
 const where = (s, ps) => JSON.stringify([s.machine ?? null, place(s, ps)]);
 const base = (path) => path.replace(/\/+$/, "").split("/").pop();
 // Changes made outside Herdr (an editor's save, a commit in another app): looked
 // for this often, in repos the list shows, while the window is in front.
 const FALLBACK = 60000;
-// Another machine's core runs at most 16 execs at once, for every mod, and turns the
-// rest away: look at this many of its places at a time (two execs each).
+// Places looked at together (two git runs each). All at once, a few hundred spaces
+// run out of the app's open files (256 when started from the Dock on macOS) or
+// past a machine core's 16 running execs, and those spaces wait for FALLBACK.
 const AT_ONCE = 4;
 // A place git couldn't answer for is asked again after this, doubling up to FALLBACK.
 const RETRY = 2000;
 
-// Runs f on each item, at most n at a time.
-async function limited(items, n, f) {
-  const queue = [...items];
-  await Promise.all(Array.from({ length: Math.min(n, queue.length) }, async () => {
-    while (queue.length) await f(queue.shift());
-  }));
+// Both runs, finished: a place isn't done while one of its runs still holds a slot.
+async function both(a, b) {
+  const done = await Promise.allSettled([a, b]);
+  const failed = done.find((d) => d.status === "rejected");
+  if (failed) throw failed.reason;
+  return done.map((d) => d.value);
 }
 
 // What a stored color name looks like on an avatar (the same in every mod
@@ -224,17 +228,22 @@ export default class Spaces extends View {
     this.busy = {}; // pane -> an agent working or a program in front of its shell
     this.ready = {}; // machine -> its layout was readable at the last look
     this.at = {}; // space -> its where() at the last look
-    this.watching = new Set(); // local repos' git folders
+    this.watching = new Map(); // local repos' pending folder watches
     // Spaces made while this runs wait (at most a moment) for their git, so a
     // worktree appears under its repo instead of jumping there.
     this.shown = new Set(spaces().map((s) => s.id));
     this.born = {};
     this.pressed = null;
     this.over = null;
+    this.scroll = ScrollHandle.new(); // the list's position: the active space is brought into view through it
+    this.activeAt = -1; // the active space's place among the list's children (headers and rows), -1 when not drawn
     this.machines = [];
-    this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
-    for (const state of Object.values(this.reconnecting)) state.busy = false;
-    this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
+    try {
+      this.reconnecting = JSON.parse(localStorage.getItem("machines.reconnecting") ?? "{}");
+      if (!this.reconnecting || typeof this.reconnecting !== "object" || Array.isArray(this.reconnecting)) this.reconnecting = {};
+      for (const state of Object.values(this.reconnecting)) state.busy = false;
+    } catch { this.reconnecting = {}; }
+    try { this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]")); } catch { this.folded = new Set(); }
     this.refreshMachines(cx);
     cx.timer.every(15000, cx => this.refreshMachines(cx));
     // Refresh only when the refs could have changed (see `due`).
@@ -330,6 +339,17 @@ export default class Spaces extends View {
     const at = {};
     for (const s of sp) at[s.id] = where(s, ps);
     const keys = new Set(Object.values(at).filter((k) => JSON.parse(k)[1]));
+    for (const k of Object.keys(this.git)) if (!keys.has(k)) {
+      delete this.git[k];
+      delete this.checked[k];
+      delete this.tries[k];
+      this.unsure.delete(k);
+    }
+    const repos = new Set(Object.values(this.git).filter(Boolean).map((g) => g.repo));
+    for (const [repo, pending] of this.watching) if (!repos.has(JSON.stringify([null, repo]))) {
+      this.watching.delete(repo);
+      pending.cancel();
+    }
     const due = new Set([...keys].filter((k) => !(k in this.git)));
     for (const [id, k] of Object.entries(at)) if (this.at[id] && this.at[id] !== k && keys.has(k)) due.add(k);
     this.at = at;
@@ -426,12 +446,11 @@ export default class Spaces extends View {
       while (this.pending.size) {
         const keys = [...this.pending];
         this.pending.clear();
-        const by = {};
-        for (const key of keys) (by[JSON.parse(key)[0] ?? ""] ??= []).push(key);
-        await Promise.all(Object.entries(by).map(([on, ks]) => limited(ks, on ? AT_ONCE : ks.length, (key) => this.check(key, cx))));
+        let next = 0;
+        await Promise.all(Array.from({ length: Math.min(AT_ONCE, keys.length) }, async () => {
+          while (next < keys.length) await this.check(keys[next++], cx);
+        }));
       }
-      const used = new Set(Object.values(this.git).filter(Boolean).map((g) => JSON.parse(g.repo)).filter(([on]) => !on).map(([, repo]) => repo));
-      for (const repo of this.watching) if (!used.has(repo)) this.watching.delete(repo);
       this.refreshing = false;
       cx.notify();
     });
@@ -445,10 +464,10 @@ export default class Spaces extends View {
     try {
       // Ref-only reads avoid scanning the worktree or waking its index watch.
       // Two reads: a folder name may itself contain a newline.
-      const [r, common] = await Promise.all([
+      const [r, common] = await both(
         exec("git", ["rev-parse", "--path-format=absolute", "--show-toplevel"], { cwd, on }),
         exec("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], { cwd, on }),
-      ]);
+      );
       if (r.code !== 0 || common.code !== 0) {
         // Only git's own "no" is remembered as no repo; anything else (a busy core) keeps
         // what it showed and is asked again.
@@ -462,10 +481,10 @@ export default class Spaces extends View {
       }
       // The repo's own .git folder names it; a worktree's top differs from it.
       const top = r.stdout.replace(/\n$/, ""), repo = common.stdout.replace(/\n$/, "");
-      const [branch, counts] = await Promise.all([
+      const [branch, counts] = await both(
         exec("git", ["symbolic-ref", "-q", "HEAD"], { cwd, on }),
         exec("git", ["rev-list", "--left-right", "--count", "HEAD...@{upstream}"], { cwd, on }),
-      ]);
+      );
       const name = repo.endsWith("/.git") ? base(repo.slice(0, -5)) : base(repo).replace(/\.git$/, "");
       const [ahead, behind] = counts.code === 0 ? counts.stdout.trim().split(/\s+/).map(Number) : [0, 0];
       const info = { name, branch: branch.code === 0 ? branch.stdout.trim().replace(/^refs\/heads\//, "") : "(detached)", ahead, behind, repo: JSON.stringify([on, repo]), linked: repo !== `${top}/.git` };
@@ -483,15 +502,23 @@ export default class Spaces extends View {
 
   watch(repo, cx) {
     if (this.watching.has(repo)) return;
-    this.watching.add(repo);
+    const pending = watchFolder(repo);
+    this.watching.set(repo, pending);
     cx.spawn(async (cx) => {
+      let current = pending;
       try {
-        while (this.watching.has(repo)) {
-          await watchFolder(repo);
+        for (;;) {
+          await current;
+          if (this.watching.get(repo) !== current) return;
           const mine = JSON.stringify([null, repo]);
-          if (this.watching.has(repo)) this.refreshGit(Object.keys(this.git).filter((k) => this.git[k]?.repo === mine), cx);
+          const keys = Object.keys(this.git).filter((k) => this.git[k]?.repo === mine);
+          if (!keys.length) break;
+          this.refreshGit(keys, cx);
+          current = watchFolder(repo);
+          this.watching.set(repo, current);
         }
-      } catch { this.watching.delete(repo); }
+      } catch {}
+      if (this.watching.get(repo) === current) this.watching.delete(repo);
     });
   }
 
@@ -558,6 +585,10 @@ export default class Spaces extends View {
   grouped(t, collapsed) {
     const rows = this.ordered();
     const draw = (r) => (collapsed ? this.compact(r, t) : this.row(r, t));
+    // Where the active space's row lands among the children this returns: the list scrolls by its direct
+    // children, and machine headers, login notes and loading rows count too.
+    this.activeAt = -1;
+    let before = 0;
     const remote = [...new Set([...rows.map(r => r.w.machine).filter(Boolean), ...this.machines.map(m => m.name), ...Object.keys(this.reconnecting)])].sort();
     const loading = m => {
       const layout = machines().find(k => k.name === m)?.layout;
@@ -565,7 +596,11 @@ export default class Spaces extends View {
         || spaces().some(s => (s.machine ?? null) === m && !this.shown.has(s.id));
     };
     const loadingRow = m => h_flex().id(`machine-loading-${m ?? "local"}`).h(28).flex_none().px(collapsed ? 0 : 8).items_center().when(collapsed, el => el.justify_center()).text_size(12).text_color(t.dim).child(collapsed ? "…" : "Loading…");
-    if (!remote.length) return loading(null) && !rows.length ? [loadingRow(null)] : rows.map(draw);
+    if (!remote.length) {
+      if (loading(null) && !rows.length) return [loadingRow(null)];
+      this.activeAt = rows.findIndex(r => r.w.active);
+      return rows.map(draw);
+    }
     const machineNames = [null, ...remote];
     return machineNames.flatMap((m) => {
       const mine = rows.filter((r) => (r.w.machine ?? null) === m);
@@ -586,6 +621,9 @@ export default class Spaces extends View {
           localStorage.setItem("machines.folded", JSON.stringify([...this.folded]));
           cx.notify();
         })
+        .when(machine?.keeps_running_after_logout === false, el => el.child(div().id(`machine-logout-${m}`)
+          .flex_none().text_color(t.blocked).tooltip("Agents stop when you disconnect. Click for the fix.")
+          .on_click((_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "machine-add", kind: "dialog", width: 560 }); }).child("⚠")))
         .when(!collapsed, el => el.child(icon))
         .when(collapsed, el => el.child(div().relative().flex_none().child(icon).when(Boolean(m), el => el.child(badge))))
         .when(!collapsed, el => el.child(div().flex_1().truncate().child(m ?? "This computer"))
@@ -608,7 +646,7 @@ export default class Spaces extends View {
           .child(h_flex().size(18).rounded(5).border_1().border_color(t.dim).items_center().justify_center()
             .child(svg("mods/workspace-chrome/plus.svg").size(10))))
         .when(!collapsed, el => el.child(svg("mods/workspace-chrome/plus.svg").size(12)).child("New space there"));
-      if (!collapsed && rebuilt) return [head];
+      if (!collapsed && rebuilt) { before += 1; return [head]; }
       const cell = collapsed ? railCell : (el) => el;
       const guidance = !collapsed && login ? [v_flex().px(8).pb(6).gap(3).flex_none()
         .child(div().text_size(11).text_color(t.blocked).child("needs a login: run"))
@@ -618,13 +656,18 @@ export default class Spaces extends View {
             .text_size(11).text_color(t.foreground).bg(t.raised).cursor_pointer().hover(s => s.bg(t.hover))
             .on_click((_e, cx) => { cx.stop_propagation(); cx.write_to_clipboard(login); this.copiedLogin = login; cx.notify(); })
             .child(this.copiedLogin === login ? "Copied" : "Copy")))] : [];
-      return [cell(head), ...guidance, ...(folded ? [] : mine.length ? mine.map(draw) : [loading(m) ? loadingRow(m) : cell(empty)])];
+      const items = [cell(head), ...guidance, ...(folded ? [] : mine.length ? mine.map(draw) : [loading(m) ? loadingRow(m) : cell(empty)])];
+      const first = folded ? -1 : mine.findIndex(r => r.w.active);
+      if (first >= 0) this.activeAt = before + 1 + guidance.length + first;
+      before += items.length;
+      return items;
     });
   }
 
   // Only what's unusual, after the name: "herdr \u00b7 spike \u21912 \u21931". The repo or
   // branch goes when the name already says it (a worktree is named after its branch),
-  // and master/main go: nearly every space is on one.
+  // and master/main go: nearly every space is on one. When the row is full, it
+  // and the name both start from their text's width and give way in proportion.
   gitTail(g, tree, name, t) {
     const raw = g.branch ?? "detached";
     const same = (a) => a.toLowerCase() === name.toLowerCase();
@@ -632,8 +675,8 @@ export default class Spaces extends View {
     const repo = tree || same(g.name) ? "" : g.name;
     const where = [repo, branch].filter(Boolean).join(" \u00b7 ");
     return h_flex()
-      .flex_1()
-      .min_w(0)
+      .flex_auto()
+      .min_w(where ? SIDE_MIN : 0)
       .gap(5)
       .justify_end()
       .items_center()
@@ -694,9 +737,9 @@ export default class Spaces extends View {
         h_flex()
           .gap(9)
           .items_center()
-          .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).text_color(t.dim)))
+          .when(Boolean(tree), el => el.pl(22).child(svg("mods/workspace-chrome/branch.svg").size(13).flex_none().text_color(t.dim)))
           .when(!tree, el => el.child(h_flex().size(18).flex_none().rounded(5).bg(fill).items_center().justify_center().text_size(10.5).font_bold().text_color("#ffffff").child([...w.name][0]?.toUpperCase() ?? "?")))
-          .child(div().flex_shrink(0).max_w(150).truncate().text_color(t.foreground).child(w.name))
+          .child(div().flex_initial().min_w(SIDE_MIN).truncate().text_color(t.foreground).child(w.name))
           .child(g ? this.gitTail(g, tree, w.name, t) : div().flex_1())
           .when(Boolean(this.marks?.[w.id]), (el) => el.child(this.reviewMark(w.id, this.marks[w.id], t))),
       );
@@ -872,6 +915,14 @@ export default class Spaces extends View {
       changed = true;
     }
     if (changed) setShared("space.colors", kept);
+    const list = this.grouped(t, collapsed);
+    // Bring the active space into view when it, or its place in the list, changes; a row already in view stays put.
+    const active = sp.find(p => p.active)?.id;
+    if (active !== this.revealed || this.activeAt !== this.revealedAt) {
+      this.revealed = active;
+      this.revealedAt = this.activeAt;
+      if (this.activeAt >= 0) this.scroll.scroll_to_item(this.activeAt);
+    }
     return v_flex().size_full().min_h(0).bg(t.chrome).text_size(13)
       .child(h_flex().h(31).pl(16).pr(10).items_center().justify_between().text_size(11.5).text_color(t.dim)
         .when(collapsed, el => el.pl(0).pr(0).justify_center())
@@ -879,8 +930,10 @@ export default class Spaces extends View {
         .when(!collapsed, el => el.child(this.reviewBadge(review, rows, t)))
         .child(div().id("space-new").size(26).flex_none().flex().items_center().justify_center().rounded(6).hover(s => s.bg(t.hover).text_color(t.foreground))
           .on_click(() => newSpace()).child(svg("mods/workspace-chrome/plus.svg").size(14))))
-      .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always")
+      .child(v_flex().flex_1().min_h(0).px(collapsed ? 0 : 8).pb(14).overflow_y_scrollbar().mode("always").track_scroll(this.scroll)
+        // A block above (another mod's) growing, or the window resizing, shrinks this list and can push the active space out.
+        .on_size_change((_size, cx) => { if (this.activeAt >= 0) { this.scroll.scroll_to_item(this.activeAt); cx.notify(); } })
         .on_mouse_up("left", (_e, cx) => { this.pressed = null; cx.notify(); })
-        .children(this.grouped(t, collapsed)));
+        .children(list));
   }
 }

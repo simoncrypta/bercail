@@ -11,7 +11,7 @@ const h = () => globalThis.herdr;
 export const agents = () => h().agents;
 export const terminals = () => h().terminals;
 export const spaces = () => h().spaces;
-export const panes = () => [];
+export const panes = () => h().panes ?? [];
 export const focused = () => h().focused;
 export const run = (name, args) => h().calls.push([name, args]);
 export const theme = () => new Proxy({}, { get: (_t, k) => String(k) });
@@ -91,6 +91,45 @@ EOF
 mod_case() {
   cat "$BATS_TEST_TMPDIR/prelude.mjs" - >"$BATS_TEST_TMPDIR/test.mjs"
   node "$BATS_TEST_TMPDIR/test.mjs"
+}
+
+@test "agent titles keep opening brackets and quotes while dropping spinner and Codex status marks" {
+  mod_case <<'EOF'
+for (const [raw, want] of [["✦  Working", "Working"], ["⠋ - Thinking", "Thinking"],
+  ["[ ! ] Fix login", "Fix login"], ["[ . ] Fix login", "Fix login"],
+  ["[web] login", "[web] login"], ["“Quoted task”", "“Quoted task”"]]) {
+  const got = deskRows([], [{ ...desk("t2", "s1", "t1"), title: raw }], spaces, null)[0].title;
+  if (got !== want) fail(`title ${JSON.stringify(raw)} became ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+}
+EOF
+}
+
+@test "a live title equal to the terminal or fallback agent address keeps its tab name" {
+  mod_case <<'EOF'
+const tab = { id: "tab1", name: "Pi", named: false };
+const a = { ...agent("t9", "s1"), tab: tab.id, title: "t9", program: { name: "Pi", agent: true } };
+const texts = () => els.flatMap((e) => e.kids.filter((k) => typeof k === "string"));
+render({ agents: [a], terminals: [], spaces: [{ ...spaces[0], tabs: [tab] }],
+  panes: [{ tab: tab.id, terminal: "t9", title: "t9", program: a.program }] });
+if (texts().includes("· t9") || !texts().includes("· Pi")) fail(`terminal id used as title: ${JSON.stringify(texts())}`);
+render({ agents: [a, { ...a, address: "t10", title: "t10" }], terminals: [], spaces: [{ ...spaces[0], tabs: [tab] }] });
+if (texts().some((s) => /^· t(?:9|10)$/.test(s)) || texts().filter((s) => s === "· Pi").length !== 2) {
+  fail(`fallback agent address used as title: ${JSON.stringify(texts())}`);
+}
+EOF
+}
+
+@test "agents recover malformed or wrongly shaped persisted status and pin data" {
+  mod_case <<'EOF'
+for (const [key, raw] of [["changed", "{"], ["changed", "null"], ["changed", "[]"],
+  ["pins", "{"], ["pins", "null"], ["pins", "{}"]]) {
+  store.clear();
+  store.set(key, raw);
+  try { renderShellDesk(); } catch (e) { fail(`${key}=${raw} prevents rendering: ${e.message}`); }
+  if (!row("t2") || !row("t9")) fail(`${key}=${raw} lost agent rows`);
+  if (herdr.calls.some(([name]) => name === "terminal.pin")) fail(`${key}=${raw} invented a pin`);
+}
+EOF
 }
 
 @test "a Shell sub-agent desk gets a row" {

@@ -20,7 +20,7 @@ export const spaces = () => h().spaces;
 export const focused = () => h().focused;
 export const terminals = () => h().terminals;
 export const panes = () => h().panes ?? [];
-export const machines = () => [];
+export const machines = () => h().machines ?? [];
 export const notify = (n) => h().notes.push(n);
 export const theme = () => new Proxy({}, { get: (_t, k) => String(k) });
 export const props = () => h().props ?? {};
@@ -29,8 +29,15 @@ export const setShared = (k, v) => { h().shared[k] = v; };
 export const openOverlay = (spec) => { h().calls.push(["openOverlay", spec]); return "o1"; };
 export const closeOverlay = (id) => h().calls.push(["closeOverlay", id]);
 export const exec = async (cmd, args, opts) => { h().execs.push([cmd, ...args]); return h().exec(cmd, args, opts); };
-export const hc = async () => ({ code: 1, stdout: "", stderr: "" });
-export const watchFolder = () => new Promise(() => {});
+export const hc = async () => ({ code: 0, stdout: JSON.stringify({ machines: h().machineList ?? [] }), stderr: "" });
+export const watchFolder = (path) => {
+  let resolve;
+  const pending = new Promise((r) => { resolve = r; });
+  pending.cancel = () => { pending.canceled = true; resolve(); };
+  pending.fire = resolve;
+  (h().watches ??= []).push({ path, pending });
+  return pending;
+};
 export const window = () => ({ active: true });
 export const home = () => "/home/me";
 // The files a test puts in h().files, by path; else absent.
@@ -48,6 +55,8 @@ const el = () => {
       if (k === "on_click") t.click = a[0];
       if (k === "tooltip") t.tip = a[0];
       if (k === "text_color") t.color = a[0];
+      if (k === "track_scroll") t.scroll = a[0];
+      if (k === "on_size_change") t.resize = a[0];
       if (k === "child") t.kids.push(a[0]);
       if (k === "children") t.kids.push(...a[0]);
       if (k === "when" && a[0]) a[1](p);
@@ -57,6 +66,7 @@ const el = () => {
   return p;
 };
 export class View {}
+export const ScrollHandle = { new: () => ({ revealed: [], scroll_to_item(i) { this.revealed.push(i); } }) };
 export const div = el, svg = el, h_flex = el, v_flex = el;
 export const E = (n) => n?.__el ?? n;
 // The text under a node, depth first, one string per element with text.
@@ -395,6 +405,157 @@ await settle();
 herdr.calls = [];
 v.ordered();
 expect(moves(), ["l", "box/a"], "box/x answered: box's spaces are sorted too");
+EOF
+}
+
+@test "a rejected git run keeps its global worker slot until its sibling finishes" {
+  mod_case <<'EOF'
+herdr.spaces = Array.from({ length: 5 }, (_, i) => ({ ...S(`s${i}`, `s${i}`, `/w/${i}`), machine: i % 2 ? "box" : null }));
+const started = new Set(), release = [];
+let finishSibling;
+herdr.exec = async (cmd, args, opts) => {
+  if (cmd !== "git") return { code: 1, stdout: "", stderr: "" };
+  started.add(opts.cwd);
+  if (opts.cwd === "/w/0" && args.at(-1) === "--show-toplevel") throw new Error("connection lost");
+  return new Promise((resolve) => {
+    const done = () => resolve({ code: 5, stdout: "", stderr: "busy" });
+    if (opts.cwd === "/w/0") finishSibling = done;
+    else release.push(done);
+  });
+};
+const v = new Spaces();
+v.init({}, cx());
+timers.find((t) => t.ms === 250).f(cx());
+await tick();
+expect([...started], ["/w/0", "/w/1", "/w/2", "/w/3"], "four workers include rejected run's unfinished sibling");
+finishSibling();
+await tick();
+expect([...started], ["/w/0", "/w/1", "/w/2", "/w/3", "/w/4"], "finishing the sibling releases the slot");
+for (const done of release) done();
+for (let i = 0; i < 100 && v.refreshing; i++) await tick();
+expect(v.refreshing, false, "all work drains after release");
+EOF
+}
+
+@test "spaces recover corrupt persisted machine reconnect and fold state" {
+  mod_case <<'EOF'
+for (const [key, raw] of [["machines.reconnecting", "{"], ["machines.reconnecting", "null"],
+  ["machines.reconnecting", "[]"], ["machines.folded", "{"]]) {
+  for (const k of Object.keys(store)) delete store[k];
+  store[key] = raw;
+  const v = new Spaces();
+  try { v.init({}, cx()); v.render(); } catch (e) { fail(`${key}=${raw} prevents rendering: ${e.message}`); }
+  expect(v.reconnecting, {}, `${key}=${raw}: no reconnects invented`);
+  expect([...v.folded], [], `${key}=${raw}: no folds invented`);
+}
+EOF
+}
+
+@test "active space is revealed on selection and list resize but unchanged renders keep scroll position" {
+  mod_case <<'EOF'
+herdr.spaces = [{ ...S("s0", "home"), active: true }, S("s1", "work")];
+const v = new Spaces();
+v.init({}, cx());
+const list = () => all(v.render()).find((e) => e.scroll);
+let shown = list();
+if (!shown) fail("spaces list does not track a ScrollHandle");
+expect(shown.scroll.revealed, [0], "initial active row");
+list();
+expect(shown.scroll.revealed, [0], "unchanged render leaves scrolling alone");
+herdr.spaces[0].active = false;
+herdr.spaces[1].active = true;
+shown = list();
+expect(shown.scroll.revealed, [0, 1], "new active row");
+if (!shown.resize) fail("list resize does not reveal the active row");
+shown.resize({ width: 100, height: 30 }, cx());
+expect(shown.scroll.revealed, [0, 1, 1], "resize reveals active row again");
+expect(viewCalls(), [], "reveal never selects, focuses or switches views");
+EOF
+}
+
+@test "active reveal counts machine headers and login notes and skips folded or rebuilt rows in wide and rail layouts" {
+  mod_case <<'EOF'
+herdr.spaces = [S("local", "home"), { ...S("box/one", "one"), machine: "box" },
+  { ...S("box/two", "two"), machine: "box", active: true }];
+herdr.machineList = [{ name: "box", state: "needs_login" }];
+const v = new Spaces();
+v.init({}, cx());
+await tick();
+const list = () => all(v.render()).find((e) => e.scroll);
+let shown = list();
+if (!shown) fail("grouped spaces list does not track a ScrollHandle");
+expect(shown.scroll.revealed.at(-1), 5, "local header/row, box header/login note, box rows");
+const clickHeader = (id) => views(`machine-${id}`)(v.render()).click({}, cx());
+clickHeader("local"); // The local header's id is machine-local, folding key null.
+shown = list();
+expect(shown.scroll.revealed.at(-1), 4, "folded local group loses its row");
+clickHeader("box");
+shown = list();
+const count = shown.scroll.revealed.length;
+shown.resize({}, cx());
+expect(shown.scroll.revealed.length, count, "folded active machine has no row to reveal");
+clickHeader("box");
+herdr.layout.children.find((n) => n.id === "sidebar").size = { px: 44 };
+shown = list();
+expect(shown.scroll.revealed.at(-1), 3, "rail has no login guidance and local remains folded");
+herdr.layout.children.find((n) => n.id === "sidebar").size = { px: 268 };
+herdr.machineList.unshift({ name: "a", state: "unreachable", why: 'a different core answers there ("new")' });
+// The scheduled machine-list read supplies the changed snapshot.
+timers.find((t) => t.ms === 15000).f(cx());
+await tick();
+shown = list();
+expect(shown.scroll.revealed.at(-1), 5, "rebuilt machine contributes only its header before box");
+expect(viewCalls(), [], "reveal and folding never switch views");
+EOF
+}
+
+@test "logout warning opens the machine fix dialog without folding or switching views" {
+  mod_case <<'EOF'
+herdr.spaces = [{ ...S("box/one", "one"), machine: "box" }];
+herdr.machineList = [{ name: "box", state: "connected", keeps_running_after_logout: false }];
+const v = new Spaces();
+v.init({}, cx());
+await tick();
+const warning = views("machine-logout-box")(v.render());
+if (!warning) fail("machine whose agents stop on logout has no warning");
+expect(warning.tip, "Agents stop when you disconnect. Click for the fix.", "warning explains the risk");
+let stopped = false;
+warning.click({}, { stop_propagation: () => { stopped = true; } });
+expect(stopped, true, "warning click does not reach the fold handler");
+expect(herdr.calls, [["openOverlay", { mod: "machine-add", kind: "dialog", width: 560 }]], "only opens the fix dialog");
+expect([...v.folded], [], "warning leaves group unfolded");
+EOF
+}
+
+@test "closing the last space prunes its git cache and cancels its watch without rearming it" {
+  mod_case <<'EOF'
+herdr.spaces = [S("s0", "app", "/w/app")];
+herdr.exec = async (_cmd, args) => {
+  const out = { "--show-toplevel": "/w/app", "--git-common-dir": "/w/app/.git" }[args.at(-1)];
+  return { code: 0, stdout: out ? `${out}\n` : args[0] === "symbolic-ref" ? "refs/heads/main\n" : "0 0\n", stderr: "" };
+};
+const v = new Spaces();
+v.init({}, cx());
+const poll = timers.find((t) => t.ms === 250).f;
+poll(cx());
+for (let i = 0; i < 100 && (v.refreshing || i < 2); i++) await tick();
+expect(herdr.watches?.map((w) => w.path), ["/w/app/.git"], "local git is watched");
+const key = JSON.stringify([null, "/w/app"]);
+// A transient refusal leaves retry state for this same place before it disappears.
+herdr.exec = async () => ({ code: 5, stdout: "", stderr: "busy" });
+Date.now = () => NOW + 61000;
+poll(cx());
+for (let i = 0; i < 100 && (v.refreshing || i < 2); i++) await tick();
+expect(v.tries[key], 1, "transient failure records a retry");
+herdr.spaces = [];
+poll(cx());
+await tick();
+expect(Object.keys(v.git), [], "closed space leaves no git cache");
+expect(Object.keys(v.checked), [], "closed space leaves no checked time");
+expect([...v.unsure], [], "closed space leaves no unsure key");
+expect(Object.keys(v.tries), [], "closed space leaves no retry count");
+expect(herdr.watches[0].pending.canceled, true, "unused watch canceled");
+expect(herdr.watches.length, 1, "canceled watch does not rearm");
 EOF
 }
 

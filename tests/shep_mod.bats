@@ -33,7 +33,10 @@ export const closeOverlay = (id) => h().calls.push(["closeOverlay", id]);
 // A call's argv; .on: the machine it ran on (null: here).
 export const exec = async (cmd, args, opts) => { h().execs.push(Object.assign([cmd, ...args], { on: opts?.on ?? null })); return h().exec(cmd, args); };
 export const hc = async () => ({ code: 0, stdout: "", stderr: "" });
-export const watchFolder = (path) => ((h().watched ??= []).push(path), new Promise(() => {}));
+export const watchFolder = (path) => {
+  (h().watched ??= []).push(path);
+  return Object.assign(new Promise(() => {}), { cancel() {} });
+};
 export const window = () => ({ platform: "linux", active: true });
 export const home = () => "/home/me";
 // The files a test puts in h().files, by path; else absent.
@@ -60,6 +63,7 @@ const el = () => {
   return p;
 };
 export class View {}
+export const ScrollHandle = { new: () => ({ scroll_to_item() {} }) };
 export const div = el, image = el, svg = el, h_flex = el, v_flex = el;
 EOF
   local mod
