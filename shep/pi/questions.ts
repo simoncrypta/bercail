@@ -2,6 +2,22 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, normalize } from "node:path";
+import type {
+  CandidateReviewSpec,
+  JobScope,
+  ScopedAction,
+  ScopedActionReceipt,
+  ScopedActionState,
+  ScopedAnswerCheck,
+  ScopedAuthorization,
+  ScopedCandidate,
+  ScopedEffectObservation,
+  ScopedGrant,
+  ScopedSnapshot,
+} from "./scoped-types.ts";
+import { SCOPED_CAPABILITY } from "./scoped-types.ts";
+export { SCOPED_CAPABILITY } from "./scoped-types.ts";
+export type * from "./scoped-types.ts";
 
 export interface QuestionTarget {
   repo: string;
@@ -23,7 +39,9 @@ export interface QuestionOrigin {
   entry: string | null;
 }
 export interface QuestionSpec {
-  kind: "planning" | "review" | "action";
+  kind: "planning" | "review" | "action" | "scoped-authorization" | "candidate-review";
+  authorization?: ScopedAuthorization;
+  review?: CandidateReviewSpec;
   prompt: string;
   options: string[];
   origin: QuestionOrigin;
@@ -75,7 +93,7 @@ export interface Question extends QuestionSpec {
   withdrawal?: QuestionWithdrawal;
 }
 export interface QuestionSnapshot {
-  version: 1;
+  version: 1 | 2;
   questions: Question[];
   selected: string | null;
 }
@@ -87,7 +105,7 @@ export interface ProposalResult {
 }
 type Receipt = { requestId: string; payload: string; result: Question | ProposalResult | AnswerResult };
 const STATUSES = ["pending", "answered", "superseded", "withdrawn"];
-type State = QuestionSnapshot & { requests: Receipt[] };
+type State = QuestionSnapshot & { requests: Receipt[] } & Partial<ScopedSnapshot>;
 
 function fail(message: string): never {
   throw new Error(`Question store: ${message}`);
@@ -108,8 +126,21 @@ function shape(value: unknown, keys: string[]): asserts value is Record<string, 
 const optional = (value: Record<string, unknown>, keys: string[]) => keys.filter((key) => value[key] !== undefined);
 function spec(value: unknown): asserts value is QuestionSpec {
   const v = value as Record<string, unknown>;
-  shape(value, ["kind", "prompt", "options", "origin", "target", ...optional(v ?? {}, ["brief", "recommendation"])]);
-  if (!["planning", "review", "action"].includes(value.kind as string)) fail("invalid kind");
+  shape(value, [
+    "kind",
+    "prompt",
+    "options",
+    "origin",
+    "target",
+    ...optional(v ?? {}, ["brief", "recommendation", "authorization", "review"]),
+  ]);
+  if (!["planning", "review", "action", "scoped-authorization", "candidate-review"].includes(value.kind as string))
+    fail("invalid kind");
+  if (
+    (value.kind === "scoped-authorization") !== (value.authorization !== undefined) ||
+    (value.kind === "candidate-review") !== (value.review !== undefined)
+  )
+    fail("typed question payload required, and only for its kind");
   text(value.prompt);
   if (!Array.isArray(value.options)) fail("invalid options");
   value.options.forEach(text);
@@ -139,17 +170,47 @@ function spec(value: unknown): asserts value is QuestionSpec {
   ];
   shape(value.target, keys);
   for (const key of keys)
-    if (value.target[key] !== null || value.kind !== "planning" || key === "repo" || key === "topic")
+    if (
+      value.target[key] !== null ||
+      !(value.kind === "planning" || (value.kind === "scoped-authorization" && ["head", "stagedTree"].includes(key))) ||
+      key === "repo" ||
+      key === "topic"
+    )
       text(value.target[key]);
   const repo = value.target.repo as string;
   if (!isAbsolute(repo) || normalize(repo) !== repo)
     fail("repo must be a canonical absolute identity path supplied by the caller");
   if (value.target.worktree !== null && !isAbsolute(value.target.worktree as string)) fail("worktree must be absolute");
+  if (value.authorization !== undefined) {
+    shape(value.authorization, ["scope", "actions", "expiresAt", "allowChoice", "stageOnlyChoice"]);
+    jobScope(value.authorization.scope);
+    allowedActions(value.authorization.actions);
+    date(value.authorization.expiresAt);
+    for (const key of ["allowChoice", "stageOnlyChoice"]) {
+      text(value.authorization[key]);
+      if (!value.options.includes(value.authorization[key])) fail("authorization choice must be an option");
+    }
+    if (value.authorization.allowChoice === value.authorization.stageOnlyChoice)
+      fail("distinct authorization choices required");
+    if (!scopeTarget(value.authorization.scope, value.target as unknown as QuestionTarget))
+      fail("scope differs from question target");
+  }
+  if (value.review !== undefined) {
+    shape(value.review, ["grantId", "candidate", "allowChoice"]);
+    text(value.review.grantId);
+    scopedCandidate(value.review.candidate);
+    if (!value.options.includes(value.review.allowChoice)) fail("review choice must be an option");
+    if (!candidateTarget(value.review.candidate, value.target as unknown as QuestionTarget))
+      fail("candidate differs from question target");
+  }
 }
 function question(value: unknown): asserts value is Question {
   const v = value as Record<string, unknown>;
   const keys = ["id", "revision", "status", "createdAt", "proposals", "kind", "prompt", "options", "origin", "target"];
-  shape(value, [...keys, ...optional(v ?? {}, ["brief", "recommendation", "answer", "withdrawal"])]);
+  shape(value, [
+    ...keys,
+    ...optional(v ?? {}, ["brief", "recommendation", "authorization", "review", "answer", "withdrawal"]),
+  ]);
   const { id, revision, status, createdAt, proposals, answer, withdrawal, ...fields } = value;
   spec(fields);
   if (
@@ -201,13 +262,21 @@ function question(value: unknown): asserts value is Question {
   }
 }
 function validate(value: unknown): asserts value is State {
-  shape(value, ["version", "questions", "selected", "requests"]);
-  if (value.version !== 1 || !Array.isArray(value.questions) || !Array.isArray(value.requests))
+  const v = value as Record<string, unknown>;
+  shape(value, [
+    "version",
+    "questions",
+    "selected",
+    "requests",
+    ...(v?.version === 2 ? ["grants", "reviews", "actions"] : []),
+  ]);
+  if (![1, 2].includes(value.version as number) || !Array.isArray(value.questions) || !Array.isArray(value.requests))
     fail("invalid state version or history");
   if (value.selected !== null) text(value.selected);
   const latest = new Map<string, Question>();
   for (const q of value.questions) {
     question(q);
+    if (value.version === 1 && typed(q)) fail("typed questions require version 2");
     const previous = latest.get(q.id);
     if (
       q.revision !== (previous?.revision ?? 0) + 1 ||
@@ -237,6 +306,7 @@ function validate(value: unknown): asserts value is State {
       if (!result.accepted) text(result.reason);
     } else question(r.result);
   }
+  if (value.version === 2) validateScoped(value as unknown as State & ScopedSnapshot, ids);
 }
 const sameScope = (a: QuestionSpec, b: QuestionSpec) =>
   ["repo", "issue", "topic"].every(
@@ -253,6 +323,283 @@ const canonical = (value: unknown): string =>
       : item,
   );
 export const tokenOf = (q: Pick<Question, "id" | "revision">): string => `${q.id}@${q.revision}`;
+
+const typed = (q: Pick<QuestionSpec, "kind">) => ["scoped-authorization", "candidate-review"].includes(q.kind);
+const scopeKeys = [
+  "repo",
+  "worktree",
+  "issue",
+  "pr",
+  "headRef",
+  "baseRef",
+  "baseOid",
+  "remote",
+  "endpoint",
+  "backend",
+  "desk",
+  "space",
+  "session",
+  "owner",
+  "mapping",
+  "policy",
+];
+function date(value: unknown): asserts value is string {
+  text(value);
+  if (!Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) fail("expected ISO date");
+}
+function jobScope(value: unknown): asserts value is JobScope {
+  shape(value, scopeKeys);
+  scopeKeys.forEach((key) => text(value[key]));
+  for (const key of ["repo", "worktree"])
+    if (!isAbsolute(value[key] as string) || normalize(value[key] as string) !== value[key])
+      fail("scope paths must be canonical absolute paths");
+  if (value.backend !== "gh") fail("unsupported scoped backend");
+  try {
+    const url = new URL(value.pr as string);
+    if (!["https:", "http:"].includes(url.protocol) || url.username || url.password) fail("invalid PR URL");
+  } catch {
+    fail("invalid PR URL");
+  }
+}
+function scopedCandidate(value: unknown): asserts value is ScopedCandidate {
+  const keys = ["head", "tree", "base", "description", "evidence"];
+  shape(value, keys);
+  keys.forEach((key) => text(value[key]));
+}
+function allowedActions(value: unknown): asserts value is ScopedAction[] {
+  if (
+    !Array.isArray(value) ||
+    !value.length ||
+    new Set(value).size !== value.length ||
+    value.some((action) => !["commit", "publish-fast-forward"].includes(action))
+  )
+    fail("invalid scoped actions");
+}
+const equal = (a: unknown, b: unknown) => canonical(a) === canonical(b);
+const scopeTarget = (scope: JobScope, target: QuestionTarget) =>
+  ["repo", "worktree", "issue", "desk", "space", "session", "baseRef"].every(
+    (key) => scope[key as keyof JobScope] === target[key as keyof QuestionTarget],
+  );
+const candidateTarget = (candidate: ScopedCandidate, target: QuestionTarget) =>
+  candidate.head === target.head && candidate.tree === target.stagedTree && candidate.base === target.base;
+// A replacement grant/session cannot shed an unresolved local or remote operation.
+const sameExecutionTarget = (a: JobScope, b: JobScope) =>
+  (a.repo === b.repo && (a.worktree === b.worktree || a.headRef === b.headRef)) ||
+  (a.endpoint === b.endpoint && a.headRef === b.headRef);
+const unfinished = (r: ScopedActionReceipt) => r.state === "applying" || r.state === "inspect";
+function upgrade(state: State): asserts state is State & ScopedSnapshot {
+  if (state.version === 1) {
+    state.version = 2;
+    state.grants = [];
+    state.reviews = [];
+    state.actions = [];
+  }
+}
+function transition(grant: ScopedGrant, state: ScopedGrant["state"], reason: string | null) {
+  if (grant.state === state && grant.reason === reason) return;
+  grant.state = state;
+  grant.reason = reason;
+  grant.revision++;
+}
+function reviewedCandidate(
+  state: State & ScopedSnapshot,
+  grantId: string,
+  action: ScopedAction,
+  candidate: ScopedCandidate,
+): boolean {
+  const exact = (value: ScopedCandidate) =>
+    state.reviews.some((review) => review.grantId === grantId && equal(review.candidate, value));
+  if (exact(candidate)) return true;
+  // A checked single-parent commit may mechanically transfer its exact review
+  // to publication, never to another commit or changed content/evidence.
+  return (
+    action === "publish-fast-forward" &&
+    state.actions.some(
+      (receipt) =>
+        receipt.grantId === grantId &&
+        receipt.action === "commit" &&
+        receipt.state === "succeeded" &&
+        receipt.result === candidate.head &&
+        oid(receipt.result) &&
+        JSON.parse(receipt.payload)[5] === true &&
+        equal({ ...receipt.candidate, head: candidate.head }, candidate) &&
+        exact(receipt.candidate),
+    )
+  );
+}
+const oid = (value: unknown): value is string =>
+  typeof value === "string" && /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(value);
+function effectObservation(value: unknown): asserts value is ScopedEffectObservation {
+  shape(value, ["remoteHead", "capability"]);
+  if (value.remoteHead !== null && !oid(value.remoteHead)) fail("invalid observed remote head");
+  if (value.capability !== SCOPED_CAPABILITY) fail("unsupported scoped capability");
+}
+const actionPayload = (
+  grantId: string,
+  action: ScopedAction,
+  candidate: ScopedCandidate,
+  scope: JobScope,
+  reviewRequired: boolean,
+) => canonical(["scoped-action", grantId, action, candidate, scope, reviewRequired]);
+function blockedTarget(state: State & ScopedSnapshot, scope: JobScope) {
+  return state.actions.some(
+    (r) => unfinished(r) && sameExecutionTarget(state.grants.find((g) => g.id === r.grantId)!.scope, scope),
+  );
+}
+function validateScoped(state: State & ScopedSnapshot, requestIds: Set<string>) {
+  if (![state.grants, state.reviews, state.actions].every(Array.isArray)) fail("invalid scoped history");
+  const ids = new Set<string>();
+  const origin = (token: unknown, kind: QuestionSpec["kind"], choice: string) => {
+    const q = state.questions.find((q) => tokenOf(q) === token);
+    if (!q || q.kind !== kind || !q.answer || q.answer.choice !== choice) fail("invalid scoped question linkage");
+    const receipt = state.requests.find((r) => r.requestId === q.answer!.requestId);
+    if (
+      !receipt ||
+      receipt.payload !== canonical(["answerScoped", token, choice, q.answer.source]) ||
+      !("question" in receipt.result) ||
+      !receipt.result.accepted ||
+      !equal({ ...receipt.result.question, proposals: q.proposals }, q) ||
+      !equal(receipt.result.question.proposals, q.proposals.slice(0, receipt.result.question.proposals.length))
+    )
+      fail("invalid scoped acceptance receipt");
+    return q;
+  };
+  for (const g of state.grants) {
+    shape(g, ["id", "question", "scope", "actions", "expiresAt", "revision", "state", "reason"]);
+    text(g.id);
+    text(g.question);
+    jobScope(g.scope);
+    allowedActions(g.actions);
+    date(g.expiresAt);
+    if (!["active", "paused", "ended"].includes(g.state) || !Number.isSafeInteger(g.revision) || g.revision < 1)
+      fail("invalid grant state");
+    if (g.reason !== null) text(g.reason);
+    if ((g.state === "active") !== (g.reason === null)) fail("invalid grant reason");
+    const q = state.questions.find((q) => tokenOf(q) === g.question);
+    if (!q?.authorization) fail("missing authorization question");
+    origin(g.question, "scoped-authorization", q.authorization.allowChoice);
+    if (
+      g.id !== `grant:${g.question}` ||
+      ids.has(g.id) ||
+      !equal(g.scope, q.authorization.scope) ||
+      !equal(g.actions, q.authorization.actions) ||
+      g.expiresAt !== q.authorization.expiresAt ||
+      Date.parse(q.answer!.at) >= Date.parse(g.expiresAt)
+    )
+      fail("invalid grant linkage");
+    ids.add(g.id);
+  }
+  for (const r of state.reviews) {
+    shape(r, ["id", "question", "grantId", "scope", "candidate", "at"]);
+    text(r.id);
+    text(r.question);
+    text(r.grantId);
+    jobScope(r.scope);
+    scopedCandidate(r.candidate);
+    date(r.at);
+    const q = state.questions.find((q) => tokenOf(q) === r.question);
+    const g = state.grants.find((g) => g.id === r.grantId);
+    if (!q?.review || !g) fail("missing review linkage");
+    origin(r.question, "candidate-review", q.review.allowChoice);
+    if (
+      r.id !== `review:${r.question}` ||
+      ids.has(r.id) ||
+      q.review.grantId !== g.id ||
+      !equal(r.scope, g.scope) ||
+      !scopeTarget(g.scope, q.target) ||
+      !equal(r.candidate, q.review.candidate) ||
+      r.at !== q.answer!.at ||
+      Date.parse(r.at) >= Date.parse(g.expiresAt)
+    )
+      fail("invalid review linkage");
+    ids.add(r.id);
+  }
+  for (const q of state.questions) {
+    if (
+      q.authorization &&
+      q.answer?.choice === q.authorization.allowChoice &&
+      !state.grants.some((g) => g.question === tokenOf(q))
+    )
+      fail("missing answered grant");
+    if (q.review && q.answer?.choice === q.review.allowChoice && !state.reviews.some((r) => r.question === tokenOf(q)))
+      fail("missing answered review");
+  }
+  for (const r of state.actions) {
+    shape(r, [
+      "requestId",
+      "payload",
+      "grantId",
+      "grantRevision",
+      "expectedCommit",
+      "remoteHead",
+      "capability",
+      "action",
+      "candidate",
+      "state",
+      "result",
+    ]);
+    effectObservation({ remoteHead: r.remoteHead, capability: r.capability });
+    text(r.requestId);
+    text(r.payload);
+    text(r.grantId);
+    scopedCandidate(r.candidate);
+    allowedActions([r.action]);
+    if (r.expectedCommit !== null && (r.action !== "commit" || !oid(r.expectedCommit)))
+      fail("invalid expected commit OID");
+    if (!["applying", "inspect", "succeeded", "no-effect", "conflict"].includes(r.state)) fail("invalid action state");
+    if (r.result !== null) text(r.result);
+    if (r.state === "applying" && r.result !== null) fail("applying action has no result");
+    if (requestIds.has(r.requestId)) fail("duplicate request id");
+    requestIds.add(r.requestId);
+    const g = state.grants.find((g) => g.id === r.grantId);
+    if (
+      !g ||
+      !g.actions.includes(r.action) ||
+      !Number.isSafeInteger(r.grantRevision) ||
+      r.grantRevision < 1 ||
+      r.grantRevision > g.revision
+    )
+      fail("invalid action grant linkage");
+    let p: unknown;
+    try {
+      p = JSON.parse(r.payload);
+    } catch {
+      fail("invalid action fingerprint");
+    }
+    if (
+      !Array.isArray(p) ||
+      p.length !== 6 ||
+      typeof p[5] !== "boolean" ||
+      r.payload !== actionPayload(r.grantId, r.action, r.candidate, g.scope, p[5])
+    )
+      fail("invalid action fingerprint");
+    if (r.state === "succeeded" && r.action === "commit" && (!oid(r.result) || r.result !== r.expectedCommit))
+      fail("successful commit receipt needs exact prepared expected OID");
+    if (p[5] && !reviewedCandidate(state, g.id, r.action, r.candidate)) fail("missing action review linkage");
+  }
+}
+
+// Guard preflight must not wait for an executor or create authority files. Rename
+// publication gives this reader one whole validated snapshot, or a closed failure.
+export function readQuestionState(dir: string): QuestionSnapshot & ScopedSnapshot {
+  let state: State;
+  try {
+    state = JSON.parse(readFileSync(join(dir, "questions.json"), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      return { version: 1, questions: [], selected: null, grants: [], reviews: [], actions: [] };
+    fail("unreadable or corrupt questions.json");
+  }
+  validate(state);
+  return {
+    version: state.version,
+    questions: state.questions,
+    selected: state.selected,
+    grants: state.grants ?? [],
+    reviews: state.reviews ?? [],
+    actions: state.actions ?? [],
+  };
+}
 
 // The caller supplies repo identity; this store never probes or changes a checkout.
 export class QuestionStore {
@@ -333,6 +680,7 @@ export class QuestionStore {
     text(requestId);
     const encoded = canonical(payload);
     return this.locked((state) => {
+      if (state.actions?.some((r) => r.requestId === requestId)) fail("request id reused with different payload");
       const old = state.requests.find((r) => r.requestId === requestId);
       if (old) {
         if (old.payload !== encoded) fail("request id reused with different payload");
@@ -353,6 +701,7 @@ export class QuestionStore {
     return this.request(requestId, ["create", intent], (state) => {
       const fields = resolveSpec(intent);
       spec(fields);
+      if (typed(fields)) upgrade(state);
       const id = `Q${state.questions.reduce((max, q) => Math.max(max, Number(q.id.slice(1))), 0) + 1}`;
       const q: Question = {
         ...structuredClone(fields),
@@ -371,6 +720,7 @@ export class QuestionStore {
     return this.request(requestId, ["revise", token, intent], (state) => {
       const fields = resolveSpec(intent);
       spec(fields);
+      if (typed(fields)) upgrade(state);
       const previous = this.find(state, token);
       if (previous.status !== "pending") fail("stale or closed question revision");
       if (!sameScope(previous, fields)) fail("revision cannot change repo, issue or topic; create a new question");
@@ -427,6 +777,246 @@ export class QuestionStore {
     });
   }
 
+  scopedSnapshot(): ScopedSnapshot {
+    return this.locked((state) => ({
+      grants: state.grants ?? [],
+      reviews: state.reviews ?? [],
+      actions: state.actions ?? [],
+    }));
+  }
+
+  // Only the supported picker calls this seam. The resolver is a short local
+  // recheck under the ledger lock, never a network call or an identity claim.
+  answerScoped(
+    requestId: string,
+    token: string,
+    choice: string,
+    source: QuestionAnswer["source"],
+    resolve: () => ScopedAnswerCheck,
+  ): AnswerResult {
+    text(choice);
+    if (!ANSWER_SOURCES.includes(source)) fail("unknown answer source");
+    return this.request(requestId, ["answerScoped", token, choice, source], (state) => {
+      const q = this.find(state, token);
+      const reject = (reason: string): AnswerResult => ({ question: q, accepted: false, reason });
+      if (!typed(q)) return reject("not a scoped question");
+      if (q.status !== "pending") return reject(`question is ${q.status}`);
+      if (!q.options.includes(choice)) return reject("not one of the question's choices");
+      const check = resolve();
+      shape(check, [
+        "status",
+        "reasons",
+        "current",
+        ...optional((check ?? {}) as unknown as Record<string, unknown>, ["scope", "candidate"]),
+      ]);
+      if (
+        typeof check?.status !== "string" ||
+        !Array.isArray(check.reasons) ||
+        check.reasons.some((reason) => typeof reason !== "string")
+      )
+        fail("invalid scoped check");
+      if (check.status !== "fresh" || !check.current)
+        return reject(`changed since Shep asked: ${check.reasons.join(", ") || "not checked"}`);
+      shape(check.current, ["head", "stagedTree"]);
+      for (const key of ["head", "stagedTree"] as const) if (check.current[key] !== null) text(check.current[key]);
+      if (check.scope !== undefined) jobScope(check.scope);
+      if (check.candidate !== undefined) scopedCandidate(check.candidate);
+      const at = new Date().toISOString();
+      let grant: ScopedGrant | undefined;
+      if (q.authorization) {
+        if (Date.parse(at) >= Date.parse(q.authorization.expiresAt)) return reject("scoped question expired");
+        if (!check.scope || !equal(check.scope, q.authorization.scope)) return reject("scope changed or unavailable");
+      } else {
+        grant = state.grants?.find((g) => g.id === q.review!.grantId);
+        if (!grant || grant.state !== "active" || Date.parse(at) >= Date.parse(grant.expiresAt))
+          return reject("grant unavailable or expired");
+        if (!check.scope || !equal(check.scope, grant.scope) || !scopeTarget(grant.scope, q.target))
+          return reject("scope changed or unavailable");
+        if (
+          !check.candidate ||
+          !equal(check.candidate, q.review!.candidate) ||
+          check.current.head !== check.candidate.head ||
+          check.current.stagedTree !== check.candidate.tree
+        )
+          return reject("candidate changed or unavailable");
+      }
+      q.status = "answered";
+      q.answer = { requestId, choice, source, at, head: check.current.head, stagedTree: check.current.stagedTree };
+      upgrade(state);
+      if (q.authorization && choice === q.authorization.allowChoice) {
+        state.grants.push({
+          id: `grant:${token}`,
+          question: token,
+          scope: structuredClone(q.authorization.scope),
+          actions: [...q.authorization.actions],
+          expiresAt: q.authorization.expiresAt,
+          revision: 1,
+          state: "active",
+          reason: null,
+        });
+      } else if (q.review && choice === q.review.allowChoice) {
+        state.reviews.push({
+          id: `review:${token}`,
+          question: token,
+          grantId: grant!.id,
+          scope: structuredClone(grant!.scope),
+          candidate: structuredClone(q.review.candidate),
+          at,
+        });
+      }
+      return { question: q, accepted: true };
+    });
+  }
+
+  beginScopedAction(
+    requestId: string,
+    grantId: string,
+    action: ScopedAction,
+    candidate: ScopedCandidate,
+    scope: JobScope,
+    now: () => string,
+    reviewRequired: boolean,
+    observation: ScopedEffectObservation,
+  ): ScopedActionReceipt & { duplicate: boolean } {
+    text(requestId);
+    text(grantId);
+    allowedActions([action]);
+    scopedCandidate(candidate);
+    jobScope(scope);
+    if (typeof now !== "function") fail("live clock callback required");
+    if (typeof reviewRequired !== "boolean") fail("explicit review requirement needed");
+    effectObservation(observation);
+    const outcome = this.locked((state): { error: string } | (ScopedActionReceipt & { duplicate: boolean }) => {
+      if (state.requests.some((r) => r.requestId === requestId)) fail("request id reused with different payload");
+      const old = state.actions?.find((r) => r.requestId === requestId);
+      if (old) {
+        if (old.payload !== actionPayload(grantId, action, candidate, scope, reviewRequired))
+          fail("request id reused with different payload");
+        // Unfinished duplicates are inspection requests, never permission to replay.
+        if (old.state === "applying") old.state = "inspect";
+        return { ...old, duplicate: true };
+      }
+      const grant = state.grants?.find((g) => g.id === grantId);
+      if (!grant || grant.state === "ended") return { error: "grant unavailable or ended" };
+      const at = now();
+      date(at);
+      if (Date.parse(at) >= Date.parse(grant.expiresAt)) {
+        transition(grant, "ended", "expired");
+        return { error: "grant expired" };
+      }
+      if (!equal(grant.scope, scope)) {
+        transition(grant, "ended", "scope changed");
+        return { error: "grant scope changed" };
+      }
+      if (grant.state !== "active") return { error: "grant paused" };
+      if (!grant.actions.includes(action)) return { error: "action outside grant" };
+      const scoped = state as State & ScopedSnapshot;
+      if (blockedTarget(scoped, scope)) return { error: "unfinished action requires inspection" };
+      if (reviewRequired && !reviewedCandidate(scoped, grantId, action, candidate))
+        return { error: "fresh exact candidate review required" };
+      const receipt: ScopedActionReceipt = {
+        requestId,
+        payload: actionPayload(grantId, action, candidate, scope, reviewRequired),
+        grantId,
+        grantRevision: grant.revision,
+        expectedCommit: null,
+        remoteHead: observation.remoteHead,
+        capability: observation.capability,
+        action,
+        candidate: structuredClone(candidate),
+        state: "applying",
+        result: null,
+      };
+      scoped.actions.push(receipt);
+      return { ...receipt, duplicate: false };
+    }, true);
+    if ("error" in outcome) fail(outcome.error);
+    return outcome;
+  }
+
+  // The executor verifies the detached commit before recording its immutable OID,
+  // and records it before the feature-ref CAS so recovery cannot bless a lookalike.
+  prepareScopedCommit(requestId: string, expectedCommit: string): ScopedActionReceipt {
+    text(requestId);
+    if (!oid(expectedCommit)) fail("full expected commit OID required");
+    return this.locked((ledger) => {
+      const receipt = ledger.actions?.find((r) => r.requestId === requestId) ?? fail("unknown action request");
+      if (receipt.action !== "commit" || !unfinished(receipt)) fail("only an unfinished commit can be prepared");
+      if (receipt.expectedCommit !== null && receipt.expectedCommit !== expectedCommit)
+        fail("expected commit OID is immutable");
+      receipt.expectedCommit = expectedCommit;
+      return receipt;
+    }, true);
+  }
+
+  endScopedAction(
+    requestId: string,
+    state: Exclude<ScopedActionState, "applying">,
+    result: string | null,
+  ): ScopedActionReceipt {
+    text(requestId);
+    if (!["inspect", "succeeded", "no-effect", "conflict"].includes(state)) fail("invalid action completion state");
+    if (result !== null) text(result);
+    return this.locked((ledger) => {
+      const receipt = ledger.actions?.find((r) => r.requestId === requestId) ?? fail("unknown action request");
+      if (!unfinished(receipt)) {
+        if (receipt.state !== state || receipt.result !== result) fail("terminal receipt cannot change");
+        return receipt;
+      }
+      if (state === "succeeded" && receipt.action === "commit" && (!oid(result) || result !== receipt.expectedCommit))
+        fail("successful commit receipt needs exact prepared expected OID");
+      receipt.state = state;
+      receipt.result = result;
+      if (state === "conflict")
+        transition(
+          ledger.grants!.find((g) => g.id === receipt.grantId)!,
+          "ended",
+          result ?? "action conflict",
+        );
+      return receipt;
+    }, true);
+  }
+
+  revokeGrant(id: string, reason: string): ScopedGrant {
+    text(id);
+    text(reason);
+    return this.locked((state) => {
+      const grant = state.grants?.find((g) => g.id === id) ?? fail("unknown grant");
+      if (grant.state !== "ended") transition(grant, "ended", reason);
+      return grant;
+    }, true);
+  }
+
+  pauseGrant(id: string, reason: string): ScopedGrant {
+    text(id);
+    text(reason);
+    return this.locked((state) => {
+      const grant = state.grants?.find((g) => g.id === id) ?? fail("unknown grant");
+      if (grant.state === "ended") fail("grant ended");
+      transition(grant, "paused", reason);
+      return grant;
+    }, true);
+  }
+
+  resumeGrant(id: string, scope: JobScope, now: () => string): ScopedGrant {
+    text(id);
+    jobScope(scope);
+    if (typeof now !== "function") fail("live clock callback required");
+    return this.locked((state) => {
+      const grant = state.grants?.find((g) => g.id === id) ?? fail("unknown grant");
+      if (grant.state === "ended") fail("grant ended");
+      const at = now();
+      date(at);
+      if (Date.parse(at) >= Date.parse(grant.expiresAt)) transition(grant, "ended", "expired");
+      else if (!equal(grant.scope, scope)) transition(grant, "ended", "scope changed");
+      else {
+        if (blockedTarget(state as State & ScopedSnapshot, scope)) fail("unfinished action requires inspection");
+        transition(grant, "active", null);
+      }
+      return grant;
+    }, true);
+  }
+
   // The person's pick: once per revision, one of its options, and only when the live
   // check the caller ran just before found the candidate unchanged (fresh). A local
   // user-owned record, not proof of who picked (docs/shep.md, "Answering").
@@ -441,8 +1031,9 @@ export class QuestionStore {
     text(choice);
     return this.request(requestId, ["answer", token, choice, source], (state) => {
       const q = this.find(state, token);
-      const reason =
-        q.status !== "pending"
+      const reason = typed(q)
+        ? "typed questions require the trusted scoped picker path"
+        : q.status !== "pending"
           ? `question is ${q.status}`
           : !q.options.includes(choice)
             ? "not one of the question's choices"

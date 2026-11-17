@@ -136,7 +136,11 @@ export function captureTarget(input: TargetInput): QuestionTarget {
   };
 }
 
-export async function checkQuestion(question: Question) {
+export async function checkQuestion(question: Question, state = process.env.BERCAIL_SHEP_STATE) {
+  if (question.kind === "scoped-authorization" || question.kind === "candidate-review") {
+    const { checkScopedQuestion } = await import("./scoped-questions.ts");
+    return checkScopedQuestion(question, state);
+  }
   const target = question.target;
   const reasons: string[] = [];
   let current: QuestionTarget | null = null;

@@ -253,7 +253,7 @@ shep_bg() {
 deploy_shep() {
   local share rel
   share="$(shep_share_dir)"
-  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts; do
+  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts pi/scoped-types.ts pi/scoped-questions.ts pi/scoped-target.ts pi/scoped-execution.ts; do
     deploy_install_file "shep/$rel" "$share/$rel"
   done
 }

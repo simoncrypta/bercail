@@ -2,3 +2,6 @@
 tests/statechart/shep-inbox/graph.json linguist-generated=true
 tests/statechart/shep-inbox/sha256sums linguist-generated=true
 tests/statechart/shep-inbox/chart/** linguist-generated=true
+# Written by tests/statechart/scoped-job/check.sh; replay validates every edge.
+tests/statechart/scoped-job/graph.json linguist-generated=true
+tests/statechart/scoped-job/sha256sums linguist-generated=true

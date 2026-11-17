@@ -4,6 +4,7 @@ import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { hasScopedJob, registerScopedJob, scopedProtectedPath, scopedToolDenial } from "./scoped-job.ts";
 
 /** The part of a repo's effective policy (lib/policy.sh) the guard enforces. */
 export type Policy = {
@@ -35,6 +36,8 @@ export const defaultPolicy: Policy = {
 export type GuardInput = {
   role: string;
   hasUI: boolean;
+  /** A typed scoped question exists for this checkout/desk, even without an active grant. */
+  scopedJob?: boolean;
   /** undefined: after a cd the guard could not follow. */
   cwd: string | undefined;
   /** Current branch per git dir. Missing: not looked up. "": lookup failed. */
@@ -45,6 +48,8 @@ export type GuardInput = {
   graphiteAliases?: readonly string[];
   /** Files that decide what the guard lets through: the person edits them. */
   protectedFiles?: string[];
+  /** Trusted runtime path check, including aliases of authority and execution locks. */
+  protectedPath?: (path: string, cwd: string | undefined) => boolean;
   /** Todo targets and routes: only bercail todo target and route write them. */
   todoFiles?: string[];
   home?: string;
@@ -85,6 +90,8 @@ const headlessRelease = "A headless run does not tag or release. Leave the relea
 const autopilotRelease = "Autopilot does not tag or release. Leave the release to the person.";
 const readOnly = "This role is read-only. Do not edit files or change the git tree.";
 const readOnlyTool = "This role is read-only. Do not edit or write files.";
+const scopedWrite =
+  "This desk has a scoped job. Use scoped_job for its supported actions. Raw commits, pushes, tags and releases cannot use role, repo policy or confirmation as a fallback.";
 const unknownBranch = "Could not read the current branch, so this push is blocked. Push the branch by name.";
 const trustCommand =
   "Trusting a repo's policy is the person's call. Ask them to run bercail policy trust in their own shell.";
@@ -694,7 +701,7 @@ function readGraphiteAliases(): readonly string[] | undefined {
   }
 }
 
-type GitCall = { sub: string; args: string[]; dir: string | undefined; config: string[] };
+type GitCall = { sub: string; args: string[]; dir: string | undefined; config: string[]; global: string[] };
 
 // dir is undefined when --git-dir or --work-tree point git somewhere the guard cannot place.
 function parseGit(words: string[], cwd: string | undefined): GitCall | undefined {
@@ -722,7 +729,7 @@ function parseGit(words: string[], cwd: string | undefined): GitCall | undefined
     if (gitValue.has(name) && eq < 0) i++;
     i++;
   }
-  return { sub: words[i] ?? "", args: words.slice(i + 1), dir, config };
+  return { sub: words[i] ?? "", args: words.slice(i + 1), dir, config, global: words.slice(1, i) };
 }
 
 function shortCluster(word: string): string | undefined {
@@ -1114,6 +1121,7 @@ function decideEntire(kind: EntireKind, words: string[], dir: string | undefined
   if (readOnlyRole(input.role)) return block(readOnly);
   if (kind === "push") return decidePush([], dir, input);
   if (kind === "write" || kind === "refresh") return allow;
+  if (input.scopedJob) return block(scopedWrite);
   if (!input.hasUI) return block(entireUnknown);
   return { action: "ask", reason: "Allow this entire command? bercail does not know it to be read-only." };
 }
@@ -1293,11 +1301,24 @@ const fileWriters = new Set([
   "touch",
 ]);
 
-function writesProtected(words: string[], raw: string[], files: string[] | undefined): boolean {
-  if (!files?.length) return false;
-  const tails = files.map((file) => file.split("/").slice(-2).join("/"));
-  if (!raw.some((word) => tails.some((tail) => word.includes(tail)))) return false;
-  return fileWriters.has(words[0]) || raw.some((word) => /^\d*>|^&>/.test(word));
+function writesProtected(words: string[], raw: string[], files: string[] | undefined, input?: GuardInput): boolean {
+  if (!fileWriters.has(words[0]) && !raw.some((word) => /^\d*>|^&>/.test(word))) return false;
+  if (input?.protectedPath) {
+    const targets = raw.flatMap((word, i) => {
+      const redirect = /^(?:\d*>>?|&>)(.*)$/.exec(word);
+      return redirect ? [redirect[1] || raw[i + 1] || ""] : [];
+    });
+    if (fileWriters.has(words[0])) targets.push(...words.slice(1));
+    if (
+      targets.some((word) => {
+        const path = word.replace(/^[^=]+=\s*/, "");
+        return path !== "" && !path.startsWith("-") && input.protectedPath!(path, input.cwd);
+      })
+    )
+      return true;
+  }
+  const tails = files?.map((file) => file.split("/").slice(-2).join("/")) ?? [];
+  return raw.some((word) => tails.some((tail) => word.includes(tail)));
 }
 
 // git commands that leave HEAD on its branch. Anything else, an alias included,
@@ -1456,6 +1477,7 @@ function branchOf(dir: string | undefined, input: GuardInput): string | GuardDec
 
 function decideRelease(dir: string | undefined, input: GuardInput): GuardDecision {
   if (readOnlyRole(input.role)) return block(readOnly);
+  if (input.scopedJob) return block(scopedWrite);
   const policy = policyFor(dir, input);
   if (!isPolicy(policy)) return policy;
   if (policy.agentMayRelease) return approve(because(policy, "agent_may_release", "true"));
@@ -1471,6 +1493,7 @@ function decidePush(args: string[], dir: string | undefined, input: GuardInput):
   if (facts.deleteMain) return block(deleteMain);
   if (hasNoVerify("push", args)) return block(noVerify);
   if (readOnlyRole(input.role)) return block(readOnly);
+  if (input.scopedJob) return block(scopedWrite);
 
   let decision: GuardDecision = allow;
   const release = facts.tags || facts.refspecs.some(specIsTag) || facts.deleted.some(isTagRef);
@@ -1515,6 +1538,7 @@ function decidePush(args: string[], dir: string | undefined, input: GuardInput):
 
 function decideCommit(dir: string | undefined, input: GuardInput): GuardDecision {
   if (readOnlyRole(input.role)) return block(readOnly);
+  if (input.scopedJob) return block(scopedWrite);
   if (input.role === "autopilot") return approve("autopilot commits to its pull request branch");
   if (dir !== undefined && input.fresh?.has(dir))
     return approve("scratch repo: this command made it with git init under mktemp -d");
@@ -1525,11 +1549,153 @@ function decideCommit(dir: string | undefined, input: GuardInput): GuardDecision
   return publish("commit", input);
 }
 
+// Scoped raw Git has no authority beyond known reads and staging. Unknown aliases
+// and options cannot inherit the default allow used by independent desks.
+const scopedReads: Record<string, [string, string?]> = {
+  status: [
+    "--short -s --branch -b --porcelain --porcelain=v1 --porcelain=v2 --untracked-files=all --untracked-files=no --ignored",
+  ],
+  diff: [
+    "--cached --staged --stat --numstat --shortstat --name-only --name-status --check --quiet --exit-code --raw --patch -p -u --no-patch --no-ext-diff --no-textconv --no-color --binary --no-renames",
+  ],
+  show: [
+    "--oneline --stat --numstat --name-only --name-status --no-patch -s --no-color --no-ext-diff --no-textconv",
+    "--format --pretty",
+  ],
+  log: [
+    "--oneline --stat --numstat --name-only --name-status --no-patch --all --graph --no-color --no-decorate",
+    "--format --pretty --max-count -n --since --until --author --grep",
+  ],
+  "rev-parse": [
+    "--show-toplevel --git-common-dir --absolute-git-dir --show-prefix --is-inside-work-tree --is-bare-repository --verify --quiet -q --short --symbolic-full-name --abbrev-ref --end-of-options",
+    "--path-format --git-path",
+  ],
+  "ls-files": ["--cached --stage --others --exclude-standard --modified --deleted --unmerged -z"],
+  "ls-tree": ["-r -t -z --name-only --name-status --full-tree --long"],
+  "cat-file": ["-t -s -p -e --batch --batch-check --batch-all-objects"],
+  "merge-base": ["--is-ancestor --all --fork-point --independent"],
+  "rev-list": ["--count --left-right --boundary --all --objects", "--max-count -n"],
+  "for-each-ref": ["", "--format --sort --count --points-at --contains --merged --no-merged --no-contains"],
+  "ls-remote": ["--refs --heads --branches --tags --exit-code --symref --quiet -q --get-url"],
+};
+
+function scopedArgs(args: string[], flags = "", values = ""): boolean {
+  const known = new Set(flags.split(" "));
+  const takesValue = new Set(values.split(" "));
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === "--") return true;
+    if (!arg.startsWith("-") || known.has(arg)) continue;
+    const eq = arg.indexOf("=");
+    if (eq > 0 && takesValue.has(arg.slice(0, eq)) && arg.slice(eq + 1) !== "") continue;
+    if (!takesValue.has(arg) || !args[i + 1] || args[i + 1].startsWith("-")) return false;
+    i++;
+  }
+  return true;
+}
+
+function scopedGit(git: GitCall, input: GuardInput): GuardDecision {
+  if (git.dir === undefined || input.gitEnv || input.gitConfigEnv) return block(scopedWrite);
+  for (let i = 0; i < git.global.length; i++) {
+    const option = git.global[i];
+    if (option === "-C" && git.global[i + 1] && !git.global[i + 1].startsWith("-")) {
+      i++;
+      continue;
+    }
+    if (!["--no-pager", "--literal-pathspecs", "--no-optional-locks"].includes(option)) return block(scopedWrite);
+  }
+  const { sub, args } = git;
+  const read = Object.hasOwn(scopedReads, sub) ? scopedReads[sub] : undefined;
+  if (read) return scopedArgs(args, ...read) ? allow : block(scopedWrite);
+  if (sub === "branch") {
+    const listing = args.length === 0 || args[0] === "--list" || args[0] === "--show-current";
+    return listing && scopedArgs(args, "--list --show-current --all -a --remotes -r --verbose -v -vv --no-color")
+      ? allow
+      : block(scopedWrite);
+  }
+  if (sub === "tag") {
+    const listing = args[0] === "--list" || args[0] === "-l" || args[0] === "--verify" || args[0] === "-v";
+    return listing && scopedArgs(args, "--list -l --verify -v --no-color", "--format --sort")
+      ? allow
+      : block(scopedWrite);
+  }
+  if (sub === "config") {
+    const listing = ["--get", "--get-all", "--get-regexp", "--get-urlmatch", "--list", "-l", "get", "list"].includes(
+      args[0],
+    );
+    return listing &&
+      scopedArgs(
+        args,
+        "--get --get-all --get-regexp --get-urlmatch --list -l --show-origin --show-scope --null -z --includes --no-includes",
+      )
+      ? allow
+      : block(scopedWrite);
+  }
+  let stage = false;
+  if (sub === "add")
+    stage = scopedArgs(
+      args,
+      "--all -A --update -u --intent-to-add -N --renormalize --dry-run -n --verbose -v --force -f --ignore-errors --sparse",
+    );
+  if (sub === "restore")
+    stage =
+      args.slice(0, args.includes("--") ? args.indexOf("--") : args.length).includes("--staged") &&
+      scopedArgs(args, "--staged -q --quiet", "--source -s");
+  if (sub === "reset")
+    stage = args.length === 0 || args[0] === "--" || (args[0] === "HEAD" && (args.length === 1 || args[1] === "--"));
+  if (sub === "rm") stage = scopedArgs(args, "--cached -r -f --force --ignore-unmatch --dry-run -n --quiet -q");
+  if (sub === "mv") stage = scopedArgs(args, "-f --force -n --dry-run -v --verbose -k");
+  if (sub === "write-tree") stage = args.length === 0;
+  return stage ? (readOnlyRole(input.role) ? block(readOnly) : allow) : block(scopedWrite);
+}
+
+function scopedForge(words: string[], input: GuardInput): GuardDecision {
+  if (words[0] === "gt" || words[0] === "origin") return block(scopedWrite);
+  const operation = words.slice(1, 3).join(" ");
+  if (["pr comment", "pr edit"].includes(operation)) {
+    if (readOnlyRole(input.role)) return block(readOnly);
+    return scopedArgs(words.slice(3), "--edit-last --create-if-none", "--body -b --body-file -F --title -t")
+      ? allow
+      : block(scopedWrite);
+  }
+  if (words[1] === "api")
+    return !ghApiWrites(words) &&
+      scopedArgs(
+        words.slice(2),
+        "--paginate --slurp --include -i --silent",
+        "--method -X --jq -q --template -t --header -H --cache",
+      )
+      ? allow
+      : block(scopedWrite);
+  const known = [
+    "pr view",
+    "pr list",
+    "pr status",
+    "pr diff",
+    "pr checks",
+    "repo view",
+    "repo list",
+    "issue view",
+    "issue list",
+    "run view",
+    "run list",
+  ];
+  return known.includes(operation) &&
+    scopedArgs(
+      words.slice(3),
+      "--web --comments --watch --compact --open --closed --merged --all --name-only --color=never",
+      "--json --jq -q --template -t --limit -L --state --base --head --author --search --label --repo -R",
+    )
+    ? allow
+    : block(scopedWrite);
+}
+
 function decideGit(git: GitCall, input: GuardInput): GuardDecision {
   const { sub, args } = git;
   if (hasNoVerify(sub, args) && ["commit", "push", "merge", "rebase"].includes(sub)) return block(noVerify);
   const risky = git.config.find((key) => riskyConfig.test(key)) ?? (sub === "config" ? configWrite(args) : undefined);
   if (risky) return configBlock(risky);
+  if (input.scopedJob) return scopedGit(git, input);
   if (sub === "push") return decidePush(args, git.dir, input);
   if (sub === "tag" && tagWrites(args)) return decideRelease(git.dir, input);
   if (readOnlyRole(input.role) && gitWrite(sub, args)) return block(readOnly);
@@ -2017,6 +2183,8 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     }
     const forge = forgeCall(words, gitEnv || gitConfigEnv ? undefined : here.cwd);
     if (!help && isForgeMerge(forge.words)) return block(prMerge);
+    if (!help && input.scopedJob && ["gt", "gh", "origin"].includes(words[0]))
+      decision = worse(decision, scopedForge(forge.words, here));
     // The words as written go last, so a block names what the agent wrote.
     const valueReading =
       forge.words[0] === "entire" && !pluginCall(forge.words) ? entireValueReading(forge.words) : undefined;
@@ -2049,7 +2217,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (setsTodoTarget(words) && input.role !== "shep") decision = worse(decision, block(todoTargets));
     decision = worse(decision, decideBasecamp(words, input.role));
     if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
-    if (writesProtected(words, raw, input.protectedFiles)) decision = worse(decision, block(protectedFile));
+    if (writesProtected(words, raw, input.protectedFiles, here)) decision = worse(decision, block(protectedFile));
     if (writesProtected(words, raw, input.todoFiles)) decision = worse(decision, block(todoFile));
     if (!help && (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout")))
       branchMoved = true;
@@ -2082,7 +2250,11 @@ export function decideTool(tool: string, command: string | undefined, input: Gua
   if (tool === "edit" || tool === "write") {
     if (readOnlyRole(input.role)) return block(readOnlyTool);
     const full = path?.startsWith("~/") && input.home ? join(input.home, path.slice(2)) : path;
-    if (full && input.cwd !== undefined && input.protectedFiles?.includes(resolve(input.cwd, full)))
+    if (
+      full &&
+      (input.protectedPath?.(full, input.cwd) ||
+        (input.cwd !== undefined && input.protectedFiles?.includes(resolve(input.cwd, full))))
+    )
       return block(protectedFile);
     if (full && input.cwd !== undefined && input.todoFiles?.includes(resolve(input.cwd, full))) return block(todoFile);
   }
@@ -2220,6 +2392,7 @@ function logApproval(command: string, approved: string[], input: GuardInput): vo
 const policySection = "bercail_git_policy";
 
 export default function (pi: ExtensionAPI) {
+  registerScopedJob(pi);
   const home = process.env.HOME;
   const config =
     process.env.BERCAIL_CONFIG ||
@@ -2228,6 +2401,7 @@ export default function (pi: ExtensionAPI) {
     join(stateDir(), "policy-trust.json"),
     // Shep's question ledger: an answered question in it is the person's pick.
     join(stateDir(), "shep/questions.json"),
+    join(stateDir(), "shep/questions.lock"),
     config,
   ];
   // Not one of the guard's: a target decides where Shep writes, not what runs.
@@ -2265,15 +2439,23 @@ export default function (pi: ExtensionAPI) {
     else delete sections[policySection];
   });
 
+  let seenScoped = false;
   pi.on("tool_call", async (event, ctx) => {
+    seenScoped = (await hasScopedJob(ctx)) || seenScoped;
+    if (event.toolName === "scoped_job") {
+      const reason = scopedToolDenial(event.input, ctx);
+      return reason ? { block: true, reason } : undefined;
+    }
     const input = event.input as { command?: string; path?: string };
     const command = event.toolName === "bash" ? String(input.command ?? "") : undefined;
     let guardInput: GuardInput = {
       role: process.env.BERCAIL_ROLE ?? "",
       hasUI: ctx.hasUI,
+      scopedJob: seenScoped,
       cwd: ctx.cwd,
       home,
       protectedFiles,
+      protectedPath: scopedProtectedPath,
       todoFiles,
       graphiteAliases: event.toolName === "bash" ? readGraphiteAliases() : undefined,
       deskSecret: deskSecretOf(await secretJson(ctx.cwd)),

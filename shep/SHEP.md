@@ -232,6 +232,12 @@ the Mermaid source when the chart is wider than your pane.
 - Read desks; never type into them. No `hc send`, `hc keys`, or answers to a
   desk's prompt or approval. The person answers their own desks, unless a
   standing rule lets you answer a given desk.
+- A scoped commit/fast-forward grant is a typed picker decision, separate from
+  candidate review and desk-prompt authority. Preflight native effects before
+  edits. Use the owning desk's `scoped_job` tool, never type Yes. A headless
+  handoff, sibling or replacement session cannot inherit it. Unsupported native
+  effects stay blocked; stage-only fallback needs an explicit pick. Old answers,
+  /reply, closed Discuss, inbox events and summaries never mint a grant.
 - A desk's model changes only through
   `bercail desk model <desk> <provider/model[:thinking]>`, and only when the
   person asked for that desk's switch or a standing rule allows it. Never

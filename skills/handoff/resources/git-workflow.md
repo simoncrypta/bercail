@@ -21,9 +21,16 @@ another PR's branch. Keep the parent relation in the selected backend. Never
 run `gt` in a `gh`, `origin` or `entire` repo. For an independent `gh` branch, plain
 `git` and `gh pr` remain appropriate.
 
+Before edits, check that the selected backend can enforce the job's local and
+remote scope. Graphite amend/restack/submit does not establish an exact-ref,
+fast-forward-only contract. Stop on unsupported effects, or obtain an explicit
+stage-only fallback. Never substitute raw git for a required native operation.
+A scoped grant is applied by `scoped_job`, not by answering a desk prompt. It
+belongs to the actual visible desk/session and does not transfer to a headless
+handoff or sibling. Candidate review stays separate.
+
 The PR body and the commit that lands are the description the desk's /validate
-wrote (the `describe` skill shows each backend's commands). On `gt` a fix after
-review amends the PR's commit (`gt m -a`, then `gt submit`). On `gh` and
+wrote (the `describe` skill shows each backend's commands). On `gh` and
 `origin` a fix is a new commit, and the person squash-merges with the
 description as the message; bercail never force-pushes there. On `entire` a
 fix is a new commit too, and the person, or Shep when they ask, merges with

@@ -35,6 +35,11 @@ captures the agents' sessions here), `default_copy`, `helper`,
 Never put the user's ask on the spawn command line; it goes in the beads issue.
 Never `python -c`, never a wrapper `.sh`, never argv after `--`.
 
+Before edits in a publication job, check native effect feasibility. A scoped
+commit/fast-forward grant uses `scoped_job` on its exact visible owning desk,
+never a job label, parent terminal or headless role. Handoffs and resumed sessions
+do not inherit another owner's grant. Unknown native scope or rewrite-capable
+publication stops. Stage-only fallback needs an explicit pick. Keep the backend.
 
 ## The job is a beads issue
 

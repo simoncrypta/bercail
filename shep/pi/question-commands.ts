@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { createHash } from "node:crypto";
 import { QuestionStore, projection, tokenOf } from "./questions.ts";
 import { captureTarget, checkQuestion } from "./question-target.ts";
+import { scopedQuestionSpec } from "./scoped-questions.ts";
 
 const bareDecision = /^(?:yes|no|y|n|lgtm|[1-9]\d*)[.!]?$/i;
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -137,7 +138,13 @@ export default function (pi: ExtensionAPI) {
       "Create or revise a durable targeted question. Capture current repo/job/desk/session and candidate; never grants authority. Returns at most 50KB.",
     parameters: Type.Object({
       requestId: Type.String(),
-      kind: Type.Union([Type.Literal("planning"), Type.Literal("review"), Type.Literal("action")]),
+      kind: Type.Union([
+        Type.Literal("planning"),
+        Type.Literal("review"),
+        Type.Literal("action"),
+        Type.Literal("scoped-authorization"),
+        Type.Literal("candidate-review"),
+      ]),
       prompt: Type.String(),
       options: Type.Array(Type.String()),
       brief: Type.String({
@@ -157,6 +164,11 @@ export default function (pi: ExtensionAPI) {
       desk: Type.Union([Type.String(), Type.Null()]),
       base: Type.Union([Type.String(), Type.Null()]),
       action: Type.Union([Type.String(), Type.Null()]),
+      pr: Type.Optional(Type.String({ description: "Exact PR URL for a scoped question" })),
+      remote: Type.Optional(Type.String()),
+      actions: Type.Optional(Type.Array(Type.Union([Type.Literal("commit"), Type.Literal("publish-fast-forward")]))),
+      expiresAt: Type.Optional(Type.String({ description: "Explicit ISO expiry; no automatic renewal" })),
+      grantId: Type.Optional(Type.String({ description: "Active grant for a separate candidate review" })),
       originEvent: Type.String({
         description: "Original desk event ID, or explicit conversation entry identifier; never invent a missed event",
       }),
@@ -164,25 +176,45 @@ export default function (pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, input, _signal, _onUpdate, ctx) {
       const { requestId, reviseToken, ...intent } = input;
-      const resolveSpec = () => ({
-        kind: input.kind,
-        prompt: input.prompt,
-        options: input.options,
-        ...(input.brief === undefined ? {} : { brief: input.brief }),
-        ...(input.recommendation ? { recommendation: input.recommendation } : {}),
-        origin: {
-          event: input.originEvent,
-          session: ctx.sessionManager.getSessionId(),
-          entry: ctx.sessionManager.getLeafId(),
-        },
-        target: captureTarget(input),
-      });
+      const origin = {
+        event: input.originEvent,
+        session: ctx.sessionManager.getSessionId(),
+        entry: ctx.sessionManager.getLeafId(),
+      };
+      // Scoped resolution includes PR reads; do it before the ledger transaction.
+      const prepared =
+        input.kind === "scoped-authorization" || input.kind === "candidate-review"
+          ? scopedQuestionSpec(store, {
+              ...input,
+              kind: input.kind,
+              issue: input.issue ?? "",
+              desk: input.desk ?? "",
+              base: input.base ?? "",
+              pr: input.pr ?? "",
+              remote: input.remote ?? "origin",
+              origin,
+            })
+          : undefined;
+      const resolveSpec = () => {
+        if (prepared) return prepared;
+        if (input.kind !== "planning" && input.kind !== "review" && input.kind !== "action")
+          throw new Error("Scoped question was not resolved");
+        return {
+          kind: input.kind,
+          prompt: input.prompt,
+          options: input.options,
+          ...(input.brief === undefined ? {} : { brief: input.brief }),
+          ...(input.recommendation ? { recommendation: input.recommendation } : {}),
+          origin,
+          target: captureTarget({ ...input, kind: input.kind }),
+        };
+      };
       const question = reviseToken
         ? store.revise(requestId, reviseToken, intent, resolveSpec)
         : store.create(requestId, intent, resolveSpec);
       const current = store.snapshot().questions.find((q) => tokenOf(q) === tokenOf(question));
       if (!current) throw new Error("Question receipt has no durable revision; restore the ledger before continuing.");
-      const check = await checkQuestion(current);
+      const check = await checkQuestion(current, state);
       const output = JSON.stringify({ token: tokenOf(question), question, check });
       return {
         content: [

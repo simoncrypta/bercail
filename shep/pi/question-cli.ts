@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { QuestionStore, projection, tokenOf, type QuestionSpec } from "./questions.ts";
 import { captureTarget, checkQuestion } from "./question-target.ts";
 import { closed, discussionOf, openDiscussion, pick } from "./discuss.ts";
+import { scopedQuestionSpec } from "./scoped-questions.ts";
 
 async function main() {
   const state = process.env.BERCAIL_SHEP_STATE;
@@ -27,7 +28,7 @@ async function main() {
       throw new Error("check requires an explicit Qn@revision token");
     const question = store.snapshot().questions.find((q) => tokenOf(q) === args[0]);
     if (!question) throw new Error("unknown question revision");
-    result = await checkQuestion(question);
+    result = await checkQuestion(question, state);
   } else if (op === "discuss") {
     if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
       throw new Error("discuss requires a Qn@revision token");
@@ -61,15 +62,21 @@ async function main() {
       )
         throw new Error("origin requires nonempty event/session and entry or null");
       const { requestId, token, ...intent } = input;
-      const resolveSpec = (): QuestionSpec => ({
-        kind: input.kind,
-        prompt: input.prompt,
-        options: input.options,
-        ...(input.brief === undefined ? {} : { brief: input.brief }),
-        ...(input.recommendation == null ? {} : { recommendation: input.recommendation }),
-        origin: input.origin,
-        target: captureTarget(input),
-      });
+      // Resolve scoped network facts before acquiring the short ledger lock.
+      const prepared =
+        input.kind === "scoped-authorization" || input.kind === "candidate-review"
+          ? scopedQuestionSpec(store, input)
+          : undefined;
+      const resolveSpec = (): QuestionSpec =>
+        prepared ?? {
+          kind: input.kind,
+          prompt: input.prompt,
+          options: input.options,
+          ...(input.brief === undefined ? {} : { brief: input.brief }),
+          ...(input.recommendation == null ? {} : { recommendation: input.recommendation }),
+          origin: input.origin,
+          target: captureTarget(input),
+        };
       result =
         op === "create"
           ? store.create(requestId, intent, resolveSpec)
@@ -89,7 +96,7 @@ async function panel(store: QuestionStore, state: string) {
   const bin = process.env.BERCAIL_SHEP_BIN || "bercail";
   const cards = [];
   for (const q of store.snapshot().questions.filter((x) => x.status === "pending")) {
-    const check = await checkQuestion(q);
+    const check = await checkQuestion(q, state);
     let change = null;
     if (q.kind !== "planning" && q.target.worktree) {
       // describe check exits 1 while the change has no description; its JSON still holds the size.

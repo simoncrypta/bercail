@@ -436,6 +436,7 @@ for (const toolName of ["bash", "read"]) {
     const script = `import guard from ${JSON.stringify(guardUrl)};
       const handlers = {};
       guard({on: (name, handler) => handlers[name] = handler,
+        registerTool() {},
         exec: async () => ({code: 1, stdout: "", stderr: ""})});
       const result = await handlers.tool_call(${JSON.stringify({ toolName, input: { command: "gt submit --help", path: "/work/a.ts" } })},
         {hasUI: false, cwd: "/work"});
@@ -482,7 +483,7 @@ test("genuine CLI help reaches the extension without write policy lookup, confir
     stderr: "",
   }));
   const confirm = vi.fn(async () => false);
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
   const ctx = { hasUI: true, cwd: "/work", ui: { confirm } };
   try {
     // Secret discovery is independent of git-write policy lookup and happens for every tool.
@@ -1500,6 +1501,7 @@ test("a review worktree's project files are never trusted; other folders are lef
   const handlers: Record<string, (event: { cwd: string }) => Promise<unknown>> = {};
   guard({
     on: (name: string, handler: (event: { cwd: string }) => Promise<unknown>) => (handlers[name] = handler),
+    registerTool() {},
   } as never);
   assertDeepEqual(await handlers.project_trust({ cwd: "/home/u/Work/app.review-3" }), { trusted: "no" });
   assertDeepEqual(await handlers.project_trust({ cwd: "/home/u/Work/app" }), { trusted: "undecided" });
@@ -1602,7 +1604,7 @@ test("Shep's question ledger, the answer command and typing for the person are n
   const saved = process.env.XDG_STATE_HOME;
   process.env.XDG_STATE_HOME = "/s";
   try {
-    guard({ on: (name: string, handler: never) => (handlers[name] = handler) } as never);
+    guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {} } as never);
   } finally {
     if (saved === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = saved;
@@ -2013,7 +2015,7 @@ test("the guard extension sets the shim at session start and keeps the secret fo
     ++calls === 1
       ? { code: 1, stdout: "", stderr: "" }
       : { code: 0, stdout: JSON.stringify(secretPolicy()), stderr: "" };
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
   const ctx = { hasUI: false, cwd: "/work.feature", ui: { notify: () => {} } };
   try {
     delete process.env.BERCAIL_ROLE;

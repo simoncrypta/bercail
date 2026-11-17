@@ -37,7 +37,12 @@ The text ends with one line that says an agent wrote it and whether a person
 reviewed it: `Written with bercail (Pi, claude-opus-5-5); reviewed by Simon`,
 or `...; not yet reviewed`. bercail adds it when it prints the description,
 from facts only: the model the desk's record names, and a reviewer only when
-one is given. Never write it by hand. The repo's policy picks the form:
+one is given. Never write it by hand. The scoped executor can instead record
+`reviewed via Decisions picker` or `reviewed via Discuss picker` from the exact
+durable candidate review. This identifies the supported review path, not a
+person. Trailer form uses `Review-source`, never a fabricated `Reviewed-by`.
+It does not change the standalone printer's named-reviewer gate. The repo's
+policy picks the form:
 `provenance = "line"` (the default), `"trailer"` (`Assisted-by:` and
 `Reviewed-by:` git trailers), or `"none"`.
 

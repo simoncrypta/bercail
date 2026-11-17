@@ -33,6 +33,8 @@ Post-install CLI (bercail):
                 questions [--json] (pending targeted questions; replies are unverified) |
                 question create|revise|reply|answer|withdraw (JSON on stdin) | check TOKEN | thread TOPIC |
                 panel (the Decisions panel's JSON) | discuss TOKEN (make or find its branch) | closed TOKEN OPENING
+                Scoped questions: kind scoped-authorization or candidate-review; only a picker grants authority.
+                Pi guard tool scoped_job: preflight | execute | inspect | revoke (exact visible desk; no force).
   todo          What only you can do, on one of your todo lists (targets; Basecamp for now):
                 add "TITLE" [--notes TEXT] [--due YYYY-MM-DD] [--issue ID] [--repo DIR] [--target NAME] |
                 list [--target NAME] [--json] | show ID | done ID. Shep adds them; desks propose Todo: "<text>".

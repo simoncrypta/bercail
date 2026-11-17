@@ -33,6 +33,15 @@ in a `gh` or `origin` repo. Do not rewrite someone else's stack members. If
 native sync/restack needs a force-push or an unauthorized branch update, stop
 and report it; autopilot's no-force-push and no-merge rules still apply.
 
+Before edits, prove that the native backend can honor the exact local and remote
+effects. Graphite submit's implicit lease-force default is not fast-forward-only;
+modify may restack children. If exact scope cannot be enforced, stop or obtain an
+explicit stage-only fallback. Never silently replace the native workflow with raw
+git. A durable scoped grant is used through `scoped_job`, not the role-wide raw
+commit/push allowance. Its owner must be the actual visible desk/session; a
+headless run or sibling cannot borrow its parent's grant. A required candidate
+LGTM remains separate, and replies/body edits need their existing authority.
+
 The snapshot helper and GitHub commands below apply to `gh` and `gt` only.
 For `origin`, use `origin pr view`, `origin pr checks`, `origin pr requirements`,
 `origin pr thread`, and `origin pr watch` instead. Read `origin agent prompt ci`
@@ -64,11 +73,11 @@ Run `pr-state.sh`, do what `next` says, push, then run it again.
 One failure per commit. Re-run `pr-state.sh` after every push: a new head
 starts new checks, and a fix can fail a different job.
 
-The PR's description lands as one commit (the `describe` skill). On `gt`, a
-fix amends the PR's commit: `gt m -a -m "$(bercail describe commit)"`, then
-`gt submit --no-edit --no-ai`. On `gh` and `origin`, push each fix as a new
-commit; the person squash-merges with the description as the message. Never
-force-push there.
+The PR's description lands as one commit (the `describe` skill). Graphite's
+amend/restack/submit workflow remains blocked when its effects conflict with the
+job's no-rewrite or exact-ref limits. Omitting a force flag does not settle that.
+On independently authorized `gh` and `origin` paths, push each fix as a new
+commit; the person squash-merges with the description as the message.
 
 After each fix, keep the description true. Rerun the checks the fix touched
 into `.bercail/validate.json` for the new tree, update the parts of

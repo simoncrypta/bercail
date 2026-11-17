@@ -82,10 +82,12 @@ Where the repo commits straight to main, `commit` refuses a change whose
 LGTM first.
 
 Each change lands on the trunk as one commit whose message is the
-description. A direct-commit repo gets one commit per finished job. On `gt`,
-a fix after review amends the PR's commit. On `gh` and `origin`, a fix is a new
-commit on the PR branch, and the PR lands by squash-merge with the description
-as the squash commit's message. bercail never force-pushes there. On `entire`
+description. A direct-commit repo gets one commit per finished job. Graphite
+amend/submit can rewrite or restack branches: check native feasibility before
+edits, and stop when it cannot honor the job's scope. A scoped commit/fast-forward
+grant never permits that rewrite or a silent switch to plain git. On `gh` and
+`origin`, a fix is a new commit on the PR branch. The PR lands by squash-merge
+with the description as the squash commit's message. bercail never force-pushes there. On `entire`
 (a repo hosted on Entire), the trail is the PR, and Entire writes the merge.
 The person merges, or Shep when they ask and the guard's prompt gets their yes.
 The guard stops every other agent at a merge and everyone at a trail approval,
@@ -101,7 +103,7 @@ are none, so the commands below always pass it.
 | direct | `bercail describe commit \| git commit -F -` | the next job is a new commit | the commit is on the trunk |
 | `gh` | `bercail describe commit \| git commit -F -`, push, then `bercail describe body \| gh pr create --title "$(bercail describe title)" --body-file -` | commit the fix, push, then `bercail describe body \| gh pr edit <n> --title "$(bercail describe title)" --body-file -` | `bercail describe body --checkpoints origin/<base> \| gh pr merge <n> --squash --subject "$(bercail describe title)" --body-file -` |
 | `gh` stack | `gh stack submit --auto`, then the `gh pr edit` above in each layer's worktree | the same, in the layer's worktree | each PR squash-merged as above |
-| `gt` | `gt create -m "$(bercail describe commit)"`, `gt submit --no-edit --no-ai`, then the `gh pr edit` above | `gt m -a -m "$(bercail describe commit --checkpoints HEAD~1)"` (`gt modify --all`), `gt submit --no-edit --no-ai`, then `gh pr edit` | the PR's one commit already carries it |
+| `gt` | Stop unless the native path proves the exact authorized effects. Implicit lease-force submit is not fast-forward-only | Same preflight. A commit/fast-forward grant does not cover amend, restack or rewrite | The description must match the authorized candidate |
 | `origin` | as `gh`, with `bercail describe body \| origin pr create --title "$(bercail describe title)" --body-file - --status open` (`--stack-on <parent>` for a stack) | commit the fix, push, then `bercail describe body \| origin pr edit <n> --title "$(bercail describe title)" --body-file -` | `bercail describe body --checkpoints origin/<base> \| origin pr merge <n> --squash --subject "$(bercail describe title)" --body-file -` (one PR at a time: a stack merge takes no message) |
 | `entire` | `bercail describe commit \| git commit -F -`, then `entire trail create --title "$(bercail describe title)" --body "$(bercail describe body)"`: it publishes the branch (`--base <parent>` for a stack) | commit the fix, push, then `entire trail update --title "$(bercail describe title)" --body "$(bercail describe body)"` | the person, or Shep when they ask, runs `entire trail merge` once the trail's gates pass; it takes no message, so the trail carries the description |
 
