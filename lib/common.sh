@@ -3,7 +3,7 @@
 # shellcheck disable=SC2034 # the constants below are read by the libs sourced after this file
 set -euo pipefail
 
-BERCAIL_VERSION="0.16.0"
+BERCAIL_VERSION="0.17.0"
 BERCAIL_MARKER_START="# >>> bercail"
 BERCAIL_MARKER_END="# <<< bercail"
 
