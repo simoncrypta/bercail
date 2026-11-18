@@ -26,7 +26,18 @@ SHEP_KEEP_RECENT=50000
 # A report comment longer than this is cut in the brief.
 SHEP_BRIEF_BUDGET=1500
 
-_shep_hc() { "${HC_BIN:-hc}" "$@" 2>/dev/null </dev/null; }
+_shep_hc() { _git_backend_bounded 2 "${HC_BIN:-hc}" "$@" 2>/dev/null </dev/null; }
+
+# An explicit checkout wins over inherited store/git addressing.
+_shep_bd() {
+  local key
+  local -a clean=()
+  _shep_need_policy
+  while IFS= read -r key; do
+    [[ "$key" =~ ^(BD_|BEADS_|GIT_) ]] && clean+=(-u "$key")
+  done < <(compgen -e)
+  _git_backend_bounded 2 env "${clean[@]}" bd "$@"
+}
 
 # --- known repos ----------------------------------------------------------------
 
@@ -73,25 +84,27 @@ _shep_repo_list() {
 _shep_open_issues() {
   local main="$1" raw
   [[ -d "$main/.beads" ]] || return 1
-  raw="$(cd "$main" && _git_backend_bounded 10 bd list --json --brief --limit 0 </dev/null 2>/dev/null)" || return 1
-  jq -c '[(if type == "array" then .[] else empty end) | select(.status != "closed")
-    | {id, title, status, labels: (.labels // [])}]' <<<"$raw" 2>/dev/null
+  raw="$(cd "$main" && _shep_bd list --all --json --limit 0 </dev/null 2>/dev/null)" || return 1
+  jq -c '[(if type == "array" then .[] else empty end) | select(.status != "closed" or any(.metadata.bercail_task.requests[]?; .status != "complete"))
+    | {id, title, status, labels: (.labels // []), task: .metadata.bercail_task}]' <<<"$raw" 2>/dev/null
 }
 
 # Known repos as a JSON array: path, git backend, policy (trusted, untrusted,
 # none), open issue count (null without beads), where bercail saw the repo,
 # and the open issues themselves for the board.
 _shep_repos_json() {
-  local main from backend policy issues
+  local main from backend policy issues beads
   while IFS=$'\t' read -r main from; do
     backend="$(git_backend "$main" 2>/dev/null)" || backend=""
     policy="$(policy_json "$main" 2>/dev/null \
       | jq -r 'if .file == "" then "none" elif .trusted then "trusted" else "untrusted" end' 2>/dev/null)" || policy=""
+    beads=false
+    [[ ! -d "$main/.beads" ]] || beads=true
     issues="$(_shep_open_issues "$main")" || issues=null
-    jq -nc --arg path "$main" --arg from "$from" --arg backend "$backend" --arg policy "$policy" --argjson issues "$issues" '
+    jq -nc --arg path "$main" --arg from "$from" --arg backend "$backend" --arg policy "$policy" --argjson issues "$issues" --argjson beads "$beads" '
       {path: $path, backend: (if $backend == "" then null else $backend end),
        policy: (if $policy == "" then null else $policy end),
-       open: (if $issues == null then null else ($issues | length) end), from: ($from | split(",")), issues: $issues}'
+       open: (if $issues == null then null else ($issues | length) end), from: ($from | split(",")), issues: $issues, beads:$beads}'
   done < <(_shep_repo_list) | jq -sc .
 }
 
@@ -111,7 +124,7 @@ shep_repos() {
   esac
   out="$(_shep_repos_json)"
   if ((json)); then
-    jq 'map(del(.issues))' <<<"$out"
+    jq 'map(del(.issues, .beads))' <<<"$out"
     return 0
   fi
   jq -r --arg home "$HOME" --arg state "$(shep_state_dir)" "$SHEP_JQ_DEFS"'
@@ -120,7 +133,7 @@ shep_repos() {
       | .[] | (.path | tilde) as $p
       | "\($p)\(if $w > ($p | length) then " " * ($w - ($p | length)) else "" end)  \(.backend // "?")  "
         + ({trusted: "policy trusted  ", untrusted: "policy untrusted", none: "no policy       "}[.policy // ""] // "policy ?        ")
-        + "  " + (if .open == null then "no beads" else "\(.open) open" end) + "  (\(.from | join(", ")))"
+        + "  " + (if .open != null then "\(.open) open" elif .beads then "UNKNOWN (beads unavailable)" else "no beads" end) + "  (\(.from | join(", ")))"
     end' <<<"$out"
 }
 
@@ -130,23 +143,34 @@ shep_repos() {
 # blocked, idle), and the issue, title, space and model (handoff --model) on
 # their labels. [] when hc does not answer.
 _shep_desks_json() {
-  local addr
-  { _shep_hc ls --json --label bercail.role=agent || true; } \
-    | jq -r '.terminals[]? | select(.state == "live") | .address' 2>/dev/null \
-    | while IFS= read -r addr; do
-      _shep_hc get "$addr" --json | jq -c '{address, name, cwd, state: (.status.state // "unknown"),
+  local addr detail main rows snapshot
+  _shep_need_policy
+  rows="$(_shep_hc ls --json --label bercail.role=agent)" || return 1
+  jq -e '.terminals | type == "array"' <<<"$rows" >/dev/null || return 1
+  snapshot="$(
+    while IFS= read -r addr; do
+      detail="$(_shep_hc get "$addr" --json)" || exit 1
+      main="$(_shep_main_of "$(jq -r '.cwd // ""' <<<"$detail")")" || main=""
+      jq -c --arg repo "$main" '{address, name, cwd, repo:$repo, state: (.status.state // "unknown"),
         issue: .labels["bercail.issue"], title: .labels["bercail.issue_title"], space: .labels["bercail.space"],
-        model: .labels["bercail.model"], bg: (.labels["bercail.shep"] == "bg")}' 2>/dev/null || true
-    done | jq -sc '[.[] | select(.address)]'
+        model: .labels["bercail.model"], bg: (.labels["bercail.shep"] == "bg")}' <<<"$detail"
+    done < <(jq -r '.terminals[] | select(.state == "live") | .address' <<<"$rows")
+  )" || return 1
+  jq -sc '[.[] | select(.address)]' <<<"$snapshot"
 }
 
-# The latest handoff record per issue: {"<id>": {desk, space, label, branch, path, model}}.
+# A repo-scoped projection for status only. Dispatch checks every live candidate;
+# it never treats this latest-record summary as proof of ownership.
 _shep_records_json() {
-  local file
+  local file row main
   file="$(notify_handoffs_file)"
   [[ -f "$file" ]] || { printf '{}'; return 0; }
-  jq -ncR '[inputs | fromjson? | select(type == "object" and (.issue | type) == "string" and .issue != "")]
-    | map({key: .issue, value: {desk, space, label, branch, path, model}}) | from_entries' "$file" 2>/dev/null || printf '{}'
+  _shep_need_policy
+  while IFS= read -r row; do
+    main="$(_shep_main_of "$(jq -r '.path // ""' <<<"$row")" "$(jq -r '.branch // ""' <<<"$row")")" || continue
+    jq -c --arg repo "$main" '. + {repo:$repo}' <<<"$row"
+  done < <(jq -Rc 'fromjson? | select(type == "object" and .issue)' "$file") \
+    | jq -sc 'reduce .[] as $r ({}; .[($r.repo + "\u001f" + $r.issue)] = $r)'
 }
 
 # The main checkout of a folder. A handoff's worktree that is gone gives
@@ -164,7 +188,7 @@ _shep_main_of() {
 # The issue as bd prints it from DIR, one JSON object.
 _shep_bd_issue() {
   local raw
-  raw="$(cd "$1" && bd show "$2" --json 2>/dev/null </dev/null)" || return 1
+  raw="$(cd "$1" && _shep_bd show "$2" --json 2>/dev/null </dev/null)" || return 1
   jq -ce 'if type == "array" then .[0] else . end | select(type == "object" and .id)' <<<"$raw" 2>/dev/null
 }
 
@@ -176,7 +200,7 @@ _shep_screen_tail() {
 
 shep_brief() {
   local issue="" repo="" budget="$SHEP_BRIEF_BUDGET" records desks rec desk main="" issue_json comments screen="" candidate
-  local worktree change staged=""
+  local worktree change staged="" hints
   local usage="usage: bercail shep brief ISSUE [--repo DIR] [--budget CHARS]"
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -194,10 +218,18 @@ shep_brief() {
   [[ "$budget" =~ ^[0-9]+$ && "$budget" -ge 200 ]] || { _shep_err "--budget takes a number of characters, 200 or more"; return 1; }
   records="$(_shep_records_json)"
   desks="$(_shep_desks_json)"
-  rec="$(jq -c --arg id "$issue" '.[$id] // null' <<<"$records")"
-  desk="$(jq -c --arg id "$issue" --argjson rec "$rec" '
-    (map(select(.issue == $id)) | first) // (if $rec.desk then map(select(.address == $rec.desk and (.issue // $id) == $id)) | first else null end)' <<<"$desks")"
-  # The repo: --repo, else the handoff's, the desk's, or the known repo whose bd knows the issue.
+  if [[ -n "$repo" ]]; then
+    main="$(_shep_main_of "$repo")" || { _shep_err "$repo is not a git checkout"; return 1; }
+    repo="$main"
+  else
+    hints="$(jq -nc --arg id "$issue" --argjson ds "$desks" --argjson rs "$records" '[($ds[] | select(.issue == $id) | .repo), ($rs[] | select(.issue == $id) | .repo)] | map(select(. != "" and . != null)) | unique')"
+    [[ "$(jq length <<<"$hints")" -lt 2 ]] || { _shep_err "$issue exists in more than one repo; pass --repo explicitly"; return 1; }
+    repo="$(jq -r '.[0] // ""' <<<"$hints")"
+  fi
+  rec="$(jq -c --arg id "$issue" --arg repo "$repo" '.[($repo + "\u001f" + $id)] // null' <<<"$records")"
+  desk="$(jq -c --arg id "$issue" --arg repo "$repo" --argjson rec "$rec" '
+    map(select(.repo == $repo)) | (map(select(.issue == $id)) | first) // (if $rec.desk then map(select(.address == $rec.desk and (.issue // $id) == $id)) | first else null end)' <<<"$desks")"
+  # Unambiguous hints are convenience, never a cross-repo ownership transfer.
   if [[ -n "$repo" ]]; then
     main="$(_shep_main_of "$repo")" || { _shep_err "$repo is not a git checkout"; return 1; }
   else
@@ -212,7 +244,7 @@ shep_brief() {
   [[ -n "$main" ]] || { _shep_err "no known repo has $issue; pass its checkout with --repo"; return 1; }
   issue_json="$(_shep_bd_issue "$main" "$issue")" \
     || { _shep_err "bd does not know $issue in $main; pass its checkout with --repo"; return 1; }
-  comments="$(cd "$main" && bd comments "$issue" --json 2>/dev/null </dev/null | jq -c 'if type == "array" then . else [] end' 2>/dev/null)" || comments='[]'
+  comments="$(cd "$main" && _shep_bd comments "$issue" --json 2>/dev/null </dev/null | jq -c 'if type == "array" then . else [] end' 2>/dev/null)" || comments='[]'
   [[ -n "$comments" ]] || comments='[]'
   if [[ "$(jq -r '.state // empty' <<<"$desk")" == blocked ]]; then
     screen="$(_shep_screen_tail "$(jq -r .address <<<"$desk")")"
@@ -232,6 +264,8 @@ shep_brief() {
     ($issue.id) as $id
     | ([$comments | to_entries[] | select((.value.text // "") | startswith("bercail handoff:") or startswith("bercail todo:") | not)]) as $reports
     | "\($id): \($issue.title // "" | flat)",
+      ($issue.metadata.bercail_task.requests[]? | "request \(.id): \(.outcome) [\(.status)]" + (if (.authoring // "") != "" then " · authoring \(.authoring)" else "" end) + " · next: \(.next)",
+        (select(.receipt != null) | "canonical receipt \(.id): " + (.receipt | {head,tree,results,open} | with_entries(select(.value != null)) | tojson))),
       ([$issue.status, (if $issue.priority != null then "P\($issue.priority)" else empty end), $issue.issue_type]
         | map(select(. != null and . != "")) | join(" "))
         + (if ($issue.labels // []) | length > 0 then " · labels \($issue.labels | join(", "))" else "" end)
@@ -259,12 +293,21 @@ shep_brief() {
 # open issues are a count, with how many of them were handed off to a desk
 # that is gone.
 shep_board() {
+  local out rc=0
+  _shep_need_policy
+  out="$(_git_backend_bounded 10 "${BERCAIL_SELF:-bercail}" shep board-snapshot "$@")" || rc=$?
+  [[ -z "$out" ]] || printf '%s\n' "$out"
+  if ((rc)); then printf 'Board incomplete: UNKNOWN (status sources failed or exceeded 10s); dispatch is not gated on this snapshot.\n' >&2; fi
+  return "$rc"
+}
+
+_shep_board_snapshot() {
   local repos desks records todos
   [[ $# -eq 0 ]] || { _shep_err "usage: bercail shep board"; return 1; }
   _shep_need_policy
-  repos="$(_shep_repos_json)"
-  desks="$(_shep_desks_json)"
-  records="$(_shep_records_json)"
+  repos="$(_shep_repos_json)" || return 1
+  desks="$(_shep_desks_json)" || return 1
+  records="$(_shep_records_json)" || return 1
   # shellcheck source=lib/todo.sh
   declare -F todo_board_json >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/todo.sh"
   todos="$(todo_board_json)"
@@ -272,14 +315,14 @@ shep_board() {
     --argjson todos "$todos" "$SHEP_JQ_DEFS"'
     def who($d): if $d.bg then "background Shep \($d.name // $d.address)" else "desk \($d.address)" end;
     def head($j): "\($j.id): \($j.title // "" | flat | cut(70))";
-    ($desks | map(select(.issue)) | map({key: .issue, value: .}) | from_entries) as $live
-    | [ $repos[] | . as $r | ($r.issues // [])[] | . as $i | ($rec[$i.id]) as $h | ($live[$i.id]) as $d
-        | select($d or $i.status == "in_progress" or $i.status == "blocked")
-        | {repo: $r.path, id: $i.id, title: $i.title, status: $i.status, desk: $d, rec: $h} ] as $jobs
-    | ([$repos[].issues // [] | .[].id]) as $open
+    ($desks | map(select(.issue)) | map({key: (.repo + "\u001f" + .issue), value: .}) | from_entries) as $live
+    | [ $repos[] | . as $r | ($r.issues // [])[] | . as $i | ($rec[($r.path + "\u001f" + $i.id)]) as $h | ($live[($r.path + "\u001f" + $i.id)]) as $d
+        | select($d or $i.status == "in_progress" or $i.status == "blocked" or any($i.task.requests[]?; .status != "complete"))
+        | {repo: $r.path, id: $i.id, title: $i.title, status: $i.status, desk: $d, rec: $h, task:$i.task} ] as $jobs
+    | ([$repos[] | .path as $repo | (.issues // [])[] | $repo + "\u001f" + .id]) as $open
     | ( $repos[] | . as $r | [$jobs[] | select(.repo == $r.path)] as $mine | select($mine | length > 0)
         | ([$mine[].id]) as $ids
-        | ([$r.issues[] | select(.id as $x | ($ids | index($x) | not) and $rec[$x].desk)] | length) as $gone
+        | ([$r.issues[] | select(.id as $x | ($ids | index($x) | not) and $rec[($r.path + "\u001f" + $x)].desk)] | length) as $gone
         | "\($r.path | tilde): \($mine | length) job\(if ($mine | length) == 1 then "" else "s" end)"
           + (if ($r.open - ($mine | length)) > 0 then ", \($r.open - ($mine | length)) other open issues"
               + (if $gone > 0 then " (\($gone) handed off to a desk that is gone)" else "" end) else "" end),
@@ -287,17 +330,18 @@ shep_board() {
             + (if .status != "open" then " [\(.status)]" else "" end)
             + " · " + (if .desk then "\(who(.desk)) \(.desk.state)" elif .rec.desk then "desk \(.rec.desk) gone" else "no desk" end)
             + " · " + (.rec.branch // "-")
-            + ((if .desk then .desk.model else .rec.model end) | if . then " · model \(.)" else "" end)) ),
+            + ((if .desk then .desk.model else .rec.model end) | if . then " · model \(.)" else "" end)
+            + (if .task then " · requests " + ([.task.requests[] | "\(.id):\(.outcome)/\(.status) next=\(.next)"] | join("; ")) else "" end)) ),
       ([ $repos[] | . as $r | select(([$jobs[] | select(.repo == $r.path)] | length) == 0)
-         | "\($r.path | tilde) (" + (if .open == null then "no beads" else "\(.open) open" end) + ")" ]
+         | "\($r.path | tilde) (" + (if .open != null then "\(.open) open" elif .beads then "UNKNOWN (beads unavailable)" else "no beads" end) + ")" ]
        | if length > 0 then "Other repos: " + join(", ") else empty end),
-      ([ $desks[] | select(.issue and (.issue as $x | $open | index($x) | not)) | "\(who(.)) \(.state) (\(.issue))" ]
+      ([ $desks[] | select(.issue and ((.repo + "\u001f" + .issue) as $x | $open | index($x) | not)) | "\(who(.)) \(.state) (\(.issue))" ]
        | if length > 0 then "Desks on closed or unknown issues: " + join(", ") else empty end),
       "Waiting on the person:",
       ([ ($jobs[] | select(.desk) | . as $j
            | if .desk.state == "blocked" then "- " + head($j) + ": \(who(.desk)) is blocked; bercail shep brief \(.id) shows what it asks"
              elif (.desk.state == "done" or .desk.state == "idle") then
-               "- " + head($j) + ": \(who(.desk)) finished; " + (if .desk.bg then "report it, then hc kill \(.desk.name // .desk.address)" else "review its staged changes in its space" end)
+               "- " + head($j) + ": " + (if any(.task.requests[]?; .status != "complete") then "\(who(.desk)) is idle/done but requested work remains; inspect its brief in this repo" else "\(who(.desk)) finished; " + (if .desk.bg then "report it, then hc kill \(.desk.name // .desk.address)" else "review its staged changes in its space" end) end)
              else empty end),
          ($desks[] | select((.issue | not) and .state == "blocked") | "- \(who(.)) (\(.cwd // "?" | tilde)) is blocked"),
          ($todos // [] | .[] | . as $t | def tag: if .issue then " for \(.issue)" else "" end;
@@ -315,20 +359,20 @@ shep_board() {
 # Open PRs in the GitHub repo MAIN that wait on the person, as a JSON array: not
 # a draft, not approved, and either asking LOGIN for a review or opened from a
 # handoff's branch (BRANCHES, a JSON array). Lines leave lockfiles out. []
-# without a github.com remote, or when gh does not answer within 10 seconds.
+# without a github.com remote. A failed query is UNKNOWN, never an empty list.
 _shep_queue_prs() {
   local main="$1" login="$2" branches="$3" raw
   grep -q 'github\.com[:/]' <<<"$(git -C "$main" remote -v 2>/dev/null)" || { printf '[]'; return 0; }
-  raw="$(cd "$main" && _git_backend_bounded 10 "${GH_BIN:-gh}" pr list --state open --limit 100 \
+  raw="$(cd "$main" && _git_backend_bounded 2 "${GH_BIN:-gh}" pr list --state open --limit 100 \
     --json number,title,url,isDraft,reviewDecision,headRefName,reviewRequests,files,createdAt </dev/null 2>/dev/null)" \
-    || { printf '[]'; return 0; }
+    || return 1
   jq -c --arg repo "$main" --arg login "$login" --argjson branches "$branches" --arg locks "$DESC_LOCKFILES" '
     ($locks | split(" ")) as $l
     | [.[]? | select((.isDraft | not) and .reviewDecision != "APPROVED"
         and (([.reviewRequests[]?.login] | index($login)) or (.headRefName | IN($branches[]))))
       | {kind: "pr", repo: $repo, number, title, url, branch: .headRefName, state: "review", since: .createdAt,
          lines: ([.files[]? | select(.path | split("/") | last | IN($l[]) | not) | .additions + .deletions] | add // 0)}]' \
-    <<<"$raw" 2>/dev/null || printf '[]'
+    <<<"$raw" 2>/dev/null
 }
 
 # The issue as bd prints it from MAIN, given at most 10 seconds; fails when the
@@ -336,7 +380,7 @@ _shep_queue_prs() {
 _shep_queue_issue() {
   local raw
   [[ -d "$1/.beads" ]] || return 1
-  raw="$(cd "$1" && _git_backend_bounded 10 bd show "$2" --json </dev/null 2>/dev/null)" || return 1
+  raw="$(cd "$1" && _shep_bd show "$2" --json </dev/null 2>/dev/null)" || return 1
   jq -ce 'if type == "array" then .[0] else . end | select(type == "object" and .id)' <<<"$raw" 2>/dev/null
 }
 
@@ -363,7 +407,7 @@ _shep_queue_state() {
   local main="$1" issue="$2" path="$3" change="$4" records="$5" bd=null moved="" latest top
   if [[ -n "$issue" ]]; then
     bd="$(_shep_queue_issue "$main" "$issue")" || bd=null
-    latest="$(jq -r --arg id "$issue" '.[$id].path // empty' <<<"$records")"
+    latest="$(jq -r --arg id "$issue" --arg repo "$main" '.[($repo + "\u001f" + $id)].path // empty' <<<"$records")"
     if [[ -n "$latest" ]] && top="$(_shep_top "$path")" && latest="$(_shep_top "$latest")" && [[ "$latest" != "$top" ]]; then
       moved="$latest"
     fi
@@ -376,9 +420,11 @@ _shep_queue_state() {
       else ([$bd.dependencies[]? | {to: (.depends_on_id // .id), type: (.dependency_type // .type)}
               | select(.type == "supersedes" or .type == "duplicates")] | first) as $d
         | {title: $bd.title}
-          + if $d then {state: "superseded", by: $d.to,
+          + if any($bd.metadata.bercail_task.requests[]?; .status != "complete") then
+              {state: "outstanding", why: "requested outcome unfinished; keep the original owner and next action"}
+            elif $d then {state: "superseded", by: $d.to,
                         why: (if $d.type == "supersedes" then "superseded by \($d.to)" else "a duplicate of \($d.to)" end)}
-            elif $bd.status == "closed" then {state: "cleanup", why: "issue closed"}
+            elif $bd.status == "closed" then {state: "unknown", why: "issue closed but staged changes remain; custody/outcome unproven"}
             elif $moved != "" then {state: "superseded", by: $moved, why: "its job moved to another worktree"}
             else $waits end
       end'
@@ -392,11 +438,12 @@ _shep_queue_state() {
 # waiting first. repos has each repo's counted lines against its policy's
 # review_budget, for the repos with items.
 _shep_queue_json() {
-  local repos="$1" desks="$2" records="$3" path issue title desk space main change state since gh_repos branches start login="" items='[]'
+  local repos="$1" desks="$2" records="$3" path issue title desk space main change state since gh_repos branches prs login="" items='[]'
   local -A policies=()
   # \x1f, not a tab: read would merge an empty title's two tabs into one.
   while IFS=$'\x1f' read -r path issue title desk space; do
     main="$(_shep_main_of "$path")" || continue
+    jq -e --arg m "$main" 'any(.[]; .path == $m)' <<<"$repos" >/dev/null || continue
     [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
     change="$(desc_change "$path" 2>/dev/null)" || continue
     jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || continue
@@ -413,21 +460,23 @@ _shep_queue_json() {
     def one(f): map(f | select(. != null and . != "")) | first // "";
     ([$repos[].issues // [] | .[] | {key: .id, value: .title}] | from_entries) as $titles
     | ([$desks[] | select(.bg | not) | select(.cwd) | {path: .cwd, issue, title, desk: .address, space, state}]
-       + [$rec | to_entries[] | select(.value.path) | {path: .value.path, issue: .key, title: null, desk: .value.desk, space: .value.space, state: "gone"}]) as $all
+       + [$rec | to_entries[] | select(.value.path) | {path: .value.path, issue: .value.issue, title: null, desk: .value.desk, space: .value.space, state: "gone"}]) as $all
     | ($all | group_by(.path)[] | select(all(.[]; .state != "working")))
     | one(.issue) as $issue
     | [.[0].path, $issue, (one(.title) | if . == "" then $titles[$issue] // "" else . end), one(.desk), one(.space)] | join("\u001f")')
   gh_repos="$(jq -r '.[] | select(.backend == "gh") | .path' <<<"$repos")"
   if [[ -n "$gh_repos" ]]; then
-    # Shep's compaction gives the board 60 seconds: no new gh call after 20.
-    start=$SECONDS
-    login="$(_git_backend_bounded 5 "${GH_BIN:-gh}" api user --jq .login </dev/null 2>/dev/null)" || login=""
     while IFS= read -r main; do
-      ((SECONDS - start < 20)) || break
+      grep -q 'github\.com[:/]' <<<"$(git -C "$main" remote -v 2>/dev/null)" || continue
+      if [[ -z "$login" ]]; then
+        login="$(_git_backend_bounded 2 "${GH_BIN:-gh}" api user --jq .login </dev/null 2>/dev/null)" || return 1
+        [[ -n "$login" ]] || return 1
+      fi
       [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
       # A handoff's worktree is <main>.<branch>, gone or not.
-      branches="$(jq -c --arg m "$main" '[.[] | select(.branch and .path and (.path | startswith($m + "."))) | .branch]' <<<"$records")"
-      items="$(jq -c --argjson prs "$(_shep_queue_prs "$main" "$login" "$branches")" '. + $prs' <<<"$items")"
+      branches="$(jq -c --arg m "$main" '[.[] | select(.branch and .path and .repo == $m) | .branch]' <<<"$records")"
+      prs="$(_shep_queue_prs "$main" "$login" "$branches")" || return 1
+      items="$(jq -c --argjson prs "$prs" '. + $prs' <<<"$items")"
     done <<<"$gh_repos"
   fi
   for main in "${!policies[@]}"; do
@@ -456,7 +505,7 @@ _shep_queue_text() {
       else (if .issue then .issue + (if .title then ": \(.title | flat | cut(70))" else "" end) else (.path | tilde) end)
         + ((.change.files - .change.left_out.files) as $n | " · \(size) staged in \($n) file\(if $n == 1 then "" else "s" end)")
         + " · stakes \(.change.stakes)" + (if .counts and .change.review == "required" then ", needs the person'"'"'s LGTM" else "" end)
-        + ({unknown: " · state unknown: \(.why)", cleanup: " · \(.why), a cleanup candidate",
+        + ({outstanding: " · outstanding: \(.why)", unknown: " · state unknown: \(.why)", cleanup: " · \(.why), a cleanup candidate",
             superseded: " · \(.why)" + (if (.by // "") | startswith("/") then " (\(.by | tilde))" else "" end)}[.state] // "")
         + (if .issue then " · \(.path | tilde)" else "" end) end;
     ($q.items | map(select(.counts))) as $w
@@ -472,12 +521,27 @@ _shep_queue_text() {
     end,
     ($q.repo // empty
       | if .over then
-          "\(.path | tilde) is over its review budget: \(.lines) lines wait on the person, the budget is \(.budget). Tell them what waits and ask before you start another desk there."
+          "\(.path | tilde) is over its review budget: \(.lines) lines wait on the person, the budget is \(.budget). Report it; accepted work is not held for review budget."
         else "\(.path | tilde): \(.lines) of \(.budget) lines wait on the person; a new desk fits its review budget." end)'
 }
 
 shep_queue() {
-  local repo="" main="" queue budget json=0
+  local out rc=0
+  _shep_need_policy
+  out="$(_git_backend_bounded 6 "${BERCAIL_SELF:-bercail}" shep queue-snapshot "$@")" || rc=$?
+  if ((rc)); then
+    if [[ " $* " == *" --json "* ]]; then
+      printf '{"schema":"bercail.queue/v1","status":"unknown","items":null,"repos":null,"error":"status sources failed or exceeded 6s; not a dispatch gate"}\n'
+    else
+      printf 'Review queue: UNKNOWN (status sources failed or exceeded 6s); accepted work can still dispatch.\n' >&2
+    fi
+    return "$rc"
+  fi
+  [[ -z "$out" ]] || printf '%s\n' "$out"
+}
+
+_shep_queue_snapshot() {
+  local repo="" main="" queue budget json=0 repos
   local usage="usage: bercail shep queue [--repo DIR] [--json]"
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -491,7 +555,12 @@ shep_queue() {
   if [[ -n "$repo" ]]; then
     main="$(_shep_main_of "$repo")" || { _shep_err "$repo is not a git checkout"; return 1; }
   fi
-  queue="$(_shep_queue_json "$(_shep_repos_json)" "$(_shep_desks_json)" "$(_shep_records_json)")"
+  if [[ -n "$main" ]]; then
+    repos="$(jq -nc --arg path "$main" --arg backend "$(git_backend "$main")" '{path:$path,backend:$backend,issues:[]} | [.]')"
+  else
+    repos="$(_shep_repos_json)"
+  fi
+  queue="$(_shep_queue_json "$repos" "$(_shep_desks_json)" "$(_shep_records_json)")"
   if [[ -n "$main" ]]; then
     budget="$(policy_json "$main" 2>/dev/null | jq -r .policy.review_budget)" || budget=""
     queue="$(jq -c --arg m "$main" --argjson b "${budget:-$(jq .review_budget <<<"$POLICY_DEFAULTS")}" '

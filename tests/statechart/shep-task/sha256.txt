@@ -1,0 +1,5 @@
+bc01e4f5c380cd64e38ece2ead8a34faa6e2e9d35ddd259574172d0f7311abae  tests/statechart/shep-task/TaskDelivery.tla
+d5e1ba08c87b5f0bcc61ae50ac16a2b3a35242d03c6c53aa758445e5e7d91b4c  tests/statechart/shep-task/full.cfg
+f604d36365323d817d3ed95122e05da5b5447dfee8c62754d9941c3c915f097f  tests/statechart/shep-task/view.mjs
+6f22c647487e3adaada594402caa8dbe83ea3ab645297e1789939c799daa24e2  tests/statechart/shep-task/graph.json
+34d4b8ecbd16d3afcfafadb21534b928beb9b8bf2d5b8dce6324c68d9d259c1e  config/pi/extensions/bercail-desk.ts

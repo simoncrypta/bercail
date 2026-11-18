@@ -417,7 +417,7 @@ handoff_spawn_main() {
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0
-  local base="" model=""
+  local base="" model="" target="" fork_reason="" session="" lock="" prior path prior_main created=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -446,6 +446,8 @@ handoff_spawn_main() {
         shift 2
         ;;
       --dry-run) dry=1; shift ;;
+      --target) [[ $# -ge 2 ]] || handoff_usage; target="$2"; shift 2 ;;
+      --fork-reason) [[ $# -ge 2 ]] || handoff_usage; fork_reason="$2"; shift 2 ;;
       --branch)
         [[ $# -ge 2 ]] || handoff_usage
         branch="$2"
@@ -485,6 +487,8 @@ handoff_spawn_main() {
     return 0
   fi
 
+  [[ "${BERCAIL_ROLE:-}" != shep-bg ]] || handoff_die "background workers cannot dispatch coding or interactive authoring; continue the visible owner"
+  [[ "${BERCAIL_ROLE:-}" != shep || ( -n "$branch" && "${BERCAIL_TASK_RESERVED:-}" == 1 ) ]] || handoff_die "Shep coding dispatch must use bercail shep task dispatch (visible original owner, no raw/headless fallback)"
   [[ -n "$stage" ]] || handoff_die "--stage bstack|autopilot is required; bercail does not pick a stage"
   [[ "$stage" == bstack || "$stage" == autopilot ]] || handoff_die "unknown stage: $stage"
   [[ -n "$issue" ]] || handoff_die "--issue <beads id> is required; the job lives in that issue"
@@ -529,6 +533,29 @@ handoff_spawn_main() {
 
   handoff_is_main_checkout "$main" \
     || handoff_die "cwd is not the main git checkout; refuse to spawn from a linked worktree"
+
+  # Serialize before any space/worktree creation. A stale lock is an explicit
+  # recovery decision, never a reason to start another agent on retry.
+  if [[ "${BERCAIL_TASK_RESERVED:-}" != 1 ]]; then
+    lock="$(git -C "$main" rev-parse --path-format=absolute --git-common-dir)/bercail-task.lock"
+    mkdir "$lock" 2>/dev/null || handoff_die "visible dispatch lock held: $lock; inspect the previous spawn before retrying"
+    trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+  fi
+  target="${target:-task:$issue}"
+  [[ "$target" =~ ^(task:[A-Za-z0-9._-]+|pr:[1-9][0-9]*)$ ]] || handoff_die "--target must be task:ID or pr:N"
+  if [[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl" ]]; then
+    while IFS= read -r prior; do
+      path="$(jq -r '.path // empty' <<<"$prior")"
+      [[ -n "$path" ]] || continue
+      prior_main="$(git_backend_main "$path" 2>/dev/null || jq -r '.repo // empty' <<<"$prior")"
+      [[ "$prior_main" == "$main" ]] || continue
+      if jq -e --arg i "$issue" '.issue == $i' <<<"$prior" >/dev/null; then
+        handoff_die "original task already has a handoff: $prior; use bercail shep task dispatch, never a new preparation branch"
+      fi
+      [[ -n "$fork_reason" ]] || handoff_die "logical target already has a handoff: $prior; continue its issue, or pass --fork-reason on a separate exploration issue"
+    done < <(jq -c --arg i "$issue" --arg t "$target" 'select(.issue == $i or .target == $t)' "${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl")
+  fi
+  session="$(</proc/sys/kernel/random/uuid)"
 
   if [[ "$dirty" == "auto" ]]; then
     if handoff_main_is_dirty "$main"; then
@@ -612,25 +639,35 @@ handoff_spawn_main() {
   # The desk agent runs the lead from lead.json. It gets the one-line prompt
   # through WT_HERDR_AGENT_PROMPT, the issue through WT_HERDR_ISSUE and
   # WT_HERDR_ISSUE_TITLE, and --model through WT_HERDR_MODEL. No file.
-  if WT_HERDR_KEEP_FOCUS="$keep_space" \
+  if created="$(WT_HERDR_KEEP_FOCUS="$keep_space" \
     WT_HERDR_AGENT_PROMPT="$prompt" \
     WT_HERDR_ISSUE="$issue" \
     WT_HERDR_ISSUE_TITLE="$issue_title" \
     WT_HERDR_MODEL="$model" \
-    wt_herdr_handoff_agent "$label" "$sibling"; then
+    WT_HERDR_SESSION_ID="$session" \
+    wt_herdr_handoff_agent "$label" "$sibling")"; then
     started=1
   else
     echo "handoff-spawn: the desk agent did not start; worktree is still $sibling ($label)" >&2
   fi
 
-  space="$(_wt_herdr_find_space "$sibling" 2>/dev/null || true)"
-  [[ -z "$space" ]] || desk="$(_wt_herdr_space_desk "$space" 2>/dev/null || true)"
+  space="$(jq -r '.space // empty' <<<"$created" 2>/dev/null || true)"
+  desk="$(jq -r '.desk // empty' <<<"$created" 2>/dev/null || true)"
+  [[ -n "$space" ]] || space="$(_wt_herdr_find_space "$sibling" 2>/dev/null || true)"
+  [[ -n "$desk" || -z "$space" ]] || desk="$(_wt_herdr_space_desk "$space" 2>/dev/null || true)"
   json="$(handoff_result_json "$label" "$sibling" "$branch" "$issue" "$started" "$copied" "$backend" "$stage" pi "$space" "$desk" "$issue_title")"
+  json="$(jq -c --arg repo "$main" --arg target "$target" --arg session "$session" --arg fork "$fork_reason" \
+    '. + {repo:$repo,target:$target,session:$session} + (if $fork == "" then {} else {forkReason:$fork} end)
+     | if .agent_started and (.space // "") != "" and (.desk // "") != "" then .
+       else .ok = false | .error = "partial visible creation; inspect these facts, do not relaunch" end' <<<"$json")"
   [[ -z "$base" ]] || json="$(jq -c --arg base "$base" '. + {base:$base}' <<<"$json")"
   [[ -z "$model" ]] || json="$(jq -c --arg model "$model" '. + {model:$model}' <<<"$json")"
   handoff_notify_check "$sibling"
   handoff_remember "$json"
   printf '%s\n' "$json"
+  [[ -z "$lock" ]] || rmdir "$lock"
+  trap - EXIT
+  [[ "$(jq -r .ok <<<"$json")" == true ]]
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

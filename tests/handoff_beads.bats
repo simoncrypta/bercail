@@ -147,7 +147,7 @@ HERDR
   cat >"$HOME/.config/worktrunk/herdr-layout.sh" <<'HELPER'
 _wt_herdr_keep_user_focus() { :; }
 _wt_generate_session_name() { printf 'Feat_Repo'; }
-wt_herdr_handoff_agent() { return 0; }
+wt_herdr_handoff_agent() { printf '{"space":"sp1","desk":"desk1"}\n'; }
 _wt_herdr_space_by_folder() { printf 'sp1'; }
 _wt_herdr_space_desk() { printf 'desk1'; }
 wt_herdr_main_space() { :; }
@@ -158,7 +158,7 @@ HELPER
   jq -n --arg guard "$HOME/.local/share/bercail/pi/extensions/guard.ts" --arg model "claude-bridge/lead-model:high" \
     '["pi","--model",$model,"-e","npm:pi-claude-bridge@0.12.0","-e",$guard]' \
     >"$HOME/.local/share/bercail/pi/lead.json"
-  (cd "$main" && PATH="$bin:$PATH" HERDR_APP_BIN="$bin/herdr-app" \
+  (cd "$main" && PATH="$bin:$PATH" HERDR_APP_BIN="$bin/herdr-app" BERCAIL_BIN="$ROOT/bin/bercail" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" \
     --branch feat --stage bstack --issue "$id" --clean >/dev/null) \
     || fail "a --branch spawn needs a lead profile, not [bstack] enabled"

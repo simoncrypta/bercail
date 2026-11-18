@@ -186,6 +186,24 @@ doctor_notify() {
   [[ "$missing" -eq 0 ]]
 }
 
+# Disk parity and actual startup evidence are separate. This reads no question
+# ledger and never installs, reloads or repairs a running owner.
+doctor_runtime() {
+  local snapshot script
+  script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runtime.ts"
+  log ""
+  log "Runtime identity (read-only):"
+  if ! snapshot="$(node "$script" 2>/dev/null)"; then
+    log "  UNKNOWN  runtime evidence unavailable (Node and the diagnostic helper are required)"
+    return 0
+  fi
+  jq -r '"  source revision  " + .source_revision,
+    "  installed revision  " + .installed_revision,
+    (.files[] | "  sha256  " + .resource + " source=" + .source + " installed=" + .installed),
+    (if (.loaded | type) == "string" then "  loaded  " + .loaded
+     else .loaded[] | "  loaded  " + (.desk // "Shep") + " generation=" + .generation + " guard=" + .guard_generation end)' <<<"$snapshot"
+}
+
 doctor_helper() {
   local src
   if [[ ! -f "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh" ]]; then

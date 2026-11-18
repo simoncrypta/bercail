@@ -2,7 +2,7 @@
 
 Handoff is parallel, not a chat fork: one beads issue per job, run headless or in a sibling worktree with its own desk.
 
-The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), bercail's orchestrator, creates the issue (`bd create`), then runs `handoff-spawn` with the issue id and a stage. `--stage` and `--issue` are both required; bercail has no default stage and no fallthrough. Stages are `bstack` and `autopilot`. Both run Pi.
+The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), bercail's orchestrator, creates the issue (`bd create`), then uses [`shep task dispatch`](shep.md#task-ownership-and-requested-outcomes) to resolve the original owner before a first visible handoff. Other callers can run the raw create-only `handoff-spawn` with the issue id and a stage. `--stage` and `--issue` are both required; bercail has no default stage and no fallthrough. Stages are `bstack` and `autopilot`. Both run Pi.
 
 | Stage | Binary | Headless argv (the last word is the prompt) |
 |-------|--------|-----------------------------------------------|
@@ -43,6 +43,15 @@ Before replacing a prior result or `start.log`, the runner moves it into `.berca
 
 Each `--branch` spawn appends one line to `${XDG_STATE_HOME:-~/.local/state}/bercail/handoffs.jsonl`: the spawn JSON, plus `v` (the record's version, `1`) and `at` (when, UTC). Records written before v1 have neither. Headless runs are not logged there. Follow a `--branch` desk through [agent status webhooks](shep.md#agent-status-webhooks) or with `hc wait <desk>`; `desk`, `space`, and, when known, `issue_title` (and `base` and `model`, when set) are in the spawn JSON.
 
+Raw visible creation refuses a prior handoff for this repo/issue/target and a
+desk already occupying the resolved space. `--target pr:N|task:ID` records the
+logical target; deliberate parallel exploration uses a separate issue and
+`--fork-reason`. A repository/common-Git lock serializes reservations. The pinned
+startup session is included in the result. `ok:true` requires a started agent,
+space and desk. Partial creation reports nonzero with available facts; inspect
+those facts, never retry into a replacement. Background wait/admin workers
+cannot dispatch coding; Shep cannot bypass its original-owner dispatcher.
+
 ## What a `--branch` spawn does
 
 For changing `handoff-spawn`; agents follow the [handoff skill](../skills/handoff/SKILL.md) and do not assemble these steps.
@@ -52,10 +61,10 @@ For changing `handoff-spawn`; agents follow the [handoff skill](../skills/handof
 3. The dirty copy, when the main checkout is dirty or `--dirty` is given, and not with `--clean`: `git -C main diff HEAD --binary | git -C sibling apply` (no `--index`), then `cp -a` of each `git ls-files --others --exclude-standard` path. The sibling's index stays empty.
 4. The branch is registered with the [git backend](#git-backend): `gt track`, or for a `--base` dependent `gh stack init`/`add` or `origin stack track --onto`.
 5. The `bd comment` on the issue: the worktree, stage and do not commit, the backend and its stack commands.
-6. The desk: `wt_herdr_handoff_agent` runs `hc run --bg --keep --outlive-parent` of `bercail-desk-agent --prompt <the one line>` under the space's first terminal, labelled `bercail.role=agent`, `bercail.space`, and the issue when known. It replaces a live desk in that space. A failed start keeps the worktree.
+6. The desk: `wt_herdr_handoff_agent` runs `hc run --bg --keep --outlive-parent` of `bercail-desk-agent --prompt <the one line>` under the space's first terminal, labelled `bercail.role=agent`, `bercail.space`, and the issue when known. It refuses a live desk in that space. A failed start keeps the worktree and reports partial facts.
 7. The spawn JSON on stdout, appended to `handoffs.jsonl`.
 
-Steps 1, 2 and 6 hold a lock per checkout (`flock` on `bercail-space-<hash>.lock` in `$XDG_RUNTIME_DIR`), so two spawns or hooks at once on one checkout make one space and one desk.
+Within the repository reservation, steps 1, 2 and 6 hold a lock per checkout (`flock` on `bercail-space-<hash>.lock` in `$XDG_RUNTIME_DIR`), so two spawns or hooks at once on one checkout make one space and one desk.
 
 ### No window on this machine
 

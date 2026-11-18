@@ -16,12 +16,23 @@ export default function (pi: ExtensionAPI) {
       maxTokens: 200,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     })),
-    streamSimple(model) {
+    streamSimple(model, context) {
+      const last = context.messages.at(-1);
+      const work = last?.role === "user" && JSON.stringify(last.content).includes("Amend/publish follow-up");
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
         const message: AssistantMessage = {
           role: "assistant",
-          content: [{ type: "text", text: "OK" }],
+          content: work
+            ? [
+                {
+                  type: "toolCall",
+                  id: `read-${Date.now()}`,
+                  name: "bash",
+                  arguments: { command: "git rev-parse HEAD" },
+                },
+              ]
+            : [{ type: "text", text: "OK" }],
           api: model.api,
           provider: model.provider,
           model: model.id,
@@ -33,10 +44,10 @@ export default function (pi: ExtensionAPI) {
             totalTokens: 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           },
-          stopReason: "stop",
+          stopReason: work ? "toolUse" : "stop",
           timestamp: Date.now(),
         };
-        stream.push({ type: "done", reason: "stop", message });
+        stream.push({ type: "done", reason: work ? "toolUse" : "stop", message });
         stream.end();
       });
       return stream;

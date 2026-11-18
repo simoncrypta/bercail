@@ -12,5 +12,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["*.ts", "tests/**/*.ts", "bstack/pi/extensions/*.ts", "shep/pi/*.ts", "config/pi/extensions/*.ts", "site/*.ts"]
+  "include": ["*.ts", "lib/*.ts", "tests/**/*.ts", "bstack/pi/extensions/*.ts", "shep/pi/*.ts", "config/pi/extensions/*.ts", "site/*.ts"]
 }

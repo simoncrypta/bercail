@@ -94,6 +94,15 @@ fails the dry run and writes no result.
 
 ## Spawn a `--branch` desk
 
+Shep uses `bercail shep task dispatch` (JSON stdin with explicit repo, issue,
+logical target, stable request ID and outcome). It resolves and continues the
+original visible owner before considering a branch. Raw spawn is create-only,
+not a follow-up route; it refuses an existing handoff or occupied desk. A
+stale/ambiguous/partial result is not permission to make another preparation
+checkout. `--target pr:N|task:ID` records a target; a deliberate parallel
+exploration needs a separate issue and `--fork-reason`, without inherited grants.
+Background wait/admin workers cannot use this coding route.
+
 Run the **resolved script directly** (absolute path below). Set the process
 working directory to `cwd` from `--info`. Flags only.
 
@@ -121,7 +130,7 @@ reads `lead.json`) with a one-line prompt pointing at the issue as its first mes
 `bercail.role=agent`, `bercail.space=<space id>`, and, when known, `bercail.issue` and `bercail.issue_title`. The bercail layout shows
 it in the desk column. `--stage` is required; bercail has no default stage.
 A missing lead profile fails before any worktree is made. A desk already running in
-that space is replaced. `wt remove <branch>` closes the space and its desk.
+that space is refused, never killed or replaced. `wt remove <branch>` closes the space and its desk.
 When no space sits on the repo's main checkout, the spawn first opens one there
 (a plain shell, no desk), so the sidebar nests the desk's space under its repo.
 
@@ -167,11 +176,14 @@ warning with the `gt track` command to run, and the desk still starts.
 
 The script prints JSON: `ok`, `label`, `path`, `branch`, `issue`, `issue_title`
 (when known), `agent_started`, `dirty_copied`, `git`, `stage`, `harness`, `space` (the
-child's Herdr app space), `desk` (the desk agent's hc address), and `model` when `--model` was given. It appends that line to
+child's Herdr app space), `desk` (the desk agent's hc address), pinned startup
+`session`, canonical `repo`, `target`, and `model` when `--model` was given. It appends that line to
 `~/.local/state/bercail/handoffs.jsonl` whenever the sibling exists.
 
-Report that tuple and stop. If the script exits nonzero before creating a
-worktree, report the error and stop. Do not `hc send` to the desk agent, type
+Report the factual tuple and stop. `ok` requires `agent_started` and both space
+and desk; partial creation returns nonzero with the facts it has. A partial or
+lost response requires inspection, not automatic relaunch. If the script exits
+nonzero before creating a worktree, report the error and stop. Do not `hc send` to the desk agent, type
 into it, or switch the user to its space. To see how it is doing, read
 it: `hc get <desk>`, `hc wait <desk>`, with `desk` from that JSON (or the
 terminal labelled `bercail.space=<space>` in `hc ls`).

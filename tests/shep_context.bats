@@ -133,7 +133,7 @@ EOF
     <<<"$out" >/dev/null || fail "repos --json: $out"
   out="$(shep repos)"
   [[ "$out" == "~/Work/a  gt  policy trusted    2 open  (config, extras, trust)
-~/Work/b  gh  policy untrusted  no beads  (extras)
+~/Work/b  gh  policy untrusted  UNKNOWN (beads unavailable)  (extras)
 ~/Work/c  gh  no policy         no beads  (extras)" ]] || fail "repos: $out"
 }
 
@@ -365,13 +365,13 @@ GH
   local out want
   queue_fixture
   out="$(shep queue --repo "$HOME/Work/app.export")" || fail "queue: $out"
-  want="Review queue: 13 lines in 3 changes
-~/Work/app: 13 of 10 lines, over its review budget
+  want="Review queue: 15 lines in 4 changes
+~/Work/app: 15 of 10 lines, over its review budget
 - app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · ~/Work/app.export
+- app-3: Old job · 2 lines staged in 1 file · stakes low · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/app.old
 - PR #12: Teammate fix · 4 lines · https://github.com/o/app/pull/12
 - PR #15: Old job PR · 3 lines · https://github.com/o/app/pull/15
-- not counted: app-3: Old job · 2 lines staged in 1 file · stakes low · issue closed, a cleanup candidate · ~/Work/app.old
-~/Work/app is over its review budget: 13 lines wait on the person, the budget is 10. Tell them what waits and ask before you start another desk there."
+~/Work/app is over its review budget: 15 lines wait on the person, the budget is 10. Report it; accepted work is not held for review budget."
   [[ "$out" == "$want" ]] || fail "queue: $(diff <(printf '%s\n' "$want") <(printf '%s\n' "$out"))"
   if grep -q "^gh .* in $HOME/Work/docs\$" "$LOG"; then fail "gh ran in a repo with no GitHub remote: $(cat "$LOG")"; fi
 }
@@ -380,7 +380,7 @@ GH
   local out
   queue_fixture
   out="$(shep queue --repo "$HOME/Work/docs")"
-  [[ "$out" == "Review queue: 13 lines in 3 changes"*$'\n'"~/Work/docs: 0 of 1000 lines wait on the person; a new desk fits its review budget." ]] \
+  [[ "$out" == "Review queue: nothing waits on the person."*$'\n'"~/Work/docs: 0 of 1000 lines wait on the person; a new desk fits its review budget." ]] \
     || fail "a repo with nothing waiting: $out"
   git -C "$HOME/Work/app.export" reset -q
   git -C "$HOME/Work/app.old" reset -q
@@ -394,7 +394,7 @@ GH
   local out
   queue_fixture
   out="$(shep board)" || fail "board: $out"
-  [[ "$out" == *$'\nWaiting on the person:\n'*$'\nReview queue: 13 lines in 3 changes\n~/Work/app: 13 of 10 lines, over its review budget\n- app-2: '* ]] \
+  [[ "$out" == *$'\nWaiting on the person:\n'*$'\nReview queue: 15 lines in 4 changes\n~/Work/app: 15 of 10 lines, over its review budget\n- app-2: '* ]] \
     || fail "the board does not end with the queue: $out"
   git -C "$HOME/Work/app.export" reset -q
   git -C "$HOME/Work/app.old" reset -q
@@ -477,34 +477,34 @@ bd_issue() {
   # Counted first, the longest waiting first; then what does not count.
   jq -e --arg h "$REAL_HOME" '[.items[] | [(.issue // (.path | ltrimstr($h))), .state, .counts, (.by // "" | ltrimstr($h)), .space, .since]] == [
     ["/Work/web.mine", "review", true, "", "sp9", "2023-11-14T22:13:20Z"],
+    ["web-4", "unknown", true, "", null, "2023-11-14T22:18:20Z"],
     ["web-7", "unknown", true, "", null, "2023-11-14T22:20:00Z"],
     ["web-1", "lgtm", true, "", "sp1", "2023-11-14T22:21:40Z"],
     ["web-8", "review", true, "", null, "2023-11-14T22:23:20Z"],
     ["web-6", "superseded", false, "/Work/web.new", "sp5", "2023-11-14T22:14:10Z"],
     ["web-2", "superseded", false, "web-5", null, "2023-11-14T22:15:00Z"],
-    ["web-3", "superseded", false, "web-5", null, "2023-11-14T22:16:40Z"],
-    ["web-4", "cleanup", false, "", null, "2023-11-14T22:18:20Z"]]' <<<"$out" >/dev/null \
+    ["web-3", "superseded", false, "web-5", null, "2023-11-14T22:16:40Z"]]' <<<"$out" >/dev/null \
     || fail "states: $(jq -c --arg h "$REAL_HOME" '[.items[] | [(.issue // (.path | ltrimstr($h))), .state, .counts, (.by // "" | ltrimstr($h)), .space, .since]]' <<<"$out")"
-  jq -e '.repos == [{path: .repos[0].path, lines: 32, changes: 4, budget: 100, over: false}]' <<<"$out" >/dev/null \
+  jq -e '.repos == [{path: .repos[0].path, lines: 72, changes: 5, budget: 100, over: false}]' <<<"$out" >/dev/null \
     || fail "the budget counts cleanup or superseded work: $(jq -c .repos <<<"$out")"
-  jq -e '[.items[] | select(.issue == "web-4" or .issue == "web-1") | .title] == ["Job web-1", "Job web-4"]' <<<"$out" >/dev/null \
+  jq -e '[.items[] | select(.issue == "web-4" or .issue == "web-1") | .title] == ["Job web-4", "Job web-1"]' <<<"$out" >/dev/null \
     || fail "a closed issue's title is not read from bd: $(jq -c '[.items[] | .title]' <<<"$out")"
 
   out="$(shep queue)" || fail "queue: $out"
-  [[ "$out" == "Review queue: 32 lines in 4 changes
-~/Work/web: 32 of 100 lines
+  [[ "$out" == "Review queue: 72 lines in 5 changes
+~/Work/web: 72 of 100 lines
 - ~/Work/web.mine · 9 lines staged in 1 file · stakes low
+- web-4: Job web-4 · 40 lines staged in 1 file · stakes low · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/web.four
 - web-7 · 10 lines staged in 2 files · stakes high, needs the person's LGTM · state unknown: bd does not answer for web-7 · ~/Work/web.seven
 - web-1: Job web-1 · 5 lines staged in 2 files · stakes high, needs the person's LGTM · ~/Work/web.one
 - web-8: Job web-8 · 8 lines staged in 1 file · stakes low · ~/Work/web.eight
 - not counted: web-6: Job web-6 · 60 lines staged in 1 file · stakes low · its job moved to another worktree (~/Work/web.new) · ~/Work/web.old
 - not counted: web-2: Job web-2 · 20 lines staged in 1 file · stakes low · superseded by web-5 · ~/Work/web.two
-- not counted: web-3: Job web-3 · 30 lines staged in 1 file · stakes low · a duplicate of web-5 · ~/Work/web.three
-- not counted: web-4: Job web-4 · 40 lines staged in 1 file · stakes low · issue closed, a cleanup candidate · ~/Work/web.four" ]] \
+- not counted: web-3: Job web-3 · 30 lines staged in 1 file · stakes low · a duplicate of web-5 · ~/Work/web.three" ]] \
     || fail "queue text: $out"
 }
 
-@test "shep queue: only cleanup left says nothing waits, and still lists it" {
+@test "shep queue: a closed issue with staged work is unknown custody, never an automatic cleanup candidate" {
   local out
   repo web
   printf '%s\n' "$HOME/Work/web" >"$STATE/repos"
@@ -512,10 +512,10 @@ bd_issue() {
   bd_issue 4 closed
   record --arg p "$HOME/Work/web.four" '{path: $p, branch: "four", issue: "web-4", desk: "t4"}'
   out="$(shep queue --repo "$HOME/Work/web")" || fail "queue: $out"
-  [[ "$out" == "Review queue: nothing waits on the person.
-~/Work/web: nothing waits
-- not counted: web-4: Job web-4 · 4 lines staged in 1 file · stakes low · issue closed, a cleanup candidate · ~/Work/web.four
-~/Work/web: 0 of 1000 lines wait on the person; a new desk fits its review budget." ]] || fail "cleanup only: $out"
+  [[ "$out" == "Review queue: 4 lines in 1 change
+~/Work/web: 4 of 1000 lines
+- web-4: Job web-4 · 4 lines staged in 1 file · stakes low · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/web.four
+~/Work/web: 4 of 1000 lines wait on the person; a new desk fits its review budget." ]] || fail "cleanup only: $out"
 }
 
 @test "shep brief shows the job's staged size and stakes" {
@@ -702,6 +702,83 @@ Where bercail todo add sends a todo: --target, else the route of the job's repo,
   grep -qx -- '- none found yet (`bercail shep repos` explains where they come from)' "$STATE/context.md" \
     && grep -qx -- '- no todo targets yet: bercail todo target add <name> <to-do list URL>' "$STATE/context.md" \
     && grep -qx -- '- none yet' "$STATE/context.md" || fail "empty context: $(cat "$STATE/context.md")"
+}
+
+@test "brief and board keep identical issue ids scoped to their original repos" {
+  local out name
+  for name in a b; do
+    repo "$name"; worktree "$name" "fix-$name"
+    issues "$name" "same-1|Job $name|in_progress"
+    jq -n --arg t "Job $name" '{id:"same-1",title:$t,status:"in_progress"}' >"$HOME/Work/$name/.beads/fake/same-1.json"
+  done
+  printf '%s\n' "$HOME/Work/a" "$HOME/Work/b" >"$STATE/repos"
+  record --arg p "$HOME/Work/a.fix-a" '{path:$p,branch:"fix-a",issue:"same-1",desk:"t9",space:"spa"}'
+  record --arg p "$HOME/Work/b.fix-b" '{path:$p,branch:"fix-b",issue:"same-1",desk:"t8",space:"spb"}'
+  desk t9 "$HOME/Work/a.fix-a" working '{"bercail.issue":"same-1","bercail.space":"spa"}'
+  desk t8 "$HOME/Work/b.fix-b" working '{"bercail.issue":"same-1","bercail.space":"spb"}'
+  out="$(shep brief same-1 2>&1)" && fail "$out"
+  [[ "$out" == *"more than one repo"* ]]
+  out="$(shep brief same-1 --repo "$HOME/Work/a")" || fail "$out"
+  [[ "$out" == *"desk t9"* && "$out" != *"desk t8"* && "$out" == *"fix-a"* ]]
+  out="$(shep board)" || fail "$out"
+  [[ "$out" == *"Job a"*"desk t9"*"fix-a"* && "$out" == *"Job b"*"desk t8"*"fix-b"* ]]
+}
+
+@test "closed stale reports do not hide requested publication from queue, brief or board" {
+  local out file
+  queue_fixture
+  file="$HOME/Work/app/.beads/fake/app-3.json"
+  jq '.metadata.bercail_task={requests:[{id:"amend2",outcome:"publish",authoring:"gt m -a",status:"blocked",next:"Native descendant scope must be resolved in the original desk"}]}' "$file" >"$BATS_TEST_TMPDIR/r"
+  mv "$BATS_TEST_TMPDIR/r" "$file"
+  jq --slurpfile r "$file" 'map(if .id == "app-3" then .metadata=$r[0].metadata else . end)' "$HOME/Work/app/.beads/fake/list.json" >"$BATS_TEST_TMPDIR/r"
+  mv "$BATS_TEST_TMPDIR/r" "$HOME/Work/app/.beads/fake/list.json"
+  out="$(shep queue --repo "$HOME/Work/app" --json)" || fail "$out"
+  jq -e 'any(.items[]; .issue == "app-3" and .state == "outstanding" and .counts)' <<<"$out"
+  out="$(shep brief app-3 --repo "$HOME/Work/app")" || fail "$out"
+  [[ "$out" == *"request amend2: publish [blocked] · authoring gt m -a"* && "$out" == *"Native descendant scope"* ]]
+  out="$(shep board)" || fail "$out"
+  [[ "$out" == *"requests amend2:publish/blocked"*"Native descendant scope"* ]]
+}
+
+@test "brief shows a canonical completion receipt despite a later failed readback comment" {
+  local out file
+  queue_fixture
+  file="$HOME/Work/app/.beads/fake/app-3.json"
+  jq '.metadata.bercail_task={requests:[{id:"close-1",outcome:"cleanup",status:"complete",next:"Closure proven",receipt:{results:[{space:"sp-old",status:"CLOSED"}],open:[]}}]}' "$file" >"$BATS_TEST_TMPDIR/r"
+  mv "$BATS_TEST_TMPDIR/r" "$file"
+  printf '%s\n' '[{"text":"Full native proof"},{"text":"Supplemental readback checker failed"}]' >"${file%.json}.comments.json"
+  out="$(shep brief app-3 --repo "$HOME/Work/app")" || fail "$out"
+  [[ "$out" == *"close-1: cleanup [complete]"*"canonical receipt close-1:"*'"status":"CLOSED"'*"Supplemental readback checker failed"* ]]
+}
+
+@test "repo queue neither queries unrelated slow GitHub repos nor waits on their status" {
+  local out
+  queue_fixture
+  git -C "$HOME/Work/docs" remote add origin https://github.com/o/docs.git
+  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'EOF'
+#!/bin/sh
+case "$PWD" in */docs) echo unrelated >>"$LOG"; exec sleep 30 ;; esac
+case "$1" in api) echo me ;; pr) cat "$HC_DATA/prs.json" ;; esac
+EOF
+  out="$(shep queue --repo "$HOME/Work/app" --json)" || fail "$out"
+  jq -e '.repos | length == 1' <<<"$out"
+  ! grep -q unrelated "$LOG"
+}
+
+@test "slow or failed PR status is bounded UNKNOWN, never an invented empty queue" {
+  local out start
+  queue_fixture
+  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'EOF'
+#!/bin/sh
+case "$1" in api) echo me ;; pr) exit 3 ;; esac
+EOF
+  out="$(shep queue --repo "$HOME/Work/app" --json)" && fail "$out"
+  jq -e '.status == "unknown" and .items == null and .repos == null' <<<"$out"
+  printf '#!/bin/sh\nexec sleep 30\n' >"$BATS_TEST_TMPDIR/bin/gh"
+  start=$SECONDS
+  out="$(shep queue --repo "$HOME/Work/app" --json)" && fail "$out"
+  [[ $((SECONDS-start)) -lt 8 ]] || fail "repo intake exceeded eight seconds"
+  jq -e '.status == "unknown" and .items == null' <<<"$out"
 }
 
 # bats test_tags=live

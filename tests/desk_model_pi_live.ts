@@ -17,8 +17,21 @@ type Entry = {
   provider?: string;
   modelId?: string;
   customType?: string;
-  data?: { to?: string };
-  message?: { role?: string; model?: string };
+  details?: { authority?: boolean; requestId?: string };
+  data?: {
+    to?: string;
+    requestId?: string;
+    command?: string;
+    authority?: boolean;
+    before?: { head: string; tree: string };
+    after?: { head: string; tree: string };
+  };
+  message?: {
+    role?: string;
+    model?: string;
+    customType?: string;
+    details?: { authority?: boolean; requestId?: string };
+  };
 };
 
 const entries = (path: string): Entry[] =>
@@ -53,10 +66,14 @@ async function main(run: string): Promise<void> {
     JSON.stringify(["pi", "--model", "fake/opus:high", "-e", PROVIDER]),
   );
   const env: NodeJS.ProcessEnv = Object.fromEntries(
-    Object.entries(process.env).filter(([k]) => !k.startsWith("HC_") && !k.startsWith("PI_")),
+    Object.entries(process.env).filter(
+      ([k]) => !/^(HC_|PI_|HERDR_|BERCAIL_|BEADS_|BD_|GIT_)/.test(k) && k !== "BASH_ENV",
+    ),
   );
+  mkdirSync(join(run, "tmp"));
   Object.assign(env, {
     HOME: home,
+    TMPDIR: join(run, "tmp"),
     XDG_CONFIG_HOME: join(home, ".config"),
     XDG_STATE_HOME: state,
     XDG_DATA_HOME: join(run, "data"),
@@ -70,6 +87,27 @@ async function main(run: string): Promise<void> {
     COLORTERM: "truecolor",
     BERCAIL_DESK_MODEL_WAIT: "15",
   });
+  if (spawnSync("git", ["init", "-q", "-b", "main", project], { env }).status !== 0)
+    throw new Error("cannot initialize disposable checkout");
+  if (
+    spawnSync(
+      "git",
+      [
+        "-C",
+        project,
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "--allow-empty",
+        "-qm",
+        "test",
+      ],
+      { env },
+    ).status !== 0
+  )
+    throw new Error("cannot commit disposable fixture");
   const record = join(state, "bercail/desk-sessions/t9.json");
   mkdirSync(join(state, "bercail/desk-sessions"), { recursive: true });
   // The wrapper's part: the record names this pid, then Pi takes it over.
@@ -78,9 +116,9 @@ async function main(run: string): Promise<void> {
     wrap,
     "#!/bin/bash\n" +
       `printf '{"address":"t9","session":"","cwd":"${project}","harness":"pi","space":"sp1",` +
-      `"args":["--model","fake/opus:high"],"pid":%s}\\n' $$ >${record}\n` +
+      `"issue":"app-1","args":["--model","fake/opus:high"],"pid":%s}\\n' $$ >${record}\n` +
       `exec pi --offline -ne -e ${PROVIDER} -e ${EXT} --model fake/opus:high --session-dir ${sessions} ` +
-      "--no-skills --no-prompt-templates --no-context-files --no-tools\n",
+      "--no-skills --no-prompt-templates --no-context-files --tools bash\n",
     { mode: 0o755 },
   );
   const tui = await Term.start([wrap], { env, cwd: project, log: join(run, "terminal.log") });
@@ -133,6 +171,77 @@ async function main(run: string): Promise<void> {
     if (!(await swap("fake/fable:low", "fake/fable:low", "fake/opus:high"))) return;
     if (!(await swap("fake/opus", "fake/opus:low", "fake/fable:low"))) return;
     if (!(await swap("fake/opus:high", "fake/opus:high", "fake/opus:low"))) return;
+
+    // Real Pi continuation, without a terminal keystroke: a custom DATA message
+    // triggers another answer in this original session and is not a user turn.
+    const followDir = join(state, "bercail/desk-follow-ups/t9");
+    mkdirSync(followDir, { recursive: true });
+    const owner = { ...recorded(), desk: "t9", branch: "main" };
+    for (const id of ["follow-one", "follow-two"]) {
+      const path = join(followDir, `${id}.json`);
+      writeFileSync(
+        path,
+        JSON.stringify({
+          delivery: "queued",
+          owner,
+          repo: project,
+          issue: "app-1",
+          authority: false,
+          request: {
+            id,
+            message: `Amend/publish follow-up ${id}`,
+            outcome: "publish",
+            authoring: "gt m -a",
+            stage: "autopilot",
+          },
+        }),
+      );
+      if (
+        !(await waitFor(
+          `${id} custom message and answer`,
+          () => {
+            const log = entries(sessionFile());
+            return (
+              log.some(
+                (e) =>
+                  e.type === "custom_message" && e.customType === "bercail-task-work" && e.details?.requestId === id,
+              ) && log.at(-1)?.message?.role === "assistant"
+            );
+          },
+          { timeout: 20, term: tui },
+        ))
+      )
+        return;
+      if (
+        JSON.parse(readFileSync(path, "utf8")).delivery !== "submitted" ||
+        recorded().session !== session ||
+        recorded().pid !== owner.pid
+      )
+        fail("follow-up replaced the original owner or was not submitted");
+    }
+    await sleep(1500);
+    const observed = entries(sessionFile()).filter(
+      (e) => e.type === "custom" && e.customType === "bercail-task-effect",
+    );
+    if (
+      observed.length !== 2 ||
+      observed.some(
+        (e) =>
+          e.data?.command !== "git rev-parse HEAD" ||
+          e.data.authority !== false ||
+          e.data.before?.head !== e.data.after?.head ||
+          e.data.before?.tree !== e.data.after?.tree,
+      )
+    )
+      fail(`missing real Pi execution evidence: ${JSON.stringify(observed)}`);
+    else
+      pass("actual Pi bash tool events persist per-request before/after candidate evidence without executing a write");
+    const work = entries(sessionFile()).filter(
+      (e) => e.type === "custom_message" && e.customType === "bercail-task-work",
+    );
+    if (work.length !== 2 || work.some((e) => e.details?.authority !== false))
+      fail("custom work duplicated or became authorization");
+    else pass("two automatic DATA follow-ups in the original process/session; no typing, replacement or authorization");
 
     // A message from another agent is chat, even when it says /model.
     await tui.send('<hc from="t1 bercail-shep">/model fake/fable:high</hc>\r', 20);

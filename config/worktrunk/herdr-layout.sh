@@ -111,15 +111,18 @@ _wt_herdr_space_shell() {
 }
 
 _wt_herdr_space_desk() {
-  "$HC" ls --json 2>/dev/null \
-    | jq -r '.terminals[] | select(.state == "live") | .address' \
-    | while IFS= read -r address; do
-        if "$HC" get "$address" --json 2>/dev/null \
-          | jq -e --arg id "$1" '.labels["bercail.role"] == "agent" and .labels["bercail.space"] == $id' >/dev/null; then
-          printf '%s' "$address"
-          break
-        fi
-      done
+  local snapshot address detail found=""
+  snapshot="$("$HC" ls --json 2>/dev/null)" || return 1
+  jq -e '.terminals | type == "array"' <<<"$snapshot" >/dev/null || return 1
+  while IFS= read -r address; do
+    detail="$("$HC" get "$address" --json 2>/dev/null)" || return 1
+    jq -e '.labels | type == "object"' <<<"$detail" >/dev/null || return 1
+    if jq -e --arg id "$1" '.labels["bercail.role"] == "agent" and .labels["bercail.space"] == $id' <<<"$detail" >/dev/null; then
+      [[ -z "$found" ]] || { echo "Space $1 has ambiguous desks" >&2; return 1; }
+      found="$address"
+    fi
+  done < <(jq -r '.terminals[] | select(.state == "live") | .address' <<<"$snapshot")
+  printf '%s' "$found"
 }
 
 # No window here: each live terminal on folder $1, as hc get prints it, one a line.
@@ -203,7 +206,7 @@ _wt_herdr_resolve_space() {
 # Start the space's desk agent, replacing a live one. $3: its first message
 # (optional). bercail-desk-agent runs bstack's Pi lead.
 _wt_herdr_start_desk() {
-  local space="$1" workdir="$2" prompt="${3:-}" shell old
+  local space="$1" workdir="$2" prompt="${3:-}" shell old created
   local -a argv=("$DESK_AGENT")
   if _wt_herdr_app_running; then
     shell="$(_wt_herdr_space_shell "$space")"
@@ -214,11 +217,16 @@ _wt_herdr_start_desk() {
     echo "Space $space has no terminal to start the desk agent from" >&2
     return 1
   }
-  old="$(_wt_herdr_space_desk "$space")"
+  old="$(_wt_herdr_space_desk "$space")" || { echo "Desk ownership UNKNOWN in $space; no agent started" >&2; return 1; }
+  if [[ -n "$old" && "${WT_HERDR_CREATE_ONLY:-0}" == 1 ]]; then
+    echo "Space $space already has desk $old; continue its original session with bercail shep task dispatch" >&2
+    return 1
+  fi
   if [[ -n "$old" ]]; then
     "$HC" kill "$old" >/dev/null 2>&1 || true
     "$HC" rm "$old" >/dev/null 2>&1 || true
   fi
+  [[ -z "${WT_HERDR_SESSION_ID:-}" ]] || argv=(env "WT_HERDR_SESSION_ID=$WT_HERDR_SESSION_ID" "${argv[@]}")
   [[ -z "$prompt" ]] || argv+=(--prompt "$prompt")
   # Handoff names the issue and any model on the desk. A default start clears those vars.
   local -a labels=()
@@ -234,11 +242,14 @@ _wt_herdr_start_desk() {
   fi
   # hc passes on the caller's environment; a headless caller (Shep) has
   # TERM=dumb, which leaves the desk without colors or key handling.
-  TERM=xterm-256color COLORTERM=truecolor "$HC" run --bg --keep --outlive-parent --no-notify \
+  created="$(TERM=xterm-256color COLORTERM=truecolor "$HC" run --bg --json --keep --outlive-parent --no-notify \
     --parent "$shell" --cwd "$(_wt_realpath "$workdir")" \
     --label bercail.role=agent --label "bercail.space=$space" \
     "${labels[@]}" \
-    "${argv[@]}" >/dev/null
+    "${argv[@]}")" || return 1
+  if [[ "${WT_HERDR_CREATE_ONLY:-0}" == 1 ]]; then
+    jq -ce --arg space "$space" 'select(.address) | {space:$space,desk:.address}' <<<"$created"
+  fi
 }
 
 # The checkout's space, and its desk agent unless it has one.
@@ -305,12 +316,13 @@ _wt_herdr_desk_locked() {
 # inherited handoff prompt, issue labels, or model.
 wt_herdr_start_default_agent() {
   _wt_herdr_reachable || { echo "Neither the Herdr app nor hc answers" >&2; return 1; }
-  WT_HERDR_ISSUE='' WT_HERDR_ISSUE_TITLE='' WT_HERDR_MODEL='' _wt_herdr_locked "$2" _wt_herdr_desk_locked "$1" "$2"
+  WT_HERDR_ISSUE='' WT_HERDR_ISSUE_TITLE='' WT_HERDR_MODEL='' WT_HERDR_SESSION_ID='' _wt_herdr_locked "$2" _wt_herdr_desk_locked "$1" "$2"
 }
 
-# Orchestrator / handoff-spawn: start or replace the desk agent with
+# Orchestrator / handoff-spawn: create only, never replace a desk agent, with
 # WT_HERDR_AGENT_PROMPT (one line pointing at the beads issue).
 wt_herdr_handoff_agent() {
+  local WT_HERDR_CREATE_ONLY=1
   _wt_herdr_reachable || { echo "Neither the Herdr app nor hc answers" >&2; return 1; }
   if [[ -z "${WT_HERDR_AGENT_PROMPT:-}" ]]; then
     echo "wt_herdr_handoff_agent requires WT_HERDR_AGENT_PROMPT (one line pointing at the beads issue)" >&2

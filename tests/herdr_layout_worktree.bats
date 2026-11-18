@@ -21,7 +21,7 @@ setup() {
   DESK="$HOME/.local/bin/bercail-desk-agent"
   # How every desk starts: a sub-agent of sp-child's Shell (t9), no tab of its own
   # (no herdr.space), found again by the bercail labels.
-  RUN="hc run --bg --keep --outlive-parent --no-notify --parent t9 --cwd $FEATURE --label bercail.role=agent --label bercail.space=sp-child $DESK"
+  RUN="hc run --bg --json --keep --outlive-parent --no-notify --parent t9 --cwd $FEATURE --label bercail.role=agent --label bercail.space=sp-child $DESK"
 
   # A fake Herdr app: spaces live in $FAKE_STATE/spaces.json, the shown one in $FAKE_STATE/shown.
   cat >"$FAKE_BIN/herdr-app" <<'EOF'
@@ -70,6 +70,7 @@ case "$1" in
       jq -nc --arg a "$2" --arg c "$(cat "$FAKE_STATE/cwd-$2" 2>/dev/null)" \
         '{address: $a, labels: {}} + (if $c == "" then {} else {cwd: $c} end)'
     fi ;;
+  run) echo '{"address":"t10"}' ;;
   *) echo '{}' ;;
 esac
 EOF
@@ -157,13 +158,13 @@ open_space() {
   grep -qx 'TERM=xterm-256color' "$CALL_LOG" || fail "a headless caller's TERM=dumb must not reach the desk; log=$(cat "$CALL_LOG")"
 }
 
-@test "handoff replaces a live desk agent" {
+@test "handoff refuses to replace a live desk agent" {
   open_space
   touch "$FAKE_STATE/desk"
-  WT_HERDR_AGENT_PROMPT=bercail-0s2 \
-    wt_herdr_handoff_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature"
-  grep -q '^hc kill t5' "$CALL_LOG" || fail "handoff should replace the live desk; log=$(cat "$CALL_LOG")"
-  grep -qx "$RUN --prompt bercail-0s2" "$CALL_LOG" || fail "replacement desk; log=$(cat "$CALL_LOG")"
+  local out
+  out="$(WT_HERDR_AGENT_PROMPT=bercail-0s2 wt_herdr_handoff_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" 2>&1)" && fail "$out"
+  [[ "$out" == *"already has desk t5"* ]]
+  ! grep -Eq '^hc (kill|rm|run) ' "$CALL_LOG"
 }
 
 @test "handoff requires a prompt" {
@@ -204,7 +205,7 @@ open_space() {
   open_space
   WT_HERDR_AGENT_PROMPT=bercail-0s1 WT_HERDR_MODEL="$model" \
     wt_herdr_handoff_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature"
-  grep -qx "hc run --bg --keep --outlive-parent --no-notify --parent t9 --cwd $FEATURE --label bercail.role=agent --label bercail.space=sp-child --label bercail.model=$model $DESK --prompt bercail-0s1 --model $model" "$CALL_LOG" \
+  grep -qx "hc run --bg --json --keep --outlive-parent --no-notify --parent t9 --cwd $FEATURE --label bercail.role=agent --label bercail.space=sp-child --label bercail.model=$model $DESK --prompt bercail-0s1 --model $model" "$CALL_LOG" \
     || fail "the desk runs bercail-desk-agent --model, labelled with it; log=$(cat "$CALL_LOG")"
   : >"$CALL_LOG"
   WT_HERDR_MODEL="$model" wt_herdr_start_default_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature"
@@ -303,7 +304,7 @@ live_with() {
   fi
 }
 
-@test "with no window, post-start again on the checkout reuses its space and desk, and a handoff replaces only the desk" {
+@test "with no window, post-start reuses its space and desk, and a handoff refuses replacement" {
   local space desk
   headless
   wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" || fail "first post-start"
@@ -312,13 +313,14 @@ live_with() {
   wt_herdr_layout_create "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" || fail "second post-start"
   [[ "$(live_with herdr.space | jq length)" -eq 1 && "$(live_with bercail.role agent | jq -r '.[].address')" == "$desk" ]] \
     || fail "the second post-start must reuse both: $(cat "$HC_STATE")"
-  WT_HERDR_AGENT_PROMPT=bercail-0s1 wt_herdr_handoff_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature" \
-    || fail "headless handoff failed; log=$(cat "$CALL_LOG")"
-  [[ "$(live_with herdr.space | jq length)" -eq 1 ]] || fail "a handoff keeps the space: $(cat "$HC_STATE")"
+  : >"$CALL_LOG"
+  if WT_HERDR_AGENT_PROMPT=bercail-0s1 wt_herdr_handoff_agent "Main_Feature" "$BATS_TEST_TMPDIR/main.feature"; then
+    fail "headless handoff must refuse replacement"
+  fi
+  [[ "$(live_with herdr.space | jq length)" -eq 1 ]]
   live_with bercail.role agent | jq -e --arg d "$desk" --arg s "$space" \
-    'length == 1 and .[0].address != $d and .[0].labels["bercail.space"] == $s' >/dev/null \
-    || fail "the handoff's desk replaces the old one in the same space: $(cat "$HC_STATE")"
-  grep -q -- "--prompt bercail-0s1$" "$CALL_LOG" || fail "the handoff desk gets its prompt; log=$(cat "$CALL_LOG")"
+    'length == 1 and .[0].address == $d and .[0].labels["bercail.space"] == $s' >/dev/null
+  ! grep -Eq '^(kill|rm|run) ' "$CALL_LOG"
 }
 
 @test "with no window, two post-starts at once on one checkout make one space and one desk" {

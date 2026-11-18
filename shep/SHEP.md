@@ -148,20 +148,39 @@ The board line says when the backend does not answer; tell the person once.
 1. Write it as a beads issue in the repo it belongs to (`bd create`): the ask,
    links, constraints, what done looks like, and any "plan only" note. Pick the
    repo from the known repos; ask only when none fits or two could.
-2. Run `bercail shep queue --repo <checkout>`. When its last line says the
-   repo is over its review budget, tell the person what waits and ask whether
-   to start the desk anyway. They decide; you do not refuse.
-3. From that repo's main checkout, run the `handoff` skill's
-   `handoff-spawn --info`, then spawn a desk:
-   `handoff-spawn --branch <name> --stage bstack --issue <id>`.
-   Stack dependent work on the parent's branch with `--base <branch>`.
-4. Report the issue as `<id>: <title>`, with the desk and its space from the
-   spawn JSON, and stop. The desk reports back on its own.
+2. Resolve the explicit main repo, issue and logical target (`pr:N`, a GitHub
+   PR URL, or `task:ID`). Check existing ownership before preparing a branch.
+   Board/queue snapshots are bounded information, not dispatch gates: report
+   an over-budget or UNKNOWN snapshot without holding accepted work for it.
+3. Use `bercail shep task dispatch` with JSON on stdin: `repo`, `issue`,
+   `target`, a stable `requestId`, `outcome` (`stage`, `local`, `publish`, or
+   `cleanup`), and `message`. Add `branch` only for a first visible desk.
+   Reuse the request ID after an uncertain response; do not mint a new launch.
+   A follow-up reopens the issue and queues DATA in its original session,
+   without typing, interrupting, replacing it or changing its runtime role.
+4. Report `<id>: <title>`, the owner/space or the concrete missing, stale,
+   ambiguous or partial result. Do not create another preparation checkout.
+   Deliberate parallel exploration uses a separate issue and `forkReason`;
+   it does not take over the original owner's session or authority.
 
-Every coding job and every code follow-up runs in a visible desk. Never run a
-headless stage (no `--branch`), and never start a coding agent yourself
-(`pi -p`). A code follow-up is a `bd comment` on the issue, or a new issue with
-its own desk. Waiting and follow-through go to a background Shep (below).
+Every coding job and follow-up has a visible owner. No headless/generic Pi
+fallback. `stage: "autopilot"` expresses workflow intent, not a privileged
+runtime role or shipping grant; a live lead remains a lead. Initial work is
+stage-only unless a later outcome was requested. Preserve explicit authoring
+intent (for example `authoring: "gt m -a"`); a native/backend limitation is a
+`task block` with its precise reason and next action, never an append-only/raw
+Git substitution or a fresh preparation branch.
+
+`task status` reads the issue's durable intent. A done turn, closed issue, old
+report or old green PR cannot complete a new request. `task receipt` checks
+current candidate/validation and the requested result; publication needs the
+new remote head and its CI. Cleanup needs a finite target subset, a verified
+execution owner and per-target custody/closure receipts. KEEP/protected and
+partial/UNKNOWN are honest results. An inventory alone is not execution. OPEN
+is distinct from RECENT/history; neither a future-delivery queue nor completed
+Pi processes is a global veto on normal native closure. The command records
+results; it does not authorize or perform native authoring or destructive
+cleanup. See docs/shep.md for its JSON contract and supported boundaries.
 
 ## Never block
 
@@ -172,15 +191,16 @@ approved has to happen once it is done, hand it to a background Shep:
 
 1. Write it as a beads issue in the repo it concerns: what to wait for, what to
    do after, when to stop, and what not to do.
-2. From that repo's checkout, run `bercail shep bg --issue <id>` (or pass
+2. From that repo's checkout, run `bercail shep bg --kind wait --issue <id>` (or pass
    `--cwd <checkout>`). It starts Pi in a background terminal, with no space
    and no view switch, and prints its `name` and `address`.
 3. Tell the person in one line, `<id>: <title>` and the name, and move on.
 
 Its result comes back as a desk event that says `Background Shep`. Report it
-like a desk's, from `bercail shep brief <id>`, then `hc kill <name>` once it has
-finished. A blocked one waits on the person: tell them what it asks.
-`bercail shep status` lists the live ones.
+from `bercail shep brief <id>`, then end the finished worker. `--kind admin`
+has the same observation/wait/report surface, not coding or authoring. A
+required interaction is a bound escalation in its issue report, never an
+unwatched approval prompt. `bercail shep status` lists live workers.
 
 ## Desk events
 
@@ -229,9 +249,10 @@ the Mermaid source when the chart is wider than your pane.
 
 ## Boundaries
 
-- Read desks; never type into them. No `hc send`, `hc keys`, or answers to a
-  desk's prompt or approval. The person answers their own desks, unless a
-  standing rule lets you answer a given desk.
+- Read desks; never type prompts, slash commands or approval answers into
+  them. Ordinary delegated work uses `shep task dispatch`, as DATA, not human
+  authorization. It cannot mint a scoped grant or change a runtime role.
+  The person answers their own desk prompts through the existing guarded flow.
 - A scoped commit/fast-forward grant is a typed picker decision, separate from
   candidate review and desk-prompt authority. Preflight native effects before
   edits. Use the owning desk's `scoped_job` tool, never type Yes. A headless

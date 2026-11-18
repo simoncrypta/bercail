@@ -863,7 +863,7 @@ HERDR
   cat >"$home/.config/worktrunk/herdr-layout.sh" <<HELPER
 _wt_herdr_keep_user_focus() { :; }
 _wt_generate_session_name() { printf 'Lbl'; }
-wt_herdr_handoff_agent() { : >"$BATS_TEST_TMPDIR/$name-desk-started"; }
+wt_herdr_handoff_agent() { : >"$BATS_TEST_TMPDIR/$name-desk-started"; printf '{"space":"sp1","desk":"desk1"}'; }
 _wt_herdr_space_by_folder() { printf 'sp1'; }
 _wt_herdr_space_desk() { printf 'desk1'; }
 wt_herdr_main_space() { :; }
@@ -1228,6 +1228,7 @@ if [[ "$1" == run ]]; then
 fi
 case "$1" in
   ls) printf '{"terminals":[]}\n' ;;
+  run) printf '{"address":"t9"}\n' ;;
   *) printf '{}\n' ;;
 esac
 HC
@@ -1247,6 +1248,36 @@ _desk_spawn() {
     XDG_STATE_HOME="$DESK_STATE" BERCAIL_BIN="$BATS_TEST_TMPDIR/no-bercail" \
     HANDOFF_PI_PROFILE="$HANDOFF_PI_PROFILE" \
     "$ROOT/skills/handoff/scripts/handoff-spawn" --branch feat --stage bstack --issue "$ISSUE" --clean "$@")
+}
+
+@test "create-only visible dispatch refuses an occupied desk without kill or replacement" {
+  local out
+  _desk_fixture occupied
+  cat >"$DESK_BIN/hc" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$DESK_HC_LOG"
+case "$1" in
+ls) echo '{"terminals":[{"address":"old","state":"live"}]}' ;;
+get) echo '{"address":"old","state":"live","labels":{"bercail.role":"agent","bercail.space":"sp1"}}' ;;
+*) exit 3 ;;
+esac
+EOF
+  out="$(_desk_spawn 2>&1)" && fail "$out"
+  [[ "$out" == *"already has desk old"* ]]
+  ! grep -Eq '^(run|kill|rm|send|keys) ' "$DESK_HC_LOG"
+}
+
+@test "create-only visible dispatch fails UNKNOWN when native owner lookup fails" {
+  local out
+  _desk_fixture unavailable
+  cat >"$DESK_BIN/hc" <<'EOF'
+#!/bin/sh
+echo "$*" >>"$DESK_HC_LOG"
+exit 3
+EOF
+  out="$(_desk_spawn 2>&1)" && fail "$out"
+  [[ "$out" == *"ownership UNKNOWN"* ]]
+  ! grep -Eq '^(run|kill|rm|send|keys) ' "$DESK_HC_LOG"
 }
 
 @test "a --branch spawn puts the title in JSON, handoffs.jsonl, and the desk labels" {
@@ -1313,7 +1344,7 @@ _desk_headless() {
   fi
 }
 
-@test "with no window, two --branch spawns at once from one main checkout make one space on it" {
+@test "with no window, concurrent duplicate branch requests create only one visible owner" {
   need flock
   _desk_headless twice
   export HC_RUN_DELAY=0.3
@@ -1323,11 +1354,13 @@ _desk_headless() {
   _desk_spawn --branch other >"$BATS_TEST_TMPDIR/twice-2.out" 2>&1 &
   b=$!
   # Not a bare wait: with BATS_TEST_TIMEOUT set, bats's watchdog is a child too.
-  wait "$a" "$b"
+  wait "$a" || true
+  wait "$b" || true
   jq -e --arg m "$(cd "$DESK_REPO" && pwd -P)" '[.[] | select(.labels["herdr.space"] != null and .cwd == $m)] | length == 1' \
     "$HC_STATE" >/dev/null || fail "one Shell space on the main checkout: $(cat "$HC_STATE")"
-  [[ "$(jq '[.[] | select(.labels["bercail.role"] == "agent")] | length' "$HC_STATE")" -eq 2 ]] \
-    || fail "a desk for each branch: $(cat "$HC_STATE") $(cat "$BATS_TEST_TMPDIR"/twice-*.out)"
+  [[ "$(jq '[.[] | select(.labels["bercail.role"] == "agent")] | length' "$HC_STATE")" -eq 1 ]] \
+    || fail "one task, one owner: $(cat "$HC_STATE") $(cat "$BATS_TEST_TMPDIR"/twice-*.out)"
+  grep -Eq 'lock held|original task already has' "$BATS_TEST_TMPDIR"/twice-*.out || fail "duplicate was not explicitly stopped"
 }
 
 # A Pi whose --list-models knows claude-bridge/fable and logs its argv.
@@ -1368,9 +1401,10 @@ STUB
   rm -rf "$DESK_REPO.feat"
   git -C "$DESK_REPO" worktree prune
   git -C "$DESK_REPO" branch -qD feat
-  out="$(_desk_spawn --model claude-bridge/fable:low 2>&1)" || fail "spawn failed: $out"
-  printf '%s' "$out" | tail -n 1 | jq -e '.model == "claude-bridge/fable:low"' >/dev/null \
-    || fail "a given thinking level is kept: $out"
+  local rc=0
+  out="$(_desk_spawn --model claude-bridge/fable:low 2>&1)" || rc=$?
+  [[ "$rc" != 0 && "$out" == *"original task already has a handoff"* ]] \
+    || fail "deleting a checkout must not authorize replacement of its owner: $out"
 }
 
 @test "a --branch spawn without --model runs the lead's and checks nothing" {

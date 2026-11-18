@@ -14,7 +14,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
 SHEP_SKILLS=(handoff review desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|discuss|closed"
+SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch|status|block|receipt (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|discuss|closed"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -59,8 +59,8 @@ shep_pi_argv() {
       [[ -n "$ext" ]] && SHEP_PI_ARGV+=(-e "$ext")
     done < <(jq -r '. as $a | range(0; length) | select($a[.] == "-e") | $a[. + 1]' "$lead" 2>/dev/null || true)
   fi
-  SHEP_PI_ARGV+=(-e "$share/pi/inbox.ts" -e "$share/pi/compaction.ts" -e "$share/pi/question-commands.ts" --append-system-prompt "$share/SHEP.md"
-    --append-system-prompt "$state/context.md" --no-context-files --approve
+  SHEP_PI_ARGV+=(-e "${BERCAIL_SHARE_DIR:-$HOME/.local/share/bercail}/pi-extensions/bercail-desk.ts" -e "$share/pi/inbox.ts" -e "$share/pi/compaction.ts" -e "$share/pi/question-commands.ts" --append-system-prompt "$share/SHEP.md"
+    --append-system-prompt "$state/context.md" --no-context-files --no-skills --approve
     --session-dir "$state/pi-sessions" --continue --name Shep)
   for id in "${SHEP_SKILLS[@]}"; do
     [[ -d "$(skill_canonical_dir "$id")" ]] && SHEP_PI_ARGV+=(--skill "$(skill_canonical_dir "$id")")
@@ -186,7 +186,7 @@ SHEP_TITLE_MAX=60
 # bd does not know the issue there.
 _shep_issue_title() {
   local dir="$1" id="$2" raw
-  raw="$(cd "$dir" && bd show "$id" --json 2>/dev/null </dev/null)" || return 1
+  raw="$(cd "$dir" && _shep_bd show "$id" --json 2>/dev/null </dev/null)" || return 1
   jq -er --argjson max "$SHEP_TITLE_MAX" '
     (if type == "array" then .[0] else . end).title // empty
     | gsub("[[:space:][:cntrl:]]+"; " ") | gsub("^ +| +$"; "")
@@ -201,11 +201,12 @@ _shep_issue_title() {
 # --outlive-parent: a Shep restart does not drop the wait. --rm: `hc kill` is
 # the whole cleanup once it has reported.
 shep_bg() {
-  local issue="" cwd="$PWD" title name lead brief prompt stop="." out
+  local issue="" cwd="$PWD" title name lead brief prompt stop="." out kind="" model ext guard
   local hc="${HC_BIN:-hc}" agent="$LOCAL_BIN/bercail-desk-agent"
   local -a cmd
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --kind) kind="${2:-}"; shift 2 || shift $# ;;
       --issue) issue="${2:-}"; shift 2 || shift $# ;;
       --issue=*) issue="${1#*=}"; shift ;;
       --cwd) cwd="${2:-}"; shift 2 || shift $# ;;
@@ -215,6 +216,7 @@ shep_bg() {
   done
   [[ -n "$issue" ]] || { _shep_err "usage: bercail shep bg --issue ID [--cwd DIR]"; return 1; }
   [[ "$issue" =~ ^[A-Za-z0-9._-]+$ ]] || { _shep_err "issue id '$issue' has characters a beads id does not"; return 1; }
+  [[ "$kind" == wait || "$kind" == admin ]] || { _shep_err "bg requires --kind wait|admin; coding/interactive authoring must continue in its original visible owner"; return 1; }
   cwd="$(cd "$cwd" 2>/dev/null && pwd -P)" || { _shep_err "no folder $cwd; pass the repo's checkout with --cwd"; return 1; }
   title="$(_shep_issue_title "$cwd" "$issue")" \
     || { _shep_err "bd does not know $issue in $cwd; run it from the issue's repo or pass --cwd"; return 1; }
@@ -226,22 +228,30 @@ shep_bg() {
   fi
   [[ -x "$agent" ]] || agent="bercail-desk-agent"
   cmd=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u BERCAIL_SHEP_INBOX
-    BERCAIL_ROLE=shep-bg TERM=xterm-256color COLORTERM=truecolor)
+    BERCAIL_ROLE=shep-bg "BERCAIL_ISSUE=$issue" "BERCAIL_BG_KIND=$kind" TERM=xterm-256color COLORTERM=truecolor)
   title="${title%.}"
   [[ "$title" != *… ]] || stop=""
   prompt="Your job is beads issue $issue: $title$stop Run \`bd show $issue\` (read its comments too) and do exactly what it describes, then stop."
   cmd+=("$agent" --prompt "$prompt")
   lead="${BSTACK_PI_DIR:-${BERCAIL_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json"
-  if [[ -r "$lead" ]]; then
-    while IFS= read -r -d '' out; do
-      cmd+=("$out")
-    done < <(jq -j '.[] | ., "\u0000"' "$lead")
-  else
-    cmd+=(pi)
-  fi
+  [[ -r "$lead" ]] && jq -e 'type == "array" and .[0] == "pi" and index("--model") != null
+    and any(.[]; test("(^|/)guard\\.ts$"))' "$lead" >/dev/null 2>&1 \
+    || { _shep_err "required lead model/guard profile missing or invalid: $lead; no generic Pi fallback"; return 1; }
+  guard="$(jq -r '.[] | select(test("(^|/)guard\\.ts$"))' "$lead")"
+  [[ -r "$guard" ]] || { _shep_err "required guard resource missing: $guard; no background worker started"; return 1; }
   brief="$(shep_share_dir)/BACKGROUND.md"
-  [[ -r "$brief" ]] || { _shep_err "$brief is missing; run bercail update"; return 1; }
-  cmd+=(--append-system-prompt "$brief")
+  [[ -r "$brief" && -r "$(shep_share_dir)/pi/background.ts" ]] || { _shep_err "background profile is missing; run bercail update"; return 1; }
+  model="$(jq -r 'index("--model") as $i | .[$i + 1]' "$lead")"
+  cmd+=(pi --model "$model")
+  while IFS= read -r ext; do
+    [[ -n "$ext" ]] && cmd+=(-e "$ext")
+  done < <(jq -r '. as $a | range(0; length) | select($a[.] == "-e") | $a[. + 1]
+    | select(test("(scoped-job|review)\\.ts$") | not)' "$lead")
+  cmd+=(-e "$(shep_share_dir)/pi/background.ts" --no-extensions --no-mcp --no-skills
+    --no-prompt-templates --no-context-files --no-approve --tools "read,grep,find,ls,shep_issue,shep_wait,shep_report"
+    --system-prompt "$brief")
+  # Environment is inherited by hc and its child, never an approval channel.
+  export BERCAIL_BG_BRIEF="$brief"
   out="$("$hc" run --bg --json --name "$name" --cwd "$cwd" --outlive-parent --no-notify --rm \
     --label bercail.role=agent --label bercail.shep=bg --label "bercail.issue=$issue" \
     --label "bercail.issue_title=$title" -- "${cmd[@]}" </dev/null)" \
@@ -253,7 +263,7 @@ shep_bg() {
 deploy_shep() {
   local share rel
   share="$(shep_share_dir)"
-  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts pi/scoped-types.ts pi/scoped-questions.ts pi/scoped-target.ts pi/scoped-execution.ts; do
+  for rel in SHEP.md BACKGROUND.md pi/background.ts pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts pi/scoped-types.ts pi/scoped-questions.ts pi/scoped-target.ts pi/scoped-execution.ts; do
     deploy_install_file "shep/$rel" "$share/$rel"
   done
 }
@@ -303,11 +313,15 @@ cmd_shep() {
     run) shep_run ;;
     status) shep_status ;;
     bg) shift; shep_bg "$@" ;;
+    task) shift; BERCAIL_SHEP_BIN="${BERCAIL_SHEP_BIN:-${BERCAIL_SELF:-bercail}}" node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shep-task.ts" "$@" ;;
+    runtime) node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runtime.ts" ;;
     discuss) shift; shep_discuss "$@" ;;
     repos) shift; shep_repos "$@" ;;
     brief) shift; shep_brief "$@" ;;
     board) shift; shep_board "$@" ;;
+    board-snapshot) shift; _shep_board_snapshot "$@" ;;
     queue) shift; shep_queue "$@" ;;
+    queue-snapshot) shift; _shep_queue_snapshot "$@" ;;
     remember) shift; shep_remember "$@" ;;
     forget) shift; shep_forget "$@" ;;
     list) shift; shep_list "$@" ;;

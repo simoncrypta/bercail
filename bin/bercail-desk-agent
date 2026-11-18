@@ -31,6 +31,13 @@ if [[ ${#argv[@]} -eq 0 ]]; then
   done < <(jq -j '.[] | ., "\u0000"' "$PI_LEAD")
 fi
 
+# A newly dispatched visible desk has a pinned session before the native launch;
+# a lost response cannot justify adopting a replacement session later.
+if [[ -n "${WT_HERDR_SESSION_ID:-}" && "$(basename "${argv[0]}")" == pi ]]; then
+  argv+=(--session-id "$WT_HERDR_SESSION_ID")
+fi
+unset WT_HERDR_SESSION_ID BERCAIL_TASK_RESERVED
+
 # Swap only the model. Before the record: a restore replays its flags, so the
 # desk comes back on this model.
 if [[ -n "$model" ]]; then
