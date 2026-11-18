@@ -805,7 +805,8 @@ export default class Spaces extends View {
     const now = Date.now();
     const st = reviewStatus(r, now);
     const waits = rows.filter((x) => x.item.counts);
-    const quiet = rows.filter((x) => !x.item.counts);
+    const quiet = rows.filter((x) => !x.item.counts && x.item.state !== "stale");
+    const stale = rows.filter((x) => x.item.state === "stale");
     const total = waits.reduce((n, x) => n + lines(x.item), 0);
     const overlay = props()?.overlay;
     const tilde = (p) => (p && p.startsWith(`${home()}/`) ? `~${p.slice(home().length)}` : (p ?? ""));
@@ -829,7 +830,7 @@ export default class Spaces extends View {
             ? `${item.issue}${item.title ? `: ${item.title}` : ""}`
             : (item.title ?? "no issue");
       const by = item.by?.startsWith("/") ? ` (${tilde(item.by)})` : "";
-      const state = { unknown: `unknown: ${item.why}`, cleanup: `${item.why}: clean up`, superseded: `${item.why}${by}` }[item.state];
+      const state = { unknown: `unknown: ${item.why}`, cleanup: `${item.why}: clean up`, stale: `${item.why}: clean up`, superseded: `${item.why}${by}` }[item.state];
       const facts = [item.kind === "pr" ? "PR" : `stakes ${item.change?.stakes ?? "?"}`, lgtm(item) && "needs your LGTM", state]
         .filter(Boolean)
         .join(" · ");
@@ -892,7 +893,12 @@ export default class Spaces extends View {
           .overflow_y_scrollbar()
           .when(!rows.length, (el) => el.child(div().px(12).py(10).text_color(t.dim).child(r.q ? "Nothing waits on your review." : st.text)))
           .children(waits.map(row))
-          .when(quiet.length > 0, (el) => el.child(section("Not counted against the review budget")).children(quiet.map((x, i) => row(x, waits.length + i)))),
+          .when(quiet.length > 0, (el) => el.child(section("Not counted against the review budget")).children(quiet.map((x, i) => row(x, waits.length + i))))
+          .when(stale.length > 0, (el) =>
+            el
+              .child(section(`${stale.length} stale worktree${stale.length === 1 ? "" : "s"} with no Herdr space: cleanup candidates`))
+              .children(stale.map((x, i) => row(x, waits.length + quiet.length + i))),
+          ),
       );
   }
 

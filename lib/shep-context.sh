@@ -430,16 +430,32 @@ _shep_queue_state() {
       end'
 }
 
+# The Herdr spaces open in the window, as {ids, paths}: their ids, and the
+# folders they and their terminals sit in on this machine. Fails when no window
+# answers, so no worktree is called spaceless on a guess.
+_shep_live_spaces() {
+  local spaces terms
+  spaces="$(_git_backend_bounded 2 "${HERDR_APP_BIN:-herdr-app}" ls 2>/dev/null </dev/null)" || return 1
+  terms="$(_shep_hc ls --json)" && jq -e 'type == "object"' <<<"$terms" >/dev/null 2>&1 || terms='{}'
+  jq -nce --argjson t "$terms" '
+    ([$t.terminals[]? | select(.cwd) | {key: .address, value: .cwd}] | from_entries) as $cwd
+    | input.spaces | arrays
+    | {ids: map(.id), paths: [.[] | select(.machine == null) | .folder, (.tabs[]?.terminals[]?.terminal | strings | $cwd[.])] | map(strings) | unique}' \
+    <<<"$spaces" 2>/dev/null
+}
+
 # What waits on the person's review, as JSON: {schema, at, items, repos}. An
 # item is a worktree with staged changes whose desk is not working (done, idle,
 # blocked, or gone), or an open PR that waits on them. Each has a state (see
-# _shep_queue_state; a PR is review) and counts against the review budget
-# unless it is cleanup or superseded. Counted items come first, the longest
+# _shep_queue_state; a PR is review; stale when no open Herdr space has the
+# worktree) and counts against the review budget unless it is cleanup,
+# superseded or stale. Counted items come first, the longest
 # waiting first. repos has each repo's counted lines against its policy's
 # review_budget, for the repos with items.
 _shep_queue_json() {
-  local repos="$1" desks="$2" records="$3" path issue title desk space main change state since gh_repos branches prs login="" items='[]'
+  local repos="$1" desks="$2" records="$3" path issue title desk space main change state since gh_repos branches prs login="" items='[]' live
   local -A policies=()
+  live="$(_shep_live_spaces)" || live=""
   # \x1f, not a tab: read would merge an empty title's two tabs into one.
   while IFS=$'\x1f' read -r path issue title desk space; do
     main="$(_shep_main_of "$path")" || continue
@@ -447,7 +463,11 @@ _shep_queue_json() {
     [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
     change="$(desc_change "$path" 2>/dev/null)" || continue
     jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || continue
-    state="$(_shep_queue_state "$main" "$issue" "$path" "$change" "$records")"
+    if [[ -n "$live" ]] && ! jq -e --arg s "$space" --arg p "$path" '(.ids | index($s)) or (.paths | index($p))' <<<"$live" >/dev/null; then
+      state='{"state":"stale","why":"no Herdr space"}'
+    else
+      state="$(_shep_queue_state "$main" "$issue" "$path" "$change" "$records")"
+    fi
     since="$(_shep_staged_at "$path")" || since=""
     items="$(jq -c --arg repo "$main" --arg path "$path" --arg issue "$issue" --arg title "$title" --arg desk "$desk" \
       --arg space "$space" --arg since "$since" --argjson change "$change" --argjson state "$state" '
@@ -483,7 +503,7 @@ _shep_queue_json() {
     printf '%s\t%s\n' "$main" "${policies[$main]:-$POLICY_DEFAULTS}"
   done | jq -nRc --argjson items "$items" --argjson defaults "$POLICY_DEFAULTS" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
     ([inputs | split("\t") | {key: .[0], value: (.[1] | fromjson? // $defaults)}] | from_entries) as $p
-    | ($items | map(.counts = (.state | IN("cleanup", "superseded") | not))
+    | ($items | map(.counts = (.state | IN("cleanup", "superseded", "stale") | not))
         | sort_by([(if .counts then 0 else 1 end), (.since // "~")])) as $items
     | {schema: "bercail.queue/v1", at: $at, items: $items,
        repos: [$items | group_by(.repo)[] | .[0].repo as $r | map(select(.counts)) as $w
@@ -494,7 +514,8 @@ _shep_queue_json() {
 }
 
 # The queue for a person to read: what waits, by repo, then each repo's
-# cleanup and superseded worktrees, which do not count. With .repo (shep queue
+# cleanup and superseded worktrees, which do not count, and one line for its
+# stale worktrees with no Herdr space. With .repo (shep queue
 # --repo), a last line says whether that repo is over its review budget, so
 # Shep asks before another desk there.
 _shep_queue_text() {
@@ -517,7 +538,10 @@ _shep_queue_text() {
         | (if $r.changes > 0 then "\($r.path | tilde): \($r.lines) of \($r.budget) lines" + (if $r.over then ", over its review budget" else "" end)
            else "\($r.path | tilde): nothing waits" end),
           ($w[] | select(.repo == $r.path) | "- " + line),
-          ($q.items[] | select(.repo == $r.path and (.counts | not)) | "- not counted: " + line))
+          ($q.items[] | select(.repo == $r.path and (.counts | not) and .state != "stale") | "- not counted: " + line),
+          ([$q.items[] | select(.repo == $r.path and .state == "stale") | .path | tilde]
+           | select(length > 0)
+           | "- not counted: \(length) stale worktree\(if length == 1 then "" else "s" end) with no Herdr space, cleanup candidates: \(join(", "))"))
     end,
     ($q.repo // empty
       | if .over then

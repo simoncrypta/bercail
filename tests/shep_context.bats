@@ -518,6 +518,62 @@ bd_issue() {
 ~/Work/web: 4 of 1000 lines wait on the person; a new desk fits its review budget." ]] || fail "cleanup only: $out"
 }
 
+# Four staged worktrees of ~/Work/web and the window's spaces: web.spaced's record
+# names live space sp1, web.folder is space sp2's folder, web.term's desk t9 sits
+# in space sp3 (whose folder is ~), and web.gone's space sp-gone is closed.
+spaces_fixture() {
+  repo web
+  printf '%s\n' "$HOME/Work/web" >"$STATE/repos"
+  issues web 'web-1|Job web-1|in_progress' 'web-2|Job web-2|in_progress' 'web-3|Job web-3|in_progress' 'web-4|Job web-4|in_progress'
+  staged spaced 3 1700000100
+  staged folder 4 1700000200
+  staged term 2 1700000300
+  staged gone 5 1700000400
+  local n
+  for n in 1 2 3 4; do bd_issue "$n" in_progress; done
+  record --arg p "$HOME/Work/web.spaced" '{path: $p, branch: "spaced", issue: "web-1", desk: "t1", space: "sp1"}'
+  record --arg p "$HOME/Work/web.folder" '{path: $p, branch: "folder", issue: "web-2", desk: "t2"}'
+  record --arg p "$HOME/Work/web.term" '{path: $p, branch: "term", issue: "web-3", desk: "t9"}'
+  record --arg p "$HOME/Work/web.gone" '{path: $p, branch: "gone", issue: "web-4", desk: "t4", space: "sp-gone"}'
+  desk t9 "$HOME/Work/web.term" "done" '{"bercail.issue": "web-3"}'
+  jq -n --arg h "$HOME" '{spaces: [
+    {id: "sp1", folder: "/elsewhere", machine: null, tabs: []},
+    {id: "sp2", folder: "\($h)/Work/web.folder", machine: null, tabs: []},
+    {id: "sp3", folder: $h, machine: null, tabs: [{terminals: [{terminal: "t9"}]}]},
+    {id: "box/sp4", folder: "\($h)/Work/web.gone", machine: "box", tabs: []}]}' >"$HC_DATA/spaces.json"
+  printf '#!/usr/bin/env bash\n[[ "$1" == ls ]] && cat "$HC_DATA/spaces.json"\n' >"$HERDR_APP_BIN"
+  chmod +x "$HERDR_APP_BIN"
+}
+
+@test "shep queue: a staged worktree no open Herdr space has is a stale cleanup candidate, not counted" {
+  local out
+  spaces_fixture
+  out="$(shep queue --repo "$HOME/Work/web")" || fail "queue: $out"
+  [[ "$out" == "Review queue: 9 lines in 3 changes
+~/Work/web: 9 of 1000 lines
+- web-1: Job web-1 · 3 lines staged in 1 file · stakes low · ~/Work/web.spaced
+- web-2: Job web-2 · 4 lines staged in 1 file · stakes low · ~/Work/web.folder
+- web-3: Job web-3 · 2 lines staged in 1 file · stakes low · ~/Work/web.term
+- not counted: 1 stale worktree with no Herdr space, cleanup candidates: ~/Work/web.gone
+~/Work/web: 9 of 1000 lines wait on the person; a new desk fits its review budget." ]] || fail "queue: $out"
+  out="$(shep queue --json)" || fail "queue --json: $out"
+  jq -e '[.items[] | [.issue, .state, .counts, .why]] == [
+      ["web-1", "review", true, null], ["web-2", "review", true, null], ["web-3", "review", true, null],
+      ["web-4", "stale", false, "no Herdr space"]]
+    and .repos == [{path: .repos[0].path, lines: 9, changes: 3, budget: 1000, over: false}]' <<<"$out" >/dev/null \
+    || fail "queue --json: $(jq -c '[.items[] | [.issue, .state, .counts]], .repos' <<<"$out")"
+}
+
+@test "shep queue: with no Herdr window answering, a worktree is not called stale" {
+  local out
+  spaces_fixture
+  printf '#!/usr/bin/env bash\nexit 1\n' >"$HERDR_APP_BIN"
+  out="$(shep queue --json)" || fail "queue --json: $out"
+  jq -e '[.items[] | [.issue, .state, .counts]] == [
+      ["web-1", "review", true], ["web-2", "review", true], ["web-3", "review", true], ["web-4", "review", true]]' <<<"$out" >/dev/null \
+    || fail "queue --json: $(jq -c '[.items[] | [.issue, .state, .counts]]' <<<"$out")"
+}
+
 @test "shep brief shows the job's staged size and stakes" {
   local out
   queue_fixture

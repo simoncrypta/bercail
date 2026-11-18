@@ -91,7 +91,8 @@ EOF
   cp "$ROOT/bercail/layouts/bercail.json" "$BATS_TEST_TMPDIR/layout.json"
   # The queue, oldest first: s1's high-stakes job, a PR, s2's big job, s3's unknown
   # (found by its folder; high-stakes), and work in no space (a space on another
-# machine has its folder); then s4's cleanup (high-stakes too) and s5's superseded.
+# machine has its folder); then s4's cleanup (high-stakes too), s5's superseded, and
+# a stale worktree whose space is closed.
   jq -n '{schema: "bercail.queue/v1", at: "2026-11-14T12:00:00Z", items: [
     {kind: "staged", path: "/w/app.one", issue: "app-1", title: "Export", space: "s1", since: "2026-11-14T09:00:00Z",
      state: "lgtm", counts: true, change: {lines: 6, stakes: "high", review: "required"}},
@@ -105,7 +106,9 @@ EOF
     {kind: "staged", path: "/w/app.three", issue: "app-3", title: "Old", space: "s4", since: "2026-11-10T12:00:00Z",
      state: "cleanup", why: "issue closed", counts: false, change: {lines: 40, stakes: "high", review: "required"}},
     {kind: "staged", path: "/w/app.four", issue: "app-4", space: "s5", since: "2026-11-11T12:00:00Z",
-     state: "superseded", why: "its job moved to another worktree", by: "/home/me/w/app.five", counts: false, change: {lines: 9, stakes: "low"}}],
+     state: "superseded", why: "its job moved to another worktree", by: "/home/me/w/app.five", counts: false, change: {lines: 9, stakes: "low"}},
+    {kind: "staged", path: "/w/app.gone", issue: "app-6", space: "sp-gone", since: "2026-11-12T12:00:00Z",
+     state: "stale", why: "no Herdr space", counts: false, change: {lines: 50, stakes: "low"}}],
     repos: []}' >"$BATS_TEST_TMPDIR/queue.json"
   cat >"$BATS_TEST_TMPDIR/prelude.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
@@ -150,7 +153,7 @@ mod_case() {
 @test "review-next order: spaces whose work waits, in queue order, wrapping; cleanup, superseded and spaceless work are skipped" {
   mod_case <<'EOF'
 const rows = reviewRows(Q, herdr.spaces, []);
-expect(rows.map((r) => r.space?.id ?? null), ["s1", null, "s2", "s3", null, "s4", "s5"], "spaces: by id, else by folder, this machine's only");
+expect(rows.map((r) => r.space?.id ?? null), ["s1", null, "s2", "s3", null, "s4", "s5", null], "spaces: by id, else by folder, this machine's only");
 const walk = [];
 let at = "s0";
 for (let i = 0; i < 4; i++) walk.push((at = nextReview(rows, at)));
@@ -294,6 +297,10 @@ expect(row(4), ["/w/far", "no issue", "2 lines", "stakes low", "–", "no space"
 if (!text(tree).includes("Not counted against the review budget")) fail("no section for what does not count");
 expect(row(5).slice(0, 4), ["old", "app-3: Old", "40 lines", "stakes high · issue closed: clean up"], "cleanup row: no LGTM for what does not count");
 expect(row(6)[3], "stakes low · its job moved to another worktree (~/w/app.five)", "superseded row");
+const at = (s) => text(tree).indexOf(s);
+const heads = [at("Not counted against the review budget"), at("1 stale worktree with no Herdr space: cleanup candidates"), at("/w/app.gone")];
+if (!(heads[0] < heads[1] && heads[1] < heads[2] && at("app-4") < heads[1])) fail(`stale work is not under its own cleanup line: ${heads}`);
+expect(row(7), ["/w/app.gone", "app-6", "50 lines", "stakes low · no Herdr space: clean up", "2d", "no space"], "stale row, last");
 const clickable = all(tree).filter((e) => e.click).map((e) => e.id.replace(/-[0-9]+$/, ""));
 expect([...new Set(clickable)].sort(), ["review-close", "review-open", "review-pr", "review-space"], "only open targets and close");
 E(views("review-open-0")(tree)).click();
