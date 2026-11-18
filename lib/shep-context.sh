@@ -483,10 +483,8 @@ _shep_queue_json() {
     change="$(desc_change "$path" 2>/dev/null)" || continue
     jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || continue
     if [[ -n "$live" ]] && ! jq -e --arg s "$space" --arg p "$path" '(.ids | index($s)) or (.paths | index($p))' <<<"$live" >/dev/null; then
+      # A title lookup must not hold up the snapshot for an already-classified row.
       state='{"state":"stale","why":"no Herdr space"}'
-      if [[ -n "$issue" && -z "$title" ]]; then
-        title="$(_shep_queue_issue "$main" "$issue" | jq -r '.title // empty')" || title=""
-      fi
     else
       state="$(_shep_queue_state "$main" "$issue" "$path" "$change" "$records")"
     fi

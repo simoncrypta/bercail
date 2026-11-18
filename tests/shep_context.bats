@@ -328,9 +328,10 @@ queue_fixture() {
   mkdir -p "$HOME/Work/app.export/lib"
   seq 1 6 >"$HOME/Work/app.export/lib/a.sh"
   seq 1 40 >"$HOME/Work/app.export/yarn.lock"
-  git -C "$HOME/Work/app.export" add lib/a.sh yarn.lock
+  # The queue sorts by index mtime; give export an earlier second than old.
+  stage_at "$HOME/Work/app.export" 1700000000
   seq 1 2 >"$HOME/Work/app.old/notes.md"
-  git -C "$HOME/Work/app.old" add notes.md
+  stage_at "$HOME/Work/app.old" 1700000001
   seq 1 3 >"$HOME/Work/app.busy/wip.md"
   git -C "$HOME/Work/app.busy" add wip.md
   record --arg p "$HOME/Work/app.export" '{path: $p, branch: "export", issue: "app-2", desk: "t8"}'
@@ -562,6 +563,25 @@ spaces_fixture() {
       ["web-4", "stale", false, "no Herdr space"]]
     and .repos == [{path: .repos[0].path, lines: 9, changes: 3, budget: 1000, over: false}]' <<<"$out" >/dev/null \
     || fail "queue --json: $(jq -c '[.items[] | [.issue, .state, .counts]], .repos' <<<"$out")"
+}
+
+@test "shep queue returns 14 stale worktrees without looking up their optional titles" {
+  local n branch out
+  repo web
+  for n in {1..14}; do
+    branch="gone$n"
+    staged "$branch" 1 "$((1700000000 + n))"
+    bd_issue "$n" in_progress
+    record --arg p "$HOME/Work/web.$branch" --arg b "$branch" --arg id "web-$n" '{path: $p, branch: $b, issue: $id}'
+  done
+  printf '#!/bin/sh\necho '\''{"spaces":[]}'\''\n' >"$HERDR_APP_BIN"
+  chmod +x "$HERDR_APP_BIN"
+
+  out="$(shep queue --json)" || fail "queue failed within its 6s bound: $out"
+  jq -e '[.items[].issue] == [range(1; 15) | "web-\(.)"]
+    and all(.items[]; .state == "stale" and .counts == false)
+    and .repos[0].changes == 0' <<<"$out"
+  if grep -q '^bd show ' "$LOG"; then fail "queue queried Beads for stale rows: $(grep '^bd show ' "$LOG")"; fi
 }
 
 @test "shep queue: with no Herdr window answering, a worktree is not called stale" {
