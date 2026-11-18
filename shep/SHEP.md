@@ -162,6 +162,13 @@ The board line says when the backend does not answer; tell the person once.
    ambiguous or partial result. Do not create another preparation checkout.
    Deliberate parallel exploration uses a separate issue and `forkReason`;
    it does not take over the original owner's session or authority.
+5. When the original desk is gone (`original owner missing/stale`) and its
+   checkout still exists, tell the person and ask. Only on their yes,
+   dispatch again with `adoptReason`: why, and that they asked. It starts a
+   visible desk with a new session in that checkout and records the adoption
+   on the issue. Earlier requests stay blocked with the gone owner; ask for
+   them again as new requests. A live desk on that checkout stops it: name it
+   to the person, never close it yourself.
 
 Every coding job and follow-up has a visible owner. No headless/generic Pi
 fallback. `stage: "autopilot"` expresses workflow intent, not a privileged

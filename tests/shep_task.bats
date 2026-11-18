@@ -456,3 +456,131 @@ EOF
   out="$(proof | jq '.proof.results=[{space:"sp1",generation:"g1",status:"CLOSED",custody:"app-1: Repair login, r1"}]' | task receipt)" || fail "$out"
   jq -e '.outstanding == 0 and .owner.session == "s1" and .authority == false' <<<"$out"
 }
+
+# The original desk t9 is gone. A stand-in spawn starts t10 in the same checkout
+# with a new session, s2, and logs that adoption the way handoff-spawn does.
+orphan() {
+  rm "$TASK_DATA/t9.hc"
+  owner t10 s2
+  mv "$TASK_DATA/t10.hc" "$BATS_TEST_TMPDIR/t10.hc"
+  export BERCAIL_HANDOFF_SPAWN="$BATS_TEST_TMPDIR/bin/spawn" TASK_NEW="$BATS_TEST_TMPDIR/t10.hc" TASK_REPO="$REPO"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'SPAWN'
+#!/usr/bin/env bash
+printf 'spawn %s\n' "$*" >>"$LOG"
+cp "$TASK_NEW" "$TASK_DATA/t10.hc"
+jq -nc --arg p "$TASK_REPO.fix" --arg r "${*: -1}" '{ok:true,agent_started:true,path:$p,branch:"fix",space:"sp1",desk:"t10",session:"s2",issue:"app-1",target:"pr:12",adoptReason:$r}' | tee -a "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+SPAWN
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+  pr_head
+}
+
+# gh pr view answers that the PR's head is $PR_HEAD, fix by default.
+pr_head() {
+  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'GH'
+#!/bin/sh
+jq -nc --arg h "${PR_HEAD:-fix}" '{headRefName:$h,isCrossRepository:false}'
+GH
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+}
+
+adopt() { request "${1:-r1}" | jq '.adoptReason="desk t9 exited; Simon asked to update the PR"'; }
+
+@test "a PR branch whose desk is gone is adopted only with a recorded reason, in a new session on its checkout" {
+  local out
+  orphan
+  out="$(request | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"missing/stale"* ]]
+  jq -nc --arg cwd "$REPO.fix" '{address:"t178",cwd:$cwd,state:"live",labels:{"bercail.role":"agent","bercail.space":"sp1"}}' >"$TASK_DATA/t178.hc"
+  out="$(adopt | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"live desk t178"* ]] || fail "an occupied checkout is not adoptable: $out"
+  rm "$TASK_DATA/t178.hc"
+  out="$(adopt | task dispatch)" || fail "$out"
+  jq -e '.status == "awaiting-session" and .creation.desk == "t10" and .creation.session == "s2"' <<<"$out"
+  grep -q -- '--branch fix .*--adopt-reason desk t9 exited; Simon asked to update the PR' "$LOG"
+  jq -e '.metadata.bercail_task.adoptions[0] | .reason == "desk t9 exited; Simon asked to update the PR" and .request == "r1" and .branch == "fix" and .from[0].desk == "t9"' "$TASK_DATA/app-1.json"
+  out="$(adopt | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t10" and .owner.session == "s2"' <<<"$out"
+  out="$(request r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t10"' <<<"$out"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
+}
+
+@test "adoption still refuses a live, stale, ambiguous or unbound owner" {
+  local out
+  out="$(adopt | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"live original owner t9"* ]]
+  owner t8 s2
+  out="$(adopt | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"ambiguous"* ]]
+  rm "$TASK_DATA/t8.hc"
+  jq '.start_ticks="stale"' "$XDG_STATE_HOME/bercail/desk-sessions/t9.json" >"$BATS_TEST_TMPDIR/r"
+  mv "$BATS_TEST_TMPDIR/r" "$XDG_STATE_HOME/bercail/desk-sessions/t9.json"
+  out="$(adopt | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"stale"* ]]
+  orphan
+  out="$(adopt | PR_HEAD=other task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"not bound"* ]]
+  out="$(adopt | jq '.adoptReason=" "' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"adoptReason"* ]]
+  grep -q '^spawn ' "$LOG" && fail "a refused adoption must not spawn"
+  ! grep -Eq 'hc (run|send|keys|kill|rm)' "$LOG"
+}
+
+@test "an adopting desk inherits no earlier request from the gone owner" {
+  local out
+  request | task dispatch >/dev/null
+  orphan
+  out="$(adopt r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "awaiting-session"' <<<"$out"
+  jq -e '.metadata.bercail_task.requests[0] | .status == "blocked" and (.reason | contains("adopted"))' "$TASK_DATA/app-1.json"
+  adopt r2 | task dispatch >/dev/null
+  out="$(request | task dispatch)" || fail "$out"
+  jq -e '.status == "blocked" and .retry' <<<"$out"
+  [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups/t10" -name '*.json' | wc -l)" == 1 ]]
+  ! grep -rq '"id":"r1"' "$XDG_STATE_HOME/bercail/desk-follow-ups/t10"
+}
+
+@test "after adopting a task dispatch created, follow-ups go to the adopting desk" {
+  local out
+  cp "$TASK_DATA/t9.hc" "$BATS_TEST_TMPDIR/original.hc"
+  partial_launch
+  export TASK_ORIGINAL="$BATS_TEST_TMPDIR/original.hc" TASK_REPO="$REPO"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'SPAWN'
+#!/usr/bin/env bash
+printf 'spawn %s\n' "$*" >>"$LOG"
+cp "$TASK_ORIGINAL" "$TASK_DATA/t9.hc"
+jq -nc --arg p "$TASK_REPO.fix" '{ok:true,agent_started:true,path:$p,branch:"fix",space:"sp1",desk:"t9",session:"s1",issue:"app-1",target:"pr:12"}' | tee "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+SPAWN
+  request r0 | jq '.branch="fix"' | task dispatch >/dev/null
+  request r0 | jq '.branch="fix"' | task dispatch >/dev/null
+  orphan
+  adopt | task dispatch >/dev/null
+  adopt | task dispatch >/dev/null
+  out="$(request r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t10" and .owner.session == "s2"' <<<"$out"
+}
+
+@test "adoption needs a recorded owner and never takes the main checkout" {
+  local out main
+  orphan
+  rm "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(adopt | jq '.branch="fix"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"nothing recorded"* ]]
+  main="$(git -C "$REPO" branch --show-current)"
+  jq -nc --arg p "$REPO" --arg b "$main" '{path:$p,branch:$b,issue:"app-1",desk:"t9",target:"pr:12"}' >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(adopt | PR_HEAD="$main" task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"main checkout"* ]]
+  grep -q '^spawn ' "$LOG" && fail "a refused adoption must not spawn"
+  [[ "$(jq '.metadata.bercail_task' "$TASK_DATA/app-1.json")" == null ]]
+}
+
+@test "adoption keeps the UNKNOWN refusal after an uncertain creation" {
+  local out
+  partial_launch
+  pr_head
+  out="$(request | jq '.branch="fix"' | task dispatch 2>&1)" && fail "$out"
+  jq -nc --arg p "$REPO.fix" '{ok:false,path:$p,branch:"fix",issue:"app-1",target:"pr:12"}' >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(adopt r2 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"UNKNOWN"* ]]
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
+}

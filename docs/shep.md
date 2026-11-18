@@ -45,7 +45,22 @@ adoption is unsupported and remains UNKNOWN, not a new preparation job.
 Dispatch reopens the beads issue and retains requests under
 `metadata.bercail_task`, including requested authoring, blockers and next actions.
 A deliberate exploration uses a separate issue and `forkReason`; it cannot
-inherit the original session or authority. `stage: "autopilot"` records workflow
+inherit the original session or authority.
+
+When the original desk is gone, dispatch stops with `original owner missing/stale`.
+With the person's yes, the same dispatch plus `adoptReason` (why, and who asked)
+starts a visible desk with a new session in that owner's existing checkout:
+the one branch worktree, and its branch, that the owner's records name. A PR
+target must still be that branch. Live, stale, ambiguous or unresolved owners
+keep their refusals. So do an uncertain creation (UNKNOWN), no record, the
+main checkout, and a live desk of any job on the checkout: adoption never
+closes or replaces one. The issue's
+`metadata.bercail_task.adoptions` keeps the reason, the request, the checkout
+and the gone desks, and the handoff's `bd comment` repeats the reason. The
+earlier requests stay blocked with the gone owner. The adopting desk gets
+only the new request, and later requests made in the usual way. Its
+`handoffs.jsonl` line starts a new ownership epoch, so older records neither
+own the task nor conflict with it. `stage: "autopilot"` records workflow
 intent: it does not turn a live lead into an autopilot or grant shipping rights.
 
 A compatible original Pi must have its live foreground process/start tick,

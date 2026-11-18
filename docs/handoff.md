@@ -46,7 +46,11 @@ Each `--branch` spawn appends one line to `${XDG_STATE_HOME:-~/.local/state}/ber
 Raw visible creation refuses a prior handoff for this repo/issue/target and a
 desk already occupying the resolved space. `--target pr:N|task:ID` records the
 logical target; deliberate parallel exploration uses a separate issue and
-`--fork-reason`. A repository/common-Git lock serializes reservations. The pinned
+`--fork-reason`. `--adopt-reason TEXT`, passed only by dispatch's
+[`adoptReason`](shep.md#task-ownership-and-requested-outcomes) once it has found
+the original desk gone, skips step 2 and the dirty copy and stack tracking. It starts the desk,
+with a new session, in the existing worktree of `--branch`, and puts TEXT in
+the issue comment and the `handoffs.jsonl` line. A repository/common-Git lock serializes reservations. The pinned
 startup session is included in the result. `ok:true` requires a started agent,
 space and desk. Partial creation reports nonzero with available facts; inspect
 those facts, never retry into a replacement. Background wait/admin workers

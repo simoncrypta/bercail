@@ -101,6 +101,8 @@ not a follow-up route; it refuses an existing handoff or occupied desk. A
 stale/ambiguous/partial result is not permission to make another preparation
 checkout. `--target pr:N|task:ID` records a target; a deliberate parallel
 exploration needs a separate issue and `--fork-reason`, without inherited grants.
+`--adopt-reason` (from dispatch's `adoptReason` only) starts a new-session desk in
+the existing worktree of a branch whose original desk is gone.
 Background wait/admin workers cannot use this coding route.
 
 Run the **resolved script directly** (absolute path below). Set the process

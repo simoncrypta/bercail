@@ -23,7 +23,8 @@ Post-install CLI (bercail):
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
   shep          Shep, the orchestrator on Pi: status (queued, awaiting persistence, persisted) | run |
                 bg --kind wait|admin --issue ID [--cwd DIR] (observation/wait/report only) |
-                task dispatch|status|block|receipt (JSON stdin; continue original owner, track requested outcome) |
+                task dispatch|status|block|receipt (JSON stdin; continue original owner, track requested outcome;
+                  adoptReason: a new desk on a gone owner's checkout) |
                 runtime (source/installed fingerprints and actual startup evidence; read-only) |
                 discuss TOKEN (a read-only Pi on the question's branch: what Discuss runs) |
                 repos [--json] (your known repos) | board (open jobs, what waits on you) |

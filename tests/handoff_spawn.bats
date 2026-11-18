@@ -1296,6 +1296,32 @@ EOF
     || fail "hc run labels: $(cat "$DESK_ARGV" 2>/dev/null) log=$(cat "$DESK_HC_LOG")"
 }
 
+@test "an adoption starts a fresh desk in the existing worktree and records its reason" {
+  local out existing session
+  _desk_fixture adopt
+  git -C "$DESK_REPO" worktree add -qb feat "$DESK_REPO.feat"
+  existing="$(cd "$DESK_REPO.feat" && pwd -P)"
+  mkdir -p "$DESK_STATE/bercail"
+  jq -nc --arg p "$existing" --arg i "$ISSUE" '{path:$p,branch:"feat",issue:$i,desk:"t130",space:"sp-old"}' >"$DESK_STATE/bercail/handoffs.jsonl"
+  out="$(_desk_spawn --adopt-reason 'desk t130 exited; Simon asked to update the PR' 2>&1)" && fail "$out"
+  [[ "$out" == *"shep task dispatch"* ]] || fail "raw adoption must go through dispatch: $out"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn 2>&1)" && fail "$out"
+  [[ "$out" == *"already has a handoff"* ]] || fail "no reason, no adoption: $out"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --adopt-reason 'desk t130 exited; Simon asked to update the PR' 2>"$BATS_TEST_TMPDIR/adopt.err")" \
+    || fail "adoption failed: $out $(cat "$BATS_TEST_TMPDIR/adopt.err")"
+  ! grep -q '^wt ' "$DESK_HERDR_LOG" || fail "adoption must not create a worktree: $(cat "$DESK_HERDR_LOG")"
+  session="$(jq -r .session <<<"$out")"
+  jq -e --arg p "$existing" '.ok and .path == $p and .branch == "feat" and .desk == "t9" and (.adoptReason | contains("t130 exited"))' <<<"$out" >/dev/null \
+    || fail "adoption json: $out"
+  [[ "$session" =~ ^[0-9a-f-]{36}$ ]] || fail "adoption needs its own new session: $session"
+  tail -1 "$DESK_STATE/bercail/handoffs.jsonl" | jq -e '.adoptReason | contains("t130 exited")' >/dev/null \
+    || fail "handoffs.jsonl: $(cat "$DESK_STATE/bercail/handoffs.jsonl")"
+  grep -q 'Adopted: desk t130 exited; Simon asked to update the PR' "$BD_COMMENTS" \
+    || fail "the reason must be on the issue: $(cat "$BD_COMMENTS")"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --adopt-reason x --branch nope 2>&1)" && fail "$out"
+  [[ "$out" == *"no existing worktree"* ]] || fail "adoption needs an existing checkout: $out"
+}
+
 @test "a --branch spawn first opens a plain space on a main checkout with none, and keeps the shown space" {
   local out main first
   _desk_fixture mainspace

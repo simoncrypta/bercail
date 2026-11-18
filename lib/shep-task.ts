@@ -49,6 +49,16 @@ type Task = {
   branch: string;
   requests: Request[];
   forkReason?: string;
+  adoptions?: Adoption[];
+};
+// A new desk on a gone owner's checkout, and why. The desks it names are gone.
+type Adoption = {
+  request: string;
+  reason: string;
+  at: string;
+  path: string;
+  branch: string;
+  from: { desk: string; session: string; space: string }[];
 };
 const state = () => join(process.env.XDG_STATE_HOME || join(process.env.HOME!, ".local/state"), "bercail");
 const bin = (name: string) => process.env[`${name.toUpperCase()}_BIN`] || name;
@@ -237,6 +247,55 @@ function verify(repo: string, terminal: any, id: string, saved?: Owner | null): 
     );
   return owner;
 }
+// An adoption starts a new ownership epoch: the records before it name desks
+// that are gone, so they neither own the task nor conflict with its new desk.
+function owned(history: any[], id: string, target: string, fork: boolean): any[] {
+  const handoffs = history.filter((r) => r.issue === id || (!fork && r.target === target));
+  const epoch = handoffs.findLastIndex((r) => r.issue === id && r.adoptReason);
+  return epoch < 0 ? handoffs : handoffs.slice(epoch);
+}
+// The gone owner's one checkout, checked before anything is recorded. A live
+// desk there, or two recorded checkouts, stops it: adoption replaces nothing.
+function adoptable(repo: string, id: string, target: string, task: Task | undefined, history: any[], input: any) {
+  const gone = [
+    ...(task?.owner ? [{ ...task.owner, path: task.owner.cwd }] : []),
+    ...owned(history, id, target, !!task?.forkReason).filter((r) => r.path),
+  ];
+  if (!gone.length) throw new Error("nothing recorded to adopt; adoption is only for a recorded owner that is gone");
+  const paths = [...new Set(gone.map((r) => (existsSync(r.path) ? realpathSync(r.path) : r.path)))];
+  const branches = [...new Set([...gone.map((r) => r.branch), task?.branch, input.branch].filter(Boolean))];
+  if (paths.length > 1 || branches.length > 1)
+    throw new Error(
+      `ambiguous recorded checkouts (${[...paths, ...branches].join(", ")}); reconcile them, no adoption`,
+    );
+  const [path] = paths;
+  const branch = branches[0];
+  if (!branch) throw new Error(`no branch recorded for ${path}; inspect it, no adoption`);
+  if (path === repo)
+    throw new Error("the recorded checkout is the main checkout; adoption takes only a branch worktree");
+  if (!existsSync(path))
+    throw new Error(`recorded checkout ${path} is gone; adoption continues a checkout, it never creates one`);
+  if (mainOf(path) !== repo || git(path, "branch", "--show-current") !== branch)
+    throw new Error(`${path} is no longer ${branch} in this repo; inspect it, no adoption`);
+  const occupant = live(repo).find((t) => realpathSync(t.cwd) === path);
+  if (occupant)
+    throw new Error(
+      `checkout ${path} has live desk ${occupant.address}; adoption never replaces a live desk: close it, or continue its own task`,
+    );
+  if (target.startsWith("pr:")) {
+    const pr = JSON.parse(
+      run(bin("gh"), ["pr", "view", target.slice(3), "--json", "headRefName,isCrossRepository"], repo),
+    );
+    if (pr.isCrossRepository || pr.headRefName !== branch)
+      throw new Error(`${target} is not bound to the adopted branch ${branch}; no adoption`);
+  }
+  const from = [...new Map(gone.filter((r) => r.desk).map((r) => [r.desk, r])).values()].map((r) => ({
+    desk: r.desk,
+    session: r.session || "",
+    space: r.space || "",
+  }));
+  return { path, branch, from };
+}
 function findOwner(
   repo: string,
   id: string,
@@ -244,8 +303,9 @@ function findOwner(
   saved?: Owner | null,
   fork = false,
   history = records(repo),
+  adopt = false,
 ): Owner | null {
-  const handoffs = history.filter((r) => r.issue === id || (!fork && r.target === target));
+  const handoffs = owned(history, id, target, fork);
   if (handoffs.some((r) => r.unresolved))
     throw new Error("stale/unresolved original checkout record; reconcile it before creating another desk");
   const candidates = live(repo).filter((t) => {
@@ -261,7 +321,7 @@ function findOwner(
   if (candidates.length > 1)
     throw new Error("ambiguous owners; reconcile the original desks explicitly, no launch occurred");
   if (!candidates.length) {
-    if (saved || handoffs.length)
+    if ((saved || handoffs.length) && !adopt)
       throw new Error("original owner missing/stale; inspect the recorded checkout/space, no replacement was started");
     return null;
   }
@@ -366,6 +426,7 @@ export function taskCommand(op: string, input: any): any {
     "authoring",
     "branch",
     "forkReason",
+    "adoptReason",
     "targets",
     "universe",
     "reason",
@@ -410,6 +471,11 @@ export function taskCommand(op: string, input: any): any {
         !input.message.trim()
       )
         throw new Error("dispatch needs outcome stage|local|publish|cleanup and a work message");
+      const adopting = input.adoptReason !== undefined;
+      if (adopting && (typeof input.adoptReason !== "string" || !input.adoptReason.trim() || input.forkReason))
+        throw new Error(
+          "adoptReason must say why a new desk takes over the gone owner's checkout (and cannot go with forkReason)",
+        );
       if (task && task.repo !== repo) throw new Error("issue belongs to another repository; no transfer");
       if (task && task.target !== target && !task.aliases?.includes(target)) {
         if (task.target !== `task:${value.id}` || !target.startsWith("pr:") || !task.owner)
@@ -446,6 +512,7 @@ export function taskCommand(op: string, input: any): any {
             authoring: input.authoring || "",
             branch: input.branch || "",
             forkReason: input.forkReason || "",
+            adoptReason: input.adoptReason || "",
             targets: input.targets || null,
             universe: input.universe || null,
           }),
@@ -493,16 +560,32 @@ export function taskCommand(op: string, input: any): any {
         }
         return { ...prior, owner: task!.owner, authority: false, retry: true };
       }
-      const owner = findOwner(repo, value.id, target, task?.owner, !!(task?.forkReason || input.forkReason), history);
-      const creation = task?.requests.find((r) => (r as any).creation) as (Request & { creation?: any }) | undefined;
+      const owner = findOwner(
+        repo,
+        value.id,
+        target,
+        task?.owner,
+        !!(task?.forkReason || input.forkReason),
+        history,
+        adopting,
+      );
+      if (adopting && owner)
+        throw new Error(
+          `live original owner ${owner.desk}; continue it with a normal dispatch, adoption is only for a gone owner`,
+        );
+      // The latest creation: an adoption's desk replaced the first one.
+      const creation = task?.requests.findLast((r) => (r as any).creation) as
+        | (Request & { creation?: any })
+        | undefined;
       if (owner && creation?.creation?.session && owner.session !== creation.creation.session)
         throw new Error("original startup session changed; no transfer to a replacement");
       if (input.branch && (owner || task) && input.branch !== (owner?.branch || task?.branch))
         throw new Error(
           "branch differs from original task; continue the original checkout or fork to a separate issue with a reason",
         );
-      if (task && !owner)
+      if (task && !owner && (!adopting || task.requests.some((r) => r.status === "creating" || r.status === "unknown")))
         throw new Error("creation outcome UNKNOWN; inspect partial worktree/space facts, do not retry launch");
+      const adoption = adopting ? adoptable(repo, value.id, target, task, history, input) : null;
       const request: Request = {
         id: input.requestId,
         sequence: task?.requests.length || 0,
@@ -525,13 +608,14 @@ export function taskCommand(op: string, input: any): any {
         repo,
         target,
         owner,
-        branch: owner?.branch || input.branch || "",
+        branch: owner?.branch || adoption?.branch || input.branch || "",
         requests: [],
         ...(input.forkReason ? { forkReason: String(input.forkReason) } : {}),
       };
       if (!owner && !task.branch) throw new Error("no existing owner; pass branch explicitly for a new visible desk");
+      const checkout = owner?.cwd || adoption?.path || repo;
       Object.assign(request, {
-        candidate: { head: git(owner?.cwd || repo, "rev-parse", "HEAD"), tree: git(owner?.cwd || repo, "write-tree") },
+        candidate: { head: git(checkout, "rev-parse", "HEAD"), tree: git(checkout, "write-tree") },
       });
       if (input.outcome === "publish" && target.startsWith("pr:")) {
         try {
@@ -581,6 +665,20 @@ export function taskCommand(op: string, input: any): any {
           open_at_dispatch: native.spaces.map((s: any) => s.id),
         });
       }
+      if (adoption) {
+        // The gone owner's requests stay its own: none is delivered to the new session.
+        for (const r of task.requests.filter((r) => pending(r) && r.status !== "blocked"))
+          Object.assign(r, {
+            status: "blocked",
+            reason: `original owner gone; its checkout was adopted by request ${request.id}, so this request did not move to the new session`,
+            next: "Dispatch it again as a new request if the adopting desk should do it",
+          });
+        task.branch = adoption.branch;
+        task.adoptions = [
+          ...(task.adoptions || []),
+          { request: request.id, reason: input.adoptReason.trim(), at: new Date().toISOString(), ...adoption },
+        ];
+      }
       task.owner = owner;
       task.requests.push(request);
       save(repo, value, task); // Reopen before delivery, so even an interrupted send protects unpublished work.
@@ -607,6 +705,7 @@ export function taskCommand(op: string, input: any): any {
               target,
               "--clean",
               ...(input.forkReason ? ["--fork-reason", String(input.forkReason)] : []),
+              ...(adoption ? ["--adopt-reason", input.adoptReason.trim()] : []),
             ],
             repo,
             30000,
@@ -618,7 +717,8 @@ export function taskCommand(op: string, input: any): any {
         if (
           t.state !== "live" ||
           t.labels?.["bercail.space"] !== result.space ||
-          realpathSync(t.cwd) !== realpathSync(result.path)
+          realpathSync(t.cwd) !== realpathSync(result.path) ||
+          (adoption && realpathSync(result.path) !== adoption.path)
         )
           throw new Error(`visible tuple unconfirmed: ${JSON.stringify(result)}`);
         request.status = "awaiting-session";

@@ -20,7 +20,7 @@ usage: handoff-spawn --info
                      [--resume SESSION] [--dry-run] [--model PROVIDER/MODEL[:thinking]]
        handoff-spawn --branch <name> --stage bstack --issue ID
                      [--dirty|--clean] [--space <id>] [--base <branch>]
-                     [--model PROVIDER/MODEL[:thinking]]
+                     [--model PROVIDER/MODEL[:thinking]] [--adopt-reason TEXT]
 
   --info          print JSON facts and exit
   --issue ID      beads issue to work (bd show ID). It holds the detail. The
@@ -52,6 +52,11 @@ usage: handoff-spawn --info
                   default branch (wt switch --create --base), so a dependent
                   issue stacks on its parent's branch. The repo's git backend
                   records that parent (gh stack, gt track, or origin stack track).
+  --adopt-reason TEXT
+                  --branch only, from bercail shep task dispatch: start a desk
+                  with a new session in the existing worktree of --branch,
+                  whose original desk is gone. No new branch, no dirty copy.
+                  TEXT goes on the issue and in handoffs.jsonl.
 
 Shep writes the beads issue first and owns the workflow. There are no prompt
 files and no per-stage modes. Each real handoff adds a bd comment to the
@@ -417,7 +422,7 @@ handoff_spawn_main() {
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0
-  local base="" model="" target="" fork_reason="" session="" lock="" prior path prior_main created=""
+  local base="" model="" target="" fork_reason="" adopt_reason="" session="" lock="" prior path prior_main created=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -448,6 +453,7 @@ handoff_spawn_main() {
       --dry-run) dry=1; shift ;;
       --target) [[ $# -ge 2 ]] || handoff_usage; target="$2"; shift 2 ;;
       --fork-reason) [[ $# -ge 2 ]] || handoff_usage; fork_reason="$2"; shift 2 ;;
+      --adopt-reason) [[ $# -ge 2 ]] || handoff_usage; adopt_reason="$2"; shift 2 ;;
       --branch)
         [[ $# -ge 2 ]] || handoff_usage
         branch="$2"
@@ -489,6 +495,9 @@ handoff_spawn_main() {
 
   [[ "${BERCAIL_ROLE:-}" != shep-bg ]] || handoff_die "background workers cannot dispatch coding or interactive authoring; continue the visible owner"
   [[ "${BERCAIL_ROLE:-}" != shep || ( -n "$branch" && "${BERCAIL_TASK_RESERVED:-}" == 1 ) ]] || handoff_die "Shep coding dispatch must use bercail shep task dispatch (visible original owner, no raw/headless fallback)"
+  # Only dispatch has checked that the original desk is gone and recorded why.
+  [[ -z "$adopt_reason" || ( -n "$branch" && "${BERCAIL_TASK_RESERVED:-}" == 1 ) ]] \
+    || handoff_die "--adopt-reason comes from bercail shep task dispatch with adoptReason, which checks the original desk is gone; run that"
   [[ -n "$stage" ]] || handoff_die "--stage bstack|autopilot is required; bercail does not pick a stage"
   [[ "$stage" == bstack || "$stage" == autopilot ]] || handoff_die "unknown stage: $stage"
   [[ -n "$issue" ]] || handoff_die "--issue <beads id> is required; the job lives in that issue"
@@ -550,6 +559,7 @@ handoff_spawn_main() {
       prior_main="$(git_backend_main "$path" 2>/dev/null || jq -r '.repo // empty' <<<"$prior")"
       [[ "$prior_main" == "$main" ]] || continue
       if jq -e --arg i "$issue" '.issue == $i' <<<"$prior" >/dev/null; then
+        [[ -z "$adopt_reason" ]] || continue
         handoff_die "original task already has a handoff: $prior; use bercail shep task dispatch, never a new preparation branch"
       fi
       [[ -n "$fork_reason" ]] || handoff_die "logical target already has a handoff: $prior; continue its issue, or pass --fork-reason on a separate exploration issue"
@@ -575,7 +585,12 @@ handoff_spawn_main() {
   wt_herdr_main_space "$main" \
     || echo "handoff-spawn: could not open a space on the main checkout $main; the desk's space shows top-level" >&2
   # The post-start hook makes the space only: this starts the desk below.
-  if [[ -n "$base" ]]; then
+  if [[ -n "$adopt_reason" ]]; then
+    # The gone desk's checkout as it is; the desk below finds or opens its space.
+    sibling="$(handoff_worktree_of "$main" "$branch")" \
+      || handoff_die "no existing worktree for $branch; an adoption continues a checkout, it never creates one"
+    dirty=0
+  elif [[ -n "$base" ]]; then
     git -C "$main" rev-parse --verify --quiet "$base^{commit}" >/dev/null \
       || handoff_die "--base $base is not a branch or commit in this repo"
     WT_HERDR_NO_DESK=1 wt switch --create "$branch" --base "$base" --no-cd \
@@ -585,7 +600,7 @@ handoff_spawn_main() {
       || handoff_die "wt switch --create $branch failed"
   fi
   _wt_herdr_keep_user_focus "$keep_space"
-  sibling="$(handoff_sibling_path "$main" "$branch")" \
+  [[ -n "$adopt_reason" ]] || sibling="$(handoff_sibling_path "$main" "$branch")" \
     || handoff_die "could not resolve sibling worktree for $branch"
   sibling="$(_git_backend_realpath "$sibling")"
 
@@ -599,7 +614,8 @@ handoff_spawn_main() {
   local track_rc=0
   backend="$(git_backend "$sibling")" || track_rc=$?
   [[ "$track_rc" -ne 130 ]] || exit 130
-  case "$backend" in
+  # An adopted branch already has its place in any stack.
+  [[ -n "$adopt_reason" ]] || case "$backend" in
     gt)
       handoff_track_graphite "$sibling" "$base"
       ;;
@@ -632,6 +648,8 @@ handoff_spawn_main() {
       intro="$(printf '%s Entire has no stacks: open the trail with entire trail create --base %s, and once %s lands, move it with entire trail retarget.' "$intro" "$base" "$base")"
     fi
   fi
+  [[ -z "$adopt_reason" ]] \
+    || intro="$(printf '%s\nAdopted: %s. The previous desk is gone; this desk starts a new session in its checkout and inherits none of that session, its requests, or its authority.' "$intro" "${adopt_reason%.}")"
   handoff_issue_comment "$sibling" "$issue" "$intro"
 
   prompt="$(handoff_issue_prompt "$issue" "$issue_title")"
@@ -662,6 +680,7 @@ handoff_spawn_main() {
        else .ok = false | .error = "partial visible creation; inspect these facts, do not relaunch" end' <<<"$json")"
   [[ -z "$base" ]] || json="$(jq -c --arg base "$base" '. + {base:$base}' <<<"$json")"
   [[ -z "$model" ]] || json="$(jq -c --arg model "$model" '. + {model:$model}' <<<"$json")"
+  [[ -z "$adopt_reason" ]] || json="$(jq -c --arg r "$adopt_reason" '. + {adoptReason:$r}' <<<"$json")"
   handoff_notify_check "$sibling"
   handoff_remember "$json"
   printf '%s\n' "$json"
