@@ -52,15 +52,9 @@ esac
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/"{hc,bd}
   # An OS-level Pi stand-in, never the installed Pi or a live Herdr desk.
-  cp "$(command -v sleep)" "$BATS_TEST_TMPDIR/bin/pi"
-  (cd "$REPO.fix" && exec "$BATS_TEST_TMPDIR/bin/pi" 120) >/dev/null 2>&1 &
-  PID=$!
-  local n
-  for ((n=0; n<200; n++)); do
-    [[ "$(basename "$(readlink "/proc/$PID/exe")")" == pi ]] && break
-    sleep 0.01
-  done
-  [[ "$n" -lt 200 ]] || fail "fake Pi did not exec"
+  cp "$BASH" "$BATS_TEST_TMPDIR/bin/pi"
+  mkfifo "$BATS_TEST_TMPDIR/pi.hold"
+  start_pi PID
   TICKS="$(awk '{print $22}' "/proc/$PID/stat")"
   owner t9 s1
   jq -nc --arg p "$REPO.fix" '{path:$p,branch:"fix",issue:"app-1",space:"sp1",desk:"t9",target:"pr:12"}' >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
@@ -72,6 +66,22 @@ teardown() {
     [[ -n "$pid" ]] || continue
     kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true
   done
+}
+
+# Starts the Pi stand-in in the worktree, waits until /proc names it pi, and
+# sets the variable named $1 to its pid. It is bash blocked in a builtin read,
+# not a renamed sleep: a multicall coreutils (uutils, on Ubuntu 26.04) picks
+# its applet from argv[0], so a copy named pi exits at once.
+start_pi() {
+  local pid n
+  (cd "$REPO.fix" && exec "$BATS_TEST_TMPDIR/bin/pi" -c 'read -rt 120 <>"$0"' "$BATS_TEST_TMPDIR/pi.hold") >/dev/null 2>&1 &
+  pid=$!
+  for ((n=0; n<200; n++)); do
+    [[ "$(basename "$(readlink "/proc/$pid/exe")")" == pi ]] && break
+    sleep 0.01
+  done
+  [[ "$n" -lt 200 ]] || fail "fake Pi did not exec"
+  printf -v "$1" %s "$pid"
 }
 
 owner() {
@@ -425,13 +435,9 @@ EOF
 
 @test "a competing exact-session process is ambiguous even without a coding role label" {
   local out ticks
-  (cd "$REPO.fix" && exec "$BATS_TEST_TMPDIR/bin/pi" 120) >/dev/null 2>&1 &
-  OTHER_PID=$!
+  start_pi OTHER_PID
   ticks="$(awk '{print $22}' "/proc/$OTHER_PID/stat")"
   jq -n --argjson pid "$OTHER_PID" --arg ticks "$ticks" '{pid:$pid,start_ticks:$ticks,sessions:["s1"]}' >"$XDG_RUNTIME_DIR/bercail/open-sessions/$OTHER_PID.json"
-  # Wait for exec, not a timing-dependent delay.
-  local n
-  for ((n=0;n<200;n++)); do [[ "$(basename "$(readlink "/proc/$OTHER_PID/exe")")" == pi ]] && break; sleep .01; done
   out="$(request | task dispatch 2>&1)" && fail "$out"
   [[ "$out" == *"exact-session process claims"* ]]
   ! grep -Eq 'hc (run|send|keys|kill|rm)' "$LOG"
