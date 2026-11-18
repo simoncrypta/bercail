@@ -275,7 +275,6 @@ export default class Spaces extends View {
     cx.spawn(async (cx) => {
       do {
         this.readAgain = false;
-        const was = shared(REVIEW) ?? {};
         const backend = await this.config;
         let next;
         try {
@@ -288,7 +287,7 @@ export default class Spaces extends View {
             next = { q, error: null, backend };
           }
         } catch (e) {
-          next = { q: was.q ?? null, backend: was.backend ?? null, error: String(e?.message ?? e) };
+          next = { q: null, backend, error: String(e?.message ?? e) };
         }
         setShared(REVIEW, next);
       } while (this.readAgain);

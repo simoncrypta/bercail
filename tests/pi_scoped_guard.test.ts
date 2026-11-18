@@ -292,10 +292,19 @@ test("scoped tags and releases cannot use independent policy or plain confirmati
   expect(decideBash("gh pr comment 1 -b 'Tests passed'", input)).toMatchObject({ action: "allow" });
 });
 
-test("guard registers the scoped_job structured tool", () => {
-  const tools: { name: string }[] = [];
-  guard({ on() {}, registerTool: (tool: { name: string }) => tools.push(tool) } as never);
-  expect(tools.map((tool) => tool.name)).toEqual(["scoped_job"]);
+test("guard registers scoped_job with a provider-compatible object schema", () => {
+  const tools: unknown[] = [];
+  guard({ on() {}, registerTool: (tool: unknown) => tools.push(tool) } as never);
+  expect(tools).toHaveLength(1);
+  expect(tools[0]).toMatchObject({
+    name: "scoped_job",
+    parameters: {
+      type: "object",
+      required: ["op"],
+      additionalProperties: false,
+      properties: { op: { type: "string", enum: ["preflight", "execute", "inspect", "revoke"] } },
+    },
+  });
 });
 
 function harness() {
@@ -732,6 +741,11 @@ test.each(["judge", "council", "discuss"])("%s cannot execute even when bypassin
 });
 
 test.each([
+  { op: "preflight", issue: "app-1" },
+  { op: "execute", requestId: "action-1", grantId: "grant:Q1@1", action: "commit" },
+  { op: "inspect" },
+  { op: "inspect", requestId: "action-1", grantId: "grant:Q1@1" },
+  { op: "revoke", grantId: "grant:Q1@1" },
   { ...action, cwd: "/forged" },
   { ...action, desk: "parent" },
   { ...action, session: "old" },

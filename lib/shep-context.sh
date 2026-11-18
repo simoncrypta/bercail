@@ -58,7 +58,11 @@ _shep_repo_candidates() {
   [[ ! -f "$trust" ]] || jq -r 'keys[] | "trust\t" + .' "$trust" 2>/dev/null || true
   [[ ! -f "$(notify_handoffs_file)" ]] || jq -nrR 'inputs | fromjson? | select(type == "object" and (.path | type) == "string")
     | ["handoffs", .path, (.branch // "")] | @tsv' "$(notify_handoffs_file)" 2>/dev/null || true
-  _shep_desks_json | jq -r '.[] | select(.cwd) | "desks\t" + .cwd' 2>/dev/null || true
+  if [[ $# -gt 0 ]]; then
+    printf '%s\n' "$1"
+  else
+    _shep_desks_json
+  fi | jq -r '.[] | select(.cwd) | "desks\t" + .cwd' 2>/dev/null || true
   extras="$(shep_state_dir)/repos"
   [[ ! -f "$extras" ]] || awk '{ sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, "") } $0 != "" && !/^#/ { print "extras\t" $0 }' "$extras"
   return 0
@@ -68,11 +72,14 @@ _shep_repo_candidates() {
 # Candidates that are not a git checkout any more are dropped.
 _shep_repo_list() {
   local src path branch main
-  _shep_repo_candidates | awk -F'\t' '$2 != "" && !seen[$0]++' | while IFS=$'\t' read -r src path branch; do
+  local -A mains=()
+  _shep_repo_candidates "$@" | awk -F'\t' '$2 != "" && !seen[$0]++' | while IFS=$'\t' read -r src path branch; do
     # shellcheck disable=SC2088 # a literal ~/ from config.toml or the extras file
     [[ "$path" != "~/"* ]] || path="$HOME/${path#"~/"}"
-    main="$(_shep_main_of "$path" "$branch")" || continue
-    printf '%s\t%s\n' "$main" "$src"
+    _shep_handoff_path path "$branch"
+    [[ -v 'mains[$path]' ]] || mains[$path]="$(_shep_main_of "$path")" || mains[$path]=""
+    main="${mains[$path]}"
+    [[ -z "$main" ]] || printf '%s\t%s\n' "$main" "$src"
   done | sort -u | awk -F'\t' '
     !($1 in from) { order[++n] = $1; from[$1] = $2; next }
     { from[$1] = from[$1] "," $2 }
@@ -141,15 +148,15 @@ shep_repos() {
 
 # Live desks and background Sheps: address, name, cwd, state (working, done,
 # blocked, idle), and the issue, title, space and model (handoff --model) on
-# their labels. [] when hc does not answer.
+# their labels. Fails when hc does not answer.
 _shep_desks_json() {
-  local addr detail main rows snapshot
+  local get="${1:-_shep_hc}" addr detail main rows snapshot
   _shep_need_policy
   rows="$(_shep_hc ls --json --label bercail.role=agent)" || return 1
   jq -e '.terminals | type == "array"' <<<"$rows" >/dev/null || return 1
   snapshot="$(
     while IFS= read -r addr; do
-      detail="$(_shep_hc get "$addr" --json)" || exit 1
+      detail="$("$get" get "$addr" --json 2>/dev/null </dev/null)" || exit 1
       main="$(_shep_main_of "$(jq -r '.cwd // ""' <<<"$detail")")" || main=""
       jq -c --arg repo "$main" '{address, name, cwd, repo:$repo, state: (.status.state // "unknown"),
         issue: .labels["bercail.issue"], title: .labels["bercail.issue_title"], space: .labels["bercail.space"],
@@ -162,25 +169,36 @@ _shep_desks_json() {
 # A repo-scoped projection for status only. Dispatch checks every live candidate;
 # it never treats this latest-record summary as proof of ownership.
 _shep_records_json() {
-  local file row main
+  local file row path branch main
+  local -A mains=()
   file="$(notify_handoffs_file)"
   [[ -f "$file" ]] || { printf '{}'; return 0; }
   _shep_need_policy
-  while IFS= read -r row; do
-    main="$(_shep_main_of "$(jq -r '.path // ""' <<<"$row")" "$(jq -r '.branch // ""' <<<"$row")")" || continue
-    jq -c --arg repo "$main" '. + {repo:$repo}' <<<"$row"
-  done < <(jq -Rc 'fromjson? | select(type == "object" and .issue)' "$file") \
-    | jq -sc 'reduce .[] as $r ({}; .[($r.repo + "\u001f" + $r.issue)] = $r)'
+  while IFS=$'\x1f' read -r path branch row; do
+    _shep_handoff_path path "$branch"
+    [[ -v 'mains[$path]' ]] || mains[$path]="$(_shep_main_of "$path")" || mains[$path]=""
+    main="${mains[$path]}"
+    [[ -z "$main" ]] || printf '%s\x1f%s\n' "$main" "$row"
+  done < <(jq -Rr 'fromjson? | select(type == "object" and .issue and (.path | strings | length > 0))
+    | [.path, (.branch // ""), tojson] | join("\u001f")' "$file") \
+    | jq -nRc 'reduce inputs as $line ({};
+      ($line | index("\u001f")) as $i | ($line[:$i]) as $repo | ($line[$i+1:] | fromjson) as $r
+      | .[($repo + "\u001f" + $r.issue)] = ($r + {repo: $repo}))'
 }
 
-# The main checkout of a folder. A handoff's worktree that is gone gives
-# <main> from <main>.<branch>, the name handoff-spawn uses.
-_shep_main_of() {
-  local path="$1" branch="${2:-}"
-  [[ -n "$path" ]] || return 1
-  if [[ ! -d "$path" && -n "$branch" && "$path" == *".$branch" ]]; then
-    path="${path%".$branch"}"
+# Normalize the caller's path before looking up a checkout: a gone handoff at
+# <main>.<branch> still identifies <main>.
+_shep_handoff_path() {
+  local -n checkout="$1"
+  local branch="$2"
+  if [[ ! -d "$checkout" && -n "$branch" && "$checkout" == *".$branch" ]]; then
+    checkout="${checkout%".$branch"}"
   fi
+}
+
+_shep_main_of() {
+  local path="$1"
+  _shep_handoff_path path "${2:-}"
   [[ -d "$path" ]] || return 1
   git_backend_main "$path" 2>/dev/null
 }
@@ -460,11 +478,15 @@ _shep_queue_json() {
   while IFS=$'\x1f' read -r path issue title desk space; do
     main="$(_shep_main_of "$path")" || continue
     jq -e --arg m "$main" 'any(.[]; .path == $m)' <<<"$repos" >/dev/null || continue
+    git -C "$path" diff --cached --quiet 2>/dev/null && continue
     [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
     change="$(desc_change "$path" 2>/dev/null)" || continue
     jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || continue
     if [[ -n "$live" ]] && ! jq -e --arg s "$space" --arg p "$path" '(.ids | index($s)) or (.paths | index($p))' <<<"$live" >/dev/null; then
       state='{"state":"stale","why":"no Herdr space"}'
+      if [[ -n "$issue" && -z "$title" ]]; then
+        title="$(_shep_queue_issue "$main" "$issue" | jq -r '.title // empty')" || title=""
+      fi
     else
       state="$(_shep_queue_state "$main" "$issue" "$path" "$change" "$records")"
     fi
@@ -565,7 +587,7 @@ shep_queue() {
 }
 
 _shep_queue_snapshot() {
-  local repo="" main="" queue budget json=0 repos
+  local repo="" main="" queue budget json=0 repos desks records backends path
   local usage="usage: bercail shep queue [--repo DIR] [--json]"
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -579,12 +601,19 @@ _shep_queue_snapshot() {
   if [[ -n "$repo" ]]; then
     main="$(_shep_main_of "$repo")" || { _shep_err "$repo is not a git checkout"; return 1; }
   fi
+  # The outer queue deadline bounds required desk details as one scan, with no per-desk polling delay.
+  desks="$(_shep_desks_json "${HC_BIN:-hc}")" || return 1
+  records="$(_shep_records_json)" || return 1
   if [[ -n "$main" ]]; then
-    repos="$(jq -nc --arg path "$main" --arg backend "$(git_backend "$main")" '{path:$path,backend:$backend,issues:[]} | [.]')"
+    repos="$(jq -nc --arg path "$main" --arg backend "$(git_backend "$main")" '[{path:$path,backend:$backend}]')"
   else
-    repos="$(_shep_repos_json)"
+    # The queue reads issue details only for staged candidates, not the board's full issue lists.
+    backends="$(while IFS=$'\t' read -r path _; do
+      printf '%s\t%s\n' "$path" "$(git_backend "$path" 2>/dev/null)"
+    done < <(_shep_repo_list "$desks"))"
+    repos="$(jq -Rnc '[inputs | split("\t") | select(length == 2) | {path: .[0], backend: .[1]}]' <<<"$backends")"
   fi
-  queue="$(_shep_queue_json "$repos" "$(_shep_desks_json)" "$(_shep_records_json)")"
+  queue="$(_shep_queue_json "$repos" "$desks" "$records")" || return 1
   if [[ -n "$main" ]]; then
     budget="$(policy_json "$main" 2>/dev/null | jq -r .policy.review_budget)" || budget=""
     queue="$(jq -c --arg m "$main" --argjson b "${budget:-$(jq .review_budget <<<"$POLICY_DEFAULTS")}" '

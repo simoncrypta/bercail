@@ -248,11 +248,14 @@ herdr.calls = [];
 herdr.send("review-next");
 await tick();
 expect(herdr.calls.find(([n]) => n === "space.select"), ["space.select", { id: "box/sp1" }], "review-next goes to box/sp1");
-// A failed read keeps the last queue with the machine it came from.
-herdr.exec = () => ({ code: 1, stdout: "", stderr: "box is away" });
+herdr.exec = () => ({ code: 124, stdout: "", stderr: "box is away" });
 v.readQueue(cx());
 await tick();
-expect([herdr.shared["bercail.review"].backend, herdr.shared["bercail.review"].error], ["box", "box is away"], "a failed read");
+expect(herdr.shared["bercail.review"], { q: null, backend: "box", error: "box is away" }, "a failed read clears the previous queue");
+herdr.calls = [];
+herdr.send("review-next");
+await tick();
+expect(herdr.calls, [], "a failed read does not navigate to a stale row");
 EOF
 }
 

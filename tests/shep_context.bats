@@ -26,7 +26,7 @@ setup() {
   cat >"$BATS_TEST_TMPDIR/bin/hc" <<'EOF'
 #!/usr/bin/env bash
 case "$1" in
-  ls) cat "$HC_DATA/ls.json" ;;
+  ls) printf 'hc ls %s\n' "$*" >>"$LOG"; cat "$HC_DATA/ls.json" ;;
   get) cat "$HC_DATA/$2.json" 2>/dev/null || { printf '{"error":{"kind":"not_found"}}\n'; exit 5; } ;;
   read) cat "$HC_DATA/$2.screen" 2>/dev/null || exit 5 ;;
   *) exit 2 ;;
@@ -819,6 +819,25 @@ EOF
   out="$(shep queue --repo "$HOME/Work/app" --json)" || fail "$out"
   jq -e '.repos | length == 1' <<<"$out"
   ! grep -q unrelated "$LOG"
+}
+
+@test "the global queue reads 30 desks once and skips full Beads lists" {
+  local name branch out
+  for name in app api web; do
+    repo "$name"
+    for branch in {1..10}; do
+      worktree "$name" "feat$branch"
+      desk "t-$name-$branch" "$HOME/Work/$name.feat$branch" idle
+    done
+  done
+  printf 'change\n' >"$HOME/Work/web.feat10/change"
+  git -C "$HOME/Work/web.feat10" add change
+
+  out="$(shep queue --json)" || fail "queue failed within its 6s bound: $out"
+
+  jq -e --arg path "$REAL_HOME/Work/web.feat10" '[.items[] | [.path, .state]] == [[$path, "review"]]' <<<"$out"
+  [[ "$(grep -c 'hc ls .*--label' "$LOG")" == 1 ]]
+  ! grep -q '^bd list ' "$LOG"
 }
 
 @test "slow or failed PR status is bounded UNKNOWN, never an invented empty queue" {

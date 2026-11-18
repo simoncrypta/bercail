@@ -1,6 +1,7 @@
 import { readFileSync, readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { QuestionStore } from "../../../shep/pi/questions.ts";
@@ -13,31 +14,22 @@ const candidateSchema = Type.Object(
   { head: oid, tree: oid, base: oid, description: fingerprint, evidence: fingerprint },
   { additionalProperties: false },
 );
-export const scopedJobSchema = Type.Union([
-  Type.Object(
-    {
-      op: Type.Literal("preflight"),
-      issue: text,
-      topic: text,
-      base: Type.Optional(text),
-      pr: Type.Optional(text),
-      remote: Type.Optional(text),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      op: Type.Literal("execute"),
-      requestId: text,
-      grantId: text,
-      action: Type.Union([Type.Literal("commit"), Type.Literal("publish-fast-forward")]),
-      candidate: candidateSchema,
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object({ op: Type.Literal("inspect"), requestId: text }, { additionalProperties: false }),
-  Type.Object({ op: Type.Literal("revoke"), grantId: text, reason: text }, { additionalProperties: false }),
-]);
+export const scopedJobSchema = Type.Object(
+  {
+    op: StringEnum(["preflight", "execute", "inspect", "revoke"]),
+    issue: Type.Optional(text),
+    topic: Type.Optional(text),
+    base: Type.Optional(text),
+    pr: Type.Optional(text),
+    remote: Type.Optional(text),
+    requestId: Type.Optional(text),
+    grantId: Type.Optional(text),
+    action: Type.Optional(StringEnum(["commit", "publish-fast-forward"])),
+    candidate: Type.Optional(candidateSchema),
+    reason: Type.Optional(text),
+  },
+  { additionalProperties: false },
+);
 
 type Caller = { cwd: string; desk: string; session: string; role: string };
 type ScopedInput =
@@ -216,7 +208,8 @@ export function registerScopedJob(pi: ExtensionAPI): void {
     name: "scoped_job",
     label: "Scoped job",
     description:
-      "Read-only preflight before work; execute an exact granted commit or fast-forward publication; inspect without retrying; or revoke. This tool never creates or approves a grant. Use the person's Decisions picker for authority.",
+      "Read-only preflight before work; execute an exact granted commit or fast-forward publication; inspect without retrying; or revoke. This tool never creates or approves a grant. Use the person's Decisions picker for authority. " +
+      "Required fields: preflight (issue, topic), execute (requestId, grantId, action, candidate), inspect (requestId), revoke (grantId, reason).",
     parameters: scopedJobSchema,
     async execute(_id, input, signal, _update, ctx) {
       const request = parse(input);
