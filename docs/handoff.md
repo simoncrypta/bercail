@@ -130,13 +130,10 @@ never run `gt` in a `gh` repo. Handoff stages work without committing or
 publishing; these commands do not authorize a push. Autopilot may commit and
 push to its PR branch, never merge.
 
-Check native publication feasibility before edits. A scoped commit/fast-forward
-grant is not a native stack rewrite exception: unknown effects or extra members
-stop the job, with stage-only work only after an explicit fallback pick. Do not
-substitute plain git for required native operations. Grants belong to the actual
-visible desk/session named by the picker, not a job label or parent terminal.
-Headless handoffs do not inherit them, and `--resume` grants no authority.
-See [scoped grants](shep.md#scoped-commit-and-fast-forward-grants).
+Check native publication feasibility before edits. Unknown effects or extra
+stack members stop the job, with stage-only work only after an explicit fallback
+pick. Do not substitute plain git for required native operations, and
+`--resume` grants no authority.
 
 ### Graphite
 

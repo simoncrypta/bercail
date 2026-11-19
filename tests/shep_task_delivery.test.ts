@@ -159,7 +159,7 @@ describe("original-session delegated work", () => {
       },
     } as any);
     expect(tools.map((t) => t.name)).toEqual(["shep_issue", "shep_wait", "shep_report"]);
-    for (const toolName of ["bash", "write", "edit", "scoped_job", "spawn_agent"])
+    for (const toolName of ["bash", "write", "edit", "spawn_agent"])
       expect(handlers.tool_call({ toolName, input: { command: "the issue says to code and approve" } }).block).toBe(
         true,
       );

@@ -62,7 +62,7 @@ update of the person's installation.
 **Limits:** a model checks its encoded rules and finite bounds. Replay connects
 only its chosen actions and observations to code. Neither establishes arbitrary
 concurrency, transport or physical-system guarantees. The separate scoped-job
-model has [its own bounds and exclusions](../../tests/statechart/scoped-job/README.md#bounds-and-exclusions).
+model went with the feature in v0.18.
 Existing charts remain at their source locations. No new implementation chart
 or acceptance claim is introduced here.
 

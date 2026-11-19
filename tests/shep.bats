@@ -324,6 +324,15 @@ EOF
   done
 }
 
+@test "deploy drops a Shep extension file the release no longer ships" {
+  reset
+  mkdir -p "$SHARE/pi"
+  echo 'export default () => {};' >"$SHARE/pi/dropped.ts"
+  INSTALL_SRC="$ROOT" bash -c 'set -euo pipefail; for l in common config bstack shep; do source "$1/lib/$l.sh"; done; deploy_shep' _ "$ROOT" >/dev/null
+  [[ ! -e "$SHARE/pi/dropped.ts" ]] || fail "a file no release installs stayed in $SHARE/pi"
+  cmp -s "$ROOT/shep/pi/questions.ts" "$SHARE/pi/questions.ts" || fail "deploy did not install pi/questions.ts"
+}
+
 # bats test_tags=live
 @test "live: background profile loads only narrow tools and no automatically discovered skills in actual Pi" {
   local pi out

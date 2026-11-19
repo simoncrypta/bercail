@@ -25,9 +25,6 @@ Before edits, check that the selected backend can enforce the job's local and
 remote scope. Graphite amend/restack/submit does not establish an exact-ref,
 fast-forward-only contract. Stop on unsupported effects, or obtain an explicit
 stage-only fallback. Never substitute raw git for a required native operation.
-A scoped grant is applied by `scoped_job`, not by answering a desk prompt. It
-belongs to the actual visible desk/session and does not transfer to a headless
-handoff or sibling. Candidate review stays separate.
 
 The PR body and the commit that lands are the description the desk's /validate
 wrote (the `describe` skill shows each backend's commands). On `gh` and

@@ -7,7 +7,7 @@ reports or new permission to act. The linked reference docs describe current
 usage.
 
 - [Publication boundaries](publication-boundaries.md): historical Graphite
-  contract research, the landed help fix and independent-`gh` scoped grants.
+  contract research, the landed help fix, and scoped grants (removed in v0.18).
 - [Tooling and bounded proof](tooling-and-proof.md): landed repo setup,
   statechart and Herdr mod-sync outcomes, with their remaining limits.
 - [Evidence preservation](evidence-preservation.md): what the cleanup inventory

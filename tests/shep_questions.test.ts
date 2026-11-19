@@ -335,6 +335,13 @@ describe("durable targeted questions", () => {
     expect(store.snapshot().questions).toEqual([]);
   });
 
+  test("only planning, review and action questions exist; the old candidate-review kind is refused", () => {
+    expect(() => store.create("old", { ...fields(), kind: "candidate-review" } as any, resolveSpec)).toThrow(
+      /invalid kind/,
+    );
+    expect(store.snapshot()).toEqual({ version: 1, questions: [], selected: null });
+  });
+
   test("returned objects and input objects cannot mutate persisted state", () => {
     const spec = fields();
     const q = store.create("q", spec, resolveSpec);
@@ -349,16 +356,18 @@ describe("durable targeted questions", () => {
     expect(statSync(join(state, "questions.json")).mode & 0o777).toBe(0o600);
   });
 
-  test.each(["{", JSON.stringify({ version: 2, questions: [], selected: null, requests: [] })])(
-    "corrupt state fails closed and is not overwritten",
-    (raw) => {
-      mkdirSync(state);
-      writeFileSync(join(state, "questions.json"), raw);
-      expect(() => store.snapshot()).toThrow(/corrupt/);
-      expect(() => store.create("q", fields(), resolveSpec)).toThrow(/corrupt/);
-      expect(readFileSync(join(state, "questions.json"), "utf8")).toBe(raw);
-    },
-  );
+  test.each([
+    "{",
+    JSON.stringify({ version: 2, questions: [], selected: null, requests: [] }),
+    // A version 2 ledger held grants, which no code reads now: refused, not ignored.
+    JSON.stringify({ version: 2, questions: [], selected: null, requests: [], grants: [], reviews: [], actions: [] }),
+  ])("corrupt state fails closed and is not overwritten", (raw) => {
+    mkdirSync(state);
+    writeFileSync(join(state, "questions.json"), raw);
+    expect(() => store.snapshot()).toThrow(/corrupt/);
+    expect(() => store.create("q", fields(), resolveSpec)).toThrow(/corrupt/);
+    expect(readFileSync(join(state, "questions.json"), "utf8")).toBe(raw);
+  });
 
   test("a forged verified proposal in the persisted file fails closed", () => {
     const q = store.create("q", fields(), resolveSpec);

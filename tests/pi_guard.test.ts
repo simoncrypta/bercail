@@ -1838,6 +1838,54 @@ test("Shep's question ledger, the answer command and typing for the person are n
   allowed("hyprctl dispatch workspace 2", tui);
 });
 
+test("the guard adds no tool of its own: publishing goes through the policy and its ask", () => {
+  const registerTool = vi.fn();
+  guard({ on() {}, registerTool } as never);
+  expect(registerTool).not.toHaveBeenCalled();
+});
+
+test("Shep's ledger stays protected through a symlinked state folder, a dangling link and a linked ledger", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "guard-ledger-"));
+  const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
+  const state = join(dir, "state/bercail/shep");
+  mkdirSync(state, { recursive: true });
+  vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
+  try {
+    guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {} } as never);
+    const call = (toolName: string, input: object) =>
+      handlers.tool_call({ toolName, input }, { hasUI: false, cwd: join(dir, "work") });
+    symlinkSync(state, join(dir, "alias"));
+    for (const name of ["questions.json", "questions.lock", ".questions.x.tmp"]) {
+      const path = join(dir, "alias", name);
+      expect(await call("write", { path }), path).toMatchObject({ block: true });
+      for (const command of [
+        `rm ${path}`,
+        `echo bad > ${path}`,
+        `dd if=/tmp/new of=${path}`,
+        `cd ${state}; rm ${name}`,
+      ])
+        expect(await call("bash", { command }), command).toMatchObject({ block: true });
+    }
+    // A dangling link would create the ledger where the guard protects it.
+    symlinkSync(join(state, "questions.json"), join(dir, "dangling"));
+    expect(await call("write", { path: join(dir, "dangling") })).toMatchObject({ block: true });
+    expect(await call("bash", { command: `echo bad > ${dir}/dangling` })).toMatchObject({ block: true });
+    // A ledger that is a link: its target is the ledger.
+    writeFileSync(join(dir, "target"), "{}");
+    symlinkSync(join(dir, "target"), join(state, "questions.json"));
+    expect(await call("write", { path: join(dir, "target") })).toMatchObject({ block: true });
+    expect(await call("bash", { command: `rm ${dir}/target` })).toMatchObject({ block: true });
+    // A symlink loop: the guard cannot tell where the write lands.
+    symlinkSync("loop", join(dir, "loop"));
+    expect(await call("write", { path: join(dir, "loop") })).toMatchObject({ block: true });
+    expect(await call("bash", { command: `echo x > ${dir}/loop` })).toMatchObject({ block: true });
+    expect(await call("write", { path: join(dir, "work/notes.md") })).toBeUndefined();
+  } finally {
+    vi.unstubAllEnvs();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a Discuss branch runs no commands and edits nothing", () => {
   const discuss = { role: "discuss", hasUI: true, cwd: "/work", policies: none };
   for (const command of [

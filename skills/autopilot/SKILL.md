@@ -37,10 +37,8 @@ Before edits, prove that the native backend can honor the exact local and remote
 effects. Graphite submit's implicit lease-force default is not fast-forward-only;
 modify may restack children. If exact scope cannot be enforced, stop or obtain an
 explicit stage-only fallback. Never silently replace the native workflow with raw
-git. A durable scoped grant is used through `scoped_job`, not the role-wide raw
-commit/push allowance. Its owner must be the actual visible desk/session; a
-headless run or sibling cannot borrow its parent's grant. A required candidate
-LGTM remains separate, and replies/body edits need their existing authority.
+git. A required high-stakes LGTM is the person's, separate from the role's
+commit/push allowance, and replies/body edits need their existing authority.
 
 The snapshot helper and GitHub commands below apply to `gh` and `gt` only.
 For `origin`, use `origin pr view`, `origin pr checks`, `origin pr requirements`,

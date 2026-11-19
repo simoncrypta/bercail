@@ -166,7 +166,7 @@ _shep_desks_json() {
   jq -sc '[.[] | select(.address)]' <<<"$snapshot"
 }
 
-# A repo-scoped projection for status only. Dispatch checks every live candidate;
+# A per-repo projection for status only. Dispatch checks every live candidate;
 # it never treats this latest-record summary as proof of ownership.
 _shep_records_json() {
   local file row path branch main

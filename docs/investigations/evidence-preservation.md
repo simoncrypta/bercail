@@ -9,7 +9,8 @@ ran no product tests. It counted one canonical candidate ready for human review,
 zero authorized shipments and zero worktrees proven removable at that time.
 
 The pending scoped-authorization classification is now
-[superseded by its landed commit](publication-boundaries.md#scoped-grants-landed-for-independent-gh-branches-only).
+[superseded by its landed commit](publication-boundaries.md#scoped-grants-landed-then-removed-in-v018),
+and the feature was later removed.
 Do not carry old candidate counts, clean-tree observations or process snapshots
 forward as current status. The setup, help, statechart, quiet-installer and mod
 changes were already landed in I1. Their old copies were preservation concerns,

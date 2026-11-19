@@ -35,11 +35,9 @@ captures the agents' sessions here), `default_copy`, `helper`,
 Never put the user's ask on the spawn command line; it goes in the beads issue.
 Never `python -c`, never a wrapper `.sh`, never argv after `--`.
 
-Before edits in a publication job, check native effect feasibility. A scoped
-commit/fast-forward grant uses `scoped_job` on its exact visible owning desk,
-never a job label, parent terminal or headless role. Handoffs and resumed sessions
-do not inherit another owner's grant. Unknown native scope or rewrite-capable
-publication stops. Stage-only fallback needs an explicit pick. Keep the backend.
+Before edits in a publication job, check native effect feasibility. Unknown
+native scope or rewrite-capable publication stops. Stage-only fallback needs an
+explicit pick. Keep the backend.
 
 ## The job is a beads issue
 
@@ -100,7 +98,7 @@ original visible owner before considering a branch. Raw spawn is create-only,
 not a follow-up route; it refuses an existing handoff or occupied desk. A
 stale/ambiguous/partial result is not permission to make another preparation
 checkout. `--target pr:N|task:ID` records a target; a deliberate parallel
-exploration needs a separate issue and `--fork-reason`, without inherited grants.
+exploration needs a separate issue and `--fork-reason`.
 `--adopt-reason` (from dispatch's `adoptReason` only) starts a new-session desk in
 the existing worktree of a branch whose original desk is gone. `--reuse-worktree`
 and `--released` are dispatch's too: finishing a creation that stopped before its

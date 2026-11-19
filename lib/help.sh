@@ -28,7 +28,7 @@ Post-install CLI (bercail):
                 runtime (source/installed fingerprints and actual startup evidence; read-only) |
                 discuss TOKEN (a read-only Pi on the question's branch: what Discuss runs) |
                 repos [--json] (your known repos) | board (open jobs, what waits on you) |
-                brief ISSUE [--repo DIR] [--budget CHARS] (repo-scoped owner, requested outcome, latest report) |
+                brief ISSUE [--repo DIR] [--budget CHARS] (the owner in that repo, requested outcome, latest report) |
                 queue [--repo DIR] [--json] (bounded status; UNKNOWN is not an empty queue or a dispatch gate) |
                 remember "RULE" [--scope SCOPE] | list | forget N (Shep's standing rules) |
                 mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list (the mistakes ledger) |
@@ -36,8 +36,6 @@ Post-install CLI (bercail):
                 questions [--json] (pending targeted questions; replies are unverified) |
                 question create|revise|reply|answer|withdraw (JSON on stdin) | check TOKEN | thread TOPIC |
                 panel (the Decisions panel's JSON) | discuss TOKEN (make or find its branch) | closed TOKEN OPENING
-                Scoped questions: kind scoped-authorization or candidate-review; only a picker grants authority.
-                Pi guard tool scoped_job: preflight | execute | inspect | revoke (exact visible desk; no force).
   todo          What only you can do, on one of your todo lists (targets; Basecamp for now):
                 add "TITLE" [--notes TEXT] [--due YYYY-MM-DD] [--issue ID] [--repo DIR] [--target NAME] |
                 list [--target NAME] [--json] | show ID | done ID. Shep adds them; desks propose Todo: "<text>".

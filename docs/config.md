@@ -187,7 +187,7 @@ writes, installs, deployment, commits, pushes, releases or approvals in init.
 
 ## A desk secret per repo
 
-1Password's app approves `op` per terminal, for ten minutes. Pi's bash tool has no terminal of its own, so every `op` call from a desk asks you again. A repo can instead give its desks a read-only [service account](https://developer.1password.com/docs/service-accounts/) scoped to one vault made for agents, while your other secrets keep asking.
+1Password's app approves `op` per terminal, for ten minutes. Pi's bash tool has no terminal of its own, so every `op` call from a desk asks you again. A repo can instead give its desks a read-only [service account](https://developer.1password.com/docs/service-accounts/) limited to one vault made for agents, while your other secrets keep asking.
 
 ```toml
 [desk_secrets."~/Work/some-repo"]    # the main checkout, as in [policy."<path>"]

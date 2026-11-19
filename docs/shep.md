@@ -332,8 +332,6 @@ replies leave the question pending.
 Only your pick in the [Decisions panel](#the-decisions-panel) or a Discuss
 branch answers a question (`answered`). A proposal never permits
 a desk prompt, guard approval, commit, merge, publication, spend or scope change.
-Only a newly typed scoped-authorization question can create the limited grant
-below. Ordinary answers and narrative summaries never become grants.
 
 Shep's `shep_question` tool creates or revises a question after verifying the
 explicit checkout/job and desk session against existing beads, hc and
@@ -405,9 +403,6 @@ guard is the seatbelt for agents: it blocks writes to Shep's state folder,
 `ydotool`, `xdotool`, `dotool`, `evemu`, `/dev/uinput`, and `hyprctl`'s
 `sendshortcut`, `sendkeystate` and `pass`, or a `dispatch exec` of one). A seatbelt,
 not a sandbox: a script file or another language gets past it.
-
-Before creating a scoped question, follow the [ledger upgrade and recovery](#ledger-upgrade-and-recovery)
-steps. Version 2 requires compatible readers and guards, not just a new ledger.
 
 #### Discuss
 
@@ -484,95 +479,6 @@ model run and in compaction/rollover, Shep reloads this store rather than
 reconstructing question state from narrative. The bounded projection shows up
 to 20 pending questions; the JSON snapshot contains the full history.
 
-### Scoped commit and fast-forward grants
-
-Before edits, the desk uses the guard's `scoped_job` preflight. Only an independent
-`gh` branch with a proven one-ref fast-forward publication path is supported.
-Unknown native effects, Graphite restacking or lease-force submit, Origin and
-Entire publication stay blocked. Do not substitute raw git for a required native
-workflow. A stage-only fallback requires an explicit pick.
-
-Shep creates `kind: "scoped-authorization"` through `shep_question` or
-`question create`, with `repo`, `issue`, `topic`, `desk`, `base`, exact `pr` URL,
-`remote`, `actions` (`commit`, `publish-fast-forward`) and ISO `expiresAt`, plus
-the usual origin. The resolver supplies the scope. The generated card names the
-allowed actions, expiry, canonical repository and worktree, PR/full head/base,
-remote endpoint, desk/session, owner, mapping and policy. Caller-supplied scope
-or prose does not authorize anything. Only the allow pick in the panel or
-Discuss creates a grant. Stage-only and decline create none.
-
-The grant, separate candidate reviews and execution receipts share
-`questions.json` and its transaction lock. An ordinary new candidate does not
-end the stable grant. A changed binding, completed job, revocation or expiry
-ends it; restoring an old binding never revives it. Unavailable facts pause use.
-A replacement desk, fork or headless sibling cannot inherit another session's
-grant. The current adapter requires the actual visible owning desk.
-
-For review-required work, Shep asks `kind: "candidate-review"` with `grantId`
-and the same target inputs. Its LGTM binds head/tree/base and description/evidence
-hashes, not future fixes. A verified single-parent commit receipt can carry that
-review to publication only for identical content, base, description and evidence.
-A scoped commit records that review via its picker channel, not an invented
-reviewer name. The standalone description printer's reviewer gate is unchanged.
-
-The owning desk executes a structured `scoped_job` request. It does not type Yes
-or get a shell-command exemption. Raw Git is limited to recognized reads and
-index staging in a scoped context. Unknown aliases, flags and native mutators
-cannot fall back to autopilot, confirmation or permissive repo policy. Each execution takes a target
-lock, rechecks live bindings and review, and records an applying receipt before
-effects, including the grant revision, observed remote head and executor capability.
-Commits retain hooks and bind checked parent/tree/message. The exact detached OID
-is recorded before updating the feature ref; recovery cannot bless a same-parent/tree
-replacement. Message- or tree-rewriting hooks are rejected before that ref update.
-Publication sends one immutable OID to one feature ref without force. Main/base,
-extra refs/tags, merges, deletion, releases, hook bypass and unrelated forge writes
-are excluded.
-Existing independent policy on unscoped desks is unchanged.
-
-Use `scoped_job` revoke to end a grant. Inspection never commits or pushes.
-An interrupted or uncertain receipt blocks new effects for that target until
-its outcome is proven. Repeating a request ID returns its receipt, never another
-execution; changing its payload is rejected. A lost publication response requires
-remote inspection, not automatic resend. Seeing the old or candidate OID alone
-is not proof of remote quiescence. This adapter keeps recovered uncertain
-publications quarantined rather than offering a caller-asserted clearance.
-Unreadable/corrupt state, an invalid authority root and failed locks fail closed.
-Once this guard instance observes a scoped context, losing the ledger does not
-restore its raw-write allowance. Persistence assumes an intact ledger: after
-external deletion and restart, its absence is indistinguishable from a fresh
-installation. Do not recreate grants or resend uncertain work to replace missing
-outcome evidence.
-
-The one-ref non-force Git update enforces ref scope and fast-forward behavior,
-not PR metadata. PR/base/ownership checks are fresh snapshots before the durable
-execution claim; Git cannot atomically bind them to that remote update. A grant
-does not promise server-enforced PR/base/auto-merge invariants. Advisory locks do
-not control arbitrary external writers, and hooks are not sandboxed. The picker
-retains the local user-owned seatbelt trust model described above.
-
-#### Ledger upgrade and recovery
-
-Installing this code does not migrate the ledger or create authority. Reads and
-ordinary question writes keep an existing v1 ledger at v1. The first successful
-creation or revision of a typed scoped question writes v2 in the same locked,
-fsynced transaction, even before anyone picks. Its grant/review/action arrays
-start empty. Historical answers are retained, never converted to grants.
-
-Before creating that first typed question, stop old Shep/Discuss and desk
-processes and upgrade all ledger readers and writers together, including the
-panel's CLI and the guard's execution modules. Restart them on the same version.
-An old reader rejects v2's schema rather than ignoring its grants. An already
-running old guard still lacks the scoped denial boundary, so a mixed-version
-rollout is not safe merely because the ledger fails closed. A process replacement
-also changes owner bindings: restarting cannot transfer an existing grant.
-
-Back up the intact ledger before migration. There is no v2-to-v1 downgrade or
-quarantine-clear command. Do not strip fields, restore an older snapshot over
-newer receipts, or treat a new pick as outcome evidence. If rolling back code,
-keep v2 and stop scoped work until compatible readers are restored. An uncertain
-publication may remain quarantined indefinitely. Recovery needs authoritative
-completion evidence that this adapter cannot establish from a visible OID alone.
-
 A read-only Herdr board, unread/reconciliation UI, isolated conversation views
 and proof of who picked an answer are not part of this feature.
 
@@ -626,7 +532,7 @@ bercail shep bg --kind wait --issue bercail-ow2        # from the issue's repo
 bercail shep bg --kind admin --issue bercail-ow2 --cwd ~/Work/bercail
 ```
 
-It prints `{address, name, cwd, issue, issue_title}`. The background Shep is one hc terminal named `shep-bg-<id>`, started in the background with no space, so nothing in the app moves or takes focus; the agents list shows it. It runs `bercail-desk-agent` with the lead's selected model/provider and guard, but replaces the coding prompt with [`shep/BACKGROUND.md`](../shep/BACKGROUND.md). It disables skill, context, prompt-template, MCP and automatic extension discovery. Its tools are read/search/list, `shep_issue`, `shep_wait` and `shep_report`: observation, bounded waits and reporting on the assigned issue. There is no shell, write/edit tool, scoped-job tool, agent launch, authoring or publication. Missing required lead/model/guard resources fail admission; no generic Pi fallback. Its first message is one line pointing at the issue. A second `bg` for an issue whose background Shep is still live is refused.
+It prints `{address, name, cwd, issue, issue_title}`. The background Shep is one hc terminal named `shep-bg-<id>`, started in the background with no space, so nothing in the app moves or takes focus; the agents list shows it. It runs `bercail-desk-agent` with the lead's selected model/provider and guard, but replaces the coding prompt with [`shep/BACKGROUND.md`](../shep/BACKGROUND.md). It disables skill, context, prompt-template, MCP and automatic extension discovery. Its tools are read/search/list, `shep_issue`, `shep_wait` and `shep_report`: observation, bounded waits and reporting on the assigned issue. There is no shell, write/edit tool, agent launch, authoring or publication. Missing required lead/model/guard resources fail admission; no generic Pi fallback. Its first message is one line pointing at the issue. A second `bg` for an issue whose background Shep is still live is refused.
 
 Its labels are `bercail.role=agent`, `bercail.shep=bg`, `bercail.issue`, and `bercail.issue_title`, with no `bercail.space`. The notify follower treats it like a desk, so its finish or block reaches Shep as a [desk event](#desk-events) whose text says `Background Shep <address>` and whose `agent.role` is `shep-bg`. It is started with `--no-notify`, so hc types nothing into Shep's prompt, `--outlive-parent`, so restarting Shep does not end the wait, and `--rm`. Once Shep has reported a finished one, `hc kill <name>` ends and removes it; killing it sends no second event.
 

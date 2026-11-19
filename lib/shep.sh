@@ -248,7 +248,7 @@ shep_bg() {
   while IFS= read -r ext; do
     [[ -n "$ext" ]] && cmd+=(-e "$ext")
   done < <(jq -r '. as $a | range(0; length) | select($a[.] == "-e") | $a[. + 1]
-    | select(test("(scoped-job|review)\\.ts$") | not)' "$lead")
+    | select(test("review\\.ts$") | not)' "$lead")
   cmd+=(-e "$(shep_share_dir)/pi/background.ts" --no-extensions --no-mcp --no-skills
     --no-prompt-templates --no-context-files --no-approve --tools "read,grep,find,ls,shep_issue,shep_wait,shep_report"
     --system-prompt "$brief")
@@ -263,7 +263,9 @@ shep_bg() {
 deploy_shep() {
   local share rel
   share="$(shep_share_dir)"
-  for rel in SHEP.md BACKGROUND.md pi/background.ts pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts pi/scoped-types.ts pi/scoped-questions.ts pi/scoped-target.ts pi/scoped-execution.ts; do
+  # pi/ holds only what this installs, so a file a release dropped goes with it.
+  [[ ! -d "$share/pi" ]] || run rm -rf "$share/pi"
+  for rel in SHEP.md BACKGROUND.md pi/background.ts pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts; do
     deploy_install_file "shep/$rel" "$share/$rel"
   done
 }

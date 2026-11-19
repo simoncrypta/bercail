@@ -200,19 +200,9 @@ export async function pick(
 ): Promise<AnswerResult> {
   const store = new QuestionStore(state);
   const q = store.snapshot().questions.find((x) => tokenOf(x) === token) ?? fail("unknown question revision");
-  // Resolve outside the ledger transaction: PR/remote checks may use the network.
-  // The picker, not a source string supplied to the old answer API, owns this path.
-  const check = await checkQuestion(q, state);
-  const result =
-    q.kind === "scoped-authorization" || q.kind === "candidate-review"
-      ? store.answerScoped(requestId, token, choice, source, () => ({
-          status: check.status,
-          reasons: check.reasons,
-          current: check.current,
-          ...("scope" in check && check.scope ? { scope: check.scope } : {}),
-          ...("candidate" in check && check.candidate ? { candidate: check.candidate } : {}),
-        }))
-      : store.answer(requestId, token, choice, source, check);
+  // Check outside the ledger transaction: it runs git and bercail policy show.
+  const check = await checkQuestion(q);
+  const result = store.answer(requestId, token, choice, source, check);
   if (result.accepted) decisionEvent(state, result.question, `${q.id}-${q.revision}`, { choice, by: source });
   return result;
 }
@@ -269,7 +259,7 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       const q = question();
       if (!q || !q.options.length) return ctx.ui.notify("This question has no choices to pick.", "warning");
-      const check = await checkQuestion(q, state);
+      const check = await checkQuestion(q);
       if (check.status !== "fresh")
         return ctx.ui.notify(
           `Can't answer: ${check.reasons.join(", ") || "it could not be checked"}. Shep must ask again.`,

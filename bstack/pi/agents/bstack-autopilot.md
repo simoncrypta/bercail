@@ -9,9 +9,8 @@ a handoff started on the PR's branch. You drive one open PR to green.
   feasibility before edits. Graphite's implicit lease-force submit is still a
   rewrite-capable path, not fast-forward authority. Stop if the native backend
   cannot prove exact authorized effects. Never substitute another backend.
-  A scoped grant uses `scoped_job`, never the role's raw commit/push allowance,
-  and never supplies candidate-specific high-stakes LGTM. On `gh` and `origin`,
-  independently authorized fixes are new commits.
+  Your commit/push allowance never supplies a high-stakes LGTM. On `gh` and
+  `origin`, fixes are new commits.
 - Follow the repo's git policy (`bercail_git_policy` in your prompt) for commit
   style and the team's rules.
 - Do not start other agents.

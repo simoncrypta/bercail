@@ -47,39 +47,18 @@ for Graphite, known non-overridden aliases. Unknown alias state keeps the write
 checks. This fixes help misclassification, not native publication scope. A
 parser allowing a command string is not authority to execute its effects.
 
-## Scoped grants: landed for independent gh branches only
+## Scoped grants: landed, then removed in v0.18
 
 The earlier inventory [I1](README.md#private-source-records) called scoped job
-authorization a staged, pending candidate on `3495144`. That status is
-**superseded**: the checked baseline contains
-[`b93c99f`](https://github.com/simoncrypta/bercail/commit/b93c99f3b519643d1c5739672b0d6db00892fcdb),
-with parent `3495144adaf3faadf0884ed95bb2fd026ea371fb` and tree
-`d5aa4b105566468e55146b880970c9de99b44b28`. This establishes landing, not a
-fresh approval or activation. The recorded publication CI is
-[run 44008064166](https://github.com/simoncrypta/bercail/actions/runs/44008064166).
-No product test or CI rerun was performed for these docs.
+authorization a staged, pending candidate on `3495144`. It landed as
+[`b93c99f`](https://github.com/simoncrypta/bercail/commit/b93c99f3b519643d1c5739672b0d6db00892fcdb)
+for independent `gh` branches only: a job grant, a separate candidate review
+and an action receipt, with one immutable OID sent to one feature ref without
+force. Graphite, Entire and native-stack publication stayed unsupported.
 
-Use the existing [scoped-grant reference](../shep.md#scoped-commit-and-fast-forward-grants)
-and [rollout/recovery instructions](../shep.md#ledger-upgrade-and-recovery),
-not the older research's proposed API. Landed code separates a job grant from
-an exact candidate review and an action receipt. Its supported executor sends
-one immutable OID to one independent `gh` feature ref without force. Graphite,
-Entire and native-stack publication remain unsupported, with no silent raw-Git
-fallback. The separate trusted-policy path is not a scoped grant.
-
-The publication report recorded no activation. This consolidation did not
-inspect the live ledger or installed processes and cannot establish their
-current versions or authority state. Shipping files alone creates no grant.
-The first successful typed scoped-question creation or revision migrates v1 to
-v2 before a pick. Ordinary question writes keep v1. An old reader rejecting v2
-does not make an already-loaded old guard safe. Coordinated reader/writer/guard
-upgrade and restart remain separate operational work, not actions authorized
-by these docs.
-
-The [bounded lifecycle proof](../../tests/statechart/scoped-job/README.md)
-explores one grant, one request, two candidates and two callers. Its recorded
-511 states and 4,540 edges establish bounded ledger correspondence, not OS lock,
-Git transport or complete executor correctness. PR/ownership checks remain
-snapshots. Uncertain publication can remain quarantined indefinitely: a new
-pick, session or visible OID is not remote-quiescence evidence. None of this
-implements or approves G2's lease-rewrite proposal.
+It was never used: of the 101 questions Shep had asked when the
+[v0.18 plan](../plans/v0.18.md) counted them, none was of its kinds. The plan
+removed it (S3, job J5), with its tool,
+question kinds, guard rules and statechart. Shep commits and pushes through
+the repo's policy and the guard's ask instead. None of this implements or
+approves G2's lease-rewrite proposal.

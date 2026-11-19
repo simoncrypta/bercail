@@ -91,7 +91,7 @@ export function captureTarget(input: TargetInput): QuestionTarget {
     if (input.issue.startsWith("-")) fail("invalid issue id");
     const jobs = JSON.parse(run("bd", ["show", input.issue, "--json"], worktree));
     if (!Array.isArray(jobs) || jobs.length !== 1 || jobs[0]?.id !== input.issue)
-      fail("issue does not match repo-scoped beads job");
+      fail("issue does not match the repo's beads job");
   }
   let space: string | null = null;
   let session: string | null = null;
@@ -136,11 +136,7 @@ export function captureTarget(input: TargetInput): QuestionTarget {
   };
 }
 
-export async function checkQuestion(question: Question, state = process.env.BERCAIL_SHEP_STATE) {
-  if (question.kind === "scoped-authorization" || question.kind === "candidate-review") {
-    const { checkScopedQuestion } = await import("./scoped-questions.ts");
-    return checkScopedQuestion(question, state);
-  }
+export async function checkQuestion(question: Question) {
   const target = question.target;
   const reasons: string[] = [];
   let current: QuestionTarget | null = null;

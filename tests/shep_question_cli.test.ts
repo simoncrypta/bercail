@@ -125,7 +125,7 @@ beforeEach(() => {
 });
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-test("target helper resolves facts from the explicitly scoped checkout", () => {
+test("target helper resolves facts from the explicitly named checkout", () => {
   const saved = process.env;
   try {
     process.env = env;
@@ -332,7 +332,7 @@ test.each([
   expect(result.stderr.toLowerCase()).toContain(message);
 });
 
-test("rejects a wrong issue returned by repo-scoped beads", () => {
+test("rejects a wrong issue returned by the repo's beads", () => {
   json(join(dir, "issue.json"), [{ id: "other-1" }]);
   const result = call("create", spec());
   expect(result.status).not.toBe(0);

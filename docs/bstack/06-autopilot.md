@@ -59,16 +59,13 @@ does not tag or release unless the repo's trusted
 [git policy](../config.md#git-policy-per-repo) sets `agent_may_release`.
 
 Before edits it checks whether the configured backend can enforce the job's
-exact effects. Graphite's implicit lease-force submit and child restacks do not
-fit a commit/fast-forward grant. An unsupported native path stops, or continues
-stage-only after an explicit fallback pick. It never silently switches backend.
+exact effects. Graphite's implicit lease-force submit and child restacks are
+not plain commits and fast-forwards. An unsupported native path stops, or
+continues stage-only after an explicit fallback pick. It never silently switches
+backend.
 
-A [scoped grant](../shep.md#scoped-commit-and-fast-forward-grants) belongs to one
-visible desk/session and uses the guard's structured `scoped_job` tool. Its denial
-cannot fall back to the autopilot role allowance. Candidate-specific high-stakes
-review is separate; a headless autopilot does not inherit its parent's grant.
-On independently authorized GitHub and Origin paths, each fix is a new commit,
-and you squash-merge with the description as the message. PR body edits keep
+High-stakes review stays the person's. On GitHub and Origin, each fix is a new
+commit, and you squash-merge with the description as the message. PR body edits keep
 their separate authority and use `bercail describe body`.
 
 It stops when the PR is green, when the same check fails after two real fixes,

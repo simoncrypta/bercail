@@ -276,7 +276,7 @@ Waiting on the person:
     || fail "board, a desk on the lead names no model: $out"
 }
 
-@test "shep remember, list and forget keep dated, scoped rules in Shep's preferences file" {
+@test "shep remember, list and forget keep dated rules with their scope in Shep's preferences file" {
   local out today file="$STATE/preferences.md"
   today="$(date +%Y-%m-%d)"
   out="$(shep list)"
@@ -780,7 +780,7 @@ Where bercail todo add sends a todo: --target, else the route of the job's repo,
     && grep -qx -- '- none yet' "$STATE/context.md" || fail "empty context: $(cat "$STATE/context.md")"
 }
 
-@test "brief and board keep identical issue ids scoped to their original repos" {
+@test "brief and board keep identical issue ids tied to their original repos" {
   local out name
   for name in a b; do
     repo "$name"; worktree "$name" "fix-$name"
