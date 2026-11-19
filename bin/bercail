@@ -114,7 +114,6 @@ cmd_doctor() {
   doctor_notify || failures=1
   doctor_bstack || failures=1
   doctor_runtime
-  doctor_desk_secrets || failures=1
   doctor_desk_restore || failures=1
   # shellcheck source=/dev/null
   source "$(find_lib_dir)/todo.sh"

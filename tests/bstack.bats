@@ -382,8 +382,6 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   cmp "$ROOT/bstack/pi/extensions/review.ts" "$p/extensions/review.ts" || fail "managed review-pr extension"
   cmp "$ROOT/bstack/pi/extensions/pi-emphasis/index.ts" "$p/extensions/pi-emphasis/index.ts" || fail "vendored pi-emphasis"
   cmp "$ROOT/bstack/pi/extensions/pi-emphasis/LICENSE" "$p/extensions/pi-emphasis/LICENSE" || fail "pi-emphasis keeps its license"
-  # The guard finds it beside its own folder, and PATH needs it executable.
-  cmp "$ROOT/bstack/pi/op-shim/op" "$p/op-shim/op" && [[ -x "$p/op-shim/op" ]] || fail "executable op shim"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
     and (index(["-e", "\($p)/extensions/review.ts"]) != null) and (index(["--tools", "read,grep,find,ls"]) != null)
     and (index(["--append-system-prompt", "\($p)/agents/bstack-pr-review.md"]) != null)
