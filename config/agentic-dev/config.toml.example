@@ -6,25 +6,22 @@ review = "tuicr"
 auto_review = true
 
 [bstack]
-# Pi with your own Claude, ChatGPT, and X subscriptions. Setup installs the
-# Claude bridge. Sign in with `claude auth login`, /login openai, /login xai.
-# Pi rate-limit fallback candidates, scanned from the start, skipping the current
-# and already attempted models. Only claude/gpt/grok, no duplicates. [] disables it.
-fallback = ["claude", "gpt", "grok"]
+# Pi with your own Claude and ChatGPT subscriptions. Setup installs the Claude
+# bridge. Sign in with `claude auth login` and /login openai. On a rate limit a
+# role pauses until it resets; only the judge switches, to Claude, while GPT is limited.
 # A model per provider. Empty: auto, the newest model of each connected plan
 # (re-picked on bercail update). Set a provider/model id to pin one; :high sets its level.
 # Claude on Pi: claude-bridge/claude-opus-5-5, not anthropic/claude-opus-5-5.
 claude = ""
 gpt = ""
-grok = ""
 # Reasoning effort of auto models: low, medium, high, xhigh, max, or none (the
 # provider's default). A model without that level gets the next one down.
 effort = "high"
-# Which provider each role uses: claude, gpt, grok, or a full model id. A role on
-# an unconnected provider takes the next connected one.
+# Which provider each role uses: claude, gpt, or a full model id. The judge on
+# gpt takes claude until ChatGPT is connected.
 lead = "claude"
-build = "grok"
-judge = "claude"
+build = "claude"
+judge = "gpt"
 
 # [git]
 # Git backend per repo: gh (git + GitHub CLI), gt (Graphite), or origin (Cursor

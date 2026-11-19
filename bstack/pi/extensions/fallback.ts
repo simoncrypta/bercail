@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isContextOverflow, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { classifyProviderError, providerEventReason, type ProviderErrorReason } from "./provider-error.ts";
 
 type Level = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -11,10 +12,13 @@ type Level = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 const profile = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const efforts = /[#:](?:off|minimal|low|medium|high|xhigh|max)$/;
 // Claude plan windows every model on the plan shares. Any other claim
-// (seven_day_opus) limits one model, so another model on the plan can still run.
+// (seven_day_opus) limits one model only.
 const planWindows = new Set(["five_hour", "seven_day", "seven_day_overage_included", "overage"]);
-// A limit that names no reset: try the desk's own model again after this long.
+// A limit that names no reset: try again after this long. One whose reset has passed: after a second.
 const unknownReset = 5 * 60_000;
+const passedReset = 1_000;
+// A pause wakes at least this often, so a machine that slept resumes on time.
+const pauseTick = 30_000;
 // Dead providers, one JSON line each, for bercail doctor.
 const deadLog = join(process.env.XDG_STATE_HOME || join(homedir(), ".local/state"), "bercail/fallback-dead.jsonl");
 
@@ -28,6 +32,19 @@ function read(name: string): string | undefined {
 }
 
 const clock = (ms: number) => new Date(ms).toTimeString().slice(0, 5);
+
+const sleep = (ms: number, signal: AbortSignal | undefined) =>
+  new Promise<void>((done) => {
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        done();
+      },
+      { once: true },
+    );
+  });
 
 export default function (pi: ExtensionAPI) {
   // The desk's own model and thinking level: what it started with, or what the person picked since.
@@ -177,11 +194,11 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
+  const until = (name: string) => Math.max(limited.get(name.split("/")[0]) ?? 0, limited.get(name) ?? 0);
   const blocked = (name: string) => {
     const provider = name.split("/")[0];
     if (dead.has(provider)) return `dead (${dead.get(provider)})`;
-    const until = Math.max(limited.get(provider) ?? 0, limited.get(name) ?? 0);
-    return until > Date.now() ? `limited until ${clock(until)}` : undefined;
+    return until(name) > Date.now() ? `limited until ${clock(until(name))}` : undefined;
   };
 
   const find = (ctx: { modelRegistry: { find(provider: string, id: string): any } }, name: string) => {
@@ -201,19 +218,101 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  // The desk's status line is its session name: say when it runs elsewhere and what is dead.
-  const noteSession = (model: string) => {
+  // The desk's status line is its session name: say when the judge's stand-in runs, until when
+  // the role is paused, and what is dead.
+  const noteSession = (model: string, pausedUntil?: number) => {
     if (!process.env.HC_TERMINAL_ID) return;
-    const base = (pi.getSessionName() ?? "").replace(/^(?:fallback|dead): .*$| · (?:fallback|dead) .*$/, "");
-    const away = model !== desk?.name;
+    const base = (pi.getSessionName() ?? "").replace(/(?:^| · )(?:stand-in|paused until|dead) .*$/, "");
     const parts = [
-      ...(away ? [base ? `fallback ${model.split("/")[0]}` : `fallback: ${model}`] : []),
-      ...(dead.size ? [`dead${base || away ? "" : ":"} ${[...dead.keys()].join(",")}`] : []),
+      model !== desk?.name ? `stand-in ${model}` : "",
+      pausedUntil ? `paused until ${clock(pausedUntil)}` : "",
+      dead.size ? `dead ${[...dead.keys()].join(",")}` : "",
     ];
     pi.setSessionName([base, ...parts].filter(Boolean).join(" · "));
   };
 
-  // A sibling role that runs out of models tells the agent that started it.
+  // Why Claude cannot run, or nothing. The bridge's dummy API key makes setModel succeed even
+  // without a Claude login, and the bridge reports a missing login as a limit.
+  const claudeLogin = async (ctx: ExtensionContext) => {
+    try {
+      const auth = await pi.exec(
+        "env",
+        [
+          "-u",
+          "ANTHROPIC_API_KEY",
+          "-u",
+          "ANTHROPIC_BASE_URL",
+          "-u",
+          "ANTHROPIC_AUTH_TOKEN",
+          "claude",
+          "auth",
+          "status",
+          "--json",
+        ],
+        { signal: ctx.signal, timeout: 5000 },
+      );
+      const login = auth.code === 0 ? JSON.parse(auth.stdout) : undefined;
+      if (login?.loggedIn !== true || !["claude.ai", "oauth_token"].includes(login.authMethod))
+        return "no Claude subscription login (claude auth login)";
+    } catch {
+      return "Claude login unavailable (claude auth login)";
+    }
+    return undefined;
+  };
+
+  // Why NAME cannot run now, or nothing.
+  const unusable = async (name: string, ctx: ExtensionContext) => {
+    const why = blocked(name);
+    if (why) return why;
+    const model = find(ctx, name);
+    if (!model) return "unavailable";
+    return model.provider === "claude-bridge" ? claudeLogin(ctx) : undefined;
+  };
+
+  // Wait until UNTIL, or until the person presses Esc or Pi is told to stop. Pi gives this hook no
+  // abort signal, and waits for it before it exits, so the pause listens itself: the shown dialog
+  // takes the keys, and SIGTERM or SIGHUP (a closed pane) ends the wait. The dialog also makes Pi
+  // report the desk as blocked, so hc shows it and Shep gets a blocked desk event. Returns why it
+  // stopped early, or nothing.
+  const pause = async (pausedUntil: number, text: string, ctx: ExtensionContext) => {
+    ctx.ui.setStatus("bercail-fallback", `paused until ${clock(pausedUntil)}`);
+    ctx.ui.notify(text, "warning");
+    const halt = new AbortController();
+    const signals = (["SIGTERM", "SIGHUP"] as const).map((name) => {
+      const stop = () => halt.abort(`because Pi got ${name}`);
+      process.once(name, stop);
+      return () => process.off(name, stop);
+    });
+    let close: ((result: undefined) => void) | undefined;
+    if (ctx.mode === "tui")
+      void ctx.ui.custom<undefined>(
+        (_tui, theme, keys, done) => {
+          close = done;
+          return {
+            render: (width: number) => [truncateToWidth(theme.fg("warning", text), width)],
+            handleInput: (data: string) => {
+              if (keys.matches(data, "tui.select.cancel")) halt.abort("by the person");
+            },
+            invalidate() {},
+          };
+        },
+        {
+          overlay: true,
+          overlayOptions: { anchor: "top-center", width: "90%" },
+          blocked: { kind: "question", message: `limit: paused until ${clock(pausedUntil)}` },
+        },
+      );
+    try {
+      while (Date.now() < pausedUntil && !halt.signal.aborted)
+        await sleep(Math.min(pausedUntil - Date.now(), pauseTick), halt.signal);
+    } finally {
+      close?.(undefined);
+      for (const off of signals) off();
+    }
+    return halt.signal.aborted ? String(halt.signal.reason) : undefined;
+  };
+
+  // A sibling role that cannot go on tells the agent that started it.
   const tellParent = async (text: string, ctx: ExtensionContext) => {
     const role = process.env.BERCAIL_ROLE;
     const me = process.env.HC_TERMINAL_ID;
@@ -226,7 +325,7 @@ export default function (pi: ExtensionAPI) {
       const self = await pi.exec("hc", ["get", me, "--json"], { timeout: 5000 });
       const parent = self.code === 0 ? JSON.parse(self.stdout).parent : undefined;
       if (parent)
-        await pi.exec("hc", ["send", parent, `${role} ${me} stopped: ${text} Do this part yourself.`], {
+        await pi.exec("hc", ["send", parent, `${role} ${me} stopped: ${text}`], {
           timeout: 5000,
         });
     } catch {
@@ -328,7 +427,7 @@ export default function (pi: ExtensionAPI) {
       const known = dead.has(assistant.provider);
       dead.set(assistant.provider, reason);
       if (!known) {
-        ctx.ui.notify(`${assistant.provider} is dead for this session, skipping it: ${reason}`, "warning");
+        ctx.ui.notify(`${assistant.provider} is dead for this session: ${reason}`, "warning");
         try {
           mkdirSync(dirname(deadLog), { recursive: true });
           appendFileSync(
@@ -337,7 +436,7 @@ export default function (pi: ExtensionAPI) {
               "\n",
           );
         } catch {
-          // doctor only reads this; the fallback goes on without it.
+          // doctor only reads this; the run goes on without it.
         }
       }
     } else {
@@ -346,108 +445,88 @@ export default function (pi: ExtensionAPI) {
       const scope = claim && !planWindows.has(claim) ? current : assistant.provider;
       limited.set(
         scope,
-        rejection?.reset && rejection.reset > Date.now() ? rejection.reset : Date.now() + unknownReset,
+        rejection?.reset ? Math.max(rejection.reset, Date.now() + passedReset) : Date.now() + unknownReset,
       );
     }
 
-    const models = new Map(
-      (read("models") ?? "").split(/\r?\n/).flatMap<[string, string]>((line) => {
-        const index = line.indexOf("=");
-        return index > 0 ? [[line.slice(0, index).trim(), line.slice(index + 1).trim()]] : [];
-      }),
-    );
-    // Each line is a family (claude, gpt, grok) or a Pi model id.
-    const order = (read("fallback") ?? "claude\ngpt\ngrok")
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+    // No role moves to another model but the judge: while its own model (GPT) is limited or dead,
+    // Claude Opus, the claude line deploy resolved, stands in so the review still finishes.
+    const judge = process.env.BERCAIL_ROLE === "judge";
+    const standIn = judge
+      ? (read("models") ?? "")
+          .split(/\r?\n/)
+          .find((line) => line.startsWith("claude="))
+          ?.slice(7)
+          .trim()
+          .replace(efforts, "") || undefined
+      : undefined;
     const skipped = [`${current}: ${blocked(current)}`];
-    for (const entry of order) {
-      const configured = entry.includes("/") ? entry : models.get(entry);
-      if (!configured) {
-        skipped.push(`${entry}: no model`);
-        continue;
-      }
-      const name = configured.replace(efforts, "");
-      if (attempted.has(name)) continue;
-      attempted.add(name);
-      const why = blocked(name);
-      if (why) {
-        skipped.push(`${name}: ${why}`);
-        continue;
-      }
-      const model = find(ctx, name);
-      if (!model) {
-        skipped.push(`${name}: unavailable`);
-        continue;
-      }
-      if (model.provider === "claude-bridge") {
-        // The bridge's dummy API key makes setModel succeed even without a Claude login.
-        try {
-          const auth = await pi.exec(
-            "env",
-            [
-              "-u",
-              "ANTHROPIC_API_KEY",
-              "-u",
-              "ANTHROPIC_BASE_URL",
-              "-u",
-              "ANTHROPIC_AUTH_TOKEN",
-              "claude",
-              "auth",
-              "status",
-              "--json",
-            ],
-            { signal: ctx.signal, timeout: 5000 },
-          );
-          const login = auth.code === 0 ? JSON.parse(auth.stdout) : undefined;
-          if (login?.loggedIn !== true || !["claude.ai", "oauth_token"].includes(login.authMethod)) {
-            skipped.push(`${name}: no Claude subscription login`);
-            continue;
-          }
-        } catch {
-          if (ctx.signal?.aborted) return;
-          skipped.push(`${name}: Claude login unavailable`);
-          continue;
-        }
-      }
+    // The models whose only obstacle is a limit; the pause waits for the first to reset.
+    const candidates: string[] = [];
+    for (const name of judge ? new Set([desk?.name, standIn]) : []) {
+      if (!name || name === current) continue;
+      const why = await unusable(name, ctx);
       if (ctx.signal?.aborted) return;
-      if (!(await switchTo(model))) {
-        skipped.push(`${name}: no login`);
-        continue;
+      const model = why ? undefined : find(ctx, name);
+      if (model && (await switchTo(model))) {
+        const text = `${isDead ? "Dead model" : "Rate limit"}: ${current} is ${blocked(current)}; the judge switched ${current} → ${name}. Continuing the same request.`;
+        ctx.ui.setStatus("bercail-fallback", name === desk?.name ? undefined : `stand-in: ${name}`);
+        ctx.ui.notify(text, "warning");
+        noteSession(name);
+        return proceed(event, current, name, text, skipped);
       }
-      const text = `${isDead ? "Dead model" : "Rate limit"}: switched ${current} → ${name}. Continuing the same request.`;
-      ctx.ui.setStatus(
-        "bercail-fallback",
-        `fallback: ${name}${dead.size ? ` · dead ${[...dead.keys()].join(",")}` : ""}`,
-      );
-      ctx.ui.notify(text, "warning");
-      noteSession(name);
-      const failed = [...event.context.contextEntries]
-        .reverse()
-        .find(
-          (entry) =>
-            entry.messages.some((message) => message.role === "assistant" && message.stopReason === "error") &&
-            entry.sourceEntry.type === "message",
-        );
-      // Omit the empty error assistant. A later provider 400s on it and then looks like a non-limit failure.
-      return {
-        entries: [
-          ...event.entries,
-          ...(failed ? [{ type: "context_edit" as const, targetId: failed.sourceEntry.id, replacement: null }] : []),
-          {
-            type: "custom_message" as const,
-            customType: "bercail-fallback",
-            content: text,
-            display: true,
-            details: { from: current, to: name, skipped, dead: Object.fromEntries(dead) },
-          },
-        ],
-        continue: true,
-      };
+      skipped.push(`${name}: ${why ?? "no login"}`);
+      if (why?.startsWith("limited until")) candidates.push(name);
     }
-    const text = `Rate limit: fallback exhausted (${order.join(" → ") || "no candidates"}). No configured model can run now.${skipped.length ? ` ${skipped.join("; ")}.` : ""}`;
-    ctx.ui.setStatus("bercail-fallback", "fallback exhausted");
+    // The run's own model waits for its reset, unless it is dead or has no Claude login.
+    if (!isDead) {
+      const login = assistant.provider === "claude-bridge" ? await claudeLogin(ctx) : undefined;
+      if (ctx.signal?.aborted) return;
+      if (login) skipped.push(`${current}: ${login}`);
+      else candidates.push(current);
+    }
+
+    if (candidates.length) {
+      const resume = Math.min(...candidates.map(until));
+      const text = `Rate limit: ${current} is ${blocked(current)}. Paused until ${clock(resume)}; then the same request goes on.${ctx.mode === "tui" ? " Esc stops waiting." : ""}`;
+      noteSession(current, resume);
+      pi.appendEntry("bercail-fallback-pause", { model: current, until: resume, text, skipped });
+      const stopped = await pause(resume, text, ctx);
+      ctx.ui.setStatus("bercail-fallback", undefined);
+      if (stopped) {
+        noteSession(current);
+        return {
+          entries: [
+            ...event.entries,
+            {
+              type: "custom" as const,
+              customType: "bercail-fallback-error",
+              data: { text: `${text} Stopped ${stopped}.`, skipped },
+            },
+          ],
+          continue: false,
+        };
+      }
+      // Whichever reset first; the judge's own model when both have.
+      let to =
+        [desk?.name, ...candidates].find((name) => name && candidates.includes(name) && !blocked(name)) ?? current;
+      const model = to === current ? undefined : find(ctx, to);
+      if (to !== current && !(model && (await switchTo(model)))) to = current;
+      noteSession(to);
+      return proceed(
+        event,
+        current,
+        to,
+        `Limit lifted at ${clock(Date.now())}: continuing the same request on ${to}.`,
+        skipped,
+      );
+    }
+
+    const fix = skipped.some((line) => /claude auth login/.test(line))
+      ? "Run claude auth login, then send the request again."
+      : "Add credits or a subscription, then send the request again.";
+    const text = `${isDead ? "Dead model" : "Rate limit"}: ${current} cannot go on: ${skipped.join("; ")}. ${fix}`;
+    ctx.ui.setStatus("bercail-fallback", "stopped");
     ctx.ui.notify(text, "error");
     noteSession(current);
     await tellParent(text, ctx);
@@ -463,4 +542,30 @@ export default function (pi: ExtensionAPI) {
       continue: false,
     };
   });
+
+  // Continue the same request: a visible note, and the empty error assistant left out, since a
+  // later provider 400s on it and that then looks like a failure that is not a limit.
+  const proceed = (event: any, from: string, to: string, text: string, skipped: string[]) => {
+    const failed = [...event.context.contextEntries]
+      .reverse()
+      .find(
+        (entry: any) =>
+          entry.messages.some((message: any) => message.role === "assistant" && message.stopReason === "error") &&
+          entry.sourceEntry.type === "message",
+      );
+    return {
+      entries: [
+        ...event.entries,
+        ...(failed ? [{ type: "context_edit" as const, targetId: failed.sourceEntry.id, replacement: null }] : []),
+        {
+          type: "custom_message" as const,
+          customType: "bercail-fallback",
+          content: text,
+          display: true,
+          details: { from, to, skipped, dead: Object.fromEntries(dead) },
+        },
+      ],
+      continue: true,
+    };
+  };
 }

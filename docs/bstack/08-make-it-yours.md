@@ -8,17 +8,15 @@ Everything lives under `[bstack]` in `~/.config/bercail/config.toml`:
 
 ```toml
 [bstack]
-enabled = true
 # Empty: auto, the newest model of that plan. A Pi model id pins one.
 claude = ""
-gpt = ""
-grok = "xai/grok-4.7"
+gpt = "openai/gpt-6.2-sol"
 # Reasoning effort of auto models: low, medium, high (default), xhigh, max, none.
 effort = "xhigh"
-# A plan (claude, gpt, grok) or a full model id.
+# A plan (claude, gpt) or a full model id.
 lead = "claude"
-build = "gpt"
-judge = "claude"
+build = "claude"
+judge = "gpt"
 ```
 
 Then `bercail bstack setup` or `bercail update`. `bercail bstack status` shows
@@ -26,35 +24,30 @@ each model as `auto` or `pinned`. A pin stays until you clear it, gets a council
 seat even when you are not signed in to its plan, and skips every new release;
 auto picks again on every update.
 
-Roles fall back to the next plan you are signed in to, so you can set them once
-and sign in later ([the order](./02-the-bstack-agent.md#the-roles)). Higher
+The judge on `gpt` runs on Claude until you sign in to ChatGPT, so you can set
+it once and sign in later ([the roles](./02-the-bstack-agent.md#the-roles)).
+Every other role takes only Claude. Higher
 effort reasons longer and spends more of each plan; a model without the level
 you ask for gets the next one down.
 
-### Rate-limit fallback
+### Rate limits
 
-`fallback = ["claude", "gpt", "grok"]` sets runtime candidates after Pi
-exhausts rate-limit retries. Each switch scans from the start, skipping the
-current model, models already tried, models still limited, and providers that
-are dead for the session (402, out of credits, no subscription). For example,
-`fallback = ["gpt", "grok"]` tries GPT before Grok. An entry is a family name or
-a Pi model id without an effort: `["claude-bridge/claude-sonnet-5-5", "claude",
-"gpt"]` tries Sonnet before Opus. That helps only when the limit belongs to one
-model (`seven_day_opus`); the five-hour and weekly windows cover the whole plan,
-and the fallback skips every Claude model then. Duplicates are rejected, and
-`[]` disables fallback. This does not change the initial role model picks above.
-
-When the desk's own model's limit lifts, the next user message or turn goes back
-to it. Every switch keeps the desk's thinking level, so a `:high` desk stays high.
+There is no fallback model. When a role hits a limit after Pi's own retries, it
+pauses until the limit resets and then goes on with the same request, on the
+same model. The desk shows the reset time and reports itself blocked; Esc stops
+waiting. The judge is the one exception: while GPT is limited, Claude stands in,
+so `/validate` still finishes, and the judge goes back to GPT once its limit
+lifts. If Claude is limited too, the judge pauses. [How it runs](../bstack.md#how-it-runs)
+has the details. A `fallback` key from an older release is ignored with a
+warning.
 
 Claude IDs use `claude-bridge/`, for example
 `claude-bridge/claude-opus-5-5:high`, as `pi --list-models` and
 `handoff-spawn --model` write it. The bridge uses `claude auth login`, not
 Pi's Anthropic login. Status and doctor count a subscription only when
 `claude auth status` reports `authMethod` `claude.ai` or `oauth_token`.
-Run `bercail update` after changing fallback or model pins. `bercail bstack status`
-shows the order, and `bercail doctor` flags stale profile data and lists the
-providers the fallback found dead in the last day. See
+Run `bercail update` after changing model pins. `bercail doctor` flags stale
+profile data and lists the providers found dead in the last day. See
 [How it runs](../bstack.md#how-it-runs) for installation and role launches.
 
 ## What bstack sets up in Pi
@@ -69,7 +62,7 @@ providers the fallback found dead in the last day. See
   tags follow the repo's trusted [git policy](../config.md#git-policy-per-repo):
   what it allows goes through and is logged; the rest asks on a desk and is
   blocked in a headless run. Each agent gets that policy in its prompt.
-- **The rate-limit fallback** above.
+- **The rate-limit pause** above, and the judge's stand-in.
 - **review-pr's reviewer** (`pi/review.json`): the lead's model with only Pi's
   read tools, kept inside the review's stack dir.
 

@@ -1,5 +1,5 @@
 ---
-description: Review the current change with one reviewer per provider (Claude, GPT, Grok) and keep only findings that hold up
+description: Review the current change with one reviewer per provider (Claude, GPT) and keep only findings that hold up
 ---
 Load the `council` skill and follow it. Review target: $ARGUMENTS
 

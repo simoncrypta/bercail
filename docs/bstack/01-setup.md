@@ -17,14 +17,14 @@ sign-ins that are still missing:
 |------|----------------|
 | Claude (Pro or Max) | `claude auth login` in a terminal. The bridge runs Claude Code on your plan |
 | ChatGPT (Plus or Pro) | `/login openai` inside Pi, choose Sign in with ChatGPT |
-| X subscription | `/login xai` inside Pi |
 
-Sign in to the ones you pay for. One is enough to start. bstack spreads the
-work out as you add more; run `bercail update` after a new sign-in.
+Claude does the work: the lead, the builder, Shep and autopilot all run on it.
+ChatGPT runs the judge, a second opinion from another provider; without it the
+judge runs on Claude too. Run `bercail update` after a new sign-in.
 
 Setup does not ask about models. Each plan you are signed in to gets its newest
-model: the newest Claude Opus, the newest GPT Sol, the newest plain Grok
-release, each at `effort` (default `high`). `bercail update` picks again, so a
+model: the newest Claude Opus and the newest GPT Sol, each at `effort`
+(default `high`). `bercail update` picks again, so a
 new release reaches bstack without you doing anything. To pin a model or change
 the effort, see [Make it yours](./08-make-it-yours.md).
 

@@ -47,14 +47,14 @@ auto_review = true
 # (re-picked on bercail update). Set a provider/model id to pin one; :high sets its level.
 claude = ""
 gpt = ""
-grok = ""
 # Reasoning effort of auto models: low, medium, high, xhigh, max, or none (the
 # provider's default). A model without that level gets the next one down.
 effort = "high"
-# Which provider each role uses: claude, gpt, grok, or a full model id.
+# Which provider each role uses: claude, gpt, or a full model id. The judge on
+# gpt takes claude until ChatGPT is connected.
 lead = "claude"
-build = "grok"
-judge = "claude"
+build = "claude"
+judge = "gpt"
 # true: the statechart skill, with the TLC and Java it needs (installed on the
 # next bercail reconfigure or update). It checks TLA+ models of stateful changes.
 statechart = false
@@ -87,10 +87,8 @@ statechart_enabled() {
 # and each [policy."<repo>"] and [desk_secrets."<repo>"] takes its own keys.
 BERCAIL_CONFIG_KEYS='layout review
 layout auto_review
-bstack fallback
 bstack claude
 bstack gpt
-bstack grok
 bstack effort
 bstack lead
 bstack build

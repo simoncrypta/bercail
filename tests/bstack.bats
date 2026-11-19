@@ -172,28 +172,52 @@ EOF
 @test "a new install's config names the roles and has no switch, desk command, or harness" {
   reset_home
   default_user_config >"$BATS_TEST_TMPDIR/new.toml"
-  assert_eq "grok" "$(toml_value "$BATS_TEST_TMPDIR/new.toml" bstack build)" "build role default"
+  assert_eq "claude" "$(toml_value "$BATS_TEST_TMPDIR/new.toml" bstack build)" "build role default"
+  assert_eq "gpt" "$(toml_value "$BATS_TEST_TMPDIR/new.toml" bstack judge)" "judge role default"
+  if grep -q -e '^grok' -e '^fallback' "$BATS_TEST_TMPDIR/new.toml"; then fail "no xAI and no fallback list"; fi
   if grep -q -e '^\[agent\]' -e '^harness' -e '^enabled' "$BATS_TEST_TMPDIR/new.toml"; then
     fail "no switch, desk command, or harness to pick"
   fi
 }
 
-@test "roles resolve through families or full ids" {
+@test "roles resolve through families or full ids: build on Claude, the judge on GPT then Claude" {
   reset_home
   write_config <<'EOF'
 [bstack]
 claude = "claude-bridge/claude-opus-5-5#high"
 gpt = "openai/gpt-6.1-sol"
-grok = ""
-build = "grok"
-judge = "xai/grok-5#fast"
+lead = "openai/gpt-6.2-astra#fast"
 EOF
-  assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_role_model lead)" "lead defaults to claude"
-  assert_eq "openai/gpt-6.1-sol" "$(bstack_role_model build)" "build on an unset grok falls to gpt"
-  set_bstack claude '""'
+  assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_role_model build)" "build defaults to claude"
+  assert_eq "openai/gpt-6.1-sol" "$(bstack_role_model judge)" "judge defaults to gpt"
+  assert_eq "openai/gpt-6.2-astra#fast" "$(bstack_role_model lead)" "a full id is used as is"
   set_bstack gpt '""'
-  assert_eq "" "$(bstack_role_model lead)" "no family with a model: Pi's default model"
-  assert_eq "xai/grok-5#fast" "$(bstack_role_model judge)" "a full id is used as is"
+  assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_role_model judge)" "no gpt model: the judge takes claude"
+  set_bstack claude '""'
+  set_bstack gpt '"openai/gpt-6.1-sol"'
+  assert_eq "" "$(bstack_role_model build)" "no claude model: build has no other family, so Pi's default model"
+}
+
+@test "an old grok or fallback in config is ignored with a warning, not refused" {
+  reset_home
+  write_pi_config
+  set_bstack grok '"xai/grok-4.7"'
+  set_bstack fallback '["claude", "gpt", "grok"]'
+  set_bstack build '"grok"'
+  set_bstack judge '"grok"'
+  local err="$BATS_TEST_TMPDIR/deploy.err"
+  FAKE_PI_READY="claude-bridge openai xai" deploy_bstack >/dev/null 2>"$err" || fail "deploy refused an old config: $(cat "$err")"
+  grep -q 'grok is ignored: bstack no longer uses xAI' "$err" || fail "grok warning: $(cat "$err")"
+  grep -q 'fallback is ignored: a limited role now pauses' "$err" || fail "fallback warning: $(cat "$err")"
+  grep -q 'build = "grok" is ignored: build uses claude' "$err" || fail "build warning: $(cat "$err")"
+  grep -q 'judge = "grok" is ignored: judge uses gpt' "$err" || fail "judge warning: $(cat "$err")"
+  assert_eq "claude-bridge/claude-opus-5-5#high" "$(FAKE_PI_READY="claude-bridge openai xai" bstack_role_model build)" "build = grok takes build's default"
+  assert_eq "openai/gpt-6.1-sol#high" "$(FAKE_PI_READY="claude-bridge openai xai" bstack_role_model judge)" "judge = grok takes judge's default"
+  [[ ! -e "$(PI_DIR)/fallback" ]] || fail "no fallback list is deployed"
+  local out
+  out="$(FAKE_PI_READY="claude-bridge openai xai" bstack_status 2>&1)"
+  grep -q 'fallback is ignored' <<<"$out" || fail "status warns too: $out"
+  if grep -rq 'xai\|grok' "$(PI_DIR)/models" "$(PI_TEMPLATES)"; then fail "a pinned grok reaches no model or seat"; fi
 }
 
 @test "handoff stages bstack and autopilot run Pi on the lead and resume by its uuid" {
@@ -228,19 +252,16 @@ EOF
 @test "auto adds the [bstack] effort variant each model offers" {
   reset_home
   mkdir -p "$(dirname "$BERCAIL_USER_CONFIG")"
-  local m='xai/grok-4.7
-openai/gpt-6.1-sol
+  local m='openai/gpt-6.1-sol
 claude-bridge/claude-opus-5-5'
   local BSTACK_CONNECTED='claude-bridge
-openai
-xai'
-  local BSTACK_VARIANTS='xai/grok-4.7 low,medium,high,xhigh
-openai/gpt-6.1-sol low,medium,high,xhigh,max
+openai'
+  local BSTACK_VARIANTS='openai/gpt-6.1-sol low,medium,high,xhigh
 claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   printf '[bstack]\n' >"$BERCAIL_USER_CONFIG"
   assert_eq "openai/gpt-6.1-sol#high" "$(_bstack_pick_model gpt <<<"$m")" "high by default"
   printf '[bstack]\neffort = "max"\n' >"$BERCAIL_USER_CONFIG"
-  assert_eq "xai/grok-4.7#xhigh" "$(_bstack_pick_model grok <<<"$m")" "grok has no max: the next level down"
+  assert_eq "openai/gpt-6.1-sol#xhigh" "$(_bstack_pick_model gpt <<<"$m")" "no max offered: the next level down"
   assert_eq "claude-bridge/claude-opus-5-5#max" "$(_bstack_pick_model claude <<<"$m")" "claude at max"
   printf '[bstack]\neffort = "none"\n' >"$BERCAIL_USER_CONFIG"
   assert_eq "openai/gpt-6.1-sol" "$(_bstack_pick_model gpt <<<"$m")" "none: the provider default"
@@ -268,21 +289,23 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   bstack_load_state reload
   assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_resolve_model claude)" "newest plain opus"
   assert_eq "openai/gpt-6.1-sol#high" "$(bstack_resolve_model gpt)" "newest sol"
-  assert_eq "xai/grok-4.7#high" "$(bstack_resolve_model grok)" "a dated 4.20 build is not newer"
   assert_eq "claude-bridge/claude-opus-5-5:high" "$(_bstack_pi_model_id "$(bstack_role_model lead)")" "#high maps to :high"
-  assert_eq "xai/grok-4.7#high" "$(bstack_role_model build)" "build defaults to grok"
+  assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_role_model build)" "build defaults to claude"
+  assert_eq "openai/gpt-6.1-sol#high" "$(bstack_role_model judge)" "judge defaults to gpt"
 
   FAKE_PI_READY="claude-bridge openai-codex" bstack_load_state reload
   assert_eq "openai-codex/gpt-6.1#high" "$(FAKE_PI_READY="claude-bridge openai-codex" bstack_resolve_model gpt)" "openai-codex stands in for openai"
-  assert_eq "" "$(FAKE_PI_READY="claude-bridge openai-codex" bstack_resolve_model grok)" "no xai login: no grok"
-  assert_eq "openai-codex/gpt-6.1#high" "$(FAKE_PI_READY="claude-bridge openai-codex" bstack_role_model build)" "build falls through to the next family with a login"
+  FAKE_PI_READY="claude-bridge" bstack_load_state reload
+  assert_eq "claude-bridge/claude-opus-5-5#high" "$(FAKE_PI_READY="claude-bridge" bstack_role_model judge)" "no ChatGPT login: the judge resolves to Opus"
+  FAKE_PI_READY="openai" bstack_load_state reload
+  assert_eq "" "$(FAKE_PI_READY="openai" bstack_role_model build)" "no Claude login: build takes no other family"
 
   FAKE_PI_READY="" bstack_load_state reload
   assert_eq "" "$(FAKE_PI_READY="" bstack_role_model lead)" "no login at all: Pi's default"
 
   set_bstack gpt '"openai/gpt-6.1-sol:xhigh"'
-  FAKE_PI_READY="claude-bridge openai xai" bstack_load_state reload
-  assert_eq "openai/gpt-6.1-sol:xhigh" "$(_bstack_pi_model_id "$(FAKE_PI_READY="claude-bridge openai xai" bstack_resolve_model gpt)")" "a pin written :level reaches Pi as written"
+  FAKE_PI_READY="claude-bridge openai" bstack_load_state reload
+  assert_eq "openai/gpt-6.1-sol:xhigh" "$(_bstack_pi_model_id "$(FAKE_PI_READY="claude-bridge openai" bstack_resolve_model gpt)")" "a pin written :level reaches Pi as written"
   _bstack_pi_known "openai/gpt-6.1-sol:xhigh" || fail "a :level pin is a known model"
   set_bstack gpt '""'
 
@@ -292,16 +315,16 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   set_bstack effort '"max"'
   assert_eq "claude-bridge/claude-opus-5-5#max" "$(FAKE_PI_READY="claude-bridge" bstack_resolve_model claude)" "effort max"
   local BSTACK_MODELS BSTACK_VARIANTS
-  BSTACK_MODELS="xai/grok-plain"
-  BSTACK_VARIANTS="xai/grok-plain "
-  assert_eq "" "$(_bstack_variant xai/grok-plain)" "a model that does not think gets no level"
+  BSTACK_MODELS="openai/gpt-plain"
+  BSTACK_VARIANTS="openai/gpt-plain "
+  assert_eq "" "$(_bstack_variant openai/gpt-plain)" "a model that does not think gets no level"
   unset FAKE_PI_READY
 }
 
 @test "deploy renders /validate and removes the /ready an older release installed, with no alias" {
   reset_home
   write_pi_config
-  export FAKE_PI_READY="claude-bridge xai"
+  export FAKE_PI_READY="claude-bridge"
   local p
   p="$(PI_DIR)"
   mkdir -p "$p/prompts"
@@ -320,13 +343,17 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   mkdir -p "$HOME/.pi/agent"
   printf '{"defaultModel":"mine"}\n' >"$HOME/.pi/agent/settings.json"
   printf '{"token":"secret"}\n' >"$HOME/.pi/agent/auth.json"
-  export FAKE_PI_READY="claude-bridge xai"
-  deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  export FAKE_PI_READY="claude-bridge openai xai"
   local p t rel
   p="$(PI_DIR)"
   t="$(PI_TEMPLATES)"
+  # An older release's Grok seat.
+  mkdir -p "$t"
+  printf -- '---\nname: bstack-council-grok\ndescription: x (managed by bercail (bstack))\n---\n' >"$t/bstack-council-grok.md"
+  deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  [[ ! -e "$t/bstack-council-grok.md" ]] || fail "an update removes the Grok seat"
   for rel in instructions.md agents/bstack-builder.md agents/bstack-judge.md \
-    agents/bstack-autopilot.md agents/bstack-pr-review.md agents/bstack-council-claude.md agents/bstack-council-grok.md; do
+    agents/bstack-autopilot.md agents/bstack-pr-review.md agents/bstack-council-claude.md agents/bstack-council-gpt.md; do
     [[ -f "$p/$rel" ]] || fail "missing $rel"
   done
   for rel in validate council handoff autopilot how why unslop pr-review bstack-setup; do
@@ -369,10 +396,10 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     and (index(["--append-system-prompt", "\($p)/instructions.md"]) != null)
     and (index("--skill") != null) and (index("env") == null)' "$p/lead.json" >/dev/null \
     || fail "the desk's lead: $(cat "$p/lead.json")"
-  assert_eq "$(printf 'claude\ngpt\ngrok')" "$(<"$p/fallback")" "default runtime fallback"
+  [[ ! -e "$p/fallback" ]] || fail "no runtime fallback list"
   grep -q 'bercail.role=agent' "$p/instructions.md" || fail "instructions warn off the desk's label"
 
-  for rel in bstack-builder bstack-judge bstack-autopilot bstack-council-claude bstack-council-grok; do
+  for rel in bstack-builder bstack-judge bstack-autopilot bstack-council-claude bstack-council-gpt; do
     [[ -f "$t/$rel.md" ]] || fail "missing template $rel"
     sed -n 1p "$t/$rel.md" | grep -qx -- '---' || fail "frontmatter starts $rel"
     sed -n 2p "$t/$rel.md" | grep -qx "name: $rel" || fail "name $rel"
@@ -386,26 +413,25 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     grep -q -- "--append-system-prompt $p/instructions.md" "$t/$rel.md" || fail "instructions in $rel"
     grep -q -- '--skill .*/skills/council' "$t/$rel.md" || fail "--skill in $rel"
   done
-  [[ ! -e "$t/bstack-council-gpt.md" ]] || fail "no gpt seat without a login"
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=builder pi --model xai/grok-4.7:high ' "$t/bstack-builder.md" || fail "builder: $(cat "$t/bstack-builder.md")"
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=judge pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-judge.md" || fail "judge"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=builder pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder: $(cat "$t/bstack-builder.md")"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=judge pi --model openai/gpt-6.1-sol:high ' "$t/bstack-judge.md" || fail "judge"
   grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=autopilot pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-autopilot.md" || fail "autopilot"
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=council pi --model xai/grok-4.7:high ' "$t/bstack-council-grok.md" || fail "council seat on its own family"
-  grep -q -- "--append-system-prompt $p/agents/bstack-council-grok.md" "$t/bstack-council-grok.md" || fail "council brief"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=council pi --model openai/gpt-6.1-sol:high ' "$t/bstack-council-gpt.md" || fail "council seat on its own family"
+  grep -q -- "--append-system-prompt $p/agents/bstack-council-gpt.md" "$t/bstack-council-gpt.md" || fail "council brief"
   grep -q 'bstack-builder.md' "$t/bstack-builder.md" || fail "builder brief"
 
   assert_eq 'mine' "$(jq -r .defaultModel "$HOME/.pi/agent/settings.json")" "unrelated settings preserved"
   jq -e '.packages == ["npm:pi-claude-bridge@0.12.0"]' "$HOME/.pi/agent/settings.json" >/dev/null || fail "bridge installed"
   assert_eq '{"token":"secret"}' "$(cat "$HOME/.pi/agent/auth.json")" "auth.json untouched"
 
-  grep -qx 'grok=xai/grok-4.7#high' "$p/models" || fail "resolved models: $(cat "$p/models")"
+  assert_eq "$(printf 'claude=claude-bridge/claude-opus-5-5#high\ngpt=openai/gpt-6.1-sol#high')" "$(<"$p/models")" "resolved models, no xAI"
   # A family that lost its login loses its seat.
   mkdir -p "$p/extensions/bercail-guard"
   printf 'old guard\n' >"$p/extensions/bercail-guard/index.ts"
   FAKE_PI_READY="claude-bridge" deploy_bstack >/dev/null 2>&1
   [[ ! -d "$p/extensions/bercail-guard" ]] || fail "update removes the old managed guard"
-  [[ ! -e "$t/bstack-council-grok.md" && ! -e "$p/agents/bstack-council-grok.md" ]] || fail "stale council seat"
-  grep -q 'BERCAIL_ROLE=builder pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder falls through"
+  [[ ! -e "$t/bstack-council-gpt.md" && ! -e "$p/agents/bstack-council-gpt.md" ]] || fail "stale council seat"
+  grep -q 'BERCAIL_ROLE=judge pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-judge.md" || fail "judge falls through to Claude"
   unset FAKE_PI_READY
 }
 
@@ -476,18 +502,21 @@ EOF
   local out
   out="$(bstack_status)"
   grep -q 'lead = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "lead: $out"
-  grep -q 'build = xai/grok-4.7:high' <<<"$out" || fail "build: $out"
-  grep -q 'judge = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "judge: $out"
-  grep -q 'council (grok) = xai/grok-4.7:high' <<<"$out" || fail "council: $out"
+  grep -q 'build = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "build: $out"
+  grep -q 'judge = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "judge on Opus until ChatGPT is connected: $out"
   grep -q 'gpt.*/login openai' <<<"$out" || fail "missing login hint: $out"
+  if grep -qi 'xai\|grok' <<<"$out"; then fail "status lists no xAI, even with an xai login: $out"; fi
+  out="$(FAKE_PI_READY="claude-bridge openai" bstack_status)"
+  grep -q 'judge = openai/gpt-6.1-sol:high' <<<"$out" || fail "judge on GPT: $out"
+  grep -q 'on a limit: a role pauses until it resets' <<<"$out" || fail "status says what a limit does: $out"
   out="$(doctor_bstack)" || fail "doctor ok: $out"
   grep -q 'ok  bstack (lead=claude-bridge/claude-opus-5-5:high)' <<<"$out" || fail "doctor: $out"
-  if out="$(FAKE_PI_READY="claude-bridge xai openai" doctor_bstack)"; then
+  if out="$(FAKE_PI_READY="claude-bridge openai" doctor_bstack)"; then
     fail "doctor: a new login is a due update"
   fi
   grep -q 'stale  bstack models' <<<"$out" || fail "doctor stale: $out"
   if out="$(FAKE_PI_READY="" doctor_bstack)"; then fail "doctor: no login"; fi
-  grep -q 'none of Claude Code, openai, xai' <<<"$out" || fail "doctor no login: $out"
+  grep -q 'none of Claude Code, openai is ready' <<<"$out" || fail "doctor no login: $out"
   rm -f "$(PI_DIR)/instructions.md"
   if out="$(doctor_bstack)"; then fail "doctor: a missing file"; fi
   grep -q 'missing  bstack .*instructions.md' <<<"$out" || fail "doctor missing: $out"
@@ -510,7 +539,8 @@ EOF
   write_pi_config
   FAKE_PI_READY="claude-bridge" bstack_setup >"$BATS_TEST_TMPDIR/setup.log" 2>&1 || fail "setup: $(cat "$BATS_TEST_TMPDIR/setup.log")"
   [[ -f "$(PI_DIR)/instructions.md" ]] || fail "setup deploys"
-  grep -q '/login xai' "$BATS_TEST_TMPDIR/setup.log" || fail "setup hints: $(cat "$BATS_TEST_TMPDIR/setup.log")"
+  grep -q '/login openai' "$BATS_TEST_TMPDIR/setup.log" || fail "setup hints: $(cat "$BATS_TEST_TMPDIR/setup.log")"
+  if grep -qi 'xai\|grok' "$BATS_TEST_TMPDIR/setup.log"; then fail "setup names no xAI: $(cat "$BATS_TEST_TMPDIR/setup.log")"; fi
   local sub out
   for sub in on off; do
     if out="$(cmd_bstack "$sub" 2>&1)"; then fail "bstack $sub ran: $out"; fi
@@ -519,10 +549,10 @@ EOF
   [[ -f "$(PI_DIR)/lead.json" ]] || fail "off removed nothing"
 }
 
-@test "every Pi role including GPT/Grok council seats and empty-role lead loads bridge, fallback, and guard, and unsets Anthropic env" {
+@test "every Pi role including the GPT council seat and empty-role lead loads bridge, fallback, and guard, and unsets Anthropic env" {
   reset_home
   write_pi_config
-  export FAKE_PI_READY="claude-bridge openai xai"
+  export FAKE_PI_READY="claude-bridge openai"
   deploy_bstack >/dev/null 2>&1
   export ANTHROPIC_API_KEY=secret ANTHROPIC_BASE_URL=https://wrong ANTHROPIC_AUTH_TOKEN=secret
   export FAKE_PI_LAUNCH_LOG="$BATS_TEST_TMPDIR/pi-launch"
@@ -549,75 +579,37 @@ EOF
   unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN FAKE_PI_LAUNCH_LOG FAKE_PI_READY
 }
 
-@test "Pi fallback order validates families and duplicates, deploys separately, and doctor catches missing/stale config" {
+@test "doctor catches missing bstack data files" {
   reset_home
   write_pi_config
-  export FAKE_PI_READY="claude-bridge openai xai"
-  set_bstack fallback '["gpt", "grok"]'
+  export FAKE_PI_READY="claude-bridge openai"
   deploy_bstack >/dev/null 2>&1
-  assert_eq "$(printf 'gpt\ngrok')" "$(<"$(PI_DIR)/fallback")" "configured fallback"
-  grep -q 'fallback: gpt grok' <<<"$(bstack_status)" || fail "status fallback order"
-  grep -qx 'claude=claude-bridge/claude-opus-5-5#high' "$(PI_DIR)/models" || fail "models format unchanged"
-  assert_eq 'claude-bridge/claude-opus-5-5#high' "$(bstack_role_model lead)" "runtime order does not change initial role"
-  set_bstack fallback '["grok", "gpt"]'
-  local out raw
-  if out="$(doctor_bstack)"; then fail "doctor stale fallback"; fi
-  grep -q 'stale  bstack fallback' <<<"$out" || fail "doctor says stale fallback: $out"
-  deploy_bstack >/dev/null 2>&1
-  doctor_bstack >/dev/null || fail "doctor after fallback redeploy"
-  for raw in '["gpt", "gpt"]' '["openai"]' '[1]' '"gpt"' '["gpt",]' ''; do
-    [[ -n "$raw" ]] || raw='["claude", "grok", "grok"]'
-    set_bstack fallback "$raw"
-    if bstack_pi_fallback >/dev/null 2>&1; then fail "invalid fallback accepted: $raw"; fi
-    if deploy_bstack >/dev/null 2>&1; then fail "deploy accepted invalid fallback: $raw"; fi
-    if out="$(doctor_bstack 2>&1)"; then fail "doctor accepted invalid fallback: $raw"; fi
-    grep -q 'invalid  bstack fallback' <<<"$out" || fail "doctor invalid fallback: $out"
-  done
-  set_bstack fallback '[]'
-  deploy_bstack >/dev/null 2>&1
-  [[ ! -s "$(PI_DIR)/fallback" ]] || fail "empty fallback disables candidates"
-  rm "$(PI_DIR)/fallback" "$(PI_DIR)/models" "$(PI_DIR)/extensions/guard.ts" "$(PI_DIR)/agents/bstack-headless.md"
+  doctor_bstack >/dev/null || fail "doctor after deploy"
+  local out
+  rm "$(PI_DIR)/models" "$(PI_DIR)/extensions/guard.ts" "$(PI_DIR)/agents/bstack-headless.md"
   if out="$(doctor_bstack)"; then fail "doctor missing data files"; fi
-  grep -q 'missing  bstack .*fallback' <<<"$out" || fail "missing fallback: $out"
   grep -q 'missing  bstack .*models' <<<"$out" || fail "missing models: $out"
   grep -q 'missing  bstack .*extensions/guard.ts' <<<"$out" || fail "missing guard: $out"
   grep -q 'missing  bstack .*bstack-headless.md' <<<"$out" || fail "missing headless brief: $out"
   unset FAKE_PI_READY
 }
 
-@test "Pi fallback order takes Pi model ids beside families, so another model on the plan can go first" {
-  reset_home
-  write_pi_config
-  export FAKE_PI_READY="claude-bridge openai xai"
-  set_bstack fallback '["claude-bridge/claude-sonnet-5-5", "claude", "gpt"]'
-  deploy_bstack >/dev/null 2>&1
-  assert_eq "$(printf 'claude-bridge/claude-sonnet-5-5\nclaude\ngpt')" "$(<"$(PI_DIR)/fallback")" "model id kept as written"
-  local out raw
-  out="$(doctor_bstack)" || fail "doctor: $out"
-  grep -qF 'ok  bstack fallback order: claude-bridge/claude-sonnet-5-5 claude gpt' <<<"$out" || fail "doctor shows the order: $out"
-  for raw in '["/claude-opus-5-5"]' '["claude-bridge/"]' '["xai/grok-4.7:high"]' '["claude bridge/x"]' '["xai/grok-4.7", "xai/grok-4.7"]'; do
-    set_bstack fallback "$raw"
-    if bstack_pi_fallback >/dev/null 2>&1; then fail "invalid fallback accepted: $raw"; fi
-  done
-  unset FAKE_PI_READY
-}
-
 @test "doctor reports providers the fallback found dead in the last day, the latest per provider, and skips bad lines" {
   reset_home
   write_pi_config
-  export FAKE_PI_READY="claude-bridge openai xai"
+  export FAKE_PI_READY="claude-bridge openai"
   deploy_bstack >/dev/null 2>&1
   local log="$XDG_STATE_HOME/bercail/fallback-dead.jsonl" out
   mkdir -p "$(dirname "$log")"
   {
-    printf '{"at":"%s","provider":"openai","model":"openai/gpt-6.1-sol","reason":"old"}\n' "$(date -u -d '-2 days' +%FT%T.000Z)"
+    printf '{"at":"%s","provider":"claude-bridge","model":"claude-bridge/claude-opus-5-5","reason":"old"}\n' "$(date -u -d '-2 days' +%FT%T.000Z)"
     printf 'not json\n'
-    printf '{"at":"%s","provider":"xai","model":"xai/grok-4.6","reason":"first"}\n' "$(date -u -d '-1 hour' +%FT%T.000Z)"
-    printf '{"at":"%s","provider":"xai","model":"xai/grok-4.7","reason":"402 out of credits"}\n' "$(date -u +%FT%T.000Z)"
+    printf '{"at":"%s","provider":"openai","model":"openai/gpt-6-sol","reason":"first"}\n' "$(date -u -d '-1 hour' +%FT%T.000Z)"
+    printf '{"at":"%s","provider":"openai","model":"openai/gpt-6.1-sol","reason":"402 out of credits"}\n' "$(date -u +%FT%T.000Z)"
   } >"$log"
   out="$(doctor_bstack)" || fail "a dead provider is a report, not a failure: $out"
   [[ "$(grep -c '  dead  ' <<<"$out")" -eq 1 ]] || fail "one dead line: $out"
-  grep -q 'dead  bstack xai (xai/grok-4.7) at .*: 402 out of credits (fallback skips it' <<<"$out" || fail "latest xai record: $out"
+  grep -q 'dead  bstack openai (openai/gpt-6.1-sol) at .*: 402 out of credits (add credits or a subscription)' <<<"$out" || fail "latest openai record: $out"
   unset FAKE_PI_READY
 }
 
@@ -672,7 +664,7 @@ EOF
   write_pi_config
   local out
   out="$(show_summary)"
-  grep -q 'bstack: log in to Claude, ChatGPT, or xAI with bercail bstack setup' <<<"$out" || fail "summary: $out"
+  grep -q 'bstack: log in to Claude and ChatGPT with bercail bstack setup' <<<"$out" || fail "summary: $out"
   grep -q 'Desk agent: pi (handoff stages: bstack, autopilot)' <<<"$out" || fail "summary desk and stages: $out"
 }
 

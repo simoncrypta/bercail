@@ -1,10 +1,10 @@
 ---
 name: bstack
 description: >-
-  bercail's playbooks for rigorous work on Pi with your own Claude, GPT, and
-  Grok subscriptions: investigation, bug fix, feature, refactor, review,
-  ship, handoff, and takeover. Routes code to the builder and hard calls to the
-  judge; the council runs only on request. Use at the start of any non-trivial task, or when
+  bercail's playbooks for rigorous work on Pi with your own Claude and GPT
+  subscriptions: investigation, bug fix, feature, refactor, review, ship,
+  handoff, and takeover. Routes code to the builder and hard calls to the judge,
+  a second opinion on GPT; the lead decides. The council runs only on request. Use at the start of any non-trivial task, or when
   asked which bstack playbook or role fits.
 ---
 
@@ -15,7 +15,8 @@ before you start, then work through them in order. Roles and finishing rules are
 in bstack's instructions (`~/.local/share/bercail/pi/instructions.md`).
 
 `bstack-*` subagents are `hc` sibling agents; your instructions show how to
-start one.
+start one. `bstack-judge` reviews and recommends; you make the call, and say why
+when you go against it.
 
 ## Pick a playbook
 

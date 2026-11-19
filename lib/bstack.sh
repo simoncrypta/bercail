@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
-# bstack: bercail's agent setup on Pi. Your own Claude, GPT, and Grok logins sit
+# bstack: bercail's agent setup on Pi. Your own Claude and ChatGPT logins sit
 # behind it, and bercail's workflow on top. [bstack] in config.toml maps roles to
 # models.
 
@@ -8,7 +8,7 @@ BSTACK_MARKER="managed by bercail (bstack)"
 # Paths below expand at source time. Same default as lib/common.sh: an unset
 # share dir would otherwise become /pi/...
 : "${BERCAIL_SHARE_DIR:=${HOME}/.local/share/bercail}"
-BSTACK_FAMILIES=(claude gpt grok)
+BSTACK_FAMILIES=(claude gpt)
 BSTACK_ROLES=(lead build judge)
 # The Pi profile lives in bercail's share dir: Pi's own files stay the person's,
 # and every launch names this dir with flags.
@@ -30,29 +30,46 @@ BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge
 # shellcheck source=lib/toml.sh
 source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
 
+# The judge is GPT, a second opinion from another provider; every other role is
+# Claude Opus.
 _bstack_role_default() {
   case "$1" in
-    lead|judge) printf 'claude' ;;
-    build) printf 'grok' ;;
+    judge) printf 'gpt' ;;
+    *) printf 'claude' ;;
   esac
 }
 
-# Families in the order a role falls back through them, strongest for it first.
+# The families a role is picked from at start, in order: the judge takes Claude
+# when ChatGPT is not connected, and every other role takes only Claude.
 _bstack_role_order() {
   case "$1" in
-    build) printf '%s\n' grok gpt claude ;;
-    *) printf '%s\n' claude gpt grok ;;
+    judge) printf '%s\n' gpt claude ;;
+    *) printf '%s\n' claude ;;
   esac
 }
 
-# A family name (claude, gpt, grok) resolves to that family's model: the one set
-# in config.toml (pinned), else bercail's pick from Pi's catalog when the login
-# is ready (auto). Anything else is a full Pi model id. Empty: the agent uses
-# Pi's default model.
+# Keys and values from before v0.18, when Grok and a fallback list existed:
+# each one is ignored, and said so, rather than refused.
+bstack_warn_old_config() {
+  local role
+  [[ -z "$(toml_value "$BERCAIL_USER_CONFIG" bstack grok)" ]] \
+    || warn '[bstack] grok is ignored: bstack no longer uses xAI; remove it from config.toml'
+  [[ -z "$(toml_value "$BERCAIL_USER_CONFIG" bstack fallback)" ]] \
+    || warn '[bstack] fallback is ignored: a limited role now pauses until its limit resets; remove it from config.toml'
+  for role in "${BSTACK_ROLES[@]}"; do
+    [[ "$(toml_value "$BERCAIL_USER_CONFIG" bstack "$role")" != grok ]] \
+      || warn "[bstack] $role = \"grok\" is ignored: $role uses $(_bstack_role_default "$role"); set it to claude or gpt"
+  done
+}
+
+# A family name (claude, gpt) resolves to that family's model: the one set in
+# config.toml (pinned), else bercail's pick from Pi's catalog when the login is
+# ready (auto). Anything else is a full Pi model id. Empty: the agent uses Pi's
+# default model.
 bstack_resolve_model() {
   local spec="$1" model
   case "$spec" in
-    claude|gpt|grok) ;;
+    claude|gpt) ;;
     *) printf '%s' "$spec"; return 0 ;;
   esac
   model="$(toml_value "$BERCAIL_USER_CONFIG" bstack "$spec")"
@@ -73,14 +90,14 @@ bstack_model_source() {
 }
 
 # A role that names a family whose plan is not connected takes the next family
-# that has a model, so build = "grok" works on Claude alone and moves to Grok
-# once the X subscription is connected. A full model id is used as is.
+# in its order that has a model, so the judge runs on Claude until ChatGPT is
+# connected. A full model id is used as is; grok, from older configs, is not.
 bstack_role_model() {
   local role="$1" spec family model
   spec="$(toml_value "$BERCAIL_USER_CONFIG" bstack "$role")"
-  [[ -n "$spec" ]] || spec="$(_bstack_role_default "$role")"
+  [[ -n "$spec" && "$spec" != grok ]] || spec="$(_bstack_role_default "$role")"
   case "$spec" in
-    claude|gpt|grok) ;;
+    claude|gpt) ;;
     *) printf '%s' "$spec"; return 0 ;;
   esac
   for family in "$spec" $(_bstack_role_order "$role"); do
@@ -98,7 +115,6 @@ _bstack_family_label() {
   case "$1" in
     claude) printf 'Claude plan (Claude Code via pi-claude-bridge)' ;;
     gpt) printf 'Sign in with ChatGPT (openai, or openai-codex)' ;;
-    grok) printf 'xAI login' ;;
   esac
 }
 
@@ -126,8 +142,7 @@ bstack_family_connected() {
 BSTACK_EFFORTS=(low medium high xhigh max)
 
 # The reasoning variant for MODEL: [bstack] effort (default high), or the highest
-# level below it that the model offers (Grok stops at xhigh). Without a variant
-# list, none.
+# level below it that the model offers. Without a variant list, none.
 _bstack_variant() {
   local model="$1" want offered level best=""
   want="$(toml_value "$BERCAIL_USER_CONFIG" bstack effort)"
@@ -157,21 +172,6 @@ bstack_login_command() {
 }
 
 # --- pi -----------------------------------------------------------------------
-
-# Runtime fallback candidates, separate from the initial role model picks.
-# Each entry is a family name or a Pi model id (claude-bridge/claude-fable-5-2),
-# so another model on the same plan can come first; an empty array disables fallback.
-bstack_pi_fallback() {
-  local raw
-  raw="$(toml_value "$BERCAIL_USER_CONFIG" bstack fallback)"
-  [[ -n "$raw" ]] || raw='["claude", "gpt", "grok"]'
-  if ! jq -e 'type == "array" and all(.[]; type == "string" and (. == "claude" or . == "gpt" or . == "grok" or test("^[A-Za-z0-9._-]+/[A-Za-z0-9._/-]+$"))) and (length == (unique | length))' \
-    <<<"$raw" >/dev/null 2>&1; then
-    warn '[bstack] fallback must be an array of claude, gpt, grok or Pi model ids (provider/model, no effort), without duplicates'
-    return 1
-  fi
-  jq -r '.[]' <<<"$raw"
-}
 
 # Providers the fallback found dead (402, no credits, no subscription) in the
 # last day, one "provider<TAB>when<TAB>model<TAB>why" line each, the latest
@@ -210,7 +210,6 @@ _bstack_pi_providers() {
   case "$1" in
     claude) printf '%s\n' claude-bridge ;;
     gpt) printf '%s\n' openai openai-codex ;;
-    grok) printf '%s\n' xai ;;
   esac
 }
 
@@ -220,7 +219,7 @@ _bstack_pi_connected_ids() {
   local provider
   dep_present pi || return 0
   _bstack_pi_claude_ready && printf '%s\n' claude-bridge
-  for provider in openai openai-codex xai; do
+  for provider in openai openai-codex; do
     if pi auth check --provider "$provider" --no-refresh --json 2>/dev/null \
       | jq -e '.status == "ready"' >/dev/null 2>&1; then
       printf '%s\n' "$provider"
@@ -250,10 +249,6 @@ _bstack_pi_pick_model() {
           || grep -E "^$provider/gpt-[0-9][0-9.]*\$" <<<"$list" | sort -V | tail -1)"
         [[ -z "$model" ]] || break
       done
-      ;;
-    grok)
-      model="$(grep -E '^xai/grok-[0-9]+(\.[0-9]+)?$' <<<"$list" | sort -V | tail -1 | grep . \
-        || grep -E '^xai/grok-[0-9]' <<<"$list" | grep -vE 'mini|image|vision' | sort -V | tail -1)"
       ;;
   esac
   printf '%s' "$model"
@@ -336,8 +331,6 @@ _bstack_deploy_pi() {
   # The guard puts it first on PATH in a repo with a desk secret (lib/desk-secret.sh).
   copy_file "$work/src/pi/op-shim/op" "$BSTACK_PI_DIR/op-shim/op"
   run chmod 755 "$BSTACK_PI_DIR/op-shim/op"
-  bstack_pi_fallback >"$work/fallback" || return 1
-  copy_file "$work/fallback" "$BSTACK_PI_DIR/fallback"
   # The desk's lead, as a JSON argv: bercail-desk-agent runs it with the
   # Anthropic env unset.
   _bstack_pi_argv "$(bstack_role_model lead)"
@@ -351,7 +344,7 @@ _bstack_deploy_pi() {
   _bstack_pi_template "$work" bstack-builder builder "$(bstack_role_model build)" bstack-builder \
     "Writes code from a precise brief and proves it with the command the brief names."
   _bstack_pi_template "$work" bstack-judge judge "$(bstack_role_model judge)" bstack-judge \
-    "The strongest reasoner, read-only. For the hardest calls and for settling disagreements."
+    "A second opinion from another provider, read-only. It reviews; the lead decides."
   _bstack_pi_template "$work" bstack-autopilot autopilot "$(bstack_role_model lead)" bstack-autopilot \
     "Drives an open PR to green. Pushes the PR branch, never merges."
   # One read-only reviewer per family with a model: the council's panel.
@@ -365,6 +358,8 @@ _bstack_deploy_pi() {
       _bstack_remove_ours "$BSTACK_PI_TEMPLATES/bstack-council-$family.md"
     fi
   done
+  # Grok's seat, from before v0.18.
+  _bstack_remove_ours "$BSTACK_PI_TEMPLATES/bstack-council-grok.md"
   _bstack_resolved_text >"$work/resolved"
   copy_file "$work/resolved" "$BSTACK_PI_DIR/models"
   info "bstack (pi): lead=$(bstack_role_model lead || true) build=$(bstack_role_model build || true) judge=$(bstack_role_model judge || true) (empty: Pi's default model)"
@@ -448,12 +443,7 @@ bstack_status() {
   else
     log "  Claude auth: no subscription login (claude auth login)"
   fi
-  local fallback
-  if fallback="$(bstack_pi_fallback)"; then
-    log "  fallback: $(paste -sd' ' - <<<"$fallback") (skips limited and dead models; back to the desk's model when its limit lifts)"
-  else
-    log "  fallback: invalid [bstack] fallback"
-  fi
+  log "  on a limit: a role pauses until it resets, then goes on with the same model; the judge has Claude stand in while GPT is limited"
   log "  logins:"
   for family in "${BSTACK_FAMILIES[@]}"; do
     model="$(bstack_resolve_model "$family")"
@@ -476,14 +466,15 @@ bstack_status() {
     model="$(bstack_resolve_model "$family")"
     [[ -z "$model" ]] || log "    council ($family) = $(_bstack_pi_model_id "$model")"
   done
-  log "  config: [bstack] in $BERCAIL_USER_CONFIG (auto picks the newest model; set claude/gpt/grok to pin a Pi id)"
+  log "  config: [bstack] in $BERCAIL_USER_CONFIG (auto picks the newest model; set claude/gpt to pin a Pi id)"
+  bstack_warn_old_config
 }
 
 # Guided: install Pi and the bridge, then render the agents. Models are picked
 # automatically (auto); a model set in config.toml stays.
 bstack_setup() {
   bstack_load_state reload
-  log "bstack setup: Pi, with your own Claude, ChatGPT, and Grok logins."
+  log "bstack setup: Pi, with your own Claude and ChatGPT logins."
   _bstack_install_pi || die "bstack on Pi needs pi; install it (mise use -g pi), then run: bercail bstack setup"
   deploy_bstack
   bstack_status
@@ -516,7 +507,7 @@ doctor_bstack() {
     log "  --  Claude auth: no subscription login (claude auth login)"
   fi
   for rel in "${BSTACK_PI_RENDERED[@]}" extensions/fallback.ts extensions/provider-error.ts extensions/guard.ts extensions/scoped-job.ts extensions/review.ts \
-    models fallback lead.json review.json; do
+    models lead.json review.json; do
     if [[ ! -f "$BSTACK_PI_DIR/$rel" ]]; then
       log "  missing  bstack $BSTACK_PI_DIR/$rel (bercail update)"
       missing=1
@@ -530,19 +521,9 @@ doctor_bstack() {
       log "  yours  $path (not managed by bstack)"
     fi
   done
-  local fallback
-  if ! fallback="$(bstack_pi_fallback)"; then
-    log "  invalid  bstack fallback (fix [bstack] fallback, then bercail update)"
-    missing=1
-  elif [[ -f "$BSTACK_PI_DIR/fallback" && "$fallback" != "$(<"$BSTACK_PI_DIR/fallback")" ]]; then
-    log "  stale  bstack fallback (bercail update)"
-    missing=1
-  else
-    log "  ok  bstack fallback order: $(paste -sd' ' - <<<"${fallback:-(none)}")"
-  fi
   local provider at why
   while IFS=$'\t' read -r provider at model why; do
-    log "  dead  bstack $provider ($model) at $at: $why (fallback skips it; add credits or a subscription)"
+    log "  dead  bstack $provider ($model) at $at: $why (add credits or a subscription)"
   done < <(bstack_pi_dead)
   if [[ -f "$BSTACK_PI_DIR/models" ]] && [[ "$(_bstack_resolved_text)" != "$(<"$BSTACK_PI_DIR/models")" ]]; then
     log "  stale  bstack models (a login or model changed since the last deploy; bercail update)"
@@ -561,7 +542,7 @@ doctor_bstack() {
     fi
   done
   if [[ "$any_login" -eq 0 ]]; then
-    log "  missing  bstack login: none of Claude Code, openai, xai is ready in Pi"
+    log "  missing  bstack login: none of Claude Code, openai is ready in Pi"
     missing=1
   fi
   if [[ "$missing" -eq 0 ]]; then
@@ -608,7 +589,7 @@ _bstack_resolved_text() {
 
 deploy_bstack() {
   local work result=0
-  bstack_pi_fallback >/dev/null || return 1
+  bstack_warn_old_config
   _bstack_install_pi || return 1
   bstack_load_state reload
   work="$(mktemp -d)"

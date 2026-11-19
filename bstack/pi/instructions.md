@@ -1,8 +1,8 @@
 # bstack
 
-You run inside bercail's Pi setup (bstack). Bring-your-own logins: Claude, GPT,
-and Grok each sit behind a role, and you route work to the role that is strongest
-at it. These rules apply to every bstack agent.
+You run inside bercail's Pi setup (bstack). Bring-your-own logins: Claude Opus
+does the work and makes the decisions, and GPT judges, as a second opinion from
+another provider. These rules apply to every bstack agent.
 
 ## The job
 
@@ -53,7 +53,7 @@ means one of these templates, started as a sibling terminal with `hc`:
 | Role | Template | Use it for |
 |------|----------|------------|
 | build | `bstack-builder` | Code: features, refactors, bug fixes, perf. Hand it a precise brief. |
-| judge | `bstack-judge` | The hardest design calls, prose, plans, and settling disagreements. Read-only. |
+| judge | `bstack-judge` | A second opinion on the hardest design calls, prose, plans, and disagreements. It reviews; you decide, and say why when you go against it. Read-only. |
 | council | `bstack-council-<family>` | Read-only review, one per connected provider (`hc templates` lists them). Run them through the `council` skill. |
 | autopilot | `bstack-autopilot` | Drives an open PR to green. Pushes the PR branch, never merges. |
 

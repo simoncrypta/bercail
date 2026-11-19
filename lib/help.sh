@@ -136,22 +136,22 @@ Ubuntu / Debian:
   Uses apt for git, fzf, jq, curl when mise is unavailable
   Downloads worktrunk, beads and tuicr from upstream when needed
 
-bstack (Pi, bring your own Claude / GPT / Grok subscription):
+bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   bercail bstack setup   install Pi and the Claude bridge (models are picked for you)
   bercail bstack status  what is logged in, each model (auto or pinned), each role
-  Roles: lead (the bstack agent), build (bstack-builder), judge (bstack-judge);
-  council: one read-only reviewer per provider. In Pi: /council, /validate, /handoff,
+  Roles: lead (the bstack agent) and build (bstack-builder) on Claude Opus; judge
+  (bstack-judge) on GPT, which reviews while the lead decides; council: one read-only reviewer per provider. In Pi: /council, /validate, /handoff,
   /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green; pushes, never
   merges), /pr-review (bercail review-pr's read-only decisions pass), /statechart.
   Settings: [bstack] in config.toml. statechart = true installs TLC (and Java
   when there is no java 11 or later) and the statechart skill: TLA+ models of
   stateful changes, checked with TLC and replayed on the real code.
-  Pi >=1.5.1 with pi-claude-bridge@0.12.0. Claude uses claude auth login; GPT and
-  Grok use /login openai and /login xai in pi. bercail update renders
+  Pi >=1.5.1 with pi-claude-bridge@0.12.0. Claude uses claude auth login; GPT
+  uses /login openai in pi. bercail update renders
   ~/.local/share/bercail/pi/ and herdr-core templates, and sets a 40k compaction
   reserve per claude-bridge model in Pi's settings.json, so Pi compacts before
   Claude Code refuses a prompt near the window. Every role loads the
-  bridge, the rate-limit fallback, and bercail's guard, which follows each repo's
+  bridge, the rate-limit extension, and bercail's guard, which follows each repo's
   trusted git policy (bercail policy show). Direct, unquoted sole --help on recognized
   git builtins and gt create/modify/submit/merge is a read, not a write approval. Graphite help
   needs a known, unmodified alias configuration with no override of that command.
@@ -164,12 +164,13 @@ bstack (Pi, bring your own Claude / GPT / Grok subscription):
   Only Shep writes to your todo lists (bercail todo add|done, basecamp writes) and
   sets where they go (bercail todo target add|rm, route); other roles may read them.
   No role writes todo.json by hand, or runs basecamp's login, logout or token commands.
-  [bstack] fallback sets candidate order: families or Pi model ids
-  (default ["claude", "gpt", "grok"]).
-  The fallback skips limited models and dead providers (402, no credits), keeps
-  the desk's thinking level, and goes back to the desk's model once its limit
-  lifts. Safety blocks take precedence over quota hints: the unfinished role
-  stays incomplete, with sanitized reason data and no fallback or self-approval.
+  On a rate limit a role pauses until the limit resets, shown as blocked, then
+  goes on with the same request on the same model; Esc stops waiting. The judge
+  alone switches: Opus stands in while GPT is limited, and goes back to GPT once
+  it resets. A dead provider (402, no credits) or a missing Claude login stops
+  the role with the fix. Safety blocks take precedence over quota hints: the
+  unfinished role stays incomplete, with sanitized reason data and no switch or
+  self-approval.
   Pi's native/provider retries run before final settlement and are not suppressed
   by this extension. The lead starts roles as hc siblings.
 
@@ -216,7 +217,7 @@ show_summary() {
   log ""
   log "bercail installed (v${BERCAIL_VERSION})"
   log ""
-  log "bstack: log in to Claude, ChatGPT, or xAI with bercail bstack setup"
+  log "bstack: log in to Claude and ChatGPT with bercail bstack setup"
   log "Desk agent: pi (handoff stages: bstack, autopilot)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Config: ${BERCAIL_USER_CONFIG}"

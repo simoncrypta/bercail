@@ -10,6 +10,23 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 const resetSoon = () => ({ "anthropic-ratelimit-unified-reset": String(Math.floor(Date.now() / 1000) + 1) });
 // Scenarios whose fake-a limit lifts within a second, so the next turn goes back to it.
 const lifts = ["restore", "user-reset", "followup-reset", "new-user-reset"];
+// Scenarios that pause: until the time in `pausedUntil`, the provider named there answers with a
+// rejected limit and its reset header, as the bridge does; after it, it succeeds.
+const pausing: Record<string, string> = {
+  "plan-window": "fake-a",
+  "model-window": "fake-a",
+  "tui-pause": "fake-a",
+  "tui-esc": "fake-a",
+  "sigterm-pause": "fake-a",
+  "role-paused": "fake-a",
+  "missing-auth": "fake-a",
+  "bridge-missing-auth": "fake-a",
+  "bridge-metered": "fake-a",
+  "judge-paused": "fake-b",
+  "no-restore": "fake-b",
+};
+const claims: Record<string, string> = { "model-window": "seven_day_opus", "judge-paused": "seven_day_opus" };
+let pausedUntil = 0;
 export default function (pi: ExtensionAPI) {
   let calls = 0;
   let toolSent = false;
@@ -92,7 +109,7 @@ export default function (pi: ExtensionAPI) {
             status = 200;
           }
           if (scenario === "restore" && model.provider === "fake-b") await sleep(1100);
-          if (first && scenario === "dead-402") {
+          if (first && (scenario === "dead-402" || scenario === "lead-dead")) {
             error = 'fake-a API error (402): 402 "You have run out of credits or need a Grok subscription."';
             status = 402;
           }
@@ -100,31 +117,47 @@ export default function (pi: ExtensionAPI) {
             error = "You need a Grok subscription to use this model";
             status = 200;
           }
-          if (
-            ["dead-402", "dead-credits", "no-restore"].includes(scenario) &&
-            model.provider === "fake-b" &&
-            userTurns > 1
-          ) {
+          if (first && scenario === "judge-stop") {
+            error = 'fake-a API error (402): 402 "You have run out of credits."';
+            status = 402;
+          }
+          if (scenario === "lead-no-login" && model.provider === "claude-bridge") {
             error = "429 rate_limit_error";
             status = 429;
           }
-          if (first && scenario === "plan-window")
-            headers = {
-              "anthropic-ratelimit-unified-status": "rejected",
-              "anthropic-ratelimit-unified-representative-claim": "five_hour",
-              ...resetSoon(),
-            };
-          if (first && scenario === "model-window")
-            headers = {
-              "anthropic-ratelimit-unified-status": "rejected",
-              "anthropic-ratelimit-unified-representative-claim": "seven_day_opus",
-              ...resetSoon(),
-            };
-          if (scenario === "plan-window" && model.provider === "fake-a") {
-            error = "429 rate_limit_error";
-            status = 429;
+          // judge-paused: GPT (fake-a) stays limited for ten more seconds; its Opus stand-in resets sooner.
+          if (first && scenario === "judge-paused") headers = { "retry-after": "10" };
+          // passed-reset: Pi's three attempts are limited with a reset that has already passed.
+          if (first && scenario === "passed-reset") {
+            error = calls <= 3 ? "429 rate_limit_error" : undefined;
+            status = error ? 429 : 200;
+            if (error)
+              headers = {
+                "anthropic-ratelimit-unified-status": "rejected",
+                "anthropic-ratelimit-unified-reset": String(Math.floor(Date.now() / 1000) - 1),
+              };
           }
-          if (["role-exhaustion", "judge-exhaustion"].includes(scenario)) error = "429 rate_limit_error";
+          const pauser = pausing[scenario];
+          // no-restore limits the stand-in only on the second user turn.
+          if (model.provider === pauser && model.id === "model" && (scenario !== "no-restore" || userTurns > 1)) {
+            // Two whole seconds ahead, so the reset is still ahead after Pi's own retries. tui-esc and
+            // sigterm-pause wait ten minutes, unless the run is stopped.
+            if (!pausedUntil)
+              pausedUntil =
+                (Math.ceil(Date.now() / 1000) + (["tui-esc", "sigterm-pause"].includes(scenario) ? 600 : 2)) * 1000;
+            if (Date.now() < pausedUntil) {
+              error = "429 rate_limit_error";
+              status = 429;
+              headers = {
+                "anthropic-ratelimit-unified-status": "rejected",
+                "anthropic-ratelimit-unified-representative-claim": claims[scenario] ?? "five_hour",
+                "anthropic-ratelimit-unified-reset": String(pausedUntil / 1000),
+              };
+            } else {
+              error = undefined;
+              status = 200;
+            }
+          }
           if (first && scenario === "bridge") {
             error = "Claude Code turn failed";
             status = 200;

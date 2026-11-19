@@ -8,14 +8,12 @@ review = "tuicr"                     # or a command of yours
 auto_review = true
 
 [bstack]
-fallback = ["claude", "gpt", "grok"] # Pi rate-limit candidates: families or Pi model ids, no duplicates
 claude = ""
 gpt = ""
-grok = ""
 effort = "high"
 lead = "claude"
-build = "grok"
-judge = "claude"
+build = "claude"
+judge = "gpt"                        # GPT reviews; Claude stands in while it is limited
 statechart = false                   # true: the statechart skill, with TLC and Java
 
 [git]                                # optional, one line per main checkout

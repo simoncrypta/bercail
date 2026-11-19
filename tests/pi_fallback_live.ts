@@ -1,9 +1,10 @@
 // Real Pi with offline providers, no subscriptions or API requests: for each
-// scenario, bstack's fallback extension switches models (or does not) after
-// Pi's own retries, keeps the desk's thinking level, and logs what it did.
+// scenario, bstack's fallback extension pauses a limited role on its own model,
+// or moves the judge to its Opus stand-in, after Pi's own retries, keeps the
+// desk's thinking level, and logs what it did.
 // Usage: PI_FALLBACK_BIN=PI node tests/pi_fallback_live.ts
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -30,6 +31,8 @@ type SessionEntry = {
   content?: unknown;
   data?: {
     text?: string;
+    until?: number;
+    skipped?: string[];
     reason?: string;
     completion?: string;
     episode_id?: string;
@@ -44,6 +47,38 @@ type SessionEntry = {
 type Dead = { provider?: string; model?: string };
 
 const root = fileURLToPath(new URL("../", import.meta.url));
+// Run COMMAND and stop it once it is paused: press Esc when the desk reports blocked (an OSC 7501
+// record), or send SIGTERM when the session records the pause. A hung run is killed after 30 s.
+const stopWhenPaused = (how: "esc" | "sigterm", command: string, args: string[], env: NodeJS.ProcessEnv, cwd: string) =>
+  new Promise<{ stdout: string; stderr: string; error?: Error; stoppedAt?: number; closedAt?: number }>((done) => {
+    // Print mode reads a piped stdin to its end, so only the TUI gets one.
+    const child = spawn(command, args, { env, cwd, stdio: [how === "esc" ? "pipe" : "ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let stoppedAt: number | undefined;
+    const timer = setTimeout(() => child.kill("SIGKILL"), 30000);
+    const stop = () => {
+      if (stoppedAt) return;
+      stoppedAt = Date.now();
+      if (how === "esc") child.stdin!.write("\x1b");
+      else child.kill("SIGTERM");
+    };
+    const poll = setInterval(() => {
+      const session = join(cwd, "session.jsonl");
+      if (how === "sigterm" && existsSync(session) && readFileSync(session, "utf8").includes("bercail-fallback-pause"))
+        stop();
+    }, 100);
+    child.stdout!.on("data", (chunk) => {
+      stdout += chunk;
+      if (how === "esc" && stdout.includes("\x1b]7501;state=blocked")) setTimeout(stop, 300);
+    });
+    child.stderr!.on("data", (chunk) => (stderr += chunk));
+    child.on("close", () => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      done({ stdout, stderr, stoppedAt, closedAt: Date.now() });
+    });
+  });
 const pi = process.env.PI_FALLBACK_BIN || "pi";
 const version = spawnSync(pi, ["--version"], { encoding: "utf8" }).stdout.trim();
 const [major, minor] = version.split(".").map(Number);
@@ -70,15 +105,13 @@ try {
     "bridge-metered",
     "bridge-subscription",
     "bridge-oauth-token",
-    "exhaustion",
-    "configured-order",
-    "tool-no-loop",
     "user-reset",
     "followup-reset",
     "new-user-reset",
-    "empty-order",
-    "default-order",
     "tui-status",
+    "tui-pause",
+    "tui-esc",
+    "sigterm-pause",
     "status-only-400",
     "status-only-401",
     "status-only-403",
@@ -88,7 +121,12 @@ try {
     "dead-credits",
     "plan-window",
     "model-window",
-    "role-exhaustion",
+    "passed-reset",
+    "role-paused",
+    "judge-paused",
+    "judge-stop",
+    "lead-dead",
+    "lead-no-login",
     "safety-absent",
     "safety-200",
     "safety-400",
@@ -108,7 +146,6 @@ try {
     "refusal-stream",
     "harmless-quote",
     "ordinary-refusal",
-    "judge-exhaustion",
   ].filter((name) => !process.env.PI_FALLBACK_FILTER || new RegExp(process.env.PI_FALLBACK_FILTER).test(name))) {
     const dir = join(tmp, scenario);
     mkdirSync(join(dir, "profile/extensions"), { recursive: true });
@@ -117,34 +154,34 @@ try {
     copyFileSync(join(root, "bstack/pi/extensions/fallback.ts"), join(dir, "profile/extensions/fallback.ts"));
     const helper = join(root, "bstack/pi/extensions/provider-error.ts");
     if (existsSync(helper)) copyFileSync(helper, join(dir, "profile/extensions/provider-error.ts"));
-    // The desk runs fake-a at high; the fallback models carry other levels, which must not win.
-    const deskFirst = [
-      "tool-no-loop",
+    // The judge runs fake-a (its GPT) at high, with fake-b as its Opus stand-in; the stand-in's #low must not win.
+    const judge = [
+      "429",
+      "usage",
+      "bridge",
+      "missing-auth",
+      "bridge-missing-auth",
+      "bridge-metered",
+      "bridge-subscription",
+      "bridge-oauth-token",
       "user-reset",
       "followup-reset",
       "new-user-reset",
+      "tui-status",
       "restore",
       "no-restore",
       "dead-402",
       "dead-credits",
+      "judge-paused",
+      "judge-stop",
     ].includes(scenario);
     const twoTurns = ["new-user-reset", "restore", "no-restore", "dead-402", "dead-credits"].includes(scenario);
-    writeFileSync(
-      join(dir, "profile/models"),
-      `claude=${deskFirst ? "fake-a" : "fake-c"}/model\ngpt=${scenario === "missing-auth" ? "fake-unlogged" : scenario.startsWith("bridge-") && ["bridge-missing-auth", "bridge-metered", "bridge-subscription", "bridge-oauth-token"].includes(scenario) ? "claude-bridge" : "fake-b"}/model#low\ngrok=fake-c/model:medium\n`,
-    );
-    // Most cases limit candidates to GPT/Grok; default-order is covered separately below.
-    if (scenario !== "default-order")
-      writeFileSync(
-        join(dir, "profile/fallback"),
-        scenario === "empty-order"
-          ? ""
-          : deskFirst
-            ? "claude\ngpt\ngrok\n"
-            : ["plan-window", "model-window"].includes(scenario)
-              ? "fake-a/other\ngpt\ngrok\n"
-              : "gpt\ngrok\n",
-      );
+    const standIn = ["missing-auth", "judge-stop"].includes(scenario)
+      ? "fake-unlogged"
+      : ["bridge-missing-auth", "bridge-metered", "bridge-subscription", "bridge-oauth-token"].includes(scenario)
+        ? "claude-bridge"
+        : "fake-b";
+    writeFileSync(join(dir, "profile/models"), `claude=${standIn}/model#low\ngpt=fake-a/model\n`);
     writeFileSync(
       join(dir, "agent/settings.json"),
       JSON.stringify({ retry: { enabled: true, maxRetries: 2, baseDelayMs: 5 }, compaction: { enabled: false } }),
@@ -182,8 +219,9 @@ try {
     for (const key of Object.keys(env))
       if (/^(HC_|HERDR_|BERCAIL_|BEADS_|BD_)/.test(key) || key === "BASH_ENV") delete env[key];
     delete env.PI_FALLBACK_MISSING_KEY;
-    if (scenario === "role-exhaustion") Object.assign(env, { BERCAIL_ROLE: "builder", HC_TERMINAL_ID: "t-child" });
-    if (scenario === "judge-exhaustion") Object.assign(env, { BERCAIL_ROLE: "judge", HC_TERMINAL_ID: "t-child" });
+    if (scenario === "role-paused") Object.assign(env, { BERCAIL_ROLE: "builder", HC_TERMINAL_ID: "t-child" });
+    if (judge) env.BERCAIL_ROLE = "judge";
+    if (scenario === "judge-stop") env.HC_TERMINAL_ID = "t-child";
     if (scenario.startsWith("safety-")) Object.assign(env, { BERCAIL_ROLE: "judge", HC_TERMINAL_ID: "t-child" });
     if (scenario.startsWith("safety-") || scenario === "refusal-stream") {
       env.BERCAIL_RESULT_PATH = join(dir, "handoff-result.json");
@@ -210,13 +248,13 @@ try {
       "-e",
       resolve(root, "tests/pi_fallback_provider.ts"),
       "--model",
-      "fake-a/model:high",
+      scenario === "lead-no-login" ? "claude-bridge/model:high" : "fake-a/model:high",
       "-p",
       "Finish the original request.",
       ...(twoTurns ? ["Second real user turn"] : []),
     ];
     let command = pi;
-    if (scenario === "tui-status") {
+    if (["tui-status", "tui-pause", "tui-esc"].includes(scenario)) {
       command = "script";
       env.HC_TERMINAL_ID = "t-offline-test";
       env.PI_PROGRAM_STATUS = "1";
@@ -227,13 +265,18 @@ try {
       const shellCommand = [pi, ...args].map(quote).join(" ");
       args.splice(0, args.length, "-qefc", shellCommand, "/dev/null");
     }
-    const result = spawnSync(command, args, {
-      env,
-      cwd: dir,
-      encoding: "utf8",
-      timeout: 30000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
+    const result =
+      scenario === "tui-esc" || scenario === "sigterm-pause"
+        ? await stopWhenPaused(scenario === "tui-esc" ? "esc" : "sigterm", command, args, env, dir)
+        : spawnSync(command, args, {
+            env,
+            cwd: dir,
+            encoding: "utf8",
+            timeout: 30000,
+            // A run stuck in a pause would ignore the default SIGTERM.
+            killSignal: "SIGKILL",
+            maxBuffer: 8 * 1024 * 1024,
+          });
     writeFileSync(join(dir, "stdout.jsonl"), result.stdout || "");
     writeFileSync(join(dir, "stderr.log"), result.stderr || "");
     assert.equal(result.error, undefined, `${scenario}: ${result.error}`);
@@ -252,7 +295,20 @@ try {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
+    // These pause on the desk's own model and then finish there.
+    const paused = [
+      "plan-window",
+      "model-window",
+      "passed-reset",
+      "tui-pause",
+      "role-paused",
+      "missing-auth",
+      "bridge-missing-auth",
+      "bridge-metered",
+    ].includes(scenario);
     const noSwitch =
+      paused ||
+      ["judge-stop", "lead-dead", "lead-no-login", "tui-esc", "sigterm-pause"].includes(scenario) ||
       [
         "401",
         "403",
@@ -265,7 +321,6 @@ try {
         "retry-success",
         "stale",
         "abort",
-        "empty-order",
         "status-only-400",
         "status-only-401",
         "status-only-403",
@@ -275,13 +330,7 @@ try {
     if (noSwitch) assert.equal(switches.length, 0, `${scenario}: must not switch`);
     else {
       assert.ok(switches.length > 0, `${scenario}: must switch; ${result.stderr}`);
-      const target = ["missing-auth", "bridge-missing-auth", "bridge-metered", "default-order"].includes(scenario)
-        ? "fake-c"
-        : ["bridge-subscription", "bridge-oauth-token"].includes(scenario)
-          ? "claude-bridge"
-          : scenario === "model-window"
-            ? "fake-a"
-            : "fake-b";
+      const target = ["bridge-subscription", "bridge-oauth-token"].includes(scenario) ? "claude-bridge" : "fake-b";
       assert.equal(switches[0].model, target, scenario);
       // Pi's setModel resets thinking to its default (medium); the desk's :high must stay, over the models file's #low and :medium.
       assert.deepEqual(
@@ -302,10 +351,59 @@ try {
         session.some((e) => e.type === "custom_message" && e.customType === "bercail-fallback" && e.display),
         `${scenario}: visible session note`,
       );
-      if (!["exhaustion", "role-exhaustion", "judge-exhaustion"].includes(scenario))
-        assert.match(result.stdout, /PI_FALLBACK_OK/, `${scenario}: turn finishes`);
+      assert.match(result.stdout, /PI_FALLBACK_OK/, `${scenario}: turn finishes`);
     }
-    if (["429", "stale", "retry-success", "exhaustion"].includes(scenario)) {
+    const pauses = session.filter((e) => e.type === "custom" && e.customType === "bercail-fallback-pause");
+    const notes = session.filter((e) => e.type === "custom_message" && e.customType === "bercail-fallback");
+    if (paused) {
+      const desk = scenario === "lead-no-login" ? "claude-bridge/model" : "fake-a/model";
+      assert.deepEqual(
+        [...new Set(requests.map((e) => `${e.provider}/${e.id}`))],
+        [desk],
+        `${scenario}: every request on the desk's own model, no other model`,
+      );
+      assert.equal(pauses.length, 1, `${scenario}: one pause`);
+      assert.match(pauses[0].data!.text!, /Paused until \d\d:\d\d; then the same request goes on/);
+      const resumed = requests.filter((e) => e.at >= pauses[0].data!.until!);
+      assert.ok(resumed.length > 0, `${scenario}: a request after the reset`);
+      assert.equal(
+        requests.at(-1)!.at >= pauses[0].data!.until!,
+        true,
+        `${scenario}: the last request waits for the reset`,
+      );
+      assert.ok(
+        resumed[0].messages.some(
+          (m) => m.role === "user" && JSON.stringify(m.content).includes("Finish the original request"),
+        ),
+        `${scenario}: the same request goes on`,
+      );
+      assert.equal(
+        resumed[0].messages.some((m) => m.role === "assistant" && m.stopReason === "error"),
+        false,
+        `${scenario}: failed assistant omitted`,
+      );
+      assert.equal(events.filter((e) => e.event === "before_agent_start").length, 1, `${scenario}: same user run`);
+      assert.ok(
+        notes.some(
+          (e) =>
+            e.display &&
+            /^Limit lifted at \d\d:\d\d: continuing the same request on fake-a\/model\.$/.test(String(e.content)),
+        ),
+        `${scenario}: visible resume note`,
+      );
+      assert.deepEqual([...new Set(requests.map((e) => e.reasoning))], ["high"], `${scenario}: the desk's level`);
+      assert.match(result.stdout, /PI_FALLBACK_OK/, `${scenario}: turn finishes`);
+    }
+    if (["missing-auth", "bridge-missing-auth", "bridge-metered"].includes(scenario))
+      assert.ok(
+        pauses[0].data!.skipped!.some((s) =>
+          scenario === "missing-auth"
+            ? s === "fake-unlogged/model: no login"
+            : s.startsWith("claude-bridge/model: no Claude subscription login"),
+        ),
+        `${scenario}: the stand-in could not run, so the judge waits for GPT: ${JSON.stringify(pauses[0].data!.skipped)}`,
+      );
+    if (["429", "stale", "retry-success"].includes(scenario)) {
       assert.equal(
         requests.filter((e) => e.provider === "fake-a").length,
         scenario === "retry-success" ? 2 : scenario === "stale" ? 2 : 3,
@@ -393,10 +491,27 @@ try {
       assert.ok(done, `Pi done status missing: ${records.join(" | ")}`);
       assert.match(
         Buffer.from(done.split("msg=")[1], "base64").toString(),
-        /fallback: fake-b\/model/,
+        /stand-in fake-b\/model/,
         "session name carries the switch",
       );
-      assert.match(result.stdout, /fallback: fake-b\/model/, "real Pi footer status");
+      assert.match(result.stdout, /stand-in: fake-b\/model/, "real Pi footer status");
+    }
+    if (scenario === "tui-pause") {
+      // oxlint-disable-next-line no-control-regex -- an OSC 7501 record is ESC ] ... BEL or ST.
+      const records = [...result.stdout.matchAll(/\x1b\]7501;([^\x07\x1b]+)(?:\x07|\x1b\\)/g)].map((m) => m[1]);
+      const decode = (record: string) => Buffer.from(record.split("msg=")[1] ?? "", "base64").toString();
+      const blocked = records.findIndex(
+        (r) => r.startsWith("state=blocked") && /paused until \d\d:\d\d/.test(decode(r)),
+      );
+      assert.ok(blocked >= 0, `the paused desk reports blocked, so Shep gets the event: ${records.join(" | ")}`);
+      assert.ok(
+        records.slice(blocked + 1).some((r) => r.startsWith("state=working")),
+        "back to working once the limit lifts",
+      );
+      assert.ok(
+        records.slice(blocked + 1).some((r) => r.startsWith("state=done")),
+        "then done",
+      );
     }
     if (scenario === "429") {
       const firstSwitch = events.findIndex((e) => e.event === "model_select");
@@ -420,41 +535,6 @@ try {
       );
       assert.equal(events.filter((e) => e.event === "before_agent_start").length, 1, "same user run");
       assert.equal(events.filter((e) => e.event === "agent_settled").length, 1, "settles only after continuation");
-    }
-    if (scenario === "exhaustion") {
-      assert.equal(requests.length, 9, "each configured provider attempted once with native retries");
-      assert.ok(
-        session.some(
-          (e) =>
-            e.type === "custom" &&
-            e.customType === "bercail-fallback-error" &&
-            /fallback exhausted/.test(e.data?.text ?? ""),
-        ),
-        "clear persisted exhaustion error",
-      );
-      assert.equal(
-        session.some((e) => e.type === "custom_message" && e.customType === "bercail-fallback-error"),
-        false,
-        "exhaustion is not a later user turn",
-      );
-    }
-    if (scenario === "empty-order")
-      assert.ok(
-        session.some(
-          (e) =>
-            e.type === "custom" &&
-            e.customType === "bercail-fallback-error" &&
-            /no candidates/.test(e.data?.text ?? ""),
-        ),
-        "empty order stops clearly",
-      );
-    if (scenario === "tool-no-loop") {
-      assert.deepEqual(
-        switches.map((e) => e.model),
-        ["fake-b", "fake-c"],
-        "fallback attempts survive tool turns",
-      );
-      assert.equal(events.filter((e) => e.type === "tool").length, 1, "real tool executed");
     }
     if (["user-reset", "followup-reset", "new-user-reset"].includes(scenario)) {
       assert.deepEqual(
@@ -501,8 +581,8 @@ try {
     if (scenario === "no-restore") {
       assert.deepEqual(
         switches.map((e) => e.model),
-        ["fake-b", "fake-c"],
-        "a still-limited desk model is skipped",
+        ["fake-b"],
+        "the stand-in stays: GPT is still limited",
       );
       assert.equal(
         turn2.some((e) => e.provider === "fake-a"),
@@ -510,12 +590,14 @@ try {
         "no request to the desk's model before its limit lifts",
       );
       assert.equal(restores.length, 0, "no restore while limited");
+      assert.equal(pauses.length, 1, "a limited stand-in pauses the judge");
+      assert.match(String(notes.at(-1)?.content), /continuing the same request on fake-b\/model/);
     }
     if (["dead-402", "dead-credits"].includes(scenario)) {
       assert.deepEqual(
         switches.map((e) => e.model),
-        ["fake-b", "fake-c"],
-        "the dead model is skipped on the next fallback",
+        ["fake-b"],
+        "the judge's Opus stand-in takes over",
       );
       assert.equal(
         turn2.some((e) => e.provider === "fake-a"),
@@ -537,7 +619,7 @@ try {
           (e) =>
             e.type === "custom_message" &&
             e.customType === "bercail-fallback" &&
-            String(e.content).startsWith("Dead model: switched fake-a/model"),
+            String(e.content).startsWith("Dead model: fake-a/model is dead"),
         ),
         "the note says dead",
       );
@@ -546,38 +628,88 @@ try {
         "dead providers in the note's details",
       );
     }
-    if (scenario === "plan-window") {
+    if (scenario === "model-window")
       assert.equal(
         requests.some((e) => e.id === "other"),
         false,
-        "a plan-wide window skips the other model on that plan",
+        "an Opus-only window pauses too: no other model on the plan",
+      );
+    if (scenario === "passed-reset")
+      assert.ok(
+        pauses[0].data!.until! - requests[0].at < 5000,
+        "a reset that has passed retries in a second, not as an unknown reset in 5 minutes",
+      );
+    if (scenario === "role-paused")
+      assert.equal(
+        readFileSync(join(dir, "hc.log"), "utf8").includes("send "),
+        false,
+        "a paused builder tells its lead nothing: it goes on",
+      );
+    if (scenario === "judge-paused") {
+      assert.deepEqual(
+        switches.map((e) => e.model),
+        ["fake-b"],
+        "a GPT limit moves the judge to its Opus stand-in",
+      );
+      assert.equal(pauses.length, 1, "an Opus limit after that pauses the judge");
+      assert.match(pauses[0].data!.text!, /^Rate limit: fake-b\/model is limited until/);
+      const after = requests.filter((e) => e.at >= pauses[0].data!.until!);
+      assert.ok(after.length > 0 && after.every((e) => e.provider === "fake-b"), "resumes on Opus, which reset first");
+      assert.ok(
+        session.some((e) => e.type === "model_change" && e.provider === "fake-b"),
+        "the switch to the stand-in is persisted",
+      );
+    }
+    const stops = session.filter((e) => e.type === "custom" && e.customType === "bercail-fallback-error");
+    if (["judge-stop", "lead-dead", "lead-no-login"].includes(scenario)) {
+      assert.equal(stops.length, 1, `${scenario}: one stop`);
+      assert.equal(pauses.length, 0, `${scenario}: a limit that never resets does not pause`);
+      assert.match(
+        stops[0].data!.text!,
+        scenario === "lead-no-login"
+          ? /^Rate limit: claude-bridge\/model cannot go on: .*no Claude subscription login.*Run claude auth login/
+          : /^Dead model: fake-a\/model cannot go on: .*Add credits or a subscription/,
+        scenario,
+      );
+    }
+    if (scenario === "tui-esc") {
+      assert.equal(pauses.length, 1, "it paused");
+      assert.ok(
+        stops.some((e) => e.data?.text?.endsWith("Esc stops waiting. Stopped by the person.")),
+        "Esc ends the pause and stops the run",
       );
       assert.ok(
-        session.some(
-          (e) =>
-            e.type === "custom_message" && e.details?.skipped?.some((s) => s.startsWith("fake-a/other: limited until")),
-        ),
-        "says why it skipped it",
+        requests.every((e) => e.at < pauses[0].data!.until!),
+        "no request after Esc: the run did not wait out the reset",
+      );
+      assert.doesNotMatch(result.stdout, /PI_FALLBACK_OK/);
+    }
+    if (scenario === "sigterm-pause") {
+      const { stoppedAt, closedAt } = result as { stoppedAt?: number; closedAt?: number };
+      assert.ok(stoppedAt, "the run paused and got SIGTERM");
+      assert.ok(
+        closedAt! - stoppedAt! < 5000,
+        `a paused Pi exits on SIGTERM, not at the reset: ${closedAt! - stoppedAt!} ms`,
+      );
+      assert.ok(
+        stops.some((e) => e.data?.text?.endsWith("Stopped because Pi got SIGTERM.")),
+        "the stop is recorded with its reason",
+      );
+      assert.ok(
+        requests.every((e) => e.at < pauses[0].data!.until!),
+        "no request after SIGTERM",
       );
     }
-    if (scenario === "model-window")
-      assert.equal(switches[0].id, "other", "a one-model window tries the other model on the same plan first");
-    if (scenario === "role-exhaustion") {
-      const hc = readFileSync(join(dir, "hc.log"), "utf8");
-      assert.match(hc, /^get t-child --json$/m, "asks hc for its parent");
-      assert.match(
-        hc,
-        /^send t-lead builder t-child stopped: Rate limit: fallback exhausted .*Do this part yourself\.$/m,
-        "tells the lead it stopped",
-      );
-    }
-    if (scenario === "judge-exhaustion") {
+    if (scenario === "judge-stop") {
       const hc = readFileSync(join(dir, "hc.log"), "utf8");
       assert.match(hc, /Unfinished review cannot approve shipping or be replaced by parent self-approval/);
       assert.match(hc, /example-237: Offline review/);
       assert.doesNotMatch(hc, /Do this part yourself/);
     }
-    if (scenario === "exhaustion") assert.equal(existsSync(join(dir, "hc.log")), false, "the lead tells no one");
+    if (["lead-dead", "lead-no-login"].includes(scenario))
+      assert.equal(existsSync(join(dir, "hc.log")), false, "the lead tells no one");
+    if (scenario === "lead-dead")
+      assert.equal(requests.length, 1, "dead is not a limit: no native retries and no other model");
     console.log(`PASS: real Pi ${scenario} (${requests.length} requests, ${switches.length} switches)`);
   }
 } catch (error) {

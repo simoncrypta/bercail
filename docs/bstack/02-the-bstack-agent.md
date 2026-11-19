@@ -31,17 +31,20 @@ template in `~/.config/herdr-core/templates/`.
 |------|----------|------|
 | lead | the desk | your ask; plans, routes, checks, reports |
 | build | `bstack-builder` | code from a precise brief |
-| judge | `bstack-judge` | hard design calls, prose, and the intent and description check at `/validate` |
+| judge | `bstack-judge` | a second opinion on hard design calls, prose, and the intent and description check at `/validate`; the lead decides |
 | council | `bstack-council-<plan>` | read-only adversarial review, one per plan with a model, on `/council` |
 | autopilot | `bstack-autopilot` | an open PR to get green |
 
-By default the lead and judge run on Claude and the builder on Grok. A role
-names a plan (`claude`, `gpt`, `grok`) or a full Pi model id. When you are not
-signed in to its plan, it takes the next one you are (build: grok, then gpt,
-then claude; lead and judge: claude, then gpt, then grok), so bstack works on
-one plan and spreads out as you sign in to more. A pinned model is used whether
-or not you are signed in to its plan. With no sign-in at all, agents use Pi's
-default model.
+By default the lead, the builder and autopilot run on Claude Opus, and the judge
+on GPT. The judge reviews from another provider; the lead, on Opus, makes the
+call. A role names a plan (`claude`, `gpt`) or a full Pi model id. The judge
+runs on Claude until you sign in to ChatGPT; every other role takes only
+Claude. A pinned model is used whether or not you are signed in to its plan.
+With no sign-in at all, agents use Pi's default model.
+
+A rate limit never moves a role to another model: the role pauses until the
+limit resets, then goes on. The judge alone switches, to Claude, while GPT is
+limited ([how it runs](../bstack.md#how-it-runs)).
 
 To run one desk's lead on another model, without changing the lead for every
 desk, hand it off with `--model` ([handoff](../handoff.md)). Only that desk's
