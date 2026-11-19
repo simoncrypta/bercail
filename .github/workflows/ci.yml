@@ -64,8 +64,9 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           tools: github:gastownhall/beads@${{ env.BD_VERSION }}
-      # With GNU parallel, tests/run.sh runs two jobs per core; without it, one
-      # at a time. The runner image ships it; fail here if that changes.
+      # With GNU parallel, tests/run.sh spreads tests over two jobs per core;
+      # without it, it falls back to one bats run per file. The runner image
+      # ships it; fail here if that changes.
       - name: GNU parallel
         run: command -v parallel
       # The bats unit suite, then the TypeScript unit tests (vp test).
