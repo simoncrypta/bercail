@@ -29,7 +29,7 @@ bash tests/run.sh tests/notify.bats       # one area
 node_modules/.bin/bats -f 'regex' tests/notify.bats   # the tests whose names match
 bash tests/run.sh --live                  # the real-Pi live proofs, tagged live
 npm exec -- vp test -t 'regex'            # the TypeScript tests whose names match
-bash tests/lint.sh                        # shellcheck -S warning on every shell file, vp check, the mods' lint (CI runs this)
+bash tests/lint.sh                        # shellcheck -S warning and the printf | grep -q check on every shell file, vp check, the mods' lint (CI runs this)
 npm exec -- vp check --fix                # format, lint and type-check the TypeScript and JavaScript
 herdr-app check bercail/mods/bercail-desk # each mod you touch
 .agents/skills/verify-bercail/run.sh      # throwaway-HOME drive; evidence in .bercail/verify/

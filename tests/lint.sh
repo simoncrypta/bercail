@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # What the unit suite cannot see: a shellcheck warning in any tracked shell
-# file (the .bats files too); the format, lint and types of the TypeScript and
-# JavaScript (vp check); and the Herdr mods' lint, syntax errors included,
-# which `herdr-app check` would catch but CI cannot run. CI runs this.
+# file (the .bats files too); `printf | grep -q`, which shellcheck misses and
+# pipefail turns into a rare failure (tests/lint_grep_q.sh); the format, lint
+# and types of the TypeScript and JavaScript (vp check); and the Herdr mods'
+# lint, syntax errors included, which `herdr-app check` would catch but CI
+# cannot run. CI runs this.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -24,6 +26,7 @@ while IFS= read -r f; do
   esac
 done < <(git ls-files)
 shellcheck -S warning "${files[@]}"
+tests/lint_grep_q.sh "${files[@]}"
 
 "$vp" check
 # Herdr loads the mods as plain JS: no type-aware pass (bercail/mods/lint.config.ts).

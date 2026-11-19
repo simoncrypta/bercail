@@ -2,13 +2,14 @@
 # Once per bats run: drop what ties the process to the desk it started from.
 # Each @test then gets its own HOME (test_helper.bash).
 setup_suite() {
-  # mise shims stop resolving once HOME moves: use the tools' own bin dirs, and
-  # drop the shims so a tool mise does not manage here falls through to the system.
+  # mise shims and command wrappers run mise, which reads HOME once it moves:
+  # use the tools' own bin dirs, and drop both so a tool mise does not manage
+  # here falls through to the system. isolate fails a test that has them back.
+  local bins=""
   if command -v mise >/dev/null 2>&1; then
-    local bins
     bins="$(mise bin-paths 2>/dev/null | paste -sd:)"
-    PATH="${bins:+$bins:}$(tr : '\n' <<<"$PATH" | grep -v '/mise/shims$' | paste -sd:)"
   fi
+  PATH="${bins:+$bins:}$(tr : '\n' <<<"$PATH" | grep -Ev '/mise/(shims|command-wrappers/bin)/?$' | paste -sd:)"
   unset BASH_ENV OPENCODE_CONFIG_DIR HYPRLAND_INSTANCE_SIGNATURE
   # The same clock zone and collation on every machine.
   export TZ=UTC LC_ALL=C.UTF-8

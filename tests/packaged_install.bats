@@ -39,8 +39,8 @@ run_bercail() {
   : >"$STAGE/.bercail-package"
   ln -s "$STAGE/bin/bercail" "$home/.local/bin/bercail"
   out="$(run_bercail "$home" doctor 2>&1 || true)"
-  printf '%s' "$out" | grep -q 'bercail doctor' || fail "doctor via symlink did not load lib: $out"
-  if printf '%s' "$out" | grep -q 'cannot find bercail lib'; then fail "symlink did not find lib: $out"; fi
+  [[ "$out" == *'bercail doctor'* ]] || fail "doctor via symlink did not load lib: $out"
+  [[ "$out" != *'cannot find bercail lib'* ]] || fail "symlink did not find lib: $out"
 }
 
 @test "packaged install does not copy bercail over the mise/packslip link" {

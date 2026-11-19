@@ -26,11 +26,31 @@ isolate() {
   printf '#!/bin/sh\necho "node: this test did not ask for Node; add need node to it (tests/test_helper.bash)" >&2\nexit 127\n' \
     >"$BATS_TEST_TMPDIR/bin/node"
   chmod +x "$BATS_TEST_TMPDIR/bin/node"
+  # Last, once the watchdog's pid is kept: a failure here must not wait it out.
+  escaped_to_mise
 }
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2
   return 1
+}
+
+# A mise shim or command wrapper on PATH runs the real mise, which then reads
+# the test's HOME or reaches past a stand-in, and a BASH_ENV can put them back
+# in every bash child (bercail-fss). setup_suite drops all three; this fails a
+# test whose suite or file setup brought one back.
+escaped_to_mise() {
+  local dir dirs
+  [[ -z "${BASH_ENV:-}" ]] ||
+    fail "BASH_ENV is set ($BASH_ENV): a bash child sources it and can put the real mise shims back on PATH; unset it (tests/setup_suite.bash)" || return
+  IFS=: read -ra dirs <<<"$PATH"
+  for dir in "${dirs[@]}"; do
+    case "${dir%/}" in
+      */mise/shims | */mise/command-wrappers/bin)
+        fail "PATH reaches mise through $dir; drop it (tests/setup_suite.bash), or name the tool's own bin dir" || return
+        ;;
+    esac
+  done
 }
 
 # A repo at DIR with one commit.

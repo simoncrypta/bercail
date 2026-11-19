@@ -1,0 +1,6 @@
+set -euo pipefail
+grep -q x <<<"$out"
+# Not printf | grep -q: it fails under pipefail.
+note="printf | grep -q under pipefail"
+printf '%s\n' "$out" | grep -c x
+printf '%s' "$out" || grep -q x file
