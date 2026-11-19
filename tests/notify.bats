@@ -83,7 +83,8 @@ heartbeat() {
 
 # What hc actually sends after its snapshot: an `event` per changed fact.
 status_event() {
-  jq -nc --arg t "${2:-t9}" --arg s "$1" '{jsonrpc:"2.0", method:"event", params:{seq:9, terminal:$t,
+  jq -nc --arg t "${2:-t9}" --arg s "$1" --argjson seq "${3:-null}" '
+    {jsonrpc:"2.0", method:"event", params:{seq:$seq, terminal:$t,
     type:"status", data:{records:{}, reported:true,
       status:(if $s == "" then null else {app:"pi", state:$s, msg:"Reading"} end)}}}'
 }
@@ -323,6 +324,50 @@ EOF
 @test "source reconciliation creates no inbox before Shep first starts" {
   event done | notify_follow
   [[ ! -e "$(shep_state_dir)" ]] || fail "source reconciliation started an unused Shep inbox"
+}
+
+inbox_count() {
+  find "$(shep_state_dir)/inbox" -name '*.json' | wc -l
+}
+
+@test "a replayed finish does not replace the next turn's finish even with no new report" {
+  start_source_inbox
+  # Same desk, issue and report throughout. Drain both turns in one second.
+  _notify_now() { printf '1794886882'; }
+  { event working
+    status_event done t9 10
+    status_event working t9 11
+    status_event done t9 10
+    status_event done t9 12
+    status_event working t9 11
+    status_event done t9 12
+  } | notify_follow
+  local ids
+  ids="$(jq -sc '[.[] | [.kind, (.event_id | split(":")[2])]]' "$BATS_TEST_TMPDIR/bodies.jsonl")"
+  [[ "$ids" == '[["finished","1794886882.10"],["finished","1794886882.12"]]' ]] || fail "expected both real finishes, not their replays: $ids"
+  [[ "$(inbox_count)" -eq 2 ]] || fail "Shep must get both turns even in one second"
+}
+
+@test "a labels lookup that already sees done never puts the source ahead of the queued events" {
+  local labels='{"method":"event","params":{"terminal":"t9","type":"labels","data":{}}}'
+  start_source_inbox
+  cat >"$BATS_TEST_TMPDIR/bin/hc-ahead" <<EOF
+#!/usr/bin/env bash
+[[ "\$1 \$2" == 'get t9' ]] || exit 1
+jq -nc --arg cwd "$desk" '{address:"t9",state:"live",cwd:\$cwd,status:{state:"done",app:"pi"},
+  labels:{"bercail.role":"agent","bercail.space":"sp1","bercail.issue":"myapp-1"}}'
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/hc-ahead"
+  { event working; printf '%s\n' "$labels"; } | HC_BIN="$BATS_TEST_TMPDIR/bin/hc-ahead" notify_follow
+  if jq -e '.desks[0].agent.status == "done"' "$(source_state)" >/dev/null && [[ "$(inbox_count)" -eq 0 ]]; then
+    fail "the source says done with no finish queued, so Shep reads a gap notice, then the finish"
+  fi
+  rm -f "$(shep_state_dir)/inbox/"*.json
+  : >"$BATS_TEST_TMPDIR/bodies.jsonl"
+  { event working; printf '%s\n' "$labels"; status_event blocked; status_event done; } \
+    | HC_BIN="$BATS_TEST_TMPDIR/bin/hc-ahead" notify_follow
+  [[ "$(kinds)" == '["blocked","finished"]' ]] || fail "the queued statuses must be reported once, in order: $(kinds)"
+  jq -e '.desks[0].agent.status == "done"' "$(source_state)" >/dev/null || fail "source not current"
 }
 
 @test "a desk seen done first is not reported; working->done, blocked once, blocked->done are" {

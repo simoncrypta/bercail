@@ -178,25 +178,6 @@ handoff_track_graphite() {
   printf 'the desk starts anyway, untracked. In %s run: gt track --parent %s\n' "$sibling" "$parent" >&2
 }
 
-handoff_trunk_name() {
-  local root="$1" ref name
-  ref="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
-  if [[ "$ref" == refs/remotes/origin/* ]]; then
-    printf '%s' "${ref#refs/remotes/origin/}"
-    return 0
-  fi
-  name="$(git -C "$root" config --get init.defaultBranch 2>/dev/null || true)"
-  if [[ -n "$name" ]] && git -C "$root" show-ref --verify --quiet "refs/heads/$name"; then
-    printf '%s' "$name"
-    return 0
-  fi
-  if git -C "$root" show-ref --verify --quiet refs/heads/master; then
-    printf 'master'
-    return 0
-  fi
-  printf 'main'
-}
-
 handoff_worktree_of() {
   local root="$1" branch="$2" path
   path="$(git -C "$root" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$branch" '
@@ -227,7 +208,7 @@ handoff_track_gh() {
   }
   main="$(git_backend_main "$sibling")" || main="$sibling"
   catalog="$(handoff_gh_catalog "$sibling")"
-  trunk="$(handoff_trunk_name "$main")"
+  trunk="$(git_backend_trunk "$main")"
   if [[ -f "$catalog" ]] && jq -e --arg p "$parent" \
     'any(.stacks[]?; any(.branches[]?; .branch == $p))' "$catalog" >/dev/null 2>&1; then
     if ! jq -e --arg p "$parent" 'any(.stacks[]?; .branches[-1].branch == $p)' "$catalog" >/dev/null 2>&1; then
@@ -305,6 +286,25 @@ handoff_checkout_existing() {
     fi
   fi
   WT_HERDR_NO_DESK=1 wt switch "$branch" --no-cd || handoff_die "wt switch $branch failed"
+}
+
+# The commit a new desk branch starts from: origin's trunk once fetched, when
+# the local trunk is behind it, so a desk never starts on a base that has moved.
+# A SHA, so the branch gets no upstream. Empty means wt's default (local trunk):
+# no origin, a failed fetch, or a local trunk with commits origin lacks.
+handoff_fresh_base() {
+  local main="$1" trunk remote mine
+  git -C "$main" remote get-url origin >/dev/null 2>&1 || return 0
+  trunk="$(git_backend_trunk "$main")"
+  if ! _git_backend_bounded "$(handoff_gt_timeout)" git -C "$main" fetch --quiet origin \
+    "+refs/heads/$trunk:refs/remotes/origin/$trunk" </dev/null >&2; then
+    printf 'handoff-spawn: git fetch origin %s failed; the desk starts on the local %s, which may be behind\n' "$trunk" "$trunk" >&2
+    return 0
+  fi
+  remote="$(git -C "$main" rev-parse --verify --quiet "refs/remotes/origin/$trunk^{commit}")" || return 0
+  mine="$(git -C "$main" rev-parse --verify --quiet "refs/heads/$trunk^{commit}")" || mine=""
+  [[ -z "$mine" ]] || git -C "$main" merge-base --is-ancestor "$mine" "$remote" || return 0
+  printf '%s' "$remote"
 }
 
 handoff_sibling_path() {
@@ -461,7 +461,7 @@ handoff_spawn_main() {
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0
-  local base="" model="" target="" fork_reason="" adopt_reason="" session="" lock="" prior path prior_main created=""
+  local base="" fresh="" model="" target="" fork_reason="" adopt_reason="" session="" lock="" prior path prior_main created=""
   local existing=0 reuse=0 released="" role=""
 
   while [[ $# -gt 0 ]]; do
@@ -654,7 +654,9 @@ handoff_spawn_main() {
     WT_HERDR_NO_DESK=1 wt switch --create "$branch" --base "$base" --no-cd \
       || handoff_die "wt switch --create $branch --base $base failed"
   else
-    WT_HERDR_NO_DESK=1 wt switch --create "$branch" --no-cd \
+    # A dirty copy is a patch on the local trunk; it stays there.
+    [[ "$dirty" == 1 ]] || fresh="$(handoff_fresh_base "$main")"
+    WT_HERDR_NO_DESK=1 wt switch --create "$branch" ${fresh:+--base "$fresh"} --no-cd \
       || handoff_die "wt switch --create $branch failed"
   fi
   _wt_herdr_keep_user_focus "$keep_space"

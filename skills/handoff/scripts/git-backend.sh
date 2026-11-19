@@ -146,6 +146,26 @@ git_backend_entire_capture() {
   [[ "$enabled" == true ]]
 }
 
+# The trunk a branch lands on: origin/HEAD, else init.defaultBranch, master, main.
+git_backend_trunk() {
+  local root="$1" ref name
+  ref="$(git -C "$root" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)"
+  if [[ "$ref" == refs/remotes/origin/* ]]; then
+    printf '%s' "${ref#refs/remotes/origin/}"
+    return 0
+  fi
+  name="$(git -C "$root" config --get init.defaultBranch 2>/dev/null || true)"
+  if [[ -n "$name" ]] && git -C "$root" show-ref --verify --quiet "refs/heads/$name"; then
+    printf '%s' "$name"
+    return 0
+  fi
+  if git -C "$root" show-ref --verify --quiet refs/heads/master; then
+    printf 'master'
+    return 0
+  fi
+  printf 'main'
+}
+
 # Status 124 on timeout. Kill leftover children even after a successful command:
 # otherwise they can hold the caller's pipes open.
 # Signal only the worker group, never the desk or its sibling terminals.

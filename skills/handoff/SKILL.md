@@ -120,7 +120,7 @@ working directory to `cwd` from `--info`. Flags only.
 - `--dirty` / `--clean` override `default_copy` (a dirty main checkout is copied, a clean
   one starts from HEAD). The copy is the main checkout's `git diff HEAD` plus its untracked
   files, put in the sibling as unstaged work before the desk starts; nothing is `git add`ed.
-- `--base <branch>` is optional: dependent issues stack on the parent's branch via `--base` (`wt switch --create --base`), then register the parent with the `git` backend from `--info`: `gh stack`, `gt track`, or `origin stack track`; `entire` has no stacks, so the trail names its base (`entire trail create --base`). Without it the branch is cut from the default branch. Publish and update through that backend's stack commands, never a hand-made PR merely based on another PR's branch. See [Git backend](#git-backend). Never run `gt` unless `git` is `gt`.
+- `--base <branch>` is optional: dependent issues stack on the parent's branch via `--base` (`wt switch --create --base`), then register the parent with the `git` backend from `--info`: `gh stack`, `gt track`, or `origin stack track`; `entire` has no stacks, so the trail names its base (`entire trail create --base`). Without it the branch is cut from the default branch, fetched first: origin's when the local one is behind it. Publish and update through that backend's stack commands, never a hand-made PR merely based on another PR's branch. See [Git backend](#git-backend). Never run `gt` unless `git` is `gt`.
 - `--model <provider/id[:thinking]>` is optional: run this one agent on another Pi model, such as
   `claude-bridge/claude-fable-5-2:high`, when the person asks for one. See [Another model](#another-model).
 - Plan-only work is a line in the issue, not a flag.

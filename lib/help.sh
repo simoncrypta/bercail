@@ -54,10 +54,11 @@ Post-install CLI (bercail):
                 All profiles require human review and leave releases to the person. No trust or
                 backend configuration is changed. verify-NAME is an INCOMPLETE /validate starter.
   describe      A change's description (.bercail/description.md, written by /validate):
-                check [--json] (also its size and stakes) | stamp (record the staged tree) |
-                template | title | body | commit [--reviewed-by NAME] (the text for git and
-                the forge, with its provenance line; refuses a stale one, and a change
-                that waits for your review where the repo commits straight to main)
+                check [--json] (also its size and stakes, and a moved base) | stamp (record
+                the staged tree) | template | title | body | commit [--reviewed-by NAME]
+                (the text for git and the forge, with its provenance line; refuses a stale
+                one, and a change that waits for your review where the repo commits
+                straight to main)
                 [--checkpoints BASE] (keep the Entire-Checkpoint trailers of BASE..HEAD
                 through a squash or a reworded amend)
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>

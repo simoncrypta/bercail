@@ -288,6 +288,21 @@ _desc_body_problems() {
       }'
 }
 
+# A warning when the trunk has commits HEAD is not on: origin's as last fetched,
+# else the local one. Validated on a moved base, the change is rebased at merge,
+# which makes its description stale. No fetch, so check stays offline.
+_desc_base_moved() {
+  local root="$1" trunk ref n
+  trunk="$(git_backend_trunk "$root")"
+  for ref in "refs/remotes/origin/$trunk" "refs/heads/$trunk"; do
+    git -C "$root" rev-parse --verify --quiet "$ref^{commit}" >/dev/null || continue
+    n="$(git -C "$root" rev-list --count "HEAD..$ref" 2>/dev/null)" || continue
+    [[ "$n" -gt 0 ]] || continue
+    printf 'the base moved: %s has %s commit(s) this change is not on; bring the branch onto it (rebase, restack or merge), then rerun /validate' "${ref#refs/*/}" "$n"
+    return 0
+  done
+}
+
 # Everything check knows, as JSON. Exit status is not the verdict; .fails is.
 desc_state() {
   local root="$1" file evidence title style tree current tpl_json template meta_tpl tpl_text="" body ids line change base path cmd full
@@ -343,6 +358,8 @@ desc_state() {
   if jq -e .over_budget <<<"$change" >/dev/null; then
     warns+=("$(jq -r '"the change is \(.lines) lines added and removed, over the diff budget of \(.diff_budget) (lockfiles and generated files left out): split it, or say in the description why it is one change"' <<<"$change")")
   fi
+  line="$(_desc_base_moved "$root")"
+  [[ -z "$line" ]] || warns+=("$line")
   if git -C "$root" ls-files -- .bercail | grep -qvx '.bercail/policy.toml'; then
     fails+=(".bercail/ runtime files are staged: git rm --cached them; only .bercail/policy.toml is versioned")
   fi

@@ -1185,10 +1185,11 @@ _desk_fixture() {
   cat >"$DESK_BIN/wt" <<'WT'
 #!/usr/bin/env bash
 printf 'wt %s\n' "$*" >>"$DESK_HERDR_LOG"
-branch="" create=0
+branch="" create=0 base=HEAD
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --create) branch="$2" create=1; shift 2 ;;
+    --base) base="$2"; shift 2 ;;
     switch | --*) shift ;;
     *) branch="$1"; shift ;;
   esac
@@ -1196,7 +1197,7 @@ done
 main="$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
 # Without --create, as wt does: the local branch, else a tracking branch from origin's.
 if [[ "$create" -eq 1 ]]; then
-  git -C "$main" worktree add -q -b "$branch" "$main.$branch" HEAD
+  git -C "$main" worktree add -q -b "$branch" "$main.$branch" "$base"
 else
   git -C "$main" worktree add -q "$main.$branch" "$branch"
 fi
@@ -1336,6 +1337,39 @@ _desk_origin() {
   git -C "$DESK_REPO" branch feat
   PR_HEAD="$(git -C "$DESK_REPO" commit-tree 'HEAD^{tree}' -p feat -m 'pushed by the PR author')"
   git -C "$DESK_REPO" push -q origin "$PR_HEAD:refs/heads/feat"
+}
+
+# origin has the trunk one commit past the local trunk, at $MOVED: the base moved
+# after the main checkout last pulled.
+_desk_moved_origin() {
+  local origin="$BATS_TEST_TMPDIR/$1-origin.git" trunk
+  trunk="$(git -C "$DESK_REPO" symbolic-ref --short HEAD)"
+  git init -q --bare "$origin"
+  git -C "$DESK_REPO" remote add origin "$origin"
+  git -C "$DESK_REPO" push -q origin "$trunk"
+  MOVED="$(git -C "$DESK_REPO" commit-tree 'HEAD^{tree}' -p "$trunk" -m 'landed after the last pull')"
+  git -C "$DESK_REPO" push -q origin "$MOVED:refs/heads/$trunk"
+}
+
+@test "a new desk branch starts on origin's trunk when the base moved, with no upstream" {
+  local out
+  _desk_fixture moved
+  _desk_moved_origin moved
+  out="$(_desk_spawn 2>"$BATS_TEST_TMPDIR/moved.err")" || fail "spawn failed: $out $(cat "$BATS_TEST_TMPDIR/moved.err")"
+  [[ "$(git -C "$DESK_REPO.feat" rev-parse HEAD)" == "$MOVED" ]] \
+    || fail "the desk must start on the fetched base $MOVED: $(cat "$DESK_HERDR_LOG")"
+  [[ -z "$(git -C "$DESK_REPO" config --get branch.feat.merge)" ]] || fail "the desk branch must not track the trunk"
+}
+
+@test "a new desk branch stays on a local trunk that has commits origin lacks" {
+  local out mine trunk
+  _desk_fixture moved-local
+  _desk_moved_origin moved-local
+  trunk="$(git -C "$DESK_REPO" symbolic-ref --short HEAD)"
+  git -C "$DESK_REPO" commit -q --allow-empty -m 'merged here, not pushed'
+  mine="$(git -C "$DESK_REPO" rev-parse "$trunk")"
+  out="$(_desk_spawn 2>"$BATS_TEST_TMPDIR/moved-local.err")" || fail "spawn failed: $out $(cat "$BATS_TEST_TMPDIR/moved-local.err")"
+  [[ "$(git -C "$DESK_REPO.feat" rev-parse HEAD)" == "$mine" ]] || fail "the desk must keep the local trunk's unpushed work"
 }
 
 @test "--existing-branch checks out a PR branch at origin's head and fast-forwards a stale local branch" {

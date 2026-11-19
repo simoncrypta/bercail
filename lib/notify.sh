@@ -334,7 +334,7 @@ notify_deliver_all() {
 # are its bercail.issue, bercail.issue_title and bercail.shep labels.
 notify_desk_changed() {
   local address="$1" prev="$2" status="$3" app="$4" space="$5" cwd="$6" title="$7"
-  local issue="${8:-}" issue_title="${9:-}" shep="${10:-}"
+  local issue="${8:-}" issue_title="${9:-}" shep="${10:-}" seq="${11:-}"
   local kind agent_json space_json desk_json
   kind="$(notify_classify "$prev" "$status")"
   [[ "$kind" != "none" ]] || return 0
@@ -345,9 +345,9 @@ notify_desk_changed() {
      role:(if $shep == "bg" then "shep-bg" else "desk" end)}')"
   space_json="$(notify_space_info "$space" "$cwd")"
   desk_json="$(notify_desk_info "$cwd" "$app" "$issue" "$issue_title")"
-  # Same id for every sink and retry, so receivers can dedupe.
+  # Keep distinct stream events apart even when queued in the same second.
   local event_id
-  event_id="$address:$kind:$(_notify_now):$$"
+  event_id="$address:$kind:$(_notify_now)${seq:+.$seq}:$$"
   local episode
   if jq -e '.result.provider_error.completion == "incomplete"' <<<"$desk_json" >/dev/null; then
     kind=blocked
@@ -437,7 +437,7 @@ _notify_follower_write() {
 #   T address status app space cwd title issue issue_title shep
 #                                            a live desk in that snapshot, with its
 #                                            bercail.issue, .issue_title and .shep labels
-#   E type address status app title          an `event` notification: one fact changed
+#   E type address status app title seq      an `event` notification: one fact changed
 # Heartbeats and anything else give nothing.
 _NOTIFY_FOLLOW_JQ='
   def f: tostring | gsub("[\t\n\u001f]"; " ");
@@ -462,13 +462,14 @@ _NOTIFY_FOLLOW_JQ='
     | ($d.status | if type == "object" then . else {} end) as $s
     | if $p.type == "status" and (($d.status | valid_status) | not) then empty
       else ["E", ($p.type // ""), $p.terminal, ($s.state // ""), ($s.app // ""),
-       ($d.title // (if $p.type == "title" and ($p.data | type) == "string" then $p.data else "" end))] | row end
+       ($d.title // (if $p.type == "title" and ($p.data | type) == "string" then $p.data else "" end)),
+       ($p.seq | numbers // "")] | row end
   else empty end'
 
 # A desk went from $2 to $3: record a finish or block for doctor, and deliver it.
 # Called by notify_follow; reads its per-desk maps (bash scoping is dynamic).
 _notify_follow_changed() {
-  local address="$1" before="$2" now="$3" kind f
+  local address="$1" before="$2" now="$3" seq="${4:-}" kind f
   kind="$(notify_classify "$before" "$now")"
   [[ "$kind" != "none" ]] || return 0
   f="$(notify_follower_file)"
@@ -477,7 +478,7 @@ _notify_follow_changed() {
     --slurpfile old "$f" '($old[0] // {}) + {last_transition_at:$at, last_transition:{address:$a, kind:$k}}'
   notify_desk_changed "$address" "$before" "$now" "${appof[$address]:-}" "${spaceof[$address]:-}" \
     "${cwdof[$address]:-}" "${titleof[$address]:-}" "${issueof[$address]:-}" \
-    "${issuetitleof[$address]:-}" "${shepof[$address]:-}" || true
+    "${issuetitleof[$address]:-}" "${shepof[$address]:-}" "$seq" || true
 }
 
 # Read `hc events` lines on stdin; deliver each desk's status changes.
@@ -487,7 +488,7 @@ _notify_follow_changed() {
 # a desk seen for the first time has no previous status, so no historical
 # transition is invented. Shep also gets a separate current-source projection.
 notify_follow() {
-  local line kind a b c d e g h i j k snapped address info changed observed_at
+  local line kind a b c d e g h i j k snapped address info changed observed_at last_status_seq=0
   local -A prev=() spaceof=() cwdof=() titleof=() appof=() issueof=() issuetitleof=() shepof=() seen=() sourceof=()
   _notify_follower_write --argjson at "$(_notify_now)" --argjson pid "$$" '{pid:$pid, started_at:$at}'
   while IFS= read -r line; do
@@ -509,9 +510,17 @@ notify_follow() {
           prev[$a]="$b"
           _notify_follow_source "$a" "$b"
           ;;
-        E) # type address status app title
+        E) # type address status app title seq
           address="$b"
           [[ -n "$address" ]] || continue
+          # Sequence numbers belong to this ordered stream, not to a later hc
+          # get. Ignore replayed statuses before they can change prev or deliver.
+          if [[ "$a" == status && "$g" =~ ^[1-9][0-9]{0,15}$ ]]; then
+            (( g > last_status_seq )) || continue
+            last_status_seq="$g"
+          else
+            g=""
+          fi
           case "$a" in
             finished|removed|lost)
               # Forget it, so a reused address starts fresh.
@@ -539,14 +548,17 @@ notify_follow() {
             fi
             IFS=$'\x1f' read -r "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]" \
               "issueof[$address]" "issuetitleof[$address]" "shepof[$address]" k <<<"$info"
-            _notify_follow_source "$address" "$k"
+            # hc get can be ahead of the stream: a desk this follower knows keeps
+            # its status until the status event comes, so the source never says
+            # done before the finish is queued (Shep would read a gap notice too).
+            _notify_follow_source "$address" "${prev[$address]-$k}"
             changed=1
           fi
           [[ -n "$e" ]] && titleof[$address]="$e"
           [[ "$a" == status ]] || continue
           [[ -n "$d" ]] && appof[$address]="$d"
           if [[ -n "${prev[$address]+x}" && "${prev[$address]}" != "$c" ]]; then
-            _notify_follow_changed "$address" "${prev[$address]}" "$c"
+            _notify_follow_changed "$address" "${prev[$address]}" "$c" "$g"
           fi
           prev[$address]="$c"
           _notify_follow_source "$address" "$c"

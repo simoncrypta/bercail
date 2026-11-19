@@ -282,6 +282,23 @@ SH
   describe check 2>&1 | grep -qF "fail: the evidence file $BATS_TEST_TMPDIR/out/c.log of" || fail "brace group: $(describe check 2>&1)"
 }
 
+@test "check: a trunk with commits the branch is not on warns that the base moved, and never fails" {
+  local out moved
+  git checkout -qb feat
+  described
+  out="$(describe check 2>&1)" || fail "$out"
+  ! grep -q 'base moved' <<<"$out" || fail "a fresh base must not warn: $out"
+  git init -q --bare "$BATS_TEST_TMPDIR/origin.git"
+  git remote add origin "$BATS_TEST_TMPDIR/origin.git"
+  moved="$(git commit-tree 'main^{tree}' -p main -m 'landed elsewhere')"
+  git push -q origin "$moved:refs/heads/main"
+  out="$(describe check 2>&1)" || fail "a moved base warns, it does not fail: $out"
+  grep -qF 'warn: the base moved: origin/main has 1 commit(s) this change is not on' <<<"$out" || fail "origin moved: $out"
+  git remote remove origin
+  git update-ref refs/heads/main "$moved"
+  describe check 2>&1 | grep -qF 'warn: the base moved: main has 1 commit(s)' || fail "local trunk moved"
+}
+
 @test "title, body and commit print the text for git and the forges; with no description they say /validate" {
   described
   [[ "$(describe title)" == "file: add a line" ]] || fail "title"
