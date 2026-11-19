@@ -154,15 +154,17 @@ function readOnlyRole(role: string): boolean {
 const deskFiles = new Set(["description.md", "validate.json", "handoff-result.json", "policy.toml"]);
 
 // A read-only role writes its answer and scratch files: anywhere under the temp
-// dirs, and a new file under the worktree's .bercail/, which git ignores.
+// dirs, and a new file under the worktree's .bercail/, which git ignores. The
+// .bercail/ rules come first, since a worktree may itself live under /tmp.
 function readOnlyWrite(path: string, input: GuardInput): boolean {
   const where = input.readOnlyWrites;
   if (!where || (input.cwd === undefined && !isAbsolute(path))) return false;
   const full = resolve(input.cwd ?? "/", path);
+  if (basename(dirname(full)) === ".bercail" && deskFiles.has(basename(full))) return false;
   const under = (dir: string) => full.startsWith(`${resolve(dir)}/`);
-  if (where.tmp.some(under)) return true;
   const dir = join(where.root, ".bercail");
-  return under(dir) && !deskFiles.has(full.slice(dir.length + 1)) && !where.exists(full);
+  if (under(dir)) return !where.exists(full);
+  return where.tmp.some(under);
 }
 
 function isMainRef(ref: string): boolean {
@@ -2190,19 +2192,35 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   return decision;
 }
 
-export function decideTool(tool: string, command: string | undefined, input: GuardInput, path?: string): GuardDecision {
+// The path a Pi file tool acts on, as its resolveToCwd reads one: Unicode spaces
+// as spaces, a leading @ dropped, ~ and file:// URLs expanded.
+function toolPath(path: string, home: string | undefined): string {
+  const named = path.replace(/[\u00a0\u2000-\u200a\u202f\u205f\u3000]/g, " ").replace(/^@/, "");
+  if (home && (named === "~" || named.startsWith("~/"))) return join(home, named.slice(2));
+  try {
+    return named.startsWith("file://") ? fileURLToPath(named) : named;
+  } catch {
+    return named; // Pi's tool throws on it too, and writes nothing.
+  }
+}
+
+export function decideTool(
+  tool: string,
+  command: string | undefined,
+  input: GuardInput,
+  given?: string,
+): GuardDecision {
+  // read, edit, write, grep, find and ls all take a path; another tool's may not be a string.
+  const path = typeof given === "string" ? toolPath(given, input.home) : undefined;
   if (tool === "edit" || tool === "write") {
-    const full = path?.startsWith("~/") && input.home ? join(input.home, path.slice(2)) : path;
-    if (readOnlyRole(input.role) && !(tool === "write" && full && readOnlyWrite(full, input)))
+    if (readOnlyRole(input.role) && !(tool === "write" && path && readOnlyWrite(path, input)))
       return block(readOnlyTool);
     const targets = path ? [path] : [];
     if (writesGuardFiles(targets, input)) return block(protectedFile);
     if (writesTodoFiles(targets, input)) return block(todoFile);
   }
-  // read, edit, write, grep, find and ls all take a path.
   if (input.deskSecret && path) {
-    const full = path.startsWith("~/") && input.home ? join(input.home, path.slice(2)) : path;
-    if (inSecret(tool, resolve(input.cwd ?? "/", full), input.deskSecret, input.home)) return block(secretFile);
+    if (inSecret(tool, resolve(input.cwd ?? "/", path), input.deskSecret, input.home)) return block(secretFile);
   }
   if (tool === "bash") return input.role === "discuss" ? block(discussOnly) : decideBash(command ?? "", input);
   return allow;

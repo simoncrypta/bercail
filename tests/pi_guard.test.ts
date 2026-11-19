@@ -615,6 +615,11 @@ test("edit and write are blocked for read-only roles only", () => {
   assertEqual(decideTool("edit", undefined, headless).action, "allow");
   assertEqual(decideTool("write", undefined, auto).action, "allow");
   assertEqual(decideTool("read", undefined, judge).action, "allow");
+  // Another extension's tool may take a path that is not a string.
+  assertEqual(
+    decideTool("custom", undefined, { ...judge, deskSecret: { file: "/s", root: "/work" } }, [] as never).action,
+    "allow",
+  );
 });
 
 test("a read-only role writes under the temp dirs and new files under .bercail/, and nowhere else", () => {
@@ -662,7 +667,7 @@ test("a read-only role writes under the temp dirs and new files under .bercail/,
     protectedFiles: ["/tmp/s/policy-trust.json"],
     protectedDirs: ["/tmp/s/shep"],
   };
-  for (const path of ["/tmp/s/policy-trust.json", "/tmp/s/shep/questions.json"])
+  for (const path of ["/tmp/s/policy-trust.json", "/tmp/s/shep/questions.json", "@/tmp/s/policy-trust.json"])
     assertMatch((decideTool("write", undefined, guarded, path) as Decision).reason ?? "", /decides what/, path);
   assertEqual(decideTool("write", undefined, guarded, "/tmp/s/notes.md").action, "allow");
   // A worktree with no policy file: a reviewer still may not add one.
@@ -672,6 +677,30 @@ test("a read-only role writes under the temp dirs and new files under .bercail/,
   const lost = { ...judge, cwd: undefined, readOnlyWrites };
   assertEqual(decideTool("write", undefined, lost, ".bercail/x.md").action, "block");
   assertEqual(decideTool("write", undefined, lost, "/tmp/x").action, "allow");
+});
+
+test("a read-only role in a worktree under a temp dir still may not write the desk files or overwrite .bercail/", () => {
+  for (const root of ["/tmp/wt", "/run/user/1000/tmp/wt"]) {
+    const there = new Set([`${root}/.bercail/judge.md`]);
+    const readOnlyWrites = { tmp: ["/tmp", "/run/user/1000/tmp"], root, exists: (p: string) => there.has(p) };
+    const input = { ...judge, cwd: `${root}/lib`, home: "/home/me", readOnlyWrites };
+    const got = (path: string) => decideTool("write", undefined, input, path) as Decision;
+    for (const path of [
+      ...["description.md", "validate.json", "handoff-result.json", "policy.toml"].map((f) => `${root}/.bercail/${f}`),
+      "../.bercail/validate.json",
+      `${root}/.bercail/judge.md`,
+      // Another worktree's desk files under /tmp are its evidence too.
+      "/tmp/other/.bercail/description.md",
+      // Pi drops a leading @ and decodes a file:// URL before it writes.
+      `file://${root}/.bercail/%64escription.md`,
+      `@${root}/.bercail/judge.md`,
+      "@/home/me/.bashrc",
+      "@~/.bashrc",
+    ])
+      assertMatch(got(path).reason ?? "", /read-only/, `${root}: ${path}`);
+    for (const path of [`${root}/.bercail/answer.md`, "/tmp/x", "/tmp/description.md", "/tmp/other/.bercail/notes.md"])
+      assertEqual(got(path).action, "allow", `${root}: ${path}`);
+  }
 });
 
 test("the guard extension lets a judge write in TMPDIR and a new file in the worktree's .bercail/", async () => {
@@ -1067,6 +1096,9 @@ test("the files that decide the guard's answers are the person's to edit; secret
   };
   assertEqual(decideTool("write", undefined, guarded, "~/.local/state/bercail/policy-trust.json").action, "block");
   assertEqual(decideTool("edit", undefined, guarded, "/h/.config/bercail/config.toml").action, "block");
+  // Pi's file tools drop a leading @ and decode a file:// URL.
+  for (const path of ["@~/.local/state/bercail/policy-trust.json", "file:///h/.config/bercail/config%2Etoml"])
+    assertEqual(decideTool("write", undefined, guarded, path).action, "block", path);
   assertEqual(decideTool("edit", undefined, guarded, "/work/.bercail/policy.toml").action, "allow");
 
   assertEqual(
@@ -2062,7 +2094,12 @@ test("in a repo with a desk secret, no role reads, copies or decrypts its file",
     ])
       blocked(command, input, named);
     for (const tool of ["read", "edit", "write", "grep", "find", "ls"]) {
-      for (const path of ["~/.config/bercail/secrets/repo-agents.op", "/home/me/.config/bercail/secrets"]) {
+      for (const path of [
+        "~/.config/bercail/secrets/repo-agents.op",
+        "/home/me/.config/bercail/secrets",
+        "@~/.config/bercail/secrets/repo-agents.op",
+        "file:///home/me/.config/bercail/secrets/repo-%61gents.op",
+      ]) {
         const got = decideTool(tool, undefined, input, path) as Decision;
         assertEqual(got.action, "block", `${input.role} ${tool} ${path}`);
         // A read-only role's edit stops earlier, as read-only.
@@ -2086,6 +2123,9 @@ test("in a repo with a desk secret, no role reads, copies or decrypts its file",
   // A file right in HOME: its folder is everyone's, so only the file counts.
   const inHome = { ...deskLead, deskSecret: { file: "/home/me/agents.op", root: "/work" } };
   blocked("cat ~/agents.op", inHome, named);
+  // Pi's file tools read a Unicode space as a space.
+  const spaced = { ...deskLead, deskSecret: { file: "/home/me/my agents.op", root: "/work" } };
+  assertMatch((decideTool("read", undefined, spaced, "/home/me/my\u00A0agents.op") as Decision).reason ?? "", named);
   allowed("ls ~", inHome);
   assertEqual(decideTool("read", undefined, inHome, "/home/me/notes.md").action, "allow");
   // No desk secret: nothing to keep.
