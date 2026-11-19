@@ -193,7 +193,8 @@ EOF
     --label bercail.role=agent --label bercail.shep=bg --label bercail.issue=bc-1
     --label "bercail.issue_title=Wait for CI on PR 12, then merge it" --
     env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u BERCAIL_SHEP_INBOX
-    BERCAIL_ROLE=shep-bg BERCAIL_ISSUE=bc-1 BERCAIL_BG_KIND=wait TERM=xterm-256color COLORTERM=truecolor bercail-desk-agent
+    BERCAIL_ROLE=shep-bg BERCAIL_ISSUE=bc-1 BERCAIL_BG_KIND=wait "BERCAIL_BG_BRIEF=$SHARE/BACKGROUND.md"
+    TERM=xterm-256color COLORTERM=truecolor bercail-desk-agent
     --prompt 'Your job is beads issue bc-1: Wait for CI on PR 12, then merge it. Run `bd show bc-1` (read its comments too) and do exactly what it describes, then stop.'
     pi --model fake/lead:high -e npm:pi-claude-bridge@0.12.0 -e /x/fallback.ts -e "$BATS_TEST_TMPDIR/guard.ts"
     -e "$SHARE/pi/background.ts" --no-extensions --no-mcp --no-skills --no-prompt-templates --no-context-files

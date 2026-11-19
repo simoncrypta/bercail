@@ -227,8 +227,11 @@ shep_bg() {
     return 1
   fi
   [[ -x "$agent" ]] || agent="bercail-desk-agent"
+  brief="$(shep_share_dir)/BACKGROUND.md"
+  # hc run starts the worker from the Herdr server, so only this env prefix reaches it.
   cmd=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u BERCAIL_SHEP_INBOX
-    BERCAIL_ROLE=shep-bg "BERCAIL_ISSUE=$issue" "BERCAIL_BG_KIND=$kind" TERM=xterm-256color COLORTERM=truecolor)
+    BERCAIL_ROLE=shep-bg "BERCAIL_ISSUE=$issue" "BERCAIL_BG_KIND=$kind" "BERCAIL_BG_BRIEF=$brief"
+    TERM=xterm-256color COLORTERM=truecolor)
   title="${title%.}"
   [[ "$title" != *… ]] || stop=""
   prompt="Your job is beads issue $issue: $title$stop Run \`bd show $issue\` (read its comments too) and do exactly what it describes, then stop."
@@ -239,7 +242,6 @@ shep_bg() {
     || { _shep_err "required lead model/guard profile missing or invalid: $lead; no generic Pi fallback"; return 1; }
   guard="$(jq -r '.[] | select(test("(^|/)guard\\.ts$"))' "$lead")"
   [[ -r "$guard" ]] || { _shep_err "required guard resource missing: $guard; no background worker started"; return 1; }
-  brief="$(shep_share_dir)/BACKGROUND.md"
   [[ -r "$brief" && -r "$(shep_share_dir)/pi/background.ts" ]] || { _shep_err "background profile is missing; run bercail update"; return 1; }
   model="$(jq -r 'index("--model") as $i | .[$i + 1]' "$lead")"
   cmd+=(pi --model "$model")
@@ -250,8 +252,6 @@ shep_bg() {
   cmd+=(-e "$(shep_share_dir)/pi/background.ts" --no-extensions --no-mcp --no-skills
     --no-prompt-templates --no-context-files --no-approve --tools "read,grep,find,ls,shep_issue,shep_wait,shep_report"
     --system-prompt "$brief")
-  # Environment is inherited by hc and its child, never an approval channel.
-  export BERCAIL_BG_BRIEF="$brief"
   out="$("$hc" run --bg --json --name "$name" --cwd "$cwd" --outlive-parent --no-notify --rm \
     --label bercail.role=agent --label bercail.shep=bg --label "bercail.issue=$issue" \
     --label "bercail.issue_title=$title" -- "${cmd[@]}" </dev/null)" \

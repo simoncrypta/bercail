@@ -80,11 +80,14 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_start", () => {
     if (!issue || !["wait", "admin"].includes(process.env.BERCAIL_BG_KIND || ""))
       throw new Error("missing narrow background admission");
+    const brief = process.env.BERCAIL_BG_BRIEF;
+    if (!brief)
+      throw new Error("BERCAIL_BG_BRIEF is unset; start the background Shep with bercail shep bg, which passes it");
     // Pin the actual brief at startup in the worker's session, not today's file.
     pi.appendEntry("bercail-background-profile", {
       kind: process.env.BERCAIL_BG_KIND,
       generation: "wait-admin-1",
-      brief: readFileSync(process.env.BERCAIL_BG_BRIEF!, "utf8"),
+      brief: readFileSync(brief, "utf8"),
     });
   });
 }
