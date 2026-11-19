@@ -1,5 +1,6 @@
-// Durable work intent belongs to the issue. The file queue only transports data
-// to its original Pi; neither an outcome nor a message grants shipping authority.
+// Dispatch: start a task's first visible desk, or queue a follow-up into the
+// original desk's session. The issue keeps who owns the task; the file queue
+// carries the message to that Pi. Neither grants shipping authority.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -25,20 +26,15 @@ type Owner = {
   pid: number;
   start_ticks: string;
 };
-type Request = {
-  id: string;
-  sequence: number;
-  payload: string;
-  outcome: string;
-  stage: string;
-  message: string;
-  authoring: string;
-  status: string;
+// What Shep asked for. A retry repeats its id and payload.
+type Request = { id: string; payload: string; stage: string; message: string };
+// The task's latest desk creation: a retry of its id finishes an UNKNOWN one,
+// and a retry once it started binds the new desk and queues its message.
+type Creation = Request & {
+  status: "creating" | "unknown" | "started";
   next: string;
   reason?: string;
-  receipt?: unknown;
-  candidate?: { head: string; tree: string };
-  publication?: { target: string; head: string };
+  result?: any;
 };
 type Task = {
   v: number;
@@ -47,10 +43,44 @@ type Task = {
   aliases?: string[];
   owner: Owner | null;
   branch: string;
-  requests: Request[];
+  creation?: Creation;
+  // Request ids that never reach a desk again: a creation an adoption replaced,
+  // and v0.17 requests other than its creation. A queued one finds its file first.
+  retired?: string[];
+  // Follow-ups saved for owner whose queue file is not written yet, by request
+  // id, with their payload. A retry must match it and re-verifies owner; an
+  // adoption retires them.
+  pending?: Record<string, string>;
   forkReason?: string;
   adoptions?: Adoption[];
+  // A v0.17 request ledger; save drops it.
+  requests?: any[];
 };
+// A v0.17 record keeps its creation in the request ledger: the last request that
+// started a desk, or was still starting one, unless it was blocked. Its payload
+// was hashed another way, so a retry of it is checked on its message and stage.
+// Every other request it holds is retired, as v0.17 never sent them again.
+function migrated(task: Task | undefined): Task | undefined {
+  if (!task || task.creation || !Array.isArray(task.requests)) return task;
+  const last = task.requests.findLast(
+    (r) =>
+      (r.creation && !["blocked", "complete"].includes(r.status)) ||
+      ["creating", "unknown", "awaiting-session"].includes(r.status),
+  );
+  if (last)
+    task.creation = {
+      id: last.id,
+      payload: "",
+      stage: last.stage || "bstack",
+      message: last.message || "",
+      status: last.status === "creating" || last.status === "unknown" ? last.status : "started",
+      next: last.next || "",
+      ...(last.reason ? { reason: last.reason } : {}),
+      ...(last.creation ? { result: last.creation } : {}),
+    };
+  task.retired = task.requests.filter((r) => r !== last).map((r) => r.id);
+  return task;
+}
 // A new desk on a gone owner's checkout, and why. The desks it names are gone.
 type Adoption = {
   request: string;
@@ -60,6 +90,13 @@ type Adoption = {
   branch: string;
   from: { desk: string; session: string; space: string }[];
 };
+// A retry asks for the same work: the same payload, or, for a v0.17 request
+// whose payload was hashed another way, the same message and stage.
+function same(stored: Request, request: Request): boolean {
+  return stored.payload
+    ? stored.payload === request.payload
+    : stored.message === request.message && (stored.stage || "bstack") === request.stage;
+}
 const state = () => join(process.env.XDG_STATE_HOME || join(process.env.HOME!, ".local/state"), "bercail");
 const bin = (name: string) => process.env[`${name.toUpperCase()}_BIN`] || name;
 function run(command: string, args: string[], cwd: string, timeout = 3000, input?: string): string {
@@ -93,21 +130,21 @@ function issue(repo: string, id: string): any {
   if (value?.id !== id) throw new Error(`bd does not know ${id} in ${repo}`);
   return value;
 }
-function save(repo: string, value: any, task: Task): void {
-  // Keep unrelated metadata. A failed/uncertain bd write stops dispatch before
-  // any external effect; retry reads the durable reservation first.
+// Write the task and, unless reopen is false, set the issue in progress. Keep
+// unrelated metadata. A failed reservation stops dispatch before the desk or
+// its queue file sees anything; a retry reads that reservation first.
+function save(repo: string, value: any, task: Task, reopen = true): void {
   const file = join(
     git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
     "bercail-task.lock/metadata.json",
   );
-  const current = issue(repo, value.id);
-  if (current.metadata?.bercail_task?.requests?.some((r: Request) => !task.requests.some((ours) => ours.id === r.id)))
-    throw new Error("task changed outside the repository reservation; inspect it without dropping newer work");
+  delete task.requests;
+  task.v = 2;
   // bd 1.3.1 --metadata merges inside the storage transaction. Submit only
   // this namespace; resubmitting other keys would overwrite concurrent edits.
   writeFileSync(file, JSON.stringify({ bercail_task: task }), { mode: 0o600 });
   try {
-    bd(repo, "update", value.id, "--metadata", `@${file}`, "--status", "in_progress", "--json");
+    bd(repo, "update", value.id, "--metadata", `@${file}`, ...(reopen ? ["--status", "in_progress"] : []), "--json");
   } finally {
     rmSync(file);
   }
@@ -378,75 +415,33 @@ function findOwner(
     );
   return owner;
 }
+// A follow-up's file name ends in a hash of the request, so a retry finds it
+// under whichever desk it went to, after an adoption too.
+const sentAs = (repo: string, id: string, request: Request) =>
+  `-${createHash("sha256").update(`${repo}\0${id}\0${request.id}`).digest("hex")}.json`;
+function queued(repo: string, id: string, request: Request): { path: string; file: any } | null {
+  const root = join(state(), "desk-follow-ups");
+  if (!existsSync(root)) return null;
+  for (const desk of readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory())) {
+    const hit = readdirSync(join(root, desk.name)).find((f) => f.endsWith(sentAs(repo, id, request)));
+    if (hit) return { path: join(root, desk.name, hit), file: json(join(root, desk.name, hit)) };
+  }
+  return null;
+}
+// Write the follow-up for owner's desk; dispatch looked for an earlier one first.
+// Its name starts with a number above the desk's others (the time, unless the
+// clock went back), so the desk takes them in dispatch order.
 function queue(repo: string, id: string, owner: Owner, request: Request): string {
   const dir = join(state(), "desk-follow-ups", owner.desk);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const path = join(
-    dir,
-    `${String(request.sequence).padStart(9, "0")}-${createHash("sha256").update(`${repo}\0${id}\0${request.id}`).digest("hex")}.json`,
+  const last = Math.max(0, ...readdirSync(dir).map((f) => Number(/^(\d+)-/.exec(f)?.[1] || 0)));
+  const path = join(dir, `${String(Math.max(Date.now(), last + 1)).padStart(15, "0")}${sentAs(repo, id, request)}`);
+  writeFileSync(
+    path,
+    JSON.stringify({ v: 2, repo, issue: id, owner, request, delivery: "queued", authority: false }) + "\n",
+    { mode: 0o600, flag: "wx" },
   );
-  if (!existsSync(path))
-    writeFileSync(
-      path,
-      JSON.stringify({ v: 1, repo, issue: id, owner, request, delivery: "queued", authority: false }) + "\n",
-      { mode: 0o600, flag: "wx" },
-    );
   return path;
-}
-function pending(r: Request): boolean {
-  return r.status !== "complete";
-}
-function effectsFor(owner: Owner, repo: string, id: string, request: Request): any[] {
-  const entries = readFileSync(owner.session_file, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
-  const byID = new Map(entries.filter((e) => e.type !== "session").map((e) => [e.id, e]));
-  const active = new Set<string>();
-  const runtimeRoot = process.env.XDG_STATE_HOME || join(process.env.HOME!, ".local/state");
-  const loaded = json(join(runtimeRoot, "bercail/runtime", `${owner.pid}.json`));
-  if (
-    loaded.pid !== owner.pid ||
-    loaded.start_ticks !== owner.start_ticks ||
-    loaded.session !== owner.session ||
-    loaded.session_file !== owner.session_file ||
-    !loaded.leaf
-  )
-    throw new Error(
-      "original runtime's active-leaf evidence missing/stale; physical JSONL tail is not an active branch",
-    );
-  let leaf = loaded.leaf;
-  while (leaf && byID.has(leaf) && !active.has(leaf)) {
-    active.add(leaf);
-    leaf = byID.get(leaf).parentId;
-  }
-  const branch = entries.filter((e) => active.has(e.id));
-  const same = (d: any) => d?.repo === repo && d.issue === id && d.requestId === request.id && d.authority === false;
-  if (!branch.some((e) => e.type === "custom_message" && e.customType === "bercail-task-work" && same(e.details)))
-    throw new Error(
-      "request has no complete matching persisted work message in the original active session; queued/submitted is not execution",
-    );
-  return branch
-    .filter(
-      (e) =>
-        e.type === "custom" &&
-        e.customType === "bercail-task-effect" &&
-        same(e.data) &&
-        e.data.session === owner.session,
-    )
-    .map((e) => e.data)
-    .filter(
-      (d) =>
-        d.exit_code === 0 &&
-        branch.some(
-          (e) =>
-            e.type === "message" &&
-            e.message?.role === "toolResult" &&
-            e.message.toolCallId === d.toolCallId &&
-            !e.message.isError &&
-            e.message.structuredContent?.exit_code === 0,
-        ),
-    );
 }
 
 // What a creation whose spawn ended without a desk left: no handoffs.jsonl line
@@ -494,10 +489,11 @@ type Spawn = {
   forkReason?: string;
   adoptReason?: string;
 };
-// Start the visible desk for request. timeout runs the spawn in its own process
-// group and kills the whole group when time runs out, so nothing it started is
-// still on its way to a desk when the request turns UNKNOWN.
-function create(repo: string, value: any, task: Task, request: Request, opts: Spawn): any {
+// Start the visible desk for task.creation. timeout runs the spawn in its own
+// process group and kills the whole group when time runs out, so nothing it
+// started is still on its way to a desk when the creation turns UNKNOWN.
+function create(repo: string, value: any, task: Task, opts: Spawn): any {
+  const creation = task.creation!;
   const spawn =
     process.env.BERCAIL_HANDOFF_SPAWN || join(process.env.HOME!, ".agents/skills/handoff/scripts/handoff-spawn");
   const secs = spawnTimeout();
@@ -515,7 +511,7 @@ function create(repo: string, value: any, task: Task, request: Request, opts: Sp
           "--branch",
           task.branch,
           "--stage",
-          request.stage,
+          creation.stage,
           "--issue",
           value.id,
           "--target",
@@ -547,18 +543,18 @@ function create(repo: string, value: any, task: Task, request: Request, opts: Sp
       (opts.adoption && realpathSync(result.path) !== opts.adoption.path)
     )
       throw new Error(`visible tuple unconfirmed: ${JSON.stringify(result)}`);
-    request.status = "awaiting-session";
-    request.next = `Created ${result.path}, space ${result.space}, desk ${result.desk}; inspect startup then dispatch the next request in that original session`;
-    delete request.reason;
-    Object.assign(request, { creation: result });
+    creation.status = "started";
+    creation.next = `Created ${result.path}, space ${result.space}, desk ${result.desk}; its first prompt is the issue. Dispatch follow-ups to it as new requests`;
+    delete creation.reason;
+    creation.result = result;
     // Startup may still be loading. Do not invent a session or call restore.
     task.branch = result.branch;
     save(repo, value, task);
-    return { status: request.status, creation: result, authority: false };
+    return { status: creation.status, creation: result, authority: false };
   } catch (error) {
-    request.status = "unknown";
-    request.reason = String(error);
-    request.next =
+    creation.status = "unknown";
+    creation.reason = String(error);
+    creation.next =
       "Retry this requestId: it finishes a creation that left no desk and no handoffs.jsonl line, else says what to inspect";
     save(repo, value, task);
     throw error;
@@ -566,6 +562,7 @@ function create(repo: string, value: any, task: Task, request: Request, opts: Sp
 }
 
 export function taskCommand(op: string, input: any): any {
+  if (op !== "dispatch") throw new Error("usage: bercail shep task dispatch (JSON on stdin)");
   if (!input || typeof input !== "object" || !input.repo || !/^[a-z0-9][a-z0-9._-]*$/i.test(input.issue || ""))
     throw new Error("pass explicit repo and issue as JSON on stdin");
   const allowed = new Set([
@@ -573,25 +570,16 @@ export function taskCommand(op: string, input: any): any {
     "issue",
     "target",
     "requestId",
-    "outcome",
     "stage",
     "message",
-    "authoring",
     "branch",
     "forkReason",
     "adoptReason",
-    "targets",
-    "universe",
-    "reason",
-    "next",
-    "proof",
-    "session",
-    "desk",
   ]);
-  if (Object.keys(input).some((key) => !allowed.has(key)) || JSON.stringify(input).length > 65536)
-    throw new Error("unknown task field or request exceeds 64KiB");
-  if (input.authoring !== undefined && typeof input.authoring !== "string")
-    throw new Error("authoring must be the requested command string");
+  const unknown = Object.keys(input).filter((key) => !allowed.has(key));
+  if (unknown.length)
+    throw new Error(`unknown task field ${unknown.join(", ")}; dispatch takes ${[...allowed].join(", ")}`);
+  if (JSON.stringify(input).length > 65536) throw new Error("request exceeds 64KiB");
   if (input.branch) run("git", ["check-ref-format", "--branch", input.branch], process.cwd());
   const repo = mainOf(input.repo);
   const common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir");
@@ -603,491 +591,258 @@ export function taskCommand(op: string, input: any): any {
   }
   try {
     const value = issue(repo, input.issue);
-    let task: Task | undefined = value.metadata?.bercail_task;
-    if (op === "status")
-      return task || { status: "unknown", next: "No tracked request; inspect the issue and original handoff" };
-    if (op === "dispatch") {
-      const target = logicalTarget(input.target || "");
-      if (/^https:/i.test(input.target)) {
-        const slug = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\//i.exec(input.target)?.[1]?.toLowerCase();
-        const remote = git(repo, "remote", "get-url", "origin").replace(/\.git$/, "");
-        const origin = /github\.com[:/]([^/]+\/[^/]+)$/.exec(remote)?.[1]?.toLowerCase();
-        if (!slug || origin !== slug)
-          throw new Error("PR URL belongs to another repository; ownership cannot be inferred from its number");
-      }
-      if (!/^[a-z0-9][a-z0-9._-]{0,99}$/i.test(input.requestId || ""))
-        throw new Error("requestId is required; reuse it after an uncertain response, never mint a retry");
-      if (
-        !["stage", "local", "publish", "cleanup"].includes(input.outcome) ||
-        !["bstack", "autopilot"].includes(input.stage || "bstack") ||
-        typeof input.message !== "string" ||
-        !input.message.trim()
-      )
-        throw new Error("dispatch needs outcome stage|local|publish|cleanup and a work message");
-      const adopting = input.adoptReason !== undefined;
-      if (adopting && (typeof input.adoptReason !== "string" || !input.adoptReason.trim() || input.forkReason))
+    let task = migrated(value.metadata?.bercail_task);
+    const target = logicalTarget(input.target || "");
+    if (/^https:/i.test(input.target)) {
+      const slug = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\//i.exec(input.target)?.[1]?.toLowerCase();
+      const remote = git(repo, "remote", "get-url", "origin").replace(/\.git$/, "");
+      const origin = /github\.com[:/]([^/]+\/[^/]+)$/.exec(remote)?.[1]?.toLowerCase();
+      if (!slug || origin !== slug)
+        throw new Error("PR URL belongs to another repository; ownership cannot be inferred from its number");
+    }
+    if (!/^[a-z0-9][a-z0-9._-]{0,99}$/i.test(input.requestId || ""))
+      throw new Error("requestId is required; reuse it after an uncertain response, never mint a retry");
+    if (
+      !["bstack", "autopilot"].includes(input.stage || "bstack") ||
+      typeof input.message !== "string" ||
+      !input.message.trim()
+    )
+      throw new Error("dispatch needs a work message, and stage bstack or autopilot");
+    const adopting = input.adoptReason !== undefined;
+    if (adopting && (typeof input.adoptReason !== "string" || !input.adoptReason.trim() || input.forkReason))
+      throw new Error(
+        "adoptReason must say why a new desk takes over the gone owner's checkout (and cannot go with forkReason)",
+      );
+    if (task && task.repo !== repo) throw new Error("issue belongs to another repository; no transfer");
+    if (task && task.target !== target && !task.aliases?.includes(target)) {
+      if (task.target !== `task:${value.id}` || !target.startsWith("pr:") || !task.owner)
+        throw new Error("issue already owns another logical target; use a separate issue with an explicit forkReason");
+      const pr = prFacts(repo, target);
+      if (pr.isCrossRepository || pr.headRefName !== task.owner.branch)
+        throw new Error("new PR is not bound to the original owner's branch; no target or session transfer");
+      task.aliases = [...(task.aliases || []), task.target];
+      task.target = target;
+    }
+    const all = allIssues(repo);
+    const released = supersededBy(all, value.id);
+    const recorded = records(repo);
+    // A superseded issue gives up its target once none of its desks is live.
+    if (released.size) {
+      const desks = new Set(
+        [
+          ...recorded.filter((r) => released.has(r.issue)).map((r) => r.desk),
+          ...all.filter((i: any) => released.has(i.id)).map((i: any) => i.metadata?.bercail_task?.owner?.desk),
+        ].filter(Boolean),
+      );
+      const still = live(repo).find((t) => released.has(t.labels?.["bercail.issue"]) || desks.has(t.address));
+      if (still)
         throw new Error(
-          "adoptReason must say why a new desk takes over the gone owner's checkout (and cannot go with forkReason)",
+          `superseded issue ${still.labels?.["bercail.issue"] || [...released].join(", ")} still has live desk ${still.address}; close it before its target moves`,
         );
-      if (task && task.repo !== repo) throw new Error("issue belongs to another repository; no transfer");
-      if (task && task.target !== target && !task.aliases?.includes(target)) {
-        if (task.target !== `task:${value.id}` || !target.startsWith("pr:") || !task.owner)
-          throw new Error(
-            "issue already owns another logical target; use a separate issue with an explicit forkReason",
-          );
-        const pr = prFacts(repo, target);
-        if (pr.isCrossRepository || pr.headRefName !== task.owner.branch)
-          throw new Error("new PR is not bound to the original owner's branch; no target or session transfer");
-        task.aliases = [...(task.aliases || []), task.target];
-        task.target = target;
-      }
-      const all = allIssues(repo);
-      const released = supersededBy(all, value.id);
-      const recorded = records(repo);
-      // A superseded issue gives up its target once none of its desks is live.
-      if (released.size) {
-        const desks = new Set(
-          [
-            ...recorded.filter((r) => released.has(r.issue)).map((r) => r.desk),
-            ...all.filter((i: any) => released.has(i.id)).map((i: any) => i.metadata?.bercail_task?.owner?.desk),
-          ].filter(Boolean),
-        );
-        const still = live(repo).find((t) => released.has(t.labels?.["bercail.issue"]) || desks.has(t.address));
-        if (still)
-          throw new Error(
-            `superseded issue ${still.labels?.["bercail.issue"] || [...released].join(", ")} still has live desk ${still.address}; close it before its target moves`,
-          );
-      }
-      const history = recorded.filter((r) => !released.has(r.issue));
-      if (target.startsWith("pr:") && history.some((r) => (!r.target || r.target.startsWith("task:")) && r.branch)) {
-        const pr = prFacts(repo, target);
-        if (!pr.headRefName || pr.isCrossRepository)
-          throw new Error("legacy PR ownership UNKNOWN; cannot infer absence or start a new desk");
-        for (const r of history)
-          if ((!r.target || r.target.startsWith("task:")) && r.branch === pr.headRefName) r.target = target;
-      }
-      const payload = createHash("sha256")
+    }
+    const history = recorded.filter((r) => !released.has(r.issue));
+    if (target.startsWith("pr:") && history.some((r) => (!r.target || r.target.startsWith("task:")) && r.branch)) {
+      const pr = prFacts(repo, target);
+      if (!pr.headRefName || pr.isCrossRepository)
+        throw new Error("legacy PR ownership UNKNOWN; cannot infer absence or start a new desk");
+      for (const r of history)
+        if ((!r.target || r.target.startsWith("task:")) && r.branch === pr.headRefName) r.target = target;
+    }
+    const request: Request = {
+      id: input.requestId,
+      payload: createHash("sha256")
         .update(
           JSON.stringify({
             repo,
             issue: value.id,
             target,
-            outcome: input.outcome,
             stage: input.stage || "bstack",
             message: input.message,
-            authoring: input.authoring || "",
             branch: input.branch || "",
             forkReason: input.forkReason || "",
             adoptReason: input.adoptReason || "",
-            targets: input.targets || null,
-            universe: input.universe || null,
           }),
         )
-        .digest("hex");
-      const aliases = all.filter(
-        (i: any) =>
-          i.id !== value.id &&
-          !released.has(i.id) &&
-          i.metadata?.bercail_task?.repo === repo &&
-          (i.metadata.bercail_task.target === target || i.metadata.bercail_task.aliases?.includes(target)),
+        .digest("hex"),
+      stage: input.stage || "bstack",
+      message: input.message,
+    };
+    const aliases = all.filter(
+      (i: any) =>
+        i.id !== value.id &&
+        !released.has(i.id) &&
+        i.metadata?.bercail_task?.repo === repo &&
+        (i.metadata.bercail_task.target === target || i.metadata.bercail_task.aliases?.includes(target)),
+    );
+    const other = history.filter((r) => r.issue !== value.id && r.target === target);
+    if ((aliases.length || other.length) && !input.forkReason)
+      throw new Error(
+        `logical target already owned by ${aliases[0]?.id || other[0]?.issue}; continue that issue, close it with bd supersede ${aliases[0]?.id || other[0]?.issue} --with ${value.id}, or use an explicit forkReason on a separate exploration issue`,
       );
-      const other = history.filter((r) => r.issue !== value.id && r.target === target);
-      if ((aliases.length || other.length) && !input.forkReason)
-        throw new Error(
-          `logical target already owned by ${aliases[0]?.id || other[0]?.issue}; continue that issue, close it with bd supersede ${aliases[0]?.id || other[0]?.issue} --with ${value.id}, or use an explicit forkReason on a separate exploration issue`,
-        );
-      const prior = task?.requests.find((r) => r.id === input.requestId);
-      if (prior) {
-        if (prior.payload !== payload) throw new Error("requestId payload changed; this is not a retry");
-        // The spawn of an UNKNOWN creation has ended. When it left no desk and
-        // no handoffs line, finish it in its clean worktree, or start it again.
-        if (
-          prior.status === "unknown" &&
-          !task!.owner &&
-          prior === task!.requests.at(-1) &&
-          !task!.adoptions?.some((a) => a.request === prior.id)
-        ) {
-          const pr = target.startsWith("pr:") ? prFacts(repo, target) : null;
-          const existing = !!pr && !pr.isCrossRepository && pr.headRefName === task!.branch;
-          let path: string | null;
-          try {
-            // An older dispatch saved autopilot requests it then started as bstack, on any branch.
-            if (prior.stage === "autopilot" && !existing)
-              throw new Error(
-                `stage autopilot starts a desk only on ${target}'s own branch, and ${task!.branch} is not it`,
-              );
-            path = leftover(repo, value.id, task!.branch, history, existing ? pr!.headRefOid : "");
-          } catch (error) {
-            const why = (error as Error).message;
-            return { ...prior, owner: null, authority: false, retry: true, next: `Not finished: ${why}` };
-          }
-          prior.status = "creating";
-          prior.next = path
-            ? `Finishing the partial creation in ${path}`
-            : "Starting the creation again: the last one left no worktree";
-          save(repo, value, task!);
-          const done = create(repo, value, task!, prior, {
-            existing,
-            reuse: !!path,
-            released,
-            adoption: null,
-            forkReason: task!.forkReason,
-          });
-          return { ...done, retry: true };
-        }
-        // Repair only a missing queue file after a durable acceptance, never a
-        // claimed/submitted send or a launch with an uncertain native result.
-        if (prior.status === "awaiting-session" && !task!.owner) {
-          const created = (prior as any).creation;
-          const original = findOwner(repo, value.id, target, null, !!task!.forkReason, history);
-          if (
-            !original ||
-            original.desk !== created.desk ||
-            original.space !== created.space ||
-            original.session !== created.session ||
-            original.cwd !== realpathSync(created.path)
-          )
-            throw new Error("original startup/session not ready or changed; do not replace it");
-          task!.owner = original;
-          prior.status = "queued";
-          prior.next = "Original startup confirmed; work and its receipts remain outstanding";
-          save(repo, value, task!);
-        }
-        if (prior.status === "queued" && task!.owner) {
-          const original = findOwner(repo, value.id, target, task!.owner, !!task!.forkReason, history);
-          if (!original) throw new Error("original owner missing; request remains outstanding");
-          save(repo, value, task!);
-          queue(repo, value.id, original, prior);
-        }
-        return { ...prior, owner: task!.owner, authority: false, retry: true };
-      }
-      const owner = findOwner(
-        repo,
-        value.id,
-        target,
-        task?.owner,
-        !!(task?.forkReason || input.forkReason),
-        history,
-        adopting,
-      );
-      if (adopting && owner)
-        throw new Error(
-          `live original owner ${owner.desk}; continue it with a normal dispatch, adoption is only for a gone owner`,
-        );
-      // The latest creation: an adoption's desk replaced the first one.
-      const creation = task?.requests.findLast((r) => (r as any).creation) as
-        | (Request & { creation?: any })
-        | undefined;
-      if (owner && creation?.creation?.session && owner.session !== creation.creation.session)
-        throw new Error("original startup session changed; no transfer to a replacement");
-      if (input.branch && (owner || task) && input.branch !== (owner?.branch || task?.branch))
-        throw new Error(
-          "branch differs from original task; continue the original checkout or fork to a separate issue with a reason",
-        );
-      if (task && !owner && (!adopting || task.requests.some((r) => r.status === "creating" || r.status === "unknown")))
-        throw new Error(
-          "creation outcome UNKNOWN; retry its own requestId to finish a partial creation, or inspect the worktree/space facts; do not launch another",
-        );
-      const adoption = adopting ? adoptable(repo, value.id, target, task, history, input) : null;
-      const request: Request = {
-        id: input.requestId,
-        sequence: task?.requests.length || 0,
-        payload,
-        outcome: input.outcome,
-        stage: input.stage || "bstack",
-        message: input.message,
-        authoring: input.authoring || "",
-        status: owner ? "queued" : "creating",
-        next: owner
-          ? "Original desk processes this work; validation and requested receipts still outstanding"
-          : "Inspect visible creation result",
+    // A retry of a follow-up: it was queued once, and is never sent again.
+    const sent = queued(repo, value.id, request);
+    if (sent) {
+      if (!same({ ...sent.file.request, payload: sent.file.v === 2 ? sent.file.request.payload : "" }, request))
+        throw new Error("requestId payload changed; this is not a retry");
+      return {
+        status: "queued",
+        owner: sent.file.owner,
+        path: sent.path,
+        delivery: sent.file.delivery,
+        authority: false,
+        retry: true,
       };
-      if (input.outcome === "cleanup" && (!Array.isArray(input.targets) || !input.targets.length))
-        throw new Error(
-          "cleanup needs a finite explicit target subset and an execution owner; an inventory is not a receipt",
-        );
-      task ||= {
-        v: 1,
-        repo,
-        target,
-        owner,
-        branch: owner?.branch || adoption?.branch || input.branch || "",
-        requests: [],
-        ...(input.forkReason ? { forkReason: String(input.forkReason) } : {}),
-      };
-      if (!owner && !task.branch) throw new Error("no existing owner; pass branch explicitly for a new visible desk");
-      // A new desk on a PR's own branch starts at its fetched head; the branch is never cut again.
-      let existing = false;
-      if (!owner && !adoption && target.startsWith("pr:")) {
-        const pr = prFacts(repo, target);
-        existing = !pr.isCrossRepository && pr.headRefName === task.branch;
-      }
-      if (!owner && request.stage === "autopilot" && !(adoption ? target.startsWith("pr:") : existing))
-        throw new Error(
-          "stage autopilot starts a desk only on an open PR's own branch: target pr:N, with branch set to that PR's head branch",
-        );
-      const checkout = owner?.cwd || adoption?.path || repo;
-      Object.assign(request, {
-        candidate: { head: git(checkout, "rev-parse", "HEAD"), tree: git(checkout, "write-tree") },
-      });
-      if (input.outcome === "publish" && target.startsWith("pr:")) {
-        try {
-          const baseline = JSON.parse(
-            run(bin("gh"), ["pr", "view", target.slice(3), "--json", "headRefOid"], owner?.cwd || repo),
-          );
-          if (/^[a-f0-9]{40,64}$/.test(baseline.headRefOid))
-            request.publication = { target, head: baseline.headRefOid };
-        } catch {
-          /* Unknown baseline does not stop dispatch to the original owner. */
-        }
-      }
-      if (input.outcome === "cleanup") {
-        if (input.authoring)
-          throw new Error(
-            "cleanup cannot discard requested authoring; dispatch authoring as a separate local/publish request in the same issue",
-          );
-        const native = JSON.parse(run(process.env.HERDR_APP_BIN || "herdr-app", ["ls"], repo));
-        if (!Array.isArray(native.spaces))
-          throw new Error("native OPEN snapshot UNKNOWN; audit is not an execution target snapshot");
-        const targets = input.targets.map((t: any) => {
-          const space = native.spaces.find((s: any) => s.id === t.space);
-          if (!space || (t.generation && t.generation !== (space.generation || space.id)))
-            throw new Error("cleanup target/generation not in the observed native OPEN snapshot");
-          const disposition = t.disposition || "CLOSE";
-          if (!["CLOSE", "KEEP", "PROTECTED"].includes(disposition) || (disposition !== "CLOSE" && !t.reason?.trim()))
-            throw new Error(
-              "cleanup target disposition must be CLOSE, or an explicitly requested KEEP/PROTECTED with its reason",
-            );
-          return {
-            space: space.id,
-            generation: space.generation || space.id,
-            disposition,
-            reason: t.reason || "",
-            snapshot: space,
-          };
-        });
-        if (new Set(targets.map((t: any) => t.space)).size !== targets.length)
-          throw new Error("duplicate cleanup target");
-        if (input.universe && !["subset", "current"].includes(input.universe))
-          throw new Error("universe must be subset or current");
-        if (input.universe === "current" && targets.length !== native.spaces.length)
-          throw new Error("requested subset is not the current OPEN universe");
-        Object.assign(request, {
-          targets,
-          universe: input.universe || "subset",
-          open_at_dispatch: native.spaces.map((s: any) => s.id),
-        });
-      }
-      if (adoption) {
-        // The gone owner's requests stay its own: none is delivered to the new session.
-        for (const r of task.requests.filter((r) => pending(r) && r.status !== "blocked"))
-          Object.assign(r, {
-            status: "blocked",
-            reason: `original owner gone; its checkout was adopted by request ${request.id}, so this request did not move to the new session`,
-            next: "Dispatch it again as a new request if the adopting desk should do it",
-          });
-        task.branch = adoption.branch;
-        task.adoptions = [
-          ...(task.adoptions || []),
-          { request: request.id, reason: input.adoptReason.trim(), at: new Date().toISOString(), ...adoption },
-        ];
-      }
-      task.owner = owner;
-      task.requests.push(request);
-      save(repo, value, task); // Reopen before delivery, so even an interrupted send protects unpublished work.
-      if (owner) {
-        const path = queue(repo, value.id, owner, request);
-        return { status: "queued", owner, path, authority: false };
-      }
-      return create(repo, value, task, request, {
-        existing,
-        reuse: false,
-        released,
-        adoption,
-        forkReason: input.forkReason ? String(input.forkReason) : undefined,
-        adoptReason: adoption ? input.adoptReason.trim() : undefined,
-      });
     }
-    if (!task) throw new Error("no durable requested outcome on this issue; dispatch it explicitly first");
-    const request = task.requests.find((r) => r.id === input.requestId);
-    if (!request) throw new Error("unknown requestId; old turns/reports cannot complete a new request");
-    if (request.status === "complete" && (op === "receipt" || op === "block"))
-      return { ...task, outstanding: task.requests.filter(pending).length, authority: false, retry: true };
-    if (op === "block") {
-      if (!input.reason || !input.next) throw new Error("block needs the precise reason and next action");
-      request.status = "blocked";
-      request.reason = String(input.reason);
-      request.next = String(input.next);
-    } else if (op === "receipt") {
-      if (!task.owner) throw new Error("no verified execution owner; an audit cannot complete cleanup");
-      let owner: Owner | null;
-      let alive = false;
-      try {
-        alive = processTicks(task.owner.pid) === task.owner.start_ticks;
-      } catch {}
-      if (request.outcome === "cleanup" && !alive) {
-        // Receipt-only reconciliation of the already-bound owner, not an owner
-        // transfer or permission to execute after normal native closure.
-        owner = task.owner;
-        const header = JSON.parse(readFileSync(owner.session_file, "utf8").split("\n")[0]!);
-        if (
-          header.id !== owner.session ||
-          header.cwd !== owner.cwd ||
-          git(owner.cwd, "branch", "--show-current") !== owner.branch
-        )
-          throw new Error("closed original owner's persisted context is stale; cleanup remains UNKNOWN");
-      } else {
-        const released = supersededBy(allIssues(repo), value.id);
-        const history = records(repo).filter((r) => !released.has(r.issue));
-        owner = findOwner(repo, value.id, task.target, task.owner, !!task.forkReason, history);
-      }
-      if (!owner || input.session !== owner.session || input.desk !== owner.desk)
-        throw new Error("receipt must name the original execution owner/session (not authorization)");
-      const head = git(owner.cwd, "rev-parse", "HEAD");
-      const tree = git(owner.cwd, "write-tree");
-      const proof = input.proof;
-      const effects = effectsFor(owner, repo, value.id, request);
-      const validation = effects.find(
-        (e) =>
-          e.command === proof?.validation?.command &&
-          e.before.head === head &&
-          e.before.tree === tree &&
-          e.after.head === head &&
-          e.after.tree === tree,
+    if (task?.retired?.includes(input.requestId))
+      throw new Error(
+        `request ${input.requestId} is retired: it was for a desk whose checkout was adopted, or is v0.17 work with no queue file. Dispatch it again with a new requestId`,
       );
-      if (!validation)
-        throw new Error(
-          "fresh successful validation in this request/session for the current head/tree is required; old describe/CI/caller claims are not evidence",
-        );
-      if (
-        !proof ||
-        proof.head !== head ||
-        proof.tree !== tree ||
-        proof.validation?.head !== head ||
-        proof.validation?.tree !== tree ||
-        proof.validation?.exit_code !== 0 ||
-        !proof.validation.command
-      )
-        throw new Error("fresh validation for this head and staged tree is required");
-      if (request.outcome === "cleanup") {
-        const targets = (request as any).targets;
-        if (!Array.isArray(proof.results) || proof.results.length !== targets.length)
-          throw new Error("per-target custody/closure receipts required, not an inventory or planned subset");
-        const native = JSON.parse(run(process.env.HERDR_APP_BIN || "herdr-app", ["ls"], repo));
-        if (!Array.isArray(native.spaces)) throw new Error("native OPEN spaces UNKNOWN");
-        for (const target of targets) {
-          const r = proof.results.find((x: any) => x.space === target.space && x.generation === target.generation);
-          if (!r?.custody || !["CLOSED", "EXTERNAL", "KEEP", "PROTECTED", "UNKNOWN", "PARTIAL"].includes(r.status))
-            throw new Error("each original target needs its generation, actual result and custody");
-          if (["CLOSED", "EXTERNAL"].includes(r.status) && target.disposition !== "CLOSE")
+    if (
+      task?.pending &&
+      Object.hasOwn(task.pending, input.requestId) &&
+      task.pending[input.requestId] !== request.payload
+    )
+      throw new Error("requestId payload changed; this is not a retry");
+    const prior = task?.creation?.id === input.requestId ? task?.creation : undefined;
+    if (prior) {
+      if (!same(prior, request)) throw new Error("requestId payload changed; this is not a retry");
+      // The spawn of an UNKNOWN creation has ended. When it left no desk and
+      // no handoffs line, finish it in its clean worktree, or start it again.
+      if (prior.status === "unknown" && !task!.owner && !task!.adoptions?.some((a) => a.request === prior.id)) {
+        const pr = target.startsWith("pr:") ? prFacts(repo, target) : null;
+        const existing = !!pr && !pr.isCrossRepository && pr.headRefName === task!.branch;
+        let path: string | null;
+        try {
+          // An autopilot desk starts only on the PR's own branch, on a retry too.
+          if (prior.stage === "autopilot" && !existing)
             throw new Error(
-              "explicitly retained target is not retained; report PARTIAL/UNKNOWN rather than successful closure",
+              `stage autopilot starts a desk only on ${target}'s own branch, and ${task!.branch} is not it`,
             );
-          if (["CLOSED", "EXTERNAL"].includes(r.status) && native.spaces.some((s: any) => s.id === r.space))
-            throw new Error("target is still OPEN; RECENT/history is not OPEN closure");
-          if (
-            r.status === "CLOSED" &&
-            !effects.some(
-              (e) =>
-                e.close === target.space &&
-                e.open_before?.some(
-                  (s: any) => s.id === target.space && (s.generation || s.id) === target.generation,
-                ) &&
-                !e.open_after?.some((s: any) => s.id === target.space),
-            )
-          )
-            throw new Error(
-              "missing observed native closure receipt from this original execution owner; an audit/inventory is not execution (use EXTERNAL only for independently observed external closure)",
-            );
-          if (["KEEP", "PROTECTED"].includes(r.status) && target.disposition !== r.status)
-            throw new Error(
-              "requested closure is still outstanding; a receipt cannot silently weaken it to KEEP/PROTECTED",
-            );
-          if (
-            ["KEEP", "PROTECTED"].includes(r.status) &&
-            !native.spaces.some((s: any) => s.id === r.space && (s.generation || s.id) === target.generation)
-          )
-            throw new Error("KEEP/protected target changed; inspect custody, do not report it closed");
+          path = leftover(repo, value.id, task!.branch, history, existing ? pr!.headRefOid : "");
+        } catch (error) {
+          const why = (error as Error).message;
+          return { status: prior.status, owner: null, authority: false, retry: true, next: `Not finished: ${why}` };
         }
-        proof.open = native.spaces.map((s: any) => s.id);
-        proof.history =
-          "RECENT/history not counted as OPEN; future delivery queue and completed processes are not global closure gates";
-        if (proof.results.some((r: any) => ["UNKNOWN", "PARTIAL"].includes(r.status))) {
-          request.status = "partial";
-          request.receipt = proof;
-          request.next = "Resolve the named partial/unknown targets with their original custody";
-          save(repo, value, task);
-          return task;
-        }
-      } else {
-        if (request.outcome === "local" && (!request.candidate?.head || head === request.candidate.head))
-          throw new Error("requested new authored head is still outstanding");
-        const recorded = json(join(owner.cwd, ".bercail/validate.json"));
-        if (
-          recorded.tree !== tree ||
-          !recorded.checks?.some(
-            (check: any) =>
-              ["test", "verify-skill"].includes(check.kind) &&
-              check.command === proof.validation.command &&
-              check.exit_code === 0,
-          )
-        )
-          throw new Error(
-            "validation command must match the candidate's recorded /validate checks, not an arbitrary successful command",
-          );
-        // This job tracks exact authoring intent. It does not invent a native
-        // authoring effect contract from command text or Git objects.
-        if (request.authoring)
-          throw new Error(
-            `native authoring receipt unavailable for ${request.authoring}; keep this request blocked in its original owner, with the exact next action`,
-          );
-        // A claim in prose is insufficient even for stage-only work.
-        run(process.env.BERCAIL_SHEP_BIN || "bercail", ["describe", "check", owner.cwd], repo, 5000);
-        if (
-          request.outcome !== "stage" &&
-          (git(owner.cwd, "rev-parse", "HEAD^{tree}") !== tree ||
-            git(owner.cwd, "status", "--porcelain", "--untracked-files=all"))
-        )
-          throw new Error("requested authoring remains outstanding; the current changes are not all authored");
-        if (request.outcome === "publish") {
-          if (!request.publication || request.publication.target !== task.target)
-            throw new Error(
-              "publication baseline UNKNOWN; keep this original request blocked, do not infer fresh publication from old reports",
-            );
-          if (head === request.publication.head)
-            throw new Error(
-              "unchanged old published/green head is not this follow-up's outcome; the requested new PR head remains outstanding",
-            );
-          const remote = git(owner.cwd, "ls-remote", "--exit-code", "origin", `refs/heads/${owner.branch}`).split(
-            /\s+/,
-          )[0];
-          if (remote !== head) throw new Error("requested new head is not published");
-          if (!task.target.startsWith("pr:"))
-            throw new Error("publication/new-head CI receipt currently supports explicit GitHub PR targets only");
-          const pr = JSON.parse(
-            run(
-              bin("gh"),
-              ["pr", "view", task.target.slice(3), "--json", "headRefOid,headRefName,statusCheckRollup"],
-              owner.cwd,
-            ),
-          );
-          if (
-            pr.headRefOid !== head ||
-            pr.headRefName !== owner.branch ||
-            !pr.statusCheckRollup?.length ||
-            !pr.statusCheckRollup.every(
-              (c: any) => ["SUCCESS", "NEUTRAL", "SKIPPED"].includes(c.conclusion) || c.state === "SUCCESS",
-            )
-          )
-            throw new Error("new-head CI is not proven green; old green PR does not complete this request");
-        }
+        prior.status = "creating";
+        prior.next = path
+          ? `Finishing the partial creation in ${path}`
+          : "Starting the creation again: the last one left no worktree";
+        save(repo, value, task!);
+        const done = create(repo, value, task!, {
+          existing,
+          reuse: !!path,
+          released,
+          adoption: null,
+          forkReason: task!.forkReason,
+        });
+        return { ...done, retry: true };
       }
-      request.status = "complete";
-      request.receipt = proof;
-      request.next = "Requested outcome proven for this candidate; no shipping authority created";
-    } else throw new Error("usage: bercail shep task dispatch|status|block|receipt (JSON on stdin)");
+      // Once the desk started, its own session gets the creation's message.
+      if (prior.status === "started" && !task!.owner) {
+        const created = prior.result;
+        const original = findOwner(repo, value.id, target, null, !!task!.forkReason, history);
+        if (
+          !original ||
+          original.desk !== created.desk ||
+          original.space !== created.space ||
+          original.session !== created.session ||
+          original.cwd !== realpathSync(created.path)
+        )
+          throw new Error("original startup/session not ready or changed; do not replace it");
+        task!.owner = original;
+        save(repo, value, task!);
+      }
+      if (prior.status === "started" && task!.owner) {
+        const original = findOwner(repo, value.id, target, task!.owner, !!task!.forkReason, history);
+        if (!original) throw new Error("original owner missing; retry once it is back");
+        const path = queue(repo, value.id, original, request);
+        return { status: "queued", owner: original, path, authority: false, retry: true };
+      }
+      return { status: prior.status, owner: task!.owner, next: prior.next, authority: false, retry: true };
+    }
+    const owner = findOwner(
+      repo,
+      value.id,
+      target,
+      task?.owner,
+      !!(task?.forkReason || input.forkReason),
+      history,
+      adopting,
+    );
+    if (adopting && owner)
+      throw new Error(
+        `live original owner ${owner.desk}; continue it with a normal dispatch, adoption is only for a gone owner`,
+      );
+    if (owner && task?.creation?.result?.session && owner.session !== task.creation.result.session)
+      throw new Error("original startup session changed; no transfer to a replacement");
+    if (input.branch && (owner || task) && input.branch !== (owner?.branch || task?.branch))
+      throw new Error(
+        "branch differs from original task; continue the original checkout or fork to a separate issue with a reason",
+      );
+    if (task && !owner && (!adopting || ["creating", "unknown"].includes(task.creation?.status || "")))
+      throw new Error(
+        "creation outcome UNKNOWN; retry its own requestId to finish a partial creation, or inspect the worktree/space facts; do not launch another",
+      );
+    const adoption = adopting ? adoptable(repo, value.id, target, task, history, input) : null;
+    task ||= {
+      v: 2,
+      repo,
+      target,
+      owner,
+      branch: owner?.branch || adoption?.branch || input.branch || "",
+      ...(input.forkReason ? { forkReason: String(input.forkReason) } : {}),
+    };
+    if (!owner && !task.branch) throw new Error("no existing owner; pass branch explicitly for a new visible desk");
+    // A new desk on a PR's own branch starts at its fetched head; the branch is never cut again.
+    let existing = false;
+    if (!owner && !adoption && target.startsWith("pr:")) {
+      const pr = prFacts(repo, target);
+      existing = !pr.isCrossRepository && pr.headRefName === task.branch;
+    }
+    if (!owner && request.stage === "autopilot" && !(adoption ? target.startsWith("pr:") : existing))
+      throw new Error(
+        "stage autopilot starts a desk only on an open PR's own branch: target pr:N, with branch set to that PR's head branch",
+      );
+    if (adoption) {
+      // The gone owner's follow-ups stay queued to its desk: none moves to the new session.
+      task.branch = adoption.branch;
+      task.adoptions = [
+        ...(task.adoptions || []),
+        {
+          request: request.id,
+          reason: input.adoptReason.trim(),
+          at: new Date().toISOString(),
+          ...adoption,
+        },
+      ];
+      task.retired = [
+        ...(task.retired || []),
+        ...(task.creation ? [task.creation.id] : []),
+        ...Object.keys(task.pending || {}),
+      ];
+      delete task.pending;
+    }
+    task.owner = owner;
+    if (owner) {
+      // Reopen before delivery, so the job is on the board while the desk works.
+      task.pending = { ...task.pending, [request.id]: request.payload };
+      save(repo, value, task);
+      const path = queue(repo, value.id, owner, request);
+      delete task.pending[request.id];
+      if (!Object.keys(task.pending).length) delete task.pending;
+      save(repo, value, task, false); // The issue may be closed meanwhile: leave its status.
+      return { status: "queued", owner, path, authority: false };
+    }
+    task.creation = { ...request, status: "creating", next: "Inspect visible creation result" };
     save(repo, value, task);
-    return { ...task, outstanding: task.requests.filter(pending).length, authority: false };
+    return create(repo, value, task, {
+      existing,
+      reuse: false,
+      released,
+      adoption,
+      forkReason: input.forkReason ? String(input.forkReason) : undefined,
+      adoptReason: adoption ? input.adoptReason.trim() : undefined,
+    });
   } finally {
     rmSync(lock, { recursive: true });
   }

@@ -13,8 +13,8 @@ Shep ships with bercail. Its rules are one file, [`shep/SHEP.md`](../shep/SHEP.m
 Bercail's workflow (beads issues, named stages, result files, review when a desk is done) is designed around Shep. Shep owns the workflow; bercail runs what Shep asks for and reports back in files Shep reads:
 
 1. Shep writes the job as a [beads](https://beads.gascity.com/) issue (`bd create`): the ask, the repo, links, and any "plan only" note.
-2. Shep calls `bercail shep task dispatch` with the explicit repo, issue, logical target and requested outcome ([contract below](#task-ownership-and-requested-outcomes)). It resolves existing ownership before preparing a branch.
-3. An existing task continues in its original Pi/session and checkout. Only a task with no owner reserves a first [visible handoff](handoff.md), with a one-line prompt pointing at the issue. Ambiguous, stale, missing or partial results stop; they never trigger a replacement or headless fallback.
+2. Shep calls `bercail shep task dispatch` with the explicit repo, issue, logical target and message ([contract below](#dispatch)). It resolves existing ownership before preparing a branch.
+3. An existing task continues in its original Pi/session and checkout: the message reaches that desk at its next turn, even while it works. Only a task with no owner reserves a first [visible handoff](handoff.md), with a one-line prompt pointing at the issue. Ambiguous, stale, missing or partial results stop; they never trigger a replacement or headless fallback.
 4. When the desk finishes or blocks, Shep hears about it [as a message in its session](#desk-events). It reads the [brief](#briefs-and-the-board) for the issue (its desk's state, the question when it is blocked, the latest report, cut short) and reports to you. `hc wait <desk>` also works (`desk` and `space` are in the spawn JSON).
 
 The Shep that ships with bercail never runs headless stages: a coding job or a code follow-up is always a desk you can see. Waiting is different: Shep never blocks its own thread on CI, a deploy, a desk, or a release, and hands that to a [background Shep](#background-sheps). `handoff-spawn` still has headless stages for other callers; a headless run opens nothing in the app, returns when it ends, and leaves `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`).
@@ -25,16 +25,17 @@ Shep never types into a desk. To move a desk to another model when you ask, or w
 
 Bercail works without Shep, but Shep is the intended orchestrator. To do Shep's part by hand, write the issue with `bd create`, then use the task dispatch below. Raw `handoff-spawn` is create-only, not an existing-task continuation.
 
-## Task ownership and requested outcomes
+## Dispatch
 
-The task commands take JSON on stdin. No shell interpolation or terminal typing
-is used to deliver work. For example:
+Dispatch takes JSON on stdin. No shell interpolation or terminal typing is
+used to deliver work. For example:
 
 ```bash
-printf '%s\n' '{"repo":"/home/me/Work/app","issue":"app-7","target":"pr:12","requestId":"amend-2","outcome":"publish","stage":"autopilot","message":"Amend the reviewed changes and publish the new head","authoring":"gt m -a"}' | bercail shep task dispatch
+printf '%s\n' '{"repo":"/home/me/Work/app","issue":"app-7","target":"pr:12","requestId":"amend-2","stage":"autopilot","message":"Amend the reviewed changes and publish the new head"}' | bercail shep task dispatch
 ```
 
-`repo`, `issue`, `target`, `requestId`, `outcome` and `message` are explicit.
+`repo`, `issue`, `target`, `requestId` and `message` are explicit; `stage` is
+`bstack` (the default) or `autopilot`. Any other field is refused by name.
 Targets are `task:ID`, `pr:N`, or a GitHub PR URL belonging to this repo. Add
 `branch` only for first creation. The canonical main checkout/common Git directory
 serializes reservations across issue aliases. Native PR branch facts resolve
@@ -42,10 +43,36 @@ legacy handoffs before absence can be assumed. A task may later bind its new PR
 only when that PR belongs to its original branch. Cross-repository fork PR
 adoption is unsupported and remains UNKNOWN, not a new preparation job.
 
-Dispatch reopens the beads issue and retains requests under
-`metadata.bercail_task`, including requested authoring, blockers and next actions.
-A deliberate exploration uses a separate issue and `forkReason`; it cannot
-inherit the original session or authority.
+Dispatch reopens the beads issue and keeps who owns it under
+`metadata.bercail_task`: the target, the branch, the verified owner (desk,
+space, session, process), the latest desk creation, any adoptions, and the
+`retired` request ids that never reach a desk again. It keeps no list of
+requests and no receipts: whether the work is done is what the
+[brief](#briefs-and-the-board) shows, the desk's state, its latest report and
+`describe check` on its staged change. A follow-up is saved as `pending`, with
+its payload, and a later save clears it once its queue file is written: a retry
+of it must carry the same payload, and goes only to the same verified owner. An adoption retires the
+creation it replaces and any pending follow-up. A retry finds a queued
+follow-up's file before it looks at `retired`. A v0.17 record is read through
+its `requests` list: the latest creation not blocked or complete is its
+creation, every other request is retired, and a retry of old work is matched on
+its message and stage. The next save drops the list. A deliberate exploration uses a separate issue and
+`forkReason`; it cannot inherit the original session or authority.
+
+A compatible original Pi must have its live foreground process/start tick,
+open-session claim, persisted session header, checkout, branch, issue, desk and
+space verified. A second live process claiming that exact session is ambiguous,
+even without a desk-role label. A follow-up is a file under
+`desk-follow-ups/<desk>/`, and the desk's Pi extension sends it as a custom
+DATA message in that same session, not a user message, approval, slash command
+or role change. It goes as a Pi steer: a busy desk sees it after the tool calls
+running then, before the model's next turn, and an idle desk starts a turn on
+it. A tool call is never cut short. Follow-ups go in the order they were
+dispatched. A claimed but uncertain send stays UNKNOWN and is never
+automatically replayed: this is at-most-once delivery. Reuse the same request
+ID and payload after a lost response; a retry finds the follow-up's file under
+whichever desk it went to and sends nothing again. Legacy or uninstrumented
+owners fail closed rather than being restarted for compatibility.
 
 When the original desk is gone, dispatch stops with `original owner missing/stale`.
 With the person's yes, the same dispatch plus `adoptReason` (why, and who asked)
@@ -56,9 +83,9 @@ keep their refusals. So do an uncertain creation (UNKNOWN), no record, the
 main checkout, and a live desk of any job on the checkout: adoption never
 closes or replaces one. The issue's
 `metadata.bercail_task.adoptions` keeps the reason, the request, the checkout
-and the gone desks, and the handoff's `bd comment` repeats the reason. The
-earlier requests stay blocked with the gone owner. The adopting desk gets
-only the new request, and later requests made in the usual way. Its
+and the gone desks, and the handoff's `bd comment` repeats the reason.
+Follow-ups queued to the gone desk stay with it; the adopting desk gets only
+the new request, and later ones made in the usual way. Its
 `handoffs.jsonl` line starts a new ownership epoch, so older records neither
 own the task nor conflict with it. `stage: "autopilot"` on a follow-up records
 workflow intent: it does not turn a live lead into an autopilot or grant shipping
@@ -70,8 +97,12 @@ at origin's head of that branch: handoff-spawn fetches it and checks it out, and
 fast-forwards a stale local branch. It never cuts the branch again, and it refuses
 a local branch with commits origin lacks.
 
+A new desk's first prompt is its issue. A retry of the creation's request ID,
+once the desk is up, binds its session as the owner and queues the message
+there; it never launches again.
+
 Dispatch gives handoff-spawn `[shep] spawn_timeout` seconds (600 by default) to
-start the desk, then stops it and the processes it started. The request is then
+start the desk, then stops it and the processes it started. The creation is then
 UNKNOWN. The repo's dispatch lock is held meanwhile, so another dispatch in that
 repo stops with `dispatch lock held` until the spawn ends; run it again then. A creation that stopped before its desk can be finished: retry the same
 `requestId` and payload. When there is no `handoffs.jsonl` line for the issue
@@ -84,68 +115,6 @@ else keeps the UNKNOWN, with the reason in `next`, and launches nothing.
 A target held by another issue moves only when that issue is closed with
 `bd supersede <it> --with <this issue>` and none of its desks is live. Its
 `handoffs.jsonl` lines then neither own the target nor conflict with the new desk.
-
-A compatible original Pi must have its live foreground process/start tick,
-open-session claim, persisted session header, checkout, branch, issue, desk and
-space verified. A second live process claiming that exact session is ambiguous,
-even without a desk-role label. Ordinary work is a custom DATA message in that same session,
-not a user message, approval, slash command or role change. Busy desks are not
-interrupted. Accepted work is delivered in request order. A claimed but uncertain
-send stays UNKNOWN and is never automatically replayed. This is at-most-once
-attempt, not exactly-once external execution. Reuse the same request ID and
-payload after a lost response. An initial `awaiting-session` result binds only
-the pinned original startup on retry; it never launches again. Legacy or
-uninstrumented owners fail closed rather than being restarted for compatibility.
-
-`task status` takes `{repo,issue}`. `task block` also takes `requestId`, `reason`
-and `next`; blocking preserves the requested authoring/outcome. `task receipt`
-takes `requestId`, the original `desk` and `session`, and
-`proof: {head,tree,validation:{head,tree,command,exit_code}}`. This JSON is a
-claim, not proof by itself: the original session must contain the matching
-persisted work message and successful guarded tool execution on the runtime's
-reported active leaf. The physical JSONL tail is not an active-branch pointer.
-The desk extension
-observes existing bash calls and records their before/after head and staged tree;
-it does not execute them or grant authority. Validation must have run for this
-request with the current head/tree unchanged, and its command must match the
-candidate's recorded `/validate` checks. A changed candidate needs new validation
-and description evidence.
-
-Outcomes are `stage` (fresh validation/description and staged changes), `local`
-(a new authored head), `publish` (a new remote/PR head and that head's CI), and
-`cleanup`. Local completion needs a new authored head. Publication needs a
-head different from the PR head observed at dispatch, so an already-authored
-but unpublished commit can be published without another commit. If the PR
-baseline is unavailable, the original request cannot prove new publication.
-Exact `authoring` intent, including
-`gt m -a`, deliberately remains blocked: this repair adds no native authoring
-effect contract or executor. Record the real native blocker and next step with
-`task block`; never substitute append-only/raw Git or a preparation branch.
-There is no shipping grant. An old report, closed issue, done turn or old green
-PR is insufficient. `task status` retains the canonical receipt, and `brief`
-shows it separately from later comments. A failed supplemental readback cannot
-reopen a completed request.
-
-Cleanup dispatch also needs a finite `targets: [{space,generation?}]` snapshot.
-Authoring and cleanup are separate requests in the same issue. Targets default
-to CLOSE; an explicit original KEEP/PROTECTED `disposition` also requires its
-`reason`. A receipt cannot turn requested closure into retention.
-Each target must be present in native OPEN; the bridge captures its actual
-incarnation (`generation`, or its native unique ID) and snapshot. `universe` is
-`subset` by default; `current` is accepted only for the complete observed OPEN
-set. Receipt `proof.results` gives each captured `space`, `generation`, actual
-`status` and `custody`. CLOSED needs an observed successful native closure in
-this request plus current absence. The observer currently recognizes the exact
-ordinary command `herdr-app do space.close --id ID --confirmed true`; other
-native routes remain unproven rather than guessed. EXTERNAL records independently
-observed external/unattributed closure, not execution by this worker. KEEP and
-PROTECTED retain only the originally requested named incarnations;
-UNKNOWN/PARTIAL remain outstanding. The original owner's durable session and
-active-leaf evidence can reconcile cleanup after native closure ended that Pi.
-This receipt-only path neither adopts a replacement nor executes work. OPEN,
-RECENT/history and the original subset versus current universe are reported
-separately. A future-delivery queue or completed Pi is not a global closure veto.
-No destructive multi-space executor or new human authorization flow is added.
 
 `bercail shep runtime` and `bercail doctor` report source/install resource hashes
 separately from live startup evidence. The desk bridge's evaluated generation
@@ -222,32 +191,31 @@ latest report: comment 2 of 2, Desk at 2026-11-11 00:43 (812 characters):
 Staged, uncommitted. What changed: …
 ```
 
-The repo is `--repo DIR`, else the issue's handoff record, its live desk, or the known repo whose `bd` has it. When the job's worktree has staged changes, a `staged:` line gives their size and [stakes](config.md#review-by-stakes-and-size), and says when the change waits for your LGTM. The desk is the live terminal labelled with the issue, else the record's (`gone` when it has ended). A desk [handed off with `--model`](handoff.md) ends its line with `model <provider/id:thinking>`, from its `bercail.model` label, or the record's when it has ended. A blocked desk adds the last 15 lines of its screen, where its question is. The report is the latest comment that is not the handoff note. One longer than `--budget` characters (1500 by default) keeps its first two thirds and its last third, and says how much was cut and that `bd comments <id>` has the rest. Measured on three real issues, a brief was 1,600 to 2,000 characters (about 400 to 500 tokens) against 31,000 to 54,000 for `bd show` plus `hc read --lines 60`: 16 to 33 times smaller.
+The repo is `--repo DIR`, else the issue's handoff record, its live desk, or the known repo whose `bd` has it. When the job's worktree has staged changes, a `staged:` line gives their size and [stakes](config.md#review-by-stakes-and-size), says when the change waits for your LGTM, and ends with what [`bercail describe check`](cli.md) says of it: `describe check ok`, or `describe check fails:` and the first thing it fails on. The desk is the live terminal labelled with the issue, else the record's (`gone` when it has ended). A desk [handed off with `--model`](handoff.md) ends its line with `model <provider/id:thinking>`, from its `bercail.model` label, or the record's when it has ended. A blocked desk adds the last 15 lines of its screen, where its question is. The report is the latest comment that is not the handoff note. One longer than `--budget` characters (1500 by default) keeps its first two thirds and its last third, and says how much was cut and that `bd comments <id>` has the rest. Measured on three real issues, a brief was 1,600 to 2,000 characters (about 400 to 500 tokens) against 31,000 to 54,000 for `bd show` plus `hc read --lines 60`: 16 to 33 times smaller.
 
-`bercail shep board` lists one line per open job across the known repos: `<id>: <title>`, its status when not `open`, its desk and state, its branch, and its model when it was handed off with `--model`. A job is an issue that is not closed and has a live desk, or is `in_progress` or `blocked`. A repo's other open issues are a count, with how many of them were handed off to a desk that has since ended. Then: the repos with no jobs, desks still open on closed or unknown issues, and **Waiting on the person**: blocked desks, finished desks to review, finished background Sheps to report and end, and your [todos](#todos-for-the-person).
+`bercail shep board` lists one line per open job across the known repos: `<id>: <title>`, its status when not `open`, its desk and state, its branch, and its model when it was handed off with `--model`. A job is an issue that is not closed and has a live desk, or is `in_progress` or `blocked`. A repo's other open issues are a count, with how many of them were handed off to a desk that has since ended. Then: the repos with no jobs, desks still open on closed or unknown issues, and **Waiting on the person**: blocked desks, finished desks to review, finished background Sheps to report and end, and your [todos](#todos-for-the-person). The board shows no reports: a finished desk's line names the brief that has its report.
 
 When anything waits on your review, the board ends with the **review queue**, which `bercail shep queue` prints on its own:
 
 ```
 Review queue: 15 lines in 4 changes
 ~/Work/app: 15 of 10 lines, over its review budget
-- app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · ~/Work/app.export
+- app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · described · ~/Work/app.export
 - PR #12: Teammate fix · 4 lines · https://github.com/o/app/pull/12
 - PR #15: Old job PR · 3 lines · https://github.com/o/app/pull/15
-- app-3: Old job · 2 lines staged in 1 file · stakes low · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/app.old
+- app-3: Old job · 2 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/app.old
 ```
 
-A staged change is on the queue when its desk is not working (done, idle, blocked, or gone); a desk still working is not waiting on you yet. Each one has a state, read from records, never from prose:
+A staged change is on the queue when its desk is not working (done, idle, blocked, or gone); a desk still working is not waiting on you yet. Each one that counts says `described` when `describe check` passes on it, or `describe check fails:` and why. The check reads a copy of the worktree's index, so reading the queue does not change when the changes were last staged. It skips one rule, no beads ids in the body, since the queue reads no full beads list; the brief runs the whole check. Each one has a state, read from records, never from prose:
 
 - **review**: it waits on you. **lgtm**: the same, and its policy wants your LGTM (it touches a `high_stakes` path).
 - **superseded**: `bd supersede` or `bd duplicate` names its issue's replacement, or the issue's latest handoff went to another worktree that is still there (the job moved to a fresh one).
-- **outstanding**: a durable requested outcome remains unfinished, even if an old report or issue status says done.
 - **unknown**: bd cannot say, or a closed issue still has staged changes without proven custody/outcome. It still counts; closed does not mean safe to clean up.
 - **stale**: no open Herdr space has the worktree: not the desk's or the handoff's space, and no space whose folder, or one of whose terminals, is in it. Spaces are read from the open window (`herdr-app ls`); with no window answering, nothing is stale.
 
-Superseded work is listed last as `not counted` and stays out of the budget. Stale worktrees are not counted either, and each repo lists them on one line: `- not counted: 2 stale worktrees with no Herdr space, cleanup candidates: ~/Work/app.a, ~/Work/app.b`. Outstanding requested work takes precedence over a superseded label. Parent and child links are not read: a child issue does not say it replaces its parent. A change with no issue is review. On a repo with a GitHub remote, an open PR counts when it is not a draft, not approved, and either asks you for a review or comes from a handoff's branch. A staged change's lines leave out lockfiles, generated and binary files; a PR's leave out lockfiles. Each repo's total is weighed against its policy's [`review_budget`](config.md#review-by-stakes-and-size). `queue --repo` reads only that repo's review sources, with a 6-second total bound; board has a 10-second bound. A failed/slow source returns UNKNOWN, not an empty list. Shep reports an over-budget or incomplete snapshot without holding already accepted work for it.
+Superseded work is listed last as `not counted` and stays out of the budget. Stale worktrees are not counted either, and each repo lists them on one line: `- not counted: 2 stale worktrees with no Herdr space, cleanup candidates: ~/Work/app.a, ~/Work/app.b`. Parent and child links are not read: a child issue does not say it replaces its parent. A change with no issue is review. On a repo with a GitHub remote, an open PR counts when it is not a draft, not approved, and either asks you for a review or comes from a handoff's branch. A staged change's lines leave out lockfiles, generated and binary files; a PR's leave out lockfiles. Each repo's total is weighed against its policy's [`review_budget`](config.md#review-by-stakes-and-size). `queue --repo` reads only that repo's review sources, with a 6-second total bound; board has a 10-second bound. A failed/slow source returns UNKNOWN, not an empty list. Shep reports an over-budget or incomplete snapshot without holding already accepted work for it.
 
-`bercail shep queue --json` is the same queue as data (`schema: "bercail.queue/v1"`), for the Herdr app: `at`, when it was read; `items`, what waits first, the longest waiting first (`since`: when a worktree's changes were last staged, or when a PR was opened), each with its `state`, `why`, `by` (the replacement), `counts`, its `space` (the desk's or the handoff's Herdr space) and its `change` (size and stakes); and `repos`, each repo's counted lines against its budget.
+`bercail shep queue --json` is the same queue as data (`schema: "bercail.queue/v1"`), for the Herdr app: `at`, when it was read; `items`, what waits first, the longest waiting first (`since`: when a worktree's changes were last staged, or when a PR was opened), each with its `state`, `why`, `by` (the replacement), `counts`, its `space` (the desk's or the handoff's Herdr space), its `change` (size and stakes) and, for a staged change that counts, `described` (`ok`, and `why` when it fails; `null` otherwise); and `repos`, each repo's counted lines against its budget.
 
 ### Review in the Herdr app
 

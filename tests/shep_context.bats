@@ -235,9 +235,9 @@ no report yet (0 comments; bd comments app-3)" ]] || fail "brief app-3: $out"
 Other repos: ~/Work/docs (1 open), ~/Work/tools (no beads)
 Desks on closed or unknown issues: desk t7 done (app-5)
 Waiting on the person:
-- app-1: Fix the login: desk t9 is blocked; bercail shep brief app-1 shows what it asks
-- app-2: Add the export, a title long enough that the board has to cut it shor…: desk t8 finished; review its staged changes in its space
-- app-6: Wait for CI: background Shep shep-bg-app-6 finished; report it, then hc kill shep-bg-app-6
+- app-1: Fix the login: desk t9 is blocked; bercail shep brief app-1 --repo '$HOME/Work/app' shows what it asks
+- app-2: Add the export, a title long enough that the board has to cut it shor…: desk t8 finished; read its report in bercail shep brief app-2 --repo '$HOME/Work/app', then review its staged changes in its space
+- app-6: Wait for CI: background Shep shep-bg-app-6 finished; report it from bercail shep brief app-6 --repo '$HOME/Work/app', then hc kill shep-bg-app-6
 - desk t6 (~/Work/tools) is blocked"
   [[ "$out" == "$want" ]] || fail "board: $(diff <(printf '%s\n' "$want") <(printf '%s\n' "$out"))"
   rm "$HC_DATA"/t*.json
@@ -368,8 +368,8 @@ GH
   out="$(shep queue --repo "$HOME/Work/app.export")" || fail "queue: $out"
   want="Review queue: 15 lines in 4 changes
 ~/Work/app: 15 of 10 lines, over its review budget
-- app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · ~/Work/app.export
-- app-3: Old job · 2 lines staged in 1 file · stakes low · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/app.old
+- app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · describe check fails: no .bercail/description.md: run /validate · ~/Work/app.export
+- app-3: Old job · 2 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/app.old
 - PR #12: Teammate fix · 4 lines · https://github.com/o/app/pull/12
 - PR #15: Old job PR · 3 lines · https://github.com/o/app/pull/15
 ~/Work/app is over its review budget: 15 lines wait on the person, the budget is 10. Report it; accepted work is not held for review budget."
@@ -494,11 +494,11 @@ bd_issue() {
   out="$(shep queue)" || fail "queue: $out"
   [[ "$out" == "Review queue: 72 lines in 5 changes
 ~/Work/web: 72 of 100 lines
-- ~/Work/web.mine · 9 lines staged in 1 file · stakes low
-- web-4: Job web-4 · 40 lines staged in 1 file · stakes low · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/web.four
-- web-7 · 10 lines staged in 2 files · stakes high, needs the person's LGTM · state unknown: bd does not answer for web-7 · ~/Work/web.seven
-- web-1: Job web-1 · 5 lines staged in 2 files · stakes high, needs the person's LGTM · ~/Work/web.one
-- web-8: Job web-8 · 8 lines staged in 1 file · stakes low · ~/Work/web.eight
+- ~/Work/web.mine · 9 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate
+- web-4: Job web-4 · 40 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/web.four
+- web-7 · 10 lines staged in 2 files · stakes high, needs the person's LGTM · describe check fails: no .bercail/description.md: run /validate · state unknown: bd does not answer for web-7 · ~/Work/web.seven
+- web-1: Job web-1 · 5 lines staged in 2 files · stakes high, needs the person's LGTM · describe check fails: no .bercail/description.md: run /validate · ~/Work/web.one
+- web-8: Job web-8 · 8 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate · ~/Work/web.eight
 - not counted: web-6: Job web-6 · 60 lines staged in 1 file · stakes low · its job moved to another worktree (~/Work/web.new) · ~/Work/web.old
 - not counted: web-2: Job web-2 · 20 lines staged in 1 file · stakes low · superseded by web-5 · ~/Work/web.two
 - not counted: web-3: Job web-3 · 30 lines staged in 1 file · stakes low · a duplicate of web-5 · ~/Work/web.three" ]] \
@@ -515,7 +515,7 @@ bd_issue() {
   out="$(shep queue --repo "$HOME/Work/web")" || fail "queue: $out"
   [[ "$out" == "Review queue: 4 lines in 1 change
 ~/Work/web: 4 of 1000 lines
-- web-4: Job web-4 · 4 lines staged in 1 file · stakes low · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/web.four
+- web-4: Job web-4 · 4 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/web.four
 ~/Work/web: 4 of 1000 lines wait on the person; a new desk fits its review budget." ]] || fail "cleanup only: $out"
 }
 
@@ -552,9 +552,9 @@ spaces_fixture() {
   out="$(shep queue --repo "$HOME/Work/web")" || fail "queue: $out"
   [[ "$out" == "Review queue: 9 lines in 3 changes
 ~/Work/web: 9 of 1000 lines
-- web-1: Job web-1 · 3 lines staged in 1 file · stakes low · ~/Work/web.spaced
-- web-2: Job web-2 · 4 lines staged in 1 file · stakes low · ~/Work/web.folder
-- web-3: Job web-3 · 2 lines staged in 1 file · stakes low · ~/Work/web.term
+- web-1: Job web-1 · 3 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate · ~/Work/web.spaced
+- web-2: Job web-2 · 4 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate · ~/Work/web.folder
+- web-3: Job web-3 · 2 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate · ~/Work/web.term
 - not counted: 1 stale worktree with no Herdr space, cleanup candidates: ~/Work/web.gone
 ~/Work/web: 9 of 1000 lines wait on the person; a new desk fits its review budget." ]] || fail "queue: $out"
   out="$(shep queue --json)" || fail "queue --json: $out"
@@ -594,12 +594,22 @@ spaces_fixture() {
     || fail "queue --json: $(jq -c '[.items[] | [.issue, .state, .counts]]' <<<"$out")"
 }
 
-@test "shep brief shows the job's staged size and stakes" {
+@test "shep brief and queue show the job's staged size, stakes and describe check" {
   local out
   queue_fixture
   out="$(shep brief app-2)" || fail "brief: $out"
-  grep -qx "staged: 6 lines in 1 file (1 more left out: lockfiles, generated or binary), stakes high: lib/a.sh; the person reviews it before it is committed or merged" <<<"$out" \
+  grep -qx "staged: 6 lines in 1 file (1 more left out: lockfiles, generated or binary), stakes high: lib/a.sh; the person reviews it before it is committed or merged · describe check fails: no .bercail/description.md: run /validate" <<<"$out" \
     || fail "brief does not show the staged change: $out"
+  (
+    cd "$HOME/Work/app.export" || exit 1
+    jq -n --arg t "$(git write-tree)" '{tree: $t, checks: [{kind: "test", command: "bash tests/run.sh", exit_code: 0, evidence: "all passed"}]}' >.bercail/validate.json
+    printf -- '---\ntitle: Add the export\n---\nAdds the export for readers of lib/a.sh.\n\nValidation: bash tests/run.sh passed.\n' >.bercail/description.md
+    "$ROOT/bin/bercail" describe stamp >/dev/null
+  ) || fail "stamp"
+  out="$(shep brief app-2)" || fail "brief: $out"
+  [[ "$out" == *"stakes high: lib/a.sh; the person reviews it before it is committed or merged · describe check ok"* ]] || fail "described: $out"
+  out="$(shep queue --repo "$HOME/Work/app")" || fail "queue: $out"
+  [[ "$out" == *"app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · described · ~/Work/app.export"* ]] || fail "queue: $out"
 }
 
 @test "shep mistake records each time, with where it happened" {
@@ -781,7 +791,7 @@ Where bercail todo add sends a todo: --target, else the route of the job's repo,
 }
 
 @test "brief and board keep identical issue ids tied to their original repos" {
-  local out name
+  local out name cmd
   for name in a b; do
     repo "$name"; worktree "$name" "fix-$name"
     issues "$name" "same-1|Job $name|in_progress"
@@ -798,33 +808,38 @@ Where bercail todo add sends a todo: --target, else the route of the job's repo,
   [[ "$out" == *"desk t9"* && "$out" != *"desk t8"* && "$out" == *"fix-a"* ]]
   out="$(shep board)" || fail "$out"
   [[ "$out" == *"Job a"*"desk t9"*"fix-a"* && "$out" == *"Job b"*"desk t8"*"fix-b"* ]]
+  # A finished desk's line names a brief that runs: with the repo, since b has same-1 too.
+  desk t9 "$HOME/Work/a.fix-a" "done" '{"bercail.issue":"same-1","bercail.space":"spa"}'
+  out="$(shep board)" || fail "$out"
+  cmd="$(sed -n 's/.*desk t9 finished; read its report in \(.*\), then review.*/\1/p' <<<"$out")"
+  [[ "$cmd" == "bercail shep brief same-1 --repo '$HOME/Work/a'" ]] || fail "board: $out"
+  out="$(eval "${cmd/bercail shep/shep}")" || fail "$cmd: $out"
+  [[ "$out" == *"desk t9 done"* && "$out" == *"fix-a"* ]] || fail "$out"
+  # b's same-1 is closed and its desk gone, but its handoff still names it.
+  issues b "same-1|Job b|closed"
+  rm "$HC_DATA/t8.json"
+  jq 'del(.terminals[] | select(.address == "t8"))' "$HC_DATA/ls.json" >"$HC_DATA/ls.tmp"
+  mv "$HC_DATA/ls.tmp" "$HC_DATA/ls.json"
+  out="$(shep board)" || fail "$out"
+  cmd="$(sed -n 's/.*desk t9 finished; read its report in \(.*\), then review.*/\1/p' <<<"$out")"
+  out="$(eval "${cmd/bercail shep/shep}")" || fail "$cmd: $out"
+  [[ "$out" == *"desk t9 done"* ]] || fail "$out"
 }
 
-@test "closed stale reports do not hide requested publication from queue, brief or board" {
+@test "a v0.17 request ledger no longer keeps a closed issue on the board, the queue or the brief" {
   local out file
   queue_fixture
   file="$HOME/Work/app/.beads/fake/app-3.json"
-  jq '.metadata.bercail_task={requests:[{id:"amend2",outcome:"publish",authoring:"gt m -a",status:"blocked",next:"Native descendant scope must be resolved in the original desk"}]}' "$file" >"$BATS_TEST_TMPDIR/r"
+  jq '.metadata.bercail_task={requests:[{id:"amend2",outcome:"publish",authoring:"gt m -a",status:"queued",next:"Original desk processes this work"}]}' "$file" >"$BATS_TEST_TMPDIR/r"
   mv "$BATS_TEST_TMPDIR/r" "$file"
   jq --slurpfile r "$file" 'map(if .id == "app-3" then .metadata=$r[0].metadata else . end)' "$HOME/Work/app/.beads/fake/list.json" >"$BATS_TEST_TMPDIR/r"
   mv "$BATS_TEST_TMPDIR/r" "$HOME/Work/app/.beads/fake/list.json"
   out="$(shep queue --repo "$HOME/Work/app" --json)" || fail "$out"
-  jq -e 'any(.items[]; .issue == "app-3" and .state == "outstanding" and .counts)' <<<"$out"
+  jq -e 'any(.items[]; .issue == "app-3" and .state == "unknown") and all(.items[]; .state != "outstanding")' <<<"$out" || fail "$out"
   out="$(shep brief app-3 --repo "$HOME/Work/app")" || fail "$out"
-  [[ "$out" == *"request amend2: publish [blocked] · authoring gt m -a"* && "$out" == *"Native descendant scope"* ]]
+  [[ "$out" != *"amend2"* && "$out" != *"request"* ]] || fail "$out"
   out="$(shep board)" || fail "$out"
-  [[ "$out" == *"requests amend2:publish/blocked"*"Native descendant scope"* ]]
-}
-
-@test "brief shows a canonical completion receipt despite a later failed readback comment" {
-  local out file
-  queue_fixture
-  file="$HOME/Work/app/.beads/fake/app-3.json"
-  jq '.metadata.bercail_task={requests:[{id:"close-1",outcome:"cleanup",status:"complete",next:"Closure proven",receipt:{results:[{space:"sp-old",status:"CLOSED"}],open:[]}}]}' "$file" >"$BATS_TEST_TMPDIR/r"
-  mv "$BATS_TEST_TMPDIR/r" "$file"
-  printf '%s\n' '[{"text":"Full native proof"},{"text":"Supplemental readback checker failed"}]' >"${file%.json}.comments.json"
-  out="$(shep brief app-3 --repo "$HOME/Work/app")" || fail "$out"
-  [[ "$out" == *"close-1: cleanup [complete]"*"canonical receipt close-1:"*'"status":"CLOSED"'*"Supplemental readback checker failed"* ]]
+  [[ "$out" != *"amend2"* && "$out" != *"requested work remains"* ]] || fail "$out"
 }
 
 @test "repo queue neither queries unrelated slow GitHub repos nor waits on their status" {

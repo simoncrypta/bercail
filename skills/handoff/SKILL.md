@@ -93,8 +93,9 @@ fails the dry run and writes no result.
 ## Spawn a `--branch` desk
 
 Shep uses `bercail shep task dispatch` (JSON stdin with explicit repo, issue,
-logical target, stable request ID and outcome). It resolves and continues the
-original visible owner before considering a branch. Raw spawn is create-only,
+logical target, stable request ID and message). It resolves and continues the
+original visible owner before considering a branch; a follow-up reaches that
+desk at its next turn, even while it works. Raw spawn is create-only,
 not a follow-up route; it refuses an existing handoff or occupied desk. A
 stale/ambiguous/partial result is not permission to make another preparation
 checkout. `--target pr:N|task:ID` records a target; a deliberate parallel

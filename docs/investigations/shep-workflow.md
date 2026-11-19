@@ -1,5 +1,10 @@
 # Shep workflow repair
 
+v0.18 removed the request ledger, the receipts and the `tests/statechart/shep-task/`
+model described here: none of the 14 requests in the ledger completed. Dispatch kept its lesson: a
+follow-up continues the original session, and never starts a second one
+([docs/shep.md](../shep.md#dispatch)).
+
 ## What went wrong
 
 Three independent facts had been treated as one: the task someone asked for,
@@ -17,7 +22,7 @@ execution-surface fallback: verify the actual space, process and session.
 
 ## Product boundaries
 
-[`bercail shep task`](../shep.md#task-ownership-and-requested-outcomes) stores requested
+[`bercail shep task`](../shep.md#dispatch) stored requested
 outcomes in the existing beads issue. A repository reservation covers canonical
 main/worktree aliases and logical PR/task targets. A deliberate exploration uses
 a separate issue and explicit reason. This is a local repository protocol, not

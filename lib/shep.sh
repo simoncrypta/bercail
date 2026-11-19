@@ -14,7 +14,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
 SHEP_SKILLS=(handoff review desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch|status|block|receipt (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|discuss|closed"
+SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|discuss|closed"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -316,8 +316,7 @@ cmd_shep() {
     status) shep_status ;;
     bg) shift; shep_bg "$@" ;;
     # [shep] spawn_timeout: the seconds dispatch gives handoff-spawn to start a desk.
-    task) shift; BERCAIL_SHEP_BIN="${BERCAIL_SHEP_BIN:-${BERCAIL_SELF:-bercail}}" \
-      BERCAIL_SPAWN_TIMEOUT="$(toml_value "$BERCAIL_USER_CONFIG" shep spawn_timeout)" \
+    task) shift; BERCAIL_SPAWN_TIMEOUT="$(toml_value "$BERCAIL_USER_CONFIG" shep spawn_timeout)" \
       node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shep-task.ts" "$@" ;;
     runtime) node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runtime.ts" ;;
     discuss) shift; shep_discuss "$@" ;;

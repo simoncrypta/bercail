@@ -23,12 +23,12 @@ Post-install CLI (bercail):
   notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
   shep          Shep, the orchestrator on Pi: status (queued, awaiting persistence, persisted) | run |
                 bg --kind wait|admin --issue ID [--cwd DIR] (observation/wait/report only) |
-                task dispatch|status|block|receipt (JSON stdin; continue original owner, track requested outcome;
-                  adoptReason: a new desk on a gone owner's checkout) |
+                task dispatch (JSON stdin; a first visible desk, or a follow-up into the original desk's session,
+                  shown at its next turn even while it works; adoptReason: a new desk on a gone owner's checkout) |
                 runtime (source/installed fingerprints and actual startup evidence; read-only) |
                 discuss TOKEN (a read-only Pi on the question's branch: what Discuss runs) |
                 repos [--json] (your known repos) | board (open jobs, what waits on you) |
-                brief ISSUE [--repo DIR] [--budget CHARS] (the owner in that repo, requested outcome, latest report) |
+                brief ISSUE [--repo DIR] [--budget CHARS] (the desk state in that repo, describe check, latest report) |
                 queue [--repo DIR] [--json] (bounded status; UNKNOWN is not an empty queue or a dispatch gate) |
                 remember "RULE" [--scope SCOPE] | list | forget N (Shep's standing rules) |
                 mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list (the mistakes ledger) |

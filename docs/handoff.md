@@ -2,7 +2,7 @@
 
 Handoff is parallel, not a chat fork: one beads issue per job, run headless or in a sibling worktree with its own desk.
 
-The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), bercail's orchestrator, creates the issue (`bd create`), then uses [`shep task dispatch`](shep.md#task-ownership-and-requested-outcomes) to resolve the original owner before a first visible handoff. Other callers can run the raw create-only `handoff-spawn` with the issue id and a stage. `--stage` and `--issue` are both required; bercail has no default stage and no fallthrough. Stages are `bstack` and `autopilot`. Both run Pi.
+The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), bercail's orchestrator, creates the issue (`bd create`), then uses [`shep task dispatch`](shep.md#dispatch) to resolve the original owner before a first visible handoff. Other callers can run the raw create-only `handoff-spawn` with the issue id and a stage. `--stage` and `--issue` are both required; bercail has no default stage and no fallthrough. Stages are `bstack` and `autopilot`. Both run Pi.
 
 | Stage | Binary | Headless argv (the last word is the prompt) |
 |-------|--------|-----------------------------------------------|
@@ -54,7 +54,7 @@ Raw visible creation refuses a prior handoff for this repo/issue/target and a
 desk already occupying the resolved space. `--target pr:N|task:ID` records the
 logical target; deliberate parallel exploration uses a separate issue and
 `--fork-reason`. `--adopt-reason TEXT`, passed only by dispatch's
-[`adoptReason`](shep.md#task-ownership-and-requested-outcomes) once it has found
+[`adoptReason`](shep.md#dispatch) once it has found
 the original desk gone, skips step 2 and the dirty copy and stack tracking. It starts the desk,
 with a new session, in the existing worktree of `--branch`, and puts TEXT in
 the issue comment and the `handoffs.jsonl` line. `--reuse-worktree`, also from

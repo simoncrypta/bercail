@@ -1,6 +1,7 @@
 // Disposable Pi TUI desk on a fake provider: `bercail desk model` switches it
 // from opus to fable and back, the footer and session show each switch, and an
-// hc chat message that says /model switches nothing.
+// hc chat message that says /model switches nothing. Shep follow-ups reach its
+// session as DATA, one of them while a run is busy.
 // Usage: node tests/desk_model_pi_live.ts ROOT PI
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -18,17 +19,11 @@ type Entry = {
   modelId?: string;
   customType?: string;
   details?: { authority?: boolean; requestId?: string };
-  data?: {
-    to?: string;
-    requestId?: string;
-    command?: string;
-    authority?: boolean;
-    before?: { head: string; tree: string };
-    after?: { head: string; tree: string };
-  };
+  data?: { to?: string };
   message?: {
     role?: string;
     model?: string;
+    stopReason?: string;
     customType?: string;
     details?: { authority?: boolean; requestId?: string };
   };
@@ -177,7 +172,7 @@ async function main(run: string): Promise<void> {
     const followDir = join(state, "bercail/desk-follow-ups/t9");
     mkdirSync(followDir, { recursive: true });
     const owner = { ...recorded(), desk: "t9", branch: "main" };
-    for (const id of ["follow-one", "follow-two"]) {
+    const follow = (id: string): string => {
       const path = join(followDir, `${id}.json`);
       writeFileSync(
         path,
@@ -187,26 +182,21 @@ async function main(run: string): Promise<void> {
           repo: project,
           issue: "app-1",
           authority: false,
-          request: {
-            id,
-            message: `Amend/publish follow-up ${id}`,
-            outcome: "publish",
-            authoring: "gt m -a",
-            stage: "autopilot",
-          },
+          request: { id, message: `Amend/publish follow-up ${id}`, stage: "autopilot" },
         }),
       );
+      return path;
+    };
+    const arrived = (id: string) => (e: Entry) =>
+      e.type === "custom_message" && e.customType === "bercail-task-work" && e.details?.requestId === id;
+    for (const id of ["follow-one", "follow-two"]) {
+      const path = follow(id);
       if (
         !(await waitFor(
           `${id} custom message and answer`,
           () => {
             const log = entries(sessionFile());
-            return (
-              log.some(
-                (e) =>
-                  e.type === "custom_message" && e.customType === "bercail-task-work" && e.details?.requestId === id,
-              ) && log.at(-1)?.message?.role === "assistant"
-            );
+            return log.some(arrived(id)) && log.at(-1)?.message?.role === "assistant";
           },
           { timeout: 20, term: tui },
         ))
@@ -219,29 +209,42 @@ async function main(run: string): Promise<void> {
       )
         fail("follow-up replaced the original owner or was not submitted");
     }
-    await sleep(1500);
-    const observed = entries(sessionFile()).filter(
-      (e) => e.type === "custom" && e.customType === "bercail-task-effect",
-    );
+
+    // A busy desk: the follow-up written while its bash call runs arrives
+    // before the run's last answer, not once the desk has finished.
+    const before = entries(sessionFile()).length;
+    await tui.send("busy run\r", 20);
+    const running = () =>
+      entries(sessionFile())
+        .slice(before)
+        .some((e) => e.message?.role === "assistant" && JSON.stringify(e.message).includes("sleep 4"));
+    if (!(await waitFor("the busy run's bash call starts", running, { timeout: 20, term: tui }))) return;
+    follow("follow-busy");
     if (
-      observed.length !== 2 ||
-      observed.some(
-        (e) =>
-          e.data?.command !== "git rev-parse HEAD" ||
-          e.data.authority !== false ||
-          e.data.before?.head !== e.data.after?.head ||
-          e.data.before?.tree !== e.data.after?.tree,
-      )
+      !(await waitFor(
+        "the busy run ends after the follow-up",
+        () => {
+          const log = entries(sessionFile()).slice(before);
+          return log.some(arrived("follow-busy")) && log.at(-1)?.message?.stopReason === "stop";
+        },
+        { timeout: 30, term: tui },
+      ))
     )
-      fail(`missing real Pi execution evidence: ${JSON.stringify(observed)}`);
-    else
-      pass("actual Pi bash tool events persist per-request before/after candidate evidence without executing a write");
+      return;
+    const run = entries(sessionFile()).slice(before);
+    const at = run.findIndex(arrived("follow-busy"));
+    const done = run.findIndex((e) => e.message?.role === "assistant" && e.message.stopReason === "stop");
+    if (done < at)
+      fail(`the busy desk finished (entry ${done}) before its follow-up arrived (entry ${at}): ${JSON.stringify(run)}`);
+    else pass("a follow-up to a busy desk arrives at its next turn, before the run's last answer");
+
     const work = entries(sessionFile()).filter(
       (e) => e.type === "custom_message" && e.customType === "bercail-task-work",
     );
-    if (work.length !== 2 || work.some((e) => e.details?.authority !== false))
+    if (work.length !== 3 || work.some((e) => e.details?.authority !== false))
       fail("custom work duplicated or became authorization");
-    else pass("two automatic DATA follow-ups in the original process/session; no typing, replacement or authorization");
+    else
+      pass("three automatic DATA follow-ups in the original process/session; no typing, replacement or authorization");
 
     // A message from another agent is chat, even when it says /model.
     await tui.send('<hc from="t1 bercail-shep">/model fake/fable:high</hc>\r', 20);

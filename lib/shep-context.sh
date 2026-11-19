@@ -92,8 +92,8 @@ _shep_open_issues() {
   local main="$1" raw
   [[ -d "$main/.beads" ]] || return 1
   raw="$(cd "$main" && _shep_bd list --all --json --limit 0 </dev/null 2>/dev/null)" || return 1
-  jq -c '[(if type == "array" then .[] else empty end) | select(.status != "closed" or any(.metadata.bercail_task.requests[]?; .status != "complete"))
-    | {id, title, status, labels: (.labels // []), task: .metadata.bercail_task}]' <<<"$raw" 2>/dev/null
+  jq -c '[(if type == "array" then .[] else empty end) | select(.status != "closed")
+    | {id, title, status, labels: (.labels // [])}]' <<<"$raw" 2>/dev/null
 }
 
 # Known repos as a JSON array: path, git backend, policy (trusted, untrusted,
@@ -270,7 +270,7 @@ shep_brief() {
   worktree="$(jq -r '$rec.path // .cwd // empty' --argjson rec "$rec" <<<"${desk:-null}")"
   if [[ -n "$worktree" && -d "$worktree" ]] && change="$(desc_change "$worktree" 2>/dev/null)" \
     && jq -e '.files > 0' <<<"$change" >/dev/null 2>&1; then
-    staged="staged: $(desc_change_line "$change")"
+    staged="staged: $(desc_change_line "$change") · $(_shep_described "$worktree" | jq -r 'if .ok then "describe check ok" else "describe check fails: \(.why)" end')"
   fi
   jq -nr --arg home "$HOME" --arg repo "$main" --argjson issue "$issue_json" --argjson comments "$comments" \
     --argjson rec "$rec" --argjson desk "$desk" --arg screen "$screen" --argjson budget "$budget" --arg staged "$staged" "$SHEP_JQ_DEFS"'
@@ -282,8 +282,6 @@ shep_brief() {
     ($issue.id) as $id
     | ([$comments | to_entries[] | select((.value.text // "") | startswith("bercail handoff:") or startswith("bercail todo:") | not)]) as $reports
     | "\($id): \($issue.title // "" | flat)",
-      ($issue.metadata.bercail_task.requests[]? | "request \(.id): \(.outcome) [\(.status)]" + (if (.authoring // "") != "" then " · authoring \(.authoring)" else "" end) + " · next: \(.next)",
-        (select(.receipt != null) | "canonical receipt \(.id): " + (.receipt | {head,tree,results,open} | with_entries(select(.value != null)) | tojson))),
       ([$issue.status, (if $issue.priority != null then "P\($issue.priority)" else empty end), $issue.issue_type]
         | map(select(. != null and . != "")) | join(" "))
         + (if ($issue.labels // []) | length > 0 then " · labels \($issue.labels | join(", "))" else "" end)
@@ -333,10 +331,12 @@ _shep_board_snapshot() {
     --argjson todos "$todos" "$SHEP_JQ_DEFS"'
     def who($d): if $d.bg then "background Shep \($d.name // $d.address)" else "desk \($d.address)" end;
     def head($j): "\($j.id): \($j.title // "" | flat | cut(70))";
+    # With the repo: another repo may have an issue, a desk or a handoff with that id.
+    def brief($j): "bercail shep brief \($j.id) --repo \($j.repo | @sh)";
     ($desks | map(select(.issue)) | map({key: (.repo + "\u001f" + .issue), value: .}) | from_entries) as $live
     | [ $repos[] | . as $r | ($r.issues // [])[] | . as $i | ($rec[($r.path + "\u001f" + $i.id)]) as $h | ($live[($r.path + "\u001f" + $i.id)]) as $d
-        | select($d or $i.status == "in_progress" or $i.status == "blocked" or any($i.task.requests[]?; .status != "complete"))
-        | {repo: $r.path, id: $i.id, title: $i.title, status: $i.status, desk: $d, rec: $h, task:$i.task} ] as $jobs
+        | select($d or $i.status == "in_progress" or $i.status == "blocked")
+        | {repo: $r.path, id: $i.id, title: $i.title, status: $i.status, desk: $d, rec: $h} ] as $jobs
     | ([$repos[] | .path as $repo | (.issues // [])[] | $repo + "\u001f" + .id]) as $open
     | ( $repos[] | . as $r | [$jobs[] | select(.repo == $r.path)] as $mine | select($mine | length > 0)
         | ([$mine[].id]) as $ids
@@ -348,8 +348,7 @@ _shep_board_snapshot() {
             + (if .status != "open" then " [\(.status)]" else "" end)
             + " · " + (if .desk then "\(who(.desk)) \(.desk.state)" elif .rec.desk then "desk \(.rec.desk) gone" else "no desk" end)
             + " · " + (.rec.branch // "-")
-            + ((if .desk then .desk.model else .rec.model end) | if . then " · model \(.)" else "" end)
-            + (if .task then " · requests " + ([.task.requests[] | "\(.id):\(.outcome)/\(.status) next=\(.next)"] | join("; ")) else "" end)) ),
+            + ((if .desk then .desk.model else .rec.model end) | if . then " · model \(.)" else "" end)) ),
       ([ $repos[] | . as $r | select(([$jobs[] | select(.repo == $r.path)] | length) == 0)
          | "\($r.path | tilde) (" + (if .open != null then "\(.open) open" elif .beads then "UNKNOWN (beads unavailable)" else "no beads" end) + ")" ]
        | if length > 0 then "Other repos: " + join(", ") else empty end),
@@ -357,9 +356,9 @@ _shep_board_snapshot() {
        | if length > 0 then "Desks on closed or unknown issues: " + join(", ") else empty end),
       "Waiting on the person:",
       ([ ($jobs[] | select(.desk) | . as $j
-           | if .desk.state == "blocked" then "- " + head($j) + ": \(who(.desk)) is blocked; bercail shep brief \(.id) shows what it asks"
+           | if .desk.state == "blocked" then "- " + head($j) + ": \(who(.desk)) is blocked; \(brief($j)) shows what it asks"
              elif (.desk.state == "done" or .desk.state == "idle") then
-               "- " + head($j) + ": " + (if any(.task.requests[]?; .status != "complete") then "\(who(.desk)) is idle/done but requested work remains; inspect its brief in this repo" else "\(who(.desk)) finished; " + (if .desk.bg then "report it, then hc kill \(.desk.name // .desk.address)" else "review its staged changes in its space" end) end)
+               "- " + head($j) + ": \(who(.desk)) finished; " + (if .desk.bg then "report it from \(brief($j)), then hc kill \(.desk.name // .desk.address)" else "read its report in \(brief($j)), then review its staged changes in its space" end)
              else empty end),
          ($desks[] | select((.issue | not) and .state == "blocked") | "- \(who(.)) (\(.cwd // "?" | tilde)) is blocked"),
          ($todos // [] | .[] | . as $t | def tag: if .issue then " for \(.issue)" else "" end;
@@ -414,6 +413,22 @@ _shep_staged_at() {
   stat -c %Y "$index" 2>/dev/null || stat -f %m "$index" 2>/dev/null
 }
 
+# What describe check says of the worktree's staged change, as {ok, why}: why
+# is the first thing it fails on. A check that cannot run is not ok. It reads a
+# copy of the index: git write-tree rewrites the index, and the queue's order is
+# when the index last changed. With SKIP_IDS, it skips the beads-id rule.
+_shep_described() {
+  local root="$1" skip_ids="${2:-}" index copy state=""
+  index="$(cd "$root" && git rev-parse --path-format=absolute --git-path index 2>/dev/null)" \
+    && copy="$(mktemp)" && cp -p "$index" "$copy" \
+    && state="$(GIT_INDEX_FILE="$copy" desc_state "$root" "$skip_ids" 2>/dev/null)"
+  [[ -z "${copy:-}" ]] || rm -f "$copy"
+  [[ -n "$state" ]] || { printf '{"ok":false,"why":"describe check did not run"}\n'; return 0; }
+  jq -c --arg root "$root/" '.fails as $f
+    | {ok: ($f | length == 0),
+       why: (($f[0] // "") | split($root) | join("")) + (if ($f | length) > 1 then " (+\($f | length - 1) more)" else "" end)}' <<<"$state"
+}
+
 # What a staged worktree is to the person, from records only: {state, why, by,
 # title}. state: review, or lgtm when its policy wants the person's LGTM (an
 # unknown one may want it too: change.review says);
@@ -438,9 +453,7 @@ _shep_queue_state() {
       else ([$bd.dependencies[]? | {to: (.depends_on_id // .id), type: (.dependency_type // .type)}
               | select(.type == "supersedes" or .type == "duplicates")] | first) as $d
         | {title: $bd.title}
-          + if any($bd.metadata.bercail_task.requests[]?; .status != "complete") then
-              {state: "outstanding", why: "requested outcome unfinished; keep the original owner and next action"}
-            elif $d then {state: "superseded", by: $d.to,
+          + if $d then {state: "superseded", by: $d.to,
                         why: (if $d.type == "supersedes" then "superseded by \($d.to)" else "a duplicate of \($d.to)" end)}
             elif $bd.status == "closed" then {state: "unknown", why: "issue closed but staged changes remain; custody/outcome unproven"}
             elif $moved != "" then {state: "superseded", by: $moved, why: "its job moved to another worktree"}
@@ -471,7 +484,7 @@ _shep_live_spaces() {
 # waiting first. repos has each repo's counted lines against its policy's
 # review_budget, for the repos with items.
 _shep_queue_json() {
-  local repos="$1" desks="$2" records="$3" path issue title desk space main change state since gh_repos branches prs login="" items='[]' live
+  local repos="$1" desks="$2" records="$3" path issue title desk space main change state since described gh_repos branches prs login="" items='[]' live
   local -A policies=()
   live="$(_shep_live_spaces)" || live=""
   # \x1f, not a tab: read would merge an empty title's two tabs into one.
@@ -489,13 +502,18 @@ _shep_queue_json() {
       state="$(_shep_queue_state "$main" "$issue" "$path" "$change" "$records")"
     fi
     since="$(_shep_staged_at "$path")" || since=""
+    # Only a change that waits on the person gets the check. It skips the beads-id
+    # rule: the queue reads no full beads list.
+    described=null
+    jq -e '.state | IN("cleanup", "superseded", "stale")' <<<"$state" >/dev/null \
+      || described="$(_shep_described "$path" skip-ids)"
     items="$(jq -c --arg repo "$main" --arg path "$path" --arg issue "$issue" --arg title "$title" --arg desk "$desk" \
-      --arg space "$space" --arg since "$since" --argjson change "$change" --argjson state "$state" '
+      --arg space "$space" --arg since "$since" --argjson change "$change" --argjson state "$state" --argjson described "$described" '
       def opt: if . == "" then null else . end;
       . + [{kind: "staged", repo: $repo, path: $path, issue: ($issue | opt),
             title: (($title | opt) // $state.title), desk: ($desk | opt), space: ($space | opt),
             since: (if $since == "" then null else ($since | tonumber | todate) end),
-            state: $state.state, why: $state.why, by: $state.by, change: $change}]' <<<"$items")"
+            state: $state.state, why: $state.why, by: $state.by, change: $change, described: $described}]' <<<"$items")"
   done < <(jq -nr --argjson repos "$repos" --argjson desks "$desks" --argjson rec "$records" '
     def one(f): map(f | select(. != null and . != "")) | first // "";
     ([$repos[].issues // [] | .[] | {key: .id, value: .title}] | from_entries) as $titles
@@ -546,7 +564,8 @@ _shep_queue_text() {
       else (if .issue then .issue + (if .title then ": \(.title | flat | cut(70))" else "" end) else (.path | tilde) end)
         + ((.change.files - .change.left_out.files) as $n | " · \(size) staged in \($n) file\(if $n == 1 then "" else "s" end)")
         + " · stakes \(.change.stakes)" + (if .counts and .change.review == "required" then ", needs the person'"'"'s LGTM" else "" end)
-        + ({outstanding: " · outstanding: \(.why)", unknown: " · state unknown: \(.why)", cleanup: " · \(.why), a cleanup candidate",
+        + (.described | if . == null then "" elif .ok then " · described" else " · describe check fails: \(.why | flat | cut(90))" end)
+        + ({unknown: " · state unknown: \(.why)", cleanup: " · \(.why), a cleanup candidate",
             superseded: " · \(.why)" + (if (.by // "") | startswith("/") then " (\(.by | tilde))" else "" end)}[.state] // "")
         + (if .issue then " · \(.path | tilde)" else "" end) end;
     ($q.items | map(select(.counts))) as $w

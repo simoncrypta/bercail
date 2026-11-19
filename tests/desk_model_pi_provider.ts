@@ -19,17 +19,20 @@ export default function (pi: ExtensionAPI) {
     streamSimple(model, context) {
       const last = context.messages.at(-1);
       const work = last?.role === "user" && JSON.stringify(last.content).includes("Amend/publish follow-up");
+      // A long run: one slow bash call, so a follow-up can arrive while it works.
+      const busy = last?.role === "user" && JSON.stringify(last.content).includes("busy run");
+      const call = busy ? "sleep 4" : work ? "git rev-parse HEAD" : "";
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
         const message: AssistantMessage = {
           role: "assistant",
-          content: work
+          content: call
             ? [
                 {
                   type: "toolCall",
                   id: `read-${Date.now()}`,
                   name: "bash",
-                  arguments: { command: "git rev-parse HEAD" },
+                  arguments: { command: call },
                 },
               ]
             : [{ type: "text", text: "OK" }],
@@ -44,10 +47,10 @@ export default function (pi: ExtensionAPI) {
             totalTokens: 0,
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
           },
-          stopReason: work ? "toolUse" : "stop",
+          stopReason: call ? "toolUse" : "stop",
           timestamp: Date.now(),
         };
-        stream.push({ type: "done", reason: work ? "toolUse" : "stop", message });
+        stream.push({ type: "done", reason: call ? "toolUse" : "stop", message });
         stream.end();
       });
       return stream;

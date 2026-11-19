@@ -21,6 +21,12 @@ case "$1" in
   show) cat "$TASK_DATA/$2.json" ;;
   list) jq -s . "$TASK_DATA/"*.json ;;
   update)
+    # TASK_CLOSE_ONCE_QUEUED: someone closes the issue once a follow-up is queued.
+    if [[ -n ${TASK_CLOSE_ONCE_QUEUED:-} && ! -e "$TASK_DATA/closed-once" ]] \
+      && find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json' 2>/dev/null | grep -q .; then
+      jq '.status = "closed"' "$TASK_DATA/$2.json" >"$TASK_DATA/tmp" && mv "$TASK_DATA/tmp" "$TASK_DATA/$2.json"
+      touch "$TASK_DATA/closed-once"
+    fi
     id="$2"; shift 2
     while (($#)); do
       case "$1" in
@@ -88,9 +94,6 @@ start_pi() {
 owner() {
   local id="$1" session="$2" file="$TASK_DATA/$2.jsonl"
   jq -nc --arg s "$session" --arg cwd "$REPO.fix" '{type:"session",version:3,id:$s,cwd:$cwd}' >"$file"
-  echo '{"type":"custom","id":"anchor","parentId":null,"customType":"fixture"}' >>"$file"
-  mkdir -p "$XDG_STATE_HOME/bercail/runtime"
-  jq -n --arg s "$session" --arg f "$file" --arg ticks "$TICKS" --argjson pid "$PID" '{pid:$pid,start_ticks:$ticks,session:$s,session_file:$f,leaf:"anchor",generation:"fixture",guard_generation:"UNKNOWN"}' >"$XDG_STATE_HOME/bercail/runtime/$PID.json"
   mkdir -p "$XDG_RUNTIME_DIR/bercail/open-sessions"
   jq -n --arg s "$session" --arg ticks "$TICKS" --argjson pid "$PID" '{pid:$pid,start_ticks:$ticks,sessions:[$s]}' >"$XDG_RUNTIME_DIR/bercail/open-sessions/$PID.json"
   jq -n --arg id "$id" --arg cwd "$REPO.fix" --argjson pid "$PID" '{address:$id,cwd:$cwd,state:"live",foreground:{pid:$pid},labels:{"bercail.role":"agent","bercail.issue":"app-1","bercail.space":"sp1"},status:{state:"working"}}' >"$TASK_DATA/$id.hc"
@@ -98,7 +101,7 @@ owner() {
 }
 
 request() {
-  jq -nc --arg repo "$REPO" --arg id "${1:-r1}" '{repo:$repo,issue:"app-1",target:"https://github.com/o/app/pull/12/",requestId:$id,outcome:"publish",stage:"autopilot",message:"Amend with gt m -a and publish the new head",authoring:"gt m -a"}'
+  jq -nc --arg repo "$REPO" --arg id "${1:-r1}" '{repo:$repo,issue:"app-1",target:"https://github.com/o/app/pull/12/",requestId:$id,stage:"autopilot",message:"Amend with gt m -a and publish the new head"}'
 }
 
 task() { "$ROOT/bin/bercail" shep task "$@"; }
@@ -110,8 +113,19 @@ task() { "$ROOT/bin/bercail" shep task "$@"; }
   request | task dispatch >/dev/null
   request r2 | task dispatch >/dev/null
   [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json' | wc -l)" == 2 ]]
-  jq -e '.status == "in_progress" and .metadata.bercail_task.requests[0].authoring == "gt m -a" and .metadata.bercail_task.requests[0].outcome == "publish"' "$TASK_DATA/app-1.json"
+  jq -e '.status == "in_progress" and .metadata.bercail_task.owner.session == "s1"' "$TASK_DATA/app-1.json"
   ! grep -Eq 'hc (run|send|keys|kill|rm)' "$LOG"
+}
+
+@test "dispatch is the only task command, and a v0.17 field is named, not ignored" {
+  local out op
+  for op in status block receipt; do
+    out="$(request | task "$op" 2>&1)" && fail "$op: $out"
+    [[ "$out" == *"usage: bercail shep task dispatch"* ]] || fail "$op: $out"
+  done
+  out="$(request | jq '.outcome="publish" | .authoring="gt m -a"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"unknown task field outcome, authoring"* ]] || fail "$out"
+  [[ ! -d "$XDG_STATE_HOME/bercail/desk-follow-ups" ]]
 }
 
 @test "a different branch cannot silently replace an existing task owner" {
@@ -143,15 +157,8 @@ task() { "$ROOT/bin/bercail" shep task "$@"; }
   owner t9 replacement
   out="$(request r2 | task dispatch 2>&1)" && fail "$out"
   [[ "$out" == *"session"* ]]
-  jq -e '.metadata.bercail_task.owner.session == "s1" and (.metadata.bercail_task.requests | length) == 1' "$TASK_DATA/app-1.json"
-}
-
-@test "a backend blocker preserves the requested authoring and publication outcome" {
-  local out
-  request | task dispatch >/dev/null
-  request | jq '. + {reason:"gt modify restacks a child; native executor unsupported",next:"Resolve descendant scope in the original desk"}' | task block >/dev/null
-  out="$(request | task status)"
-  jq -e '.requests[0].status == "blocked" and .requests[0].authoring == "gt m -a" and .requests[0].outcome == "publish" and (.requests[0].reason | contains("restacks"))' <<<"$out"
+  jq -e '.metadata.bercail_task.owner.session == "s1"' "$TASK_DATA/app-1.json"
+  [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json' | wc -l)" == 1 ]]
 }
 
 @test "repo path aliases deduplicate; issue aliases and a foreign PR URL cannot take a target" {
@@ -173,7 +180,8 @@ task() { "$ROOT/bin/bercail" shep task "$@"; }
   file="$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json')"
   rm "$file"
   request | task dispatch >/dev/null
-  [[ -f "$file" ]]
+  file="$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json')"
+  [[ -f "$file" ]] || fail "the retry did not queue it again"
   jq '.delivery="unknown"' "$file" >"$BATS_TEST_TMPDIR/msg"
   mv "$BATS_TEST_TMPDIR/msg" "$file"
   request | task dispatch >/dev/null
@@ -207,7 +215,7 @@ create() { request "${1:-r1}" | jq --arg b "${2:-fresh}" '.branch=$b | .stage="b
   out="$(create | task dispatch)" || fail "$out"
   jq -e '.status == "unknown" and .authority == false and .retry and (.next | contains("handoffs.jsonl has a line"))' <<<"$out"
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
-  jq -e '.status == "in_progress" and .metadata.bercail_task.requests[0].outcome == "publish"' "$TASK_DATA/app-1.json"
+  jq -e '.status == "in_progress" and .metadata.bercail_task.creation.status == "unknown"' "$TASK_DATA/app-1.json"
   out="$(create r2 | task dispatch 2>&1)" && fail "$out"
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]] || fail "a new request launched again: $out"
 }
@@ -262,12 +270,12 @@ EOF
   [[ "$out" == *"did not finish in 1s"* ]] || fail "$out"
   child="$(cat "$TASK_CHILD")"
   ! kill -0 "$child" 2>/dev/null || fail "the spawn's child $child outlived the timeout"
-  jq -e '.metadata.bercail_task.requests[0] | .status == "unknown" and (.reason | contains("spawn_timeout"))' "$TASK_DATA/app-1.json"
+  jq -e '.metadata.bercail_task.creation | .status == "unknown" and (.reason | contains("spawn_timeout"))' "$TASK_DATA/app-1.json"
   out="$(create | task dispatch)" || fail "$out"
-  jq -e --arg p "$REPO.fresh" '.status == "awaiting-session" and .creation.desk == "t21" and .creation.path == $p and .retry' <<<"$out"
+  jq -e --arg p "$REPO.fresh" '.status == "started" and .creation.desk == "t21" and .creation.path == $p and .retry' <<<"$out"
   [[ "$(grep -c '^spawn ' "$LOG")" == 2 ]]
   grep '^spawn ' "$LOG" | tail -1 | grep -q -- '--branch fresh --stage bstack .*--reuse-worktree' || fail "$(cat "$LOG")"
-  jq -e '.metadata.bercail_task.requests[0] | .status == "awaiting-session" and (has("reason") | not)' "$TASK_DATA/app-1.json"
+  jq -e '.metadata.bercail_task.creation | .status == "started" and (has("reason") | not)' "$TASK_DATA/app-1.json"
 }
 
 @test "a partial creation stays UNKNOWN when its worktree has changes, a busy terminal or a desk" {
@@ -297,7 +305,7 @@ EOF
   git -C "$REPO" worktree remove "$REPO.fresh"
   git -C "$REPO" branch -qD fresh
   out="$(create | task dispatch)" || fail "$out"
-  jq -e '.status == "awaiting-session" and .creation.desk == "t21"' <<<"$out"
+  jq -e '.status == "started" and .creation.desk == "t21"' <<<"$out"
   grep '^spawn ' "$LOG" | tail -1 | grep -q -- '--reuse-worktree' && fail "nothing was left to reuse: $(cat "$LOG")"
   [[ "$(grep -c '^spawn ' "$LOG")" == 2 ]]
 }
@@ -310,27 +318,32 @@ EOF
   [[ "$out" == *"stage autopilot starts a desk only on an open PR's own branch"* ]] || fail "$out"
   grep -q '^spawn ' "$LOG" && fail "a refused autopilot must not spawn"
   out="$(request | jq '.branch="fix"' | task dispatch)" || fail "$out"
-  jq -e '.status == "awaiting-session" and .creation.desk == "t21"' <<<"$out"
+  jq -e '.status == "started" and .creation.desk == "t21"' <<<"$out"
   grep -q -- '^spawn --branch fix --stage autopilot .*--target pr:12 .*--existing-branch' "$LOG" || fail "$(cat "$LOG")"
 }
 
-@test "a retry does not start an autopilot desk an older dispatch saved on a branch that is not the PR's" {
-  local out payload
+@test "a v0.17 request ledger is dropped on the next save, and a retry of its UNKNOWN autopilot launches nothing off the PR's branch" {
+  local out
   rm "$TASK_DATA/t9.hc" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
   spawn_ok t21 "$REPO.fresh"
-  # The request as v0.17.2 saved it: stage autopilot on any branch, then UNKNOWN.
-  payload="$(request | jq -c '.branch="fresh"' | node -e '
-    const i = JSON.parse(require("fs").readFileSync(0, "utf8"));
-    const body = {repo: process.argv[1], issue: i.issue, target: "pr:12", outcome: i.outcome, stage: i.stage, message: i.message,
-      authoring: i.authoring, branch: i.branch, forkReason: "", adoptReason: "", targets: null, universe: null};
-    process.stdout.write(require("crypto").createHash("sha256").update(JSON.stringify(body)).digest("hex"));' "$(realpath "$REPO")")"
-  jq --arg repo "$(realpath "$REPO")" --arg p "$payload" '.metadata.bercail_task = {v:1,repo:$repo,target:"pr:12",owner:null,branch:"fresh",
-    requests:[{id:"r1",sequence:0,payload:$p,outcome:"publish",stage:"autopilot",message:"Amend with gt m -a and publish the new head",authoring:"gt m -a",status:"unknown",next:""}]}' \
+  # The record as v0.17 saved it: a request ledger, with an UNKNOWN creation.
+  jq --arg repo "$(realpath "$REPO")" '.metadata.bercail_task = {v:1,repo:$repo,target:"pr:12",owner:null,branch:"fresh",
+    requests:[{id:"r1",sequence:0,payload:"old",outcome:"publish",stage:"autopilot",message:"Amend with gt m -a and publish the new head",authoring:"gt m -a",status:"unknown",next:""}]}' \
     "$TASK_DATA/app-1.json" >"$BATS_TEST_TMPDIR/t"
   mv "$BATS_TEST_TMPDIR/t" "$TASK_DATA/app-1.json"
   out="$(request | jq '.branch="fresh"' | task dispatch)" || fail "$out"
   jq -e '.status == "unknown" and (.next | contains("stage autopilot starts a desk only on pr:12'"'"'s own branch"))' <<<"$out" || fail "$out"
+  out="$(request r9 | jq '.branch="fresh"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"creation outcome UNKNOWN"* ]] || fail "$out"
   ! grep -q '^spawn ' "$LOG" || fail "no desk may start: $(cat "$LOG")"
+  # A follow-up to a live owner saves the record without the ledger.
+  owner t9 s1
+  jq -nc --arg p "$REPO.fix" '{path:$p,branch:"fix",issue:"app-1",space:"sp1",desk:"t9",target:"pr:12"}' >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  jq '.metadata.bercail_task.branch="fix"' "$TASK_DATA/app-1.json" >"$BATS_TEST_TMPDIR/t"
+  mv "$BATS_TEST_TMPDIR/t" "$TASK_DATA/app-1.json"
+  out="$(request r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t9"' <<<"$out"
+  jq -e '.metadata.bercail_task | (has("requests") | not) and .v == 2 and .owner.desk == "t9"' "$TASK_DATA/app-1.json"
 }
 
 @test "a target held by an issue closed as superseded moves to its successor once none of its desks is live" {
@@ -345,7 +358,7 @@ EOF
   [[ "$out" == *"superseded issue app-1 still has live desk t9"* ]] || fail "$out"
   rm "$TASK_DATA/t9.hc"
   out="$(request | jq '.issue="app-2" | .branch="fix"' | task dispatch)" || fail "$out"
-  jq -e '.status == "awaiting-session" and .creation.desk == "t21" and .creation.issue == "app-2"' <<<"$out"
+  jq -e '.status == "started" and .creation.desk == "t21" and .creation.issue == "app-2"' <<<"$out"
   grep -q -- '--existing-branch --released app-1' "$LOG" || fail "$(cat "$LOG")"
 }
 
@@ -358,10 +371,10 @@ EOF
   wait "$a" || true
   wait "$b" || true
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
-  jq -se '[.[].metadata.bercail_task.requests[]?] | length == 1' "$TASK_DATA/app-"*.json
+  jq -se '[.[].metadata.bercail_task.creation // empty] | length == 1' "$TASK_DATA/app-"*.json
 }
 
-@test "same issue id in another repo does not inherit this repo's owner or outcome" {
+@test "same issue id in another repo does not inherit this repo's owner" {
   local other="$BATS_TEST_TMPDIR/other" data="$BATS_TEST_TMPDIR/other-issues" out
   request | task dispatch >/dev/null
   git_init "$other"
@@ -376,136 +389,12 @@ EOF
   jq -e --arg repo "$REPO" '.metadata.bercail_task.repo == $repo and .metadata.bercail_task.owner.desk == "t9"' "$TASK_DATA/app-1.json"
 }
 
-# Persist the event shapes produced by the extension. Separate from dispatch:
-# an accepted/queued request cannot supply its own execution evidence.
-executed() {
-  local command="${1:-isolated tests}" close="${2:-}" head tree leaf id
-  head="$(git -C "$REPO.fix" rev-parse HEAD)"; tree="$(git -C "$REPO.fix" write-tree)"
-  leaf="$(tail -1 "$TASK_DATA/s1.jsonl" | jq -r .id)"; id="$(wc -l <"$TASK_DATA/s1.jsonl")"
-  if ! grep -q 'bercail-task-work' "$TASK_DATA/s1.jsonl"; then
-    jq -nc --arg repo "$REPO" --arg p "$leaf" '{type:"custom_message",id:"work",parentId:$p,customType:"bercail-task-work",details:{repo:$repo,issue:"app-1",requestId:"r1",authority:false}}' >>"$TASK_DATA/s1.jsonl"
-    leaf=work
-  fi
-  jq -nc --arg repo "$REPO" --arg p "$leaf" --arg id "effect$id" --arg call "call$id" --arg head "$head" --arg tree "$tree" --arg cmd "$command" --arg close "$close" \
-    '{type:"custom",id:$id,parentId:$p,customType:"bercail-task-effect",data:{repo:$repo,issue:"app-1",requestId:"r1",authority:false,session:"s1",toolCallId:$call,command:$cmd,exit_code:0,before:{head:$head,tree:$tree},after:{head:$head,tree:$tree}}} | if $close == "" then . else .data += {close:$close,open_before:[{id:$close,generation:"g1"}],open_after:[]} end' >>"$TASK_DATA/s1.jsonl"
-  jq -nc --arg id "result$id" --arg p "effect$id" --arg call "call$id" '{type:"message",id:$id,parentId:$p,message:{role:"toolResult",toolCallId:$call,isError:false,structuredContent:{exit_code:0}}}' >>"$TASK_DATA/s1.jsonl"
-  jq --arg leaf "result$id" '.leaf=$leaf' "$XDG_STATE_HOME/bercail/runtime/$PID.json" >"$BATS_TEST_TMPDIR/leaf"
-  mv "$BATS_TEST_TMPDIR/leaf" "$XDG_STATE_HOME/bercail/runtime/$PID.json"
-  if [[ "$command" == "isolated tests" ]]; then
-    mkdir -p "$REPO.fix/.bercail"
-    jq -n --arg tree "$tree" '{tree:$tree,checks:[{kind:"test",command:"isolated tests",exit_code:0,evidence:"fixture"}]}' >"$REPO.fix/.bercail/validate.json"
-  fi
-}
-
-proof() {
-  jq -nc --arg repo "$REPO" --arg head "$(git -C "$REPO.fix" rev-parse HEAD)" --arg tree "$(git -C "$REPO.fix" write-tree)" \
-    '{repo:$repo,issue:"app-1",requestId:"r1",desk:"t9",session:"s1",proof:{head:$head,tree:$tree,validation:{head:$head,tree:$tree,command:"isolated tests",exit_code:0}}}'
-}
-
-@test "old reports and a claimed native authoring result cannot complete an amend/publish follow-up" {
-  local out
-  request | task dispatch >/dev/null
-  echo amended >>"$REPO.fix/file.txt"
-  git -C "$REPO.fix" commit -qam "changed without the requested native amendment"
-  executed
-  out="$(proof | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"native authoring receipt unavailable for gt m -a"* ]]
-  out="$(proof | jq '.proof.tree="old-tree"' | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"fresh validation"* ]]
-  jq -e '.metadata.bercail_task.requests[0].status != "complete"' "$TASK_DATA/app-1.json"
-}
-
-@test "publication completes only for the current remote head and that head's CI, never old green" {
-  local out old head remote="$BATS_TEST_TMPDIR/remote.git"
-  git init --bare -q "$remote"
-  git -C "$REPO" remote set-url origin "$remote"
-  git -C "$REPO.fix" push -q origin fix
-  old="$(git -C "$REPO.fix" rev-parse HEAD)"
-  export BERCAIL_SHEP_BIN="$BATS_TEST_TMPDIR/bin/description" TASK_CI="$BATS_TEST_TMPDIR/ci"
-  printf '#!/bin/sh\nexit 0\n' >"$BERCAIL_SHEP_BIN"
-  printf '#!/bin/sh\ncat "$TASK_CI"\n' >"$BATS_TEST_TMPDIR/bin/gh"
-  chmod +x "$BERCAIL_SHEP_BIN" "$BATS_TEST_TMPDIR/bin/gh"
-  jq -n --arg h "$old" '{headRefOid:$h,headRefName:"fix",statusCheckRollup:[{conclusion:"SUCCESS"}]}' >"$TASK_CI"
-  request | jq '.target="pr:12" | .authoring=""' | task dispatch >/dev/null
-  executed
-  out="$(proof | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"unchanged old published/green head"* ]]
-  echo new >>"$REPO.fix/file.txt"
-  git -C "$REPO.fix" commit -qam "amend requested work"
-  head="$(git -C "$REPO.fix" rev-parse HEAD)"
-  executed
-  out="$(proof | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"not published"* ]]
-  git -C "$REPO.fix" push -q origin fix
-  out="$(proof | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"new-head CI"* ]]
-  jq -n --arg h "$head" '{headRefOid:$h,headRefName:"fix",statusCheckRollup:[{conclusion:"SUCCESS"}]}' >"$TASK_CI"
-  out="$(proof | task receipt)" || fail "$out"
-  jq -e '.outstanding == 0 and .requests[0].status == "complete" and .authority == false' <<<"$out"
-  request r2 | jq '.target="pr:12" | .authoring=""' | task dispatch >/dev/null
-  out="$(proof | jq '.requestId="r2"' | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"no complete matching persisted work message"* ]]
-  out="$(request | task status)"
-  jq -e '.requests[1].status == "queued" and (.requests | length) == 2' <<<"$out"
-}
-
-@test "publication can complete an already authored but previously unpublished head" {
-  local old head out remote="$BATS_TEST_TMPDIR/remote.git"
-  git init --bare -q "$remote"
-  git -C "$REPO" remote set-url origin "$remote"
-  git -C "$REPO.fix" push -q origin fix
-  old="$(git -C "$REPO.fix" rev-parse HEAD)"
-  echo new >>"$REPO.fix/file.txt"
-  git -C "$REPO.fix" commit -qam 'authored before publication request'
-  head="$(git -C "$REPO.fix" rev-parse HEAD)"
-  export BERCAIL_SHEP_BIN="$BATS_TEST_TMPDIR/bin/description" TASK_CI="$BATS_TEST_TMPDIR/ci"
-  printf '#!/bin/sh\nexit 0\n' >"$BERCAIL_SHEP_BIN"
-  printf '#!/bin/sh\ncat "$TASK_CI"\n' >"$BATS_TEST_TMPDIR/bin/gh"
-  chmod +x "$BERCAIL_SHEP_BIN" "$BATS_TEST_TMPDIR/bin/gh"
-  jq -n --arg h "$old" '{headRefOid:$h,headRefName:"fix",statusCheckRollup:[{conclusion:"SUCCESS"}]}' >"$TASK_CI"
-  request | jq '.target="pr:12" | .authoring=""' | task dispatch >/dev/null
-  git -C "$REPO.fix" push -q origin fix
-  jq -n --arg h "$head" '{headRefOid:$h,headRefName:"fix",statusCheckRollup:[{conclusion:"SUCCESS"}]}' >"$TASK_CI"
-  executed
-  out="$(proof | task receipt)" || fail "$out"
-  jq -e --arg h "$head" '.outstanding == 0 and .requests[0].receipt.head == $h' <<<"$out"
-  proof | jq '.proof={}' | task receipt | jq -e --arg h "$head" '.retry and .requests[0].receipt.head == $h'
-  proof | jq '.reason="supplemental readback failed" | .next="try again" | del(.proof,.desk,.session)' | task block | jq -e '.retry and .outstanding == 0'
-}
-
 @test "task namespace merge keeps an unrelated metadata edit during the update" {
   export TASK_CONCURRENT_METADATA=1
   jq '.metadata.external="old external marker"' "$TASK_DATA/app-1.json" >"$TASK_DATA/tmp"
   mv "$TASK_DATA/tmp" "$TASK_DATA/app-1.json"
   request | task dispatch >/dev/null
-  jq -e '.metadata.external == "newer unrelated value" and .metadata.bercail_task.requests[0].id == "r1"' "$TASK_DATA/app-1.json"
-}
-
-@test "cleanup audit is not completion; OPEN survivors and partial custody stay explicit" {
-  local out
-  export HERDR_APP_BIN="$BATS_TEST_TMPDIR/bin/native" TASK_OPEN="$BATS_TEST_TMPDIR/open"
-  printf '#!/bin/sh\ncat "$TASK_OPEN"\n' >"$HERDR_APP_BIN"
-  chmod +x "$HERDR_APP_BIN"
-  echo '{"spaces":[{"id":"sp-old", "generation":"g1"}]}' >"$TASK_OPEN"
-  out="$(request | jq '.outcome="cleanup" | .authoring="" | .targets=[{space:"invented",generation:"g1"}]' | task dispatch 2>&1)" && fail "$out"
-  [[ "$out" == *"not in the observed native OPEN snapshot"* ]]
-  request | jq '.outcome="cleanup" | .authoring="" | .targets=[{space:"sp-old",generation:"g1"}]' | task dispatch >/dev/null
-  out="$(request | jq '.outcome="cleanup" | .authoring="" | .targets=[{space:"different",generation:"g1"}]' | task dispatch 2>&1)" && fail "$out"
-  [[ "$out" == *"payload changed"* ]]
-  executed
-  out="$(proof | jq '.proof.results=[]' | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"per-target"* ]]
-  out="$(proof | jq '.proof.results=[{space:"sp-old",generation:"g1",status:"KEEP",custody:"invented retention"}]' | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"cannot silently weaken"* ]]
-  out="$(proof | jq '.proof.results=[{space:"sp-old",generation:"g1",status:"CLOSED",custody:"app-1: Repair login, r1"}]' | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"still OPEN"* ]]
-  proof | jq '.proof.results=[{space:"sp-old",generation:"g1",status:"PARTIAL",custody:"app-1: Repair login, r1"}]' | task receipt | jq -e '.requests[0].status == "partial"'
-  echo '{"spaces":[{"id":"sp-active"}]}' >"$TASK_OPEN"
-  out="$(proof | jq '.proof.results=[{space:"sp-old",generation:"g1",status:"CLOSED",custody:"app-1: Repair login, r1"}]' | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"missing observed native closure receipt"* ]]
-  executed "herdr-app do space.close --id sp-old --confirmed true" sp-old
-  out="$(proof | jq '.proof.results=[{space:"sp-old",generation:"g1",status:"CLOSED",custody:"app-1: Repair login, r1"}]' | task receipt)" || fail "$out"
-  jq -e '.outstanding == 0 and .requests[0].receipt.open == ["sp-active"] and (.requests[0].receipt.history | contains("not global closure gates"))' <<<"$out"
+  jq -e '.metadata.external == "newer unrelated value" and .metadata.bercail_task.owner.desk == "t9"' "$TASK_DATA/app-1.json"
 }
 
 @test "initial adoption rejects conflicting original mapping and unrelated foreground or session claim" {
@@ -555,25 +444,13 @@ jq -nc --arg p "$TASK_REPO.fix" '{ok:true,agent_started:true,path:$p,branch:"fix
 cat "$XDG_STATE_HOME/bercail/handoffs.jsonl"
 EOF
   out="$(request | jq '.branch="fix"' | task dispatch)" || fail "$out"
-  jq -e '.status == "awaiting-session" and .creation.desk == "t9"' <<<"$out"
+  jq -e '.status == "started" and .creation.desk == "t9"' <<<"$out"
   jq -e '.metadata.external == "keep this concurrent annotation"' "$TASK_DATA/app-1.json"
   out="$(request | jq '.branch="fix"' | task dispatch)" || fail "$out"
   jq -e '.status == "queued" and .owner.session == "s1"' <<<"$out"
   request | jq '.branch="fix"' | task dispatch >/dev/null
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
   [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json' | wc -l)" == 1 ]]
-}
-
-@test "abandoned JSONL tail is not the original runtime's active branch" {
-  local out bytes
-  request | jq '.outcome="stage" | .authoring=""' | task dispatch >/dev/null
-  executed
-  bytes="$(sha256sum "$TASK_DATA/s1.jsonl")"
-  jq '.leaf="anchor"' "$XDG_STATE_HOME/bercail/runtime/$PID.json" >"$BATS_TEST_TMPDIR/leaf"
-  mv "$BATS_TEST_TMPDIR/leaf" "$XDG_STATE_HOME/bercail/runtime/$PID.json"
-  [[ "$(sha256sum "$TASK_DATA/s1.jsonl")" == "$bytes" ]]
-  out="$(proof | task receipt 2>&1)" && fail "$out"
-  [[ "$out" == *"no complete matching persisted work message"* ]]
 }
 
 @test "a competing exact-session process is ambiguous even without a coding role label" {
@@ -584,20 +461,6 @@ EOF
   out="$(request | task dispatch 2>&1)" && fail "$out"
   [[ "$out" == *"exact-session process claims"* ]]
   ! grep -Eq 'hc (run|send|keys|kill|rm)' "$LOG"
-}
-
-@test "terminal cleanup can reconcile its original owner's durable receipt after native closure ended Pi" {
-  local out
-  export HERDR_APP_BIN="$BATS_TEST_TMPDIR/bin/native" TASK_OPEN="$BATS_TEST_TMPDIR/open"
-  printf '#!/bin/sh\ncat "$TASK_OPEN"\n' >"$HERDR_APP_BIN"; chmod +x "$HERDR_APP_BIN"
-  echo '{"spaces":[{"id":"sp1","generation":"g1"}]}' >"$TASK_OPEN"
-  request | jq '.outcome="cleanup" | .authoring="" | .targets=[{space:"sp1",generation:"g1"}]' | task dispatch >/dev/null
-  executed
-  executed "herdr-app do space.close --id sp1 --confirmed true" sp1
-  echo '{"spaces":[]}' >"$TASK_OPEN"
-  kill "$PID"; wait "$PID" 2>/dev/null || true
-  out="$(proof | jq '.proof.results=[{space:"sp1",generation:"g1",status:"CLOSED",custody:"app-1: Repair login, r1"}]' | task receipt)" || fail "$out"
-  jq -e '.outstanding == 0 and .owner.session == "s1" and .authority == false' <<<"$out"
 }
 
 # The original desk t9 is gone. A stand-in spawn starts t10 in the same checkout
@@ -638,7 +501,7 @@ adopt() { request "${1:-r1}" | jq '.adoptReason="desk t9 exited; Simon asked to 
   [[ "$out" == *"live desk t178"* ]] || fail "an occupied checkout is not adoptable: $out"
   rm "$TASK_DATA/t178.hc"
   out="$(adopt | task dispatch)" || fail "$out"
-  jq -e '.status == "awaiting-session" and .creation.desk == "t10" and .creation.session == "s2"' <<<"$out"
+  jq -e '.status == "started" and .creation.desk == "t10" and .creation.session == "s2"' <<<"$out"
   grep -q -- '--branch fix .*--adopt-reason desk t9 exited; Simon asked to update the PR' "$LOG"
   jq -e '.metadata.bercail_task.adoptions[0] | .reason == "desk t9 exited; Simon asked to update the PR" and .request == "r1" and .branch == "fix" and .from[0].desk == "t9"' "$TASK_DATA/app-1.json"
   out="$(adopt | task dispatch)" || fail "$out"
@@ -669,16 +532,15 @@ adopt() { request "${1:-r1}" | jq '.adoptReason="desk t9 exited; Simon asked to 
   ! grep -Eq 'hc (run|send|keys|kill|rm)' "$LOG"
 }
 
-@test "an adopting desk inherits no earlier request from the gone owner" {
+@test "an adopting desk inherits no earlier follow-up from the gone owner" {
   local out
   request | task dispatch >/dev/null
   orphan
   out="$(adopt r2 | task dispatch)" || fail "$out"
-  jq -e '.status == "awaiting-session"' <<<"$out"
-  jq -e '.metadata.bercail_task.requests[0] | .status == "blocked" and (.reason | contains("adopted"))' "$TASK_DATA/app-1.json"
+  jq -e '.status == "started"' <<<"$out"
   adopt r2 | task dispatch >/dev/null
   out="$(request | task dispatch)" || fail "$out"
-  jq -e '.status == "blocked" and .retry' <<<"$out"
+  jq -e '.status == "queued" and .owner.desk == "t9" and .retry' <<<"$out" || fail "$out"
   [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups/t10" -name '*.json' | wc -l)" == 1 ]]
   ! grep -rq '"id":"r1"' "$XDG_STATE_HOME/bercail/desk-follow-ups/t10"
 }
@@ -726,4 +588,168 @@ SPAWN
   out="$(adopt r2 | task dispatch 2>&1)" && fail "$out"
   [[ "$out" == *"UNKNOWN"* ]]
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
+}
+
+@test "a retry of the creation an adoption replaced is refused, and never reaches the adopting desk" {
+  local out
+  cp "$TASK_DATA/t9.hc" "$BATS_TEST_TMPDIR/original.hc"
+  partial_launch
+  export TASK_ORIGINAL="$BATS_TEST_TMPDIR/original.hc" TASK_REPO="$REPO"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'SPAWN'
+#!/usr/bin/env bash
+printf 'spawn %s\n' "$*" >>"$LOG"
+cp "$TASK_ORIGINAL" "$TASK_DATA/t9.hc"
+jq -nc --arg p "$TASK_REPO.fix" '{ok:true,agent_started:true,path:$p,branch:"fix",space:"sp1",desk:"t9",session:"s1",issue:"app-1",target:"pr:12"}' | tee "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+SPAWN
+  # r0's answer is lost before its retry queues anything.
+  request r0 | jq '.branch="fix"' | task dispatch >/dev/null
+  orphan
+  adopt r1 | task dispatch >/dev/null
+  adopt r1 | task dispatch >/dev/null
+  out="$(request r0 | jq '.branch="fix"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"request r0 is retired"* ]] || fail "$out"
+  ! grep -rq '"id":"r0"' "$XDG_STATE_HOME/bercail/desk-follow-ups/t10" || fail "r0 went to the adopting desk"
+}
+
+# The record as v0.17 saved it, with request $1 at status $2.
+v017_record() {
+  jq --arg repo "$(realpath "$REPO")" --arg id "$1" --arg s "$2" '.metadata.bercail_task={v:1,repo:$repo,target:"pr:12",owner:null,branch:"fix",
+    requests:[{id:$id,sequence:0,payload:"hashed the v0.17 way",outcome:"publish",stage:"autopilot",message:"Amend with gt m -a and publish the new head",status:$s,next:"Retry this requestId"}]}' \
+    "$TASK_DATA/app-1.json" >"$BATS_TEST_TMPDIR/issue"
+  mv "$BATS_TEST_TMPDIR/issue" "$TASK_DATA/app-1.json"
+}
+
+@test "a v0.17 UNKNOWN creation still stops an adoption" {
+  local out
+  orphan
+  v017_record lost-spawn unknown
+  out="$(adopt r1 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"creation outcome UNKNOWN"* ]] || fail "$out"
+  ! grep -q '^spawn ' "$LOG" || fail "an UNKNOWN creation was replaced: $(cat "$LOG")"
+}
+
+@test "a v0.17 UNKNOWN creation is finished by a retry of its id, as its next says" {
+  local out
+  slow_launch
+  create lost-spawn | jq '.stage="bstack"' | task dispatch >/dev/null 2>&1 && fail "the slow spawn should time out"
+  jq '.metadata.bercail_task |= (del(.creation) | .v=1 | .requests=[{id:"lost-spawn",sequence:0,payload:"hashed the v0.17 way",outcome:"stage",stage:"bstack",message:"Amend with gt m -a and publish the new head",status:"unknown",next:"Retry this requestId"}])' \
+    "$TASK_DATA/app-1.json" >"$BATS_TEST_TMPDIR/issue"
+  mv "$BATS_TEST_TMPDIR/issue" "$TASK_DATA/app-1.json"
+  out="$(create lost-spawn | task dispatch)" || fail "$out"
+  jq -e '.retry and .status == "started" and .creation.desk == "t21"' <<<"$out" || fail "$out"
+  jq -e '.metadata.bercail_task | (has("requests") | not) and .creation.id == "lost-spawn"' "$TASK_DATA/app-1.json"
+}
+
+@test "a stray file among the desks' follow-up folders does not stop dispatch" {
+  local out
+  mkdir -p "$XDG_STATE_HOME/bercail/desk-follow-ups"
+  touch "$XDG_STATE_HOME/bercail/desk-follow-ups/.DS_Store"
+  out="$(request | task dispatch 2>&1)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t9"' <<<"$out"
+}
+
+@test "after a v0.17 adoption, the creation it blocked stays retired, also once the record is saved again" {
+  local out
+  orphan
+  # As v0.17 left it: r0 started t9 and was never queued; r1 adopted the checkout on t10.
+  jq --arg repo "$(realpath "$REPO")" --arg p "$(realpath "$REPO.fix")" '.metadata.bercail_task={v:1,repo:$repo,target:"pr:12",owner:null,branch:"fix",
+    requests:[{id:"r0",sequence:0,payload:"v0.17",outcome:"stage",stage:"autopilot",message:"Amend with gt m -a and publish the new head",status:"blocked",
+        reason:"original owner gone; its checkout was adopted by request r1, so this request did not move to the new session",creation:{desk:"t9",session:"s1",space:"sp1",path:$p}},
+      {id:"r1",sequence:1,payload:"v0.17",outcome:"stage",stage:"autopilot",message:"Adopt",status:"awaiting-session",creation:{desk:"t10",session:"s2",space:"sp1",path:$p}}],
+    adoptions:[{request:"r1",reason:"desk t9 exited",at:"2026-11-18T00:00:00Z",path:$p,branch:"fix",from:[{desk:"t9",session:"s1",space:"sp1"}]}]}' \
+    "$TASK_DATA/app-1.json" >"$BATS_TEST_TMPDIR/issue"
+  mv "$BATS_TEST_TMPDIR/issue" "$TASK_DATA/app-1.json"
+  cp "$TASK_NEW" "$TASK_DATA/t10.hc"
+  jq -c '. + {desk:"t10",session:"s2",adoptReason:"desk t9 exited"}' "$XDG_STATE_HOME/bercail/handoffs.jsonl" >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(request r0 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"request r0 is retired"* ]] || fail "$out"
+  out="$(request r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t10"' <<<"$out" || fail "$out"
+  jq -e '.metadata.bercail_task | (has("requests") | not) and .retired == ["r0"]' "$TASK_DATA/app-1.json"
+  out="$(request r0 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"request r0 is retired"* ]] || fail "after the save: $out"
+  ! grep -rq '"id":"r0"' "$XDG_STATE_HOME/bercail/desk-follow-ups/t10" || fail "r0 went to the adopting desk"
+}
+
+@test "a retry of v0.17 work matches on its message and stage, since its payload was hashed another way" {
+  local out file
+  # A v0.17 follow-up file for r1: the same hash in its name, a payload of the old kind.
+  request | task dispatch >/dev/null
+  file="$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json')"
+  jq -c '.v=1 | .request.payload="v0.17" | .request.outcome="publish"' "$file" >"$BATS_TEST_TMPDIR/f"
+  mv "$BATS_TEST_TMPDIR/f" "$file"
+  out="$(request | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .retry and .owner.desk == "t9"' <<<"$out" || fail "$out"
+  out="$(request | jq '.message="something else"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"payload changed"* ]] || fail "$out"
+  # A v0.17 creation that started: a changed message is not its retry either.
+  v017_record r5 awaiting-session
+  out="$(request r5 | jq '.message="something else"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"payload changed"* ]] || fail "$out"
+  [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json' | wc -l)" == 1 ]]
+}
+
+@test "a v0.17 creation blocked by hand before an adoption is not sent to the adopting desk" {
+  local out
+  orphan
+  # task block left its own reason on r0, so the v0.17 adoption skipped it.
+  jq --arg repo "$(realpath "$REPO")" --arg p "$(realpath "$REPO.fix")" '.metadata.bercail_task={v:1,repo:$repo,target:"pr:12",owner:null,branch:"fix",
+    requests:[{id:"r0",sequence:0,payload:"v0.17",outcome:"stage",stage:"autopilot",message:"Amend with gt m -a and publish the new head",status:"blocked",
+        reason:"do not run without the original backend",next:"await direction",creation:{desk:"t9",session:"s1",space:"sp1",path:$p}},
+      {id:"r1",sequence:1,payload:"v0.17",outcome:"stage",stage:"autopilot",message:"Adopt",status:"awaiting-session",creation:{desk:"t10",session:"s2",space:"sp1",path:$p}}],
+    adoptions:[{request:"r1",reason:"desk t9 exited",at:"2026-11-18T00:00:00Z",path:$p,branch:"fix",from:[{desk:"t9",session:"s1",space:"sp1"}]}]}' \
+    "$TASK_DATA/app-1.json" >"$BATS_TEST_TMPDIR/issue"
+  mv "$BATS_TEST_TMPDIR/issue" "$TASK_DATA/app-1.json"
+  cp "$TASK_NEW" "$TASK_DATA/t10.hc"
+  jq -c '. + {desk:"t10",session:"s2",adoptReason:"desk t9 exited"}' "$XDG_STATE_HOME/bercail/handoffs.jsonl" >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(request r0 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"request r0 is retired"* ]] || fail "$out"
+  [[ ! -d "$XDG_STATE_HOME/bercail/desk-follow-ups/t10" ]] || fail "r0 went to the adopting desk"
+}
+
+@test "a follow-up saved for its owner but not yet queued is retired by an adoption, and a plain retry queues it" {
+  local out dir="$XDG_STATE_HOME/bercail/desk-follow-ups"
+  mkdir -p "$dir"
+  touch "$dir/t9" # a file where t9's folder goes: the write fails after the save
+  out="$(request half | task dispatch 2>&1)" && fail "$out"
+  jq -e '.status == "in_progress" and .metadata.bercail_task.owner.session == "s1"' "$TASK_DATA/app-1.json"
+  rm "$dir/t9"
+  out="$(request half | jq '.message="different work, same id"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"payload changed"* ]] || fail "a changed retry: $out"
+  [[ ! -d "$dir/t9" ]] || fail "the changed retry was queued"
+  out="$(request constructor | task dispatch)" || fail "a new id is not a retry of pending work: $out"
+  jq -e '.status == "queued" and .owner.desk == "t9"' <<<"$out"
+  out="$(request half | task dispatch)" || fail "the same desk takes its retry: $out"
+  jq -e '.status == "queued" and .owner.desk == "t9"' <<<"$out"
+  # Again for another follow-up, then t9 is gone and t10 adopts its checkout.
+  mv "$dir/t9" "$BATS_TEST_TMPDIR/t9-queue"
+  touch "$dir/t9"
+  out="$(request lost | task dispatch 2>&1)" && fail "$out"
+  rm "$dir/t9"
+  mv "$BATS_TEST_TMPDIR/t9-queue" "$dir/t9"
+  orphan
+  adopt r1 | task dispatch >/dev/null
+  out="$(request lost | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"request lost is retired"* ]] || fail "$out"
+  ! grep -rq '"id":"lost"' "$dir/t10" 2>/dev/null || fail "lost went to the adopting desk"
+}
+
+@test "an issue closed while a follow-up is queued stays closed" {
+  local out
+  export TASK_CLOSE_ONCE_QUEUED=1
+  out="$(request | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t9"' <<<"$out"
+  [[ -e "$TASK_DATA/closed-once" ]] || fail "the close did not happen"
+  jq -e '.status == "closed" and (.metadata.bercail_task | has("pending") | not)' "$TASK_DATA/app-1.json" || fail "$(cat "$TASK_DATA/app-1.json")"
+  [[ "$(grep -c -- '--status in_progress' "$LOG")" == 1 ]] || fail "$(cat "$LOG")"
+}
+
+@test "a follow-up dispatched later goes after the earlier one, even when the clock went back" {
+  local clock="$BATS_TEST_TMPDIR/clock.mjs" file order
+  printf 'Date.now = () => Number(process.env.TASK_CLOCK);\n' >"$clock"
+  request earlier | TASK_CLOCK=1795114321000 NODE_OPTIONS="--import=$clock" task dispatch >/dev/null
+  request later | TASK_CLOCK=1795114320000 NODE_OPTIONS="--import=$clock" task dispatch >/dev/null
+  # The desk takes its files in name order.
+  order="$(for file in "$XDG_STATE_HOME/bercail/desk-follow-ups/t9"/*.json; do jq -r '.request.id' "$file"; done)"
+  [[ "$order" == $'earlier\nlater' ]] || fail "the desk would take: ${order//$'\n'/, }"
 }

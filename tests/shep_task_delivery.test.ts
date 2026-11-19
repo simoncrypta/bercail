@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { followUpWatch, startTicks, taskEvidence } from "../config/pi/extensions/bercail-desk.ts";
+import { followUpWatch, startTicks } from "../config/pi/extensions/bercail-desk.ts";
 import { runtimeIdentity } from "../lib/runtime.ts";
 import background from "../shep/pi/background.ts";
 
@@ -60,7 +60,7 @@ describe("original-session delegated work", () => {
     );
     ctx = {
       cwd: join(dir, "work"),
-      isIdle: () => false,
+      isIdle: () => false, // the desk is mid-run
       sessionManager: { getSessionId: () => "original", getSessionFile: () => "/saved.jsonl" },
     };
     pi = { sendMessage: vi.fn() };
@@ -71,12 +71,8 @@ describe("original-session delegated work", () => {
   });
   const read = (file: string) => JSON.parse(readFileSync(file, "utf8"));
 
-  test("busy work stays on disk; idle continues the same session using custom DATA, not user input", () => {
+  test("a busy desk gets a follow-up at its next turn, as custom DATA in the same session, once", () => {
     const watch = followUpWatch(pi, ctx);
-    watch();
-    expect(read(file).delivery).toBe("queued");
-    expect(pi.sendMessage).not.toHaveBeenCalled();
-    ctx.isIdle = () => true;
     watch();
     watch();
     expect(pi.sendMessage).toHaveBeenCalledTimes(1);
@@ -84,13 +80,38 @@ describe("original-session delegated work", () => {
     expect(message.customType).toBe("bercail-task-work");
     expect(message.details.authority).toBe(false);
     expect(message.content).toContain("not a human answer or authorization");
-    expect(options).toEqual({ triggerTurn: true, deliverAs: "followUp" });
+    // steer: after the tool calls running now, before the next model call; not
+    // followUp, which waits until the desk has finished its work.
+    expect(options).toEqual({ triggerTurn: true, deliverAs: "steer" });
     expect(read(file).delivery).toBe("submitted");
     expect(ctx.sessionManager.getSessionId()).toBe("original");
   });
 
+  test("a follow-up waits out a busy desk's detached HEAD, as in a rebase, then goes once", () => {
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: ctx.cwd, stdio: "pipe" });
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "--allow-empty", "-m", "t");
+    git("switch", "-q", "--detach", "HEAD");
+    const watch = followUpWatch(pi, ctx);
+    watch();
+    expect(read(file).delivery).toBe("queued");
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    git("switch", "-q", "fix");
+    watch();
+    expect(read(file).delivery).toBe("submitted");
+    expect(pi.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test("a session replaced on another branch makes the follow-up stale, not queued for ever", () => {
+    execFileSync("git", ["symbolic-ref", "HEAD", "refs/heads/elsewhere"], { cwd: ctx.cwd });
+    const record = join(process.env.XDG_STATE_HOME!, "bercail/desk-sessions/t9.json");
+    writeFileSync(record, JSON.stringify({ ...read(record), session: "replacement" }));
+    ctx.sessionManager.getSessionId = () => "replacement";
+    followUpWatch(pi, ctx)();
+    expect(pi.sendMessage).not.toHaveBeenCalled();
+    expect(read(file).delivery).toBe("stale");
+  });
+
   test("an uncertain send is never automatically replayed, including after restart", () => {
-    ctx.isIdle = () => true;
     pi.sendMessage.mockImplementation(() => {
       throw new Error("response lost");
     });
@@ -103,7 +124,6 @@ describe("original-session delegated work", () => {
   test.each(["session", "pid", "start_ticks", "cwd", "space"])(
     "a replacement %s cannot take the original request",
     (field) => {
-      ctx.isIdle = () => true;
       request.owner[field] = field === "pid" ? 1 : "replacement";
       writeFileSync(file, JSON.stringify(request));
       followUpWatch(pi, ctx)();
@@ -164,59 +184,5 @@ describe("original-session delegated work", () => {
         true,
       );
     expect(handlers.tool_call({ toolName: "shep_wait" })).toBeUndefined();
-  });
-
-  test("guarded execution evidence observes success without executing requested actions or minting grants", async () => {
-    const handlers: any = {};
-    const api: any = {
-      on: (name: string, fn: any) => {
-        handlers[name] = fn;
-      },
-      appendEntry: vi.fn(),
-      exec: vi.fn(async (_cmd: string, args: string[]) => ({
-        code: 0,
-        stdout: args.includes("HEAD") ? "head" : "tree",
-      })),
-    };
-    const context: any = {
-      cwd: "/work",
-      sessionManager: {
-        getSessionId: () => "original",
-        getBranch: () => [
-          {
-            type: "custom_message",
-            customType: "bercail-task-work",
-            details: { repo: "/repo", issue: "app-1", requestId: "r1", authority: false },
-          },
-        ],
-      },
-    };
-    taskEvidence(api);
-    await handlers.tool_execution_start({ toolName: "bash", toolCallId: "c1", args: { command: "gt m -a" } }, context);
-    expect(api.appendEntry).not.toHaveBeenCalled();
-    await handlers.tool_execution_end(
-      { toolCallId: "c1", isError: false, result: { structuredContent: { exit_code: 0 } } },
-      context,
-    );
-    expect(api.appendEntry).toHaveBeenCalledWith(
-      "bercail-task-effect",
-      expect.objectContaining({
-        command: "gt m -a",
-        requestId: "r1",
-        authority: false,
-        session: "original",
-        before: { head: "head", tree: "tree" },
-        after: { head: "head", tree: "tree" },
-      }),
-    );
-    expect(
-      api.exec.mock.calls.every(([command, args]: [string, string[]]) => command === "env" && args.includes("git")),
-    ).toBe(true);
-    await handlers.tool_execution_start({ toolName: "bash", toolCallId: "c2", args: { command: "git push" } }, context);
-    await handlers.tool_execution_end(
-      { toolCallId: "c2", isError: true, result: { structuredContent: { exit_code: 1 } } },
-      context,
-    );
-    expect(api.appendEntry).toHaveBeenCalledTimes(1);
   });
 });

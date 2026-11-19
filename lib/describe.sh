@@ -307,6 +307,9 @@ _desc_base_moved() {
 desc_state() {
   local root="$1" file evidence title style tree current tpl_json template meta_tpl tpl_text="" body ids line change base path cmd full
   local -a fails=() warns=()
+  # A second argument skips the beads-id rule: Shep's review queue reads no
+  # full beads list. bercail describe never passes one.
+  local skip_ids="${2:-}"
   file="$root/$DESC_FILE"
   evidence="$root/$DESC_EVIDENCE"
   current="$(_desc_tree "$root")" || return 1
@@ -384,7 +387,7 @@ desc_state() {
   if _desc_conventional "$root" && [[ -n "$title" ]] && ! [[ "$title" =~ ^[a-z]+(\([^\)]+\))?!?:\ .+ ]]; then
     fails+=("this repo uses Conventional Commits (commitlint): the title must read type(scope): subject")
   fi
-  ids="$(_desc_beads_ids "$root")"
+  if [[ -n "$skip_ids" ]]; then ids='[]'; else ids="$(_desc_beads_ids "$root")"; fi
   jq -nc --arg file "$file" --arg title "$title" --arg style "$style" --arg template "$template" \
     --arg tree "$tree" --arg cur "$current" --argjson change "$change" \
     --argjson body "$(_desc_body_problems "$body" "$title" "$tpl_text" "$ids")" \

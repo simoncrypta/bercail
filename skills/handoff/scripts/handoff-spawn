@@ -716,7 +716,7 @@ handoff_spawn_main() {
     fi
   fi
   [[ -z "$adopt_reason" ]] \
-    || intro="$(printf '%s\nAdopted: %s. The previous desk is gone; this desk starts a new session in its checkout and inherits none of that session, its requests, or its authority.' "$intro" "${adopt_reason%.}")"
+    || intro="$(printf '%s\nAdopted: %s. The previous desk is gone; this desk starts a new session in its checkout and inherits none of that session, its follow-ups, or its authority.' "$intro" "${adopt_reason%.}")"
   handoff_issue_comment "$sibling" "$issue" "$intro"
 
   prompt="$(handoff_issue_prompt "$issue" "$issue_title")"

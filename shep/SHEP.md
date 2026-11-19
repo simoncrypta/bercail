@@ -153,13 +153,15 @@ The board line says when the backend does not answer; tell the person once.
    Board/queue snapshots are bounded information, not dispatch gates: report
    an over-budget or UNKNOWN snapshot without holding accepted work for it.
 3. Use `bercail shep task dispatch` with JSON on stdin: `repo`, `issue`,
-   `target`, a stable `requestId`, `outcome` (`stage`, `local`, `publish`, or
-   `cleanup`), and `message`. Add `branch` only for a first visible desk.
-   Reuse the request ID after an uncertain response; do not mint a new launch.
-   That retry also finishes an UNKNOWN creation whose spawn stopped before its
-   desk (a spawn timeout); when it cannot, its `next` says why.
-   A follow-up reopens the issue and queues DATA in its original session,
-   without typing, interrupting, replacing it or changing its runtime role.
+   `target`, a stable `requestId`, and `message`. Add `branch` only for a
+   first visible desk. Reuse the request ID after an uncertain response; do
+   not mint a new launch. That retry also finishes an UNKNOWN creation whose
+   spawn stopped before its desk (a spawn timeout); when it cannot, its
+   `next` says why. A follow-up reopens the issue and queues DATA in its
+   original session, without typing, replacing it or changing its runtime
+   role. A busy desk sees it at its next turn, after the tool calls running
+   then. An idle desk starts a turn on it. Put a change of spec in the issue
+   too, so the desk finds it when it reads the issue again.
 4. Report `<id>: <title>`, the owner/space or the concrete missing, stale,
    ambiguous or partial result. Do not create another preparation checkout.
    Deliberate parallel exploration uses a separate issue and `forkReason`;
@@ -168,9 +170,9 @@ The board line says when the backend does not answer; tell the person once.
    checkout still exists, tell the person and ask. Only on their yes,
    dispatch again with `adoptReason`: why, and that they asked. It starts a
    visible desk with a new session in that checkout and records the adoption
-   on the issue. Earlier requests stay blocked with the gone owner; ask for
-   them again as new requests. A live desk on that checkout stops it: name it
-   to the person, never close it yourself.
+   on the issue. Follow-ups queued to the gone desk stay with it; dispatch
+   them again with new request IDs. A live desk on that checkout stops it:
+   name it to the person, never close it yourself.
 6. When another issue already owns the target and the person says this issue
    replaces it, run `bd supersede <that issue> --with <this issue>` on their
    yes, then dispatch again. A live desk of the superseded issue still stops it.
@@ -179,22 +181,16 @@ Every coding job and follow-up has a visible owner. No headless/generic Pi
 fallback. On a follow-up, `stage: "autopilot"` expresses workflow intent, not a
 privileged runtime role or shipping grant; a live lead remains a lead. On a
 first desk for a PR's own branch (`branch` is its head), it starts an autopilot
-desk at the PR's fetched head, which may commit and push that branch. Initial work is
-stage-only unless a later outcome was requested. Preserve explicit authoring
-intent (for example `authoring: "gt m -a"`); a native/backend limitation is a
-`task block` with its precise reason and next action, never an append-only/raw
-Git substitution or a fresh preparation branch.
+desk at the PR's fetched head, which may commit and push that branch. Say in
+the message what the desk should do and how far (stage, commit, publish). A
+backend limit the desk hits goes in its report, never an append-only/raw Git
+substitution or a fresh preparation branch.
 
-`task status` reads the issue's durable intent. A done turn, closed issue, old
-report or old green PR cannot complete a new request. `task receipt` checks
-current candidate/validation and the requested result; publication needs the
-new remote head and its CI. Cleanup needs a finite target subset, a verified
-execution owner and per-target custody/closure receipts. KEEP/protected and
-partial/UNKNOWN are honest results. An inventory alone is not execution. OPEN
-is distinct from RECENT/history; neither a future-delivery queue nor completed
-Pi processes is a global veto on normal native closure. The command records
-results; it does not authorize or perform native authoring or destructive
-cleanup. See docs/shep.md for its JSON contract and supported boundaries.
+Whether the work is done is what `bercail shep brief` shows: the desk's
+state, its latest report, and `describe check` on its staged change. A done
+turn, closed issue, old report or old green PR does not finish a new ask:
+read the report against the follow-up you sent. See docs/shep.md for the
+JSON contract.
 
 ## Never block
 
