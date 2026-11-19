@@ -7,7 +7,7 @@ The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), b
 | Stage | Binary | Headless argv (the last word is the prompt) |
 |-------|--------|-----------------------------------------------|
 | `bstack` | pi | `pi -p --mode json --session-id <uuid> …` on the lead profile (asks are rejected: no commit, push, or merge) |
-| `autopilot` | pi | the same argv with `BERCAIL_ROLE=autopilot` (commits and pushes a PR's fixes; headless only) |
+| `autopilot` | pi | the same argv with `BERCAIL_ROLE=autopilot` (commits and pushes a PR's fixes); with `--branch`, a desk on the PR's existing branch |
 
 ```bash
 bd create "Fix the login timeout" --description "..."     # Shep writes the issue
@@ -21,11 +21,16 @@ bd create "Fix the login timeout" --description "..."     # Shep writes the issu
 # sibling worktree with its own space; the desk runs Pi's lead
 ~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME --stage bstack --issue ID [--dirty|--clean] [--space ID] [--base BRANCH]
 
+# a desk on a branch origin already has (a PR's head), checked out at the fetched head
+~/.agents/skills/handoff/scripts/handoff-spawn --branch NAME --existing-branch --stage bstack|autopilot --target pr:N --issue ID
+
 # either, on another Pi model than the lead's
 ~/.agents/skills/handoff/scripts/handoff-spawn ... --model claude-bridge/claude-fable-5-2:high
 ```
 
-`--base BRANCH` cuts the desk branch from BRANCH instead of the default branch, so a dependent issue's desk stacks on its parent's branch. The [git backend](#git-backend) registers that parent with `gh stack`, `gt track`, or `origin stack track`. It works only with `--branch`, and stage `autopilot` can't take `--branch`: give it `--worktree` on the PR's checkout. `--branch` needs bstack's Pi lead profile, which `bercail update` writes.
+`--base BRANCH` cuts the desk branch from BRANCH instead of the default branch, so a dependent issue's desk stacks on its parent's branch. The [git backend](#git-backend) registers that parent with `gh stack`, `gt track`, or `origin stack track`. It works only with `--branch`. `--branch` needs bstack's Pi lead profile, which `bercail update` writes.
+
+**A PR's branch.** `--existing-branch` starts the desk on a branch origin already has, such as an open PR's head: it fetches `origin/NAME` and runs `wt switch NAME`, never `--create`. A local branch that is behind origin's is fast-forwarded first, so the desk never starts on a stale local ref. A local branch with commits origin lacks, or one checked out in another worktree, is refused, and nothing is created. It takes no `--base` and does no stack tracking: the branch already has its place. Stage `autopilot` with `--branch` needs `--target pr:N` and `--existing-branch`: it starts an autopilot desk, `bercail-desk-agent --role autopilot`, which runs Pi's lead with `BERCAIL_ROLE=autopilot` and bstack's autopilot prompt, so the guard lets it commit and push that PR's branch. A `bercail desk restore` brings it back as a plain lead. Without `--branch`, autopilot runs headless on `--worktree`, the PR's checkout.
 
 **Model.** `--model PROVIDER/MODEL[:thinking]` runs one agent, desk or headless, on that Pi model. Only the lead's `--model` changes; its extensions, guard, prompts, skills, and instructions stay. A desk gets it as `bercail-desk-agent --model`, which swaps the model in the lead's argv. A `:thinking` suffix (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) is kept as given; without one, the lead's level is added (`claude-bridge/claude-fable-5-2` becomes `claude-bridge/claude-fable-5-2:high` on a `:high` lead). Before anything starts, bercail runs `pi --offline --list-models` with the lead's extensions, since one of them can add the provider, and refuses a model Pi does not list, before any worktree, comment, or result file. A desk on another model is labelled `bercail.model=<model>`, and its spawn JSON and `handoffs.jsonl` line carry `model`, so `bercail shep brief` and `bercail shep board` show it. Its desk record keeps the swapped `--model`, so [`bercail desk restore`](config.md#desks-after-a-reboot) brings it back on the same model. To move a live desk to another model later, use [`bercail desk model`](config.md#a-desks-model). The builder, judge, council, and autopilot templates it starts keep their own models (`bercail bstack status`).
 
@@ -50,10 +55,15 @@ logical target; deliberate parallel exploration uses a separate issue and
 [`adoptReason`](shep.md#task-ownership-and-requested-outcomes) once it has found
 the original desk gone, skips step 2 and the dirty copy and stack tracking. It starts the desk,
 with a new session, in the existing worktree of `--branch`, and puts TEXT in
-the issue comment and the `handoffs.jsonl` line. A repository/common-Git lock serializes reservations. The pinned
+the issue comment and the `handoffs.jsonl` line. `--reuse-worktree`, also from
+dispatch only, finishes a creation that stopped before its desk: it starts the
+desk in the existing clean worktree of `--branch`, with no dirty copy, and no
+stack tracking on a PR's branch. `--released ID` (dispatch only,
+repeatable) names an issue closed with `bd supersede ID --with` this one, so its
+`handoffs.jsonl` lines no longer hold the target. A repository/common-Git lock serializes reservations. The pinned
 startup session is included in the result. `ok:true` requires a started agent,
 space and desk. Partial creation reports nonzero with available facts; inspect
-those facts, never retry into a replacement. Background wait/admin workers
+those facts, never retry into a replacement by hand. Background wait/admin workers
 cannot dispatch coding; Shep cannot bypass its original-owner dispatcher.
 
 ## What a `--branch` spawn does

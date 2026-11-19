@@ -156,6 +156,8 @@ The board line says when the backend does not answer; tell the person once.
    `target`, a stable `requestId`, `outcome` (`stage`, `local`, `publish`, or
    `cleanup`), and `message`. Add `branch` only for a first visible desk.
    Reuse the request ID after an uncertain response; do not mint a new launch.
+   That retry also finishes an UNKNOWN creation whose spawn stopped before its
+   desk (a spawn timeout); when it cannot, its `next` says why.
    A follow-up reopens the issue and queues DATA in its original session,
    without typing, interrupting, replacing it or changing its runtime role.
 4. Report `<id>: <title>`, the owner/space or the concrete missing, stale,
@@ -169,10 +171,15 @@ The board line says when the backend does not answer; tell the person once.
    on the issue. Earlier requests stay blocked with the gone owner; ask for
    them again as new requests. A live desk on that checkout stops it: name it
    to the person, never close it yourself.
+6. When another issue already owns the target and the person says this issue
+   replaces it, run `bd supersede <that issue> --with <this issue>` on their
+   yes, then dispatch again. A live desk of the superseded issue still stops it.
 
 Every coding job and follow-up has a visible owner. No headless/generic Pi
-fallback. `stage: "autopilot"` expresses workflow intent, not a privileged
-runtime role or shipping grant; a live lead remains a lead. Initial work is
+fallback. On a follow-up, `stage: "autopilot"` expresses workflow intent, not a
+privileged runtime role or shipping grant; a live lead remains a lead. On a
+first desk for a PR's own branch (`branch` is its head), it starts an autopilot
+desk at the PR's fetched head, which may commit and push that branch. Initial work is
 stage-only unless a later outcome was requested. Preserve explicit authoring
 intent (for example `authoring: "gt m -a"`); a native/backend limitation is a
 `task block` with its precise reason and next action, never an append-only/raw

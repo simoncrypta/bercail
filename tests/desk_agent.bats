@@ -159,6 +159,26 @@ arrange_lead() {
     "the resumed desk runs Pi on the model it had"
 }
 
+@test "--role autopilot runs the lead as bstack's autopilot, and its record restores a plain lead" {
+  local prompt got
+  arrange_lead
+  arrange_record
+  prompt="$HOME/.local/share/bercail/pi/agents/bstack-autopilot.md"
+  cat >"$BATS_TEST_TMPDIR/bin/pi" <<'AGENT'
+#!/usr/bin/env bash
+printf 'pi'
+for a in "$@"; do printf ' [%s]' "$a"; done
+printf ' role=%s\n' "${BERCAIL_ROLE:-none}"
+AGENT
+  expect "$(desk --prompt 'Your job is beads issue bercail-ap1. Run it.' --role autopilot)" \
+    "pi [--append-system-prompt] [$prompt] [--model] [claude-bridge/opus:high] [-e] [/guard.ts] [--append-system-prompt] [/a b/instructions.md] [--skill] [/s] [Your job is beads issue bercail-ap1. Run it.] role=autopilot" \
+    "the autopilot desk gets its role and prompt"
+  record '.args' | jq -e 'index("--append-system-prompt") as $i | .[$i + 1] == "/a b/instructions.md" and (any(.[]; contains("bstack-autopilot")) | not)' >/dev/null \
+    || fail "a restore must not replay the autopilot prompt without its role: $(record .args)"
+  got="$(desk --role lead 2>&1)" && fail "only autopilot is a desk role: $got"
+  [[ "$got" == *"--role takes autopilot"* ]] || fail "$got"
+}
+
 @test "a given command runs as is; a given pi gets the desk extension and no Anthropic env" {
   local EXT
   EXT="$HOME/.local/share/bercail/pi-extensions/bercail-desk.ts"

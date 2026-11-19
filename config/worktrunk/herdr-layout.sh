@@ -228,6 +228,7 @@ _wt_herdr_start_desk() {
   fi
   [[ -z "${WT_HERDR_SESSION_ID:-}" ]] || argv=(env "WT_HERDR_SESSION_ID=$WT_HERDR_SESSION_ID" "${argv[@]}")
   [[ -z "$prompt" ]] || argv+=(--prompt "$prompt")
+  [[ -z "${WT_HERDR_ROLE:-}" ]] || argv+=(--role "$WT_HERDR_ROLE")
   # Handoff names the issue and any model on the desk. A default start clears those vars.
   local -a labels=()
   if [[ -n "${WT_HERDR_ISSUE:-}" ]]; then
@@ -313,10 +314,10 @@ _wt_herdr_desk_locked() {
 }
 
 # Clear session of the desk agent (d / dev / apply). Ignores any
-# inherited handoff prompt, issue labels, or model.
+# inherited handoff prompt, issue labels, model, or role.
 wt_herdr_start_default_agent() {
   _wt_herdr_reachable || { echo "Neither the Herdr app nor hc answers" >&2; return 1; }
-  WT_HERDR_ISSUE='' WT_HERDR_ISSUE_TITLE='' WT_HERDR_MODEL='' WT_HERDR_SESSION_ID='' _wt_herdr_locked "$2" _wt_herdr_desk_locked "$1" "$2"
+  WT_HERDR_ISSUE='' WT_HERDR_ISSUE_TITLE='' WT_HERDR_MODEL='' WT_HERDR_SESSION_ID='' WT_HERDR_ROLE='' _wt_herdr_locked "$2" _wt_herdr_desk_locked "$1" "$2"
 }
 
 # Orchestrator / handoff-spawn: create only, never replace a desk agent, with

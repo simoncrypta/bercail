@@ -147,7 +147,8 @@ export function processTicks(pid: number): string {
   const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
   return stat.slice(stat.lastIndexOf(")") + 2).split(/\s+/)[19]!;
 }
-function live(repo: string): any[] {
+// Every live terminal in this repository's checkouts, as hc get prints it.
+function terminalsIn(repo: string): any[] {
   const snapshot = JSON.parse(run(bin("hc"), ["ls", "--json"], repo));
   if (!Array.isArray(snapshot.terminals)) throw new Error("hc returned no terminal snapshot; owner UNKNOWN");
   // hc ls is a summary with no labels. Read candidates from this repository,
@@ -162,9 +163,47 @@ function live(repo: string): any[] {
       }
     })
     .map((t: any) => JSON.parse(run(bin("hc"), ["get", t.address, "--json"], repo)))
-    .filter(
-      (t: any) => t.state === "live" && t.labels?.["bercail.role"] === "agent" && t.labels?.["bercail.shep"] !== "bg",
-    );
+    .filter((t: any) => t.state === "live");
+}
+function live(repo: string): any[] {
+  return terminalsIn(repo).filter(
+    (t: any) => t.labels?.["bercail.role"] === "agent" && t.labels?.["bercail.shep"] !== "bg",
+  );
+}
+// The checkout of branch, as git lists it (its folder may be gone), or null.
+function worktreeOf(repo: string, branch: string): string | null {
+  let path: string | null = null;
+  for (const line of git(repo, "worktree", "list", "--porcelain").split("\n")) {
+    if (line.startsWith("worktree ")) path = line.slice("worktree ".length);
+    else if (line === `branch refs/heads/${branch}` && path) return existsSync(path) ? realpathSync(path) : path;
+  }
+  return null;
+}
+// Issues closed with `bd supersede <it> --with <id>`: each hands its target to id.
+function supersededBy(all: any[], id: string): Set<string> {
+  return new Set(
+    all
+      .filter(
+        (i: any) =>
+          i.id !== id &&
+          i.status === "closed" &&
+          i.dependencies?.some((d: any) => d.type === "supersedes" && d.depends_on_id === id),
+      )
+      .map((i: any) => i.id),
+  );
+}
+function allIssues(repo: string): any[] {
+  const all = bd(repo, "list", "--all", "--json", "--limit", "0");
+  if (!Array.isArray(all)) throw new Error("bd ownership lookup unavailable; no launch occurred");
+  return all;
+}
+function prFacts(
+  repo: string,
+  target: string,
+): { headRefName: string; headRefOid: string; isCrossRepository: boolean } {
+  return JSON.parse(
+    run(bin("gh"), ["pr", "view", target.slice(3), "--json", "headRefName,headRefOid,isCrossRepository"], repo),
+  );
 }
 function verify(repo: string, terminal: any, id: string, saved?: Owner | null): Owner {
   const address = terminal.address;
@@ -283,9 +322,7 @@ function adoptable(repo: string, id: string, target: string, task: Task | undefi
       `checkout ${path} has live desk ${occupant.address}; adoption never replaces a live desk: close it, or continue its own task`,
     );
   if (target.startsWith("pr:")) {
-    const pr = JSON.parse(
-      run(bin("gh"), ["pr", "view", target.slice(3), "--json", "headRefName,isCrossRepository"], repo),
-    );
+    const pr = prFacts(repo, target);
     if (pr.isCrossRepository || pr.headRefName !== branch)
       throw new Error(`${target} is not bound to the adopted branch ${branch}; no adoption`);
   }
@@ -412,6 +449,122 @@ function effectsFor(owner: Owner, repo: string, id: string, request: Request): a
     );
 }
 
+// What a creation whose spawn ended without a desk left: no handoffs.jsonl line
+// for the issue (the spawn writes one when it finishes), no desk for it, and at
+// most the branch's clean worktree, where only idle shells run. Returns that
+// worktree, or null when there is none; throws why the outcome stays UNKNOWN.
+function leftover(repo: string, id: string, branch: string, history: any[], prHead: string): string | null {
+  if (history.some((r) => r.issue === id))
+    throw new Error("handoffs.jsonl has a line for this issue, so the spawn finished; inspect what it says");
+  const terminals = terminalsIn(repo);
+  const desk = terminals.find((t) => t.labels?.["bercail.issue"] === id);
+  if (desk) throw new Error(`terminal ${desk.address} is live for ${id}; inspect it`);
+  const path = worktreeOf(repo, branch);
+  if (!path) return null;
+  if (path === repo) throw new Error(`${branch} is checked out in the main checkout; inspect it`);
+  if (!existsSync(path)) throw new Error(`the worktree of ${branch}, ${path}, is gone; run git worktree prune`);
+  if (git(path, "status", "--porcelain", "--untracked-files=all"))
+    throw new Error(`${path} has changes; inspect them before a desk starts there`);
+  const head = git(path, "rev-parse", "HEAD");
+  if (prHead && head !== prHead)
+    throw new Error(`${path} is at ${head}, not the PR head ${prHead}; remove it (wt remove ${branch}) and retry`);
+  const busy = terminals.find(
+    (t) =>
+      (realpathSync(t.cwd) === path || realpathSync(t.cwd).startsWith(`${path}/`)) &&
+      (t.labels?.["bercail.role"] || !/^(ba|z|fi|da|k)?sh$/.test(t.foreground?.name || "")),
+  );
+  if (busy) throw new Error(`terminal ${busy.address} in ${path} is not an idle shell; inspect it`);
+  return path;
+}
+
+// Seconds handoff-spawn may run: [shep] spawn_timeout, which bercail passes in.
+// A large repo's worktree and its hooks can take minutes.
+function spawnTimeout(): number {
+  const raw = process.env.BERCAIL_SPAWN_TIMEOUT || "600";
+  if (!/^[1-9][0-9]*$/.test(raw))
+    throw new Error(`[shep] spawn_timeout must be a whole number of seconds, not ${raw}; no launch occurred`);
+  return Number(raw);
+}
+
+type Spawn = {
+  existing: boolean;
+  reuse: boolean;
+  released: Set<string>;
+  adoption: ReturnType<typeof adoptable> | null;
+  forkReason?: string;
+  adoptReason?: string;
+};
+// Start the visible desk for request. timeout runs the spawn in its own process
+// group and kills the whole group when time runs out, so nothing it started is
+// still on its way to a desk when the request turns UNKNOWN.
+function create(repo: string, value: any, task: Task, request: Request, opts: Spawn): any {
+  const spawn =
+    process.env.BERCAIL_HANDOFF_SPAWN || join(process.env.HOME!, ".agents/skills/handoff/scripts/handoff-spawn");
+  const secs = spawnTimeout();
+  try {
+    let out: string;
+    try {
+      out = run(
+        "timeout",
+        [
+          "--kill-after=10",
+          String(secs),
+          "env",
+          "BERCAIL_TASK_RESERVED=1",
+          spawn,
+          "--branch",
+          task.branch,
+          "--stage",
+          request.stage,
+          "--issue",
+          value.id,
+          "--target",
+          task.target,
+          "--clean",
+          ...(opts.forkReason ? ["--fork-reason", opts.forkReason] : []),
+          ...(opts.adoption ? ["--adopt-reason", opts.adoptReason!] : []),
+          ...(opts.reuse ? ["--reuse-worktree"] : opts.existing ? ["--existing-branch"] : []),
+          ...[...opts.released].flatMap((id) => ["--released", id]),
+        ],
+        repo,
+        (secs + 30) * 1000,
+      );
+    } catch (error: any) {
+      if (error?.status === 124 || error?.status === 137)
+        throw new Error(
+          `handoff-spawn did not finish in ${secs}s ([shep] spawn_timeout) and was stopped; retry this requestId to finish a partial creation`,
+        );
+      throw error;
+    }
+    const result = JSON.parse(out);
+    if (!result.ok || !result.agent_started || !result.path || !result.space || !result.desk || !result.session)
+      throw new Error(`partial visible creation: ${JSON.stringify(result)}`);
+    const t = JSON.parse(run(bin("hc"), ["get", result.desk, "--json"], repo));
+    if (
+      t.state !== "live" ||
+      t.labels?.["bercail.space"] !== result.space ||
+      realpathSync(t.cwd) !== realpathSync(result.path) ||
+      (opts.adoption && realpathSync(result.path) !== opts.adoption.path)
+    )
+      throw new Error(`visible tuple unconfirmed: ${JSON.stringify(result)}`);
+    request.status = "awaiting-session";
+    request.next = `Created ${result.path}, space ${result.space}, desk ${result.desk}; inspect startup then dispatch the next request in that original session`;
+    delete request.reason;
+    Object.assign(request, { creation: result });
+    // Startup may still be loading. Do not invent a session or call restore.
+    task.branch = result.branch;
+    save(repo, value, task);
+    return { status: request.status, creation: result, authority: false };
+  } catch (error) {
+    request.status = "unknown";
+    request.reason = String(error);
+    request.next =
+      "Retry this requestId: it finishes a creation that left no desk and no handoffs.jsonl line, else says what to inspect";
+    save(repo, value, task);
+    throw error;
+  }
+}
+
 export function taskCommand(op: string, input: any): any {
   if (!input || typeof input !== "object" || !input.repo || !/^[a-z0-9][a-z0-9._-]*$/i.test(input.issue || ""))
     throw new Error("pass explicit repo and issue as JSON on stdin");
@@ -482,19 +635,32 @@ export function taskCommand(op: string, input: any): any {
           throw new Error(
             "issue already owns another logical target; use a separate issue with an explicit forkReason",
           );
-        const pr = JSON.parse(
-          run(bin("gh"), ["pr", "view", target.slice(3), "--json", "headRefName,isCrossRepository"], repo),
-        );
+        const pr = prFacts(repo, target);
         if (pr.isCrossRepository || pr.headRefName !== task.owner.branch)
           throw new Error("new PR is not bound to the original owner's branch; no target or session transfer");
         task.aliases = [...(task.aliases || []), task.target];
         task.target = target;
       }
-      const history = records(repo);
-      if (target.startsWith("pr:") && history.some((r) => (!r.target || r.target.startsWith("task:")) && r.branch)) {
-        const pr = JSON.parse(
-          run(bin("gh"), ["pr", "view", target.slice(3), "--json", "headRefName,isCrossRepository"], repo),
+      const all = allIssues(repo);
+      const released = supersededBy(all, value.id);
+      const recorded = records(repo);
+      // A superseded issue gives up its target once none of its desks is live.
+      if (released.size) {
+        const desks = new Set(
+          [
+            ...recorded.filter((r) => released.has(r.issue)).map((r) => r.desk),
+            ...all.filter((i: any) => released.has(i.id)).map((i: any) => i.metadata?.bercail_task?.owner?.desk),
+          ].filter(Boolean),
         );
+        const still = live(repo).find((t) => released.has(t.labels?.["bercail.issue"]) || desks.has(t.address));
+        if (still)
+          throw new Error(
+            `superseded issue ${still.labels?.["bercail.issue"] || [...released].join(", ")} still has live desk ${still.address}; close it before its target moves`,
+          );
+      }
+      const history = recorded.filter((r) => !released.has(r.issue));
+      if (target.startsWith("pr:") && history.some((r) => (!r.target || r.target.startsWith("task:")) && r.branch)) {
+        const pr = prFacts(repo, target);
         if (!pr.headRefName || pr.isCrossRepository)
           throw new Error("legacy PR ownership UNKNOWN; cannot infer absence or start a new desk");
         for (const r of history)
@@ -518,22 +684,57 @@ export function taskCommand(op: string, input: any): any {
           }),
         )
         .digest("hex");
-      const all = bd(repo, "list", "--all", "--json", "--limit", "0");
-      if (!Array.isArray(all)) throw new Error("bd ownership lookup unavailable; no launch occurred");
       const aliases = all.filter(
         (i: any) =>
           i.id !== value.id &&
+          !released.has(i.id) &&
           i.metadata?.bercail_task?.repo === repo &&
           (i.metadata.bercail_task.target === target || i.metadata.bercail_task.aliases?.includes(target)),
       );
       const other = history.filter((r) => r.issue !== value.id && r.target === target);
       if ((aliases.length || other.length) && !input.forkReason)
         throw new Error(
-          `logical target already owned by ${aliases[0]?.id || other[0]?.issue}; continue that issue, or use an explicit forkReason on a separate exploration issue`,
+          `logical target already owned by ${aliases[0]?.id || other[0]?.issue}; continue that issue, close it with bd supersede ${aliases[0]?.id || other[0]?.issue} --with ${value.id}, or use an explicit forkReason on a separate exploration issue`,
         );
       const prior = task?.requests.find((r) => r.id === input.requestId);
       if (prior) {
         if (prior.payload !== payload) throw new Error("requestId payload changed; this is not a retry");
+        // The spawn of an UNKNOWN creation has ended. When it left no desk and
+        // no handoffs line, finish it in its clean worktree, or start it again.
+        if (
+          prior.status === "unknown" &&
+          !task!.owner &&
+          prior === task!.requests.at(-1) &&
+          !task!.adoptions?.some((a) => a.request === prior.id)
+        ) {
+          const pr = target.startsWith("pr:") ? prFacts(repo, target) : null;
+          const existing = !!pr && !pr.isCrossRepository && pr.headRefName === task!.branch;
+          let path: string | null;
+          try {
+            // An older dispatch saved autopilot requests it then started as bstack, on any branch.
+            if (prior.stage === "autopilot" && !existing)
+              throw new Error(
+                `stage autopilot starts a desk only on ${target}'s own branch, and ${task!.branch} is not it`,
+              );
+            path = leftover(repo, value.id, task!.branch, history, existing ? pr!.headRefOid : "");
+          } catch (error) {
+            const why = (error as Error).message;
+            return { ...prior, owner: null, authority: false, retry: true, next: `Not finished: ${why}` };
+          }
+          prior.status = "creating";
+          prior.next = path
+            ? `Finishing the partial creation in ${path}`
+            : "Starting the creation again: the last one left no worktree";
+          save(repo, value, task!);
+          const done = create(repo, value, task!, prior, {
+            existing,
+            reuse: !!path,
+            released,
+            adoption: null,
+            forkReason: task!.forkReason,
+          });
+          return { ...done, retry: true };
+        }
         // Repair only a missing queue file after a durable acceptance, never a
         // claimed/submitted send or a launch with an uncertain native result.
         if (prior.status === "awaiting-session" && !task!.owner) {
@@ -584,7 +785,9 @@ export function taskCommand(op: string, input: any): any {
           "branch differs from original task; continue the original checkout or fork to a separate issue with a reason",
         );
       if (task && !owner && (!adopting || task.requests.some((r) => r.status === "creating" || r.status === "unknown")))
-        throw new Error("creation outcome UNKNOWN; inspect partial worktree/space facts, do not retry launch");
+        throw new Error(
+          "creation outcome UNKNOWN; retry its own requestId to finish a partial creation, or inspect the worktree/space facts; do not launch another",
+        );
       const adoption = adopting ? adoptable(repo, value.id, target, task, history, input) : null;
       const request: Request = {
         id: input.requestId,
@@ -613,6 +816,16 @@ export function taskCommand(op: string, input: any): any {
         ...(input.forkReason ? { forkReason: String(input.forkReason) } : {}),
       };
       if (!owner && !task.branch) throw new Error("no existing owner; pass branch explicitly for a new visible desk");
+      // A new desk on a PR's own branch starts at its fetched head; the branch is never cut again.
+      let existing = false;
+      if (!owner && !adoption && target.startsWith("pr:")) {
+        const pr = prFacts(repo, target);
+        existing = !pr.isCrossRepository && pr.headRefName === task.branch;
+      }
+      if (!owner && request.stage === "autopilot" && !(adoption ? target.startsWith("pr:") : existing))
+        throw new Error(
+          "stage autopilot starts a desk only on an open PR's own branch: target pr:N, with branch set to that PR's head branch",
+        );
       const checkout = owner?.cwd || adoption?.path || repo;
       Object.assign(request, {
         candidate: { head: git(checkout, "rev-parse", "HEAD"), tree: git(checkout, "write-tree") },
@@ -686,56 +899,14 @@ export function taskCommand(op: string, input: any): any {
         const path = queue(repo, value.id, owner, request);
         return { status: "queued", owner, path, authority: false };
       }
-      const spawn =
-        process.env.BERCAIL_HANDOFF_SPAWN || join(process.env.HOME!, ".agents/skills/handoff/scripts/handoff-spawn");
-      try {
-        const result = JSON.parse(
-          run(
-            "env",
-            [
-              "BERCAIL_TASK_RESERVED=1",
-              spawn,
-              "--branch",
-              task.branch,
-              "--stage",
-              "bstack",
-              "--issue",
-              value.id,
-              "--target",
-              target,
-              "--clean",
-              ...(input.forkReason ? ["--fork-reason", String(input.forkReason)] : []),
-              ...(adoption ? ["--adopt-reason", input.adoptReason.trim()] : []),
-            ],
-            repo,
-            30000,
-          ),
-        );
-        if (!result.ok || !result.agent_started || !result.path || !result.space || !result.desk || !result.session)
-          throw new Error(`partial visible creation: ${JSON.stringify(result)}`);
-        const t = JSON.parse(run(bin("hc"), ["get", result.desk, "--json"], repo));
-        if (
-          t.state !== "live" ||
-          t.labels?.["bercail.space"] !== result.space ||
-          realpathSync(t.cwd) !== realpathSync(result.path) ||
-          (adoption && realpathSync(result.path) !== adoption.path)
-        )
-          throw new Error(`visible tuple unconfirmed: ${JSON.stringify(result)}`);
-        request.status = "awaiting-session";
-        request.next = `Created ${result.path}, space ${result.space}, desk ${result.desk}; inspect startup then dispatch the next request in that original session`;
-        Object.assign(request, { creation: result });
-        // Startup may still be loading. Do not invent a session or call restore.
-        task.branch = result.branch;
-        save(repo, value, task);
-        return { status: request.status, creation: result, authority: false };
-      } catch (error) {
-        request.status = "unknown";
-        request.reason = String(error);
-        request.next =
-          "Inspect handoffs.jsonl and the branch/worktree/space; do not retry creation or replace the desk";
-        save(repo, value, task);
-        throw error;
-      }
+      return create(repo, value, task, request, {
+        existing,
+        reuse: false,
+        released,
+        adoption,
+        forkReason: input.forkReason ? String(input.forkReason) : undefined,
+        adoptReason: adoption ? input.adoptReason.trim() : undefined,
+      });
     }
     if (!task) throw new Error("no durable requested outcome on this issue; dispatch it explicitly first");
     const request = task.requests.find((r) => r.id === input.requestId);
@@ -765,7 +936,11 @@ export function taskCommand(op: string, input: any): any {
           git(owner.cwd, "branch", "--show-current") !== owner.branch
         )
           throw new Error("closed original owner's persisted context is stale; cleanup remains UNKNOWN");
-      } else owner = findOwner(repo, value.id, task.target, task.owner, !!task.forkReason);
+      } else {
+        const released = supersededBy(allIssues(repo), value.id);
+        const history = records(repo).filter((r) => !released.has(r.issue));
+        owner = findOwner(repo, value.id, task.target, task.owner, !!task.forkReason, history);
+      }
       if (!owner || input.session !== owner.session || input.desk !== owner.desk)
         throw new Error("receipt must name the original execution owner/session (not authorization)");
       const head = git(owner.cwd, "rev-parse", "HEAD");

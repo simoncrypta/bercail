@@ -58,6 +58,7 @@ EOF
   TICKS="$(awk '{print $22}' "/proc/$PID/stat")"
   owner t9 s1
   jq -nc --arg p "$REPO.fix" '{path:$p,branch:"fix",issue:"app-1",space:"sp1",desk:"t9",target:"pr:12"}' >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  pr_head
 }
 
 teardown() {
@@ -181,37 +182,179 @@ task() { "$ROOT/bin/bercail" shep task "$@"; }
   [[ "$out" == *"payload changed"* ]]
 }
 
-# The only fake launch effect here is a log line; no real Herdr process runs.
+# The only fake launch effects here are a log line and the handoffs.jsonl line a
+# finished spawn writes; no real Herdr process runs.
 partial_launch() {
   rm "$TASK_DATA/"*.hc "$XDG_STATE_HOME/bercail/handoffs.jsonl"
   export BERCAIL_HANDOFF_SPAWN="$BATS_TEST_TMPDIR/bin/spawn"
   cat >"$BERCAIL_HANDOFF_SPAWN" <<'EOF'
 #!/usr/bin/env bash
 printf 'spawn %s\n' "$*" >>"$LOG"
-printf '{"ok":true,"agent_started":false,"path":"%s.partial","space":"sp-new","branch":"fresh"}\n' "$PWD"
+printf '{"ok":false,"agent_started":false,"path":"%s.partial","space":"sp-new","branch":"fresh","issue":"app-1"}\n' "$PWD" >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+tail -1 "$XDG_STATE_HOME/bercail/handoffs.jsonl"
 EOF
   chmod +x "$BERCAIL_HANDOFF_SPAWN"
 }
 
-@test "partial initial creation reserves the job; retry reports UNKNOWN instead of launching again" {
+# A first dispatch for a new bstack desk on branch $2 (fresh by default).
+create() { request "${1:-r1}" | jq --arg b "${2:-fresh}" '.branch=$b | .stage="bstack"'; }
+
+@test "a spawn that finished without a desk reserves the job; retry reports UNKNOWN instead of launching again" {
   local out
   partial_launch
-  out="$(request | jq '.branch="fresh"' | task dispatch 2>&1)" && fail "$out"
+  out="$(create | task dispatch 2>&1)" && fail "$out"
   [[ "$out" == *"partial visible creation"* ]]
-  out="$(request | jq '.branch="fresh"' | task dispatch)" || fail "$out"
-  jq -e '.status == "unknown" and .authority == false and .retry' <<<"$out"
+  out="$(create | task dispatch)" || fail "$out"
+  jq -e '.status == "unknown" and .authority == false and .retry and (.next | contains("handoffs.jsonl has a line"))' <<<"$out"
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
   jq -e '.status == "in_progress" and .metadata.bercail_task.requests[0].outcome == "publish"' "$TASK_DATA/app-1.json"
-  out="$(request r2 | jq '.branch="fresh"' | task dispatch 2>&1)" && fail "$out"
-  [[ "$out" == *"UNKNOWN"* ]]
+  out="$(create r2 | task dispatch 2>&1)" && fail "$out"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]] || fail "a new request launched again: $out"
+}
+
+# A spawn that starts desk $1 in $2: it logs its argv, makes the worktree when it
+# is missing, writes the desk's hc record and its handoffs.jsonl line, and prints that line.
+spawn_ok() {
+  export BERCAIL_HANDOFF_SPAWN="$BATS_TEST_TMPDIR/bin/spawn" TASK_DESK="$1" TASK_PATH="$2" TASK_REPO="$REPO"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'EOF'
+#!/usr/bin/env bash
+printf 'spawn %s\n' "$*" >>"$LOG"
+while (($#)); do case "$1" in --issue) issue="$2" ;; --branch) branch="$2" ;; esac; shift; done
+[[ -d "$TASK_PATH" ]] || git -C "$TASK_REPO" worktree add -qb "$branch" "$TASK_PATH"
+jq -nc --arg d "$TASK_DESK" --arg p "$TASK_PATH" --arg i "$issue" '{address:$d,cwd:$p,state:"live",labels:{"bercail.role":"agent","bercail.space":"sp-new","bercail.issue":$i}}' >"$TASK_DATA/$TASK_DESK.hc"
+jq -nc --arg d "$TASK_DESK" --arg p "$TASK_PATH" --arg i "$issue" --arg b "$branch" '{ok:true,agent_started:true,path:$p,branch:$b,space:"sp-new",desk:$d,session:"s-new",issue:$i}' >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+tail -1 "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+EOF
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+}
+
+# An idle shell $1 in folder $2, as a space's first terminal shows in hc.
+shell_in() {
+  jq -nc --arg a "$1" --arg p "$2" '{address:$a,cwd:$p,state:"live",foreground:{name:"bash"},labels:{"herdr.space":"sp-new"}}' >"$TASK_DATA/$1.hc"
+}
+
+# The first spawn makes the fresh worktree and its space's shell, starts a child,
+# then hangs past [shep] spawn_timeout. A retry finishes it as spawn_ok does.
+slow_launch() {
+  rm "$TASK_DATA/"*.hc "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  mkdir -p "$XDG_CONFIG_HOME/bercail"
+  printf '[shep]\nspawn_timeout = 1\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+  spawn_ok t21 "$REPO.fresh"
+  mv "$BERCAIL_HANDOFF_SPAWN" "$BATS_TEST_TMPDIR/bin/finish"
+  export TASK_REPO="$REPO" TASK_CHILD="$BATS_TEST_TMPDIR/child"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'EOF'
+#!/usr/bin/env bash
+[[ -f "$TASK_CHILD" ]] && exec "$(dirname "$0")/finish" "$@"
+printf 'spawn %s\n' "$*" >>"$LOG"
+git -C "$TASK_REPO" worktree add -qb fresh "$TASK_REPO.fresh"
+jq -nc --arg p "$TASK_REPO.fresh" '{address:"t20",cwd:$p,state:"live",foreground:{name:"bash"},labels:{"herdr.space":"sp-new"}}' >"$TASK_DATA/t20.hc"
+sleep 60 &
+echo $! >"$TASK_CHILD"
+wait
+EOF
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+}
+
+@test "a spawn past spawn_timeout is stopped with its children, and a retry finishes it in the clean worktree" {
+  local out child
+  slow_launch
+  out="$(create | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"did not finish in 1s"* ]] || fail "$out"
+  child="$(cat "$TASK_CHILD")"
+  ! kill -0 "$child" 2>/dev/null || fail "the spawn's child $child outlived the timeout"
+  jq -e '.metadata.bercail_task.requests[0] | .status == "unknown" and (.reason | contains("spawn_timeout"))' "$TASK_DATA/app-1.json"
+  out="$(create | task dispatch)" || fail "$out"
+  jq -e --arg p "$REPO.fresh" '.status == "awaiting-session" and .creation.desk == "t21" and .creation.path == $p and .retry' <<<"$out"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 2 ]]
+  grep '^spawn ' "$LOG" | tail -1 | grep -q -- '--branch fresh --stage bstack .*--reuse-worktree' || fail "$(cat "$LOG")"
+  jq -e '.metadata.bercail_task.requests[0] | .status == "awaiting-session" and (has("reason") | not)' "$TASK_DATA/app-1.json"
+}
+
+@test "a partial creation stays UNKNOWN when its worktree has changes, a busy terminal or a desk" {
+  local out
+  slow_launch
+  create | task dispatch >/dev/null 2>&1 && fail "the slow spawn should time out"
+  echo edit >>"$REPO.fresh/file.txt"
+  out="$(create | task dispatch)" || fail "$out"
+  jq -e '.status == "unknown" and (.next | contains("has changes"))' <<<"$out"
+  git -C "$REPO.fresh" checkout -q file.txt
+  jq '.foreground.name="npm"' "$TASK_DATA/t20.hc" >"$BATS_TEST_TMPDIR/t"; mv "$BATS_TEST_TMPDIR/t" "$TASK_DATA/t20.hc"
+  out="$(create | task dispatch)" || fail "$out"
+  jq -e '.status == "unknown" and (.next | contains("not an idle shell"))' <<<"$out"
+  shell_in t20 "$REPO.fresh"
+  jq -nc '{address:"t22",cwd:"/",state:"live",labels:{"bercail.role":"agent","bercail.issue":"app-1"}}' >"$TASK_DATA/t22.hc"
+  jq -c --arg p "$REPO.fresh" '.cwd=$p' "$TASK_DATA/t22.hc" >"$BATS_TEST_TMPDIR/t"; mv "$BATS_TEST_TMPDIR/t" "$TASK_DATA/t22.hc"
+  out="$(create | task dispatch)" || fail "$out"
+  jq -e '.status == "unknown" and (.next | contains("t22 is live for app-1"))' <<<"$out"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
+}
+
+@test "a partial creation that left no worktree starts again on retry" {
+  local out
+  slow_launch
+  create | task dispatch >/dev/null 2>&1 && fail "the slow spawn should time out"
+  rm "$TASK_DATA/t20.hc"
+  git -C "$REPO" worktree remove "$REPO.fresh"
+  git -C "$REPO" branch -qD fresh
+  out="$(create | task dispatch)" || fail "$out"
+  jq -e '.status == "awaiting-session" and .creation.desk == "t21"' <<<"$out"
+  grep '^spawn ' "$LOG" | tail -1 | grep -q -- '--reuse-worktree' && fail "nothing was left to reuse: $(cat "$LOG")"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 2 ]]
+}
+
+@test "a new desk on a PR's own branch starts at its head, and stage autopilot starts an autopilot" {
+  local out
+  rm "$TASK_DATA/t9.hc" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  spawn_ok t21 "$REPO.fix"
+  out="$(request | jq '.branch="fresh"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"stage autopilot starts a desk only on an open PR's own branch"* ]] || fail "$out"
+  grep -q '^spawn ' "$LOG" && fail "a refused autopilot must not spawn"
+  out="$(request | jq '.branch="fix"' | task dispatch)" || fail "$out"
+  jq -e '.status == "awaiting-session" and .creation.desk == "t21"' <<<"$out"
+  grep -q -- '^spawn --branch fix --stage autopilot .*--target pr:12 .*--existing-branch' "$LOG" || fail "$(cat "$LOG")"
+}
+
+@test "a retry does not start an autopilot desk an older dispatch saved on a branch that is not the PR's" {
+  local out payload
+  rm "$TASK_DATA/t9.hc" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  spawn_ok t21 "$REPO.fresh"
+  # The request as v0.17.2 saved it: stage autopilot on any branch, then UNKNOWN.
+  payload="$(request | jq -c '.branch="fresh"' | node -e '
+    const i = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    const body = {repo: process.argv[1], issue: i.issue, target: "pr:12", outcome: i.outcome, stage: i.stage, message: i.message,
+      authoring: i.authoring, branch: i.branch, forkReason: "", adoptReason: "", targets: null, universe: null};
+    process.stdout.write(require("crypto").createHash("sha256").update(JSON.stringify(body)).digest("hex"));' "$(realpath "$REPO")")"
+  jq --arg repo "$(realpath "$REPO")" --arg p "$payload" '.metadata.bercail_task = {v:1,repo:$repo,target:"pr:12",owner:null,branch:"fresh",
+    requests:[{id:"r1",sequence:0,payload:$p,outcome:"publish",stage:"autopilot",message:"Amend with gt m -a and publish the new head",authoring:"gt m -a",status:"unknown",next:""}]}' \
+    "$TASK_DATA/app-1.json" >"$BATS_TEST_TMPDIR/t"
+  mv "$BATS_TEST_TMPDIR/t" "$TASK_DATA/app-1.json"
+  out="$(request | jq '.branch="fresh"' | task dispatch)" || fail "$out"
+  jq -e '.status == "unknown" and (.next | contains("stage autopilot starts a desk only on pr:12'"'"'s own branch"))' <<<"$out" || fail "$out"
+  ! grep -q '^spawn ' "$LOG" || fail "no desk may start: $(cat "$LOG")"
+}
+
+@test "a target held by an issue closed as superseded moves to its successor once none of its desks is live" {
+  local out
+  jq -n '{id:"app-2",title:"Autopilot the PR",status:"open",metadata:{}}' >"$TASK_DATA/app-2.json"
+  spawn_ok t21 "$REPO.fix"
+  out="$(request | jq '.issue="app-2" | .branch="fix"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"already owned by app-1"* && "$out" == *"bd supersede app-1 --with app-2"* ]] || fail "$out"
+  jq '.dependencies=[{issue_id:"app-1",depends_on_id:"app-2",type:"supersedes"}]' "$TASK_DATA/app-1.json" >"$BATS_TEST_TMPDIR/t"
+  mv "$BATS_TEST_TMPDIR/t" "$TASK_DATA/app-1.json"
+  out="$(request | jq '.issue="app-2" | .branch="fix"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"superseded issue app-1 still has live desk t9"* ]] || fail "$out"
+  rm "$TASK_DATA/t9.hc"
+  out="$(request | jq '.issue="app-2" | .branch="fix"' | task dispatch)" || fail "$out"
+  jq -e '.status == "awaiting-session" and .creation.desk == "t21" and .creation.issue == "app-2"' <<<"$out"
+  grep -q -- '--existing-branch --released app-1' "$LOG" || fail "$(cat "$LOG")"
 }
 
 @test "repo serialization covers concurrent issue aliases, not just the same issue" {
   local a b
   partial_launch
   jq -n '{id:"app-2",title:"Alias",metadata:{}}' >"$TASK_DATA/app-2.json"
-  request | jq '.branch="fresh"' | task dispatch >"$BATS_TEST_TMPDIR/a" 2>&1 & a=$!
-  request r2 | jq '.issue="app-2" | .branch="other"' | task dispatch >"$BATS_TEST_TMPDIR/b" 2>&1 & b=$!
+  create | task dispatch >"$BATS_TEST_TMPDIR/a" 2>&1 & a=$!
+  create r2 other | jq '.issue="app-2"' | task dispatch >"$BATS_TEST_TMPDIR/b" 2>&1 & b=$!
   wait "$a" || true
   wait "$b" || true
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
@@ -228,7 +371,7 @@ EOF
   export BERCAIL_HANDOFF_SPAWN="$BATS_TEST_TMPDIR/bin/spawn"
   printf '#!/bin/sh\necho "{\"ok\":false,\"agent_started\":false}"\n' >"$BERCAIL_HANDOFF_SPAWN"
   chmod +x "$BERCAIL_HANDOFF_SPAWN"
-  out="$(request | jq --arg repo "$other" '.repo=$repo | .branch="other"' | TASK_DATA="$data" task dispatch 2>&1)" && fail "$out"
+  out="$(create r1 other | jq --arg repo "$other" '.repo=$repo' | TASK_DATA="$data" task dispatch 2>&1)" && fail "$out"
   jq -e --arg repo "$other" '.metadata.bercail_task.repo == $repo and .metadata.bercail_task.owner == null' "$data/app-1.json"
   jq -e --arg repo "$REPO" '.metadata.bercail_task.repo == $repo and .metadata.bercail_task.owner.desk == "t9"' "$TASK_DATA/app-1.json"
 }
@@ -474,11 +617,11 @@ SPAWN
   pr_head
 }
 
-# gh pr view answers that the PR's head is $PR_HEAD, fix by default.
+# gh pr view answers that the PR's head is $PR_HEAD (fix by default), at $PR_OID.
 pr_head() {
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'GH'
 #!/bin/sh
-jq -nc --arg h "${PR_HEAD:-fix}" '{headRefName:$h,isCrossRepository:false}'
+jq -nc --arg h "${PR_HEAD:-fix}" --arg oid "${PR_OID:-}" '{headRefName:$h,headRefOid:$oid,isCrossRepository:false}'
 GH
   chmod +x "$BATS_TEST_TMPDIR/bin/gh"
 }

@@ -27,16 +27,17 @@ commit = "allow"
 [desk_secrets."~/Work/some-repo"]    # optional: a 1Password service account for that repo's desks
 op_service_account = "~/.config/bercail/secrets/some-repo-agents.op"   # a path, never the token
 
-[shep]                               # optional: Shep's compaction
+[shep]                               # optional: Shep's compaction and dispatch
 compact_at = 250000                  # context tokens at which Pi compacts Shep
 keep_recent = 50000                  # recent tokens kept word for word
 rollover = false                     # true: a fresh session instead, and each new day
+spawn_timeout = 600                  # seconds task dispatch gives handoff-spawn to start a desk
 
 [herdr]                              # optional: bercail on another Herdr machine
 backend = ""                         # its name in `hc machine ls`; empty: this computer
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing, and TLC and Java when `statechart` is on. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles), and `statechart` in [statecharts](bstack.md#statecharts); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start; the old `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing, and TLC and Java when `statechart` is on. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles), and `statechart` in [statecharts](bstack.md#statecharts); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start, except `spawn_timeout`, read by each [task dispatch](shep.md#task-ownership-and-requested-outcomes); the old `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
 
 Those are all the keys bercail reads. `bercail doctor` names any other key in the file (`unknown  [shep] session (nothing reads it)`), a `[git]` value that is not a backend, and a line it cannot read; none of them counts as a failure. `bercail config get <section> <key>` prints one value as bercail reads it. The file is read as a subset of TOML: quoted and `"""` strings, `true` and `false`, whole numbers, and one-line arrays.
 

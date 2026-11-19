@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# The desk agent. Usage: bercail-desk-agent [--prompt TEXT] [--model MODEL] [COMMAND [ARGS...]]
+# The desk agent. Usage: bercail-desk-agent [--prompt TEXT] [--model MODEL] [--role autopilot] [COMMAND [ARGS...]]
 #
 # COMMAND defaults to bstack's Pi lead: lead.json, which bercail update writes.
 # --model runs that Pi command on MODEL (provider/id[:thinking]) and changes
-# nothing else in it.
+# nothing else in it. --role autopilot runs it as bstack's autopilot.
 set -euo pipefail
 
 PI_LEAD="$HOME/.local/share/bercail/pi/lead.json"
@@ -12,10 +12,12 @@ PI_DESK_EXTENSION="$HOME/.local/share/bercail/pi-extensions/bercail-desk.ts"
 
 prompt=""
 model=""
-while [[ "${1:-}" == --prompt || "${1:-}" == --model ]]; do
+role=""
+while [[ "${1:-}" == --prompt || "${1:-}" == --model || "${1:-}" == --role ]]; do
   case "$1" in
     --prompt) prompt="${2:-}" ;;
     --model) model="${2:-}" ;;
+    --role) role="${2:-}" ;;
   esac
   shift 2 || shift $#
 done
@@ -55,6 +57,11 @@ if [[ -n "$model" ]]; then
   done
   [[ "$swapped" -eq 1 ]] || argv=("${argv[0]}" --model "$model" "${argv[@]:1}")
 fi
+
+[[ -z "$role" || ( "$role" == autopilot && "$(basename "${argv[0]}")" == pi ) ]] || {
+  printf 'bercail-desk-agent: --role takes autopilot, on Pi; not %s on %s\n' "$role" "${argv[0]}" >&2
+  exit 1
+}
 
 # An idle harness writes nothing. Heartbeat the record, using hc events to
 # notice its exit without waiting a full minute. Session identity comes from
@@ -173,6 +180,14 @@ remember_desk() {
 }
 
 remember_desk || true
+
+# An autopilot desk: the guard lets it commit and push its PR branch, and its
+# prompt says to drive that PR to green. After the record, so a restore brings
+# the desk back as a plain lead, which has neither.
+if [[ -n "$role" ]]; then
+  export BERCAIL_ROLE=autopilot
+  argv=("${argv[0]}" --append-system-prompt "$(dirname "$PI_LEAD")/agents/bstack-autopilot.md" "${argv[@]:1}")
+fi
 
 if [[ "$(basename "${argv[0]}")" == pi ]]; then
   # First, so a `--` in the command cannot make it a message.

@@ -99,6 +99,7 @@ bstack statechart
 shep compact_at
 shep keep_recent
 shep rollover
+shep spawn_timeout
 todo backend
 todo.basecamp account
 todo.basecamp project

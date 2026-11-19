@@ -1184,16 +1184,22 @@ _desk_fixture() {
   cp "$ROOT/config/worktrunk/herdr-layout.sh" "$DESK_HOME/.config/worktrunk/herdr-layout.sh"
   cat >"$DESK_BIN/wt" <<'WT'
 #!/usr/bin/env bash
-branch=""
+printf 'wt %s\n' "$*" >>"$DESK_HERDR_LOG"
+branch="" create=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --create) branch="$2"; shift 2 ;;
-    *) shift ;;
+    --create) branch="$2" create=1; shift 2 ;;
+    switch | --*) shift ;;
+    *) branch="$1"; shift ;;
   esac
 done
-printf 'wt %s\n' "$*" >>"$DESK_HERDR_LOG"
 main="$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
-git -C "$main" worktree add -q -b "$branch" "$main.$branch" HEAD
+# Without --create, as wt does: the local branch, else a tracking branch from origin's.
+if [[ "$create" -eq 1 ]]; then
+  git -C "$main" worktree add -q -b "$branch" "$main.$branch" HEAD
+else
+  git -C "$main" worktree add -q "$main.$branch" "$branch"
+fi
 printf '%s' "$(cd "$main.$branch" && pwd -P)" >"$DESK_FOLDER"
 WT
   cat >"$DESK_BIN/herdr-app" <<'HERDR'
@@ -1320,6 +1326,109 @@ EOF
     || fail "the reason must be on the issue: $(cat "$BD_COMMENTS")"
   out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --adopt-reason x --branch nope 2>&1)" && fail "$out"
   [[ "$out" == *"no existing worktree"* ]] || fail "adoption needs an existing checkout: $out"
+}
+
+# origin has feat at $PR_HEAD, one commit past the local feat: a stale local branch.
+_desk_origin() {
+  local origin="$BATS_TEST_TMPDIR/$1-origin.git"
+  git init -q --bare "$origin"
+  git -C "$DESK_REPO" remote add origin "$origin"
+  git -C "$DESK_REPO" branch feat
+  PR_HEAD="$(git -C "$DESK_REPO" commit-tree 'HEAD^{tree}' -p feat -m 'pushed by the PR author')"
+  git -C "$DESK_REPO" push -q origin "$PR_HEAD:refs/heads/feat"
+}
+
+@test "--existing-branch checks out a PR branch at origin's head and fast-forwards a stale local branch" {
+  local out
+  _desk_fixture existing
+  _desk_origin existing
+  out="$(_desk_spawn --existing-branch 2>"$BATS_TEST_TMPDIR/existing.err")" \
+    || fail "existing-branch spawn failed: $out $(cat "$BATS_TEST_TMPDIR/existing.err")"
+  grep -q '^wt switch feat --no-cd$' "$DESK_HERDR_LOG" || fail "wt switch, never --create: $(cat "$DESK_HERDR_LOG")"
+  [[ "$(git -C "$DESK_REPO.feat" rev-parse HEAD)" == "$PR_HEAD" ]] || fail "the desk starts at origin's head $PR_HEAD"
+  jq -e '.ok and .branch == "feat" and .desk == "t9"' <<<"$out" >/dev/null || fail "$out"
+}
+
+@test "--existing-branch refuses a local branch with commits origin lacks, or one already checked out" {
+  local out mine
+  _desk_fixture existing-refused
+  _desk_origin existing-refused
+  mine="$(git -C "$DESK_REPO" commit-tree 'HEAD^{tree}' -p feat -m 'local only')"
+  git -C "$DESK_REPO" update-ref refs/heads/feat "$mine"
+  out="$(_desk_spawn --existing-branch 2>&1)" && fail "$out"
+  [[ "$out" == *"has commits origin/feat"*"lacks"* ]] || fail "$out"
+  [[ "$(git -C "$DESK_REPO" rev-parse feat)" == "$mine" ]] || fail "the local commits must stay"
+  git -C "$DESK_REPO" update-ref refs/heads/feat "$PR_HEAD"
+  git -C "$DESK_REPO" worktree add -q "$DESK_REPO.elsewhere" feat
+  out="$(_desk_spawn --existing-branch 2>&1)" && fail "$out"
+  [[ "$out" == *"already checked out at"* ]] || fail "$out"
+  out="$(_desk_spawn --existing-branch --base master 2>&1)" && fail "$out"
+  [[ "$out" == *"no --base"* ]] || fail "$out"
+  ! grep -q '^wt ' "$DESK_HERDR_LOG" || fail "no worktree after a refusal: $(cat "$DESK_HERDR_LOG")"
+}
+
+@test "stage autopilot --branch starts an autopilot desk, only on an existing PR branch" {
+  local out
+  _desk_fixture autopilot-desk
+  _desk_origin autopilot-desk
+  out="$(_desk_spawn --stage autopilot 2>&1)" && fail "$out"
+  [[ "$out" == *"--target pr:N and --existing-branch"* ]] || fail "$out"
+  out="$(_desk_spawn --stage autopilot --target pr:5 --existing-branch 2>"$BATS_TEST_TMPDIR/autopilot.err")" \
+    || fail "autopilot desk failed: $out $(cat "$BATS_TEST_TMPDIR/autopilot.err")"
+  jq -e '.ok and .stage == "autopilot" and .target == "pr:5"' <<<"$out" >/dev/null || fail "$out"
+  jq -e 'index("--role") as $i | $i != null and .[$i + 1] == "autopilot"' "$DESK_ARGV" >/dev/null \
+    || fail "the desk runs as autopilot: $(cat "$DESK_ARGV")"
+  grep -q 'Drive the PR to green with the autopilot skill' "$BD_COMMENTS" || fail "$(cat "$BD_COMMENTS")"
+}
+
+@test "--reuse-worktree finishes a partial creation in its clean worktree, only from dispatch" {
+  local out existing
+  _desk_fixture reuse
+  git -C "$DESK_REPO" worktree add -qb feat "$DESK_REPO.feat"
+  existing="$(cd "$DESK_REPO.feat" && pwd -P)"
+  out="$(_desk_spawn --reuse-worktree 2>&1)" && fail "$out"
+  [[ "$out" == *"shep task dispatch"* ]] || fail "raw reuse must go through dispatch: $out"
+  echo edit >"$DESK_REPO.feat/new.txt"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --reuse-worktree 2>&1)" && fail "$out"
+  [[ "$out" == *"has changes"* ]] || fail "$out"
+  rm "$DESK_REPO.feat/new.txt"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --reuse-worktree 2>"$BATS_TEST_TMPDIR/reuse.err")" \
+    || fail "reuse failed: $out $(cat "$BATS_TEST_TMPDIR/reuse.err")"
+  jq -e --arg p "$existing" '.ok and .path == $p and .desk == "t9"' <<<"$out" >/dev/null || fail "$out"
+  ! grep -q '^wt ' "$DESK_HERDR_LOG" || fail "a finish makes no worktree: $(cat "$DESK_HERDR_LOG")"
+}
+
+@test "--reuse-worktree leaves a PR branch's stack alone, and still tracks a task branch" {
+  local log="$BATS_TEST_TMPDIR/reuse-gt.log" config="$BATS_TEST_TMPDIR/reuse-gt.toml"
+  _desk_fixture reuse-gt
+  git -C "$DESK_REPO" worktree add -qb feat "$DESK_REPO.feat"
+  graphite_auto_init "$DESK_REPO"
+  printf '[git]\n"%s" = "gt"\n' "$(cd "$DESK_REPO" && pwd -P)" >"$config"
+  _fake_gt "$DESK_BIN" "$log" 'exit 0'
+  BERCAIL_CONFIG="$config" BERCAIL_TASK_RESERVED=1 _desk_spawn --reuse-worktree --target pr:5 >/dev/null 2>&1 \
+    || fail "reuse on a PR branch failed"
+  [[ ! -s "$log" ]] || fail "bercail never tracks a PR's branch: $(cat "$log")"
+  rm "$DESK_STATE/bercail/handoffs.jsonl"
+  BERCAIL_CONFIG="$config" BERCAIL_TASK_RESERVED=1 _desk_spawn --reuse-worktree >/dev/null 2>&1 \
+    || fail "reuse on a task branch failed"
+  grep -q ' parent ' "$log" || fail "a task branch the first spawn may not have tracked is checked: $(cat "$log")"
+}
+
+@test "--released lets a target go from an issue dispatch saw superseded" {
+  local out old
+  _desk_fixture released
+  _desk_origin released
+  git -C "$DESK_REPO" worktree add -qb old "$DESK_REPO.old"
+  old="$(cd "$DESK_REPO.old" && pwd -P)"
+  mkdir -p "$DESK_STATE/bercail"
+  jq -nc --arg p "$old" '{path:$p,branch:"old",issue:"app-old",desk:"t130",target:"pr:5"}' >"$DESK_STATE/bercail/handoffs.jsonl"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --target pr:5 --existing-branch 2>&1)" && fail "$out"
+  [[ "$out" == *"logical target already has a handoff"* ]] || fail "$out"
+  out="$(_desk_spawn --target pr:5 --existing-branch --released app-old 2>&1)" && fail "$out"
+  [[ "$out" == *"shep task dispatch"* ]] || fail "raw --released must go through dispatch: $out"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --target pr:5 --existing-branch --released app-old 2>"$BATS_TEST_TMPDIR/released.err")" \
+    || fail "released spawn failed: $out $(cat "$BATS_TEST_TMPDIR/released.err")"
+  jq -e '.ok and .target == "pr:5"' <<<"$out" >/dev/null || fail "$out"
 }
 
 @test "a --branch spawn first opens a plain space on a main checkout with none, and keeps the shown space" {

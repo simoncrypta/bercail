@@ -102,7 +102,9 @@ stale/ambiguous/partial result is not permission to make another preparation
 checkout. `--target pr:N|task:ID` records a target; a deliberate parallel
 exploration needs a separate issue and `--fork-reason`, without inherited grants.
 `--adopt-reason` (from dispatch's `adoptReason` only) starts a new-session desk in
-the existing worktree of a branch whose original desk is gone.
+the existing worktree of a branch whose original desk is gone. `--reuse-worktree`
+and `--released` are dispatch's too: finishing a creation that stopped before its
+desk, and a target given up by a superseded issue.
 Background wait/admin workers cannot use this coding route.
 
 Run the **resolved script directly** (absolute path below). Set the process
@@ -122,7 +124,9 @@ working directory to `cwd` from `--info`. Flags only.
 - `--model <provider/id[:thinking]>` is optional: run this one agent on another Pi model, such as
   `claude-bridge/claude-fable-5-2:high`, when the person asks for one. See [Another model](#another-model).
 - Plan-only work is a line in the issue, not a flag.
-- `--branch` needs bstack's Pi lead profile (`bercail update` writes it). Autopilot cannot take `--branch`.
+- `--existing-branch` starts the desk on a branch origin already has (a PR's head): it fetches it, fast-forwards a local branch that is behind, and runs `wt switch` without `--create`. It refuses a local branch with commits origin lacks, or one checked out elsewhere.
+- `--stage autopilot` with `--branch` needs `--target pr:N` and `--existing-branch`: an autopilot desk on that PR's branch, which may commit and push its fixes.
+- `--branch` needs bstack's Pi lead profile (`bercail update` writes it).
 ## The desk (`--branch`)
 
 `--branch` makes a sibling worktree (`wt switch --create`), opens a Herdr app

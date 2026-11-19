@@ -18,8 +18,9 @@ handoff_usage() {
 usage: handoff-spawn --info
        handoff-spawn --stage bstack|autopilot --issue ID --worktree PATH
                      [--resume SESSION] [--dry-run] [--model PROVIDER/MODEL[:thinking]]
-       handoff-spawn --branch <name> --stage bstack --issue ID
+       handoff-spawn --branch <name> --stage bstack|autopilot --issue ID
                      [--dirty|--clean] [--space <id>] [--base <branch>]
+                     [--existing-branch] [--target task:ID|pr:N]
                      [--model PROVIDER/MODEL[:thinking]] [--adopt-reason TEXT]
 
   --info          print JSON facts and exit
@@ -28,9 +29,11 @@ usage: handoff-spawn --info
                   and run bd show ID.
   --stage NAME    required; bstack or autopilot (see handoff-stages.sh). Both
                   run Pi (the lead profile). autopilot may commit and push a
-                  PR's fixes; headless only, --worktree on the PR's checkout.
-                  Without --branch the stage runs headless (same result file).
-                  With --branch, bstack opens a space whose desk runs Pi's lead.
+                  PR's fixes. Without --branch the stage runs headless (same
+                  result file); autopilot then takes --worktree on the PR's
+                  checkout. With --branch, the stage opens a space whose desk
+                  runs Pi's lead; an autopilot desk needs --target pr:N and a
+                  branch that exists (--existing-branch, or an adoption).
                   Bercail has no default.
   --worktree PATH checkout for a headless stage (default: cwd)
   --resume ID     re-handoff: pi --session-id (a uuid)
@@ -52,11 +55,24 @@ usage: handoff-spawn --info
                   default branch (wt switch --create --base), so a dependent
                   issue stacks on its parent's branch. The repo's git backend
                   records that parent (gh stack, gt track, or origin stack track).
+  --existing-branch
+                  --branch only: the branch is on origin already (a PR's head).
+                  Fetch it and check it out at the fetched head with wt switch,
+                  never --create. A local branch behind it is fast-forwarded;
+                  one with commits origin lacks, or one already checked out,
+                  is refused.
   --adopt-reason TEXT
                   --branch only, from bercail shep task dispatch: start a desk
                   with a new session in the existing worktree of --branch,
                   whose original desk is gone. No new branch, no dirty copy.
                   TEXT goes on the issue and in handoffs.jsonl.
+  --reuse-worktree
+                  --branch only, from bercail shep task dispatch: finish a
+                  creation that stopped before its desk, in the existing clean
+                  worktree of --branch.
+  --released ID   from bercail shep task dispatch: ID was closed with bd
+                  supersede --with this issue, so its handoffs no longer hold
+                  the target. Repeatable.
 
 Shep writes the beads issue first and owns the workflow. There are no prompt
 files and no per-stage modes. Each real handoff adds a bd comment to the
@@ -268,6 +284,29 @@ handoff_track_origin() {
     "$branch" "$parent" "$sibling" "$branch" "$parent" >&2
 }
 
+# A PR's branch on origin, checked out at the fetched head. Moving a local
+# branch only ever fast-forwards it; anything else is the person's to sort out.
+handoff_checkout_existing() {
+  local main="$1" branch="$2" remote mine at
+  _git_backend_bounded "$(handoff_gt_timeout)" git -C "$main" fetch --quiet origin \
+    "+refs/heads/$branch:refs/remotes/origin/$branch" </dev/null >&2 \
+    || handoff_die "git fetch origin $branch failed; the PR's head is unknown, so no desk started"
+  remote="$(git -C "$main" rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")" \
+    || handoff_die "origin has no branch $branch"
+  if mine="$(git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}")"; then
+    if at="$(handoff_worktree_of "$main" "$branch")"; then
+      handoff_die "$branch is already checked out at $at; continue that desk, or remove the worktree (wt remove $branch) and retry"
+    fi
+    if [[ "$mine" != "$remote" ]]; then
+      git -C "$main" merge-base --is-ancestor "$mine" "$remote" \
+        || handoff_die "local $branch ($mine) has commits origin/$branch ($remote) lacks; push or drop them, then retry"
+      git -C "$main" update-ref -m "handoff-spawn: fast-forward to origin/$branch" "refs/heads/$branch" "$remote" "$mine" \
+        || handoff_die "could not fast-forward $branch to origin/$branch"
+    fi
+  fi
+  WT_HERDR_NO_DESK=1 wt switch "$branch" --no-cd || handoff_die "wt switch $branch failed"
+}
+
 handoff_sibling_path() {
   local main="$1" branch="$2" path
   path="$(git -C "$main" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$branch" '
@@ -423,6 +462,7 @@ handoff_spawn_main() {
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0
   local base="" model="" target="" fork_reason="" adopt_reason="" session="" lock="" prior path prior_main created=""
+  local existing=0 reuse=0 released="" role=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -454,6 +494,9 @@ handoff_spawn_main() {
       --target) [[ $# -ge 2 ]] || handoff_usage; target="$2"; shift 2 ;;
       --fork-reason) [[ $# -ge 2 ]] || handoff_usage; fork_reason="$2"; shift 2 ;;
       --adopt-reason) [[ $# -ge 2 ]] || handoff_usage; adopt_reason="$2"; shift 2 ;;
+      --existing-branch) existing=1; shift ;;
+      --reuse-worktree) reuse=1; shift ;;
+      --released) [[ $# -ge 2 ]] || handoff_usage; released+="$2"$'\n'; shift 2 ;;
       --branch)
         [[ $# -ge 2 ]] || handoff_usage
         branch="$2"
@@ -498,6 +541,13 @@ handoff_spawn_main() {
   # Only dispatch has checked that the original desk is gone and recorded why.
   [[ -z "$adopt_reason" || ( -n "$branch" && "${BERCAIL_TASK_RESERVED:-}" == 1 ) ]] \
     || handoff_die "--adopt-reason comes from bercail shep task dispatch with adoptReason, which checks the original desk is gone; run that"
+  # Only dispatch has checked the partial worktree is clean with no desk, and that each released issue's desks are gone.
+  [[ ( "$reuse" -eq 0 && -z "$released" ) || ( -n "$branch" && "${BERCAIL_TASK_RESERVED:-}" == 1 ) ]] \
+    || handoff_die "--reuse-worktree and --released come from bercail shep task dispatch, which checks the partial creation and the superseded issues; run that"
+  [[ $((existing + reuse)) -le 1 && ( -z "$adopt_reason" || $((existing + reuse)) -eq 0 ) ]] \
+    || handoff_die "--existing-branch, --reuse-worktree and --adopt-reason each pick the checkout; pass one"
+  [[ "$existing" -eq 0 || ( -n "$branch" && -z "$base" ) ]] \
+    || handoff_die "--existing-branch needs --branch and no --base: the branch is already cut"
   [[ -n "$stage" ]] || handoff_die "--stage bstack|autopilot is required; bercail does not pick a stage"
   [[ "$stage" == bstack || "$stage" == autopilot ]] || handoff_die "unknown stage: $stage"
   [[ -n "$issue" ]] || handoff_die "--issue <beads id> is required; the job lives in that issue"
@@ -507,8 +557,9 @@ handoff_spawn_main() {
   [[ -z "$base" || -n "$branch" ]] \
     || handoff_die "--base needs --branch: it picks what the new desk branch is cut from; headless stages run in an existing --worktree"
   if [[ -n "$branch" ]]; then
-    [[ "$stage" != autopilot ]] \
-      || handoff_die "stage autopilot is headless: pass --worktree <the PR's checkout> instead of --branch"
+    # An autopilot desk drives an open PR, so its branch exists: it never cuts one.
+    [[ "$stage" != autopilot || ( "$target" == pr:* && $((existing + reuse)) -eq 1 ) || ( "$target" == pr:* && -n "$adopt_reason" ) ]] \
+      || handoff_die "stage autopilot --branch starts a desk on an open PR's branch: pass --target pr:N and --existing-branch (or --worktree <the PR's checkout> to run it headless)"
     [[ -z "$resume" && "$dry" -eq 0 && -z "$worktree" ]] \
       || handoff_die "stage $stage --branch starts a desk agent; --resume/--dry-run/--worktree are for headless stages"
     [[ -f "$(handoff_pi_lead_file)" ]] \
@@ -563,7 +614,9 @@ handoff_spawn_main() {
         handoff_die "original task already has a handoff: $prior; use bercail shep task dispatch, never a new preparation branch"
       fi
       [[ -n "$fork_reason" ]] || handoff_die "logical target already has a handoff: $prior; continue its issue, or pass --fork-reason on a separate exploration issue"
-    done < <(jq -c --arg i "$issue" --arg t "$target" 'select(.issue == $i or .target == $t)' "${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl")
+    done < <(jq -c --arg i "$issue" --arg t "$target" --arg released "$released" \
+      '($released | split("\n")) as $gone | select((.issue == $i or .target == $t) and (.issue as $x | $gone | index($x) | not))' \
+      "${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl")
   fi
   session="$(</proc/sys/kernel/random/uuid)"
 
@@ -585,10 +638,15 @@ handoff_spawn_main() {
   wt_herdr_main_space "$main" \
     || echo "handoff-spawn: could not open a space on the main checkout $main; the desk's space shows top-level" >&2
   # The post-start hook makes the space only: this starts the desk below.
-  if [[ -n "$adopt_reason" ]]; then
-    # The gone desk's checkout as it is; the desk below finds or opens its space.
+  if [[ -n "$adopt_reason" || "$reuse" -eq 1 ]]; then
+    # The gone desk's checkout, or a partial creation's, as it is; the desk below finds or opens its space.
     sibling="$(handoff_worktree_of "$main" "$branch")" \
-      || handoff_die "no existing worktree for $branch; an adoption continues a checkout, it never creates one"
+      || handoff_die "no existing worktree for $branch; an adoption or a finish continues a checkout, it never creates one"
+    [[ "$reuse" -eq 0 ]] || ! handoff_main_is_dirty "$sibling" \
+      || handoff_die "$sibling has changes; a partial creation is finished only in a clean worktree"
+    dirty=0
+  elif [[ "$existing" -eq 1 ]]; then
+    handoff_checkout_existing "$main" "$branch"
     dirty=0
   elif [[ -n "$base" ]]; then
     git -C "$main" rev-parse --verify --quiet "$base^{commit}" >/dev/null \
@@ -600,7 +658,7 @@ handoff_spawn_main() {
       || handoff_die "wt switch --create $branch failed"
   fi
   _wt_herdr_keep_user_focus "$keep_space"
-  [[ -n "$adopt_reason" ]] || sibling="$(handoff_sibling_path "$main" "$branch")" \
+  [[ -n "$adopt_reason" || "$reuse" -eq 1 ]] || sibling="$(handoff_sibling_path "$main" "$branch")" \
     || handoff_die "could not resolve sibling worktree for $branch"
   sibling="$(_git_backend_realpath "$sibling")"
 
@@ -614,8 +672,9 @@ handoff_spawn_main() {
   local track_rc=0
   backend="$(git_backend "$sibling")" || track_rc=$?
   [[ "$track_rc" -ne 130 ]] || exit 130
-  # An adopted branch already has its place in any stack.
-  [[ -n "$adopt_reason" ]] || case "$backend" in
+  # An adopted or existing branch already has its place in any stack; so does a
+  # PR's branch whose partial creation this finishes. A task branch may not yet.
+  [[ -n "$adopt_reason" || "$existing" -eq 1 || ( "$reuse" -eq 1 && "$target" == pr:* ) ]] || case "$backend" in
     gt)
       handoff_track_graphite "$sibling" "$base"
       ;;
@@ -634,8 +693,14 @@ handoff_spawn_main() {
   handoff_share_main_beads "$sibling"
 
   # The checkout facts used to be a prompt preamble. They go on the issue now.
-  intro="$(printf 'bercail handoff: stage %s, desk agent %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr. %s Do not open Review or invoke the review skill; when the desk agent finishes, Review opens itself in this space once the user looks at it. When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
-    "$stage" pi "$sibling" "$branch" "$(handoff_policy_line "$sibling")" "$issue")"
+  if [[ "$stage" == autopilot ]]; then
+    role=autopilot
+    intro="$(printf 'bercail handoff: stage autopilot, desk agent pi, linked worktree %s (branch %s, the head of %s). Stay in this checkout. Drive the PR to green with the autopilot skill: you may commit and push its fixes to %s, never force-push, merge, or release. %s When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
+      "$sibling" "$branch" "$target" "$branch" "$(handoff_policy_line "$sibling")" "$issue")"
+  else
+    intro="$(printf 'bercail handoff: stage %s, desk agent %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr. %s Do not open Review or invoke the review skill; when the desk agent finishes, Review opens itself in this space once the user looks at it. When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
+      "$stage" pi "$sibling" "$branch" "$(handoff_policy_line "$sibling")" "$issue")"
+  fi
   if [[ "$backend" == gt ]]; then
     intro="$(printf '%s\nUse gt, not raw git commit/push, unless asked.' "$intro")"
   else
@@ -656,8 +721,10 @@ handoff_spawn_main() {
 
   # The desk agent runs the lead from lead.json. It gets the one-line prompt
   # through WT_HERDR_AGENT_PROMPT, the issue through WT_HERDR_ISSUE and
-  # WT_HERDR_ISSUE_TITLE, and --model through WT_HERDR_MODEL. No file.
+  # WT_HERDR_ISSUE_TITLE, --model through WT_HERDR_MODEL, and an autopilot's
+  # role through WT_HERDR_ROLE. No file.
   if created="$(WT_HERDR_KEEP_FOCUS="$keep_space" \
+    WT_HERDR_ROLE="$role" \
     WT_HERDR_AGENT_PROMPT="$prompt" \
     WT_HERDR_ISSUE="$issue" \
     WT_HERDR_ISSUE_TITLE="$issue_title" \

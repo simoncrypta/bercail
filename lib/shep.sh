@@ -313,7 +313,10 @@ cmd_shep() {
     run) shep_run ;;
     status) shep_status ;;
     bg) shift; shep_bg "$@" ;;
-    task) shift; BERCAIL_SHEP_BIN="${BERCAIL_SHEP_BIN:-${BERCAIL_SELF:-bercail}}" node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shep-task.ts" "$@" ;;
+    # [shep] spawn_timeout: the seconds dispatch gives handoff-spawn to start a desk.
+    task) shift; BERCAIL_SHEP_BIN="${BERCAIL_SHEP_BIN:-${BERCAIL_SELF:-bercail}}" \
+      BERCAIL_SPAWN_TIMEOUT="$(toml_value "$BERCAIL_USER_CONFIG" shep spawn_timeout)" \
+      node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shep-task.ts" "$@" ;;
     runtime) node "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/runtime.ts" ;;
     discuss) shift; shep_discuss "$@" ;;
     repos) shift; shep_repos "$@" ;;

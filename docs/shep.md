@@ -60,8 +60,30 @@ and the gone desks, and the handoff's `bd comment` repeats the reason. The
 earlier requests stay blocked with the gone owner. The adopting desk gets
 only the new request, and later requests made in the usual way. Its
 `handoffs.jsonl` line starts a new ownership epoch, so older records neither
-own the task nor conflict with it. `stage: "autopilot"` records workflow
-intent: it does not turn a live lead into an autopilot or grant shipping rights.
+own the task nor conflict with it. `stage: "autopilot"` on a follow-up records
+workflow intent: it does not turn a live lead into an autopilot or grant shipping
+rights. On a first creation it starts an autopilot desk, which may commit and push
+the PR's branch; that needs a `pr:N` target and `branch` set to its head branch.
+
+A first desk on a PR's own branch (a `pr:N` target whose head is `branch`) starts
+at origin's head of that branch: handoff-spawn fetches it and checks it out, and
+fast-forwards a stale local branch. It never cuts the branch again, and it refuses
+a local branch with commits origin lacks.
+
+Dispatch gives handoff-spawn `[shep] spawn_timeout` seconds (600 by default) to
+start the desk, then stops it and the processes it started. The request is then
+UNKNOWN. The repo's dispatch lock is held meanwhile, so another dispatch in that
+repo stops with `dispatch lock held` until the spawn ends; run it again then. A creation that stopped before its desk can be finished: retry the same
+`requestId` and payload. When there is no `handoffs.jsonl` line for the issue
+(the spawn writes one when it finishes), no live terminal for the issue, and the
+branch's worktree is clean with only idle shells in it, dispatch starts the desk
+there. When the spawn left no worktree, it starts the creation again. An
+autopilot request also needs the PR's own branch, as on a first dispatch. Anything
+else keeps the UNKNOWN, with the reason in `next`, and launches nothing.
+
+A target held by another issue moves only when that issue is closed with
+`bd supersede <it> --with <this issue>` and none of its desks is live. Its
+`handoffs.jsonl` lines then neither own the target nor conflict with the new desk.
 
 A compatible original Pi must have its live foreground process/start tick,
 open-session claim, persisted session header, checkout, branch, issue, desk and
