@@ -399,7 +399,8 @@ own, not proof of who pressed it: any program running as you can type or click
 (`wtype`, `ydotool`, `/dev/uinput`, Hyprland's virtual pointer), and Herdr sees
 those as yours. Herdr's scripted paths (keys.json, the palette, `herdr-app do`,
 toasts) reach a mod's commands, never the panel, and no command answers. The
-guard is the seatbelt for agents: it blocks writes to `questions.json`,
+guard is the seatbelt for agents: it blocks writes to Shep's state folder,
+`questions.json` included,
 `bercail shep question answer`, and typing or clicking for you (`wtype`,
 `ydotool`, `xdotool`, `dotool`, `evemu`, `/dev/uinput`, and `hyprctl`'s
 `sendshortcut`, `sendkeystate` and `pass`, or a `dispatch exec` of one). A seatbelt,

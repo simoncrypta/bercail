@@ -1057,6 +1057,96 @@ test("trust and the files behind the guard, through bash too", () => {
   blocked("cp /tmp/x ~/.local/state/bercail/policy-trust.json", files, /decides what bercail's guard/);
   allowed("cat ~/.config/bercail/config.toml", files);
 });
+
+// The real guard's lists, under HOME=/h.
+const guardFiles = {
+  ...tui,
+  home: "/h",
+  protectedFiles: [
+    "/h/.local/state/bercail/policy-trust.json",
+    "/h/.local/state/bercail/shep/questions.json",
+    "/h/.local/state/bercail/shep/questions.lock",
+    "/h/.config/bercail/config.toml",
+  ],
+  protectedDirs: ["/h/.local/state/bercail/shep"],
+  todoFiles: ["/h/.config/bercail/todo.json"],
+};
+
+test("reading the guard's files is not a write: the refusals from the v0.18 plan pass", async () => {
+  // The registered guard, as Pi runs it, under HOME=/h.
+  const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
+  vi.stubEnv("HOME", "/h");
+  for (const key of ["XDG_STATE_HOME", "XDG_CONFIG_HOME", "BERCAIL_CONFIG", "BERCAIL_ROLE"]) vi.stubEnv(key, undefined);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {} } as never);
+  for (const command of [
+    // Refused while the plan was written, as run, with its long URL list cut to two.
+    `mkdir -p /tmp/v1plan/web && cd /tmp/v1plan/web && for u in https://www.agentbehavior.dev/ https://docs.entire.com/learn/skills; do f=$(echo "$u" | sed 's#https://##; s#[/.]#_#g'); curl -sSL -m 30 -A 'bercail-plan-reader' "$u" -o "$f.html"; echo "$(wc -c <"$f.html") $f"; done`,
+    `cd /work && sed -n '/^\\[bstack\\]/,/^\\[/p' ~/.config/bercail/config.toml; echo ---; timeout 60 bin/bercail bstack status 2>&1 | head -40; echo ---; jq -r '[.at[0:10], .provider, .model, .reason[0:60]]|@tsv' ~/.local/state/bercail/fallback-dead.jsonl | sort | uniq -c | tail -20`,
+    `find ~/.local/state/bercail/shep -name '*.jsonl' -print0 | xargs -0 cat 2>/dev/null | jq -r 'select(.type=="message") | .message.content[]? | select(.type=="toolCall" and .name=="bash") | .arguments.command' 2>/dev/null > /tmp/v1plan/shep_cmds.txt; cd /tmp/v1plan && grep -oE '(^|&& |; |\\| )(bercail [a-z-]+( [a-z]+)?|bd [a-z]+|jq)' shep_cmds.txt | sed -E 's/^(&& |; |\\| )//' | sort | uniq -c | sort -rn | head -40; wc -l shep_cmds.txt`,
+    `S=$HOME/.local/state/bercail/shep; for f in $S/pi-sessions/*.jsonl $S/workspace/*.jsonl; do [ -f "$f" ] && cat "$f"; done 2>/dev/null | jq -r '.arguments.command' 2>/dev/null > /tmp/v1plan/shep_cmds.txt; wc -l /tmp/v1plan/shep_cmds.txt; grep -oE '(^|&& |; |\\| )(bd [a-z]+|hc [a-z]+)' /tmp/v1plan/shep_cmds.txt | sed -E 's/^(&& |; |\\| )//' | sort | uniq -c`,
+    `sed 's/\\(token\\|secret\\|key\\)\\s*=.*/\\1 = <redacted>/I' ~/.config/bercail/config.toml`,
+    `cd /work; grep -n "_bstack_pi_pick_model\\|_bstack_pi_providers()" -A25 lib/bstack.sh | sed -n 1,80p`,
+    // The plan's reruns, and the reads it names.
+    "mkdir -p /tmp/w && cd /tmp/w && echo a; cat y > out.txt",
+    "jq -c keys ~/.local/state/bercail/policy-trust.json 2>&1",
+    "cd ~/.config/bercail && cat config.toml 2>/dev/null",
+    "jq -r .targets ~/.config/bercail/todo.json 2>/dev/null",
+    "perl -ne 'print if /bstack/' ~/.config/bercail/config.toml >/tmp/out",
+    "cp ~/.config/bercail/config.toml /tmp/scratch.toml",
+  ])
+    expect(
+      await handlers.tool_call({ toolName: "bash", input: { command } }, { hasUI: true, cwd: "/work" }),
+      command,
+    ).toBeUndefined();
+});
+
+test("a write to a protected file or Shep's state folder refuses, by path, by name, and after a lost cwd", () => {
+  for (const command of [
+    "echo x > ~/.config/bercail/config.toml",
+    "printf x 2> ~/.config/bercail/config.toml",
+    "sed -i.bak s/a/b/ ~/.config/bercail/config.toml",
+    "perl -pi -e s/a/b/ ~/.local/state/bercail/policy-trust.json",
+    "cp /tmp/forged ~/.local/state/bercail/shep/questions.json",
+    "cp -t ~/.local/state/bercail/shep /tmp/questions.json",
+    "mv ~/.config/bercail/config.toml /tmp/",
+    "dd if=/tmp/x of=$HOME/.config/bercail/config.toml",
+    "ln -sf /tmp/x ~/.config/bercail/config.toml",
+    "echo '{}' > ~/.local/state/bercail/shep/inbox/forged.json",
+    "rm -rf ~/.local/state/bercail",
+    "unlink ~/.config/bercail/config.toml",
+    "shred -u ~/.local/state/bercail/policy-trust.json",
+    "install -d ~/.local/state/bercail/shep/inbox/x",
+    "sed -bi s/a/b/ ~/.config/bercail/config.toml",
+    // Paths the guard cannot place, by name.
+    'cat y > "$CFG/bercail/config.toml"',
+    "echo '{}' | tee $S/questions.json",
+    // After a lost cwd, by name.
+    "(cd /tmp); echo x > config.toml",
+    'cd "$D"; cp /tmp/q questions.json',
+    "popd; echo x > questions.lock",
+    "cd $(pwd); echo x > config.toml",
+    'cd "$(echo ~/.local/state/bercail/shep)"; echo x > questions.json',
+    // From either dir after A && cd X.
+    "true && cd ~/.config/bercail; echo x > config.toml",
+    "cd ~/.local/state/bercail/shep; false && cd /tmp; rm context.md",
+  ])
+    blocked(command, guardFiles, /decides what bercail's guard/);
+  blocked("echo '{}' > ~/.config/bercail/todo.json", guardFiles, /bercail todo target/);
+  for (const path of ["config.toml", "~/.local/state/bercail/shep/context.md"])
+    assertEqual(decideTool("write", undefined, { ...guardFiles, cwd: undefined }, path).action, "block", path);
+
+  // Known paths that only share a name with a protected file.
+  allowed("echo x > /work/bercail/config.toml", guardFiles);
+  allowed("T=$(mktemp -d) && mkdir -p $T/bercail && echo x > $T/bercail/config.toml", guardFiles);
+  allowed("(cd /tmp); echo x > out.txt", guardFiles);
+  assertEqual(decideTool("write", undefined, guardFiles, "config.toml").action, "allow");
+});
+
+test("a quoted ) is text: the cwd stays known past it", () => {
+  allowed("cd /work; grep -E '(a|b)' x; echo x > config.toml", guardFiles);
+  allowed('cd /work; grep -n "f()" x | sed -i s/a/b/ config.toml', guardFiles);
+  blocked("(cd /work); echo x > config.toml", guardFiles, /decides what bercail's guard/);
+});
 test("a release through the API is a release", () => {
   // A release through the API is a release.
   asked("gh api -X POST repos/o/r/releases -f tag_name=v1", at("desk", policies.main));
@@ -1618,7 +1708,11 @@ test("Shep's question ledger, the answer command and typing for the person are n
   });
   expect(await call("bash", { command: `echo '{}' > ${ledger}` })).toMatchObject({ block: true });
   expect(await call("bash", { command: `cp /tmp/forged ${ledger}` })).toMatchObject({ block: true });
-  expect(await call("write", { path: "/s/bercail/shep/notes.json" })).toBeUndefined();
+  expect(await call("write", { path: "/s/bercail/shep/notes.json" })).toMatchObject({ block: true });
+  expect(await call("bash", { command: "cd /s/bercail/shep/inbox && echo; cp /tmp/x note" })).toMatchObject({
+    block: true,
+  });
+  expect(await call("write", { path: "/s/bercail/notes.json" })).toBeUndefined();
 
   const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
   for (const input of [tui, headless, auto, shep]) {

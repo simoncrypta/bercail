@@ -474,10 +474,10 @@ test.each([
   expect(h.confirm).not.toHaveBeenCalled();
 });
 
-test("protected path uncertainty denies writes without throwing from preflight", () => {
+test("protected path uncertainty denies writes without throwing from preflight", async () => {
   symlinkSync("loop", join(home, "loop"));
-  expect(scopedProtectedPath(join(home, "loop"), home)).toBe(true);
-  expect(scopedProtectedPath("unplaced-relative-path", undefined)).toBe(true);
+  expect(scopedProtectedPath(join(home, "loop"))).toBe(true);
+  expect(await harness().call("bash", { command: `echo x > ${home}/loop` })).toMatchObject({ block: true });
 });
 
 test("an observed scoped context never becomes unscoped when its ledger disappears", async () => {

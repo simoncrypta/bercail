@@ -204,6 +204,7 @@ try {
   mkdirSync(join(profile, "op-shim"));
   const guard = join(profile, "extensions/guard.ts");
   copyFileSync(resolve(root, "bstack/pi/extensions/guard.ts"), guard);
+  copyFileSync(resolve(root, "bstack/pi/extensions/scoped-job.ts"), join(profile, "extensions/scoped-job.ts"));
   const fixed = "for candidate in /usr/bin/op /usr/local/bin/op /opt/homebrew/bin/op; do";
   const shim = readFileSync(resolve(root, "bstack/pi/op-shim/op"), "utf8");
   assert.ok(shim.includes(fixed), "the shim no longer names where op is");

@@ -1,6 +1,6 @@
 // bercail's Pi guard. The decision functions are pure; the default export wires
 // tool_call, the repo's git policy (bercail policy show), and the approval log.
-import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -38,8 +38,10 @@ export type GuardInput = {
   hasUI: boolean;
   /** A typed scoped question exists for this checkout/desk, even without an active grant. */
   scopedJob?: boolean;
-  /** undefined: after a cd the guard could not follow. */
+  /** undefined: after a cd the guard could not follow, or when the shell may be in more than one dir. */
   cwd: string | undefined;
+  /** Within one command: each dir the shell may be in, as after A && cd X; undefined: one it lost. */
+  cwds?: (string | undefined)[];
   /** Current branch per git dir. Missing: not looked up. "": lookup failed. */
   branches?: Record<string, string>;
   /** Effective policy per git dir. Missing: not looked up. */
@@ -48,8 +50,10 @@ export type GuardInput = {
   graphiteAliases?: readonly string[];
   /** Files that decide what the guard lets through: the person edits them. */
   protectedFiles?: string[];
-  /** Trusted runtime path check, including aliases of authority and execution locks. */
-  protectedPath?: (path: string, cwd: string | undefined) => boolean;
+  /** Folders whose every file is protected, such as Shep's state. */
+  protectedDirs?: string[];
+  /** Scoped authorization's execution locks, by absolute path. */
+  protectedPath?: (path: string) => boolean;
   /** Todo targets and routes: only bercail todo target and route write them. */
   todoFiles?: string[];
   home?: string;
@@ -1284,41 +1288,114 @@ function isPolicyTrust(words: string[]): boolean {
   return plain.some((word, i) => word === "policy" && plain[i + 1] === "trust");
 }
 
-// A shell write to a file that decides the guard's answers: a redirect, or a
-// command that writes files, naming it. A seatbelt, not a sandbox.
-const fileWriters = new Set([
-  "tee",
-  "cp",
-  "mv",
-  "rm",
-  "ln",
-  "install",
-  "truncate",
-  "sed",
-  "perl",
-  "dd",
-  "chmod",
-  "touch",
-]);
+// The files a shell command writes: its redirect targets, and what a file writer
+// changes. Reads (cat, jq, sed -n, the source of a cp) are not writes, and
+// neither is 2>&1. A seatbelt, not a sandbox.
+const redirect = /^(?:\d*>>?|&>>?)(.*)$/;
+const everyOperand = new Set(["tee", "mv", "rm", "unlink", "shred", "truncate", "chmod", "touch"]);
+const toDestination = new Set(["cp", "ln", "install"]);
+const inPlace: Record<string, RegExp> = { sed: /^-[bnrsuzE]*i|^--in-place/, perl: /^-[^-MIei]*i/ };
 
-function writesProtected(words: string[], raw: string[], files: string[] | undefined, input?: GuardInput): boolean {
-  if (!fileWriters.has(words[0]) && !raw.some((word) => /^\d*>|^&>/.test(word))) return false;
-  if (input?.protectedPath) {
-    const targets = raw.flatMap((word, i) => {
-      const redirect = /^(?:\d*>>?|&>)(.*)$/.exec(word);
-      return redirect ? [redirect[1] || raw[i + 1] || ""] : [];
-    });
-    if (fileWriters.has(words[0])) targets.push(...words.slice(1));
-    if (
-      targets.some((word) => {
-        const path = word.replace(/^[^=]+=\s*/, "");
-        return path !== "" && !path.startsWith("-") && input.protectedPath!(path, input.cwd);
-      })
-    )
-      return true;
+function writeTargets(words: string[], raw: string[]): string[] {
+  const targets = raw.flatMap((word, i) => {
+    const to = redirect.exec(word);
+    return to ? [to[1] || raw[i + 1] || ""] : [];
+  });
+  const operands = words.filter((word, i) => !redirect.test(word) && redirect.exec(words[i - 1] ?? "")?.[1] !== "");
+  const [name, ...args] = operands;
+  const dashes = args.indexOf("--");
+  const plain = args.filter((arg, i) => (dashes >= 0 && i > dashes) || !arg.startsWith("-"));
+  const makesDirs = name === "install" && args.some((arg) => arg === "--directory" || /^-[^-]*d/.test(arg));
+  if (everyOperand.has(name) || makesDirs || (inPlace[name] && args.some((arg) => inPlace[name].test(arg))))
+    targets.push(...plain);
+  if (name === "dd") targets.push(...args.filter((arg) => arg.startsWith("of=")).map((arg) => arg.slice(3)));
+  if (toDestination.has(name) && !makesDirs) {
+    // -t DIR, -tDIR or --target-directory=DIR names the destination up front.
+    const t = args.findIndex((arg) => /^(-t|--target-directory)(=|$)|^-t./.test(arg));
+    if (t >= 0) targets.push(args[t].replace(/^(--target-directory|-t)=?/, "") || (args[t + 1] ?? ""));
+    else if (plain.length > 1) targets.push(plain.at(-1)!);
+    // ln with one operand makes the link in the current dir, under the target's name.
+    else if (name === "ln" && plain.length === 1) targets.push(basename(plain[0]));
   }
-  const tails = files?.map((file) => file.split("/").slice(-2).join("/")) ?? [];
-  return raw.some((word) => tails.some((tail) => word.includes(tail)));
+  return targets.filter((target) => target !== "" && !target.startsWith("&"));
+}
+
+// The real path, through symlinks, even when the file or its parents do not exist yet.
+function canonical(path: string, links = 0): string {
+  if (links > 40) throw new Error("symlink loop");
+  try {
+    return realpathSync.native(path);
+  } catch {
+    let link: string | undefined;
+    try {
+      link = readlinkSync(path);
+    } catch {
+      /* A missing leaf may still have a symlink parent. */
+    }
+    if (link) return canonical(link.startsWith("/") ? link : `${dirname(path)}/${link}`, links + 1);
+    const parent = dirname(path);
+    return parent === path ? resolve(path) : join(canonical(parent, links), basename(path));
+  }
+}
+
+// Expands what the guard knows of ~ and the state and config dirs. That can only
+// make a write protected, never let one through.
+function expandDirs(path: string, home: string | undefined): string {
+  const known = (name: string) => (name === "HOME" ? (home ?? process.env.HOME) : process.env[name]);
+  return path
+    .replace(/^~(?=\/|$)/, home ?? process.env.HOME ?? "~")
+    .replace(
+      /\$(?:\{(HOME|XDG_STATE_HOME|XDG_CONFIG_HOME|XDG_RUNTIME_DIR)\}|(HOME|XDG_STATE_HOME|XDG_CONFIG_HOME|XDG_RUNTIME_DIR)\b)/g,
+      (all, braced, bare) => known(braced ?? bare) || all,
+    );
+}
+
+// A write lands on a protected file, or in a protected folder, from any dir the
+// shell may be in. A path the guard cannot place (an unknown $VAR, or a relative
+// path once the cwd is lost) is checked by name: a protected file's last two
+// parts, or its file name.
+function protectedTarget(
+  target: string,
+  input: GuardInput,
+  files: string[],
+  dirs: string[],
+  also?: GuardInput["protectedPath"],
+): boolean {
+  if (!files.length && !dirs.length && !also) return false;
+  const path = expandDirs(target, input.home);
+  const placed = !/[$`]/.test(path) && !path.startsWith("~");
+  const cwds = input.cwds ?? [input.cwd];
+  const fulls = !placed ? [] : path.startsWith("/") ? [path] : cwds.map((cwd) => cwd && `${cwd}/${path}`);
+  if (!placed || fulls.includes(undefined)) {
+    const named = (file: string) => {
+      const tail = file.split("/").slice(-2).join("/");
+      return basename(path) === basename(file) || `/${path}/`.includes(`/${tail}/`);
+    };
+    if (files.some(named)) return true;
+  }
+  try {
+    const roots = [...files, ...dirs].map((root) => canonical(root));
+    return fulls.some((full) => {
+      if (!full) return false;
+      const real = canonical(full);
+      const hit = roots.some((root) => real === root || real.startsWith(`${root}/`) || root.startsWith(`${real}/`));
+      return hit || also?.(full) === true;
+    });
+  } catch {
+    // A symlink loop: the guard cannot tell where the write lands.
+    return true;
+  }
+}
+
+// The guard's own files, Shep's state, and scoped authorization's locks.
+function writesGuardFiles(targets: string[], input: GuardInput): boolean {
+  const files = input.protectedFiles ?? [];
+  const dirs = input.protectedDirs ?? [];
+  return targets.some((target) => protectedTarget(target, input, files, dirs, input.protectedPath));
+}
+
+function writesTodoFiles(targets: string[], input: GuardInput): boolean {
+  return targets.some((target) => protectedTarget(target, input, input.todoFiles ?? [], []));
 }
 
 // git commands that leave HEAD on its branch. Anything else, an alias included,
@@ -2088,7 +2165,9 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   if (secret && (/\$\{?OP_SERVICE_ACCOUNT_TOKEN/.test(command) || /\/proc\/\S*environ/.test(command)))
     return block(printsToken);
   let decision: GuardDecision = allow;
-  let cwd = input.cwd;
+  // Each dir the shell may be in; git and forges use it only when there is one.
+  let cwds = input.cwds ?? [input.cwd];
+  const cwdOf = () => (cwds.length === 1 ? cwds[0] : undefined);
   let gitEnv = input.gitEnv ?? false;
   let gitConfigEnv = input.gitConfigEnv ?? false;
   let branchMoved = input.branchMoved ?? false;
@@ -2101,7 +2180,8 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     : input.graphiteAliases;
   const fresh = new Set(input.fresh);
   const chainedFresh = new Set<string>();
-  let chainedCd = false;
+  // Where the shell was before each cd after &&: that cd may not have run.
+  let skippedCd: (string | undefined)[] = [];
   const vars: TempVars = new Map();
   let straight = true;
   let closed = false;
@@ -2109,12 +2189,14 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     // Apply a ) before the next segment, even when it stood alone after a ;.
     // No inner variables, scratch evidence or cwd can be borrowed outside it.
     if (closed) {
-      cwd = undefined;
+      cwds = [undefined];
+      skippedCd = [];
       straight = false;
       fresh.clear();
       vars.clear();
     }
-    closed = segment.words.some((word) => word.endsWith(")"));
+    // tokenize makes each unquoted ) a word of its own; a quoted one is text.
+    closed = segment.words.some((word, i) => word === ")" && !segment.quoted[i]);
     if (segment.unclosed) return block(unclosedSub);
     // export GIT_DIR=... holds for the rest of the command, so it counts from here on.
     if (segment.words.some((word) => gitPlace.test(word))) gitEnv = true;
@@ -2126,8 +2208,8 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       for (const [name, v] of vars) if (v.chained) vars.delete(name);
       for (const dir of chainedFresh) fresh.delete(dir);
       chainedFresh.clear();
-      if (chainedCd) cwd = undefined;
-      chainedCd = false;
+      cwds = [...new Set([...cwds, ...skippedCd])];
+      skippedCd = [];
     }
     const bare = unparen(segment.marked, segment.quoted);
     // Past a branch, loop, function, || or pipe, no repo counts as made here. A ( subshell
@@ -2137,7 +2219,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       fresh.clear();
       vars.clear();
     }
-    const here = { ...input, cwd, gitEnv, gitConfigEnv, branchMoved, fresh, graphiteAliases };
+    const here = { ...input, cwd: cwdOf(), cwds, gitEnv, gitConfigEnv, branchMoved, fresh, graphiteAliases };
     for (const sub of segment.subs)
       decision = worse(decision, decideBash(sub, { ...here, captured: true, graphiteAliases: undefined }, depth + 1));
     if (segment.subs.length) here.graphiteAliases = graphiteAliases = undefined;
@@ -2166,14 +2248,17 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (words[0].includes("/")) words[0] = basename(words[0]);
     // A cd in a pipe or in the background may run in a subshell: where the shell is, is unknown.
     const piped = segment.before === "|" || segment.after === "|" || segment.after === "&";
-    if (words[0] === "cd" || words[0] === "pushd") cwd = piped ? undefined : cdTarget(words, cwd, input.home);
-    else if (words[0] === "popd") cwd = undefined;
+    // A cd after && may not have run once that chain ends.
+    if (["cd", "pushd", "popd"].includes(words[0]) && segment.before === "&&") skippedCd.push(...cwds);
+    // cd $(pwd): the target is the substitution's output, which words leave out.
+    const unseen = piped || segment.subs.length > 0;
+    if (words[0] === "cd" || words[0] === "pushd")
+      cwds = [...new Set(cwds.map((cwd) => (unseen ? undefined : cdTarget(words, cwd, input.home))))];
+    else if (words[0] === "popd") cwds = [undefined];
     if (linksOut(words)) {
       straight = false;
       fresh.clear();
     }
-    // A cd after && may not have run once that chain ends.
-    if (["cd", "pushd", "popd"].includes(words[0]) && segment.before === "&&") chainedCd = true;
     const script = shellScript(words);
     if (script) decision = worse(decision, decideBash(script, here, depth + 1));
     // What eval or source sets stays set, and the guard cannot see what that is.
@@ -2193,7 +2278,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       for (const kind of kinds) if (kind) decision = worse(decision, decideEntire(kind, forge.words, forge.dir, here));
       // It runs them in --repo, which forgeCall left out of forge.dir.
       for (const script of pluginScripts(forge.words))
-        decision = worse(decision, decideBash(script, { ...here, cwd: forge.dir }, depth + 1));
+        decision = worse(decision, decideBash(script, { ...here, cwd: forge.dir, cwds: undefined }, depth + 1));
       const path = entirePath(forge.words);
       if (path.includes("checkout") || path.includes("resume") || forge.words.includes("--checkout"))
         branchMoved = true;
@@ -2217,8 +2302,9 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (setsTodoTarget(words) && input.role !== "shep") decision = worse(decision, block(todoTargets));
     decision = worse(decision, decideBasecamp(words, input.role));
     if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
-    if (writesProtected(words, raw, input.protectedFiles, here)) decision = worse(decision, block(protectedFile));
-    if (writesProtected(words, raw, input.todoFiles)) decision = worse(decision, block(todoFile));
+    const targets = writeTargets(words, raw);
+    if (writesGuardFiles(targets, here)) decision = worse(decision, block(protectedFile));
+    if (writesTodoFiles(targets, here)) decision = worse(decision, block(todoFile));
     if (!help && (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout")))
       branchMoved = true;
     if (isGhRelease(forge.words) || isGhApiRelease(forge.words)) {
@@ -2249,14 +2335,9 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
 export function decideTool(tool: string, command: string | undefined, input: GuardInput, path?: string): GuardDecision {
   if (tool === "edit" || tool === "write") {
     if (readOnlyRole(input.role)) return block(readOnlyTool);
-    const full = path?.startsWith("~/") && input.home ? join(input.home, path.slice(2)) : path;
-    if (
-      full &&
-      (input.protectedPath?.(full, input.cwd) ||
-        (input.cwd !== undefined && input.protectedFiles?.includes(resolve(input.cwd, full))))
-    )
-      return block(protectedFile);
-    if (full && input.cwd !== undefined && input.todoFiles?.includes(resolve(input.cwd, full))) return block(todoFile);
+    const targets = path ? [path] : [];
+    if (writesGuardFiles(targets, input)) return block(protectedFile);
+    if (writesTodoFiles(targets, input)) return block(todoFile);
   }
   // read, edit, write, grep, find and ls all take a path.
   if (input.deskSecret && path) {
@@ -2404,6 +2485,8 @@ export default function (pi: ExtensionAPI) {
     join(stateDir(), "shep/questions.lock"),
     config,
   ];
+  // Shep's state: its ledger, inbox and sessions.
+  const protectedDirs = [join(stateDir(), "shep")];
   // Not one of the guard's: a target decides where Shep writes, not what runs.
   const todoFiles = [join(dirname(config), "todo.json")];
 
@@ -2455,6 +2538,7 @@ export default function (pi: ExtensionAPI) {
       cwd: ctx.cwd,
       home,
       protectedFiles,
+      protectedDirs,
       protectedPath: scopedProtectedPath,
       todoFiles,
       graphiteAliases: event.toolName === "bash" ? readGraphiteAliases() : undefined,

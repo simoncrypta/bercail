@@ -131,25 +131,13 @@ function canonical(path: string, links = 0): string {
   }
 }
 
-export function scopedProtectedPath(path: string, cwd: string | undefined): boolean {
+// The execution locks of a scoped grant, for an absolute path. Shep's state
+// folder is the guard's own rule.
+export function scopedProtectedPath(path: string): boolean {
   try {
-    // Expanding known state variables here can only deny a write, never grant one.
-    const expanded = path
-      .replace(/^~(?=\/|$)/, process.env.HOME ?? "")
-      .replace(
-        /\$(?:\{(HOME|XDG_STATE_HOME|XDG_RUNTIME_DIR)\}|(HOME|XDG_STATE_HOME|XDG_RUNTIME_DIR)\b)/g,
-        (_all, braced, bare) => process.env[braced ?? bare] ?? "$unknown",
-      );
-    if (!expanded.startsWith("/") && !cwd) return true;
-    const full = canonical(expanded.startsWith("/") ? expanded : `${cwd}/${expanded}`);
-    const state = scopedStateDir();
-    const roots = [
-      state,
-      join(state, "questions.json"),
-      join(state, "questions.lock"),
-      join(dirname(state), "scoped-locks"),
-    ].map((root) => canonical(root));
-    if (roots.some((root) => full === root || full.startsWith(`${root}/`) || root.startsWith(`${full}/`))) return true;
+    const full = canonical(path);
+    const locks = canonical(join(dirname(scopedStateDir()), "scoped-locks"));
+    if (full === locks || full.startsWith(`${locks}/`) || locks.startsWith(`${full}/`)) return true;
     const runtime = process.env.XDG_RUNTIME_DIR;
     if (runtime && !isAbsolute(runtime)) return true;
     return runtime !== undefined && full.startsWith(`${canonical(runtime)}/scoped-index-`);
