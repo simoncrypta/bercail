@@ -378,8 +378,9 @@ deploy_bercail_config() {
     [[ "$sub" == "config.toml" || "$sub" == "config-reader.sh" ]] && continue
     copy_file "$file" "$BERCAIL_CONFIG_DIR/$sub"
   done < <(find "$src/config/agentic-dev" -type f -print0 2>/dev/null)
-  # Older releases installed a reader here; lib/toml.sh replaced it.
-  run rm -f "$BERCAIL_CONFIG_DIR/config-reader.sh"
+  # Older releases installed a reader here; lib/toml.sh replaced it. The
+  # webhook sink example went with the sinks; a user's notify.d stays.
+  run rm -f "$BERCAIL_CONFIG_DIR/config-reader.sh" "$BERCAIL_CONFIG_DIR/notify.sink.example"
 }
 
 deploy_lib() {
@@ -781,7 +782,6 @@ deploy_configs() {
   remove_agentic_dev_shim
   migrate_graphite_config
   migrate_bstack_switch
-  notify_rename_workspaces
 
   ensure_dir "$BERCAIL_CONFIG_DIR"
   ensure_dir "$BERCAIL_SHELL_DIR"

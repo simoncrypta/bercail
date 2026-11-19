@@ -48,7 +48,7 @@ Before replacing a prior result or `start.log`, the runner moves it into `.berca
 
 **Dry run.** `--dry-run` prints the exact argv even when `pi` is not installed, and does not check `--model`. A missing lead profile fails the dry run and writes no result.
 
-Each `--branch` spawn appends one line to `${XDG_STATE_HOME:-~/.local/state}/bercail/handoffs.jsonl`: the spawn JSON, plus `v` (the record's version, `1`) and `at` (when, UTC). Records written before v1 have neither. Headless runs are not logged there. Follow a `--branch` desk through [agent status webhooks](shep.md#agent-status-webhooks) or with `hc wait <desk>`; `desk`, `space`, and, when known, `issue_title` (and `base` and `model`, when set) are in the spawn JSON.
+Each `--branch` spawn appends one line to `${XDG_STATE_HOME:-~/.local/state}/bercail/handoffs.jsonl`: the spawn JSON, plus `v` (the record's version, `1`) and `at` (when, UTC). Records written before v1 have neither. Headless runs are not logged there. Follow a `--branch` desk through [Shep's desk events](shep.md#desk-events) or with `hc wait <desk>`; `desk`, `space`, and, when known, `issue_title` (and `base` and `model`, when set) are in the spawn JSON.
 
 Raw visible creation refuses a prior handoff for this repo/issue/target and a
 desk already occupying the resolved space. `--target pr:N|task:ID` records the

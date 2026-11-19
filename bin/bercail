@@ -111,7 +111,6 @@ cmd_doctor() {
   doctor_mod_copies
   doctor_skill || failures=1
   doctor_omarchy_integration || failures=1
-  doctor_notify || failures=1
   doctor_bstack || failures=1
   doctor_runtime
   doctor_desk_restore || failures=1

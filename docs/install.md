@@ -50,7 +50,7 @@ It also installs what bercail needs, and does a little extra on Omarchy, Linux, 
 
 The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/layouts/): [`bercail/`](../bercail) holds the layout, its two mods, its keys, and a [RECIPE.md](../bercail/RECIPE.md). When you ask your agent to add it, the recipe tells it to ask you, install bercail with the commands above, switch to the layout, and then tell you the keys and commands to start with.
 
-If you'd rather add only the layout, you get the desk and Review, but the desk runs plain `pi` instead of bstack, Review needs tuicr installed separately, and there are no worktree spaces, handoff, skills, or webhooks. It needs the Herdr app (`herdr-app`, `~/.config/herdr-app`), not the `herdr` terminal and its `herdr plugin` system.
+If you'd rather add only the layout, you get the desk and Review, but the desk runs plain `pi` instead of bstack, Review needs tuicr installed separately, and there are no worktree spaces, handoff, skills, or Shep. It needs the Herdr app (`herdr-app`, `~/.config/herdr-app`), not the `herdr` terminal and its `herdr plugin` system.
 
 ## Updating from an older release
 
@@ -61,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/v0.14.0/install
 bercail update
 ```
 
-The first update to v1 removes the `agentic-dev` command (it is `bercail`), moves `~/.local/state/agentic-dev` (the handoff log) into `~/.local/state/bercail`, and leaves a link at the old path, which you can delete once nothing of yours reads it. Handoff records whose worktree and repo are both gone are dropped in the move. It also rewrites two names v1 no longer reads: `[graphite]` entries in `config.toml` become `[git]` entries (`true` is `"gt"`, `false` is `"gh"`), and `workspaces` in a notify sink becomes `spaces`.
+The first update to v1 removes the `agentic-dev` command (it is `bercail`), moves `~/.local/state/agentic-dev` (the handoff log) into `~/.local/state/bercail`, and leaves a link at the old path, which you can delete once nothing of yours reads it. Handoff records whose worktree and repo are both gone are dropped in the move. It also rewrites `[graphite]` entries in `config.toml`, a name v1 no longer reads, as `[git]` entries (`true` is `"gt"`, `false` is `"gh"`).
 
 `handoff-spawn` prints one name for each fact from v1 on. If a script of yours reads its JSON: `graphite` is gone (read `git`: `gh`, `gt` or `origin`), `socket` is gone (read `herdr`), `workspace` is gone (read `space`), and `--workspace` is `--space`.
 

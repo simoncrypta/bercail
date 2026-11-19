@@ -236,8 +236,8 @@ export function stepAgent(order, list, current, space, dir) {
     : ([...all].reverse().find((a) => rank.get(a.space) <= here) ?? all[all.length - 1]);
 }
 
-// The webhook follower (`bercail notify run`): one hidden hc terminal, kept
-// running here so it lives as long as herdr-core, window open or not.
+// The desk follower (`bercail notify run`), which feeds Shep's inbox: one hidden
+// hc terminal, kept running here so it lives as long as herdr-core, window open or not.
 const NOTIFIER = "bercail-notify";
 const NOTIFIER_PATH = 'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"';
 const NOTIFIER_RUN = `${NOTIFIER_PATH}; exec bercail notify run`;

@@ -61,7 +61,7 @@ The layout opens on Shep, your orchestrator (on Pi), with your spaces beside it:
 - [review](docs/review.md): tuicr, and how Review opens and closes.
 - [handoff](docs/handoff.md): stages, headless runs, result files.
 - [bstack](docs/bstack.md): Pi on your own plans, roles, autopilot. Then [the bstack guide](docs/bstack/README.md).
-- [Shep](docs/shep.md): the orchestrator on Pi, the Shep view, and agent status webhooks.
+- [Shep](docs/shep.md): the orchestrator on Pi, the Shep view, and desk events.
 - [development](docs/development.md): tests, dependencies, platforms.
 - [Herdr agents and subagents](docs/herdr-agents-subagents.md): a proposal for Herdr's agents list.
 

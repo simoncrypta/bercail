@@ -351,14 +351,6 @@ handoff_shown_space() {
   printf '%s' "$ws"
 }
 
-# A desk in a repo that no notify sink covers posts nowhere: bercail says so
-# on stderr, with the command that fixes it. Never fails the spawn.
-handoff_notify_check() {
-  local bercail="${BERCAIL_BIN:-bercail}"
-  command -v "$bercail" >/dev/null 2>&1 || return 0
-  "$bercail" notify check "$1" </dev/null >/dev/null || true
-}
-
 handoff_bool_json() {
   if [[ "$1" -eq 1 ]]; then
     printf 'true'
@@ -750,7 +742,6 @@ handoff_spawn_main() {
   [[ -z "$base" ]] || json="$(jq -c --arg base "$base" '. + {base:$base}' <<<"$json")"
   [[ -z "$model" ]] || json="$(jq -c --arg model "$model" '. + {model:$model}' <<<"$json")"
   [[ -z "$adopt_reason" ]] || json="$(jq -c --arg r "$adopt_reason" '. + {adoptReason:$r}' <<<"$json")"
-  handoff_notify_check "$sibling"
   handoff_remember "$json"
   printf '%s\n' "$json"
   [[ -z "$lock" ]] || rmdir "$lock"

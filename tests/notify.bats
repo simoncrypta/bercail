@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
-# Agent status webhooks: the follower, its payloads, sinks, doctor, and the
-# notify add / repo / check commands, against a fake curl and fake hc.
-# `event done` passes the status done. ls | grep checks for hidden temp files.
-# shellcheck disable=SC1010,SC2010
+# The desk follower: it reads `hc events` from a fake hc and writes each finish
+# or block to Shep's inbox, with a current source projection beside it.
+# `event done` passes the status done. The sink commands are gone.
+# shellcheck disable=SC1010
 
 setup() {
   load test_helper
@@ -10,43 +10,21 @@ setup() {
   # As in the old set -euo pipefail: a pipeline that fails anywhere fails the test.
   set -o pipefail
   export HERDR_APP_BIN="$BATS_TEST_TMPDIR/no-herdr-app" HC_BIN="$BATS_TEST_TMPDIR/no-hc"
-  export NOTIFY_RETRY_SLEEP=0
   export GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid
   export GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid
-  mkdir -p "$XDG_CONFIG_HOME/bercail/notify.d" "$BATS_TEST_TMPDIR/bin"
-
-  # A fake curl: records the body and headers it was given, answers $CURL_CODE.
-  cat >"$BATS_TEST_TMPDIR/bin/curl" <<EOF
-#!/usr/bin/env bash
-hdr=""
-while [[ \$# -gt 0 ]]; do
-  case "\$1" in
-    -H) hdr="\${2#@}"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-cat >>"$BATS_TEST_TMPDIR/bodies.jsonl"
-printf '\n' >>"$BATS_TEST_TMPDIR/bodies.jsonl"
-cat "\$hdr" >>"$BATS_TEST_TMPDIR/headers.txt"
-printf '%s' "\${CURL_CODE:-200}"
-EOF
-  chmod +x "$BATS_TEST_TMPDIR/bin/curl"
-  export NOTIFY_CURL="$BATS_TEST_TMPDIR/bin/curl"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
 
   # shellcheck source=/dev/null
   source "$ROOT/lib/notify.sh"
   # shellcheck source=/dev/null
   source "$ROOT/lib/shep.sh"
-
-  sink="$XDG_CONFIG_HOME/bercail/notify.d/work-shep.toml"
-  cat >"$sink" <<'EOF'
-url = "https://example.invalid/hook"
-key = "secret-key"
-auth = both
-repos = myapp
-notify = finished, blocked
-EOF
-  chmod 600 "$sink"
+  # A clock that ticks once per read, so one desk's two finishes get two inbox files.
+  _notify_now() {
+    local t
+    t="$(( $(cat "$BATS_TEST_TMPDIR/clock" 2>/dev/null || printf 1794886800) + 1 ))"
+    printf '%s' "$t" >"$BATS_TEST_TMPDIR/clock"
+    printf '%s' "$t"
+  }
 
   # A checkout whose main worktree is named myapp, with a handoff record.
   git init -q "$BATS_TEST_TMPDIR/myapp"
@@ -56,7 +34,18 @@ EOF
   mkdir -p "$XDG_STATE_HOME/bercail"
   jq -nc --arg p "$desk" '{path:$p, branch:"feat", issue:"myapp-1", issue_title:"Fix the login", stage:"bstack", harness:"pi"}' \
     >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
-  : >"$BATS_TEST_TMPDIR/bodies.jsonl"
+  # Shep has started once: its inbox exists, so the follower writes to it.
+  mkdir -p "$(shep_state_dir)/inbox"
+}
+
+# Shep's inbox events, oldest first by the second (and sequence) in their id.
+events() {
+  find "$(shep_state_dir)/inbox" -maxdepth 1 -name '*.json' -exec cat {} + \
+    | jq -sc 'sort_by(.event_id | split(":")[2] | tonumber? // 0)'
+}
+
+kinds() {
+  events | jq -c 'map(.kind)'
 }
 
 @test "an incomplete provider review projects a stable blocked episode rather than a new finish" {
@@ -64,8 +53,9 @@ EOF
   printf '%s\n' '{"status":"blocked","summary":"review incomplete","session_id":"session-237","issue":"myapp-1","completion":"incomplete","reason":"provider_safety_block","provider_error":{"reason":"provider_safety_block","completion":"incomplete","episode_id":"session-237:user-1","candidate":"tree-237","phase":"final-review","role":"judge"}}' >"$desk/.bercail/handoff-result.json"
   notify_desk_changed t9 working done pi sp1 "$desk" 'Review' myapp-1 'Fix the login'
   notify_desk_changed t9 working done pi sp1 "$desk" 'Review' myapp-1 'Fix the login'
-  jq -es 'length == 2 and all(.[]; .kind == "blocked" and .event_id == "provider-error:session-237:user-1:blocked"
-    and .desk.result.provider_error.candidate == "tree-237" and (.text | contains("is blocked")))' "$BATS_TEST_TMPDIR/bodies.jsonl"
+  events | jq -e 'length == 1 and all(.[]; .kind == "blocked" and .event_id == "provider-error:session-237:user-1:blocked"
+    and .desk.result.provider_error.candidate == "tree-237" and (.text | contains("is blocked")))' >/dev/null \
+    || fail "want one blocked episode: $(events)"
 }
 
 # One `hc events` line: every terminal, the desk with STATUS.
@@ -89,29 +79,10 @@ status_event() {
       status:(if $s == "" then null else {app:"pi", state:$s, msg:"Reading"} end)}}}'
 }
 
-kinds() {
-  jq -sc '[.[] | select(. != null) | .kind]' "$BATS_TEST_TMPDIR/bodies.jsonl" 2>/dev/null
-}
-
 # The desk's statuses over a session: done seen first, then working->done, blocked twice, blocked->done.
 follow_session() {
   { event done; event working; event working; event done; event idle; event working; event blocked; event blocked; event done; } \
     | notify_follow
-}
-
-load_doctor() {
-  # shellcheck source=/dev/null
-  source "$ROOT/lib/doctor.sh"
-  log() { printf '%s\n' "$*"; }
-}
-
-# hc that says every terminal it is asked about is live.
-hc_live() {
-  cat >"$BATS_TEST_TMPDIR/bin/hc" <<'EOF'
-#!/usr/bin/env bash
-printf '{"state":"live"}\n'
-EOF
-  chmod +x "$BATS_TEST_TMPDIR/bin/hc"
 }
 
 # Like hc: killing a --rm terminal removes it, and kill then answers not_found (exit 3).
@@ -126,53 +97,13 @@ EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/hc-kill"
 }
 
-# bercail update ended the live follower.
-restarted_follower() {
-  load_doctor
-  hc_kill
-  RESTART_OUT="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" notify_restart_follower 2>&1)"
-}
-
-# notify add bot-two from this checkout, with a pasted url and key.
-add_bot_two() {
-  rm -f "$XDG_CONFIG_HOME/bercail/notify.d/"*.toml
-  : >"$BATS_TEST_TMPDIR/headers.txt"
-  ADD_OUT="$(cd "$desk" && printf 'https://example.invalid/new\npasted-key\n' | notify_add bot-two --auth bearer 2>&1)" \
-    || fail "notify add: $ADD_OUT"
-  added="$XDG_CONFIG_HOME/bercail/notify.d/bot-two.toml"
-}
-
-# A checkout of `other`, and no sinks at all.
-other_no_sinks() {
-  rm -f "$XDG_CONFIG_HOME/bercail/notify.d/"*.toml
-  git init -q "$BATS_TEST_TMPDIR/other"
-  git -C "$BATS_TEST_TMPDIR/other" commit -q --allow-empty -m init
-}
-
-# Then one sink, team, covering myapp: `other` is in no sink.
-add_team() {
-  team="$XDG_CONFIG_HOME/bercail/notify.d/team.toml"
-  printf 'url = "https://example.invalid/team"\nkey = "team-key"\nauth = both\nrepos = myapp\nnotify = finished, blocked\n' >"$team"
-  chmod 600 "$team"
-}
-
-team_and_other() {
-  other_no_sinks
-  add_team
-}
-
 # Reconciliation is a current projection beside the inbox, never a historical event.
 source_state() {
   printf '%s/source-state.json' "$(shep_state_dir)"
 }
 
-start_source_inbox() {
-  mkdir -p "$(shep_state_dir)/inbox"
-}
-
-@test "first-seen terminal states reconcile for Shep without invented events or webhook changes" {
+@test "first-seen terminal states reconcile for Shep without invented events" {
   local state status
-  start_source_inbox
   mkdir -p "$desk/.bercail"
   printf '{"issue":"myapp-1","summary":"untrusted-answer","status":"ready"}\n' >"$desk/.bercail/handoff-result.json"
   for status in done idle blocked; do
@@ -192,7 +123,6 @@ start_source_inbox() {
       and ([.. | objects | has("event_id") or has("title") or has("issue_title") or has("result")] | any | not)
     ' "$state" >/dev/null || fail "bad $status projection: $(<"$state")"
   done
-  [[ "$(kinds)" == '[]' ]] || fail "first-seen snapshots changed webhook semantics: $(kinds)"
   [[ -z "$(find "$(shep_state_dir)/inbox" -type f -print)" ]] || fail "invented source event"
   [[ "$(stat -c %a "$state")" == 600 ]] || fail "source projection is not private"
   if grep -q 'untrusted-' "$state"; then fail "source projection contains desk-authored prose"; fi
@@ -200,7 +130,6 @@ start_source_inbox() {
 }
 
 @test "notify run keeps ordinary events separate from current source reconciliation" {
-  start_source_inbox
   { event working; status_event done; } >"$BATS_TEST_TMPDIR/source-stream.jsonl"
   cat >"$BATS_TEST_TMPDIR/bin/hc" <<EOF
 #!/usr/bin/env bash
@@ -212,7 +141,6 @@ EOF
   HC_BIN="$BATS_TEST_TMPDIR/bin/hc" notify_run
   [[ -f "$(source_state)" ]] || fail "notify run did not publish source reconciliation"
   jq -e '.desks[0].agent.status == "done"' "$(source_state)" >/dev/null || fail "source not current"
-  [[ "$(kinds)" == '["finished"]' ]] || fail "webhook did not keep ordinary event semantics"
   [[ "$(find "$(shep_state_dir)/inbox" -name '*.json' | wc -l)" -eq 1 ]] || fail "source became an inbox event"
   jq -e '.kind == "finished" and (.event_id | startswith("t9:finished:"))' \
     "$(shep_state_dir)/inbox/"*.json >/dev/null || fail "ordinary source event lost its identity"
@@ -220,7 +148,6 @@ EOF
 }
 
 @test "missed snapshots replace source mappings and status deltas clear stale terminal observations" {
-  start_source_inbox
   { event working
     event done | jq -c '.terminals[1].address = "t12"
       | .terminals[1].labels += {"bercail.issue":"other-2","bercail.space":"sp2"}
@@ -231,11 +158,10 @@ EOF
   jq -e '.desks | length == 1 and .[0].agent.address == "t12" and .[0].agent.status == "working"
     and .[0].space.id == "sp2" and .[0].desk.issue == "other-2"' "$(source_state)" >/dev/null \
     || fail "missed snapshot retained old mapping or stale done status: $(<"$(source_state)")"
-  [[ "$(kinds)" == '[]' ]] || fail "first-seen missed snapshot fabricated a transition"
+  [[ "$(kinds)" == '[]' ]] || fail "first-seen missed snapshot fabricated a transition: $(kinds)"
 }
 
 @test "reconciliation survives follower restart and malformed source does not erase valid state" {
-  start_source_inbox
   event done | notify_follow
   [[ -f "$(source_state)" ]] || fail "no initial source projection"
   event blocked | notify_follow
@@ -249,7 +175,6 @@ EOF
 }
 
 @test "malformed status deltas do not replace a valid source observation" {
-  start_source_inbox
   { event blocked
     printf '%s\n' '{"method":"event","params":{"terminal":"t9","type":"status","data":{"status":"bad"}}}' \
       '{"method":"event","params":{"terminal":"t9","type":"status","data":{"status":{"state":{}}}}}'
@@ -260,7 +185,6 @@ EOF
 
 @test "whole empty snapshots and gone terminal events remove source mappings" {
   local gone
-  start_source_inbox
   for gone in finished removed lost; do
     { event done
       jq -nc --arg type "$gone" '{method:"event",params:{terminal:"t9",type:$type,data:{}}}'
@@ -274,7 +198,6 @@ EOF
 
 @test "failed label and restart lookups discard the old source mapping" {
   local type
-  start_source_inbox
   cat >"$BATS_TEST_TMPDIR/bin/hc-gone" <<EOF
 #!/usr/bin/env bash
 printf '%s\\n' "\$*" >>"$BATS_TEST_TMPDIR/source-hc.log"
@@ -293,7 +216,6 @@ EOF
 
 @test "empty missed snapshots forget all mapping before a terminal address is reused" {
   local next="$BATS_TEST_TMPDIR/new-app"
-  start_source_inbox
   git init -q "$next"
   git -C "$next" commit -q --allow-empty -m init
   cat >"$BATS_TEST_TMPDIR/bin/hc-reused" <<EOF
@@ -322,6 +244,7 @@ EOF
 }
 
 @test "source reconciliation creates no inbox before Shep first starts" {
+  rm -rf "$(shep_state_dir)"
   event done | notify_follow
   [[ ! -e "$(shep_state_dir)" ]] || fail "source reconciliation started an unused Shep inbox"
 }
@@ -331,7 +254,6 @@ inbox_count() {
 }
 
 @test "a replayed finish does not replace the next turn's finish even with no new report" {
-  start_source_inbox
   # Same desk, issue and report throughout. Drain both turns in one second.
   _notify_now() { printf '1794886882'; }
   { event working
@@ -343,14 +265,13 @@ inbox_count() {
     status_event done t9 12
   } | notify_follow
   local ids
-  ids="$(jq -sc '[.[] | [.kind, (.event_id | split(":")[2])]]' "$BATS_TEST_TMPDIR/bodies.jsonl")"
+  ids="$(events | jq -c 'map([.kind, (.event_id | split(":")[2])])')"
   [[ "$ids" == '[["finished","1794886882.10"],["finished","1794886882.12"]]' ]] || fail "expected both real finishes, not their replays: $ids"
   [[ "$(inbox_count)" -eq 2 ]] || fail "Shep must get both turns even in one second"
 }
 
 @test "a labels lookup that already sees done never puts the source ahead of the queued events" {
   local labels='{"method":"event","params":{"terminal":"t9","type":"labels","data":{}}}'
-  start_source_inbox
   cat >"$BATS_TEST_TMPDIR/bin/hc-ahead" <<EOF
 #!/usr/bin/env bash
 [[ "\$1 \$2" == 'get t9' ]] || exit 1
@@ -363,7 +284,6 @@ EOF
     fail "the source says done with no finish queued, so Shep reads a gap notice, then the finish"
   fi
   rm -f "$(shep_state_dir)/inbox/"*.json
-  : >"$BATS_TEST_TMPDIR/bodies.jsonl"
   { event working; printf '%s\n' "$labels"; status_event blocked; status_event done; } \
     | HC_BIN="$BATS_TEST_TMPDIR/bin/hc-ahead" notify_follow
   [[ "$(kinds)" == '["blocked","finished"]' ]] || fail "the queued statuses must be reported once, in order: $(kinds)"
@@ -377,40 +297,37 @@ EOF
   [[ "$got" == '["finished","blocked","finished"]' ]] || fail "kinds: $got"
 }
 
-@test "the payload names the desk, its space and handoff; the key goes in headers only" {
+@test "the event names the desk, its space and handoff" {
   local first
   follow_session
-  first="$(head -n 1 "$BATS_TEST_TMPDIR/bodies.jsonl")"
+  first="$(events | jq -c '.[0]')"
   jq -e --arg p "$desk" '
-    .schema == "bercail.agent_status/v2" and .sink == "work-shep"
+    .schema == "bercail.agent_status/v2" and .sink == "shep"
     and .agent.address == "t9" and .agent.status == "done" and .agent.previous_status == "working"
     and .agent.app == "pi" and .agent.title == "Beads issue myapp-1"
     and .space.id == "sp1" and .space.repo == "myapp" and .space.checkout_path == $p and .space.linked == true
     and .desk.issue == "myapp-1" and .desk.issue_title == "Fix the login" and .desk.stage == "bstack" and .desk.branch == "feat"
     and .text == "myapp-1: Fix the login. Desk t9 finished."' <<<"$first" >/dev/null \
     || fail "payload: $first"
-  jq -se '.[1].kind == "blocked" and .[1].text == "myapp-1: Fix the login. Desk t9 is blocked." and .[1].desk.issue_title == "Fix the login"' \
-    "$BATS_TEST_TMPDIR/bodies.jsonl" >/dev/null || fail "blocked text: $(sed -n 2p "$BATS_TEST_TMPDIR/bodies.jsonl")"
-  grep -q 'Authorization: Bearer secret-key' "$BATS_TEST_TMPDIR/headers.txt" || fail "bearer header"
-  grep -q 'X-Automation-Key: secret-key' "$BATS_TEST_TMPDIR/headers.txt" || fail "automation key header"
-  if grep -q secret-key "$BATS_TEST_TMPDIR/bodies.jsonl"; then fail "the key must not be in the body"; fi
+  events | jq -e '.[1].kind == "blocked" and .[1].text == "myapp-1: Fix the login. Desk t9 is blocked." and .[1].desk.issue_title == "Fix the login"' \
+    >/dev/null || fail "blocked text: $(events | jq -c '.[1]')"
 }
 
 @test "an empty field keeps the others in place" {
   # An agent that reports no app: the empty field must not shift the others.
   { event working; event working | jq -c '.terminals[1].status = {state:"done"}'; } | notify_follow
-  jq -e --arg p "$desk" '.agent.app == null and .space.id == "sp1" and .space.checkout_path == $p' \
-    "$BATS_TEST_TMPDIR/bodies.jsonl" >/dev/null || fail "empty app shifted fields: $(cat "$BATS_TEST_TMPDIR/bodies.jsonl")"
+  events | jq -e --arg p "$desk" '.[0] | .agent.app == null and .space.id == "sp1" and .space.checkout_path == $p' \
+    >/dev/null || fail "empty app shifted fields: $(events)"
 }
 
-@test "heartbeats and other non-snapshot lines keep desk statuses; finished and blocked post" {
+@test "heartbeats and other non-snapshot lines keep desk statuses; finished and blocked are queued" {
   local got
   { event working; heartbeat 3706; event done; } | notify_follow
   got="$(kinds)"
   [[ "$got" == '["finished"]' ]] || fail "heartbeat between working and done: $got"
-  jq -e '.sink == "work-shep" and .space.repo == "myapp" and .space.linked == true' \
-    "$BATS_TEST_TMPDIR/bodies.jsonl" >/dev/null || fail "heartbeat finished payload: $(cat "$BATS_TEST_TMPDIR/bodies.jsonl")"
-  : >"$BATS_TEST_TMPDIR/bodies.jsonl"
+  events | jq -e '.[0] | .sink == "shep" and .space.repo == "myapp" and .space.linked == true' \
+    >/dev/null || fail "heartbeat finished event: $(events)"
+  rm -f "$(shep_state_dir)/inbox/"*.json
   { event working; heartbeat 1; printf 'not json\n'; heartbeat 2; event blocked; } | notify_follow
   got="$(kinds)"
   [[ "$got" == '["blocked"]' ]] || fail "heartbeat between working and blocked: $got"
@@ -423,7 +340,7 @@ EOF
   [[ "$got" == '["finished"]' ]] || fail "params snapshot: $got"
 }
 
-@test "status events after the snapshot post finished and blocked, and the follower records them" {
+@test "status events after the snapshot queue finished and blocked" {
   local got
   # (The 10:43 miss: the follower read the snapshot and nothing after it.)
   { event working; heartbeat 4054
@@ -432,12 +349,10 @@ EOF
     status_event working; status_event blocked; status_event working; status_event done; } | notify_follow
   got="$(kinds)"
   [[ "$got" == '["finished","blocked","finished"]' ]] || fail "event deltas: $got"
-  jq -se --arg p "$desk" '.[0] | .agent.address == "t9" and .agent.status == "done"
+  events | jq -e --arg p "$desk" '.[0] | .agent.address == "t9" and .agent.status == "done"
     and .agent.previous_status == "working" and .space.id == "sp1" and .space.repo == "myapp"
-    and .space.checkout_path == $p and .desk.issue == "myapp-1"' "$BATS_TEST_TMPDIR/bodies.jsonl" >/dev/null \
-    || fail "event delta payload: $(head -n 1 "$BATS_TEST_TMPDIR/bodies.jsonl")"
-  jq -e '.last_transition.address == "t9" and .last_transition.kind == "finished" and .last_transition_at > 0' \
-    "$(notify_follower_file)" >/dev/null || fail "follower record: $(cat "$(notify_follower_file)")"
+    and .space.checkout_path == $p and .desk.issue == "myapp-1"' >/dev/null \
+    || fail "event delta payload: $(events | jq -c '.[0]')"
 }
 
 @test "a desk started later is looked up, labels and all; a finished terminal is forgotten" {
@@ -453,39 +368,10 @@ EOF
   { event working; status_event working t12; status_event done t12;
     printf '{"jsonrpc":"2.0","method":"event","params":{"seq":5,"terminal":"t9","type":"finished","data":{}}}\n'
     status_event done; } | HC_BIN="$BATS_TEST_TMPDIR/bin/hc-get" notify_follow
-  jq -se 'length == 1 and .[0].agent.address == "t12" and .[0].space.id == "sp2" and .[0].agent.title == "New desk"
+  events | jq -e 'length == 1 and .[0].agent.address == "t12" and .[0].space.id == "sp2" and .[0].agent.title == "New desk"
     and .[0].agent.role == "shep-bg" and .[0].desk.issue == "bg-1" and .[0].desk.issue_title == "Wait for CI"
     and .[0].desk.stage == null' \
-    "$BATS_TEST_TMPDIR/bodies.jsonl" >/dev/null || fail "new desk / finished desk: $(cat "$BATS_TEST_TMPDIR/bodies.jsonl")"
-}
-
-@test "repos filter skips other repos" {
-  sed -i 's/^repos = myapp/repos = other/' "$sink"
-  { event working; event done; } | notify_follow
-  [[ ! -s "$BATS_TEST_TMPDIR/bodies.jsonl" ]] || fail "a sink for another repo got: $(cat "$BATS_TEST_TMPDIR/bodies.jsonl")"
-}
-
-@test "a group/other-readable key is not sent" {
-  chmod 644 "$sink"
-  { event working; event done; } | notify_follow 2>"$BATS_TEST_TMPDIR/err"
-  [[ ! -s "$BATS_TEST_TMPDIR/bodies.jsonl" ]] || fail "insecure sink must not post"
-  grep -q 'chmod 600' "$BATS_TEST_TMPDIR/err" || fail "insecure message: $(cat "$BATS_TEST_TMPDIR/err")"
-}
-
-@test "a rejected key is recorded and status prints no url or key" {
-  local out
-  { event working; event done; } | CURL_CODE=401 notify_follow 2>/dev/null
-  out="$(notify_status)"
-  grep -q 'auth_failed=true' <<<"$out" || fail "status: $out"
-  if grep -q 'secret-key\|example.invalid' <<<"$out"; then fail "status leaks: $out"; fi
-}
-
-@test "notify test sends a kind=test payload" {
-  local out
-  out="$(notify_test work-shep)" || fail "test send: $out"
-  [[ "$out" == "work-shep HTTP 200 event test:"[0-9]* ]] || fail "test output: $out"
-  jq -e 'select(.kind == "test") | .desk.issue_title == null and .text == "Test from bercail (sink work-shep)."' \
-    "$BATS_TEST_TMPDIR/bodies.jsonl" >/dev/null || fail "test payload: $(jq -c 'select(.kind == "test")' "$BATS_TEST_TMPDIR/bodies.jsonl")"
+    >/dev/null || fail "new desk / finished desk: $(events)"
 }
 
 @test "with no window here, a desk's space is named from the Shell bercail made for it" {
@@ -507,7 +393,7 @@ EOF
   notitle='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":null,"stage":"bstack","harness":"pi","result":null}'
   noissue='{"branch":null,"issue":null,"issue_title":null,"stage":null,"harness":null,"result":null}'
   dotted='{"branch":"readable-titles","issue":"bercail-wb1","issue_title":"Show the title.","stage":"bstack","harness":"pi","result":null}'
-  payload_text() { notify_payload "$1" work-shep "$agent" "$2" "$3" e1 | jq -r .text; }
+  payload_text() { notify_payload "$1" "$agent" "$2" "$3" e1 | jq -r .text; }
   [[ "$(payload_text finished "$space" "$desk_t")" == "bercail-wb1: Show the issue title next to every bd and desk id. Desk t9 (Readable-titles_Bercail) finished." ]] \
     || fail "finished text: $(payload_text finished "$space" "$desk_t")"
   [[ "$(payload_text blocked "$space" "$desk_t")" == "bercail-wb1: Show the issue title next to every bd and desk id. Desk t9 (Readable-titles_Bercail) is blocked." ]] \
@@ -525,273 +411,73 @@ EOF
     || fail "truncated title: $(payload_text finished "$space" "$cut")"
 }
 
-@test "doctor notes the last post next to a live follower" {
-  local st out want
-  # A follower that has posted: it left its record and the sink's delivery state.
-  { event working; event done; } | notify_follow
-  load_doctor
-  hc_live
-  st="$(_notify_sink_state_file work-shep)"
-  jq -c '.last_ok_at = 1793314928 | .auth_failed = false' "$st" >"$st.new" && mv "$st.new" "$st"
-  out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc" doctor_notify)" || fail "doctor_notify: $out"
-  want="last post $(date -d @1793314928 '+%Y-%m-%d %H:%M' 2>/dev/null || date -r 1793314928 '+%Y-%m-%d %H:%M')"
-  grep -q "ok  notify follower (hc terminal bercail-notify; $want)" <<<"$out" || fail "doctor: $out"
-  if grep -q 'secret-key\|example.invalid' <<<"$out"; then fail "doctor leaks: $out"; fi
-  rm -f "$st"
-  out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc" doctor_notify)" || fail "doctor_notify without state: $out"
-  grep -q 'last post never' <<<"$out" || fail "doctor never: $out"
-}
-
-@test "doctor flags a live follower that missed a desk finishing, or runs older code" {
-  local now out
-  load_doctor
-  now="$(date +%s)"
-  cat >"$BATS_TEST_TMPDIR/bin/hc-desk" <<EOF
-#!/usr/bin/env bash
-case "\$1" in
-  ls) printf '{"terminals":[{"address":"t3s","state":"live"}]}\n' ;;
-  get) [[ "\$2" == t3s ]] && printf '{"address":"t3s","state":"live","status":{"state":"done"},"status_ms":%s}\n' "$(( (now - 30) * 1000 ))" \
-    || printf '{"state":"live"}\n' ;;
-esac
-EOF
-  chmod +x "$BATS_TEST_TMPDIR/bin/hc-desk"
-  printf '{"pid":1,"started_at":%s}\n' "$((now - 600))" >"$(notify_follower_file)"
-  if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-desk" doctor_notify)"; then fail "a deaf follower passed doctor: $out"; fi
-  grep -q 'deaf  notify follower is live but missed desk t3s finishing or blocking' <<<"$out" || fail "deaf: $out"
-  cat >"$BATS_TEST_TMPDIR/bin/hc-titled" <<'EOF'
-#!/usr/bin/env bash
-case "$1" in
-  ls) printf '{"terminals":[{"address":"t3s","state":"live"}]}\n' ;;
-  get)
-    if [[ "$2" == t3s ]]; then
-      jq -nc --argjson ms "$HC_STATUS_MS" --arg title "${HC_ISSUE_TITLE:-}" '
-        {address:"t3s", state:"live", status:{state:"done"}, status_ms:$ms,
-         labels: ({"bercail.issue":"bercail-wb1"} + (if $title == "" then {} else {"bercail.issue_title":$title} end))}'
-    else
-      printf '{"state":"live"}\n'
-    fi
-    ;;
-esac
-EOF
-  chmod +x "$BATS_TEST_TMPDIR/bin/hc-titled"
-  if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-titled" HC_STATUS_MS="$(( (now - 30) * 1000 ))" HC_ISSUE_TITLE='Show the title' doctor_notify)"; then
-    fail "titled miss passed: $out"
-  fi
-  grep -q 'missed desk t3s (bercail-wb1: Show the title) finishing or blocking' <<<"$out" || fail "titled deaf: $out"
-  if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-titled" HC_STATUS_MS="$(( (now - 30) * 1000 ))" HC_ISSUE_TITLE='' doctor_notify)"; then
-    fail "bare id miss passed: $out"
-  fi
-  grep -q 'missed desk t3s (bercail-wb1) finishing or blocking' <<<"$out" || fail "bare id deaf: $out"
-  printf '{"pid":1,"started_at":%s,"last_transition_at":%s}\n' "$((now - 600))" "$((now - 29))" >"$(notify_follower_file)"
-  out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-desk" doctor_notify)" || fail "a follower that saw it: $out"
-  printf '{"pid":1,"started_at":%s}\n' "$((now - 10))" >"$(notify_follower_file)"
-  out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-desk" doctor_notify)" || fail "a finish before the follower started: $out"
-  rm -f "$(notify_follower_file)"
-  if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-desk" doctor_notify)"; then fail "an old follower passed doctor"; fi
-  grep -q 'runs an older bercail' <<<"$out" || fail "old follower: $out"
-}
-
 @test "update restarts the live follower" {
-  restarted_follower
-  [[ "$(cat "$BATS_TEST_TMPDIR/killed")" == bercail-notify ]] || fail "update did not restart the follower"
-  [[ "$RESTART_OUT" == "restarted the notify follower (hc terminal bercail-notify)" ]] || fail "restart output: $RESTART_OUT"
-}
-
-@test "doctor reports restarting right after update, missing once the window passes" {
   local out
-  # Right after the restart, before the desk mod starts the new follower.
-  restarted_follower
-  [[ "$(cat "$(notify_restart_file)")" =~ ^[0-9]+$ ]] || fail "restart not recorded"
-  out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" doctor_notify)" || fail "doctor failed during the restart: $out"
-  grep -q 'restarting  notify follower' <<<"$out" || fail "restarting: $out"
-  if grep -q 'missing  notify follower' <<<"$out"; then fail "missing during the restart: $out"; fi
-  printf '%s\n' "$(( $(date +%s) - DOCTOR_NOTIFY_RESTART_WINDOW - 1 ))" >"$(notify_restart_file)"
-  if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" doctor_notify)"; then fail "a gone follower passed doctor: $out"; fi
-  grep -q 'missing  notify follower' <<<"$out" || fail "missing after the window: $out"
-}
-
-@test "invalid, future, and absent restart stamps do not hide a missing follower" {
-  local stamp out
-  # Neither bad state nor an update with no live follower grants a new window.
-  restarted_follower
-  for stamp in invalid "$(( $(date +%s) + 600 ))"; do
-    printf '%s\n' "$stamp" >"$(notify_restart_file)"
-    if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" doctor_notify)"; then fail "bad restart stamp passed doctor: $stamp"; fi
-    [[ "$out" == *'missing  notify follower'* ]] || fail "bad stamp: $out"
-  done
-  rm -f "$(notify_restart_file)"
-  HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" notify_restart_follower
-  [[ ! -e "$(notify_restart_file)" ]] || fail "missing follower got a restart window"
-  if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" doctor_notify)"; then fail "missing follower passed without a stamp"; fi
-  [[ "$out" == *'missing  notify follower'* ]] || fail "no stamp: $out"
-}
-
-@test "failed kills and completed restarts leave no grace period" {
-  local out
-  load_doctor
-  hc_live
   hc_kill
-  out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc" notify_restart_follower 2>&1)"
-  [[ "$out" == *'could not restart'* ]] || fail "failed kill: $out"
-  [[ ! -e "$(notify_restart_file)" ]] || fail "failed kill left a restart stamp"
-  rm -f "$BATS_TEST_TMPDIR/killed"
-  HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" notify_restart_follower >/dev/null
-  HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" notify_run
-  [[ ! -e "$(notify_restart_file)" ]] || fail "new run left a restart stamp"
-  out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc" doctor_notify)" || fail "new follower failed doctor: $out"
-  [[ "$out" == *'ok  notify follower'* ]] || fail "new follower: $out"
-  if out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" doctor_notify)"; then fail "new follower's death hidden by restart stamp"; fi
-  [[ "$out" == *'missing  notify follower'* ]] || fail "new follower's death: $out"
+  out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-kill" notify_restart_follower 2>&1)"
+  [[ "$(cat "$BATS_TEST_TMPDIR/killed")" == bercail-notify ]] || fail "update did not restart the follower"
+  [[ "$out" == "restarted the notify follower (hc terminal bercail-notify)" ]] || fail "restart output: $out"
 }
 
-@test "notify add writes a 0600 sink from stdin, defaults repos to this checkout, and tests it" {
-  add_bot_two
-  [[ "$(_notify_mode "$added")" == 600 ]] || fail "mode: $(_notify_mode "$added")"
-  [[ "$(notify_sink_value "$added" url)" == https://example.invalid/new ]] || fail "url: $(cat "$added")"
-  [[ "$(notify_sink_value "$added" repos)" == myapp ]] || fail "repos default: $(cat "$added")"
-  [[ "$(notify_sink_value "$added" notify)" == "finished, blocked" ]] || fail "notify default"
-  grep -q 'Authorization: Bearer pasted-key' "$BATS_TEST_TMPDIR/headers.txt" || fail "add did not test with the key"
-  if grep -q 'X-Automation-Key' "$BATS_TEST_TMPDIR/headers.txt"; then fail "--auth bearer sent the automation header"; fi
-  grep -q 'bot-two HTTP 200' <<<"$ADD_OUT" || fail "add output: $ADD_OUT"
-  if grep -q pasted-key <<<"$ADD_OUT"; then fail "add printed the key: $ADD_OUT"; fi
-  notify_status | grep -q '^- bot-two ' || fail "status does not list bot-two"
-  if ls -A "$XDG_CONFIG_HOME/bercail/notify.d" | grep -q '^\.'; then fail "temp file left behind"; fi
-}
-
-@test "notify add asks before replacing, reads the environment, and names a 401 as a bad key" {
+@test "update says so when the follower outlives its kill" {
   local out
-  # An existing sink is shown redacted and kept without --yes; --yes replaces it.
-  add_bot_two
-  if out="$(cd "$BATS_TEST_TMPDIR" && printf 'https://example.invalid/other\nother-key\n' | notify_add bot-two 2>&1)"; then
-    fail "replaced without --yes"
-  fi
-  grep -q 'url=https://example.invalid/\.\.\. key=set' <<<"$out" || fail "redacted show: $out"
-  if grep -q 'pasted-key\|/new' <<<"$out"; then fail "existing values leaked: $out"; fi
-  [[ "$(notify_sink_value "$added" url)" == https://example.invalid/new ]] || fail "kept sink changed"
-  if out="$(cd "$BATS_TEST_TMPDIR" && BERCAIL_NOTIFY_URL=https://example.invalid/env BERCAIL_NOTIFY_KEY=env-key \
-    CURL_CODE=401 notify_add bot-two --yes </dev/null 2>&1)"; then
-    fail "a 401 must fail add"
-  fi
-  grep -q 'key or auth mode is wrong' <<<"$out" || fail "401 hint: $out"
-  if grep -q 'env-key' <<<"$out"; then fail "401 output leaked the key: $out"; fi
-  [[ "$(notify_sink_value "$added" repos)" == "" ]] || fail "outside a checkout repos should be all"
-}
-
-@test "notify add refuses a key on the command line" {
-  if notify_add bot-three --key oops </dev/null 2>/dev/null; then fail "--key must be refused"; fi
-  [[ ! -e "$XDG_CONFIG_HOME/bercail/notify.d/bot-three.toml" ]] || fail "--key wrote a sink"
-}
-
-@test "notify check warns once for a repo no enabled sink covers, and not without sinks" {
-  other_no_sinks
-  notify_check "$BATS_TEST_TMPDIR/other" 2>"$BATS_TEST_TMPDIR/err" || fail "no sinks at all must not warn"
-  [[ ! -s "$BATS_TEST_TMPDIR/err" ]] || fail "no sinks warned: $(cat "$BATS_TEST_TMPDIR/err")"
-  add_team
-  notify_check "$desk" 2>"$BATS_TEST_TMPDIR/err" || fail "a covered repo warned: $(cat "$BATS_TEST_TMPDIR/err")"
-  [[ ! -s "$BATS_TEST_TMPDIR/err" ]] || fail "a covered repo printed: $(cat "$BATS_TEST_TMPDIR/err")"
-  if notify_check "$BATS_TEST_TMPDIR/other" 2>"$BATS_TEST_TMPDIR/err"; then fail "an uncovered repo passed"; fi
-  [[ "$(wc -l <"$BATS_TEST_TMPDIR/err")" -eq 1 ]] || fail "want one warning line: $(cat "$BATS_TEST_TMPDIR/err")"
-  grep -q "no enabled sink covers repo 'other'.*bercail notify repo add team other" "$BATS_TEST_TMPDIR/err" \
-    || fail "warning: $(cat "$BATS_TEST_TMPDIR/err")"
-  sed -i 's/^repos = myapp/repos = myapp\nenabled = false/' "$team"
-  if notify_check "$desk" 2>/dev/null; then fail "a disabled sink must not count"; fi
-}
-
-@test "the handoff notify check warns on stderr for an uncovered repo and still succeeds" {
-  local out
-  team_and_other
-  # shellcheck source=/dev/null
-  source "$ROOT/skills/handoff/scripts/handoff-spawn"
-  out="$(BERCAIL_BIN="$ROOT/bin/bercail" handoff_notify_check "$BATS_TEST_TMPDIR/other" 2>"$BATS_TEST_TMPDIR/err")" \
-    || fail "the check must not fail the spawn"
-  [[ -z "$out" ]] || fail "the check wrote to stdout: $out"
-  [[ "$(wc -l <"$BATS_TEST_TMPDIR/err")" -eq 1 ]] || fail "handoff want one line: $(cat "$BATS_TEST_TMPDIR/err")"
-  grep -q 'bercail notify repo add team other' "$BATS_TEST_TMPDIR/err" || fail "handoff warning: $(cat "$BATS_TEST_TMPDIR/err")"
-  if grep -q team-key "$BATS_TEST_TMPDIR/err"; then fail "handoff warning leaked the key"; fi
-  BERCAIL_BIN="$ROOT/bin/bercail" handoff_notify_check "$desk" 2>"$BATS_TEST_TMPDIR/err" || fail "covered handoff"
-  [[ ! -s "$BATS_TEST_TMPDIR/err" ]] || fail "covered handoff warned: $(cat "$BATS_TEST_TMPDIR/err")"
-  BERCAIL_BIN="$BATS_TEST_TMPDIR/no-bercail" handoff_notify_check "$BATS_TEST_TMPDIR/other" 2>"$BATS_TEST_TMPDIR/err" || fail "no bercail"
-  [[ ! -s "$BATS_TEST_TMPDIR/err" ]] || fail "no bercail warned: $(cat "$BATS_TEST_TMPDIR/err")"
-}
-
-@test "doctor lists a repo whose live desk no sink covers" {
-  local out
-  team_and_other
-  load_doctor
-  cat >"$BATS_TEST_TMPDIR/bin/hc-cover" <<EOF
+  cat >"$BATS_TEST_TMPDIR/bin/hc" <<'EOF'
 #!/usr/bin/env bash
-case "\$1" in
-  ls) jq -nc --arg a "$desk" --arg b "$BATS_TEST_TMPDIR/other" '{terminals:[
-        {address:"t1", state:"live", cwd:\$a}, {address:"t2", state:"live", cwd:\$b},
-        {address:"t3", state:"live", cwd:\$b}, {address:"t4", state:"finished", cwd:"/"}]}' ;;
-  get) printf '{"state":"live"}\n' ;;
-esac
+printf '{"state":"live"}\n'
 EOF
-  chmod +x "$BATS_TEST_TMPDIR/bin/hc-cover"
-  printf '{"pid":1,"started_at":%s}\n' "$(date +%s)" >"$(notify_follower_file)"
-  out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc-cover" doctor_notify)" || fail "an uncovered repo must not fail doctor: $out"
-  [[ "$(grep -c uncovered <<<"$out")" -eq 1 ]] || fail "doctor uncovered lines: $out"
-  grep -q 'uncovered  repo other has a live desk but no enabled notify sink covers it (add it: bercail notify repo add team other)' \
-    <<<"$out" || fail "doctor uncovered: $out"
-  if grep -q 'repo myapp' <<<"$out"; then fail "doctor listed a covered repo: $out"; fi
-  if grep -q 'team-key\|example.invalid' <<<"$out"; then fail "doctor leaks: $out"; fi
+  chmod +x "$BATS_TEST_TMPDIR/bin/hc"
+  out="$(HC_BIN="$BATS_TEST_TMPDIR/bin/hc" notify_restart_follower 2>&1)" || fail "a failed restart must not fail update"
+  [[ "$out" == 'could not restart the notify follower; run: hc kill bercail-notify' ]] || fail "failed kill: $out"
 }
 
-@test "notify repo add and remove edit the list, keep the rest, and refuse to widen a sink" {
-  local before_mode out
-  team_and_other
-  before_mode="$(_notify_mode "$team")"
-  out="$(cd "$BATS_TEST_TMPDIR/other" && notify_repo add team 2>&1)" || fail "repo add: $out"
-  [[ "$(notify_sink_value "$team" repos)" == "myapp, other" ]] || fail "repo add: $(cat "$team")"
-  [[ "$(_notify_mode "$team")" == "$before_mode" ]] || fail "repo add changed the mode"
-  [[ "$(notify_sink_value "$team" key)" == team-key && "$(notify_sink_value "$team" notify)" == "finished, blocked" ]] \
-    || fail "repo add lost lines: $(cat "$team")"
-  if grep -q team-key <<<"$out"; then fail "repo add printed the key: $out"; fi
-  if ls -A "$XDG_CONFIG_HOME/bercail/notify.d" | grep -q '^\.'; then fail "repo add left a temp file"; fi
-  notify_check "$BATS_TEST_TMPDIR/other" 2>/dev/null || fail "an added repo still warns"
-  out="$(notify_repo add team other)" || fail "repo add again: $out"
-  grep -q 'already covers other' <<<"$out" || fail "repo add again: $out"
-  [[ "$(grep -c '^repos' "$team")" -eq 1 ]] || fail "repos line duplicated: $(cat "$team")"
-  out="$("$ROOT/bin/bercail" notify repo remove team OTHER)" || fail "repo remove via the CLI: $out"
-  [[ "$(notify_sink_value "$team" repos)" == myapp ]] || fail "repo remove: $(cat "$team")"
-  out="$(notify_repo remove team nope)" || fail "remove absent: $out"
-  grep -q 'does not list nope' <<<"$out" || fail "remove absent: $out"
-  cp "$team" "$BATS_TEST_TMPDIR/team.before"
-  if notify_repo remove team myapp 2>"$BATS_TEST_TMPDIR/err"; then fail "removing the only repo must not widen the sink"; fi
-  grep -q 'only repo' "$BATS_TEST_TMPDIR/err" || fail "only repo: $(cat "$BATS_TEST_TMPDIR/err")"
-  cmp -s "$team" "$BATS_TEST_TMPDIR/team.before" || fail "a refused remove changed the file"
-  if notify_repo remove team 2>/dev/null; then fail "remove needs a repo"; fi
-  if notify_repo add nosuch myapp 2>/dev/null; then fail "repo add to a missing sink"; fi
-  if notify_repo add team 'a b' 2>/dev/null; then fail "a repo with a blank"; fi
-  if (cd "$BATS_TEST_TMPDIR" && notify_repo add team 2>/dev/null); then fail "repo add outside a checkout needs a name"; fi
+# A curl that logs any call: nothing may post anywhere.
+curl_logs() {
+  cat >"$BATS_TEST_TMPDIR/bin/curl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >>"$BATS_TEST_TMPDIR/curl.log"
+printf 200
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/curl"
 }
 
-@test "repo add on a sink with two repos lines leaves one line, and the added repo is read" {
+# A fake hc whose event stream is one desk going from working to done.
+desk_finishes() {
+  { event working; status_event done; } >"$BATS_TEST_TMPDIR/stream.jsonl"
+  cat >"$BATS_TEST_TMPDIR/bin/hc" <<EOF
+#!/usr/bin/env bash
+[[ "\$1" == events ]] || exit 1
+cat "$BATS_TEST_TMPDIR/stream.jsonl"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/hc"
+}
+
+@test "bercail notify run puts a finished desk in Shep's inbox and posts nothing to a leftover sink" {
   local out
-  team_and_other
-  printf 'repos = "stale"\n' >>"$team"
-  out="$(notify_repo add team other 2>&1)" || fail "repo add: $out"
-  [[ "$(grep -c '^repos' "$team")" -eq 1 ]] || fail "one repos line: $(cat "$team")"
-  [[ "$(notify_sink_value "$team" repos)" == "stale, other" ]] || fail "the list read back: $(cat "$team")"
+  desk_finishes
+  curl_logs
+  # A sink file from before v0.18: bercail no longer reads it.
+  mkdir -p "$XDG_CONFIG_HOME/bercail/notify.d"
+  printf 'url = "https://example.invalid/hook"\nkey = "old-key"\n' >"$XDG_CONFIG_HOME/bercail/notify.d/old.toml"
+  chmod 600 "$XDG_CONFIG_HOME/bercail/notify.d/old.toml"
+  out="$(PATH="$BATS_TEST_TMPDIR/bin:$PATH" HC_BIN="$BATS_TEST_TMPDIR/bin/hc" NOTIFY_CURL="$BATS_TEST_TMPDIR/bin/curl" \
+    "$ROOT/bin/bercail" notify run 2>&1)" || fail "notify run: $out"
+  events | jq -e --arg p "$desk" 'length == 1 and (.[0] | .kind == "finished" and .sink == "shep"
+    and .agent.address == "t9" and .space.checkout_path == $p and .desk.issue == "myapp-1"
+    and .text == "myapp-1: Fix the login. Desk t9 finished.")' >/dev/null || fail "Shep's inbox: $(events)"
+  [[ ! -e "$BATS_TEST_TMPDIR/curl.log" ]] || fail "the follower posted to a sink: $(cat "$BATS_TEST_TMPDIR/curl.log")"
 }
 
-@test "repo add and remove are no-ops on an --all-repos sink; an old sink gains a repos line" {
-  local everyone old action out
-  team_and_other
-  # An --all-repos sink covers everything: both are no-ops and say so.
-  everyone="$XDG_CONFIG_HOME/bercail/notify.d/everyone.toml"
-  printf 'url = "https://example.invalid/all"\nrepos = ""\nspaces = ""\n' >"$everyone"
-  cp "$everyone" "$BATS_TEST_TMPDIR/everyone.before"
-  for action in add remove; do
-    out="$(notify_repo "$action" everyone other)" || fail "all-repos $action: $out"
-    grep -q 'covers every repo' <<<"$out" || fail "all-repos $action: $out"
+@test "the sink commands are gone: notify add, status, test, repo and check fail and write nothing" {
+  local cmd out
+  curl_logs
+  for cmd in "" status "add bot" "test bot" "repo add bot myapp" check; do
+    # shellcheck disable=SC2086 # each cmd is its words
+    if out="$(cd "$desk" && printf 'https://example.invalid/new\nkey\n' \
+      | PATH="$BATS_TEST_TMPDIR/bin:$PATH" NOTIFY_CURL="$BATS_TEST_TMPDIR/bin/curl" "$ROOT/bin/bercail" notify $cmd 2>&1)"; then
+      fail "bercail notify $cmd still runs: $out"
+    fi
+    [[ "$out" == *"only run is left"* ]] || fail "bercail notify $cmd: $out"
   done
-  cmp -s "$everyone" "$BATS_TEST_TMPDIR/everyone.before" || fail "an all-repos sink was edited"
-  rm -f "$everyone"
-  # A sink filtered only by space (no repos line) gets one.
-  old="$XDG_CONFIG_HOME/bercail/notify.d/old.toml"
-  printf 'url = "https://example.invalid/old"\nspaces = "*_Other"\n' >"$old"
-  notify_repo add old other >/dev/null || fail "repo add to a sink with no repos line"
-  [[ "$(notify_sink_value "$old" repos)" == other && "$(notify_sink_value "$old" spaces)" == "*_Other" ]] \
-    || fail "sink: $(cat "$old")"
+  [[ ! -e "$XDG_CONFIG_HOME/bercail/notify.d" ]] || fail "a sink was written: $(ls -A "$XDG_CONFIG_HOME/bercail/notify.d")"
+  [[ ! -e "$BATS_TEST_TMPDIR/curl.log" ]] || fail "something posted: $(cat "$BATS_TEST_TMPDIR/curl.log")"
 }

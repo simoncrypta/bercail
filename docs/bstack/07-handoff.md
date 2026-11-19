@@ -28,9 +28,8 @@ Every stage, flag, and result field is in [handoff](../handoff.md).
 
 ## Shep
 
-[Shep](../shep.md), the Grok bot, drives the same
-handoffs from your phone. It writes the issue, picks the stage, and pings you
-when a desk is ready for review. bstack is one of the stages it can pick.
+[Shep](../shep.md) drives the same handoffs. It writes the issue, picks the
+stage, and tells you when a desk is ready for review. bstack is one of the stages it can pick.
 
 ## Leave it running
 

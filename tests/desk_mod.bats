@@ -626,6 +626,6 @@ for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
 const sent = globalThis.herdr.calls.map(([n, a]) => (a ? `${n} ${JSON.stringify(a)}` : n));
 const want = ["bercail-shep.desk:space-next", "bercail-shep.desk:agent-prev", 'tab.close {"id":"tab-r"}'];
 if (JSON.stringify(sent) !== JSON.stringify(want)) fail(`keys copy ran ${JSON.stringify(sent)}`);
-if (globalThis.herdr.execs?.length) fail("the keys copy must not start the webhook follower");
+if (globalThis.herdr.execs?.length) fail("the keys copy must not start the desk follower");
 EOF
 }

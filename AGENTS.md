@@ -43,7 +43,7 @@ There is no build step for the CLI. The site build needs `npm ci` first (see
 - Match the code beside you: small bash functions with a one-line comment on why,
   `local` everything, `jq` for JSON, errors on stderr with a fix in the message.
 - Secrets never go in argv or output. Pass them on stdin, in a 0600 file, or through
-  a header file (see `notify_post`). Tests grep argv logs and output for the secret.
+  a curl header file (`-H @file`). Tests grep argv logs and output for the secret.
 - A behavior change comes with a test in `tests/` that fails without it, written to
   `skills/unit-testing`. Each file's `setup` calls `isolate`; put stand-ins in
   `$BATS_TEST_TMPDIR/bin`, never the real HOME, Herdr core, or network. No `@test`

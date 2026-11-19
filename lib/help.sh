@@ -20,7 +20,7 @@ Post-install CLI (bercail):
   reconfigure   Refresh skills from config.toml (not a full redeploy)
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files
-  notify        Agent status webhooks: status | add NAME | repo add|remove NAME | test NAME | run
+  notify        run: the desk follower that feeds Shep's inbox (the desk mod starts it)
   shep          Shep, the orchestrator on Pi: status (queued, awaiting persistence, persisted) | run |
                 bg --kind wait|admin --issue ID [--cwd DIR] (observation/wait/report only) |
                 task dispatch (JSON stdin; a first visible desk, or a follow-up into the original desk's session,

@@ -1,7 +1,8 @@
 #!/usr/bin/env bats
 # What an update does with the names bercail left behind at v1:
 # ~/.local/state/agentic-dev, where the handoff log lived, the agentic-dev
-# command, [graphite] and [bstack] enabled in config.toml, and workspaces in a notify sink.
+# command, [graphite] and [bstack] enabled in config.toml, and the webhook
+# sink example.
 
 # shellcheck disable=SC2034 # DRY_RUN and LOCAL_BIN are read by the sourced libs.
 # The libs define their own run(), so these tests capture output by hand.
@@ -15,12 +16,9 @@ setup() {
   source "$ROOT/lib/config.sh"
   # shellcheck source=/dev/null
   source "$ROOT/lib/git-backend.sh"
-  # shellcheck source=/dev/null
-  source "$ROOT/lib/notify.sh"
   DRY_RUN=0
   CONFIG="$BERCAIL_USER_CONFIG"
-  SINKS="$XDG_CONFIG_HOME/bercail/notify.d"
-  mkdir -p "$SINKS"
+  mkdir -p "$(dirname "$CONFIG")"
   OLD="$XDG_STATE_HOME/agentic-dev" NEW="$XDG_STATE_HOME/bercail"
   REPO="$BATS_TEST_TMPDIR/repo"
   LOCAL_BIN="$HOME/.local/bin"
@@ -111,6 +109,16 @@ record() {
   [[ "$(sh "$LOCAL_BIN/agentic-dev")" == mine ]] || fail "someone else's agentic-dev was removed"
 }
 
+@test "an update removes the sink example an older release installed and keeps the person's notify.d" {
+  mkdir -p "$BERCAIL_CONFIG_DIR/notify.d"
+  printf '# Copy to ~/.config/bercail/notify.d/<name>.toml\n' >"$BERCAIL_CONFIG_DIR/notify.sink.example"
+  printf 'url = "https://example.invalid/hook"\n' >"$BERCAIL_CONFIG_DIR/notify.d/mine.toml"
+  INSTALL_SRC="$ROOT" deploy_bercail_config >/dev/null
+  [[ -f "$BERCAIL_CONFIG_DIR/config.toml.example" ]] || fail "the config was not deployed"
+  [[ ! -e "$BERCAIL_CONFIG_DIR/notify.sink.example" ]] || fail "the sink example is still there"
+  [[ -f "$BERCAIL_CONFIG_DIR/notify.d/mine.toml" ]] || fail "the person's sink file was removed"
+}
+
 @test "an update moves [graphite] true and false to [git] gt and gh" {
   local stacks="$BATS_TEST_TMPDIR/stacks" plain="$BATS_TEST_TMPDIR/plain"
   git init -q "$stacks"
@@ -183,30 +191,6 @@ EOF
   out="$(migrate_graphite_config 2>&1)"
   cmp -s "$dotfiles" "$BATS_TEST_TMPDIR/after" || fail "the second run rewrote the config"
   [[ -z "$out" ]] || fail "the second run reported a move: $out"
-}
-
-@test "an update renames workspaces to spaces in a sink and keeps its mode" {
-  local sink="$SINKS/old.toml"
-  printf 'url = "https://example.invalid/hook"\nkey = "s3cret"\nworkspaces = "*_Other"\n' >"$sink"
-  chmod 600 "$sink"
-  notify_rename_workspaces >/dev/null
-  [[ "$(notify_sink_value "$sink" spaces)" == '*_Other' ]] || fail "the filter was lost: $(cat "$sink")"
-  grep -q workspaces "$sink" && fail "workspaces is still there: $(cat "$sink")"
-  [[ "$(stat -c %a "$sink")" == 600 ]] || fail "a sink that holds a key changed mode"
-  notify_sink_wants "$sink" finished '{"name":"repo_Other"}' || fail "the sink no longer takes the space it filtered for"
-  notify_sink_wants "$sink" finished '{"name":"repo_Mine"}' && fail "the sink takes a space it filtered out"
-  cp "$sink" "$BATS_TEST_TMPDIR/after"
-  notify_rename_workspaces >/dev/null
-  cmp -s "$sink" "$BATS_TEST_TMPDIR/after" || fail "the second run rewrote the sink"
-}
-
-@test "a sink that set both keeps spaces, which was the one read" {
-  local sink="$SINKS/both.toml" empty="$SINKS/empty.toml"
-  printf 'url = "https://example.invalid/a"\nspaces = "new_*"\nworkspaces = "old_*"\n' >"$sink"
-  printf 'url = "https://example.invalid/b"\nspaces = ""\nworkspaces = "old_*"\n' >"$empty"
-  notify_rename_workspaces >/dev/null
-  [[ "$(grep spaces "$sink")" == 'spaces = "new_*"' ]] || fail "both set: $(cat "$sink")"
-  [[ "$(grep spaces "$empty")" == 'spaces = "old_*"' ]] || fail "an empty spaces fell back to workspaces: $(cat "$empty")"
 }
 
 @test "an update removes bstack's false switch and explains the move from plain Pi" {

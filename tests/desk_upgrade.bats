@@ -93,10 +93,8 @@ update_from() {
       rm -rf "$home/.local/share/bercail/pi"
       ;;
   esac
-  # Names v1 no longer reads: a [graphite] entry and a sink's workspaces.
+  # A name v1 no longer reads: a [graphite] entry.
   printf '\n[graphite]\n"%s" = true\n' "$box/src" >>"$home/.config/bercail/config.toml"
-  mkdir -p "$home/.config/bercail/notify.d"
-  printf 'url = "https://example.invalid/hook"\nworkspaces = "old_*"\n' >"$home/.config/bercail/notify.d/old.toml"
   # A clone install: the old CLI updates from its recorded source.
   printf '%s\n' "$ROOT" >"$home/.local/share/bercail/source-path"
   log="$box/update.log"
@@ -208,13 +206,11 @@ reload_config() {
   [[ -L "$home/.local/state/agentic-dev" ]] || fail "the old state dir is not a link"
 }
 
-@test "the first update from v0.14.0 rewrites [graphite] and a sink's workspaces under their v1 names" {
+@test "the first update from v0.14.0 rewrites [graphite] under its v1 name" {
   need_tag v0.14.0
   update_from v0.14.0
   grep -qxF "\"$box/src\" = \"gt\"" "$home/.config/bercail/config.toml" \
     || fail "the [graphite] entry did not move to [git]: $(cat "$home/.config/bercail/config.toml")"
-  grep -qx 'spaces = "old_\*"' "$home/.config/bercail/notify.d/old.toml" \
-    || fail "the sink still says workspaces: $(cat "$home/.config/bercail/notify.d/old.toml")"
 }
 
 # Offline Pi, with its bridge available; no account is needed to deploy the profile.

@@ -10,7 +10,7 @@ Built for Shep: the window opens on Shep, the orchestrator on Pi, beside your sp
 files.** This folder is the window half of
 [bercail](https://github.com/simoncrypta/bercail). The desk starts its agent
 through `~/.local/bin/bercail-desk-agent`, and bstack, worktree spaces,
-handoff, the skills, and webhooks come from bercail too. None of that is in
+handoff, the skills, and Shep's desk follower come from bercail too. None of that is in
 these files.
 
 1. Tell the person what the install does, and ask before you run it. It runs
@@ -59,7 +59,7 @@ Second choice, the layout on its own, when the person says no:
   and the Shep view needs bercail (`bercail shep run` starts Shep); without
   it the view says so and the spaces work.
   There are no worktree spaces (`dev`, `wtc`, `wtd`), no handoff, skills or
-  webhooks, and Shep can't run it. Installing bercail later adds all of that.
+  desk follower, and Shep can't run it. Installing bercail later adds all of that.
 
 ## What you see
 
@@ -281,8 +281,8 @@ is which of `shep` and `work` is hidden.
   an agent opening its own Review with `bercail-desk.review:$HC_TERMINAL_ID`.
 - With [bercail](https://github.com/simoncrypta/bercail) installed, the mod
   also keeps `bercail notify run` alive as the hidden hc terminal
-  `bercail-notify` (checked every 60s), which posts desk status changes to
-  webhooks.
+  `bercail-notify` (checked every 60s), which writes desk finishes and
+  blocks to Shep's inbox.
 - `mods/bercail-review` (`place: "none"`): the Stack tab of a `bercail
   review-pr` space, made by bercail with `tab.new {space, name: "Stack", mod:
   "bercail-review", props: {stack, bercail}}`. It needs bercail: everything
@@ -360,7 +360,7 @@ is which of `shep` and `work` is hidden.
   or `auto_review = false` to open Review only by key.
 - Without a Shell terminal in the space's first tab, no desk can start (the
   desk is its sub-agent); the mod says so.
-- The webhook follower is only started when `bercail` is on PATH.
+- The desk follower is only started when `bercail` is on PATH.
 
 ## Done when
 
