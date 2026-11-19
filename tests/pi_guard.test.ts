@@ -1,6 +1,15 @@
 // Decision table for bercail's Pi guard. No Pi process.
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test, vi } from "vite-plus/test";
@@ -12,6 +21,7 @@ import guard, {
   defaultPolicy,
   deskSecretOf,
   isReviewWorktree,
+  onDisk,
   policyFromJson,
   redact,
   useDeskSecret,
@@ -605,6 +615,100 @@ test("edit and write are blocked for read-only roles only", () => {
   assertEqual(decideTool("edit", undefined, headless).action, "allow");
   assertEqual(decideTool("write", undefined, auto).action, "allow");
   assertEqual(decideTool("read", undefined, judge).action, "allow");
+});
+
+test("a read-only role writes under the temp dirs and new files under .bercail/, and nowhere else", () => {
+  const there = new Set(["/work/.bercail/policy.toml", "/work/.bercail/judge.md", "/work/lib/x.sh", "/tmp/old"]);
+  const readOnlyWrites = { tmp: ["/tmp", "/run/user/1000/tmp/"], root: "/work", exists: (p: string) => there.has(p) };
+  for (const role of ["judge", "discuss"]) {
+    const input = { role, hasUI: true, cwd: "/work", home: "/home/me", readOnlyWrites };
+    const got = (tool: string, path: string) => decideTool(tool, undefined, input, path) as Decision;
+    for (const path of [
+      "/work/.bercail/answer.md",
+      ".bercail/verdict.md",
+      "/work/.bercail/verify/notes.txt",
+      "/tmp/x",
+      "/tmp/old",
+      "/run/user/1000/tmp/x",
+    ])
+      assertEqual(got("write", path).action, "allow", `${role} write ${path}`);
+    for (const path of [
+      "/work/.bercail/validate.json",
+      "/work/.bercail/description.md",
+      "/work/.bercail/handoff-result.json",
+      "/work/.bercail/policy.toml",
+      "/work/.bercail/judge.md",
+      "/work/.bercail",
+      "/work/lib/x.sh",
+      "/work/lib/new.sh",
+      "~/.bashrc",
+      "/tmp/../home/me/.bashrc",
+      "/tmpx/y",
+      "/work/.bercail/../lib/x.sh",
+    ]) {
+      const write = got("write", path);
+      assertEqual(write.action, "block", `${role} write ${path}`);
+      assertMatch(write.reason ?? "", /read-only.*\/tmp/);
+    }
+    for (const path of ["/work/lib/x.sh", "/tmp/x", "/work/.bercail/answer.md"])
+      assertEqual(got("edit", path).action, "block", `${role} edit ${path}`);
+  }
+  // Without the places to write, or with a relative path and no cwd, it stays read-only.
+  assertEqual(decideTool("write", undefined, judge, "/tmp/x").action, "block");
+  // The guard's own files stay refused when they sit under a temp dir.
+  const guarded = {
+    ...judge,
+    readOnlyWrites,
+    protectedFiles: ["/tmp/s/policy-trust.json"],
+    protectedDirs: ["/tmp/s/shep"],
+  };
+  for (const path of ["/tmp/s/policy-trust.json", "/tmp/s/shep/questions.json"])
+    assertMatch((decideTool("write", undefined, guarded, path) as Decision).reason ?? "", /decides what/, path);
+  assertEqual(decideTool("write", undefined, guarded, "/tmp/s/notes.md").action, "allow");
+  // A worktree with no policy file: a reviewer still may not add one.
+  const bare = { ...judge, readOnlyWrites: { ...readOnlyWrites, root: "/other" } };
+  assertEqual(decideTool("write", undefined, bare, "/other/.bercail/policy.toml").action, "block");
+  assertEqual(decideTool("write", undefined, bare, "/other/.bercail/judge.md").action, "allow");
+  const lost = { ...judge, cwd: undefined, readOnlyWrites };
+  assertEqual(decideTool("write", undefined, lost, ".bercail/x.md").action, "block");
+  assertEqual(decideTool("write", undefined, lost, "/tmp/x").action, "allow");
+});
+
+test("the guard extension lets a judge write in TMPDIR and a new file in the worktree's .bercail/", async () => {
+  // Neither is under /tmp, where a judge may write anything, and nothing is on disk there.
+  const root = "/nonexistent-bercail/wt";
+  const dir = "/nonexistent-bercail/tmp";
+  vi.stubEnv("TMPDIR", `${dir}/`);
+  vi.stubEnv("BERCAIL_ROLE", "judge");
+  const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
+  const policyJson = { repo: root, root, scratch: false, policy: { commit: "ask", push: "ask" } };
+  const exec = async () => ({ code: 0, stdout: JSON.stringify(policyJson), stderr: "" });
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  // The judge works in a folder below the worktree: .bercail/ is the worktree's.
+  const ctx = { hasUI: true, cwd: join(root, "lib"), ui: {} };
+  const call = (toolName: string, path: string) => handlers.tool_call({ toolName, input: { path } }, ctx);
+  try {
+    for (const path of [join(root, ".bercail/judge.md"), join(dir, "x"), "/tmp/x"])
+      expect(await call("write", path), path).toBeUndefined();
+    for (const path of [join(root, ".bercail/validate.json"), join(root, "lib/x.sh"), join(root, "lib/.bercail/x")])
+      expect(await call("write", path), path).toMatchObject({ block: true });
+    expect(await call("edit", join(root, ".bercail/judge.md"))).toMatchObject({ block: true });
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+test("a file is on disk when it, or a dangling link by its name, is there", () => {
+  const dir = mkdtempSync(join(tmpdir(), "guard-disk-"));
+  try {
+    writeFileSync(join(dir, "file"), "");
+    symlinkSync(join(dir, "gone"), join(dir, "link"));
+    assertEqual(onDisk(join(dir, "file")), true);
+    assertEqual(onDisk(join(dir, "link")), true);
+    assertEqual(onDisk(join(dir, "new")), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // A repo's policy, as lib/policy.sh hands it over (untrusted loosening already

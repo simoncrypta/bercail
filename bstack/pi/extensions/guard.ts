@@ -1,6 +1,6 @@
 // bercail's Pi guard. The decision functions are pure; the default export wires
 // tool_call, the repo's git policy (bercail policy show), and the approval log.
-import { appendFileSync, mkdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { appendFileSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -69,6 +69,8 @@ export type GuardInput = {
   deskSecret?: DeskSecret;
   /** Within one command: this text runs in a $( ), so what it prints is captured, not shown. */
   captured?: boolean;
+  /** Where a read-only role's write tool may write: the temp dirs, and new files under ROOT/.bercail/. */
+  readOnlyWrites?: { tmp: string[]; root: string; exists: (path: string) => boolean };
 };
 
 export type GuardDecision =
@@ -93,7 +95,8 @@ const headless = "A headless run stages its changes and leaves commit and push t
 const headlessRelease = "A headless run does not tag or release. Leave the release to the person.";
 const autopilotRelease = "Autopilot does not tag or release. Leave the release to the person.";
 const readOnly = "This role is read-only. Do not edit files or change the git tree.";
-const readOnlyTool = "This role is read-only. Do not edit or write files.";
+const readOnlyTool =
+  "This role is read-only. Do not edit files. Write only under /tmp or $TMPDIR, or a new file under the worktree's .bercail/ (not description.md, validate.json, handoff-result.json or policy.toml).";
 const scopedWrite =
   "This desk has a scoped job. Use scoped_job for its supported actions. Raw commits, pushes, tags and releases cannot use role, repo policy or confirmation as a fallback.";
 const unknownBranch = "Could not read the current branch, so this push is blocked. Push the branch by name.";
@@ -150,6 +153,23 @@ const approve = (reason: string): GuardDecision => ({ action: "allow", approved:
 
 function readOnlyRole(role: string): boolean {
   return role === "judge" || role === "council" || role === "discuss";
+}
+
+// bercail reads these as the desk's own (describe check's evidence, a handoff's
+// result) or the repo's (its policy, whose rules need no trust), so a reviewer
+// may not write them.
+const deskFiles = new Set(["description.md", "validate.json", "handoff-result.json", "policy.toml"]);
+
+// A read-only role writes its answer and scratch files: anywhere under the temp
+// dirs, and a new file under the worktree's .bercail/, which git ignores.
+function readOnlyWrite(path: string, input: GuardInput): boolean {
+  const where = input.readOnlyWrites;
+  if (!where || (input.cwd === undefined && !isAbsolute(path))) return false;
+  const full = resolve(input.cwd ?? "/", path);
+  const under = (dir: string) => full.startsWith(`${resolve(dir)}/`);
+  if (where.tmp.some(under)) return true;
+  const dir = join(where.root, ".bercail");
+  return under(dir) && !deskFiles.has(full.slice(dir.length + 1)) && !where.exists(full);
 }
 
 function isMainRef(ref: string): boolean {
@@ -2334,7 +2354,9 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
 
 export function decideTool(tool: string, command: string | undefined, input: GuardInput, path?: string): GuardDecision {
   if (tool === "edit" || tool === "write") {
-    if (readOnlyRole(input.role)) return block(readOnlyTool);
+    const full = path?.startsWith("~/") && input.home ? join(input.home, path.slice(2)) : path;
+    if (readOnlyRole(input.role) && !(tool === "write" && full && readOnlyWrite(full, input)))
+      return block(readOnlyTool);
     const targets = path ? [path] : [];
     if (writesGuardFiles(targets, input)) return block(protectedFile);
     if (writesTodoFiles(targets, input)) return block(todoFile);
@@ -2442,6 +2464,16 @@ export function isReviewWorktree(cwd: string): boolean {
   return cwd.split("/").some((part) => /\.review-\d+$/.test(part));
 }
 
+// A dangling symlink is on disk too: writing through it lands somewhere else.
+export function onDisk(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function stateDir(): string {
   return join(process.env.XDG_STATE_HOME || join(process.env.HOME ?? "", ".local/state"), "bercail");
 }
@@ -2531,6 +2563,7 @@ export default function (pi: ExtensionAPI) {
     }
     const input = event.input as { command?: string; path?: string };
     const command = event.toolName === "bash" ? String(input.command ?? "") : undefined;
+    const json = await secretJson(ctx.cwd);
     let guardInput: GuardInput = {
       role: process.env.BERCAIL_ROLE ?? "",
       hasUI: ctx.hasUI,
@@ -2542,7 +2575,12 @@ export default function (pi: ExtensionAPI) {
       protectedPath: scopedProtectedPath,
       todoFiles,
       graphiteAliases: event.toolName === "bash" ? readGraphiteAliases() : undefined,
-      deskSecret: deskSecretOf(await secretJson(ctx.cwd)),
+      deskSecret: deskSecretOf(json),
+      readOnlyWrites: {
+        tmp: ["/tmp", process.env.TMPDIR ?? ""].filter((dir) => dir && resolve(dir) !== "/"),
+        root: json?.root ?? ctx.cwd,
+        exists: onDisk,
+      },
     };
     let decision = decideTool(event.toolName, command, guardInput, input.path);
     for (let i = 0; i < 8 && (decision.action === "need-branch" || decision.action === "need-policy"); i++) {
