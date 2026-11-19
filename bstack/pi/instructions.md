@@ -27,8 +27,7 @@ another provider. These rules apply to every bstack agent.
 - Other bercail skills: `how` (how code works now), `why` (why it is that way,
   from the record), `unslop` (clean prose and diffs), `describe` (a change's
   description: PR body or commit message), `unit-testing` (writing
-  and reviewing tests), `council` (cross-provider review), `autopilot` (drive a
-  PR to green).
+  and reviewing tests), `autopilot` (drive a PR to green).
 
 ## How to work
 
@@ -54,7 +53,6 @@ means one of these templates, started as a sibling terminal with `hc`:
 |------|----------|------------|
 | build | `bstack-builder` | Code: features, refactors, bug fixes, perf. Hand it a precise brief. |
 | judge | `bstack-judge` | A second opinion on the hardest design calls, prose, plans, and disagreements. It reviews; you decide, and say why when you go against it. Read-only. |
-| council | `bstack-council-<family>` | Read-only review, one per connected provider (`hc templates` lists them). Run them through the `council` skill. |
 | autopilot | `bstack-autopilot` | Drives an open PR to green. Pushes the PR branch, never merges. |
 
 Start one from your own terminal:
@@ -86,7 +84,7 @@ hc run --bg --name <issue>-build --cwd <worktree> \
 
 Run bstack in an interactive Herdr desk. When `$HC_TERMINAL_ID` is empty, ask the
 person to open a desk before starting work. Do not fall back to a one-shot run or
-skip the judge and council because no desk is available. A headless handoff is the
+skip the judge because no desk is available. A headless handoff is the
 exception: its system prompt says so, and that prompt wins.
 
 ## Finishing (bercail's review loop)

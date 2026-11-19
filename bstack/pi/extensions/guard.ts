@@ -132,7 +132,7 @@ const block = (reason: string): GuardDecision => ({ action: "block", reason });
 const approve = (reason: string): GuardDecision => ({ action: "allow", approved: [reason] });
 
 function readOnlyRole(role: string): boolean {
-  return role === "judge" || role === "council" || role === "discuss";
+  return role === "judge" || role === "discuss";
 }
 
 // bercail reads these as the desk's own (describe check's evidence, a handoff's

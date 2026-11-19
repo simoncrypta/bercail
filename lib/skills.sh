@@ -3,6 +3,16 @@
 
 # Pi does not discover ~/.agents/skills: each skill gets a link in Pi's dir.
 PI_SKILLS_DIR="${HOME}/.pi/agent/skills"
+# The sha256 of every council SKILL.md bercail shipped before v0.18 removed it
+# (git log -- skills/council/SKILL.md). Any other bytes are someone's own copy.
+BERCAIL_COUNCIL_SKILL_SHA256=(
+  e78b96c78a486158c6cd47f916819363c95af408d69624312d5924d7eddfa1f9
+  871aa33841db78ddcc44fa6d0c2be729008fa37c54cc32536f8609312d8c9a9f
+  3324536081f78318252427c7b443a27feb42ab15828fdea99a412996cd4ea85f
+  7dbf6febe53276956af7beadac3fec2dad8b8416a7deff9535a5278776c21baf
+  c883401fa02c7aaeca145a079d334b0cea2d95b04008c6df7769cd62a0295932
+  6533b37e41edcca6f8a7bb44f35d3ba83aa9132d2a838b05846898d6147c719c
+)
 
 # The skills to deploy and give bstack's agents. statechart only when [bstack]
 # statechart = true, which also installs its TLC and Java.
@@ -99,6 +109,35 @@ deploy_skills() {
     ensure_skill_symlink "$PI_SKILLS_DIR" "$skill_id"
   done < <(_skill_ids)
   statechart_enabled || remove_statechart_skill
+  remove_council_skill
+}
+
+# sha256 of a file, hex. macOS has shasum, not sha256sum.
+_skill_sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+# The council skill an older release installed: the files it shipped, byte for
+# byte, and its Pi link. bercail copies skills, so a linked folder or file is
+# someone's, and a file someone added keeps the folder.
+remove_council_skill() {
+  local dest sum
+  dest="$(skill_canonical_dir council)"
+  [[ ! -L "$dest" && ! -L "$dest/SKILL.md" && -f "$dest/SKILL.md" ]] || return 0
+  sum="$(_skill_sha256 "$dest/SKILL.md")" || return 0
+  [[ " ${BERCAIL_COUNCIL_SKILL_SHA256[*]} " == *" $sum "* ]] || return 0
+  remove_managed_skill_symlink "$PI_SKILLS_DIR" council
+  info "remove: $dest/SKILL.md"
+  run rm -f "$dest/SKILL.md"
+  # The file list older releases' curl install wrote.
+  if [[ -f "$dest/MANIFEST" && ! -L "$dest/MANIFEST" ]] && cmp -s "$dest/MANIFEST" <(printf 'SKILL.md\nMANIFEST\n'); then
+    run rm -f "$dest/MANIFEST"
+  fi
+  run rmdir "$dest" 2>/dev/null || warn "kept $dest: it holds files bercail did not install"
 }
 
 # No statechart skill yet, or bercail's, found by bstack's wrapper in it.
@@ -131,4 +170,5 @@ remove_managed_skills() {
     fi
   done < <(printf '%s\n' "${BERCAIL_SKILL_IDS[@]}")
   remove_statechart_skill
+  remove_council_skill
 }

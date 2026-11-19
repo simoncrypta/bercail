@@ -50,7 +50,7 @@ unknown.
 | Who | Captured |
 |-----|----------|
 | A desk's lead | yes |
-| Builder, judge, council siblings | each as its own session. Pi has no subagent tree in Entire. A read-only session changes no tracked files, so it never lands in a checkpoint. |
+| Builder and judge siblings | each as its own session. Pi has no subagent tree in Entire. A read-only session changes no tracked files, so it never lands in a checkpoint. |
 | Headless stages and autopilot | yes, even when a desk starts them: `handoff-spawn` drops the desk's `ENTIRE_PI_NESTED`, which would make Entire record nothing |
 | Background Shep | yes, in a checkout where Entire is on |
 | Shep | no: its workspace is not a repo |

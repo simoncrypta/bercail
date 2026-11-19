@@ -40,8 +40,8 @@ setup() {
   [[ -f "$AGENTS_SKILLS_DIR/review/scripts/is-agent.jq" ]] || fail "the jq both review scripts include is missing"
   [[ -L "$HOME/.pi/agent/skills/handoff" ]] || fail "pi skill symlink missing"
   [[ -L "$HOME/.pi/agent/skills/review" ]] || fail "pi review symlink missing"
-  [[ -L "$HOME/.pi/agent/skills/bstack" && -L "$HOME/.pi/agent/skills/council" ]] \
-    || fail "pi links for bstack and council missing"
+  [[ -L "$HOME/.pi/agent/skills/bstack" && -L "$HOME/.pi/agent/skills/autopilot" ]] \
+    || fail "pi links for bstack and autopilot missing"
   grep -q '^name: unit-testing$' "$AGENTS_SKILLS_DIR/unit-testing/SKILL.md" || fail "canonical unit-testing skill missing"
   [[ -L "$HOME/.pi/agent/skills/unit-testing" ]] || fail "pi link for unit-testing missing"
   grep -q '^name: describe$' "$AGENTS_SKILLS_DIR/describe/SKILL.md" || fail "canonical describe skill missing"
@@ -62,6 +62,59 @@ setup() {
   while IFS= read -r link; do
     [[ -e "$AGENTS_SKILLS_DIR/handoff/$link" ]] || fail "the skill links a file that is not installed: $link"
   done < <(grep -oE 'resources/[a-z-]+\.md' "$AGENTS_SKILLS_DIR/handoff/SKILL.md" | sort -u)
+}
+
+# A council skill as an older release installed it, with its Pi link; its
+# SKILL.md counts as shipped (the digest is of the text below).
+old_council_skill() {
+  mkdir -p "$AGENTS_SKILLS_DIR/council" "$HOME/.pi/agent/skills"
+  printf -- '---\nname: council\n---\n\nLaunch every `bstack-council-*` subagent.\n' >"$AGENTS_SKILLS_DIR/council/SKILL.md"
+  printf 'SKILL.md\nMANIFEST\n' >"$AGENTS_SKILLS_DIR/council/MANIFEST"
+  ln -s "$AGENTS_SKILLS_DIR/council" "$HOME/.pi/agent/skills/council"
+  BERCAIL_COUNCIL_SKILL_SHA256=(e96b7755055330174617ea71f5b56f9410f0ad3c4abd73de8ed18e86704c1ba3)
+}
+
+@test "deploy_skills removes the council skill an older release installed, and its pi link" {
+  old_council_skill
+  deploy_skills >/dev/null
+  [[ ! -e "$AGENTS_SKILLS_DIR/council" ]] || fail "an update keeps the retired council skill"
+  [[ ! -L "$HOME/.pi/agent/skills/council" ]] || fail "an update keeps the council skill's pi link"
+}
+
+@test "deploy_skills keeps the files someone added to the old council skill, their own MANIFEST too" {
+  old_council_skill
+  printf 'mine\n' >"$AGENTS_SKILLS_DIR/council/my-notes.md"
+  printf 'my manifest\n' >"$AGENTS_SKILLS_DIR/council/MANIFEST"
+  deploy_skills >/dev/null 2>&1
+  [[ ! -e "$AGENTS_SKILLS_DIR/council/SKILL.md" ]] || fail "an update keeps the retired SKILL.md"
+  grep -qx mine "$AGENTS_SKILLS_DIR/council/my-notes.md" || fail "an update removed a file bercail did not install"
+  grep -qx 'my manifest' "$AGENTS_SKILLS_DIR/council/MANIFEST" || fail "an update removed a MANIFEST bercail did not ship"
+}
+
+@test "deploy_skills keeps a council skill folder that is a link, and the files behind it" {
+  old_council_skill
+  mv "$AGENTS_SKILLS_DIR/council" "$BATS_TEST_TMPDIR/my-council"
+  ln -s "$BATS_TEST_TMPDIR/my-council" "$AGENTS_SKILLS_DIR/council"
+  deploy_skills >/dev/null
+  [[ -f "$BATS_TEST_TMPDIR/my-council/SKILL.md" && -f "$BATS_TEST_TMPDIR/my-council/MANIFEST" ]] \
+    || fail "an update removed files through a linked skill folder"
+  [[ -L "$HOME/.pi/agent/skills/council" ]] || fail "an update removed the pi link to a linked skill folder"
+}
+
+@test "deploy_skills keeps a council skill that is not bercail's, even one that names a seat" {
+  old_council_skill
+  printf -- '---\nname: council\n---\n\nNot the bstack-council-gpt seat.\n' >"$AGENTS_SKILLS_DIR/council/SKILL.md"
+  deploy_skills >/dev/null
+  grep -q 'Not the bstack-council-gpt seat' "$AGENTS_SKILLS_DIR/council/SKILL.md" \
+    || fail "an update removed someone else's council skill"
+  [[ -L "$HOME/.pi/agent/skills/council" ]] || fail "an update removed the link to someone else's council skill"
+}
+
+@test "uninstall removes the council skill an older release installed" {
+  old_council_skill
+  remove_managed_skills >/dev/null
+  [[ ! -e "$AGENTS_SKILLS_DIR/council" && ! -L "$HOME/.pi/agent/skills/council" ]] \
+    || fail "uninstall keeps the retired council skill"
 }
 
 @test "deploy_skills preserves a foreign path in the pi skills dir" {

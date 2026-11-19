@@ -91,7 +91,7 @@ it once with `gh run rerun <run> --failed`. A second failure is real.
 
 ## 2. Review threads
 
-Each thread is a claim. Check it like a council finding: read the code at its
+Each thread is a claim. Check it like a judge's finding: read the code at its
 `path:line`, run it when it is about behavior.
 
 - **Right and clear:** fix it, push, then reply in the thread with what changed

@@ -139,9 +139,10 @@ bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   bercail bstack setup   install Pi and the Claude bridge (models are picked for you)
   bercail bstack status  what is logged in, each model (auto or pinned), each role
   Roles: lead (the bstack agent) and build (bstack-builder) on Claude Opus; judge
-  (bstack-judge) on GPT, which reviews while the lead decides; council: one read-only reviewer per provider. In Pi: /council, /validate, /handoff,
-  /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green; pushes, never
-  merges), /pr-review (bercail review-pr's read-only decisions pass), /statechart.
+  (bstack-judge) on GPT, which reviews while the lead decides. In Pi: /validate,
+  /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
+  pushes, never merges), /pr-review (bercail review-pr's read-only decisions
+  pass), /statechart.
   Settings: [bstack] in config.toml. statechart = true installs TLC (and Java
   when there is no java 11 or later) and the statechart skill: TLA+ models of
   stateful changes, checked with TLC and replayed on the real code.
@@ -186,7 +187,7 @@ Config:
   ~/.config/worktrunk/config.toml             worktrunk hooks
   ~/.agents/skills/handoff/                   handoff skill (canonical)
   ~/.agents/skills/review/                    tuicr review skill (wait / optional GH publish)
-  ~/.agents/skills/bstack/, council/          bstack playbooks, cross-provider review
+  ~/.agents/skills/bstack/                    bstack playbooks
   ~/.agents/skills/{how,why,unslop,autopilot}/  explain, history, cleanup, PR to green
   ~/.agents/skills/desk-restore/              put a desk with no record back by hand
   ~/.agents/skills/unit-testing/              F.I.R.S.T. rules for writing and reviewing tests
@@ -197,7 +198,7 @@ Config:
   ~/.local/share/bercail/pi/                  bstack's Pi profile
   ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates
 
-Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`council\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`, \`unit-testing\`, \`describe\`):
+Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`, \`unit-testing\`, \`describe\`):
   Installed to ~/.agents/skills/<id> (https://agentskills.io), with a link in
   ~/.pi/agent/skills for each. Source: skills/handoff/, skills/review/.
   Manual: npx skills add simoncrypta/bercail -s handoff -g
@@ -219,7 +220,7 @@ show_summary() {
   log "Desk agent: pi (handoff stages: bstack, autopilot)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Config: ${BERCAIL_USER_CONFIG}"
-  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,council,autopilot,how,why,unslop,desk-restore,unit-testing,describe}"
+  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,autopilot,how,why,unslop,desk-restore,unit-testing,describe}"
   log ""
   log "Try: dev"
   log "Help: bercail help"

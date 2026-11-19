@@ -40,7 +40,7 @@ recently. It gets one rerun. A second failure is real.
 
 ## Review threads
 
-A thread is a claim, like a council finding. Autopilot reads the code it points
+A thread is a claim, like a judge's finding. Autopilot reads the code it points
 at, and:
 
 - **right and clear:** fixes it, pushes, and replies with the commit. It

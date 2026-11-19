@@ -2,7 +2,7 @@
 
 **bstack is bercail's opinionated Pi.** [Pi](https://pi.dev) signs in with a Claude plan (through Claude Code) and a ChatGPT plan, so one agent runs both, on subscriptions you already pay for. bstack sets Pi up the way bercail works: the job is a beads issue, agents stage and leave changes uncommitted for tuicr, Claude Opus does the work and makes the calls, and GPT judges as a second opinion.
 
-It borrows from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (rigor, playbooks, roles by model strength, `how`/`why`/`unslop`), [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit) (babysit-pr and CI loops, which became autopilot), [tstack](https://github.com/t3dotgg/tstack) (a council of providers), and [gstack](https://github.com/garrytan/gstack), on top of [Shep](shep.md)'s handoff workflow.
+It borrows from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (rigor, playbooks, roles by model strength, `how`/`why`/`unslop`), [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit) (babysit-pr and CI loops, which became autopilot), and [gstack](https://github.com/garrytan/gstack), on top of [Shep](shep.md)'s handoff workflow.
 
 Every install runs bstack: the desk agent is its Pi lead.
 
@@ -16,13 +16,13 @@ dev                      # the desk starts Pi as the bstack lead
 
 `bercail bstack setup` installs [Pi](https://pi.dev) (>=1.5.1) and `npm:pi-claude-bridge@0.12.0`. Claude uses your Claude Code login (`claude auth login`), not Pi's `/login anthropic` or per-token Extra Usage. GPT uses `/login openai` inside Pi. A desk runs Pi as the lead: `bercail update` writes its command line to `pi/lead.json`, and the desk shows its status and [comes back after a reboot](config.md#desks-after-a-reboot).
 
-bercail renders the profile to `~/.local/share/bercail/pi/`. Installing the bridge adds its pinned package to Pi's settings, leaving unrelated settings and auth intact. Each `bercail update` also sets `compaction.modelOverrides` there, `reserveTokens: 40000` for every `claude-bridge` model Pi lists: Claude Code refuses a prompt ("Prompt is too long") once it is within about 23k tokens of the window (20k for output, 3k of margin), and Pi's default 16384 reserve would compact only after that. A larger reserve you set stays. Every role explicitly loads the bridge and the managed `extensions/fallback.ts` with `-e`, and unsets `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, and `ANTHROPIC_AUTH_TOKEN` so Claude runs on your plan. Role boundaries and git rules remain instructions, not enforced tool restrictions. The builder, judge, council, and autopilot run as interactive `hc` sibling agents from templates in `~/.config/herdr-core/templates/`. Pi handoffs use desks or interactive siblings, not one-shot runs.
+bercail renders the profile to `~/.local/share/bercail/pi/`. Installing the bridge adds its pinned package to Pi's settings, leaving unrelated settings and auth intact. Each `bercail update` also sets `compaction.modelOverrides` there, `reserveTokens: 40000` for every `claude-bridge` model Pi lists: Claude Code refuses a prompt ("Prompt is too long") once it is within about 23k tokens of the window (20k for output, 3k of margin), and Pi's default 16384 reserve would compact only after that. A larger reserve you set stays. Every role explicitly loads the bridge and the managed `extensions/fallback.ts` with `-e`, and unsets `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`, and `ANTHROPIC_AUTH_TOKEN` so Claude runs on your plan. Role boundaries and git rules remain instructions, not enforced tool restrictions. The builder, judge, and autopilot run as interactive `hc` sibling agents from templates in `~/.config/herdr-core/templates/`. Pi handoffs use desks or interactive siblings, not one-shot runs.
 
 Shep, the lead, the builder, Discuss and autopilot run on Claude Opus; the judge runs on GPT. After Pi exhausts its own rate-limit retries, the extension does not move these roles to another model:
 
 - **Paused.** A 429, a usage limit, or a Claude plan usage rejection, whether an Opus-only window (`seven_day_opus`) or a plan window (`five_hour`, `seven_day`), pauses the role until the reset the provider gives, for 5 minutes when it gives none, or for a second when that reset has already passed. Then the same request goes on, on the same model. While it waits, the desk shows a dialog with the reset time, so Pi reports it as blocked and Shep gets a blocked desk event. Esc in that dialog stops waiting and ends the run, and so does SIGTERM or SIGHUP, so closing the pane ends it too. A headless run waits the same way, without the dialog. A blocked desk refuses `hc send` without `--force`, so a child's report or Shep's follow-up to it is refused while it waits. Each pause is a `bercail-fallback-pause` entry in the session.
 - **The judge's stand-in.** When the judge's own model (GPT) is limited or dead, Claude Opus (the `claude` line in `pi/models`) stands in, so `/validate` still finishes; the judge's report says which model judged. If Opus is limited too, the judge pauses until whichever resets first. At the next user message after GPT's limit lifts, or at the end of a pause when GPT reset first, the judge goes back to GPT; that switch is a `bercail-fallback-restore` entry. With no ChatGPT login, the judge runs on Opus from the start.
-- **Stopped.** A 402, "out of credits", or "need a … subscription" does not reset on its own, and neither does a missing Claude plan login (`claude auth status`). The role stops with the fix in its message: add credits, or run `claude auth login`. A dead provider is logged once in `~/.local/state/bercail/fallback-dead.jsonl`. A builder, judge, council seat, or autopilot that stops sends its parent the reason with `hc send`. A safety-blocked judge remains incomplete. Its parent cannot replace the missing review with self-approval.
+- **Stopped.** A 402, "out of credits", or "need a … subscription" does not reset on its own, and neither does a missing Claude plan login (`claude auth status`). The role stops with the fix in its message: add credits, or run `claude auth login`. A dead provider is logged once in `~/.local/state/bercail/fallback-dead.jsonl`. A builder, judge, or autopilot that stops sends its parent the reason with `hc send`. A safety-blocked judge remains incomplete. Its parent cannot replace the missing review with self-approval.
 - **Thinking level.** Pi's model switch resets thinking to its `defaultThinkingLevel` (medium unless set). The judge's switches put its level back, so a `:high` judge stays high on the stand-in. A level you set with `/thinking` becomes the desk's level.
 
 The desk's session name, which the desk status shows, adds `paused until <time>` while it waits, `stand-in <model>` while the judge's stand-in runs, and `dead <provider>` for dead providers.
@@ -31,7 +31,7 @@ The profile stores resolved `family=model` lines in `pi/models`. `bercail bstack
 
 ### Reply pills
 
-Every role started after `bercail update` loads [pi-emphasis](https://github.com/johnlindquist/pi-emphasis) by John Lindquist (MIT): the lead desk, the builder, the judge, council seats, autopilot, Shep, background Shep and Discuss. `bercail review-pr`'s reviewer does not, because its reply is a JSON block bercail reads. It changes what Pi draws, not what is stored, copied or exported:
+Every role started after `bercail update` loads [pi-emphasis](https://github.com/johnlindquist/pi-emphasis) by John Lindquist (MIT): the lead desk, the builder, the judge, autopilot, Shep, background Shep and Discuss. `bercail review-pr`'s reviewer does not, because its reply is a JSON block bercail reads. It changes what Pi draws, not what is stored, copied or exported:
 
 - `[[Done]]`, `[[Failed]]`, `[[Needs you]]` and the other status words become colored pills with an icon.
 - Known `##` headings and bold lead labels, such as **Cause:**, get an icon, bold text takes the theme's link color, and `├──` and `└──` tree lines are dimmed.
@@ -105,13 +105,13 @@ bercail's own spec is Shep's inbox, in `tests/statechart/shep-inbox/`: the model
 | Topic | Page |
 |-------|------|
 | `setup`, sign-ins, how models are picked, `status`, `/bstack-setup` | [Set up bstack](bstack/01-setup.md) |
-| The playbooks, the roles (lead, build, judge, council, autopilot), what a prompt holds | [Work with the bstack agent](bstack/02-the-bstack-agent.md) |
+| The playbooks, the roles (lead, build, judge, autopilot), what a prompt holds | [Work with the bstack agent](bstack/02-the-bstack-agent.md) |
 | `/how`, `/why`, taking over a branch | [Understand the code](bstack/03-understand.md) |
 | The build playbooks, `/unslop` | [Build and clean the change](bstack/04-build-and-clean.md) |
-| `/council`, `/validate` | [Review it](bstack/05-review.md) |
+| `/validate` | [Review it](bstack/05-review.md) |
 | `/autopilot` and what `bstack-autopilot` may do | [Ship with autopilot](bstack/06-autopilot.md) |
 | `/handoff`, stages `bstack` and `autopilot` | [Run jobs in parallel](bstack/07-handoff.md) |
 | Pinning models, effort, what a rate limit does, the files bstack writes | [Make it yours](bstack/08-make-it-yours.md) |
 | Prompts and pitfalls | [Recipes and pitfalls](bstack/09-recipes-and-pitfalls.md) |
 
-The skills (`bstack`, `how`, `why`, `unslop`, `unit-testing`, `council`, `autopilot`, and `statechart` when it is on) are listed in [commands](cli.md#skills), the `[bstack]` defaults in [config](config.md), and the headless stages in [handoff](handoff.md).
+The skills (`bstack`, `how`, `why`, `unslop`, `unit-testing`, `autopilot`, and `statechart` when it is on) are listed in [commands](cli.md#skills), the `[bstack]` defaults in [config](config.md), and the headless stages in [handoff](handoff.md).

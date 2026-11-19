@@ -63,7 +63,7 @@ uninstall_bercail() {
     remove_bstack
   fi
 
-  if confirm "Remove managed skills (~/.agents/skills/handoff, review, bstack, council, autopilot, how, why, unslop, desk-restore, unit-testing, describe)?"; then
+  if confirm "Remove managed skills (~/.agents/skills/handoff, review, bstack, autopilot, how, why, unslop, desk-restore, unit-testing, describe)?"; then
     remove_managed_skills
   fi
 

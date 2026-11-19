@@ -2,7 +2,6 @@
 
 bstack proves a change by running it. `/validate` runs tests and the repo's
 verify skill, writes the change's description, and has the judge check both.
-Adversarial review is there when you ask for it.
 
 ## `/validate`
 
@@ -86,26 +85,6 @@ a fix after review amends the PR's commit (`gt m -a`); on GitHub and Origin it
 is a new commit, and you squash-merge with the description as the message.
 bercail never force-pushes and never merges. See [commands](../cli.md).
 
-## `/council`
-
-```text
-/council
-```
-
-With no target, it reviews the uncommitted change. It also takes a branch
-(`/council the branch against master`) or a PR (`/council pr 42`).
-
-Every `bstack-council-<plan>` seat gets the same brief, in parallel, without
-seeing what the others said. Each seat must prove a finding with a run: a
-failing test, a repro, or command output. The lead reruns it and keeps only what
-reproduces. Style, naming, YAGNI and anything unproven are dropped, not
-reported. When you ask for fixes, it fixes what it kept and runs again until no
-blocker or major finding is left, three rounds at most.
-
-`bercail update` renders one seat per plan with a model. With none, `/council`
-still works: the lead reviews alone by the same rules and says the panel did
-not run.
-
 ## tuicr: your review
 
 When the desk goes `done`, tuicr opens on the uncommitted change (how and when:
@@ -116,6 +95,6 @@ You commit and open the PR. That is the line bstack does not cross without
 being asked. After it, autopilot takes over.
 
 **Pitfall:** accepting every finding. Reviewers, human or model, mix real
-catches with noise. The council reports only what a rerun confirms.
+catches with noise. Ask for the run that shows a finding before you act on it.
 
 Next: [Ship with autopilot](./06-autopilot.md).

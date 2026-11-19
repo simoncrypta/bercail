@@ -146,9 +146,8 @@ export default function (pi: ExtensionAPI) {
       reason === "provider_safety_block"
         ? "Human review of legitimate scope/authorization or the provider access/review process is needed. Do not replay, rewrite, switch models, or substitute parent approval."
         : "Human attention is needed; no automatic continuation for this stop.";
-    const review = /judge|council/.test(role)
-      ? " Unfinished review cannot approve shipping or be replaced by parent self-approval."
-      : "";
+    const review =
+      role === "judge" ? " Unfinished review cannot approve shipping or be replaced by parent self-approval." : "";
     const text = `${job}${role} ${process.env.HC_TERMINAL_ID ?? "headless"} stopped: ${reason}; phase ${phase}; candidate ${candidate}; session ${session_id}; episode ${episode_id}. Work is incomplete; prior evidence retains its original candidate. ${recovery}${review}`;
     ctx.ui.setStatus("bercail-fallback", `${reason}: incomplete`);
     ctx.ui.notify(text, "error");
@@ -317,7 +316,7 @@ export default function (pi: ExtensionAPI) {
     const role = process.env.BERCAIL_ROLE;
     const me = process.env.HC_TERMINAL_ID;
     if (!role || !me) return;
-    if (/judge|council/.test(role) && latestFailure) {
+    if (role === "judge" && latestFailure) {
       await stopFailure(latestFailure, ctx);
       return;
     }

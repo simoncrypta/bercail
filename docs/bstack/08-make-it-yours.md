@@ -20,8 +20,8 @@ judge = "gpt"
 ```
 
 Then `bercail bstack setup` or `bercail update`. `bercail bstack status` shows
-each model as `auto` or `pinned`. A pin stays until you clear it, gets a council
-seat even when you are not signed in to its plan, and skips every new release;
+each model as `auto` or `pinned`. A pin stays until you clear it, is used even
+when you are not signed in to its plan, and skips every new release;
 auto picks again on every update.
 
 The judge on `gpt` runs on Claude until you sign in to ChatGPT, so you can set
@@ -53,7 +53,7 @@ profile data and lists the providers found dead in the last day. See
 ## What bstack sets up in Pi
 
 - **The lead on the desk**, on the lead's model, with bercail's instructions
-  (`pi/instructions.md`), its prompt templates (`/validate`, `/council`, ...), and
+  (`pi/instructions.md`), its prompt templates (`/validate`, `/handoff`, ...), and
   bercail's skills.
 - **The roles as `hc` templates** in `~/.config/herdr-core/templates/`, each with
   its own model and brief.
@@ -76,14 +76,18 @@ stays.
 
 The templates in `~/.config/herdr-core/templates/bstack-*.md` each carry a
 `managed by bercail (bstack)` line. Delete that line and bercail never touches
-the file again; `bercail doctor` lists it as yours. `~/.local/share/bercail/pi/`
-has no line: it belongs to bercail, and every update rewrites it.
+the file again; `bercail doctor` lists it as yours. An update removes the
+council seats (`bstack-council-*.md`) releases before v0.18 rendered, when they
+still have that line. `~/.local/share/bercail/pi/` has no line: it belongs to
+bercail, and every update rewrites it.
 
 ## Skills
 
 bstack's skills are in `~/.agents/skills` ([the list](../cli.md#skills)), with
 a link in `~/.pi/agent/skills` for each. Every bstack role also loads them with
-`--skill`, so Pi's settings cannot filter them out.
+`--skill`, so Pi's settings cannot filter them out. An update removes the
+`council` skill releases before v0.18 installed, and its link, when its
+`SKILL.md` is one bercail shipped; a file you added there stays.
 
 Add your own skill next to them. Write one when you have corrected the same
 mistake twice, not before. Better still, when a lint, a test, or a type can

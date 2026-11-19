@@ -43,7 +43,7 @@ usage: handoff-spawn --info
                   --list-models names it) instead of the lead's. The rest of
                   the lead stays. A :thinking suffix is kept; without one it
                   gets the lead's. An unknown model is refused before anything
-                  starts. Sibling roles (builder, judge, council) keep theirs.
+                  starts. Sibling roles (builder, judge) keep theirs.
   --branch NAME   feature branch for a new space with a desk agent. With no
                   Herdr window here, hc makes the spaces and any connected
                   window (a laptop's) shows them, without taking focus.

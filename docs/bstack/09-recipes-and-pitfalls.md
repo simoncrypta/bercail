@@ -35,7 +35,7 @@ less than the real command.
 ## Review a branch skeptically
 
 ```text
-/council the branch against master. only bugs and behavior regressions, no style.
+review the branch against master. only bugs and behavior regressions, no style.
 ```
 
 ## Clean the diff and the PR body
@@ -62,7 +62,7 @@ show me the real output, not the build log.
 
 ## The pitfalls
 
-- **Naming every skill in the prompt.** "use /how then /council then /unslop"
+- **Naming every skill in the prompt.** "use /how then /validate then /unslop"
   reorders steps the playbook already sequences. Say the goal and the check.
 - **A finish line that can't fail.** "make it better" gives the agent nothing to
   check. Name a command, an output, or a screen.
@@ -71,7 +71,7 @@ show me the real output, not the build log.
 - **Success off a green build.** A build proves it compiles. Ask for the real
   command or flow, and expect it in the report.
 - **Accepting every review comment.** Bots and people both mix real catches with
-  noise. The council and autopilot check each one before acting on it.
+  noise. The review playbook and autopilot check each one before acting on it.
 - **Two agents in one worktree.** Give each job its own `--branch`.
 - **Expecting a commit.** bstack stages and stops. You review in tuicr and
   commit. Autopilot is the one exception, and only on the PR's branch.

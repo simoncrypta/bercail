@@ -4,8 +4,8 @@ description: >-
   bercail's playbooks for rigorous work on Pi with your own Claude and GPT
   subscriptions: investigation, bug fix, feature, refactor, review, ship,
   handoff, and takeover. Routes code to the builder and hard calls to the judge,
-  a second opinion on GPT; the lead decides. The council runs only on request. Use at the start of any non-trivial task, or when
-  asked which bstack playbook or role fits.
+  a second opinion on GPT; the lead decides. Use at the start of any
+  non-trivial task, or when asked which bstack playbook or role fits.
 ---
 
 # bstack
@@ -82,8 +82,7 @@ each step ending in something you can check.
 1. Get the target: the uncommitted diff, `git diff <base>...HEAD`, or `gh pr diff <n>`.
 2. Prove it: run the tests that cover the diff, then the repo's `verify-<repo>`
    skill when `.agents/skills/` has one. Check the diff's tests against the
-   `unit-testing` skill's review list. Run the `council` skill only when the
-   person asks for `/council`.
+   `unit-testing` skill's review list.
 3. Report only findings a run shows, worst first, with `file:line` and the command.
 4. Post to GitHub only when asked (the `review` skill's `publish-github.sh`).
 

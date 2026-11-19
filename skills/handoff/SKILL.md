@@ -154,7 +154,7 @@ A desk on another model is labelled `bercail.model=<model>`, its spawn JSON and
 `handoffs.jsonl` line carry `model`, and `bercail shep brief` and `bercail shep
 board` name it. Its desk record keeps the swapped `--model`, so
 `bercail desk restore` brings it back on the same model. The sibling roles it
-starts (builder, judge, council, autopilot templates) keep their own models.
+starts (builder, judge, autopilot templates) keep their own models.
 Without `--model`, every agent runs the lead's.
 
 ## Git backend

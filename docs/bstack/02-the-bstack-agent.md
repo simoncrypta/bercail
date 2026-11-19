@@ -12,7 +12,7 @@ the role that fits.
 | X is broken | bug fix | a repro before a fix, the root cause |
 | add or change behavior | feature | the data shape first, the real path proven |
 | same behavior, better shape | refactor | behavior pinned before anything moves |
-| review this | review | tests and the verify skill; `/council` when you ask |
+| review this | review | tests and the verify skill |
 | the PR is open | ship | autopilot until green |
 | several jobs at once | handoff | one beads issue per job |
 | finish this branch | takeover | read the trail before touching it |
@@ -32,7 +32,6 @@ template in `~/.config/herdr-core/templates/`.
 | lead | the desk | your ask; plans, routes, checks, reports |
 | build | `bstack-builder` | code from a precise brief |
 | judge | `bstack-judge` | a second opinion on hard design calls, prose, and the intent and description check at `/validate`; the lead decides |
-| council | `bstack-council-<plan>` | read-only adversarial review, one per plan with a model, on `/council` |
 | autopilot | `bstack-autopilot` | an open PR to get green |
 
 By default the lead, the builder and autopilot run on Claude Opus, and the judge
@@ -48,7 +47,7 @@ limited ([how it runs](../bstack.md#how-it-runs)).
 
 To run one desk's lead on another model, without changing the lead for every
 desk, hand it off with `--model` ([handoff](../handoff.md)). Only that desk's
-lead changes; the builder, judge, council, and autopilot it starts keep the
+lead changes; the builder, judge, and autopilot it starts keep the
 models above.
 
 A sibling knows nothing you didn't put in its brief. The lead writes the

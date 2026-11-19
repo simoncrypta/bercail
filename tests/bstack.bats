@@ -347,16 +347,12 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   local p t rel
   p="$(PI_DIR)"
   t="$(PI_TEMPLATES)"
-  # An older release's Grok seat.
-  mkdir -p "$t"
-  printf -- '---\nname: bstack-council-grok\ndescription: x (managed by bercail (bstack))\n---\n' >"$t/bstack-council-grok.md"
   deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
-  [[ ! -e "$t/bstack-council-grok.md" ]] || fail "an update removes the Grok seat"
   for rel in instructions.md agents/bstack-builder.md agents/bstack-judge.md \
-    agents/bstack-autopilot.md agents/bstack-pr-review.md agents/bstack-council-claude.md agents/bstack-council-gpt.md; do
+    agents/bstack-autopilot.md agents/bstack-pr-review.md; do
     [[ -f "$p/$rel" ]] || fail "missing $rel"
   done
-  for rel in validate council handoff autopilot how why unslop pr-review bstack-setup; do
+  for rel in validate handoff autopilot how why unslop pr-review bstack-setup; do
     [[ -f "$p/prompts/$rel.md" ]] || fail "missing prompt $rel"
     if grep -q '!`' "$p/prompts/$rel.md"; then fail "Pi templates have no !cmd: $rel"; fi
     if grep -q '^agent:' "$p/prompts/$rel.md"; then fail "Pi templates have no agent key: $rel"; fi
@@ -370,7 +366,6 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     fail "a brief has no frontmatter"
   fi
   grep -q 'You review someone else' "$p/agents/bstack-pr-review.md" || fail "pr-review keeps its body"
-  grep -q 'one reviewer on a council' "$p/agents/bstack-council-claude.md" || fail "council keeps its body"
   grep -q 'Desks only' "$p/instructions.md" || fail "instructions require a desk"
   # A desk never falls back to headless; only a headless handoff's own brief says so.
   grep -q 'exception: its system prompt says so' "$p/instructions.md" || fail "headless is only the handoff's exception"
@@ -401,7 +396,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   [[ ! -e "$p/fallback" ]] || fail "no runtime fallback list"
   grep -q 'bercail.role=agent' "$p/instructions.md" || fail "instructions warn off the desk's label"
 
-  for rel in bstack-builder bstack-judge bstack-autopilot bstack-council-claude bstack-council-gpt; do
+  for rel in bstack-builder bstack-judge bstack-autopilot; do
     [[ -f "$t/$rel.md" ]] || fail "missing template $rel"
     sed -n 1p "$t/$rel.md" | grep -qx -- '---' || fail "frontmatter starts $rel"
     sed -n 2p "$t/$rel.md" | grep -qx "name: $rel" || fail "name $rel"
@@ -414,13 +409,11 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     grep -q -- "env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN " "$t/$rel.md" || fail "$rel unsets Anthropic env"
     grep -q -- "--prompt-template $p/prompts" "$t/$rel.md" || fail "--prompt-template in $rel"
     grep -q -- "--append-system-prompt $p/instructions.md" "$t/$rel.md" || fail "instructions in $rel"
-    grep -q -- '--skill .*/skills/council' "$t/$rel.md" || fail "--skill in $rel"
+    grep -q -- '--skill .*/skills/bstack' "$t/$rel.md" || fail "--skill in $rel"
   done
   grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=builder pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder: $(cat "$t/bstack-builder.md")"
   grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=judge pi --model openai/gpt-6.1-sol:high ' "$t/bstack-judge.md" || fail "judge"
   grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=autopilot pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-autopilot.md" || fail "autopilot"
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=council pi --model openai/gpt-6.1-sol:high ' "$t/bstack-council-gpt.md" || fail "council seat on its own family"
-  grep -q -- "--append-system-prompt $p/agents/bstack-council-gpt.md" "$t/bstack-council-gpt.md" || fail "council brief"
   grep -q 'bstack-builder.md' "$t/bstack-builder.md" || fail "builder brief"
 
   assert_eq 'mine' "$(jq -r .defaultModel "$HOME/.pi/agent/settings.json")" "unrelated settings preserved"
@@ -428,13 +421,37 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   assert_eq '{"token":"secret"}' "$(cat "$HOME/.pi/agent/auth.json")" "auth.json untouched"
 
   assert_eq "$(printf 'claude=claude-bridge/claude-opus-5-5#high\ngpt=openai/gpt-6.1-sol#high')" "$(<"$p/models")" "resolved models, no xAI"
-  # A family that lost its login loses its seat.
+  # A family that lost its login: the judge moves to Claude.
   mkdir -p "$p/extensions/bercail-guard"
   printf 'old guard\n' >"$p/extensions/bercail-guard/index.ts"
   FAKE_PI_READY="claude-bridge" deploy_bstack >/dev/null 2>&1
   [[ ! -d "$p/extensions/bercail-guard" ]] || fail "update removes the old managed guard"
-  [[ ! -e "$t/bstack-council-gpt.md" && ! -e "$p/agents/bstack-council-gpt.md" ]] || fail "stale council seat"
   grep -q 'BERCAIL_ROLE=judge pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-judge.md" || fail "judge falls through to Claude"
+  unset FAKE_PI_READY
+}
+
+@test "an update removes the council seats older releases rendered, and keeps the person's bstack templates" {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="claude-bridge openai"
+  local t name
+  t="$(PI_TEMPLATES)"
+  mkdir -p "$t"
+  for name in bstack-council-claude bstack-council-gpt bstack-council-grok; do
+    printf -- '---\nname: %s\ndescription: x (managed by bercail (bstack))\n---\n' "$name" >"$t/$name.md"
+  done
+  # A person's own template, whose prompt quotes the marker.
+  printf -- '---\nname: bstack-my-review\ndescription: My reviewer\n---\nKeep the managed by bercail (bstack) line.\n' \
+    >"$t/bstack-my-review.md"
+  deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  for name in bstack-council-claude bstack-council-gpt bstack-council-grok; do
+    [[ ! -e "$t/$name.md" ]] || fail "an update keeps the retired seat $name"
+  done
+  [[ -f "$t/bstack-my-review.md" ]] || fail "an update removed a template bercail never rendered"
+  for name in bstack-builder bstack-judge bstack-autopilot; do
+    [[ -f "$t/$name.md" ]] || fail "an update removed the role it renders: $name"
+  done
+  if grep -rq council "$(PI_DIR)"; then fail "the Pi profile still names the council: $(grep -rl council "$(PI_DIR)")"; fi
   unset FAKE_PI_READY
 }
 
@@ -481,9 +498,10 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   deploy_bstack >/dev/null 2>&1
   mkdir -p "$(PI_TEMPLATES)"
   printf 'mine\n' >"$(PI_TEMPLATES)/reviewer.md"
+  printf 'mine\n' >"$(PI_TEMPLATES)/bstack-mine.md"
   remove_bstack >/dev/null 2>&1
   [[ ! -d "$(PI_DIR)" && ! -e "$(PI_TEMPLATES)/bstack-builder.md" ]] || fail "remove takes the profile"
-  [[ -f "$(PI_TEMPLATES)/reviewer.md" ]] || fail "remove keeps the person's templates"
+  [[ -f "$(PI_TEMPLATES)/reviewer.md" && -f "$(PI_TEMPLATES)/bstack-mine.md" ]] || fail "remove keeps the person's templates"
 
   # Keys left from an older bercail change nothing: bstack is Pi and always deployed.
   write_config <<'EOF'
@@ -558,7 +576,7 @@ EOF
   [[ -f "$(PI_DIR)/lead.json" ]] || fail "off removed nothing"
 }
 
-@test "every Pi role including the GPT council seat and empty-role lead loads bridge, fallback, guard, and pi-emphasis, and unsets Anthropic env" {
+@test "every Pi role template and the empty-role lead loads bridge, fallback, guard, and pi-emphasis, and unsets Anthropic env" {
   reset_home
   write_pi_config
   export FAKE_PI_READY="claude-bridge openai"

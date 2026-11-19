@@ -25,8 +25,10 @@ BSTACK_PI_BRIDGE_RESERVE=40000
 BSTACK_PI_EMPHASIS="extensions/pi-emphasis/index.ts"
 BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge.md
   agents/bstack-autopilot.md agents/bstack-headless.md agents/bstack-pr-review.md prompts/validate.md
-  prompts/council.md prompts/handoff.md prompts/autopilot.md prompts/how.md prompts/why.md
+  prompts/handoff.md prompts/autopilot.md prompts/how.md prompts/why.md
   prompts/unslop.md prompts/pr-review.md prompts/bstack-setup.md prompts/statechart.md)
+# Templates older releases rendered: the council's seats, removed in v0.18.
+BSTACK_PI_RETIRED=(bstack-council-claude bstack-council-gpt bstack-council-grok)
 
 # --- config.toml --------------------------------------------------------------
 
@@ -321,7 +323,7 @@ _bstack_pi_template() {
 }
 
 _bstack_deploy_pi() {
-  local work="$1" rel family model
+  local work="$1" rel name
   [[ ! -d "$BSTACK_PI_DIR" ]] || run rm -rf "$BSTACK_PI_DIR"
   for rel in "${BSTACK_PI_RENDERED[@]}"; do
     _bstack_render "$work/src/pi/$rel" "$work/pi-rendered"
@@ -349,19 +351,9 @@ _bstack_deploy_pi() {
     "A second opinion from another provider, read-only. It reviews; the lead decides."
   _bstack_pi_template "$work" bstack-autopilot autopilot "$(bstack_role_model lead)" bstack-autopilot \
     "Drives an open PR to green. Pushes the PR branch, never merges."
-  # One read-only reviewer per family with a model: the council's panel.
-  for family in "${BSTACK_FAMILIES[@]}"; do
-    model="$(bstack_resolve_model "$family")"
-    if [[ -n "$model" ]]; then
-      copy_file "$work/src/pi/agents/bstack-council.md" "$BSTACK_PI_DIR/agents/bstack-council-$family.md"
-      _bstack_pi_template "$work" "bstack-council-$family" council "$model" "bstack-council-$family" \
-        "Read-only council reviewer on $family. Tries to break a change and reports only findings it can show."
-    else
-      _bstack_remove_ours "$BSTACK_PI_TEMPLATES/bstack-council-$family.md"
-    fi
+  for name in "${BSTACK_PI_RETIRED[@]}"; do
+    _bstack_remove_ours "$BSTACK_PI_TEMPLATES/$name.md"
   done
-  # Grok's seat, from before v0.18.
-  _bstack_remove_ours "$BSTACK_PI_TEMPLATES/bstack-council-grok.md"
   _bstack_resolved_text >"$work/resolved"
   copy_file "$work/resolved" "$BSTACK_PI_DIR/models"
   info "bstack (pi): lead=$(bstack_role_model lead || true) build=$(bstack_role_model build || true) judge=$(bstack_role_model judge || true) (empty: Pi's default model)"
@@ -369,7 +361,7 @@ _bstack_deploy_pi() {
 
 _bstack_pi_template_paths() {
   local name
-  for name in bstack-builder bstack-judge bstack-autopilot bstack-council-claude bstack-council-gpt bstack-council-grok; do
+  for name in bstack-builder bstack-judge bstack-autopilot "${BSTACK_PI_RETIRED[@]}"; do
     printf '%s\n' "$BSTACK_PI_TEMPLATES/$name.md"
   done
 }
@@ -463,10 +455,6 @@ bstack_status() {
     note=""
     [[ -z "$model" ]] || _bstack_pi_known "$model" || note="  (not in pi --list-models)"
     log "    $role = $(_bstack_pi_model_id "${model:-(the default model in Pi)}")$note"
-  done
-  for family in "${BSTACK_FAMILIES[@]}"; do
-    model="$(bstack_resolve_model "$family")"
-    [[ -z "$model" ]] || log "    council ($family) = $(_bstack_pi_model_id "$model")"
   done
   log "  config: [bstack] in $BERCAIL_USER_CONFIG (auto picks the newest model; set claude/gpt to pin a Pi id)"
   bstack_warn_old_config

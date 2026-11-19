@@ -38,7 +38,6 @@ const auto = {
   graphiteAliases: [],
 };
 const judge = { role: "judge", hasUI: true, cwd: "/work", policies: none, graphiteAliases: [] };
-const council = { role: "council", hasUI: false, cwd: "/work", policies: none, graphiteAliases: [] };
 
 // Every field a test reads off a decision, whichever action it is.
 type Decision = { action: string; reason?: string; dir?: string; approved?: string[] };
@@ -97,9 +96,9 @@ test("blocked: force-push, mirror, deleting main, --no-verify, PR merges, headle
   blocked("git push origin refs/heads/main", auto, /main or master/);
   blocked("git push", { ...auto, branches: { "/work": "" } }, /Could not read the current branch/);
   blocked("git add .", judge, /read-only/);
-  blocked("git commit -m x", council, /read-only/);
+  blocked("git commit -m x", judge, /read-only/);
   blocked("git reset --hard", judge, /read-only/);
-  blocked("git checkout -- .", council, /read-only/);
+  blocked("git checkout -- .", judge, /read-only/);
   blocked("git restore --staged .", judge, /read-only/);
 });
 
@@ -144,7 +143,7 @@ const genuineHelps = [
 ];
 
 test("genuine CLI help needs no policy, branch lookup or approval in writing and read-only roles", () => {
-  for (const input of [headless, tui, auto, judge, council]) {
+  for (const input of [headless, tui, auto, judge]) {
     for (const command of genuineHelps) {
       assertDeepEqual(
         decision(command, { ...input, policies: undefined, branches: undefined }),
@@ -478,7 +477,7 @@ test("genuine CLI help reaches the extension without write policy lookup, confir
     await handlers.tool_call({ toolName: "read", input: { path: "/work/a.ts" } }, ctx);
     exec.mockClear();
     for (const hasUI of [false, true]) {
-      for (const role of ["", "judge", "council"]) {
+      for (const role of ["", "judge"]) {
         vi.stubEnv("BERCAIL_ROLE", role);
         expect(
           await handlers.tool_call({ toolName: "bash", input: { command: "gt submit --help" } }, { ...ctx, hasUI }),
@@ -589,7 +588,7 @@ test("a $( or backtick the tokenizer can't close is blocked, and does not hang",
 
 test("edit and write are blocked for read-only roles only", () => {
   assertEqual(decideTool("edit", undefined, judge).action, "block");
-  assertEqual(decideTool("write", undefined, council).action, "block");
+  assertEqual(decideTool("write", undefined, { ...judge, hasUI: false }).action, "block");
   assertEqual(decideTool("edit", undefined, headless).action, "allow");
   assertEqual(decideTool("write", undefined, auto).action, "allow");
   assertEqual(decideTool("read", undefined, judge).action, "allow");
@@ -718,14 +717,13 @@ test("a file is on disk when it, or a dangling link by its name, is there", () =
 // A repo's policy, as lib/policy.sh hands it over (untrusted loosening already
 // back to the defaults). Each policy value × role × command.
 const policy = (fields: Partial<Policy>): Policy => ({ ...defaultPolicy, repo: "/work", from: {}, ...fields });
-type Role = "desk" | "shep" | "headless" | "autopilot" | "judge" | "council";
+type Role = "desk" | "shep" | "headless" | "autopilot" | "judge";
 const roles: Record<Role, GuardInput> = {
   desk: { role: "", hasUI: true, cwd: "/work" },
   shep: { role: "shep", hasUI: true, cwd: "/work" },
   headless: { role: "", hasUI: false, cwd: "/work" },
   autopilot: { role: "autopilot", hasUI: false, cwd: "/work" },
   judge: { role: "judge", hasUI: true, cwd: "/work" },
-  council: { role: "council", hasUI: false, cwd: "/work" },
 };
 const roleNames = Object.keys(roles) as Role[];
 const at = (role: Role, fields: Partial<Policy>, branch = "feature"): GuardInput => ({
@@ -775,7 +773,6 @@ for (const [command, branch, answers] of commands) {
         headless: answers[i] === "ask" ? "block" : answers[i],
         autopilot: autopilotAnswer(command, branch, name),
         judge: "block",
-        council: "block",
       };
       for (const role of roleNames) {
         const got = decision(command, at(role, policies[name], branch));
@@ -1337,15 +1334,16 @@ for (const command of [...publishers, ...committers]) {
     const isCommit = committers.includes(command);
     for (const [name, fields] of Object.entries(policies)) {
       for (const role of roleNames) {
-        const expected = ["judge", "council"].includes(role)
-          ? "block"
-          : role === "autopilot"
-            ? "allow"
-            : (isCommit ? fields.commit === "allow" : ["branch", "main"].includes(fields.push ?? ""))
+        const expected =
+          role === "judge"
+            ? "block"
+            : role === "autopilot"
               ? "allow"
-              : role === "headless"
-                ? "block"
-                : "ask";
+              : (isCommit ? fields.commit === "allow" : ["branch", "main"].includes(fields.push ?? ""))
+                ? "allow"
+                : role === "headless"
+                  ? "block"
+                  : "ask";
         const got = decision(command, at(role, fields));
         assertEqual(got.action, expected, `${role} / ${name} / ${command} → ${JSON.stringify(got)}`);
       }
@@ -1555,13 +1553,14 @@ for (const command of [
   test(`entire publish follows the push policy: ${command}`, () => {
     for (const [name, fields] of Object.entries(policies)) {
       for (const role of roleNames) {
-        const expected = ["judge", "council"].includes(role)
-          ? "block"
-          : role === "autopilot" || ["branch", "main"].includes(fields.push ?? "")
-            ? "allow"
-            : role === "headless"
-              ? "block"
-              : "ask";
+        const expected =
+          role === "judge"
+            ? "block"
+            : role === "autopilot" || ["branch", "main"].includes(fields.push ?? "")
+              ? "allow"
+              : role === "headless"
+                ? "block"
+                : "ask";
         const got = decision(command, at(role, fields));
         assertEqual(got.action, expected, `${role} / ${name} / ${command} → ${JSON.stringify(got)}`);
       }
@@ -1582,7 +1581,7 @@ test("entire trail writes are like gh pr edit; unknown commands ask", () => {
     asked(command, at("desk", policies.loosest));
     blocked(command, at("headless", policies.loosest));
     blocked(command, at("autopilot", policies.loosest));
-    blocked(command, at("council", policies.loosest));
+    blocked(command, at("judge", policies.loosest));
   }
 });
 test("entire --repo does not lend cwd trust, and a trail checkout moves the branch", () => {
@@ -1614,7 +1613,7 @@ for (const command of [
 for (const command of ["entire brain refresh delta", "entire-brain refresh seed --agent none", "entire graph index"]) {
   test(`a local brain refresh is a write, not a read: ${command}`, () => {
     for (const role of ["desk", "shep", "headless", "autopilot"] as const) allowed(command, at(role, policies.default));
-    for (const role of ["judge", "council"] as const) blocked(command, at(role, policies.default), /read-only/);
+    blocked(command, at("judge", policies.default), /read-only/);
   });
 }
 for (const command of [
@@ -1662,7 +1661,7 @@ test("an unknown brain or graph command, or a flag before its subcommand, asks a
     "entire brain memories --json status sync",
   ]) {
     asked(command, at("desk", policies.loosest));
-    for (const role of ["headless", "autopilot", "council"] as const) blocked(command, at(role, policies.loosest));
+    for (const role of ["headless", "autopilot", "judge"] as const) blocked(command, at(role, policies.loosest));
   }
 });
 test("graph verify's --test and --setup are checked as bash, in its --repo", () => {
@@ -1713,7 +1712,7 @@ test("a review worktree's project files are never trusted; other folders are lef
 
 test("a command fed by op read, op inject or op item get --fields cannot run on an empty secret", () => {
   const empty = /empty value/;
-  for (const input of [tui, headless, auto, judge, council]) {
+  for (const input of [tui, headless, auto, judge]) {
     // A dismissed prompt left curl typing an empty password on a lock screen, then Enter.
     blocked(
       'op read "op://Private/laptop/password" | curl -s --data-binary @- http://pikvm/api/hid/print && curl -s http://pikvm/api/hid/events/send_key?key=Enter',
@@ -1920,7 +1919,7 @@ test("only Shep writes to Basecamp or the person's todos; every role reads, and 
   const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
   const builder = { ...tui, role: "builder" };
   const shepBg = { ...headless, role: "shep-bg" };
-  for (const input of [tui, headless, auto, builder, judge, council, shepBg]) {
+  for (const input of [tui, headless, auto, builder, judge, shepBg]) {
     for (const command of [
       'basecamp todos create "Create the tailnet login" --in 1 --list 2',
       "printf x | basecamp todos create - --in 1",
@@ -2014,7 +2013,7 @@ test("only Shep sets where the person's todos go, and no role writes todo.json b
     "bin/bercail todo target rm lesentiel",
     "cd /tmp && bercail todo target add x https://3.basecamp.com/1/buckets/2/todosets/3 --create Errands",
   ];
-  for (const input of [tui, headless, auto, builder, judge, council, shepBg]) {
+  for (const input of [tui, headless, auto, builder, judge, shepBg]) {
     for (const command of sets) blocked(command, input, /Shep's\. Say in your report which list a todo belongs on/);
     for (const command of ["bercail todo target list --json", "bercail todo target show lesentiel"])
       allowed(command, input);
