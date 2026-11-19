@@ -29,6 +29,18 @@ The desk's session name, which the desk status shows, adds `paused until <time>`
 
 The profile stores resolved `family=model` lines in `pi/models`. `bercail bstack status` reports bridge availability and Claude Code subscription auth (`authMethod` `claude.ai` or `oauth_token`, not an API key). `bercail doctor` checks the installed bridge, flags missing or stale profile data, and lists the providers found dead in the last day. It probes no provider, so a provider you have since paid for stays listed until that day is over. A `grok` or `fallback` key from before v0.18, or a role set to `grok`, is ignored with a warning.
 
+### Reply pills
+
+Every role started after `bercail update` loads [pi-emphasis](https://github.com/johnlindquist/pi-emphasis) by John Lindquist (MIT): the lead desk, the builder, the judge, council seats, autopilot, Shep, background Shep and Discuss. `bercail review-pr`'s reviewer does not, because its reply is a JSON block bercail reads. It changes what Pi draws, not what is stored, copied or exported:
+
+- `[[Done]]`, `[[Failed]]`, `[[Needs you]]` and the other status words become colored pills with an icon.
+- Known `##` headings and bold lead labels, such as **Cause:**, get an icon, bold text takes the theme's link color, and `├──` and `└──` tree lines are dimmed.
+- In Pi's terminal interface it adds a `reply_style` section to the system prompt, about 1,500 tokens by upstream's count, that tells the agent to write pills and labels. Headless runs (`pi -p`, JSON, RPC) get neither the section nor the drawing.
+
+The icons and the rounded pill ends are [Nerd Font](https://www.nerdfonts.com/) symbols; without them you see boxes. Set these in the environment Pi starts in: `PI_EMPHASIS_PILL_ICONS=0` and `PI_EMPHASIS_ROUND_CAPS=0` for plain chips, `PI_EMPHASIS_GUIDANCE=0` to keep the drawing but drop the prompt section, and `PI_EMPHASIS_COLOR` for another theme color for bold text.
+
+bercail ships a copy of upstream's one file at a pinned commit, so it installs nothing and fetches nothing. `bercail update` deploys it to `pi/extensions/pi-emphasis/`, `bercail doctor` reports the pinned commit (`ok  pi-emphasis <commit>`), and `bercail uninstall` removes it with the profile.
+
 ## Provider stops and incomplete reviews
 
 The extension classifies provider failures as `provider_safety_block`,

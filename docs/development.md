@@ -95,6 +95,8 @@ A lookup that fails does not stop the others. The run then opens or updates one 
 
 `deps-track.sh pins` checks, offline, that each entry has every field and that every `path:KEY` pin agrees with `known`. `tests/deps_track.bats` runs it on this tree, so CI fails when, say, `BD_VERSION` moves without `known`. `check` prints the same warnings. `check --dry-run` does the lookups and prints the issue writes instead of making them; with `GH_REPO=simoncrypta/bercail` and your gh login, it shows what the next run would do. To take a new version, read its notes, make the change it needs, then set `known` (and the pin, for a `path:KEY`) in the same commit.
 
+`bstack/pi/extensions/pi-emphasis/` is [pi-emphasis](https://github.com/johnlindquist/pi-emphasis), vendored like the statechart skill below: `index.ts` and `LICENSE` are upstream's, byte for byte, at the commit in its `UPSTREAM.md` and in `lib/deps.json` (a `none` entry: upstream has no releases or tags). `tests/pi_emphasis.bats` checks that the copy, the record and the manifest agree, and that the copy imports only Pi's types and adds no fetch, key, command or tool. Its live test installs bercail fresh and as an update from v0.17.4, the last release without it, and checks that the deployed lead draws a pill on the installed Pi. Formatting and lint leave it alone (`vite.config.ts`).
+
 ## statecharts
 
 `skills/statechart/` is pstack's statechart skill, vendored at the commit in its `UPSTREAM.md`, which also says how to compare the copy with upstream and how to move it. Every file under `scripts/` and `references/` is upstream's, byte for byte, except bercail's `statechart-bstack`, `pi-chart.mjs` and `graph.ts`. Formatting and lint leave the upstream files alone (`vite.config.ts`).

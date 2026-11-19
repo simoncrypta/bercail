@@ -20,6 +20,9 @@ BSTACK_PI_BRIDGE="npm:pi-claude-bridge@0.12.0"
 # window, so Pi's default 16384 reserve compacts too late on the bridge. 40k
 # compacts first, with room for the tool results Pi only estimates.
 BSTACK_PI_BRIDGE_RESERVE=40000
+# johnlindquist/pi-emphasis, vendored at the commit lib/deps.json knows
+# (bstack/pi/extensions/pi-emphasis/UPSTREAM.md): pills and icons in replies.
+BSTACK_PI_EMPHASIS="extensions/pi-emphasis/index.ts"
 BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge.md
   agents/bstack-autopilot.md agents/bstack-headless.md agents/bstack-pr-review.md prompts/validate.md
   prompts/council.md prompts/handoff.md prompts/autopilot.md prompts/how.md prompts/why.md
@@ -265,7 +268,8 @@ _bstack_pi_argv() {
   local model="$1" brief="${2:-}" id
   BSTACK_PI_ARGV=(pi)
   [[ -z "$model" ]] || BSTACK_PI_ARGV+=(--model "$(_bstack_pi_model_id "$model")")
-  BSTACK_PI_ARGV+=(-e "$BSTACK_PI_BRIDGE" -e "$BSTACK_PI_DIR/extensions/fallback.ts" -e "$BSTACK_PI_DIR/extensions/guard.ts")
+  BSTACK_PI_ARGV+=(-e "$BSTACK_PI_BRIDGE" -e "$BSTACK_PI_DIR/extensions/fallback.ts" -e "$BSTACK_PI_DIR/extensions/guard.ts"
+    -e "$BSTACK_PI_DIR/$BSTACK_PI_EMPHASIS")
   BSTACK_PI_ARGV+=(--prompt-template "$BSTACK_PI_DIR/prompts"
     --append-system-prompt "$BSTACK_PI_DIR/instructions.md")
   [[ -z "$brief" ]] || BSTACK_PI_ARGV+=(--append-system-prompt "$BSTACK_PI_DIR/agents/$brief.md")
@@ -327,6 +331,8 @@ _bstack_deploy_pi() {
   copy_file "$work/src/pi/extensions/provider-error.ts" "$BSTACK_PI_DIR/extensions/provider-error.ts"
   copy_file "$work/src/pi/extensions/guard.ts" "$BSTACK_PI_DIR/extensions/guard.ts"
   copy_file "$work/src/pi/extensions/review.ts" "$BSTACK_PI_DIR/extensions/review.ts"
+  copy_file "$work/src/pi/$BSTACK_PI_EMPHASIS" "$BSTACK_PI_DIR/$BSTACK_PI_EMPHASIS"
+  copy_file "$work/src/pi/extensions/pi-emphasis/LICENSE" "$BSTACK_PI_DIR/extensions/pi-emphasis/LICENSE"
   # The guard puts it first on PATH in a repo with a desk secret (lib/desk-secret.sh).
   copy_file "$work/src/pi/op-shim/op" "$BSTACK_PI_DIR/op-shim/op"
   run chmod 755 "$BSTACK_PI_DIR/op-shim/op"
@@ -506,12 +512,15 @@ doctor_bstack() {
     log "  --  Claude auth: no subscription login (claude auth login)"
   fi
   for rel in "${BSTACK_PI_RENDERED[@]}" extensions/fallback.ts extensions/provider-error.ts extensions/guard.ts extensions/review.ts \
-    models lead.json review.json; do
+    "$BSTACK_PI_EMPHASIS" models lead.json review.json; do
     if [[ ! -f "$BSTACK_PI_DIR/$rel" ]]; then
       log "  missing  bstack $BSTACK_PI_DIR/$rel (bercail update)"
       missing=1
     fi
   done
+  if [[ -f "$BSTACK_PI_DIR/$BSTACK_PI_EMPHASIS" ]]; then
+    log "  ok  pi-emphasis $(jq -r '.[] | select(.name == "pi-emphasis") | .known[0:12]' "$BERCAIL_DEPS_JSON" 2>/dev/null) (reply pills and icons)"
+  fi
   for path in "$BSTACK_PI_TEMPLATES/bstack-builder.md" "$BSTACK_PI_TEMPLATES/bstack-judge.md" "$BSTACK_PI_TEMPLATES/bstack-autopilot.md"; do
     if [[ ! -f "$path" ]]; then
       log "  missing  bstack $path (bercail update)"

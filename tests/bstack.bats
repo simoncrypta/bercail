@@ -380,18 +380,22 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   cmp "$ROOT/bstack/pi/extensions/provider-error.ts" "$p/extensions/provider-error.ts" || fail "managed provider-error helper"
   cmp "$ROOT/bstack/pi/extensions/guard.ts" "$p/extensions/guard.ts" || fail "managed guard extension"
   cmp "$ROOT/bstack/pi/extensions/review.ts" "$p/extensions/review.ts" || fail "managed review-pr extension"
+  cmp "$ROOT/bstack/pi/extensions/pi-emphasis/index.ts" "$p/extensions/pi-emphasis/index.ts" || fail "vendored pi-emphasis"
+  cmp "$ROOT/bstack/pi/extensions/pi-emphasis/LICENSE" "$p/extensions/pi-emphasis/LICENSE" || fail "pi-emphasis keeps its license"
   # The guard finds it beside its own folder, and PATH needs it executable.
   cmp "$ROOT/bstack/pi/op-shim/op" "$p/op-shim/op" && [[ -x "$p/op-shim/op" ]] || fail "executable op shim"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
     and (index(["-e", "\($p)/extensions/review.ts"]) != null) and (index(["--tools", "read,grep,find,ls"]) != null)
     and (index(["--append-system-prompt", "\($p)/agents/bstack-pr-review.md"]) != null)
     and (index("--skill") == null) and (index("\($p)/extensions/guard.ts") == null)
+    and (index("\($p)/extensions/pi-emphasis/index.ts") == null)
     and (index("--no-approve") != null)' "$p/review.json" >/dev/null \
     || fail "review-pr's reviewer: $(cat "$p/review.json")"
   [[ -f "$p/agents/bstack-headless.md" ]] || fail "headless lead brief"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
     and (index(["-e", "npm:pi-claude-bridge@0.12.0"]) != null)
     and (index(["-e", "\($p)/extensions/fallback.ts", "-e", "\($p)/extensions/guard.ts"]) != null)
+    and (index(["-e", "\($p)/extensions/pi-emphasis/index.ts"]) != null)
     and (index(["--prompt-template", "\($p)/prompts"]) != null)
     and (index(["--append-system-prompt", "\($p)/instructions.md"]) != null)
     and (index("--skill") != null) and (index("env") == null)' "$p/lead.json" >/dev/null \
@@ -408,6 +412,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     grep -q ' pi ' "$t/$rel.md" || fail "$rel runs pi"
     grep -q -- "-e $p/extensions/fallback.ts -e $p/extensions/guard.ts" "$t/$rel.md" || fail "$rel loads fallback then guard"
     grep -q -- "-e npm:pi-claude-bridge@0.12.0" "$t/$rel.md" || fail "$rel loads bridge"
+    grep -q -- "-e $p/extensions/pi-emphasis/index.ts" "$t/$rel.md" || fail "$rel loads pi-emphasis"
     grep -q -- "env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN " "$t/$rel.md" || fail "$rel unsets Anthropic env"
     grep -q -- "--prompt-template $p/prompts" "$t/$rel.md" || fail "--prompt-template in $rel"
     grep -q -- "--append-system-prompt $p/instructions.md" "$t/$rel.md" || fail "instructions in $rel"
@@ -511,6 +516,12 @@ EOF
   grep -q 'on a limit: a role pauses until it resets' <<<"$out" || fail "status says what a limit does: $out"
   out="$(doctor_bstack)" || fail "doctor ok: $out"
   grep -q 'ok  bstack (lead=claude-bridge/claude-opus-5-5:high)' <<<"$out" || fail "doctor: $out"
+  grep -q "ok  pi-emphasis $(jq -r '.[] | select(.name == "pi-emphasis") | .known[0:12]' "$ROOT/lib/deps.json") " <<<"$out" \
+    || fail "doctor names the pinned pi-emphasis: $out"
+  rm -f "$(PI_DIR)/extensions/pi-emphasis/index.ts"
+  if out="$(doctor_bstack)"; then fail "doctor: pi-emphasis missing"; fi
+  grep -q 'missing  bstack .*/extensions/pi-emphasis/index.ts (bercail update)' <<<"$out" || fail "doctor missing pi-emphasis: $out"
+  deploy_bstack >/dev/null 2>&1
   if out="$(FAKE_PI_READY="claude-bridge openai" doctor_bstack)"; then
     fail "doctor: a new login is a due update"
   fi
@@ -549,7 +560,7 @@ EOF
   [[ -f "$(PI_DIR)/lead.json" ]] || fail "off removed nothing"
 }
 
-@test "every Pi role including the GPT council seat and empty-role lead loads bridge, fallback, and guard, and unsets Anthropic env" {
+@test "every Pi role including the GPT council seat and empty-role lead loads bridge, fallback, guard, and pi-emphasis, and unsets Anthropic env" {
   reset_home
   write_pi_config
   export FAKE_PI_READY="claude-bridge openai"
@@ -563,6 +574,7 @@ EOF
     grep -qxF "$(PI_DIR)/extensions/fallback.ts" "$FAKE_PI_LAUNCH_LOG" || fail "fallback in $template"
     grep -qxF "$(PI_DIR)/extensions/guard.ts" "$FAKE_PI_LAUNCH_LOG" || fail "guard in $template"
     grep -qxF 'npm:pi-claude-bridge@0.12.0' "$FAKE_PI_LAUNCH_LOG" || fail "bridge in $template"
+    grep -qxF "$(PI_DIR)/extensions/pi-emphasis/index.ts" "$FAKE_PI_LAUNCH_LOG" || fail "pi-emphasis in $template"
     if grep -q '^ANTHROPIC_' "$FAKE_PI_LAUNCH_LOG.env"; then
       fail "Anthropic env leaked from $template"
     fi
@@ -572,6 +584,7 @@ EOF
   grep -qxF "$(PI_DIR)/extensions/fallback.ts" "$FAKE_PI_LAUNCH_LOG" || fail "lead fallback"
   grep -qxF "$(PI_DIR)/extensions/guard.ts" "$FAKE_PI_LAUNCH_LOG" || fail "lead guard"
   grep -qxF 'npm:pi-claude-bridge@0.12.0' "$FAKE_PI_LAUNCH_LOG" || fail "lead bridge"
+  grep -qxF "$(PI_DIR)/extensions/pi-emphasis/index.ts" "$FAKE_PI_LAUNCH_LOG" || fail "lead pi-emphasis"
   if grep -q '^ANTHROPIC_' "$FAKE_PI_LAUNCH_LOG.env"; then
     fail "Anthropic env leaked from lead"
   fi

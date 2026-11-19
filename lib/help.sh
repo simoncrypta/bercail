@@ -150,8 +150,10 @@ bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   ~/.local/share/bercail/pi/ and herdr-core templates, and sets a 40k compaction
   reserve per claude-bridge model in Pi's settings.json, so Pi compacts before
   Claude Code refuses a prompt near the window. Every role loads the
-  bridge, the rate-limit extension, and bercail's guard, which follows each repo's
-  trusted git policy (bercail policy show). Direct, unquoted sole --help on recognized
+  bridge, the rate-limit extension, pi-emphasis (status pills and icons in
+  replies; PI_EMPHASIS_GUIDANCE=0 drops its prompt rules), and bercail's
+  guard, which follows each repo's trusted git policy (bercail policy show).
+  Direct, unquoted sole --help on recognized
   git builtins and gt create/modify/submit/merge is a read, not a write approval. Graphite help
   needs a known, unmodified alias configuration with no override of that command.
   Wrappers, extra arguments and ambiguous forms keep the existing checks (docs/config.md).
