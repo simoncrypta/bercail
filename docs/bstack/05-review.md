@@ -45,7 +45,8 @@ and [review-pr](../review.md#someone-elses-pr-bercail-review-pr).
 `/validate` writes two files in the worktree's `.bercail/`, which git ignores:
 
 - `validate.json`: the checks it ran, each with its command, exit code and
-  evidence, for the staged tree.
+  evidence, for the staged tree. Evidence that starts with a path names the
+  file holding the check's output.
 - `description.md`: a `title:` line in its frontmatter, then the body. It
   follows the repo's PR template (`.github/`, the root, then `docs/`, or the
   policy's `pr_template`).
@@ -54,7 +55,8 @@ and [review-pr](../review.md#someone-elses-pr-bercail-review-pr).
 check` fails on a stale description, a missing or empty template section, an
 empty label line such as `Loom:`, a leftover template comment, a title over 72
 characters or in quotes (the commit subject would keep them), a beads id (they
-mean nothing outside your machine), or no checks for that tree. When you or
+mean nothing outside your machine), no checks for that tree, or an evidence
+file that does not exist. When you or
 Shep commit or open the PR, `bercail describe commit`, `body` and `title` print
 the text as written and refuse a stale one.
 `body` and `commit` end with a provenance line: `Written with bercail (Pi,

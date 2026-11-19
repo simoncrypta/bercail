@@ -255,6 +255,33 @@ SH
   describe check 2>&1 | grep -qF 'fail: .bercail/ runtime files are staged' || fail "staged runtime file"
 }
 
+@test "check: evidence that starts with a missing file fails; an existing file, a {a,b} group and prose pass" {
+  described
+  mkdir -p .bercail/verify "$BATS_TEST_TMPDIR/out"
+  : >.bercail/verify/tests.out
+  : >"$BATS_TEST_TMPDIR/out/a.log"
+  : >"$BATS_TEST_TMPDIR/out/b.log"
+  : >"$HOME/home.log"
+  local tree out
+  tree="$(git write-tree)"
+  # with_evidence E...: validate.json with one passing check per evidence string.
+  with_evidence() {
+    jq -n --arg t "$tree" '{tree: $t, checks: [$ARGS.positional[] | {kind: "test", command: "bash tests/run.sh", exit_code: 0, evidence: .}]}' \
+      --args -- "$@" >.bercail/validate.json
+  }
+  # shellcheck disable=SC2088 # a literal ~/ is the evidence under test
+  with_evidence ".bercail/verify/tests.out: 3 passed" "$BATS_TEST_TMPDIR/out/{a,b}.log; both passed" \
+    "~/home.log: ok" "inline/same-script: 26 ms" "all passed"
+  out="$(describe check 2>&1)" || fail "files that exist and prose pass: $out"
+  with_evidence "$BATS_TEST_TMPDIR/out/gone.log: 9 passed"
+  out="$(describe check 2>&1)" && fail "a missing absolute file passed: $out"
+  grep -qF "fail: the evidence file $BATS_TEST_TMPDIR/out/gone.log of \`bash tests/run.sh\` does not exist" <<<"$out" || fail "absolute: $out"
+  with_evidence ".bercail/verify/gone.out (expected failure)"
+  describe check 2>&1 | grep -qF "fail: the evidence file .bercail/verify/gone.out of" || fail "relative: $(describe check 2>&1)"
+  with_evidence "$BATS_TEST_TMPDIR/out/{a,c}.log: both passed"
+  describe check 2>&1 | grep -qF "fail: the evidence file $BATS_TEST_TMPDIR/out/c.log of" || fail "brace group: $(describe check 2>&1)"
+}
+
 @test "title, body and commit print the text for git and the forges; with no description they say /validate" {
   described
   [[ "$(describe title)" == "file: add a line" ]] || fail "title"

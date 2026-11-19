@@ -20,10 +20,12 @@ It exits 0 when every step and check passed, and prints the evidence folder.
 
 ## Tests
 
-First, `tests/run.sh` (the unit suite, every test in its own throwaway HOME)
-with the real `${XDG_STATE_HOME:-~/.local/state}/bercail/handoffs.jsonl`
-hashed before and after. A changed hash fails the check, and the added lines go
-to `handoffs-added.jsonl`: a real path there is another desk's spawn, so rerun.
+First, `tests/run.sh` (the unit suite, every test in its own throwaway HOME),
+with `TMPDIR` set to a temp root of its own. Then `handoffs-canary.sh` checks
+the real `${XDG_STATE_HOME:-~/.local/state}/bercail/handoffs.jsonl`: the lines
+it had must be unchanged, and a line added since that names the temp root came
+from a test and fails the check. A line naming any other path is another desk's
+spawn during the run and passes. Every added line goes to `handoffs-added.jsonl`.
 The live proofs (`tests/run.sh --live`) are not part of it.
 
 ## Launch
@@ -63,6 +65,7 @@ higher is a crash.
 
 - `summary.tsv`: step, exit code, command.
 - `tests.out`: the suite's output.
+- `handoffs-added.jsonl`: the lines added to the real handoff log during the suite, when there were any.
 - `checks.tsv`: `ok` or `FAIL` for each claim about the state the run left.
 - `<step>.out`: each step's output.
 - `hc-calls.log`: every call to the stand-in.

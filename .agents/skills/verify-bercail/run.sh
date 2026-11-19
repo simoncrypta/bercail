@@ -9,22 +9,24 @@ mkdir -p "$evidence"
 evidence="$(cd "$evidence" && pwd)"
 real_pi="$(mise which pi 2>/dev/null || command -v pi || true)"
 
-# --- tests: the suite must leave the real handoff log byte-identical ---
+# --- tests: the suite must not write the real handoff log ---
+# The suite's temp files go under one root, so a line a test wrote names it.
+# Resolved, as handoff-spawn records the paths it writes.
 real_handoffs="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl"
-handoffs_lines() { [[ -f "$real_handoffs" ]] && wc -l <"$real_handoffs" || echo 0; }
-handoffs_sum() { [[ -f "$real_handoffs" ]] && sha256sum <"$real_handoffs" || echo absent; }
-handoffs_before="$(handoffs_sum)"
-handoffs_count="$(handoffs_lines)"
+scratch="$(cd "$(mktemp -d)" && pwd -P)" box=""
+# A test may leave a read-only folder in TMPDIR; it goes too.
+trap 'chmod -R u+w "$scratch"; rm -rf "$scratch" ${box:+"$box"}' EXIT
+tests_root="$scratch/tmp"
+mkdir "$tests_root"
+cat "$real_handoffs" >"$scratch/handoffs-before.jsonl" 2>/dev/null
 tests_rc=0
-bash "$repo/tests/run.sh" >"$evidence/tests.out" 2>&1 </dev/null || tests_rc=$?
-handoffs_after="$(handoffs_sum)"
-# Another desk may spawn during the run: keep what was added so a reader can tell.
-[[ "$handoffs_before" == "$handoffs_after" ]] \
-  || tail -n "+$((handoffs_count + 1))" "$real_handoffs" >"$evidence/handoffs-added.jsonl"
+TMPDIR="$tests_root" bash "$repo/tests/run.sh" >"$evidence/tests.out" 2>&1 </dev/null || tests_rc=$?
+handoffs_rc=0
+"$repo/.agents/skills/verify-bercail/handoffs-canary.sh" "$real_handoffs" "$scratch/handoffs-before.jsonl" "$tests_root" \
+  "$evidence/handoffs-added.jsonl" 2>>"$evidence/tests.out" || handoffs_rc=$?
 
 # --- launch: nothing below can reach the real HOME or a real Herdr core ---
 box="$(mktemp -d)"
-trap 'rm -rf "$box"' EXIT
 unset BASH_ENV HC_TERMINAL_ID HC_SESSION HC_SCOPE HC_TERMINAL_SOCKET
 export __MISE_BASH_ENV_LOADED=1
 export HOME="$box/home" XDG_CONFIG_HOME="$box/home/.config" XDG_DATA_HOME="$box/home/.local/share" XDG_CACHE_HOME="$box/home/.cache"
@@ -96,7 +98,7 @@ check() {
 
 printf '%s\t%s\t%s\n' tests "$tests_rc" "bash tests/run.sh" >>"$evidence/summary.tsv"
 check "tests pass" test "$tests_rc" -eq 0
-check "tests left the real handoffs.jsonl byte-identical" test "$handoffs_before" = "$handoffs_after"
+check "tests did not write the real handoffs.jsonl" test "$handoffs_rc" -eq 0
 
 profile="$HOME/.local/share/bercail/pi"
 templates="$XDG_CONFIG_HOME/herdr-core/templates"

@@ -92,3 +92,33 @@ FIXTURE
     [[ $((SECONDS - start)) -lt 15 ]] || fail "[$mode]: waited out the timeout ($((SECONDS - start))s)"
   done
 }
+
+# verify-bercail checks that the suite leaves the real handoffs.jsonl alone.
+# Another desk spawning during the run is not the suite's doing.
+@test "verify's canary: another desk's spawn passes and is kept; a line naming the run's temp root fails" {
+  local canary="$ROOT/.agents/skills/verify-bercail/handoffs-canary.sh" dir="$BATS_TEST_TMPDIR/canary"
+  local root="$dir/run" log="$dir/handoffs.jsonl" before="$dir/before.jsonl" added="$dir/added.jsonl" out
+  mkdir -p "$root"
+  printf '{"path":"/home/me/Work/a"}\n' >"$log"
+  cp "$log" "$before"
+  "$canary" "$log" "$before" "$root" "$added" || fail "an untouched log failed"
+  [[ ! -e "$added" ]] || fail "nothing was added, yet $added was written"
+  printf '{"path":"/home/me/Work/b"}\n' >>"$log"
+  out="$("$canary" "$log" "$before" "$root" "$added" 2>&1)" || fail "another desk's spawn failed: $out"
+  grep -qx '{"path":"/home/me/Work/b"}' "$added" || fail "the added line was not kept: $(cat "$added")"
+  printf '{"path":"%s/bats-run-1/test/1/wt"}\n' "$root" >>"$log"
+  out="$("$canary" "$log" "$before" "$root" "$added" 2>&1)" && fail "a line from the run passed"
+  grep -qF 'a test wrote the real handoff log' <<<"$out" || fail "no reason given: $out"
+}
+
+@test "verify's canary: a line already in the log that changed fails, even with nothing added" {
+  local canary="$ROOT/.agents/skills/verify-bercail/handoffs-canary.sh" dir="$BATS_TEST_TMPDIR/canary" out
+  mkdir -p "$dir/run"
+  printf '{"path":"/home/me/Work/a"}\n' >"$dir/before.jsonl"
+  printf '{"path":"/home/me/Work/x"}\n' >"$dir/handoffs.jsonl"
+  out="$("$canary" "$dir/handoffs.jsonl" "$dir/before.jsonl" "$dir/run" "$dir/added.jsonl" 2>&1)" && fail "a changed line passed"
+  grep -qF 'lines already in the handoff log changed' <<<"$out" || fail "no reason given: $out"
+  rm "$dir/handoffs.jsonl"
+  "$canary" "$dir/handoffs.jsonl" "$dir/before.jsonl" "$dir/run" "$dir/added.jsonl" 2>/dev/null && fail "a deleted log passed"
+  true
+}

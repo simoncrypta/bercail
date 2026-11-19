@@ -236,6 +236,20 @@ _desc_evidence_ok() {
       and (.evidence | type == "string"))' "$1" >/dev/null 2>&1
 }
 
+# The files the checks' evidence names, as "path<TAB>command" lines, so a
+# claimed log that was never written fails. Evidence names a file when it
+# starts with one: absolute, ~/, ./, ../ or .bercail/, up to a space, colon,
+# semicolon or parenthesis, with one {a,b} group. Prose names none.
+_desc_evidence_files() {
+  jq -r '.checks[] | .command as $c | .evidence
+    | ([match("^(/|~/|\\.\\.?/|\\.bercail/)[^\\s:;()]+").string][0] // empty)
+    | sub("[.,]+$"; "")
+    | ([capture("^(?<a>[^{]*)\\{(?<alts>[^{}]*)\\}(?<z>[^{}]*)$")][0]) as $b
+    | (if $b then $b.alts | split(",")[] | $b.a + . + $b.z else . end)
+    | select(test("[{}*?]") | not)
+    | [., $c] | @tsv' "$1"
+}
+
 # Problems with the body as {fails, warns}: the template's headings and order,
 # empty sections, empty label lines, template comments, beads ids, length.
 _desc_body_problems() {
@@ -276,7 +290,7 @@ _desc_body_problems() {
 
 # Everything check knows, as JSON. Exit status is not the verdict; .fails is.
 desc_state() {
-  local root="$1" file evidence title style tree current tpl_json template meta_tpl tpl_text="" body ids line change base
+  local root="$1" file evidence title style tree current tpl_json template meta_tpl tpl_text="" body ids line change base path cmd full
   local -a fails=() warns=()
   file="$root/$DESC_FILE"
   evidence="$root/$DESC_EVIDENCE"
@@ -317,6 +331,14 @@ desc_state() {
     while IFS= read -r line; do
       warns+=("$line")
     done < <(jq -r '.checks[] | select(.exit_code != 0) | "the check `\(.command)` exited \(.exit_code): say so in the validation"' "$evidence")
+    while IFS=$'\t' read -r path cmd; do
+      case "$path" in
+        /*) full="$path" ;;
+        \~/*) full="$HOME/${path#\~/}" ;;
+        *) full="$root/$path" ;;
+      esac
+      [[ -e "$full" ]] || fails+=("the evidence file $path of \`$cmd\` does not exist: rerun the check and point its evidence at the output")
+    done < <(_desc_evidence_files "$evidence")
   fi
   if jq -e .over_budget <<<"$change" >/dev/null; then
     warns+=("$(jq -r '"the change is \(.lines) lines added and removed, over the diff budget of \(.diff_budget) (lockfiles and generated files left out): split it, or say in the description why it is one change"' <<<"$change")")

@@ -54,7 +54,9 @@ committed.
    repo's style (`git log --format=%s -20`), a blank line, then the body.
 3. Write `validate.json` from the commands you ran on this tree, with
    `"tree": "$(git write-tree)"`. Only commands that ran: a check you skipped
-   is not evidence.
+   is not evidence. When a check's output is in a file, start its `evidence`
+   with the path (absolute, or `.bercail/...` from the worktree), then `: ` and
+   the result. `check` fails when that file does not exist.
 4. Write `description.md` to the standard. Its validation names the commands in
    `validate.json` and their results.
 5. `bercail describe stamp`, then `bercail describe check`. Fix every `fail:`.
