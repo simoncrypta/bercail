@@ -77,7 +77,7 @@ new_issue() {
 comment_has() {
   local dir="$1" id="$2" needle="$3" text
   text="$(cd "$dir" && bd comments "$id" --json | jq -r '.[].text')"
-  printf '%s' "$text" | grep -F -q "$needle" \
+  grep -Fq -- "$needle" <<<"$text" \
     || fail "missing comment [$needle] from $dir: $text"
 }
 

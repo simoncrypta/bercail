@@ -122,3 +122,32 @@ FIXTURE
   "$canary" "$dir/handoffs.jsonl" "$dir/before.jsonl" "$dir/run" "$dir/added.jsonl" 2>/dev/null && fail "a deleted log passed"
   true
 }
+
+# A leak once ran the real gh past a stand-in: BASH_ENV put the mise shims back
+# ahead of it (bercail-fss). isolate fails a test whose PATH or BASH_ENV can.
+@test "a test fails when its PATH or BASH_ENV reaches the real mise shims" {
+  local dir="$BATS_TEST_TMPDIR/nested" out
+  mkdir -p "$dir"
+  cat >"$dir/escape.bats" <<FIXTURE
+setup() {
+  load "$ROOT/tests/test_helper"
+  case "\$BATS_TEST_DESCRIPTION" in
+    shims) export PATH="/home/me/.local/share/mise/shims/:\$PATH" ;;
+    wrappers) export PATH="\$PATH:/home/me/.local/share/mise/command-wrappers/bin" ;;
+    bash_env) export BASH_ENV=/home/me/.bash_env ;;
+  esac
+  isolate
+}
+@test "shims" { :; }
+@test "wrappers" { :; }
+@test "bash_env" { :; }
+@test "clean" { :; }
+FIXTURE
+  out="$("$ROOT/node_modules/.bin/bats" "$dir/escape.bats" 2>&1)" && fail "every escape passed: $out"
+  grep -qx 'not ok 1 shims' <<<"$out" || fail "the shims on PATH passed: $out"
+  grep -q 'PATH reaches mise through /home/me/.local/share/mise/shims/; drop it' <<<"$out" || fail "the failure does not name the shims: $out"
+  grep -qx 'not ok 2 wrappers' <<<"$out" || fail "the command wrappers on PATH passed: $out"
+  grep -qx 'not ok 3 bash_env' <<<"$out" || fail "a BASH_ENV passed: $out"
+  grep -q 'BASH_ENV is set (/home/me/.bash_env)' <<<"$out" || fail "the failure does not name BASH_ENV: $out"
+  grep -qx 'ok 4 clean' <<<"$out" || fail "the suite's own PATH failed the check: $out"
+}

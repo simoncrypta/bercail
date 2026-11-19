@@ -1,0 +1,5 @@
+set -euo pipefail
+printf '%s' "$out" | grep -q x
+if echo "$out" | grep -Fxq x; then :; fi
+found="$(printf '%s\n' "$a" | grep -m1 x)"
+printf '%s' "$out" | grep -F --quiet x || exit 1
