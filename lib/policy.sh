@@ -22,8 +22,9 @@ POLICY_FILE=".bercail/policy.toml"
 # diff_budget: lines one change adds and removes before /validate warns, past
 # the 200 to 400 a reviewer reads well in one sitting. review_budget: lines
 # waiting on the person's review before Shep warns at a new desk, about two
-# hours of review.
-POLICY_DEFAULTS='{"commit":"ask","push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000}'
+# hours of review. merge_reversible: whether a merge or land in this repo is a two-way
+# door, so Shep's question about it may default after the timeout (docs/shep.md).
+POLICY_DEFAULTS='{"commit":"ask","push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"merge_reversible":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000}'
 
 _policy_err() {
   printf 'bercail policy: %s\n' "$*" >&2
@@ -54,7 +55,7 @@ _policy_object() {
       if $k == "commit" then $v == "ask" or $v == "allow"
       elif $k == "push" then $v == "ask" or $v == "branch" or $v == "main"
       elif $k == "integrate" then $v == "pr" or $v == "direct"
-      elif $k == "pr_draft" or $k == "agent_may_release" then ($v | type) == "boolean"
+      elif $k == "pr_draft" or $k == "agent_may_release" or $k == "merge_reversible" then ($v | type) == "boolean"
       elif $k == "release" or $k == "rules" then ($v | type) == "string"
       elif $k == "provenance" then $v == "line" or $v == "trailer" or $v == "none"
       elif $k == "pr_template" then ($v | type) == "string" and ($v | test("^/|(^|/)\\.\\.(/|$)") | not)
@@ -143,7 +144,7 @@ policy_json() {
     --argjson repo "$repo" --argjson local "$local_" --argjson defaults "$POLICY_DEFAULTS" '
     def looser($k; $v):
       ($k == "commit" and $v == "allow") or ($k == "push" and $v != "ask") or ($k == "agent_may_release" and $v == true)
-      or ($k == "review" and $v == "none") or (($k == "diff_budget" or $k == "review_budget") and $v > $defaults[$k]);
+      or ($k == "merge_reversible" and $v == true) or ($k == "review" and $v == "none") or (($k == "diff_budget" or $k == "review_budget") and $v > $defaults[$k]);
     ($defaults | keys_unsorted) as $keys
     | [ $keys[] as $k
         | if $local | has($k) then {k: $k, v: $local[$k], from: "local"}

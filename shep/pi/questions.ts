@@ -31,13 +31,17 @@ export interface QuestionSpec {
   brief?: string;
   /** Shep's pick among options, with one line of why. */
   recommendation?: { choice: string; why: string };
+  /** Shep's: the choice can be undone, so the recommendation is taken at the deadline. */
+  reversible?: true;
 }
 /** Who recorded an answer: the person's pick on a card or in a Discuss branch. */
 export const ANSWER_SOURCES = ["panel picker", "discuss picker"] as const;
+/** The ledger's own answer: no pick by the deadline, so Shep's recommendation. Never the person's. */
+export const DEFAULT_SOURCE = "default after timeout";
 export interface QuestionAnswer {
   requestId: string;
   choice: string;
-  source: (typeof ANSWER_SOURCES)[number];
+  source: (typeof ANSWER_SOURCES)[number] | typeof DEFAULT_SOURCE;
   at: string;
   /** The candidate the live check saw when the person picked. */
   head: string | null;
@@ -59,6 +63,10 @@ export interface Question extends QuestionSpec {
   revision: number;
   status: "pending" | "answered" | "superseded" | "withdrawn";
   createdAt: string;
+  /** A reversible question with a recommendation: when it takes the recommendation. */
+  deadline?: string;
+  /** Its default's decision event is written, so it is never written again. */
+  told?: true;
   proposals: {
     requestId: string;
     answer: string;
@@ -107,7 +115,14 @@ function shape(value: unknown, keys: string[]): asserts value is Record<string, 
 const optional = (value: Record<string, unknown>, keys: string[]) => keys.filter((key) => value[key] !== undefined);
 function spec(value: unknown): asserts value is QuestionSpec {
   const v = value as Record<string, unknown>;
-  shape(value, ["kind", "prompt", "options", "origin", "target", ...optional(v ?? {}, ["brief", "recommendation"])]);
+  shape(value, [
+    "kind",
+    "prompt",
+    "options",
+    "origin",
+    "target",
+    ...optional(v ?? {}, ["brief", "recommendation", "reversible"]),
+  ]);
   if (!["planning", "review", "action"].includes(value.kind as string)) fail("invalid kind");
   text(value.prompt);
   if (!Array.isArray(value.options)) fail("invalid options");
@@ -118,6 +133,7 @@ function spec(value: unknown): asserts value is QuestionSpec {
     text(value.recommendation.why);
     if (!value.options.includes(value.recommendation.choice)) fail("recommendation must be one of the options");
   }
+  if (value.reversible !== undefined && value.reversible !== true) fail("reversible is true or absent");
   shape(value.origin, ["event", "session", "entry"]);
   text(value.origin.event);
   text(value.origin.session);
@@ -148,8 +164,11 @@ function spec(value: unknown): asserts value is QuestionSpec {
 function question(value: unknown): asserts value is Question {
   const v = value as Record<string, unknown>;
   const keys = ["id", "revision", "status", "createdAt", "proposals", "kind", "prompt", "options", "origin", "target"];
-  shape(value, [...keys, ...optional(v ?? {}, ["brief", "recommendation", "answer", "withdrawal"])]);
-  const { id, revision, status, createdAt, proposals, answer, withdrawal, ...fields } = value;
+  shape(value, [
+    ...keys,
+    ...optional(v ?? {}, ["brief", "recommendation", "reversible", "deadline", "told", "answer", "withdrawal"]),
+  ]);
+  const { id, revision, status, createdAt, deadline, told, proposals, answer, withdrawal, ...fields } = value;
   spec(fields);
   if (
     typeof id !== "string" ||
@@ -162,6 +181,13 @@ function question(value: unknown): asserts value is Question {
   if (!STATUSES.includes(status as string)) fail("invalid status");
   text(createdAt);
   if (!Number.isFinite(Date.parse(createdAt)) || !Array.isArray(proposals)) fail("invalid question history");
+  if (deadline !== undefined) {
+    text(deadline);
+    if (!fields.reversible || !fields.recommendation || !(Date.parse(deadline) > Date.parse(createdAt)))
+      fail("only a reversible question with a recommendation has a deadline, after it was asked");
+  }
+  if (told !== undefined && (told !== true || (answer as QuestionAnswer | undefined)?.source !== DEFAULT_SOURCE))
+    fail("only a default is told");
   for (const p of proposals) {
     shape(p, [
       "requestId",
@@ -186,7 +212,15 @@ function question(value: unknown): asserts value is Question {
     text(answer.requestId);
     text(answer.at);
     if (!fields.options.includes(answer.choice as string)) fail("answer is not one of the options");
-    if (!ANSWER_SOURCES.includes(answer.source as QuestionAnswer["source"])) fail("unknown answer source");
+    if (answer.source === DEFAULT_SOURCE) {
+      if (
+        deadline === undefined ||
+        answer.choice !== fields.recommendation?.choice ||
+        Date.parse(answer.at as string) < Date.parse(deadline as string)
+      )
+        fail("a default is the recommendation, taken at or after the deadline");
+    } else if (!ANSWER_SOURCES.includes(answer.source as (typeof ANSWER_SOURCES)[number]))
+      fail("unknown answer source");
     for (const key of ["head", "stagedTree"]) if (answer[key] !== null) text(answer[key]);
     if (!Number.isFinite(Date.parse(answer.at as string))) fail("invalid answer time");
   }
@@ -252,6 +286,119 @@ const canonical = (value: unknown): string =>
       : item,
   );
 export const tokenOf = (q: Pick<Question, "id" | "revision">): string => `${q.id}@${q.revision}`;
+
+// The decision-timeout matrix: one-way and two-way doors. A two-way door is cheap to
+// walk back, so a reversible question there takes Shep's recommendation at its
+// deadline; a one-way door always waits for the person. docs/shep.md keeps the same
+// table. An action question's action is its effect, from a closed set: commit, or
+// merge/land; the helper captured its candidate. A planning pick has no action. The
+// prompt, choices and brief can only make it stricter: a one-way word there wins, and
+// so does a merge or commit word without that action. What no row names is one-way.
+export type Door = { door: "one-way" | "two-way"; row: string; hit: string };
+const ONE_WAY: [string, RegExp][] = [
+  ["force push", /\bforce[- ]?push\w*|--force\b|\bpush\b[^\n]*\s-f\b/i],
+  [
+    "publishing to a forge",
+    /\b(push|pushes|pushed|pushing|submit|submits|submitted|publish|publishes|published|publishing|trail|trails|pull request)\b/i,
+  ],
+  ["an LGTM or approval", /\b(lgtm|approve|approves|approved|approval|reviewed-by)\b/i],
+  ["a release or tag", /\b(release|releases|released|releasing|tag|tags|tagged|tagging|ship|ships|shipped)\b/i],
+  [
+    "a deletion",
+    /\b(delete|deletes|deleted|deleting|deletion|remove|removes|removed|removing|rm|clean|cleans|cleaned|destroy|destroys|destroyed|wipe|wipes|wiped|purge|purges|purged|reset|prune)\b/i,
+  ],
+  [
+    "money",
+    /[$€£]|\b(money|pay|pays|paid|paying|payment|purchase|purchases|purchased|buy|buys|bought|spend|spends|spent|spending|refund|invoice|billing|subscription)\b/i,
+  ],
+  [
+    "an outward post",
+    /\b(post|posts|posted|posting|tweet|tweets|email|emails|emailed|announce|announces|announced|comment|comments|commented|send|sends|sending|reply|replies)\b/i,
+  ],
+  ["a device or deploy action", /\b(device|devices|deploy|deploys|deployed|deploying|deployment)\b/i],
+];
+const MERGE = /\b(merge|merges|merged|merging|land|lands|landed|landing)\b/i;
+const COMMIT = /\b(commit|commits|committed|committing)\b/i;
+const ACTIONS = new Set(["commit", "merge", "land"]);
+// mergeReversible: whether the repo's trusted policy says merge_reversible = true;
+// asked only for a merge or land.
+export function door(
+  q: Pick<QuestionSpec, "kind" | "prompt" | "options" | "brief" | "target">,
+  mergeReversible: () => boolean,
+): Door {
+  if (q.kind === "review") return { door: "one-way", row: "an LGTM", hit: "a review question" };
+  const words = [q.prompt, ...q.options, q.brief ?? ""].join("\n");
+  for (const [row, pattern] of ONE_WAY) {
+    const hit = pattern.exec(words);
+    if (hit) return { door: "one-way", row, hit: hit[0] };
+  }
+  const action = q.target.action;
+  if (action !== null && (q.kind !== "action" || !ACTIONS.has(action)))
+    return { door: "one-way", row: "an action no two-way row names", hit: action };
+  const merge = MERGE.exec(words)?.[0];
+  if (merge && action !== "merge" && action !== "land")
+    return { door: "one-way", row: "a merge asked without action merge or land", hit: merge };
+  const commit = COMMIT.exec(words)?.[0];
+  if (commit && action !== "commit")
+    return { door: "one-way", row: "a commit asked without action commit", hit: commit };
+  if (action === "merge" || action === "land")
+    return mergeReversible()
+      ? { door: "two-way", row: "a merge where the policy says merge_reversible", hit: action }
+      : { door: "one-way", row: "a merge where the policy does not say merge_reversible", hit: action };
+  return action === "commit"
+    ? { door: "two-way", row: "a local commit", hit: action }
+    : { door: "two-way", row: "a planning pick", hit: q.prompt };
+}
+
+// merge_reversible as a live check read it: true only when it read a policy that says so.
+export const mergesIn = (check: { policy?: { status: string; current?: unknown } }) =>
+  check.policy?.status === "checked" &&
+  (check.policy.current as { policy?: { merge_reversible?: unknown } })?.policy?.merge_reversible === true;
+
+// [shep] decision_timeout, which bercail passes in: the minutes a reversible question
+// waits for the person. 0: it never defaults.
+export function decisionTimeout(raw = process.env.BERCAIL_SHEP_DECISION_TIMEOUT): number {
+  if (raw === undefined || raw === "") return 30;
+  if (!/^\d+$/.test(raw)) fail(`[shep] decision_timeout must be a whole number of minutes, not ${raw}`);
+  return Number(raw);
+}
+
+// Its deadline passed with no pick: the ledger may take the recommendation.
+export const isDue = (q: Question) =>
+  q.status === "pending" && q.deadline !== undefined && Date.parse(q.deadline) <= Date.now();
+
+// What the repo's policy says about merges, for a question's target: the caller looks.
+export type MergePolicy = (target: QuestionTarget) => boolean;
+
+// A new revision's own fields: a reversible two-way door with a recommendation gets a deadline.
+function opened(fields: QuestionSpec, id: string, revision: number, merges: MergePolicy): Question {
+  if (fields.reversible) {
+    if (!fields.recommendation)
+      fail("a reversible question needs a recommendation: it is what the question defaults to");
+    const d = door(fields, () => merges(fields.target));
+    if (d.door === "one-way")
+      fail(`one-way door (${d.row}: "${d.hit}"): it waits for the person; ask it without reversible`);
+  }
+  const createdAt = new Date();
+  const minutes = fields.reversible ? decisionTimeout() : 0;
+  return {
+    ...structuredClone(fields),
+    id,
+    revision,
+    status: "pending",
+    createdAt: createdAt.toISOString(),
+    ...(minutes ? { deadline: new Date(createdAt.getTime() + minutes * 60000).toISOString() } : {}),
+    proposals: [],
+  };
+}
+
+// What a live check (checkQuestion) saw, as the store's transitions read it.
+type Check = {
+  status: string;
+  reasons: string[];
+  current: Pick<QuestionTarget, "head" | "stagedTree"> | null;
+  policy?: { status: string; current?: unknown };
+};
 
 // The caller supplies repo identity; this store never probes or changes a checkout.
 export class QuestionStore {
@@ -348,40 +495,37 @@ export class QuestionStore {
     return state.questions.find((q) => tokenOf(q) === token) ?? fail("unknown question revision");
   }
 
-  create<T>(requestId: string, intent: T, resolveSpec: (intent: T) => QuestionSpec): Question {
+  create<T>(
+    requestId: string,
+    intent: T,
+    resolveSpec: (intent: T) => QuestionSpec,
+    merges: MergePolicy = () => false,
+  ): Question {
     return this.request(requestId, ["create", intent], (state) => {
       const fields = resolveSpec(intent);
       spec(fields);
       const id = `Q${state.questions.reduce((max, q) => Math.max(max, Number(q.id.slice(1))), 0) + 1}`;
-      const q: Question = {
-        ...structuredClone(fields),
-        id,
-        revision: 1,
-        status: "pending",
-        createdAt: new Date().toISOString(),
-        proposals: [],
-      };
+      const q = opened(fields, id, 1, merges);
       state.questions.push(q);
       return q;
     });
   }
 
-  revise<T>(requestId: string, token: string, intent: T, resolveSpec: (intent: T) => QuestionSpec): Question {
+  revise<T>(
+    requestId: string,
+    token: string,
+    intent: T,
+    resolveSpec: (intent: T) => QuestionSpec,
+    merges: MergePolicy = () => false,
+  ): Question {
     return this.request(requestId, ["revise", token, intent], (state) => {
       const fields = resolveSpec(intent);
       spec(fields);
       const previous = this.find(state, token);
       if (previous.status !== "pending") fail("stale or closed question revision");
       if (!sameScope(previous, fields)) fail("revision cannot change repo, issue or topic; create a new question");
+      const q = opened(fields, previous.id, previous.revision + 1, merges);
       previous.status = "superseded";
-      const q: Question = {
-        ...structuredClone(fields),
-        id: previous.id,
-        revision: previous.revision + 1,
-        status: "pending",
-        createdAt: new Date().toISOString(),
-        proposals: [],
-      };
       state.questions.push(q);
       return q;
     });
@@ -433,8 +577,8 @@ export class QuestionStore {
     requestId: string,
     token: string,
     choice: string,
-    source: QuestionAnswer["source"],
-    check: { status: string; reasons: string[]; current: Pick<QuestionTarget, "head" | "stagedTree"> | null },
+    source: (typeof ANSWER_SOURCES)[number],
+    check: Check,
   ): AnswerResult {
     if (!ANSWER_SOURCES.includes(source)) fail("unknown answer source");
     text(choice);
@@ -447,7 +591,9 @@ export class QuestionStore {
             ? "not one of the question's choices"
             : check.status !== "fresh" || !check.current
               ? `changed since Shep asked: ${check.reasons.join(", ") || "not checked"}`
-              : undefined;
+              : isDue(q) && door(q, () => mergesIn(check)).door === "two-way"
+                ? `past its deadline: it takes Shep's recommendation, ${q.recommendation!.choice}`
+                : undefined;
       if (reason) return { question: q, accepted: false, reason };
       q.status = "answered";
       q.answer = {
@@ -460,6 +606,40 @@ export class QuestionStore {
       };
       return { question: q, accepted: true };
     });
+  }
+
+  // The deadline passed with no pick: the ledger, not Shep, records Shep's
+  // recommendation as DEFAULT_SOURCE, once, and only when the live check the caller
+  // ran just before found the question unchanged and, with the policy it read, still
+  // a two-way door. The caller checks a due question.
+  expire(token: string, check: Check): AnswerResult {
+    return this.locked((state) => {
+      const q = this.find(state, token);
+      if (!isDue(q)) return { question: q, accepted: false, reason: `question is ${q.status} or not due` };
+      if (check.status !== "fresh" || !check.current)
+        return { question: q, accepted: false, reason: `changed since Shep asked: ${check.reasons.join(", ")}` };
+      const d = door(q, () => mergesIn(check));
+      if (d.door === "one-way") return { question: q, accepted: false, reason: `now a one-way door: ${d.row}` };
+      q.status = "answered";
+      q.answer = {
+        requestId: `default:${tokenOf(q)}`,
+        choice: q.recommendation!.choice,
+        source: DEFAULT_SOURCE,
+        at: new Date().toISOString(),
+        head: check.current.head,
+        stagedTree: check.current.stagedTree,
+      };
+      return { question: q, accepted: true };
+    }, true);
+  }
+
+  // Its default's decision event is written: the caller wrote it, or found it there.
+  told(token: string): void {
+    this.locked((state) => {
+      const q = this.find(state, token);
+      if (q.answer?.source !== DEFAULT_SOURCE) fail("only a default is told");
+      q.told = true;
+    }, true);
   }
 }
 
@@ -479,7 +659,8 @@ export function projection(snapshot: QuestionSnapshot): string {
       .map(([key, value]) => `${key}=${line(value ?? "none", 64)}`)
       .join(" ");
     const answer = q.proposals.find((p) => p.accepted)?.answer;
-    const row = `${tokenOf(q)} [${q.kind}] ${line(q.prompt, 160)} | options=${line(q.options.join(" / "), 100)} | ${target} | proposed=${line(answer ?? "none", 100)} (${q.proposals.length} unverified proposals)`;
+    const deadline = q.deadline ? ` | defaults to ${line(q.recommendation!.choice, 80)} at ${q.deadline}` : "";
+    const row = `${tokenOf(q)} [${q.kind}] ${line(q.prompt, 160)} | options=${line(q.options.join(" / "), 100)} | ${target} | proposed=${line(answer ?? "none", 100)} (${q.proposals.length} unverified proposals)${deadline}`;
     if (lines.join("\n").length + row.length > 15500) break;
     lines.push(row);
   }
@@ -487,14 +668,23 @@ export function projection(snapshot: QuestionSnapshot): string {
     `${pending.length} pending; ${pending.length - lines.length + 1} omitted. Reply with /reply Qn@revision answer; bare replies never select a target.`,
     "Shortened fields end in …; full targets and history: bercail shep questions --json.",
   );
-  // The person's picks, newest first: the record of an answer, whatever became of its event.
-  const answered = snapshot.questions
-    .filter((q) => q.answer)
-    .sort((a, b) => b.answer!.at.localeCompare(a.answer!.at))
-    .slice(0, 10);
-  if (answered.length) {
-    lines.push("Answered by the person's pick (a local record, not proof of identity; act on it once):");
-    for (const q of answered)
+  // The answers, newest first: the record of an answer, whatever became of its event.
+  // A default is never listed as the person's.
+  const answered = (picked: boolean) =>
+    snapshot.questions
+      .filter((q) => q.answer && (q.answer.source !== DEFAULT_SOURCE) === picked)
+      .sort((a, b) => b.answer!.at.localeCompare(a.answer!.at))
+      .slice(0, 10);
+  for (const [picked, head] of [
+    [true, "Answered by the person's pick (a local record, not proof of identity; act on it once):"],
+    [
+      false,
+      "Defaulted to your recommendation after the deadline (not the person's choice, never an LGTM or reviewer; act on it once, and say it was defaulted):",
+    ],
+  ] as const) {
+    const qs = answered(picked);
+    if (qs.length) lines.push(head);
+    for (const q of qs)
       lines.push(
         `${tokenOf(q)} ${line(q.prompt, 120)} -> ${line(q.answer!.choice, 80)} (${q.answer!.source}, ${q.answer!.at}) topic=${line(q.target.topic, 64)}`,
       );

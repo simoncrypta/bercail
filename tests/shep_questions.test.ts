@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
-import { QuestionStore, projection, tokenOf, type QuestionSpec } from "../shep/pi/questions.ts";
+import { door, QuestionStore, projection, tokenOf, type QuestionSpec } from "../shep/pi/questions.ts";
 
 const worker = fileURLToPath(new URL("./shep_questions_worker.ts", import.meta.url));
 const flock = spawnSync("which", ["flock"], { encoding: "utf8" }).stdout.trim();
@@ -423,6 +423,227 @@ describe("durable targeted questions", () => {
     expect(() => store.withdraw("w3", tokenOf(b), "moot")).toThrow(/question is answered/);
     const raw = readFileSync(join(state, "questions.json"), "utf8");
     writeFileSync(join(state, "questions.json"), raw.replace(/,"withdrawal":\{[^}]*\}/, ""));
+    expect(() => store.snapshot()).toThrow(/corrupt/);
+  });
+
+  // A reversible planning pick (no action): Shep's recommendation is what it defaults to.
+  const reversible = (topic = "alpha", extra: Partial<QuestionSpec> = {}): QuestionSpec => ({
+    ...fields(topic),
+    target: { ...fields(topic).target, action: null },
+    prompt: "Which desk starts first?",
+    options: ["auth", "search"],
+    recommendation: { choice: "auth", why: "it unblocks search" },
+    reversible: true,
+    ...extra,
+  });
+  const fresh = { status: "fresh", reasons: [], current: { head: null, stagedTree: null } };
+
+  // The decision-timeout matrix, one case per row (docs/shep.md, "Reversible questions").
+  // merges: what the repo's policy says about merge_reversible.
+  const action = (act: string, prompt: string): Partial<QuestionSpec> => ({
+    kind: "action",
+    prompt,
+    options: ["yes", "wait"],
+    recommendation: { choice: "yes", why: "w" },
+    target: { ...fields().target, action: act },
+  });
+  test.each([
+    ["two-way", "a planning pick", {}, false],
+    ["two-way", "a local commit", action("commit", "Commit the staged change?"), false],
+    ["two-way", "a merge where the policy says merge_reversible", action("merge", "Merge it to master?"), true],
+    ["two-way", "a merge where the policy says merge_reversible", action("land", "Land it on master?"), true],
+    ["one-way", "a merge where the policy does not say merge_reversible", action("land", "Land it on master?"), false],
+    ["one-way", "a merge asked without action merge or land", { prompt: "Land it now?" }, true],
+    ["one-way", "a merge asked without action merge or land", action("commit", "Commit, then merge?"), true],
+    ["one-way", "an LGTM", { ...action("review staged work", "Ready?"), kind: "review" }, true],
+    ["one-way", "an LGTM or approval", { prompt: "Approve the guard change?" }, true],
+    ["one-way", "force push", { prompt: "Force push it to master?" }, true],
+    ["one-way", "force push", { options: ["auth", "git push -f origin main"] }, true],
+    ["one-way", "publishing to a forge", { prompt: "Push it to master now?" }, true],
+    ["one-way", "publishing to a forge", { options: ["auth", "git push origin main extra-branch"] }, true],
+    ["one-way", "publishing to a forge", { options: ["auth", "gt submit"] }, true],
+    ["one-way", "publishing to a forge", { brief: "Auth first; then create the trail." }, true],
+    ["one-way", "a release or tag", { prompt: "Tag v0.18 tonight?" }, true],
+    ["one-way", "a deletion", { brief: "Search first removes the old worktree." }, true],
+    ["one-way", "money", { prompt: "Buy the domain for $12?" }, true],
+    ["one-way", "an outward post", { prompt: "Post the summary on the PR?" }, true],
+    ["one-way", "an outward post", { prompt: "Send the vendor our confirmation?" }, true],
+    ["one-way", "a device or deploy action", { prompt: "Deploy to the HA box?" }, true],
+    ["one-way", "an action no two-way row names", action("git push -f origin main", "Land it?"), true],
+    ["one-way", "an action no two-way row names", action("git clean -fd", "Tidy the worktree?"), true],
+    ["one-way", "an action no two-way row names", action("stage-only review", "Review it?"), true],
+    ["one-way", "an action no two-way row names", { target: { ...fields().target, action: "commit" } }, true],
+    ["one-way", "an action no two-way row names", { target: { ...fields().target, action: "land" } }, true],
+    ["one-way", "a commit asked without action commit", { prompt: "Commit it now?" }, true],
+  ] as ["one-way" | "two-way", string, Partial<QuestionSpec>, boolean][])(
+    "a %s door: %s (%j)",
+    (way, row, extra, merges) => {
+      const spec = reversible("alpha", extra);
+      const create = () =>
+        store.create(
+          "q",
+          {},
+          () => spec,
+          () => merges,
+        );
+      if (way === "two-way") {
+        expect(create().deadline).toBe("2026-11-14T12:30:00.000Z");
+        expect(door(spec, () => merges).row).toBe(row);
+        return;
+      }
+      expect(create).toThrow(`one-way door (${row}: `);
+      // A refusal leaves nothing behind; the same question without reversible just waits.
+      expect(store.snapshot().questions).toEqual([]);
+      const { reversible: _r, ...plain } = spec;
+      expect(store.create("q2", {}, () => plain)).not.toHaveProperty("deadline");
+    },
+  );
+
+  test("a reversible question needs a recommendation, and a merge is one-way when the caller says nothing", () => {
+    const { recommendation: _r, ...bare } = reversible();
+    expect(() => store.create("q", {}, () => bare)).toThrow(/a reversible question needs a recommendation/);
+    expect(() => store.create("m", {}, () => reversible("m", action("merge", "Merge it now?")))).toThrow(
+      /one-way door \(a merge where the policy does not say merge_reversible/,
+    );
+  });
+
+  test("at the deadline a merge defaults only if the policy still says merge_reversible", () => {
+    const spec = reversible("m", action("merge", "Merge it now?"));
+    const q = store.create(
+      "q",
+      {},
+      () => spec,
+      () => true,
+    );
+    vi.setSystemTime("2026-11-14T12:30:00.000Z");
+    const policy = (merge_reversible: unknown) => ({ status: "checked", current: { policy: { merge_reversible } } });
+    for (const p of [policy(false), policy(undefined), { status: "unavailable" }, undefined])
+      expect(store.expire(tokenOf(q), { ...fresh, policy: p })).toMatchObject({
+        accepted: false,
+        reason: "now a one-way door: a merge where the policy does not say merge_reversible",
+      });
+    expect(store.expire(tokenOf(q), { ...fresh, policy: policy(true) }).accepted).toBe(true);
+  });
+
+  test("a reversible planning choice gets a deadline: 30 minutes, or [shep] decision_timeout, and 0 never", () => {
+    const q = store.create("q", {}, () => reversible());
+    expect(q).toMatchObject({ reversible: true, createdAt: "2026-11-14T12:00:00.000Z" });
+    expect(q.deadline).toBe("2026-11-14T12:30:00.000Z");
+    expect(projection(store.snapshot())).toContain("| defaults to auth at 2026-11-14T12:30:00.000Z");
+    // Keep or skip a step that publishes nothing is a planning choice too.
+    expect(
+      store.create("k", {}, () =>
+        reversible("keep", {
+          prompt: "Keep or skip the docs step?",
+          options: ["keep", "skip"],
+          recommendation: { choice: "skip", why: "w" },
+        }),
+      ).deadline,
+    ).toBe("2026-11-14T12:30:00.000Z");
+    // A revision gets its own deadline from when it was asked.
+    vi.setSystemTime("2026-11-14T12:20:00.000Z");
+    expect(store.revise("r", tokenOf(q), {}, () => reversible()).deadline).toBe("2026-11-14T12:50:00.000Z");
+    vi.stubEnv("BERCAIL_SHEP_DECISION_TIMEOUT", "5");
+    expect(store.create("five", {}, () => reversible("beta")).deadline).toBe("2026-11-14T12:25:00.000Z");
+    vi.stubEnv("BERCAIL_SHEP_DECISION_TIMEOUT", "0");
+    expect(store.create("never", {}, () => reversible("gamma"))).not.toHaveProperty("deadline");
+    vi.stubEnv("BERCAIL_SHEP_DECISION_TIMEOUT", "soon");
+    expect(() => store.create("bad", {}, () => reversible("delta"))).toThrow(
+      /\[shep\] decision_timeout must be a whole number of minutes, not soon/,
+    );
+    // Only a reversible question with a recommendation may carry a deadline.
+    const raw = readFileSync(join(state, "questions.json"), "utf8");
+    writeFileSync(join(state, "questions.json"), raw.replace(',"reversible":true', ""));
+    expect(() => store.snapshot()).toThrow(/corrupt/);
+  });
+
+  test("past its deadline it takes the recommendation once, as the default, never as the person's pick", () => {
+    const q = store.create("q", {}, () => reversible());
+    const token = tokenOf(q);
+    vi.setSystemTime("2026-11-14T12:29:59.000Z");
+    expect(store.expire(token, fresh)).toMatchObject({ accepted: false, question: { status: "pending" } });
+    vi.setSystemTime("2026-11-14T12:30:00.000Z");
+    // A changed question waits for the person past its deadline.
+    const stale = { status: "stale", reasons: ["worktree changed"], current: null };
+    expect(store.expire(token, stale)).toMatchObject({
+      accepted: false,
+      reason: "changed since Shep asked: worktree changed",
+    });
+    expect(store.expire(token, fresh)).toMatchObject({ accepted: true, question: { status: "answered" } });
+    expect(store.snapshot().questions[0]!.answer).toEqual({
+      requestId: "default:Q1@1",
+      choice: "auth",
+      source: "default after timeout",
+      at: "2026-11-14T12:30:00.000Z",
+      head: null,
+      stagedTree: null,
+    });
+    // Once: a second expiry, and the person's pick after it, change nothing.
+    expect(store.expire(token, fresh).accepted).toBe(false);
+    expect(store.answer("p", token, "search", "panel picker", fresh)).toMatchObject({
+      accepted: false,
+      reason: "question is answered",
+    });
+    // Nobody records a default by the person's door.
+    expect(() => store.answer("p2", token, "auth", "default after timeout" as never, fresh)).toThrow(
+      /unknown answer source/,
+    );
+    const view = projection(store.snapshot());
+    expect(view).not.toContain("Answered by the person's pick");
+    expect(view).toMatch(
+      /Defaulted to your recommendation after the deadline \(not the person's choice, never an LGTM/,
+    );
+    expect(view).toContain("Q1@1 Which desk starts first? -> auth (default after timeout, 2026-11-14T12:30:00.000Z)");
+    // A default is the recommendation, at or after the deadline; anything else fails closed.
+    const good = readFileSync(join(state, "questions.json"), "utf8");
+    for (const forged of [
+      good.replace('"choice":"auth","source"', '"choice":"search","source"'),
+      good.replace('"at":"2026-11-14T12:30:00.000Z","head"', '"at":"2026-11-14T12:10:00.000Z","head"'),
+    ]) {
+      expect(forged).not.toBe(good);
+      writeFileSync(join(state, "questions.json"), forged);
+      expect(() => store.snapshot()).toThrow(/corrupt/);
+    }
+  });
+
+  test("past a two-way door's deadline the person's pick is refused, unless it is no longer two-way", () => {
+    const plan = store.create("a", {}, () => reversible("a"));
+    const merge = store.create(
+      "m",
+      {},
+      () => reversible("m", action("merge", "Merge it now?")),
+      () => true,
+    );
+    vi.setSystemTime("2026-11-14T12:30:00.000Z");
+    expect(store.answer("p1", tokenOf(plan), "search", "panel picker", fresh)).toMatchObject({
+      accepted: false,
+      reason: "past its deadline: it takes Shep's recommendation, auth",
+    });
+    // The policy no longer says merge_reversible: it will not default, so the person picks.
+    expect(store.answer("p2", tokenOf(merge), "wait", "panel picker", fresh).accepted).toBe(true);
+  });
+
+  test("the person's pick before the deadline wins, and a plain or withdrawn question never defaults", () => {
+    const picked = store.create("a", {}, () => reversible("a"));
+    const plain = store.create("b", {}, () => ({ ...fields("b"), recommendation: { choice: "yes", why: "w" } }));
+    const withdrawn = store.create("c", {}, () => reversible("c"));
+    vi.setSystemTime("2026-11-14T12:10:00.000Z");
+    expect(store.answer("p", tokenOf(picked), "search", "panel picker", fresh).accepted).toBe(true);
+    store.withdraw("w", tokenOf(withdrawn), "moot");
+    vi.setSystemTime("2026-11-14T15:00:00.000Z");
+    for (const q of [picked, plain, withdrawn]) expect(store.expire(tokenOf(q), fresh).accepted).toBe(false);
+    expect(store.snapshot().questions.map((q) => [q.status, q.answer?.source ?? null])).toEqual([
+      ["answered", "panel picker"],
+      ["pending", null],
+      ["withdrawn", null],
+    ]);
+    // Only a default is ever told; a forged told on the person's pick fails closed.
+    expect(() => store.told(tokenOf(picked))).toThrow(/only a default is told/);
+    const raw = readFileSync(join(state, "questions.json"), "utf8");
+    writeFileSync(
+      join(state, "questions.json"),
+      raw.replace('"status":"answered",', '"status":"answered","told":true,'),
+    );
     expect(() => store.snapshot()).toThrow(/corrupt/);
   });
 

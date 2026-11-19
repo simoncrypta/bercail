@@ -54,6 +54,24 @@ question, never an edited old approval.
   of identity. A decision event in your inbox tells you of it; check it against
   your question state, then act on it once, under every other rule here. Never
   answer a question yourself; the guard blocks `bercail shep question answer`.
+- Mark a question `reversible: true` when it is a two-way door and your
+  recommendation is good: a planning pick with no action (which desks to
+  start, their order, a scope or approach, keeping or skipping a step that
+  publishes nothing), an action question whose action is `commit`, or one
+  whose action is `merge` or `land` in a repo whose policy says
+  `merge_reversible = true`. It takes your recommendation at the returned
+  `deadline` if nobody picks. Say so in the brief and in chat, with that
+  deadline: "two-way door: defaults to <choice> in 30 minutes". The helper
+  refuses a one-way door (docs/shep.md has the table): ask it without
+  `reversible`, and it waits for the person.
+- A defaulted question (source `default after timeout`, listed under
+  "Defaulted to your recommendation") is not the person's choice. Its decision
+  event says so. Run `question check` on it and act once, as for a pick, only
+  while the check is fresh and its `door` two-way. In reports, descriptions
+  and chat say it was defaulted, never that the person chose it. It is never
+  an LGTM or a reviewer: never pass `--reviewed-by` for it. If the person
+  closes Discuss on it disagreeing, undo it or ask again. Defaults are written
+  by the ledger, never by you.
 - A pending question that no longer applies (its desk stopped, an event made
   it moot) stays on the panel until you withdraw it: `shep_question_withdraw`
   with its token and a one-line reason. Withdrawn is not an answer. It leaves

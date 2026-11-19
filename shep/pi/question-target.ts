@@ -136,12 +136,28 @@ export function captureTarget(input: TargetInput): QuestionTarget {
   };
 }
 
+// [policy] merge_reversible for the target's checkout, as bercail policy show reads it:
+// unset, untrusted, or unreadable is false.
+export function mergeReversible(target: QuestionTarget): boolean {
+  if (!target.worktree) return false;
+  try {
+    const shown = JSON.parse(
+      run(process.env.BERCAIL_SHEP_BIN || "bercail", ["policy", "show", "--json", target.worktree], target.worktree),
+    );
+    return shown?.policy?.merge_reversible === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function checkQuestion(question: Question) {
   const target = question.target;
   const reasons: string[] = [];
   let current: QuestionTarget | null = null;
   let unavailable = false;
-  if (question.status !== "pending") reasons.push(`question is ${question.status}`);
+  // An answer is acted on after it: only a revision that no longer applies is stale.
+  if (question.status === "superseded" || question.status === "withdrawn")
+    reasons.push(`question is ${question.status}`);
   try {
     text(target.worktree, "worktree");
     current = captureTarget({

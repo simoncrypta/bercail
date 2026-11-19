@@ -2,9 +2,18 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { QuestionStore, projection, tokenOf, type QuestionSpec } from "./questions.ts";
-import { captureTarget, checkQuestion } from "./question-target.ts";
-import { closed, discussionOf, openDiscussion, pick } from "./discuss.ts";
+import {
+  DEFAULT_SOURCE,
+  door,
+  mergesIn,
+  QuestionStore,
+  projection,
+  tokenOf,
+  type Question,
+  type QuestionSpec,
+} from "./questions.ts";
+import { captureTarget, checkQuestion, mergeReversible } from "./question-target.ts";
+import { closed, discussionOf, expireDue, openDiscussion, pick, recent } from "./discuss.ts";
 
 async function main() {
   const state = process.env.BERCAIL_SHEP_STATE;
@@ -18,6 +27,8 @@ async function main() {
   }
   if (op === "json") result = store.snapshot();
   else if (op === "panel") result = await panel(store, state);
+  // What Shep's runtime runs on its timer: records the defaults that are due.
+  else if (op === "expire") result = (await expireDue(state)).map(tokenOf);
   else if (op === "thread") {
     if (args.length !== 1) throw new Error("thread requires a topic (or - to clear)");
     store.select(args[0] === "-" ? null : args[0]!);
@@ -27,7 +38,10 @@ async function main() {
       throw new Error("check requires an explicit Qn@revision token");
     const question = store.snapshot().questions.find((q) => tokenOf(q) === args[0]);
     if (!question) throw new Error("unknown question revision");
-    result = await checkQuestion(question);
+    const check = await checkQuestion(question);
+    // A reversible question's door with the policy just read: act on its default only
+    // while it is fresh and still two-way.
+    result = question.reversible ? { ...check, door: door(question, () => mergesIn(check)) } : check;
   } else if (op === "discuss") {
     if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
       throw new Error("discuss requires a Qn@revision token");
@@ -67,31 +81,35 @@ async function main() {
         options: input.options,
         ...(input.brief === undefined ? {} : { brief: input.brief }),
         ...(input.recommendation == null ? {} : { recommendation: input.recommendation }),
+        ...(input.reversible === true ? { reversible: true as const } : {}),
         origin: input.origin,
         target: captureTarget(input),
       });
       result =
         op === "create"
-          ? store.create(requestId, intent, resolveSpec)
-          : store.revise(requestId, token, intent, resolveSpec);
+          ? store.create(requestId, intent, resolveSpec, mergeReversible)
+          : store.revise(requestId, token, intent, resolveSpec, mergeReversible);
     }
   } else
     throw new Error(
-      "usage: question-cli.ts list | json | panel | create | revise | reply | answer | withdraw | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING",
+      "usage: question-cli.ts list | json | panel | expire | create | revise | reply | answer | withdraw | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING",
     );
   console.log(JSON.stringify(result));
 }
 
 // What the Decisions panel shows: each pending question with its brief, Shep's
-// recommendation and live check, and the staged change's size and stakes for a review
-// or action. Answering is `answer`; this only reads.
+// recommendation, live check and deadline, and the staged change's size and stakes for
+// a review or action; then the questions that defaulted in the last day. Answering is
+// `answer`; this only reads.
 async function panel(store: QuestionStore, state: string) {
   const bin = process.env.BERCAIL_SHEP_BIN || "bercail";
   const cards = [];
-  for (const q of store.snapshot().questions.filter((x) => x.status === "pending")) {
-    const check = await checkQuestion(q);
+  const shown = (q: Question) => q.status === "pending" || (q.answer?.source === DEFAULT_SOURCE && recent(q));
+  for (const q of store.snapshot().questions.filter(shown)) {
+    // A defaulted question is settled: nothing to check, and no picker.
+    const check = q.answer ? null : await checkQuestion(q);
     let change = null;
-    if (q.kind !== "planning" && q.target.worktree) {
+    if (!q.answer && q.kind !== "planning" && q.target.worktree) {
       // describe check exits 1 while the change has no description; its JSON still holds the size.
       const r = spawnSync(bin, ["describe", "check", "--json", q.target.worktree], {
         cwd: q.target.worktree,
@@ -113,9 +131,12 @@ async function panel(store: QuestionStore, state: string) {
       recommendation: q.recommendation ?? null,
       discussed: discussionOf(state, q) !== null,
       createdAt: q.createdAt,
+      // A deadline only while it is still a two-way door, with the policy just read.
+      deadline: !check || door(q, () => mergesIn(check)).door === "two-way" ? (q.deadline ?? null) : null,
+      defaulted: q.answer ? { choice: q.answer.choice, at: q.answer.at } : null,
       target: { repo, topic, worktree, space },
-      status: check.status,
-      reasons: check.reasons,
+      status: check?.status ?? "defaulted",
+      reasons: check?.reasons ?? [],
       change,
     });
   }

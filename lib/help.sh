@@ -35,7 +35,8 @@ Post-install CLI (bercail):
                 diagram [FILE] (a Mermaid diagram without its click and link statements) |
                 questions [--json] (pending targeted questions; replies are unverified) |
                 question create|revise|reply|answer|withdraw (JSON on stdin) | check TOKEN | thread TOPIC |
-                panel (the Decisions panel's JSON) | discuss TOKEN (make or find its branch) | closed TOKEN OPENING
+                panel (the Decisions panel's JSON) | expire (record due defaults; Shep's runtime runs it) |
+                discuss TOKEN (make or find its branch) | closed TOKEN OPENING
   todo          What only you can do, on one of your todo lists (targets; Basecamp for now):
                 add "TITLE" [--notes TEXT] [--due YYYY-MM-DD] [--issue ID] [--repo DIR] [--target NAME] |
                 list [--target NAME] [--json] | show ID | done ID. Shep adds them; desks propose Todo: "<text>".

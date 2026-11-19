@@ -116,6 +116,27 @@ scratch_repo() {
   [[ "$(field "$REPO" '.file')" == "" && "$(field "$REPO" .scratch)" == false ]] || fail "a repo with a remote is scratch"
 }
 
+@test "merge_reversible: unset and false are false, true counts only once trusted or set locally" {
+  local REPO WT
+  init_repo
+  [[ "$(field "$REPO" '.policy.merge_reversible')" == false ]] || fail "unset is not false"
+  mkdir -p "$REPO/.bercail"
+  printf 'merge_reversible = false\n' >"$REPO/.bercail/policy.toml"
+  [[ "$(field "$REPO" '[.policy.merge_reversible, .sources.merge_reversible] | join(" ")')" == "false repo" ]] || fail "false"
+  printf 'merge_reversible = true\n' >"$REPO/.bercail/policy.toml"
+  [[ "$(field "$REPO" '.policy.merge_reversible')" == false ]] || fail "an untrusted true counted"
+  [[ "$(field "$REPO" '.untrusted | join(",")')" == merge_reversible ]] || fail "the untrusted true is not named"
+  policy trust "$REPO" >/dev/null
+  [[ "$(field "$REPO" '.policy.merge_reversible')" == true ]] || fail "a trusted true did not count"
+  policy untrust "$REPO" >/dev/null
+  printf '[policy."%s"]\nmerge_reversible = true\n' "$REPO" >"$CONFIG"
+  [[ "$(field "$REPO" '[.policy.merge_reversible, .sources.merge_reversible] | join(" ")')" == "true local" ]] \
+    || fail "your own override needs no trust"
+  printf 'merge_reversible = "yes"\n' >"$REPO/.bercail/policy.toml"
+  rm "$CONFIG"
+  [[ "$(policy show --json "$REPO" 2>&1 >/dev/null)" == *'merge_reversible = "yes" is not allowed'* ]] || fail "a non-boolean passed"
+}
+
 @test "an untrusted policy cannot loosen the guard" {
   local REPO WT out
   commit_policy

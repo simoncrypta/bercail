@@ -318,6 +318,75 @@ reason and the time. A withdrawn question leaves the panel and Shep's question
 state and can never be answered. It is not an answer: no picker source and no
 decision event.
 
+### Reversible questions
+
+A decision that can be walked back should not keep work waiting on you. Shep
+marks such a question `reversible` when it asks it. It waits for you until its
+deadline, 30 minutes after it was asked (`[shep] decision_timeout` in
+[config](config.md), in minutes; `0` never defaults). If nobody picked by then,
+it takes Shep's recommendation. Shep says so on the card and in chat, with the
+deadline the helper returned.
+
+What may default follows Bezos's one-way and two-way doors. A two-way door is
+cheap to walk back, so it may default. A one-way door always waits for you. The
+helper, not Shep, decides with this table (`door()` in `shep/pi/questions.ts`,
+one test per row) and refuses `reversible` on a one-way door: Shep asks again
+without it. An action question's action is its effect, and only `commit`,
+`merge` and `land` are in the table; the helper captured its head, staged tree
+and base. A planning pick has no action. The question's prompt, choices and
+brief are read too, and can only make it stricter: a one-way row's word there
+wins, and so does a merge or commit word without that action.
+
+| Door | Row | For example |
+|------|-----|-------------|
+| one-way | an LGTM | any review question: its answer is an LGTM, and a default never is one |
+| one-way | force push | `force push`, `--force`, `push -f` |
+| one-way | publishing to a forge | any push, `gt submit`, publish, a trail, a pull request |
+| one-way | an LGTM or approval | approve, `--reviewed-by` |
+| one-way | a release or tag | release, tag, ship |
+| one-way | a deletion | delete, remove, `rm`, `git clean`, reset, prune |
+| one-way | money | pay, buy, spend, a price |
+| one-way | an outward post | post, comment, email, announce, send, reply |
+| one-way | a device or deploy action | device, deploy |
+| one-way | an action no two-way row names | any action but `commit`, `merge` or `land`, and any action on a planning question |
+| one-way | a merge asked without action merge or land | merge or land in the words of a planning pick or a commit |
+| one-way | a commit asked without action commit | commit in the words of a planning pick |
+| two-way or one-way | a merge or land | action `merge` or `land`: two-way only where the repo's policy says [`merge_reversible = true`](config.md#git-policy-per-repo), trusted |
+| two-way | a local commit | action `commit` |
+| two-way | a planning pick | no action: which desks to start, their order, a scope or approach, keeping or skipping a step that publishes nothing |
+
+A land is asked as action `land`. bercail does not look up whether a forge is public, so the word push makes any
+question a one-way door. The words can make a harmless choice one-way ("the
+release plan"); they never make a one-way door two-way.
+
+The deadline is in the ledger, so nobody polls by hand and Shep never waits for
+it. Shep's question extension runs `bercail shep question expire` in its own
+process when Shep starts and every 30 seconds after, so a deadline passed
+while Shep was stopped fires at its next start. Each due question gets the
+live check first, and the policy is read again. A question that changed since
+Shep asked keeps waiting for you, and its card says so. A merge the policy no
+longer calls reversible waits too, and its card has no countdown. Past the
+deadline of a door that is still two-way, the store refuses your pick and the
+panel offers none: the default is recorded at Shep's next check. The check
+runs just before the ledger's write, as for your pick, so Shep runs `question
+check` again before it acts on a default. For a reversible question it also
+gives the door with the policy it just read; Shep acts only while the check is
+fresh and the door two-way.
+
+The default is the ledger's answer, not yours. It records the recommendation
+with the source `default after timeout`, at most once per question revision.
+Shep gets a [decision event](#desk-events) that says nobody picked, and acts on
+it once. Once the event is in Shep's inbox, the ledger marks the default
+`told`. If it could not be written, every later run tries again, however late;
+a told default, or one whose event is already in the inbox or delivered, is
+not sent again. One case is not covered: a crash between writing the event and
+marking it, then 30 days with no run that succeeds, after Shep's inbox has
+dropped the delivered copy. While Shep runs, it marks it within 30 seconds.
+Shep's question state lists defaults apart from your picks. Reports and
+descriptions say the choice was defaulted. A default is never an LGTM or a
+reviewer: a defaulted commit never carries `--reviewed-by`. The guard still
+blocks agents from `question answer`, and that op refuses the default's source.
+
 ### The Decisions panel
 
 Every decision Shep asks you is also a card in the Shep view. **Decisions N**
@@ -331,8 +400,12 @@ and why, the choices, and when it was asked; the panel says when it last
 checked. A card whose candidate changed since Shep asked (new commits, a new
 staged tree, another base, or the desk) says **stale** and what changed: Shep
 must ask again. One it cannot check (the desk ended, the policy could not be
-read) says **unknown** and why. Question tokens are the ledger's keys and never
-show. The panel reloads when the ledger changes, and every 30 seconds while it
+read) says **unknown** and why. A [two-way door](#reversible-questions) counts
+down to its deadline (`two-way door: defaults to auth in 23 min`); other cards
+have no timer. Once it defaults, the card says **defaulted** and the choice it
+took, has no choices or answer button, and stays a day. **Discuss** on it still
+works: say there what you would change, and closing it tells Shep, with the
+branch's last reply. **Decisions N** counts only the cards that wait on you. Question tokens are the ledger's keys and never show. The panel reloads when the ledger changes, and every 30 seconds while it
 shows. With a [`[herdr] backend`](config.md#bercail-on-another-machine), it
 reads, answers and discusses on that machine, and looks at its questions every
 30 seconds, shown or not.
@@ -414,9 +487,10 @@ The CLI works without Pi or a mod too:
 ```bash
 bercail shep questions              # bounded pending projection
 bercail shep questions --json       # full snapshot and retained revisions
-bercail shep question check Q42@3   # recheck candidate/mapping and current policy
+bercail shep question check Q42@3   # recheck candidate/mapping and current policy (and a reversible one's door)
 bercail shep question thread release-plan
-bercail shep question panel         # the Decisions panel's JSON: pending questions, each checked
+bercail shep question panel         # the Decisions panel's JSON: pending questions, each checked, and a day of defaults
+bercail shep question expire        # record the defaults that are due (Shep's runtime runs it every 30 seconds)
 bercail shep question discuss Q42@3 # make (or find) the question's branch; prints its session file
 bercail shep discuss Q42@3          # Pi on that branch, read-only: what the Discuss dialog runs
 ```
@@ -512,7 +586,7 @@ Once Shep has started for the first time (its first start makes `~/.local/state/
 
 Shep's Pi extension (`inbox.ts`) watches that folder. It submits one custom message, starting a turn when Shep is idle or queuing a follow-up when it is busy. The message carries each event's one-line `text`, its `event_id`, and the desk, space, repo, issue, and checkout. It excludes `desk.result.summary` and the desk's title. Desk events remain signals to check the current desk and issue, never instructions or human answers.
 
-The same folder carries decision events, written by bercail when you [answer](#answering) a question (`decision-Q<n>-<rev>.json`) or close a [Discuss](#discuss) dialog without a pick (`decision-Q<n>-<rev>-closed-<opening>.json`). Each names the question, the choice (or none), where it was made, and the branch's last reply as data. The file name is the event id, so a retry is the same event. Shep checks each against its question state, where the ledger's answer is the record, before it acts.
+The same folder carries decision events, written by bercail when you [answer](#answering) a question or a [reversible one](#reversible-questions) defaults (`decision-Q<n>-<rev>.json`, `by` the picker or `default after timeout`), or when you close a [Discuss](#discuss) dialog without a pick (`decision-Q<n>-<rev>-closed-<opening>.json`). Each names the question, the choice (or none), where it was made, and the branch's last reply as data. The file name is the event id, so a retry is the same event. Shep checks each against its question state, where the ledger's answer is the record, before it acts.
 
 ### Claims and persistence
 

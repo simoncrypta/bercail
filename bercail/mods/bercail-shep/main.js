@@ -25,6 +25,7 @@
 // - "decisions": the Decisions panel under Shep's terminal (`shep-decisions`, hidden
 //   until the header's Decisions toggle shows it): Shep's pending questions as cards,
 //   each with Shep's brief and a picker, Shep's recommendation chosen to start with.
+//   A two-way door counts down to its deadline; one that defaulted shows for a day.
 // - "discuss": the bar of a Discuss dialog: a read-only Pi on a branch of the session
 //   the question came from (`bercail shep discuss`). props.token is the question.
 // - "modal": the bar of an agent's terminal opened over either view (bercail-agents
@@ -210,6 +211,8 @@ function decisionsChanged() {
   for (const wake of waiting) wake();
 }
 const nextDecisions = () => new Promise((wake) => D.waiters.push(wake));
+// The cards that wait on the person: not the ones that already defaulted.
+const waiting = () => (D.view?.cards ?? []).filter((c) => !c.defaulted);
 
 function decisionsShown(tree = layout()) {
   const node = find(tree, PANEL_ID);
@@ -246,7 +249,8 @@ export function loadDecisions() {
 
 // Each header and Decisions copy watches on its own cx, so one closing stops no other;
 // loads in flight are shared. A new question rewrites questions.json; a staged tree or
-// a desk changes elsewhere, so the open panel also looks again every 30 seconds. A
+// a desk changes elsewhere, and a two-way door's countdown runs down, so the open panel
+// also looks again (and redraws) every 30 seconds. A
 // ledger on the backend can't be watched from here: the count looks every 30 seconds.
 // Data never moves the view or the keyboard: only the count and the cards change.
 function watchDecisions(cx) {
@@ -297,6 +301,27 @@ function clock(iso) {
     : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
 }
 
+// The time to a deadline, in words: "29 min", "1 h 5 min", "under a minute".
+function timeLeft(ms) {
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "under a minute";
+  return min < 60 ? `${min} min` : `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ""}`;
+}
+
+// A two-way door's countdown: until its deadline it waits for the person, then Shep's
+// next check takes the recommendation, unless the question changed since Shep asked.
+// Null for a question with no deadline. `word`: the card's state in words.
+function countdown(card, word) {
+  if (!card.deadline || card.defaulted) return null;
+  const ms = Date.parse(card.deadline) - Date.now();
+  const pick = card.recommendation?.choice;
+  if (card.status !== "fresh")
+    return `two-way door: ${ms > 0 ? `due in ${timeLeft(ms)}, but` : "past its deadline;"} it waits for you while it is ${word}`;
+  return ms > 0
+    ? `two-way door: defaults to ${pick} in ${timeLeft(ms)}`
+    : `two-way door: defaults to ${pick} at Shep's next check`;
+}
+
 // A card in words: where (the space as Herdr names it), what (size and stakes), its state.
 // Question tokens are the ledger's keys, never shown.
 export function cardWords(card, all = spaces(), backend = S.backend) {
@@ -324,14 +349,26 @@ export function cardWords(card, all = spaces(), backend = S.backend) {
   const state =
     card.status === "fresh"
       ? { word: "open", why: null }
-      : card.status === "stale"
-        ? { word: "stale", why: `Changed since Shep asked: ${reasons.join(", ")}. Shep must ask again.` }
-        : { word: "unknown", why: `Can't check it now: ${reasons.join("; ") || "no answer from bercail"}.` };
-  return { title: what.join(", "), ...state, asked: `asked ${clock(card.createdAt)}` };
+      : card.status === "defaulted"
+        ? {
+            word: "defaulted",
+            why: `two-way door: nobody picked by ${clock(card.deadline)}, so it took Shep's recommendation, ${card.defaulted?.choice}. Discuss tells Shep if you disagree.`,
+          }
+        : card.status === "stale"
+          ? { word: "stale", why: `Changed since Shep asked: ${reasons.join(", ")}. Shep must ask again.` }
+          : { word: "unknown", why: `Can't check it now: ${reasons.join("; ") || "no answer from bercail"}.` };
+  return {
+    title: what.join(", "),
+    ...state,
+    asked: `asked ${clock(card.createdAt)}`,
+    timer: countdown(card, state.word),
+  };
 }
 
-// A card can be answered when the live check found nothing changed and it has choices.
-export const answerable = (card) => card.status === "fresh" && card.options?.length > 0;
+// A card can be answered when the live check found nothing changed and it has choices,
+// until a two-way door's deadline: past it, the door takes Shep's recommendation.
+export const answerable = (card) =>
+  card.status === "fresh" && card.options?.length > 0 && !(card.deadline && Date.parse(card.deadline) <= Date.now());
 
 // The choice a card starts on: Shep's recommendation, else none (Enter waits for a pick).
 export function startChoice(card) {
@@ -708,7 +745,7 @@ export default class BercailShep extends View {
   // In the header: the count of open decisions, and the person's click shows or hides
   // the panel. A new decision changes the count only.
   decisionsToggle(t) {
-    const n = D.view?.cards?.length ?? 0;
+    const n = waiting().length;
     const open = decisionsShown();
     return (
       div()
@@ -765,7 +802,7 @@ export default class BercailShep extends View {
               .flex_1()
               .truncate()
               .text_color(t.dim)
-              .child(cards.length ? `${cards.length} waiting on you · ${KEYS_HINT}` : ""),
+              .child(waiting().length ? `${waiting().length} waiting on you · ${KEYS_HINT}` : ""),
           )
           .child(div().text_size(11).text_color(t.dim).child(checked)),
       )
@@ -801,7 +838,7 @@ export default class BercailShep extends View {
 
   card(t, c, on, i) {
     const w = cardWords(c);
-    const color = w.word === "open" ? t.dim : w.word === "stale" ? t.blocked : t.unknown;
+    const color = w.word === "open" || w.word === "defaulted" ? t.dim : w.word === "stale" ? t.blocked : t.unknown;
     const can = answerable(c) && !this.busy.has(c.token);
     const at = this.choiceOf(c);
     const rec = c.recommendation;
@@ -857,7 +894,9 @@ export default class BercailShep extends View {
       .child(div().text_color(t.foreground).child(c.prompt))
       .when(Boolean(c.brief), (el) => el.child(div().text_color(t.muted).child(c.brief)))
       .when(Boolean(rec), (el) => el.child(div().text_color(t.dim).child(`Shep recommends ${rec.choice}: ${rec.why}`)))
-      .when(c.options?.length > 0, (el) => el.child(h_flex().gap(6).flex_wrap().children(c.options.map(chip))))
+      .when(c.options?.length > 0 && !c.defaulted, (el) =>
+        el.child(h_flex().gap(6).flex_wrap().children(c.options.map(chip))),
+      )
       .when(!c.options?.length, (el) => el.child(div().text_color(t.dim).child("No choices: answer Shep in chat.")))
       .when(Boolean(w.why), (el) => el.child(div().text_color(color).child(w.why)))
       .child(
@@ -865,12 +904,15 @@ export default class BercailShep extends View {
           .gap(8)
           .items_center()
           .child(div().flex_1().text_size(11).text_color(t.dim).child(w.asked))
+          .when(Boolean(w.timer), (el) =>
+            el.child(div().flex_none().text_size(11).text_color(t.foreground).child(w.timer)),
+          )
           .child(
             button(`decision-discuss-${c.token}`, c.discussed ? "Continue discussion" : "Discuss", true, (_e, cx) =>
               this.discuss(c, cx),
             ),
           )
-          .when(c.options?.length > 0, (el) =>
+          .when(c.options?.length > 0 && !c.defaulted, (el) =>
             el.child(
               button(
                 `decision-accept-${c.token}`,
@@ -954,7 +996,15 @@ export default class BercailShep extends View {
           .text_color(t.dim)
           .child(c?.prompt ?? ""),
       )
-      .child(div().flex_none().text_size(11).text_color(t.dim).child("read-only branch · /pick answers"))
+      .child(
+        div()
+          .flex_none()
+          .text_size(11)
+          .text_color(t.dim)
+          .child(
+            c?.defaulted ? "read-only branch · it defaulted; closing tells Shep" : "read-only branch · /pick answers",
+          ),
+      )
       .child(
         div()
           .id("discuss-close")

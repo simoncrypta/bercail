@@ -14,7 +14,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
 SHEP_SKILLS=(handoff review desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|discuss|closed"
+SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|expire|discuss|closed"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -51,7 +51,8 @@ shep_pi_argv() {
   [[ "$(toml_value "$BERCAIL_USER_CONFIG" shep rollover)" != true ]] || rollover=1
   SHEP_PI_ARGV=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN
     BERCAIL_ROLE=shep "BERCAIL_SHEP_INBOX=$state/inbox" "BERCAIL_SHEP_STATE=$state"
-    "BERCAIL_SHEP_BIN=${BERCAIL_SELF:-bercail}" "BERCAIL_SHEP_ROLLOVER=$rollover" pi)
+    "BERCAIL_SHEP_BIN=${BERCAIL_SELF:-bercail}" "BERCAIL_SHEP_ROLLOVER=$rollover"
+    "BERCAIL_SHEP_DECISION_TIMEOUT=$(toml_value "$BERCAIL_USER_CONFIG" shep decision_timeout)" pi)
   if [[ -r "$lead" ]]; then
     model="$(jq -r 'index("--model") as $i | if $i then .[$i + 1] else empty end' "$lead" 2>/dev/null || true)"
     [[ -z "$model" ]] || SHEP_PI_ARGV+=(--model "$model")
@@ -275,7 +276,9 @@ shep_question() {
   local script
   script="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/shep/pi/question-cli.ts"
   command -v node >/dev/null 2>&1 || { _shep_err "question commands need Node (installed with Pi)"; return 1; }
-  BERCAIL_SHEP_STATE="$(shep_state_dir)" BERCAIL_SHEP_BIN="${BERCAIL_SELF:-bercail}" node "$script" "$@"
+  # [shep] decision_timeout: the minutes a reversible question waits before it defaults.
+  BERCAIL_SHEP_STATE="$(shep_state_dir)" BERCAIL_SHEP_BIN="${BERCAIL_SELF:-bercail}" \
+    BERCAIL_SHEP_DECISION_TIMEOUT="$(toml_value "$BERCAIL_USER_CONFIG" shep decision_timeout)" node "$script" "$@"
 }
 
 # Prints Mermaid source (FILE or stdin) without its click and link statements,

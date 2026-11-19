@@ -512,6 +512,142 @@ test("the person's pick records the choice once against the checked candidate, a
   expect(call("list").stdout).toMatch(/Q1@1 Review this candidate\? -> yes \(panel picker, /);
 });
 
+test("a two-way door counts down on the panel, defaults by expire past its deadline, and stays a day as defaulted", () => {
+  const plan = (extra: Record<string, unknown> = {}) =>
+    spec({
+      kind: "planning",
+      prompt: "Which desk starts first?",
+      options: ["auth", "search"],
+      recommendation: { choice: "auth", why: "it unblocks search" },
+      reversible: true,
+      issue: null,
+      desk: null,
+      base: null,
+      action: null,
+      ...extra,
+    });
+  const refused = call(
+    "create",
+    spec({ requestId: "lgtm", reversible: true, recommendation: { choice: "yes", why: "w" } }),
+  );
+  expect(refused.stderr).toMatch(/one-way door \(an LGTM: "a review question"\)/);
+  const q = ok("create", plan());
+  expect(Date.parse(q.deadline) - Date.parse(q.createdAt)).toBe(30 * 60000);
+  ok("create", plan({ requestId: "plain", topic: "plain", reversible: false }));
+  let cards = ok("panel").cards;
+  expect(cards.map((c: any) => [c.token, c.status, c.deadline, c.defaulted])).toEqual([
+    ["Q1@1", "fresh", q.deadline, null],
+    ["Q2@1", "fresh", null, null],
+  ]);
+  expect(ok("expire")).toEqual([]);
+  expect(events()).toEqual([]);
+  // Time passes with nothing running: the ledger's times are an hour back.
+  const file = join(env.BERCAIL_SHEP_STATE!, "questions.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  const hourAgo = Date.now() - 3600000;
+  ledger.questions[0].createdAt = new Date(hourAgo).toISOString();
+  ledger.questions[0].deadline = new Date(hourAgo + 30 * 60000).toISOString();
+  writeFileSync(file, JSON.stringify(ledger));
+  // The panel only reads: it shows the due card; Shep's runtime runs expire. Past the
+  // deadline the person's pick is refused: the door takes the recommendation.
+  expect(pick("late", "search")).toMatchObject({
+    accepted: false,
+    reason: "past its deadline: it takes Shep's recommendation, auth",
+  });
+  const due = readFileSync(file, "utf8");
+  expect(ok("panel").cards[0]).toMatchObject({ status: "fresh", defaulted: null });
+  expect(readFileSync(file, "utf8")).toBe(due);
+  expect(ok("expire")).toEqual(["Q1@1"]);
+  // Shep checks it before acting: unchanged, it is fresh.
+  expect(ok("check", undefined, ["Q1@1"])).toMatchObject({
+    status: "fresh",
+    reasons: [],
+    door: { door: "two-way", row: "a planning pick" },
+  });
+  cards = ok("panel").cards;
+  expect(cards[0]).toMatchObject({ status: "defaulted", defaulted: { choice: "auth" }, reasons: [] });
+  expect(cards[1].status).toBe("fresh");
+  expect(ok("json").questions[0].answer).toMatchObject({ choice: "auth", source: "default after timeout" });
+  expect(events()).toEqual(["decision-Q1-1.json"]);
+  expect(event("decision-Q1-1.json")).toMatchObject({ choice: "auth", by: "default after timeout" });
+  // Once: the next run records nothing more, and nobody picks over it.
+  const before = readFileSync(file, "utf8");
+  expect(ok("expire")).toEqual([]);
+  expect(readFileSync(file, "utf8")).toBe(before);
+  expect(pick("p1", "search")).toMatchObject({ accepted: false, reason: "question is answered" });
+  expect(
+    call("answer", { requestId: "p2", token: "Q2@1", choice: "auth", source: "default after timeout" }).stderr,
+  ).toMatch(/unknown answer source/);
+  // A day after the default, the card leaves the panel.
+  const old = JSON.parse(before);
+  old.questions[0].answer.at = new Date(Date.now() - 25 * 3600000).toISOString();
+  old.questions[0].createdAt = new Date(Date.now() - 27 * 3600000).toISOString();
+  old.questions[0].deadline = new Date(Date.now() - 26 * 3600000).toISOString();
+  writeFileSync(file, JSON.stringify(old));
+  expect(ok("panel").cards.map((c: any) => c.token)).toEqual(["Q2@1"]);
+});
+
+test("a commit is a two-way door; a merge is one only while the repo's policy says merge_reversible", () => {
+  const act = (requestId: string, action: string, prompt: string) =>
+    call(
+      "create",
+      spec({
+        requestId,
+        kind: "action",
+        action,
+        prompt,
+        topic: requestId,
+        reversible: true,
+        recommendation: { choice: "yes", why: "w" },
+      }),
+    );
+  const policy = (extra: Record<string, unknown>) =>
+    json(join(dir, "policy.json"), {
+      repo,
+      root: repo,
+      sha256: "p",
+      trusted: true,
+      policy: { integrate: "direct", ...extra },
+    });
+  expect(JSON.parse(act("commit", "commit", "Commit the staged change?").stdout).deadline).toEqual(expect.any(String));
+  for (const value of [undefined, false]) {
+    policy(value === undefined ? {} : { merge_reversible: value });
+    expect(act(`merge-${value}`, "merge", "Land it?").stderr).toMatch(
+      /one-way door \(a merge where the policy does not say merge_reversible: "merge"\)/,
+    );
+  }
+  expect(act("cmd", "git push -f origin main", "Land it?").stderr).toMatch(
+    /one-way door \(an action no two-way row names/,
+  );
+  policy({ merge_reversible: true });
+  const merge = JSON.parse(act("merge-true", "merge", "Land it?").stdout);
+  expect(merge.deadline).toEqual(expect.any(String));
+  // Revoked before its deadline: the panel promises no default for the merge.
+  policy({});
+  expect(ok("panel").cards.map((c: any) => [c.token, c.deadline === null])).toEqual([
+    ["Q1@1", false],
+    ["Q2@1", true],
+  ]);
+  // Past the deadline, the policy is read again: untrusted or turned off, it waits.
+  const file = join(env.BERCAIL_SHEP_STATE!, "questions.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  for (const q of ledger.questions) {
+    q.createdAt = new Date(Date.now() - 3600000).toISOString();
+    q.deadline = new Date(Date.now() - 1800000).toISOString();
+  }
+  writeFileSync(file, JSON.stringify(ledger));
+  policy({});
+  expect(ok("expire")).toEqual(["Q1@1"]);
+  policy({ merge_reversible: true });
+  expect(ok("expire")).toEqual(["Q2@1"]);
+  // Turned off after the default: the check says the door is one-way now, so Shep does not act.
+  policy({});
+  expect(ok("check", undefined, ["Q2@1"])).toMatchObject({
+    status: "fresh",
+    door: { door: "one-way", row: "a merge where the policy does not say merge_reversible" },
+  });
+});
+
 test("a stale question, a choice it does not offer, or a made-up source records nothing", () => {
   ok("create", spec());
   writeFileSync(join(repo, "file"), "two\n");

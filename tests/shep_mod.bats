@@ -654,6 +654,60 @@ eq(answers().map((a) => a.choice), ["Not yet"], "the picked choice");
 EOF
 }
 
+@test "a two-way door counts down on its card and ticks; a defaulted one says so, has no picker, and is not counted" {
+  mod_case <<'EOF'
+const at = (min) => new Date(Date.now() + min * 60000).toISOString();
+const plan = { kind: "planning", prompt: "Which desk first?", options: ["auth", "search"], change: null,
+  recommendation: { choice: "auth", why: "it unblocks search" } };
+const view = { ...PANEL_VIEW, cards: [
+  card("Q1@1", { ...plan, deadline: at(29.5), defaulted: null }),
+  card("Q2@1", { deadline: null, defaulted: null }),
+  card("Q3@1", { ...plan, deadline: at(-1), defaulted: null }),
+  card("Q4@1", { ...plan, deadline: at(-1), defaulted: null, status: "stale", reasons: ["worktree changed"] }),
+  card("Q5@1", { ...plan, deadline: at(-5), status: "defaulted", reasons: [], defaulted: { choice: "auth", at: at(-4) } }),
+  card("Q6@1", { ...plan, deadline: at(65.5), defaulted: null }),
+  card("Q7@1", { ...plan, deadline: at(0.5), defaulted: null }),
+] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+const h = copy("header");
+await tick();
+const render = () => { els.length = 0; d.render(cx); return texts(); };
+const timers = (all) => all.filter((x) => x.startsWith("two-way door: ") && !x.includes("nobody picked"));
+eq(timers(render()), [
+  "two-way door: defaults to auth in 29 min",
+  "two-way door: defaults to auth at Shep's next check",
+  "two-way door: past its deadline; it waits for you while it is stale",
+  "two-way door: defaults to auth in 1 h 5 min",
+  "two-way door: defaults to auth in under a minute",
+], "timers (none on the card with no deadline)");
+const all = texts();
+if (!all.includes("defaulted")) fail(`no defaulted word in ${JSON.stringify(all)}`);
+if (!all.some((x) => /^two-way door: nobody picked by (\d{4}-\d\d-\d\d )?\d\d:\d\d, so it took Shep's recommendation, auth\. Discuss tells Shep if you disagree\.$/.test(x)))
+  fail(`no defaulted line in ${JSON.stringify(all)}`);
+// Past its deadline a fresh card takes no pick: only Discuss is clickable.
+eq(els.filter((e) => e.click && e.id?.includes("Q3@1")).map((e) => e.id), ["decision-discuss-Q3@1"], "overdue card controls");
+// The defaulted card: Discuss only, no choices and no answer button; not waiting on you.
+eq(els.filter((e) => e.id?.includes("Q5@1") && e.id !== "decision-Q5@1").map((e) => e.id), ["decision-discuss-Q5@1"], "defaulted card controls");
+if (!all.some((x) => x.startsWith("6 waiting on you"))) fail(`panel count: ${JSON.stringify(all)}`);
+els.length = 0;
+h.render(cx);
+if (!texts().includes("Decisions 6")) fail(`header: ${JSON.stringify(texts())}`);
+// Ten minutes on, the next draw counts down.
+const now = Date.now;
+Date.now = () => now() + 10 * 60000;
+if (!timers(render()).includes("two-way door: defaults to auth in 19 min")) fail(`no tick: ${JSON.stringify(timers(texts()))}`);
+Date.now = now;
+// Its Discuss bar says it defaulted, not that /pick answers.
+globalThis.herdr.props = { role: "discuss", token: "Q5@1" };
+const bar = new Shep();
+bar.init({}, cx);
+els.length = 0;
+bar.render(cx);
+if (!texts().includes("read-only branch · it defaulted; closing tells Shep")) fail(`discuss bar: ${JSON.stringify(texts())}`);
+EOF
+}
+
 @test "a new decision changes the header's count and nothing else" {
   mod_case <<'EOF'
 // Data never moves the view, the panel, or the keyboard: only the count changes.

@@ -3,9 +3,12 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import { createHash } from "node:crypto";
 import { QuestionStore, projection, tokenOf } from "./questions.ts";
-import { captureTarget, checkQuestion } from "./question-target.ts";
+import { spawn } from "node:child_process";
+import { captureTarget, checkQuestion, mergeReversible } from "./question-target.ts";
 
 const bareDecision = /^(?:yes|no|y|n|lgtm|[1-9]\d*)[.!]?$/i;
+// How often Shep's runtime looks for a reversible question past its deadline.
+export const EXPIRE_MS = 30000;
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 export default function (pi: ExtensionAPI) {
@@ -44,6 +47,31 @@ export default function (pi: ExtensionAPI) {
       `${token}: ${result.accepted ? "proposed answer saved" : "reply rejected"}${result.duplicate ? " (duplicate)" : ""}. ${result.reason ?? "Unverified; still pending. No approval or action authority."}`,
     );
   };
+  // Deadlines fire here, not in Shep's turns: at start (one missed while Shep was down
+  // fires now) and every EXPIRE_MS after. Each default reaches Shep as an inbox event.
+  // `bercail shep question expire` runs the live checks (git, hc, bd, policy) in its own
+  // process, so Shep's never waits on them; one at a time.
+  let timer: ReturnType<typeof setInterval> | null = null;
+  let running = false;
+  const expire = () => {
+    if (running) return;
+    running = true;
+    const child = spawn(process.env.BERCAIL_SHEP_BIN || "bercail", ["shep", "question", "expire"], {
+      stdio: "ignore",
+    });
+    child.once("error", () => (running = false));
+    child.once("exit", () => (running = false));
+  };
+  pi.on("session_start", () => {
+    if (timer) clearInterval(timer);
+    timer = setInterval(expire, EXPIRE_MS);
+    timer.unref?.();
+    expire();
+  });
+  pi.on("session_shutdown", () => {
+    if (timer) clearInterval(timer);
+    timer = null;
+  });
   pi.registerCommand("questions", {
     description: "List durable pending questions and exact reply targets",
     handler: async (_args, _ctx) => {
@@ -134,7 +162,7 @@ export default function (pi: ExtensionAPI) {
     name: "shep_question",
     label: "Shep question",
     description:
-      "Create or revise a durable targeted question. Capture current repo/job/desk/session and candidate; never grants authority. Returns at most 50KB.",
+      "Create or revise a durable targeted question. Capture current repo/job/desk/session and candidate; never grants authority. A reversible two-way door with a recommendation takes it at its deadline. Returns at most 50KB.",
     parameters: Type.Object({
       requestId: Type.String(),
       kind: Type.Union([Type.Literal("planning"), Type.Literal("review"), Type.Literal("action")]),
@@ -151,6 +179,12 @@ export default function (pi: ExtensionAPI) {
         }),
         Type.Null(),
       ]),
+      reversible: Type.Optional(
+        Type.Boolean({
+          description:
+            "true: a two-way door (a planning pick with no action; action commit; or action merge or land where the repo's policy says merge_reversible), so it takes your recommendation at the returned question's deadline. The helper refuses a one-way door.",
+        }),
+      ),
       repo: Type.String({ description: "Explicit checkout path, never a bare issue lookup" }),
       issue: Type.Union([Type.String(), Type.Null()]),
       topic: Type.String(),
@@ -175,12 +209,13 @@ export default function (pi: ExtensionAPI) {
         options: input.options,
         ...(input.brief === undefined ? {} : { brief: input.brief }),
         ...(input.recommendation ? { recommendation: input.recommendation } : {}),
+        ...(input.reversible ? { reversible: true as const } : {}),
         origin,
         target: captureTarget(input),
       });
       const question = reviseToken
-        ? store.revise(requestId, reviseToken, intent, resolveSpec)
-        : store.create(requestId, intent, resolveSpec);
+        ? store.revise(requestId, reviseToken, intent, resolveSpec, mergeReversible)
+        : store.create(requestId, intent, resolveSpec, mergeReversible);
       const current = store.snapshot().questions.find((q) => tokenOf(q) === tokenOf(question));
       if (!current) throw new Error("Question receipt has no durable revision; restore the ledger before continuing.");
       const check = await checkQuestion(current);

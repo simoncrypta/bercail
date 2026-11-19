@@ -132,7 +132,7 @@ EOF
 @test "the shep usage names every subcommand" {
   local out
   out="$(shep unknown </dev/null 2>&1)" && fail "an unknown subcommand passed"
-  [[ "$out" == 'bercail shep: usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|discuss|closed' ]] \
+  [[ "$out" == 'bercail shep: usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|expire|discuss|closed' ]] \
     || fail "shep usage: $out"
 }
 
@@ -312,6 +312,37 @@ EOF
   run shep question check Q1@1
   [[ "$status" == 1 && "$output" == *'unknown question revision'* ]] || fail "$output"
   [[ ! -f "$STATE/questions.json" ]] || fail "a read created question authority"
+}
+
+@test "[shep] decision_timeout sets a reversible question's deadline, in the helper and in Shep's Pi" {
+  local repo="$BATS_TEST_TMPDIR/repo" out
+  need node
+  reset
+  git init -q "$repo"
+  # The minutes between a reversible question's ask and its deadline, or none.
+  minutes() {
+    jq -n --arg repo "$repo" --arg id "$1" '{requestId:$id, kind:"planning", prompt:"Which desk first?",
+      options:["auth","search"], recommendation:{choice:"auth", why:"smaller"}, reversible:true,
+      origin:{event:"chat", session:"shep-1", entry:null}, repo:$repo, issue:null, topic:$id, desk:null, base:null, action:null}' \
+      | shep question create | jq -r 'if .deadline then (((.deadline | .[0:19] + "Z" | fromdate) - (.createdAt | .[0:19] + "Z" | fromdate)) / 60) else "none" end'
+  }
+  [[ "$(minutes r1)" == 30 ]] || fail "no config is 30 minutes"
+  printf '[shep]\ndecision_timeout = 5\n' >"$CONFIG"
+  [[ "$(minutes r2)" == 5 ]] || fail "5 minutes"
+  printf '[shep]\ndecision_timeout = 0\n' >"$CONFIG"
+  [[ "$(minutes r3)" == none ]] || fail "0 is never"
+  printf '[shep]\ndecision_timeout = "soon"\n' >"$CONFIG"
+  out="$(minutes r4 2>&1)" && fail "a bad value passed: $out"
+  [[ "$out" == *"[shep] decision_timeout must be a whole number of minutes, not soon"* ]] || fail "bad value: $out"
+  # Shep's Pi gets the same value at its start.
+  cat >"$BATS_TEST_TMPDIR/bin/pi" <<'EOF'
+#!/usr/bin/env bash
+[[ " $* " == *" --list-models "* ]] && { printf 'provider  model  context\nfake      lead   1M\n'; exit 0; }
+printf 'pi timeout=%s\n' "${BERCAIL_SHEP_DECISION_TIMEOUT-unset}" >>"$LOG"
+EOF
+  printf '[shep]\ndecision_timeout = 45\n' >"$CONFIG"
+  shep run </dev/null >/dev/null 2>&1
+  grep -qx 'pi timeout=45' "$LOG" || fail "Shep's Pi env: $(cat "$LOG")"
 }
 
 @test "deploy installs Shep rules, the background brief and Pi extensions" {

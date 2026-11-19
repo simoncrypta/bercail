@@ -98,6 +98,7 @@ shep compact_at
 shep keep_recent
 shep rollover
 shep spawn_timeout
+shep decision_timeout
 todo backend
 todo.basecamp account
 todo.basecamp project
@@ -109,6 +110,7 @@ policy integrate
 policy pr_draft
 policy release
 policy agent_may_release
+policy merge_reversible
 policy rules'
 
 # bercail config get SECTION KEY: the value as bercail reads it. No output and
