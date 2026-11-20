@@ -2001,6 +2001,29 @@ test("only Shep writes to Basecamp or the person's todos; every role reads, and 
   assertMatch((decideTool("bash", "basecamp todos create x", discuss) as Decision).reason ?? "", /Discuss branch/);
 });
 
+test("bercail cleanup asks the person in every role that can write, and nowhere runs unasked", () => {
+  const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
+  const cleanups = [
+    "bercail cleanup ~/Work/widgets.feature",
+    "~/.local/bin/bercail cleanup ../widgets.feature",
+    "cd / && bin/bercail cleanup /work.feature",
+    "bash -c 'bercail cleanup /work.feature'",
+    "env BERCAIL_ARCHIVE_DIR=/a bercail cleanup /work.feature",
+  ];
+  for (const command of cleanups) {
+    for (const input of [tui, shep, { ...tui, role: "builder" }]) {
+      const got = decision(command, input);
+      assertEqual(got.action, "ask", `${command} → ${JSON.stringify(got)}`);
+      assertMatch(got.reason ?? "", /archives its \.bercail\/.*The branch stays/, command);
+    }
+    for (const input of [headless, auto, { ...headless, role: "shep-bg" }])
+      blocked(command, input, /only where the person can say yes/);
+    blocked(command, judge, /read-only/);
+  }
+  for (const command of ["bercail help", "bercail review-pr close 7", "git worktree list", "echo bercail cleanup"])
+    allowed(command, tui);
+});
+
 test("only Shep sets where the person's todos go, and no role writes todo.json by hand", () => {
   const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
   const builder = { ...tui, role: "builder" };

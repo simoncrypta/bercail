@@ -106,6 +106,10 @@ const entirePerson =
 const entireDestroy =
   "This entire command amends a commit, resets git state, or deletes checkpoints. Ask the person to run it.";
 const entireUnknown = "A headless run only uses entire commands bercail knows. Leave this one to the person.";
+const cleanupAsk =
+  "Retire this worktree? bercail cleanup archives its .bercail/, ends its desk, removes the worktree and closes its space. The branch stays.";
+const cleanupHeadless =
+  "bercail cleanup removes a worktree, so it runs only where the person can say yes. Leave it to Shep or the person.";
 const brainSetup =
   "This Brain or Graph command sets it up, syncs memories, runs background work, or runs a binary it names. Suggest it to the person; do not run it.";
 const brainSpend =
@@ -1284,6 +1288,14 @@ function setsTodoTarget(words: string[]): boolean {
   return args !== undefined && (args[0] === "route" || (args[0] === "target" && ["add", "rm"].includes(args[1])));
 }
 
+// bercail cleanup deletes a worktree, so the person says yes first.
+function decideCleanup(words: string[], input: GuardInput): GuardDecision {
+  const plain = plainWords(words);
+  if (basename(plain[0] ?? "") !== "bercail" || plain[1] !== "cleanup") return allow;
+  if (readOnlyRole(input.role)) return block(readOnly);
+  return input.hasUI ? { action: "ask", reason: cleanupAsk } : block(cleanupHeadless);
+}
+
 function isPolicyTrust(words: string[]): boolean {
   const plain = plainWords(words);
   return plain.some((word, i) => word === "policy" && plain[i + 1] === "trust");
@@ -2054,6 +2066,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     }
     if (sync && readOnlyRole(input.role)) decision = worse(decision, block(readOnly));
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
+    decision = worse(decision, decideCleanup(words, here));
     if (isAnswer(words)) decision = worse(decision, block(answerCommand));
     if (writesTodo(words) && input.role !== "shep") decision = worse(decision, block(basecampWrite));
     if (setsTodoTarget(words) && input.role !== "shep") decision = worse(decision, block(todoTargets));

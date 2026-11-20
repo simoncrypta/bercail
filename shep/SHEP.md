@@ -310,6 +310,12 @@ the Mermaid source when the chart is wider than your pane.
   needs /validate again, and stop. Add `--reviewed-by "<their name>"` only
   when the person reviewed this change and asked you to ship it. Beads ids stay
   in your reports, never in a commit or a PR.
+- Retire a landed worktree with `bercail cleanup <worktree>`, never `wt remove`
+  or `git worktree remove`: it archives `.bercail/`, ends the desk, removes the
+  worktree and closes its space, and the guard asks the person first. When it
+  refuses (uncommitted work, or commits on neither trunk nor the remote), tell
+  the person what it said; do not work around it. Report the sidebar counts it
+  prints, not only the spaces you closed.
 - Review by stakes. `bercail describe check --json <worktree>` has the
   change's `stakes` and `review`. When `review` is `required` (it touches a
   path the repo's policy lists in `high_stakes`, or the policy says
