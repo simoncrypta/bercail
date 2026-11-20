@@ -411,9 +411,9 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     grep -q -- "--append-system-prompt $p/instructions.md" "$t/$rel.md" || fail "instructions in $rel"
     grep -q -- '--skill .*/skills/bstack' "$t/$rel.md" || fail "--skill in $rel"
   done
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=builder pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder: $(cat "$t/bstack-builder.md")"
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=judge pi --model openai/gpt-6.1-sol:high ' "$t/bstack-judge.md" || fail "judge"
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=autopilot pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-autopilot.md" || fail "autopilot"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=builder [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder: $(cat "$t/bstack-builder.md")"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=judge [^ ]*bercail scratch run -- pi --model openai/gpt-6.1-sol:high ' "$t/bstack-judge.md" || fail "judge"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=autopilot [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-autopilot.md" || fail "autopilot"
   grep -q 'bstack-builder.md' "$t/bstack-builder.md" || fail "builder brief"
 
   assert_eq 'mine' "$(jq -r .defaultModel "$HOME/.pi/agent/settings.json")" "unrelated settings preserved"
@@ -426,7 +426,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   printf 'old guard\n' >"$p/extensions/bercail-guard/index.ts"
   FAKE_PI_READY="claude-bridge" deploy_bstack >/dev/null 2>&1
   [[ ! -d "$p/extensions/bercail-guard" ]] || fail "update removes the old managed guard"
-  grep -q 'BERCAIL_ROLE=judge pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-judge.md" || fail "judge falls through to Claude"
+  grep -q 'BERCAIL_ROLE=judge [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-judge.md" || fail "judge falls through to Claude"
   unset FAKE_PI_READY
 }
 
@@ -583,10 +583,15 @@ EOF
   deploy_bstack >/dev/null 2>&1
   export ANTHROPIC_API_KEY=secret ANTHROPIC_BASE_URL=https://wrong ANTHROPIC_AUTH_TOKEN=secret
   export FAKE_PI_LAUNCH_LOG="$BATS_TEST_TMPDIR/pi-launch"
-  local template cmd
+  # The templates start Pi through this checkout's bercail scratch run.
+  ln -s "$ROOT/bin/bercail" "$FAKE_BIN/bercail"
+  local template cmd scratch
   for template in "$(PI_TEMPLATES)"/bstack-*.md; do
     cmd="$(awk '/^command: / { sub(/^command: /, ""); print }' "$template")"
     eval "$cmd"
+    scratch="$(sed -n 's/^TMPDIR=//p' "$FAKE_PI_LAUNCH_LOG.env")"
+    [[ "$scratch" == "$XDG_CACHE_HOME/bercail/scratch/"* && ! -e "$scratch" ]] \
+      || fail "$template runs Pi on a scratch TMPDIR it removes after: $scratch"
     grep -qxF "$(PI_DIR)/extensions/fallback.ts" "$FAKE_PI_LAUNCH_LOG" || fail "fallback in $template"
     grep -qxF "$(PI_DIR)/extensions/guard.ts" "$FAKE_PI_LAUNCH_LOG" || fail "guard in $template"
     grep -qxF 'npm:pi-claude-bridge@0.12.0' "$FAKE_PI_LAUNCH_LOG" || fail "bridge in $template"
@@ -704,4 +709,14 @@ EOF
       'source "$1"; printf "%s" "$BSTACK_PI_DIR"' _ "$ROOT/lib/bstack.sh"
   )"
   assert_eq "$HOME/.local/share/bercail/pi" "$dir" "unset share dir is ~/.local/share/bercail/pi"
+}
+
+@test "a role starts through ~/.local/bin/bercail, or the bercail on PATH when bercail is packaged" {
+  mkdir -p "$LOCAL_BIN"
+  printf '#!/bin/sh\n' >"$LOCAL_BIN/bercail"
+  chmod +x "$LOCAL_BIN/bercail"
+  [[ "$(bstack_pi_command judge '')" == *"BERCAIL_ROLE=judge $LOCAL_BIN/bercail scratch run -- pi "* ]] \
+    || fail "installed: $(bstack_pi_command judge '')"
+  [[ "$(BERCAIL_PACKAGED=1 bstack_pi_command judge '')" == *"BERCAIL_ROLE=judge bercail scratch run -- pi "* ]] \
+    || fail "packaged, past an old ~/.local/bin/bercail: $(BERCAIL_PACKAGED=1 bstack_pi_command judge '')"
 }

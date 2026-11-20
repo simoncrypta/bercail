@@ -130,9 +130,9 @@ assuming the rule holds.
 For the judge and `/validate`. Report a finding only when a run
 shows it, and include the command.
 
-1. **Does it fail without the change?** Export the base to /tmp
-   (`git archive <base> | tar -x -C /tmp/<name>`), copy the new tests in, and
-   run them there. A pass means the test proves nothing.
+1. **Does it fail without the change?** Export the base to a scratch folder
+   (`d="$(mktemp -d)"; git archive <base> | tar -x -C "$d"`), copy the new
+   tests in, and run them there. A pass means the test proves nothing.
 2. **Can it reach real state?** Look for `$HOME` or `~` used before the test
    sets them, absolute user paths, an `XDG_*` left unset, live tools missing a
    fake on `PATH`, desk variables passed through. Prove it with a hash of the

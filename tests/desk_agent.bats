@@ -333,6 +333,38 @@ AGENT
   wait_for '[[ -s "$BATS_TEST_TMPDIR/events.pid" ]] && ! kill -0 "$(cat "$BATS_TEST_TMPDIR/events.pid")" 2>/dev/null'
 }
 
+@test "the desk runs on its own scratch TMPDIR, and its watcher sweeps it and a killed sibling's when the agent exits" {
+  local root="$XDG_CACHE_HOME/bercail/scratch" seen
+  arrange_record
+  hc_streams_events
+  sleep 0 &
+  local dead=$!
+  wait "$dead"
+  # The agent leaves its TMPDIR and a sibling's left by a kill, then exits.
+  cat >"$BATS_TEST_TMPDIR/bin/pi" <<AGENT
+#!/usr/bin/env bash
+printf '%s' "\$TMPDIR" >"$BATS_TEST_TMPDIR/seen"
+touch "\$TMPDIR/copy"
+mkdir -p "$root/$dead" && : >"$root/.$dead"
+AGENT
+  chmod +x "$BATS_TEST_TMPDIR/bin/pi"
+  hash -r
+  desk pi >/dev/null
+  seen="$(cat "$BATS_TEST_TMPDIR/seen")"
+  [[ "$seen" =~ ^"$root"/[0-9]+$ ]] || fail "the desk's TMPDIR is <root>/<pid>: $seen"
+  wait_for '[[ ! -e "$seen" && ! -e "$root/$dead" ]]'
+}
+
+@test "a desk with no watcher keeps the TMPDIR it was given, so it leaves no scratch" {
+  local root="$XDG_CACHE_HOME/bercail/scratch"
+  printf '#!/usr/bin/env bash\nprintf "%%s" "$TMPDIR" >"%s/seen"\n' "$BATS_TEST_TMPDIR" >"$BATS_TEST_TMPDIR/bin/pi"
+  chmod +x "$BATS_TEST_TMPDIR/bin/pi"
+  hash -r
+  desk pi >/dev/null
+  [[ "$(cat "$BATS_TEST_TMPDIR/seen")" == "$TMPDIR" ]] || fail "an unrecorded desk got a scratch TMPDIR: $(cat "$BATS_TEST_TMPDIR/seen")"
+  [[ -z "$(ls -A "$root" 2>/dev/null)" ]] || fail "it left scratch: $(ls -A "$root")"
+}
+
 @test "the watcher keeps the record fresh while the agent runs" {
   local pid
   arrange_record
