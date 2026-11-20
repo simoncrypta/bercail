@@ -70,6 +70,10 @@ Post-install CLI (bercail):
                 t: tuicr with [AI Agent] drafts. Then: run | card | ui | select | checkout |
                 rereview | open | dir. When done, review-pr close <PR url> removes the
                 worktree, the run dir, and the space.
+  cleanup       Retire a finished worktree: cleanup <worktree> copies its .bercail/ to
+                ~/Work/worktree-archives/<repo>/, ends its desk, removes the worktree,
+                closes its space, and keeps the branch. Refuses uncommitted work,
+                commits on neither trunk nor a remote branch, and submodules.
 EOF
 }
 
