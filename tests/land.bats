@@ -1,0 +1,187 @@
+#!/usr/bin/env bats
+# bercail land: Shep commits a desk's described change and waits in the
+# background for the branch's CI; the result reaches Shep's inbox as one land
+# event (bercail-auev). Stand-ins for hc (runs the wait in the foreground) and
+# gh (answers run list from $RUNS); a temp HOME.
+
+setup() {
+  load test_helper
+  isolate
+  need git jq
+  set -o pipefail
+  export GIT_CONFIG_GLOBAL="$BATS_TEST_TMPDIR/gitconfig" GIT_CONFIG_NOSYSTEM=1
+  git config --global user.name test
+  git config --global user.email test@example.com
+  git config --global init.defaultBranch main
+  unset BERCAIL_CONFIG
+  export LOG="$BATS_TEST_TMPDIR/log" RUNS="$BATS_TEST_TMPDIR/runs.json"
+  export PATH="$BATS_TEST_TMPDIR/bin:/usr/bin:/bin"
+  export BERCAIL_ROLE=shep BERCAIL_LAND_POLL=0 BERCAIL_LAND_TIMEOUT=0
+  : >"$LOG"
+  # hc: logs its argv, then runs the command after -- where hc run would start it.
+  cat >"$BATS_TEST_TMPDIR/bin/hc" <<'EOF'
+#!/usr/bin/env bash
+printf 'hc %s\n' "$*" >>"$LOG"
+while [[ $# -gt 0 && "$1" != -- ]]; do shift; done
+shift
+"$@" >>"$LOG" 2>&1 || exit 1
+printf '{"address":"t1","name":"land-x"}\n'
+EOF
+  # gh: run list prints $RUNS, and logs what it was asked.
+  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+printf 'gh %s\n' "$*" >>"$LOG"
+[[ "$1 $2" == "run list" ]] || exit 1
+cat "$RUNS"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/"*
+  INBOX="$XDG_STATE_HOME/bercail/shep/inbox"
+  mkdir -p "$INBOX"
+  REPO="$BATS_TEST_TMPDIR/repo"
+  git_init "$REPO"
+  git -C "$REPO" checkout -qb feature
+  cd "$REPO" || return 1
+}
+
+land() { "$ROOT/bin/bercail" land "$@"; }
+
+# A staged change with evidence and a stamped description titled $1.
+described() {
+  printf 'new\n' >>file.txt
+  git add file.txt
+  mkdir -p .bercail
+  jq -n --arg t "$(git write-tree)" \
+    '{tree: $t, checks: [{kind: "test", command: "bash tests/run.sh", exit_code: 0, evidence: "all passed"}]}' >.bercail/validate.json
+  printf -- '---\ntitle: %s\n---\nAdds a line for readers of file.txt.\n\nValidation: bash tests/run.sh passed.\n' \
+    "${1:-file: add a line}" >.bercail/description.md
+  "$ROOT/bin/bercail" describe stamp >/dev/null || fail "stamp"
+}
+
+# CI runs for the commit, one per argument: name:status:conclusion.
+runs() {
+  local spec
+  for spec in "$@"; do
+    IFS=: read -r name status conclusion <<<"$spec"
+    jq -nc --arg n "$name" --arg s "$status" --arg c "$conclusion" \
+      '{databaseId: 1, name: $n, status: $s, conclusion: $c, url: "https://github.com/o/r/actions/runs/1"}'
+  done | jq -s . >"$RUNS"
+}
+
+# The one event in Shep's inbox.
+event() {
+  local files=("$INBOX"/*.json)
+  [[ ${#files[@]} -eq 1 && -f "${files[0]}" ]] || fail "want one event in $INBOX: $(ls -A "$INBOX")" || return
+  cat "${files[0]}"
+}
+
+@test "a green branch is committed with its described text and reaches Shep as ready" {
+  described "file: add a line"
+  runs CI:completed:success
+  run land "$REPO"
+  [ "$status" -eq 0 ] || fail "land: $output"
+  [ "$(git log -1 --format=%s)" = "file: add a line" ] || fail "subject: $(git log -1 --format=%s)"
+  git diff --cached --quiet || fail "the staged change was not committed"
+  sha="$(git rev-parse HEAD)"
+  grep -q "gh run list --commit $sha --branch feature --event push" "$LOG" || fail "gh not asked about the branch push: $(cat "$LOG")"
+  grep -q -- "--label bercail.land_head=$sha" "$LOG" || fail "hc labels: $(cat "$LOG")"
+  [[ "$output" == *"git -C $REPO push origin feature"* ]] || fail "no push step for Shep: $output"
+  ev="$(event)" || return 1
+  jq -e --arg sha "$sha" '.source == "bercail" and .kind == "land" and .land.status == "ready"
+    and .land.head == $sha and .land.branch == "feature" and .space.checkout_path != null' <<<"$ev" >/dev/null \
+    || fail "event: $ev"
+  [[ "$(jq -r .text <<<"$ev")" == *"is ready to land: CI passed"*"git push origin $sha:main"* ]] || fail "text: $ev"
+}
+
+@test "on red CI no event says ready" {
+  # Skipped or neutral alone is not a pass.
+  for spec in "Lint:completed:success CI:completed:failure" "Lint:completed:success CI:completed:cancelled" \
+    CI:completed:skipped CI:completed:neutral; do
+    rm -f "$INBOX"/*.json
+    # shellcheck disable=SC2086 # one run per word
+    runs $spec
+    run land --wait "$(git rev-parse HEAD)" "$REPO"
+    [ "$status" -eq 0 ] || fail "wait: $output"
+    ev="$(event)" || return 1
+    jq -e '.land.status == "failed"' <<<"$ev" >/dev/null || fail "$spec: $ev"
+    [[ "$(jq -r .text <<<"$ev")" != *ready* && "$(jq -r .text <<<"$ev")" == *"CI did not pass"*"Do not land it"* ]] \
+      || fail "$spec text: $ev"
+  done
+}
+
+@test "a green commit the branch has moved past is not ready" {
+  runs CI:completed:success
+  tested="$(git rev-parse HEAD)"
+  git commit -q --allow-empty -m later
+  run land --wait "$tested" "$REPO"
+  [ "$status" -eq 0 ] || fail "wait: $output"
+  ev="$(event)" || return 1
+  jq -e '.land.status == "moved"' <<<"$ev" >/dev/null || fail "$ev"
+  [[ "$(jq -r .text <<<"$ev")" != *"is ready"* && "$(jq -r .text <<<"$ev")" == *"Do not land it"* ]] || fail "text: $ev"
+}
+
+@test "a run still going, none at all, or no list from gh when time is up times out, never ready" {
+  for spec in running none empty; do
+    rm -f "$INBOX"/*.json
+    case "$spec" in
+      running) runs CI:in_progress: ;;
+      none) printf '[]\n' >"$RUNS" ;;
+      empty) : >"$RUNS" ;;
+    esac
+    run land --wait "$(git rev-parse HEAD)" "$REPO"
+    [ "$status" -eq 0 ] || fail "$spec wait: $output"
+    ev="$(event)" || return 1
+    jq -e '.land.status == "timeout"' <<<"$ev" >/dev/null || fail "$spec: $ev"
+    [[ "$(jq -r .text <<<"$ev")" == "No CI result for"*"Do not land it yet." ]] || fail "$spec text: $ev"
+    [[ "$spec" != none || "$(jq -r .text <<<"$ev")" == *"is the branch pushed to origin?"* ]] || fail "no hint to push: $ev"
+  done
+}
+
+@test "a desk running land is refused, and nothing is committed or waited on" {
+  described
+  head="$(git rev-parse HEAD)"
+  for role in "" autopilot judge shep-bg; do
+    BERCAIL_ROLE="$role" run land "$REPO"
+    [ "$status" -ne 0 ] || fail "role '$role' landed"
+    [[ "$output" == *"landing is Shep's"* ]] || fail "role '$role': $output"
+    BERCAIL_ROLE="$role" run land --wait "$head" "$REPO"
+    [ "$status" -ne 0 ] || fail "role '$role' started a wait"
+  done
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "a commit was made"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "a stale description is refused before any commit" {
+  described
+  printf 'more\n' >>file.txt
+  git add file.txt
+  head="$(git rev-parse HEAD)"
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "landed a stale description"
+  [[ "$output" == *"stale"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "a commit was made"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "a described change on the trunk itself is refused: it has no branch CI to wait for" {
+  git checkout -q main
+  described
+  head="$(git rev-parse HEAD)"
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "landed on main"
+  [[ "$output" == *"is on main itself"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "a commit was made"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "a rerun after the commit waits on HEAD without a second commit" {
+  described
+  runs CI:completed:success
+  land "$REPO" >/dev/null || fail "first land"
+  head="$(git rev-parse HEAD)"
+  rm -f "$INBOX"/*.json
+  run land "$REPO"
+  [ "$status" -eq 0 ] || fail "rerun: $output"
+  [[ "$output" == *"no new commit"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "a second commit was made"
+  jq -e '.land.status == "ready"' <<<"$(event)" >/dev/null || fail "no ready event on the rerun"
+}

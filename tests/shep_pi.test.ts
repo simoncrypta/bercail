@@ -45,6 +45,24 @@ describe("only the text, the event id and ids reach the model", () => {
     expect(eventLine({ ...ev(), text: "" })).toBeNull();
   });
 
+  test("a land event reaches the model with its text, and its facts", () => {
+    const land = (status: string, text: string) => ({
+      source: "bercail",
+      schema: "bercail.land/v1",
+      kind: "land",
+      sink: "shep",
+      event_id: "land:abc:2026-11-20T00:00:00Z",
+      land: { status, head: "abc", branch: "feature", runs: [] },
+      space: { repo: "app", checkout_path: "/w/app.login" },
+      desk: { issue: "app-1", issue_title: null },
+      text,
+    });
+    expect(eventLine(land("ready", "feature at abc in app is ready to land: CI passed."))).toBe(
+      "- feature at abc in app is ready to land: CI passed. [event land:abc:2026-11-20T00:00:00Z] (repo app, issue app-1, checkout /w/app.login)",
+    );
+    expect(eventLine(land("failed", "CI failed on feature at abc in app (CI failure)."))).toMatch(/^- CI failed on/);
+  });
+
   test("one message for several events, named a signal", () => {
     expect(eventMessage(["- x"])).toMatch(/^bercail desk event \(a signal/);
     expect(eventMessage(["- x", "- y"]).split("\n")).toHaveLength(3);

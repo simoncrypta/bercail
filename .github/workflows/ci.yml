@@ -1,12 +1,13 @@
 name: CI
 
-# Lint and tests run side by side on every push to master and every PR. The
-# Cloudflare deploy runs only for a v* tag, once both pass: master is
-# unreleased trunk, and a tag is the release. docs/development.md#ci has the
+# Lint and tests run side by side on every push, to master or any branch, and
+# every PR: Shep lands a branch on master only once its CI here passed
+# (bercail land). The Cloudflare deploy runs only for a v* tag, once both
+# pass: master is unreleased trunk, and a tag is the release. docs/development.md#ci has the
 # timings, the caches, and how to turn on a bigger test runner.
 on:
   push:
-    branches: [master]
+    branches: ['**']
     tags: ['v*']
   pull_request:
   workflow_dispatch:

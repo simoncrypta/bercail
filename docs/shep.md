@@ -580,6 +580,29 @@ Its labels are `bercail.role=agent`, `bercail.shep=bg`, `bercail.issue`, and `be
 
 It runs with `BERCAIL_ROLE=shep-bg` and an explicit wait/admin admission. Generated issue prose cannot widen that tool surface. A coding or interactive next step is reported with its target, blocker and next action for the original visible owner or Shep's existing question flow; no unattended approval prompt. This is a narrow trusted-extension profile, not an OS sandbox. A worker report or completed wait does not complete a later author/publish or cleanup request.
 
+## Landing a change
+
+Once the person has reviewed a desk's staged change and asked Shep to ship it, Shep runs `bercail land <worktree>` (with `--reviewed-by "<their name>"` when the change waits for their LGTM). It refuses anything but Shep (`BERCAIL_ROLE=shep`), a checkout on the trunk itself or on no branch, and a description that fails `bercail describe check`. Then it commits the staged tree with the text `bercail describe commit` prints. A rerun whose commit is already HEAD makes no second one.
+
+It then starts a background hc terminal, `land-<12-character sha>`, labelled `bercail.land=wait` and `bercail.land_head=<sha>`, and ends. That terminal runs `bercail land --wait <sha> <worktree>`: every 30 seconds, for up to two hours, it reads the runs GitHub started for the push of that commit to that branch (`gh run list --commit <sha> --branch <branch> --event push`). Every such run counts and none is picked by name, so it assumes the repo's CI runs on a branch push: in a repo whose CI runs only on PRs, another workflow that runs on push would make it ready on its own. It writes one `land` event to Shep's inbox:
+
+- `ready`: every run finished, and at least one passed. The text names the commit to push: `git push origin <sha>:<trunk>` where the repo commits straight to main.
+- `failed`: a run finished any other way, or only skipped or neutral runs finished. Its text names the runs and says not to land it.
+- `moved`: CI passed, but the branch is no longer at that commit. The new commits need their own review and land.
+- `timeout`: no result in time. The text says whether there was no run (the branch is not pushed) or one still going.
+
+`bercail land` never pushes. Shep pushes the branch (`git -C <worktree> push origin <branch>`, which land prints as the next step) so its CI runs. On a `ready` event, Shep lands the commit it names the way the repo's policy says: a push to main, a PR, or a trail, with plain git, gh or entire under its guard, which keeps the policy's rules and its ask. Only a `ready` event says ready. The guard does not yet check that a push to main is a commit whose CI passed: Shep's rules say so, not a refusal. bercail's own CI runs on every branch push for this.
+
+```json
+{"source":"bercail","schema":"bercail.land/v1","kind":"land","sink":"shep","at":"2026-11-20T00:39:22Z",
+ "event_id":"land:<sha>:2026-11-20T00:39:22Z",
+ "land":{"status":"ready","head":"<sha>","branch":"feat/login","runs":[{"name":"CI","conclusion":"success","url":"..."}]},
+ "space":{"repo":"app","checkout_path":"/path/desk"},"desk":{"issue":"app-1","issue_title":"Fix the login"},
+ "text":"feat/login at 0be22854b643 in app is ready to land: CI passed. Land that commit the way the repo policy says (straight to main: git push origin <sha>:main)."}
+```
+
+The text is written from these facts only. `desk.issue` comes from the checkout's `handoffs.jsonl` record, as for a desk event.
+
 ## Desk events
 
 Once Shep has started for the first time (its first start makes `~/.local/state/bercail/shep/inbox/`), the notify follower (`bercail notify run`, the hidden `bercail-notify` terminal the desk mod keeps alive) writes each finished or blocked desk as one file in that folder. Before Shep's first start it idles. `bercail update` restarts a running follower so it runs the new code. The files are the [`agent_status/v2` payload](#the-payload) with `sink: "shep"`, mode 600, named `<desk>_<kind>_<second>.<seq>.json` for sequenced events and `<desk>_<kind>_<second>.json` otherwise.

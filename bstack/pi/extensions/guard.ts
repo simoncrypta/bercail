@@ -120,6 +120,8 @@ const basecampAuth =
   "Logging Basecamp in or out (auth, login, logout, setup, profile create or delete), and its token, are the person's. They run basecamp auth login --device-code in their own shell.";
 const todoTargets =
   "Where the person's todos go (bercail todo target add|rm, bercail todo route) is Shep's. Say in your report which list a todo belongs on, and Shep sets it.";
+const landCommand =
+  "Landing a change (bercail land) is Shep's. Stage it, finish with /validate, and Shep lands it once it is reviewed.";
 const todoFile =
   "Todo targets and routes change only through bercail todo target and bercail todo route, which read the list before they keep it. Shep runs them.";
 const basecampFlags =
@@ -1284,6 +1286,12 @@ function setsTodoTarget(words: string[]): boolean {
   return args !== undefined && (args[0] === "route" || (args[0] === "target" && ["add", "rm"].includes(args[1])));
 }
 
+// bercail land: Shep's commit and CI wait for a desk's branch.
+function isLand(words: string[]): boolean {
+  const plain = plainWords(words);
+  return plain.some((word, i) => basename(word) === "bercail" && plain[i + 1] === "land");
+}
+
 function isPolicyTrust(words: string[]): boolean {
   const plain = plainWords(words);
   return plain.some((word, i) => word === "policy" && plain[i + 1] === "trust");
@@ -2057,6 +2065,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (isAnswer(words)) decision = worse(decision, block(answerCommand));
     if (writesTodo(words) && input.role !== "shep") decision = worse(decision, block(basecampWrite));
     if (setsTodoTarget(words) && input.role !== "shep") decision = worse(decision, block(todoTargets));
+    if (isLand(words) && input.role !== "shep") decision = worse(decision, block(landCommand));
     decision = worse(decision, decideBasecamp(words, input.role));
     if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
     const targets = writeTargets(words, raw);

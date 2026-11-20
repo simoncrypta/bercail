@@ -239,6 +239,15 @@ main() {
       source "$(find_lib_dir)/describe.sh"
       cmd_describe "$@"
       ;;
+    land)
+      load_libs
+      # shellcheck source=/dev/null
+      source "$(find_lib_dir)/land.sh"
+      # The background CI wait runs this bercail.
+      BERCAIL_SELF="$(bercail_bin_dir)/bercail"
+      export BERCAIL_SELF
+      cmd_land "$@"
+      ;;
     review-pr)
       load_libs
       # shellcheck source=/dev/null
