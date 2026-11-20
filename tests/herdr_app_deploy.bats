@@ -133,6 +133,17 @@ app_edits_then_update() {
     || fail "doctor: the person's own Pi key, after one Pi cannot read: $out"
 }
 
+@test "bercail's Pi keys leave no Pi app key shadowed by the shipped layout" {
+  deploy_herdr_app >/dev/null
+  printf '#!/bin/sh\nexit 0\n' >"$BATS_TEST_TMPDIR/bin/pi" && chmod +x "$BATS_TEST_TMPDIR/bin/pi"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/bstack.sh"
+  mkdir -p "$HOME/.pi/agent"
+  printf '%s\n' "$BSTACK_PI_KEYS" >"$HOME/.pi/agent/keybindings.json"
+  out="$(doctor_herdr_app 2>&1)" || fail "doctor: $out"
+  if grep -q shadowed <<<"$out"; then fail "doctor: bercail's keys must reach Pi: $out"; fi
+}
+
 @test "update keeps the app's layout edits and restores the mod" {
   app_edits_then_update
   jq -e '.background == "chrome"' "$APP/layouts/bercail.json" >/dev/null || fail "an unchanged shipped layout must not replace the app's"

@@ -460,22 +460,22 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
 
 PI_KEYS() { printf '%s' "$HOME/.pi/agent/keybindings.json"; }
 
-@test "deploy moves Pi's restore-queued key off the layout's Alt+Up into a fresh keybindings.json" {
+@test "deploy moves the Pi keys the layout's Alt+Up/Down take into a fresh keybindings.json" {
   reset_home
   write_pi_config
   FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
-  jq -e '. == {"app.message.dequeue": "alt+q"}' "$(PI_KEYS)" >/dev/null || fail "keybindings: $(cat "$(PI_KEYS)")"
+  jq -e '. == {"app.message.dequeue": "alt+q", "app.models.reorderUp": "shift+up", "app.models.reorderDown": "shift+down"}' "$(PI_KEYS)" >/dev/null || fail "keybindings: $(cat "$(PI_KEYS)")"
   FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "second deploy"
   grep -q "unchanged: $(PI_KEYS)" "$BATS_TEST_TMPDIR/pi.log" || fail "a second deploy changes nothing: $(cat "$BATS_TEST_TMPDIR/pi.log")"
 }
 
-@test "deploy adds the restore-queued key beside the person's other Pi bindings" {
+@test "deploy adds bercail's Pi keys beside the person's other Pi bindings" {
   reset_home
   write_pi_config
   mkdir -p "$HOME/.pi/agent"
   printf '%s\n' '{"app.session.new": "ctrl+shift+n", "tui.altScreen.pageUp": []}' >"$(PI_KEYS)"
   FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
-  jq -e '. == {"app.session.new": "ctrl+shift+n", "tui.altScreen.pageUp": [], "app.message.dequeue": "alt+q"}' "$(PI_KEYS)" >/dev/null \
+  jq -e '. == {"app.session.new": "ctrl+shift+n", "tui.altScreen.pageUp": [], "app.message.dequeue": "alt+q", "app.models.reorderUp": "shift+up", "app.models.reorderDown": "shift+down"}' "$(PI_KEYS)" >/dev/null \
     || fail "keybindings: $(cat "$(PI_KEYS)")"
 
   # A file Pi cannot read stays as it is.
@@ -489,26 +489,30 @@ PI_KEYS() { printf '%s' "$HOME/.pi/agent/keybindings.json"; }
   assert_eq '{} []' "$(cat "$(PI_KEYS)")" "two JSON values untouched"
 }
 
-@test "deploy keeps the restore-queued key the person set, says so, and uninstall leaves it" {
+@test "deploy keeps the Pi keys the person set, says so, and uninstall leaves them" {
   reset_home
   write_pi_config
   mkdir -p "$HOME/.pi/agent"
-  printf '%s\n' '{"app.message.dequeue": ["ctrl+shift+u"]}' >"$(PI_KEYS)"
+  printf '%s\n' '{"app.message.dequeue": ["ctrl+shift+u"], "app.models.reorderUp": "ctrl+k"}' >"$(PI_KEYS)"
   FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
-  jq -e '. == {"app.message.dequeue": ["ctrl+shift+u"]}' "$(PI_KEYS)" >/dev/null || fail "their key changed: $(cat "$(PI_KEYS)")"
+  jq -e '. == {"app.message.dequeue": ["ctrl+shift+u"], "app.models.reorderUp": "ctrl+k", "app.models.reorderDown": "shift+down"}' \
+    "$(PI_KEYS)" >/dev/null || fail "their keys changed: $(cat "$(PI_KEYS)")"
   grep -qF 'keeping your Pi key app.message.dequeue = ["ctrl+shift+u"]' "$BATS_TEST_TMPDIR/pi.log" \
     || fail "says it kept theirs: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  grep -qF 'keeping your Pi key app.models.reorderUp = "ctrl+k"' "$BATS_TEST_TMPDIR/pi.log" \
+    || fail "says it kept their reorder key: $(cat "$BATS_TEST_TMPDIR/pi.log")"
 
   # Their own alt+q is theirs too: bercail did not add it.
-  printf '%s\n' '{"app.message.dequeue": "alt+q"}' >"$(PI_KEYS)"
+  printf '%s\n' '{"app.message.dequeue": "alt+q", "app.models.reorderUp": "ctrl+k"}' >"$(PI_KEYS)"
   FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy"
   grep -qF 'keeping your Pi key app.message.dequeue = "alt+q"' "$BATS_TEST_TMPDIR/pi.log" \
     || fail "says it kept their alt+q: $(cat "$BATS_TEST_TMPDIR/pi.log")"
   remove_bstack >/dev/null 2>&1
-  jq -e '. == {"app.message.dequeue": "alt+q"}' "$(PI_KEYS)" >/dev/null || fail "uninstall took their key: $(cat "$(PI_KEYS)" 2>&1)"
+  jq -e '. == {"app.message.dequeue": "alt+q", "app.models.reorderUp": "ctrl+k"}' "$(PI_KEYS)" >/dev/null \
+    || fail "uninstall took their keys: $(cat "$(PI_KEYS)" 2>&1)"
 }
 
-@test "uninstall takes back only the restore-queued key bercail added" {
+@test "uninstall takes back only the Pi keys bercail added" {
   reset_home
   write_pi_config
   export FAKE_PI_READY="claude-bridge"

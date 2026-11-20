@@ -29,9 +29,8 @@ BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge
   prompts/unslop.md prompts/pr-review.md prompts/bstack-setup.md prompts/statechart.md)
 # Templates older releases rendered: the council's seats, removed in v0.18.
 BSTACK_PI_RETIRED=(bstack-council-claude bstack-council-gpt bstack-council-grok)
-# Pi keys the bercail layout takes before Pi sees them, moved: Alt+Up is the
-# previous space there and Pi's restore-queued key. Alt+Q is Pi's own on Windows.
-BSTACK_PI_KEYS='{"app.message.dequeue":"alt+q"}'
+# Pi keys the bercail layout's Alt+Up/Down take before Pi sees them, moved.
+BSTACK_PI_KEYS='{"app.message.dequeue":"alt+q","app.models.reorderUp":"shift+up","app.models.reorderDown":"shift+down"}'
 
 # --- config.toml --------------------------------------------------------------
 
