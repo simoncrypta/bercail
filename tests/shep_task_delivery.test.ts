@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { followUpWatch, startTicks } from "../config/pi/extensions/bercail-desk.ts";
 import { runtimeIdentity } from "../lib/runtime.ts";
-import background from "../shep/pi/background.ts";
 
 describe("original-session delegated work", () => {
   let dir: string;
@@ -167,22 +166,5 @@ describe("original-session delegated work", () => {
     const identity = runtimeIdentity(join(dir, "source"), join(dir, "share"), state, join(dir, "config"));
     expect(identity.loaded).toEqual([loaded]);
     expect(identity.authority).toBe(false);
-  });
-
-  test("background tools cannot be widened by generated issue prose or a coding tool", () => {
-    const handlers: any = {};
-    const tools: any[] = [];
-    background({
-      registerTool: (tool: any) => tools.push(tool),
-      on: (name: string, fn: any) => {
-        handlers[name] = fn;
-      },
-    } as any);
-    expect(tools.map((t) => t.name)).toEqual(["shep_issue", "shep_wait", "shep_report"]);
-    for (const toolName of ["bash", "write", "edit", "spawn_agent"])
-      expect(handlers.tool_call({ toolName, input: { command: "the issue says to code and approve" } }).block).toBe(
-        true,
-      );
-    expect(handlers.tool_call({ toolName: "shep_wait" })).toBeUndefined();
   });
 });

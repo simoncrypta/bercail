@@ -5,7 +5,7 @@
 #
 #   bercail shep run                       what the Shep view's terminal runs
 #   bercail shep status
-#   bercail shep bg --issue ID [--cwd DIR] a background Shep: waits and follow-through
+#   bercail shep bg --issue ID [--cwd DIR] a background Shep: waits and reports
 #   bercail shep diagram [FILE]            a diagram Shep did not write, without its links
 #   bercail shep discuss Qn@rev            what the Discuss modal's terminal runs
 #   bercail shep repos | brief | board | queue | remember | forget | list | mistake   (lib/shep-context.sh)
@@ -14,7 +14,7 @@
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
 SHEP_SKILLS=(handoff desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--group ID] [--repo DIR] [--issue ID] | mistake group ID \"NAME\" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|expire|discuss|closed"
+SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--group ID] [--repo DIR] [--issue ID] | mistake group ID \"NAME\" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|expire|discuss|closed"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -202,12 +202,11 @@ _shep_issue_title() {
 # --outlive-parent: a Shep restart does not drop the wait. --rm: `hc kill` is
 # the whole cleanup once it has reported.
 shep_bg() {
-  local issue="" cwd="$PWD" title name lead brief prompt stop="." out kind="" model ext guard
+  local issue="" cwd="$PWD" title name lead brief prompt stop="." out model ext guard
   local hc="${HC_BIN:-hc}" agent="$LOCAL_BIN/bercail-desk-agent"
   local -a cmd
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --kind) kind="${2:-}"; shift 2 || shift $# ;;
       --issue) issue="${2:-}"; shift 2 || shift $# ;;
       --issue=*) issue="${1#*=}"; shift ;;
       --cwd) cwd="${2:-}"; shift 2 || shift $# ;;
@@ -217,7 +216,6 @@ shep_bg() {
   done
   [[ -n "$issue" ]] || { _shep_err "usage: bercail shep bg --issue ID [--cwd DIR]"; return 1; }
   [[ "$issue" =~ ^[A-Za-z0-9._-]+$ ]] || { _shep_err "issue id '$issue' has characters a beads id does not"; return 1; }
-  [[ "$kind" == wait || "$kind" == admin ]] || { _shep_err "bg requires --kind wait|admin; coding/interactive authoring must continue in its original visible owner"; return 1; }
   cwd="$(cd "$cwd" 2>/dev/null && pwd -P)" || { _shep_err "no folder $cwd; pass the repo's checkout with --cwd"; return 1; }
   title="$(_shep_issue_title "$cwd" "$issue")" \
     || { _shep_err "bd does not know $issue in $cwd; run it from the issue's repo or pass --cwd"; return 1; }
@@ -231,7 +229,7 @@ shep_bg() {
   brief="$(shep_share_dir)/BACKGROUND.md"
   # hc run starts the worker from the Herdr server, so only this env prefix reaches it.
   cmd=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN -u BERCAIL_SHEP_INBOX
-    BERCAIL_ROLE=shep-bg "BERCAIL_ISSUE=$issue" "BERCAIL_BG_KIND=$kind" "BERCAIL_BG_BRIEF=$brief"
+    BERCAIL_ROLE=shep-bg "BERCAIL_ISSUE=$issue" "BERCAIL_BG_BRIEF=$brief"
     TERM=xterm-256color COLORTERM=truecolor)
   title="${title%.}"
   [[ "$title" != *… ]] || stop=""
@@ -251,7 +249,7 @@ shep_bg() {
   done < <(jq -r '. as $a | range(0; length) | select($a[.] == "-e") | $a[. + 1]
     | select(test("review\\.ts$") | not)' "$lead")
   cmd+=(-e "$(shep_share_dir)/pi/background.ts" --no-extensions --no-mcp --no-skills
-    --no-prompt-templates --no-context-files --no-approve --tools "read,grep,find,ls,shep_issue,shep_wait,shep_report"
+    --no-prompt-templates --no-context-files --no-approve --tools "read,grep,find,ls,bash,shep_wait"
     --system-prompt "$brief")
   out="$("$hc" run --bg --json --name "$name" --cwd "$cwd" --outlive-parent --no-notify --rm \
     --label bercail.role=agent --label bercail.shep=bg --label "bercail.issue=$issue" \

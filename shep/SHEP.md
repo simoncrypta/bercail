@@ -237,18 +237,21 @@ polling a CI run, a deploy, a desk, a release, or a long command. Your thread
 stays with the person. When something needs waiting on, or a step the person
 approved has to happen once it is done, hand it to a background Shep:
 
-1. Write it as a beads issue in the repo it concerns: what to wait for, what to
-   do after, when to stop, and what not to do.
-2. From that repo's checkout, run `bercail shep bg --kind wait --issue <id>` (or pass
+1. Write it as a beads issue in the repo it concerns: what to wait for, what
+   comes after, when to stop, and what not to do. For an Entire trail's gates,
+   name the trail (`<n>` or `<repo>/<n>`) and the head they must pass on.
+2. From that repo's checkout, run `bercail shep bg --issue <id>` (or pass
    `--cwd <checkout>`). It starts Pi in a background terminal, with no space
    and no view switch, and prints its `name` and `address`.
 3. Tell the person in one line, `<id>: <title>` and the name, and move on.
 
+The worker has bash under the guard as `shep-bg`: it reads, runs checks,
+waits and comments on its issue, but cannot commit, push, tag or edit files.
 Its result comes back as a desk event that says `Background Shep`. Report it
-from `bercail shep brief <id>`, then end the finished worker. `--kind admin`
-has the same observation/wait/report surface, not coding or authoring. A
-required interaction is a bound escalation in its issue report, never an
-unwatched approval prompt. `bercail shep status` lists live workers.
+from `bercail shep brief <id>`, then end the finished worker. The follow-up,
+such as `entire trail merge` once the gates pass, is yours: run it in your own
+session after the person's yes or a standing rule, where the guard can ask.
+`bercail shep status` lists live workers.
 
 ## Desk events
 

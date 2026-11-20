@@ -89,6 +89,8 @@ const shepBgCommit =
 const headlessRelease = "A headless run does not tag or release. Leave the release to the person.";
 const autopilotRelease = "Autopilot does not tag or release. Leave the release to the person.";
 const readOnly = "This role is read-only. Do not edit files or change the git tree.";
+const backgroundOnly =
+  "A background Shep waits and reports: it does not commit, push, tag or edit files. Put the next step in your report on the issue; Shep runs it.";
 const readOnlyTool =
   "This role is read-only. Do not edit files. Write only under /tmp or $TMPDIR, or a new file under the worktree's .bercail/ (not description.md, validate.json, handoff-result.json or policy.toml).";
 const unknownBranch = "Could not read the current branch, so this push is blocked. Push the branch by name.";
@@ -162,6 +164,17 @@ const askOr = (input: GuardInput, question: string, refusal: string): GuardDecis
 
 function readOnlyRole(role: string): boolean {
   return role === "judge" || role === "discuss";
+}
+
+// Where a background Shep's shell may write besides its temp dirs.
+const stream = /^\/dev\/(null|stdout|stderr|tty|fd\/[0-9]+)$/;
+
+// What refuses a commit, a push, a tag or a tree change: the read-only roles,
+// and background Shep, which runs commands only to wait and report.
+function noChange(role: string): GuardDecision | undefined {
+  if (readOnlyRole(role)) return block(readOnly);
+  if (role === "shep-bg") return block(backgroundOnly);
+  return undefined;
 }
 
 // bercail reads these as the desk's own (describe check's evidence, a handoff's
@@ -1354,7 +1367,9 @@ function decideCleanup(words: string[], input: GuardInput): GuardDecision {
   const plain = plainWords(words);
   if (basename(plain[0] ?? "") !== "bercail" || plain[1] !== "cleanup") return allow;
   if (readOnlyRole(input.role)) return block(readOnly);
-  return input.hasUI ? { action: "ask", reason: cleanupAsk } : block(cleanupHeadless);
+  if (!input.hasUI) return block(cleanupHeadless);
+  if (input.role === "shep-bg") return block(backgroundOnly);
+  return { action: "ask", reason: cleanupAsk };
 }
 
 // bercail land: Shep's commit and CI wait for a desk's branch.
@@ -1606,7 +1621,8 @@ function configWrite(args: string[]): string | undefined {
 }
 
 function gitWrite(sub: string, args: string[]): boolean {
-  if (["add", "commit", "push", "restore", "clean", "rm", "mv", "merge", "rebase"].includes(sub)) return true;
+  const writes = "add commit push restore clean rm mv merge rebase cherry-pick revert am pull switch".split(" ");
+  if (writes.includes(sub)) return true;
   if (sub === "reset" && args.some((arg) => arg === "--hard" || arg.startsWith("--hard"))) return true;
   if (
     sub === "checkout" &&
@@ -1648,7 +1664,8 @@ function branchOf(dir: string | undefined, input: GuardInput): string | GuardDec
 }
 
 function decideRelease(dir: string | undefined, input: GuardInput): GuardDecision {
-  if (readOnlyRole(input.role)) return block(readOnly);
+  const refused = noChange(input.role);
+  if (refused) return refused;
   const policy = policyFor(dir, input);
   if (!isPolicy(policy)) return policy;
   if (policy.agentMayRelease) return approve(because(policy, "agent_may_release", "true"));
@@ -1663,7 +1680,8 @@ function decidePush(args: string[], dir: string | undefined, input: GuardInput):
   if (facts.mirror) return block(mirror);
   if (facts.deleteMain) return block(deleteMain);
   if (hasNoVerify("push", args)) return block(noVerify);
-  if (readOnlyRole(input.role)) return block(readOnly);
+  const refused = noChange(input.role);
+  if (refused) return refused;
 
   let decision: GuardDecision = allow;
   const release = facts.tags || facts.refspecs.some(specIsTag) || facts.deleted.some(isTagRef);
@@ -1722,8 +1740,11 @@ function decideGit(git: GitCall, input: GuardInput): GuardDecision {
   if (risky) return configBlock(risky);
   if (sub === "push") return decidePush(args, git.dir, input);
   if (sub === "tag" && tagWrites(args)) return decideRelease(git.dir, input);
-  if (readOnlyRole(input.role) && gitWrite(sub, args)) return block(readOnly);
   if (sub === "commit") return decideCommit(input);
+  if (gitWrite(sub, args)) {
+    const refused = noChange(input.role);
+    if (refused) return refused;
+  }
   return allow;
 }
 
@@ -2136,7 +2157,8 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       if (hasNoVerify("push", words)) return block(noVerify);
       decision = worse(decision, publishing === "commit" ? decideCommit(here) : decidePush([], forge.dir, here));
     }
-    if (sync && readOnlyRole(input.role)) decision = worse(decision, block(readOnly));
+    const refused = sync ? noChange(input.role) : undefined;
+    if (refused) decision = worse(decision, refused);
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
     decision = worse(decision, decideCleanup(words, here));
     if (isAnswer(words)) decision = worse(decision, block(answerCommand));
@@ -2146,11 +2168,15 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     decision = worse(decision, decideBasecamp(words, input.role));
     if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
     const targets = writeTargets(words, raw);
+    if (input.role === "shep-bg" && targets.some((target) => !stream.test(target) && !readOnlyWrite(target, here)))
+      decision = worse(decision, block(backgroundOnly));
     if (writesGuardFiles(targets, here)) decision = worse(decision, block(protectedFile));
     if (writesTodoFiles(targets, here)) decision = worse(decision, block(todoFile));
     if (cwds.includes(undefined) && targets.some(relativeTarget)) decision = worse(decision, warn(lostCwd));
-    if (!help && (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout")))
-      branchMoved = true;
+    const prCheckout = words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout";
+    const checkoutRefused = prCheckout && !help ? noChange(input.role) : undefined;
+    if (checkoutRefused) decision = worse(decision, checkoutRefused);
+    if (!help && (words[0] === "gt" || prCheckout)) branchMoved = true;
     if (isGhRelease(forge.words) || isGhApiRelease(forge.words)) {
       decision = worse(decision, decideRelease(forge.dir, here));
     }
@@ -2186,8 +2212,7 @@ export function decideTool(
   // read, edit, write, grep, find and ls all take a path; another tool's may not be a string.
   const path = typeof given === "string" ? toolPath(given, input.home) : undefined;
   if (tool === "edit" || tool === "write") {
-    if (readOnlyRole(input.role) && !(tool === "write" && path && readOnlyWrite(path, input)))
-      return block(readOnlyTool);
+    if (noChange(input.role) && !(tool === "write" && path && readOnlyWrite(path, input))) return block(readOnlyTool);
     const targets = path ? [path] : [];
     if (writesGuardFiles(targets, input)) return block(protectedFile);
     if (writesTodoFiles(targets, input)) return block(todoFile);

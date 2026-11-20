@@ -122,6 +122,52 @@ test("blocked: force-push, mirror, deleting main, --no-verify, PR merges, headle
   blocked("git restore --staged .", judge, /read-only/);
 });
 
+// Its bash waits and reports. Even where the policy lets everything through, it
+// commits, pushes, tags and edits nothing: that goes back to Shep.
+test("background Shep reads, checks and comments, and commits, pushes, tags or edits nothing", () => {
+  const loosest = { ...defaultPolicy, push: "main" as const, agentMayRelease: true };
+  const shepBg = {
+    ...tui,
+    role: "shep-bg",
+    branches: { "/work": "feature" },
+    policies: { "/work": loosest },
+    readOnlyWrites: { tmp: ["/tmp"], root: "/work", exists: () => false },
+  };
+  for (const command of [
+    "git status",
+    "git log -1 --format=%H",
+    "gh run view 12 --json conclusion",
+    "entire trail show 32 --json",
+    "bd comment bc-1 --stdin",
+    "entire trail show 32 --json 2>/dev/null >/tmp/trail.json",
+  ])
+    allowed(command, shepBg);
+  for (const command of [
+    "git push origin feature",
+    "git push origin main",
+    "git tag v1.0.0",
+    "gh release create v1.0.0",
+    "gh pr create --fill",
+    "entire trail link 32 --branch feature",
+    "git add .",
+    "git checkout -- .",
+    "git reset --hard",
+    "git cherry-pick abc123",
+    "git revert HEAD",
+    "git am fix.patch",
+    "git pull",
+    "git switch main",
+    "gh pr checkout 12",
+    "echo done > README.md",
+    "sed -i s/a/b/ lib/shep.sh",
+    "gh run view 12 | tee notes.md",
+  ])
+    blocked(command, shepBg, /background Shep waits and reports: it does not commit, push, tag or edit files/);
+  blocked("entire trail merge 32", shepBg, /person's call/);
+  for (const tool of ["edit", "write"])
+    assertMatch((decideTool(tool, undefined, shepBg, "/work/a.ts") as Decision).reason ?? "", /read-only/);
+});
+
 test("asked: a builder's push; a commit warns", () => {
   asked("git push origin feature", { ...tui, role: "builder" });
   warned("git commit -m 'ship'", tui);
@@ -2148,6 +2194,7 @@ test("bercail cleanup asks the person in every role that can write, and nowhere 
     }
     for (const input of [headless, auto, { ...headless, role: "shep-bg" }])
       blocked(command, input, /only where the person can say yes/);
+    blocked(command, { ...tui, role: "shep-bg" }, /background Shep waits and reports/);
     blocked(command, judge, /read-only/);
   }
   for (const command of ["bercail help", "bercail review-pr close 7", "git worktree list", "echo bercail cleanup"])

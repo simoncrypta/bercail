@@ -67,7 +67,7 @@ repeatable) names an issue closed with `bd supersede ID --with` this one, so its
 `handoffs.jsonl` lines no longer hold the target. A repository/common-Git lock serializes reservations. The pinned
 startup session is included in the result. `ok:true` requires a started agent,
 space and desk. Partial creation reports nonzero with available facts; inspect
-those facts, never retry into a replacement by hand. Background wait/admin workers
+those facts, never retry into a replacement by hand. Background Sheps
 cannot dispatch coding; Shep cannot bypass its original-owner dispatcher.
 
 ## What a `--branch` spawn does

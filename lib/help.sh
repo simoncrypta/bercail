@@ -24,7 +24,7 @@ Post-install CLI (bercail):
   uninstall     Remove marker block and managed files
   notify        run: the desk follower that feeds Shep's inbox (the desk mod starts it)
   shep          Shep, the orchestrator on Pi: status (queued, awaiting persistence, persisted) | run |
-                bg --kind wait|admin --issue ID [--cwd DIR] (observation/wait/report only) |
+                bg --issue ID [--cwd DIR] (waits and reports: bash under the guard, no commit, push or edit) |
                 task dispatch [--wait-ready] (JSON stdin; a first visible desk, or a follow-up into the original desk's session,
                   shown at its next turn even while it works; a gone owner's checkout gets a new desk, unasked;
                   --wait-ready: return once a new desk's Pi is up, with the message queued) |
