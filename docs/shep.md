@@ -146,7 +146,7 @@ bercail shep board       # one line per open job across those repos, then what w
 bercail shep queue       # what waits on your review, with sizes and stakes (--repo DIR: against its budget)
 bercail shep brief ID    # one issue: its desk and state, the question it is blocked on, the latest report
 bercail shep list        # Shep's standing rules: remember "RULE" [--scope S] adds one, forget N drops one
-bercail shep mistake list  # the mistakes ledger: mistake KEY "WHAT" [--repo DIR] [--issue ID] records one
+bercail shep mistake list  # the mistakes ledger by group: mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] records one
 bercail shep diagram FILE  # a Mermaid diagram without its click and link statements (stdin without FILE)
 ```
 
@@ -261,14 +261,17 @@ They live in `~/.local/state/bercail/shep/preferences.md`, one `- DATE [SCOPE] R
 
 ### Mistakes
 
-A mistake that shows up twice should get a guardrail, not a second fix by hand. Shep keeps a ledger of them in `~/.local/state/bercail/shep/mistakes.jsonl`, one line each time: when, a short key, what happened, and where (repo and issue).
+A mistake that shows up twice should get a fix in the system, not a second fix by hand. Shep keeps a ledger of them in `~/.local/state/bercail/shep/mistakes.jsonl`, one line each time: when, a short key, what happened, and where (repo and issue).
+
+One cause often shows up under several keys, so each key belongs to a group, and the count that matters is the group's. A group has a short ID, a name, and what its mistakes count against: `process` (a bercail step that caused them), `tool`, or `conduct` (how an agent worked). `~/.local/state/bercail/shep/mistake-groups.json` holds the groups and which group each key is in.
 
 ```bash
+bercail shep mistake group G7 "Test isolation" --against tool tests-touch-real-state   # make or rename a group, move keys into it
 bercail shep mistake tests-touch-real-state "the handoff test wrote to the real handoffs.jsonl" --repo ~/Work/bercail --issue bercail-4k9
-bercail shep mistake list   # each key with its count, most frequent first
+bercail shep mistake list   # each group with its count and keys, most frequent first
 ```
 
-A key is a-z, 0-9 and `-`, the same each time. When a key reaches its second time, the command says so, and [`SHEP.md`](../shep/SHEP.md) has Shep write an issue for a guardrail (a lint rule, a test, the guard, or a doctor check) and tell you.
+A key is a-z, 0-9 and `-`, the same each time. A key in no group yet needs `--group` when it is recorded, and keeps that group after. Only `mistake group` moves a key, because a move changes the count of all its past entries. When a group reaches its second time, the command says so, with the fix that fits what the group counts against. A `tool` group gets a guardrail (a lint rule, a test, the guard, or a doctor check), a `conduct` group gets a rule in SHEP.md or a skill, or a check, and a `process` group gets the step that caused it removed or simplified. [`SHEP.md`](../shep/SHEP.md) has Shep write that issue and tell you.
 
 What counts as good conduct for Shep is written down as [behavior specs](../.agents/behaviors/README.md), for reviewing its traces rather than for its prompt. Their README maps each group of mistakes to a spec, or marks it a product bug.
 

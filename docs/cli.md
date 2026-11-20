@@ -31,7 +31,7 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 | `bercail todo add "TITLE" [--notes TEXT] [--due YYYY-MM-DD] [--issue ID] [--repo DIR] [--target NAME]` / `list [--target NAME] [--json]` / `show ID` / `done ID` | What only you can do, on one of your [todo lists](shep.md#todos-for-the-person). `add` goes to `--target`, else the route of the job's repo (`--repo`, or the checkout of `--issue`), else the default, and prints the todo's link; `--issue` comments it on that beads issue. Shep adds them; the guard blocks the writes from desks |
 | `bercail todo target add NAME URL [--backend NAME] [--create "LIST"] [--json]` / `list [--json]` / `show NAME [--json]` / `rm NAME` | The [lists todos go to](config.md#todos), by name. `add` reads the list at URL first; a project's To-dos URL fails and lists its lists, or `--create` makes one there. `rm` drops its routes too |
 | `bercail todo route REPO TARGET` / `--default TARGET` / `--rm REPO` / `--rm --default` | Send a repo's todos (its main checkout, worktrees included) to a target, or set the default for the rest. Shep runs them; the guard blocks them from desks |
-| `bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID]` / `mistake list` | Shep's [mistakes ledger](shep.md#mistakes): the second time a key is recorded, it asks for a guardrail |
+| `bercail shep mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID]` / `mistake group ID "NAME" --against process\|tool\|conduct [KEY...]` / `mistake list` | Shep's [mistakes ledger](shep.md#mistakes), by group: the second time a group is recorded, it asks for a fix in the system |
 
 ## shell
 

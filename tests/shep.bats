@@ -132,7 +132,7 @@ EOF
 @test "the shep usage names every subcommand" {
   local out
   out="$(shep unknown </dev/null 2>&1)" && fail "an unknown subcommand passed"
-  [[ "$out" == 'bercail shep: usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|expire|discuss|closed' ]] \
+  [[ "$out" == 'bercail shep: usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|expire|discuss|closed' ]] \
     || fail "shep usage: $out"
 }
 

@@ -328,14 +328,17 @@ A mistake seen twice is fixed in the system, not by hand again. When a desk's
 report, a review, or the person names something that went wrong in the work
 (not a bug in the product), record it:
 
-    bercail shep mistake <key> "<what happened>" --repo <checkout> --issue <id>
+    bercail shep mistake <key> "<what happened>" --group <id> --repo <checkout> --issue <id>
 
 Run `bercail shep mistake list` first and reuse a key that fits; a key is a
 short name for the kind of mistake (`tests-touch-real-state`), the same each
-time. When the command says the key has happened twice or more, write a beads
-issue for a guardrail that catches it (a lint rule, a test, the guard, or a
-doctor check) in the repo that owns the check, bercail's own for bercail's
-tools, and tell the person in one line. Do not just fix the instance again.
+time. A new key needs `--group`: the group of its root cause. When no group
+fits, make one with `bercail shep mistake group` and tell the person.
+When the command says the group has happened twice or more, write the issue it
+names, in the repo that owns the fix, bercail's own for bercail's tools, and
+tell the person in one line. A `process` group counts against bercail's
+process, not the desks, so its fix removes or simplifies a step. Do not just
+fix the instance again.
 
 ## Why
 
