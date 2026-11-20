@@ -197,11 +197,12 @@ WATCHED=""
 remember_desk || true
 
 # The harness's own TMPDIR, named for this pid, which exec hands to it: only with
-# a watcher to sweep it. The sweep of runs that ended unwatched does not hold up
-# the start.
+# a watcher to sweep it. The sweep of runs that ended unwatched, and of old /tmp
+# entries, does not hold up the start. It starts first: with the folder as its
+# TMPDIR it would hold it, and the watcher could not remove it after a short run.
 if [[ -n "$WATCHED" ]] && scratch="$("$BERCAIL" scratch dir "$$" 2>/dev/null)"; then
-  export TMPDIR="$scratch"
   ("$BERCAIL" scratch sweep >/dev/null 2>&1 &)
+  export TMPDIR="$scratch"
 fi
 
 # An autopilot desk: the guard lets it commit and push its PR branch, and its

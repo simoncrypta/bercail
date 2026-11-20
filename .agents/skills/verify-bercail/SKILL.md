@@ -51,6 +51,7 @@ higher is a crash.
 | Step | Proves |
 |------|--------|
 | `bercail desk restore --dry-run` on a seeded record | says `would resume`, sends no `hc send`, leaves the record unchanged |
+| a desk session (`bercail-desk-agent` on a stand-in `pi`) | its `TMPDIR` is its scratch folder; the stand-in's `mktemp` file and folder, and Node's temp dir and compile cache when there is a Node, all land in it; no `verify-desk.*` appears in `/tmp` (only that name is looked for); and the folder is gone once the desk exits. The run's sweeps take `$box/system-tmp` as `/tmp` (`BERCAIL_TMP_ROOT`), so it removes nothing from the real one |
 | `handoff-spawn --info` | prints JSON |
 | `bercail bstack status` | reports the profile, models and logins |
 | deployed files | the lead's `lead.json` loads the guard, review-pr's `review.json` has only read tools and the description standard, `/validate` is there and `/ready` is not, the `describe` skill is installed |

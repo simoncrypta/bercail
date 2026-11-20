@@ -8,6 +8,8 @@ evidence="${1:-$repo/.bercail/verify/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$evidence"
 evidence="$(cd "$evidence" && pwd)"
 real_pi="$(mise which pi 2>/dev/null || command -v pi || true)"
+# Resolved here: a mise shim on PATH would read the box's HOME.
+real_node="$(mise which node 2>/dev/null || command -v node || true)"
 
 # --- tests: the suite must not write the real handoff log ---
 # The suite's temp files go under one root, so a line a test wrote names it.
@@ -31,9 +33,11 @@ unset BASH_ENV HC_TERMINAL_ID HC_SESSION HC_SCOPE HC_TERMINAL_SOCKET
 export __MISE_BASH_ENV_LOADED=1
 export HOME="$box/home" XDG_CONFIG_HOME="$box/home/.config" XDG_DATA_HOME="$box/home/.local/share" XDG_CACHE_HOME="$box/home/.cache"
 export XDG_STATE_HOME="$box/state" XDG_RUNTIME_DIR="$box/run" INSTALL_SRC="$repo"
-export HC_BIN="$box/bin/hc" HC_CALLS="$evidence/hc-calls.log" REAL_PI="$real_pi"
+export HC_BIN="$box/bin/hc" HC_CALLS="$evidence/hc-calls.log" REAL_PI="$real_pi" REAL_NODE="$real_node"
+# A desk's sweep takes this as /tmp: the run never removes anything from the real one.
+export BERCAIL_TMP_ROOT="$box/system-tmp"
 export PATH="$box/bin:$PATH"
-mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$box/bin" "$XDG_STATE_HOME/bercail/desk-sessions" "$XDG_CONFIG_HOME/bercail"
+mkdir -p "$HOME" "$XDG_RUNTIME_DIR" "$box/bin" "$BERCAIL_TMP_ROOT" "$XDG_STATE_HOME/bercail/desk-sessions" "$XDG_CONFIG_HOME/bercail"
 : >"$HC_CALLS"
 
 # Pi, offline: the real version, a catalog with one Claude model, no login, and
@@ -120,6 +124,35 @@ step desk-restore-dry-run 0 "$bercail" desk restore --dry-run
 check "dry run would resume the desk" out_has desk-restore-dry-run "would resume"
 check "dry run typed nothing" absent "$HC_CALLS" '^send'
 check "dry run left the record alone" test "$before" = "$(sha256sum "$record")"
+
+# A desk session: its harness makes what a toolchain makes (a mktemp file and
+# folder, Node's temp dir and compile cache), all in the desk's own TMPDIR,
+# nothing under /tmp, and the folder is gone once the desk exits.
+mkdir -p "$box/desk"
+cat >"$box/desk/pi" <<'PI'
+#!/usr/bin/env bash
+out="$DESK_OUT"
+{
+  printf 'tmpdir\t%s\n' "$TMPDIR"
+  printf 'mktemp\t%s\n' "$(mktemp -t verify-desk.XXXXXX)" "$(mktemp -d -t verify-desk.XXXXXX)"
+  if [[ -x "$REAL_NODE" ]]; then
+    "$REAL_NODE" -e 'const m = require("node:module"); m.enableCompileCache(); console.log("node\t" + require("node:os").tmpdir()); console.log("cache\t" + m.getCompileCacheDir())'
+  fi
+} >"$out"
+PI
+chmod +x "$box/desk/pi"
+before_tmp="$(find /tmp -maxdepth 1 -name 'verify-desk.*' 2>/dev/null | sort)"
+step desk-session 0 env HC_TERMINAL_ID=t1 DESK_OUT="$evidence/desk-session.tsv" timeout 30 "$repo/bin/bercail-desk-agent" "$box/desk/pi"
+desk_tmp="$(awk -F'\t' '$1 == "tmpdir" { print $2 }' "$evidence/desk-session.tsv" 2>/dev/null)"
+inside_desk_tmp() { [[ -n "$desk_tmp" ]] && awk -F'\t' -v d="$desk_tmp/" '$1 != "tmpdir" && index($2, d) != 1 && $2 != substr(d, 1, length(d) - 1) { bad = 1 } END { exit bad }' "$evidence/desk-session.tsv"; }
+gone_soon() { local _; for _ in $(seq 1 100); do [[ -e "$1" ]] || return 0; sleep 0.1; done; return 1; }
+check "the desk's TMPDIR is its scratch folder" test "${desk_tmp%/*}" = "$XDG_CACHE_HOME/bercail/scratch"
+# Two mktemp rows, and Node's two when there is a Node: a missing row is a step that did not run.
+desk_rows() { [[ "$(cut -f1 "$evidence/desk-session.tsv" | sort | tr '\n' ' ')" == "${REAL_NODE:+cache }mktemp mktemp ${REAL_NODE:+node }tmpdir " ]]; }
+check "the desk's harness made a mktemp file and folder${real_node:+, and Node its temp dir and compile cache}" desk_rows
+check "what the desk's tools made is in its TMPDIR" inside_desk_tmp
+check "the desk wrote nothing new under /tmp" test "$before_tmp" = "$(find /tmp -maxdepth 1 -name 'verify-desk.*' 2>/dev/null | sort)"
+check "the desk's scratch is gone once it exits" gone_soon "$desk_tmp"
 
 step handoff-info 0 "$repo/skills/handoff/scripts/handoff-spawn" --info
 check "handoff --info is JSON" jq -e 'type == "object"' "$evidence/handoff-info.out"

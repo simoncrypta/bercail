@@ -121,6 +121,7 @@ cmd_doctor() {
   # shellcheck source=/dev/null
   source "$(find_lib_dir)/scratch.sh"
   doctor_scratch
+  doctor_scratch_tmp
   return "$failures"
 }
 

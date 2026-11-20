@@ -334,6 +334,9 @@ the Mermaid source when the chart is wider than your pane.
   `hc send` a `/model`: the desk reads it as chat and ignores it. A busy desk
   switches when its current run ends; tell the person which it was.
 - Do not switch the person's view or close their spaces.
+- Scratch files (a brief, a JSON dump, a log) go in `"$TMPDIR/<name>"` or a
+  `mktemp` file, never a literal `/tmp/<name>`: `/tmp` holds RAM and keeps a
+  file for days, and the guard warns.
 - Ask before anything hard to undo or outward-facing: merging, deleting,
   publishing, spending money, or changing another tool's configuration.
 - Desks stage their changes for the person's review. Commit, push, open a PR, or

@@ -120,6 +120,23 @@ EOF
   [[ -d "$STATE/inbox" && -d "$STATE/delivered" ]] || fail "no inbox"
 }
 
+@test "Shep runs on a scratch TMPDIR of its own, gone once it exits" {
+  local root="$XDG_CACHE_HOME/bercail/scratch" seen made
+  reset
+  cat >"$BATS_TEST_TMPDIR/bin/pi" <<EOF
+#!/usr/bin/env bash
+[[ " \$* " != *" --list-models "* ]] || exit 0
+printf '%s' "\$TMPDIR" >"$BATS_TEST_TMPDIR/seen"
+mktemp >"$BATS_TEST_TMPDIR/made"
+EOF
+  shep run </dev/null >/dev/null 2>&1
+  seen="$(cat "$BATS_TEST_TMPDIR/seen")" made="$(cat "$BATS_TEST_TMPDIR/made")"
+  [[ "$seen" =~ ^"$root"/[0-9]+$ ]] || fail "Shep's TMPDIR is <root>/<pid>: $seen"
+  [[ "$made" == "$seen"/* ]] || fail "mktemp wrote outside it: $made"
+  [[ ! -e "$seen" ]] || fail "it outlived Shep"
+  [[ -z "$(ls -A "$TMPDIR")" ]] || fail "Shep wrote to the TMPDIR it was given: $(ls -A "$TMPDIR")"
+}
+
 @test "no Pi: it says how to install it" {
   local out
   reset

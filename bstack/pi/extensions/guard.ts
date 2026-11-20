@@ -55,6 +55,8 @@ export type GuardInput = {
   branchMoved?: boolean;
   /** Where a read-only role's write tool may write: the temp dirs, and new files under ROOT/.bercail/. */
   readOnlyWrites?: { tmp: string[]; root: string; exists: (path: string) => boolean };
+  /** The agent's own TMPDIR, when it is not /tmp: a write under a literal /tmp then warns. */
+  tmpdir?: string;
 };
 
 // warnings: lines the command runs with, shown in its result and logged.
@@ -151,6 +153,8 @@ const unclosedWarn =
   "The guard could not find where a $( or backtick ends, so it did not check the rest of this command. Next time, write the body to a file first, then pass its path.";
 const lostCwd =
   "The guard lost track of the folder after a cd it could not follow, so it checked a relative write target by its name only.";
+const tmpWrite = (tmpdir: string) =>
+  `This writes under /tmp, which holds RAM and keeps a file for days. Put scratch in $TMPDIR (${tmpdir}) or a mktemp -d folder instead: bercail removes it when you exit.`;
 
 const allow: GuardDecision = { action: "allow" };
 const block = (reason: string): GuardDecision => ({ action: "block", reason });
@@ -1422,11 +1426,16 @@ const valueFlag: Record<string, RegExp> = {
 const scriptFlag: Record<string, RegExp> = { sed: /^(-[^-]*[ef]|--expression|--file)/, perl: /^-[^-]*[eE]/ };
 const chmodMode = /^[0-7]{1,4}$|^[ugoa]*[-+=][-+=rwxXstugoa,]*$/;
 
-function writeTargets(words: string[], raw: string[]): string[] {
-  const targets = raw.flatMap((word, i) => {
+// A redirect's target: glued on (>file) or the next word.
+function redirectTargets(raw: string[]): string[] {
+  return raw.flatMap((word, i) => {
     const to = redirect.exec(word);
     return to ? [to[1] || raw[i + 1] || ""] : [];
   });
+}
+
+function writeTargets(words: string[], raw: string[]): string[] {
+  const targets = redirectTargets(raw);
   const operands = words.filter((word, i) => !redirect.test(word) && redirect.exec(words[i - 1] ?? "")?.[1] !== "");
   const [name, ...args] = operands;
   // One pass, so a flag's value (touch -r -r FILE) is never read as a flag or as --.
@@ -1554,6 +1563,91 @@ function writesGuardFiles(targets: string[], input: GuardInput, literal = false)
 
 function writesTodoFiles(targets: string[], input: GuardInput, literal = false): boolean {
   return targets.some((target) => protectedTarget(target, input, input.todoFiles ?? [], [], literal));
+}
+
+// An absolute path under /tmp, as written, and not in the agent's own TMPDIR,
+// which may be there.
+function inTmp(path: string, tmpdir: string): boolean {
+  if (!isAbsolute(path)) return false;
+  const full = resolve(path);
+  const own = resolve(tmpdir);
+  return (full === "/tmp" || full.startsWith("/tmp/")) && full !== own && !full.startsWith(`${own}/`);
+}
+
+// Where a command makes something, as its operands name it: mkdir's folders,
+// mktemp's template or -p dir, git clone's and git worktree add's folder, tar
+// -x's -C dir, rsync's and scp's destination, unzip's -d dir. A heuristic:
+// another writer's flags (sort -o) are not read.
+// git clone's and git worktree add's flags that take the next word as a value.
+const cloneValue = new Set([
+  "--depth",
+  "-b",
+  "--branch",
+  "-o",
+  "--origin",
+  "-c",
+  "--config",
+  "--reference",
+  "--reference-if-able",
+  "--separate-git-dir",
+  "--template",
+  "-j",
+  "--jobs",
+  "--filter",
+  "-u",
+  "--upload-pack",
+  "--shallow-since",
+  "--shallow-exclude",
+  "--bundle-uri",
+  "--server-option",
+]);
+const worktreeValue = new Set(["-b", "-B", "--reason"]);
+
+// A command's operands: past its flags, the values VALUED flags take, and --.
+function operandsOf(args: string[], valued: Set<string>): string[] {
+  const out: string[] = [];
+  let ended = false;
+  for (let i = 0; i < args.length; i++) {
+    if (ended || !args[i].startsWith("-")) out.push(args[i]);
+    else if (args[i] === "--") ended = true;
+    else if (valued.has(args[i])) i++;
+  }
+  return out;
+}
+
+function madeAt(command: string[]): string[] {
+  // Redirects are writeTargets'; here they would read as operands.
+  const words = command.filter((word, i) => !redirect.test(word) && redirect.exec(command[i - 1] ?? "")?.[1] !== "");
+  const [name, ...args] = words;
+  const plain = (from = 0) => args.slice(from).filter((arg) => !arg.startsWith("-"));
+  const valueOf = (flag: RegExp) =>
+    args.flatMap((arg, i) => (flag.test(arg) ? [arg.replace(flag, "") || args[i + 1] || ""] : []));
+  if (name === "mkdir") return plain();
+  if (name === "mktemp") return [...plain(), ...valueOf(/^(-p|--tmpdir=?)/)];
+  if (name === "unzip") return valueOf(/^-d/);
+  if (name === "rsync" || name === "scp") return plain().length > 1 ? [plain().at(-1)!] : [];
+  if (name === "tar" && args.some((arg) => /^-[^-]*x|^--(extract|get)$/.test(arg)))
+    return valueOf(/^(-C|--directory=?)/);
+  const git = parseGit(words, undefined);
+  if (git?.sub === "clone") return operandsOf(git.args, cloneValue).slice(1, 2);
+  if (git?.sub === "worktree" && git.args[0] === "add") return operandsOf(git.args.slice(1), worktreeValue).slice(0, 1);
+  return [];
+}
+
+// A shell write under /tmp while the agent has its own TMPDIR. A removal's
+// operands are not writes; its redirects are.
+function writesInTmp(words: string[], raw: string[], targets: string[], tmpdir: string | undefined): boolean {
+  if (!tmpdir) return false;
+  const paths = ["rm", "unlink", "shred"].includes(words[0]) ? redirectTargets(raw) : [...targets, ...madeAt(words)];
+  return paths.some((path) => inTmp(path, tmpdir));
+}
+
+// $(mktemp -d -p /tmp): the segments stand a path in for it, so its words are read here.
+function mktempInTmp(command: string, tmpdir: string | undefined): boolean {
+  if (!tmpdir) return false;
+  return subsIn(command).some(
+    (body) => makesTempDir(body) && madeAt(body.trim().split(/\s+/)).some((path) => inTmp(path, tmpdir)),
+  );
 }
 
 // A read-only role's shell write goes where its write tool may, or into a mktemp -d
@@ -2099,7 +2193,7 @@ function feedsEmptySecret(command: string): boolean {
 export function decideBash(command: string, input: GuardInput, depth = 0): GuardDecision {
   if (depth > 4) return block("This command is nested too deep to check. Split it into a simpler command.");
   if (feedsEmptySecret(command)) return block(emptySecret);
-  let decision: GuardDecision = allow;
+  let decision: GuardDecision = mktempInTmp(command, input.tmpdir) ? warn(tmpWrite(input.tmpdir!)) : allow;
   // Each dir the shell may be in; git and forges use it only when there is one.
   let cwds = input.cwds ?? [input.cwd];
   const cwdOf = () => (cwds.length === 1 ? cwds[0] : undefined);
@@ -2238,6 +2332,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (writesGuardFiles(targets, here)) decision = worse(decision, block(protectedFile));
     if (writesTodoFiles(targets, here)) decision = worse(decision, block(todoFile));
     if (cwds.includes(undefined) && targets.some(relativeTarget)) decision = worse(decision, warn(lostCwd));
+    if (writesInTmp(words, raw, targets, input.tmpdir)) decision = worse(decision, warn(tmpWrite(input.tmpdir!)));
     const prCheckout = words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout";
     const checkoutRefused = prCheckout && !help ? noChange(input.role) : undefined;
     if (checkoutRefused) decision = worse(decision, checkoutRefused);
@@ -2281,6 +2376,7 @@ export function decideTool(
     const targets = path ? [path] : [];
     if (writesGuardFiles(targets, input, true)) return block(protectedFile);
     if (writesTodoFiles(targets, input, true)) return block(todoFile);
+    if (path && input.tmpdir && inTmp(path, input.tmpdir)) return warn(tmpWrite(input.tmpdir));
   }
   if (tool === "bash") return input.role === "discuss" ? block(discussOnly) : decideBash(command ?? "", input);
   return allow;
@@ -2476,6 +2572,7 @@ export default function (pi: ExtensionAPI) {
         root: json?.root ?? ctx.cwd,
         exists: onDisk,
       },
+      tmpdir: process.env.TMPDIR && resolve(process.env.TMPDIR) !== "/tmp" ? process.env.TMPDIR : undefined,
     };
     let decision = decideTool(event.toolName, command, guardInput, input.path);
     for (let i = 0; i < 8 && lookup(decision); i++) {

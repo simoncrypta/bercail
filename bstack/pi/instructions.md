@@ -41,9 +41,10 @@ another provider. These rules apply to every bstack agent.
   docs from the web instead of guessing.
 - Prove it works on the real thing: run the test, the command, the app. "It
   compiles" and "it should work" are not proof. Say exactly what you ran.
-- Scratch copies (a base checkout, a copy of the worktree, test logs) go under
-  `$TMPDIR`, your own folder: bercail removes it when you exit, and `mktemp -d`
-  uses it. Never under `/tmp`, where a copy stays until reboot.
+- Scratch (a base checkout, a copy of the worktree, a test log, a brief, a JSON
+  dump) goes under `$TMPDIR`, your own folder: bercail removes it when you exit,
+  and `mktemp` uses it. Write `"$TMPDIR/<name>"`, never a literal `/tmp/<name>`:
+  `/tmp` holds RAM and keeps a file for days, and the guard warns.
 - Don't block on the human for reversible choices. Pick, say why in one line, go on.
   Ask before anything hard to undo: deletes, publishing, spending money. Never
   force-push or pass `--no-verify`.

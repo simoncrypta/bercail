@@ -988,6 +988,87 @@ test("the guard extension lets a judge write in TMPDIR and a new file in the wor
   }
 });
 
+test("a write under a literal /tmp runs with a warning naming TMPDIR, when the agent's TMPDIR is elsewhere", () => {
+  const own = { ...tui, tmpdir: "/home/me/.cache/bercail/scratch/42" };
+  const tmpWarning = /writes under \/tmp.*\$TMPDIR \(\/home\/me\/\.cache\/bercail\/scratch\/42\)/;
+  for (const command of [
+    "gh pr view 3 --json state > /tmp/prstate-final.json",
+    "cat > /tmp/autopilot-brief-2.txt <<'EOF'\nbrief\nEOF",
+    "npm test 2>&1 | tee /tmp/test.log",
+    "mkdir -p /tmp/w && cd /tmp/w && echo a > out.txt",
+    "cp -r . /tmp/copy",
+    "git worktree add /tmp/base HEAD",
+    "git archive HEAD | tar -x -C/tmp/base",
+    "d=$(mktemp -d -p /tmp)",
+    "mktemp --tmpdir=/tmp x.XXXX",
+    "git clone https://example.com/r.git /tmp/r",
+    "git clone -- /tmp/source /tmp/dest > /dev/null",
+    "rsync -a src/ /tmp/dest/",
+    "rm /tmp/old > /tmp/rm.log",
+  ])
+    warned(command, own, tmpWarning);
+  // A judge may still write there: the warning steers it, it does not refuse.
+  const readOnlyWrites = { tmp: ["/tmp", own.tmpdir], root: "/work", exists: () => false };
+  warned("echo x > /tmp/judge.md", { ...judge, tmpdir: own.tmpdir, readOnlyWrites }, tmpWarning);
+  const write = decideTool("write", undefined, own, "/tmp/dfa1.tsx");
+  assertMatch((write as Decision).warnings?.join("") ?? "", tmpWarning);
+  // Its own TMPDIR, a read, a removal, a mktemp that follows TMPDIR, or a name that only starts with /tmp.
+  for (const command of [
+    'echo x > "$TMPDIR/a"',
+    "echo x > /home/me/.cache/bercail/scratch/42/a",
+    "cat /tmp/old.log",
+    "git -C /tmp/build status",
+    "git clone --depth 1 /tmp/source",
+    "git status -- clone /tmp/foo /tmp/bar",
+    "cd /tmp && pwd",
+    "rsync /tmp/source ./dest",
+    "tar -czf out.tgz -C /tmp/x .",
+    "rm -rf /tmp/old",
+    "d=$(mktemp -d)",
+    "echo x > /tmpfile",
+    "echo x > /tmp/../home/me/x",
+  ])
+    assertEqual(decision(command, own).warnings, undefined, command);
+  // A tool's path is a path, not a shell word.
+  for (const path of ["/work/a.ts", "-C/tmp/a", "/tmp/../home/me/persist"])
+    assertEqual((decideTool("write", undefined, own, path) as Decision).warnings, undefined, path);
+  // A TMPDIR under /tmp is the agent's own; with none of its own, /tmp is where it should write.
+  assertEqual(decision("echo x > /tmp/user-1/a", { ...tui, tmpdir: "/tmp/user-1" }).warnings, undefined);
+  assertEqual(decision("echo x > /tmp/a", tui).warnings, undefined);
+});
+
+test("the guard extension warns on a /tmp write only while TMPDIR points elsewhere, and logs it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "guard-tmp-"));
+  vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
+  vi.stubEnv("BERCAIL_ROLE", "");
+  const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
+  const exec = async () => ({ code: 1, stdout: "", stderr: "" });
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  const ctx = { hasUI: true, cwd: "/work", ui: {} };
+  const run = async (id: string, command: string) => {
+    expect(await handlers.tool_call({ toolName: "bash", toolCallId: id, input: { command } }, ctx)).toBeUndefined();
+    const shown = (await handlers.tool_result(
+      { toolName: "bash", toolCallId: id, content: [{ type: "text", text: "out" }], isError: false },
+      {},
+    )) as { content: { text: string }[] } | undefined;
+    return shown?.content[0].text;
+  };
+  try {
+    vi.stubEnv("TMPDIR", join(dir, "scratch"));
+    assertMatch((await run("t1", "echo x > /tmp/x")) ?? "", /^bercail guard warning: This writes under \/tmp/);
+    vi.stubEnv("TMPDIR", "/tmp/");
+    assertEqual(await run("t2", "echo x > /tmp/x"), undefined);
+    const logged = readFileSync(join(dir, "state/bercail/guard-warnings.jsonl"), "utf8").trim().split("\n");
+    assertDeepEqual(
+      logged.map((line) => JSON.parse(line) as { kind: string; command: string }).map((e) => [e.kind, e.command]),
+      [["warning", "echo x > /tmp/x"]],
+    );
+  } finally {
+    vi.unstubAllEnvs();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a file is on disk when it, or a dangling link by its name, is there", () => {
   const dir = mkdtempSync(join(tmpdir(), "guard-disk-"));
   try {

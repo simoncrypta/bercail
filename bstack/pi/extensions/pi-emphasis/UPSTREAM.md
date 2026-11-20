@@ -14,10 +14,11 @@ network.
 To check the copy, or move it to a newer commit:
 
 ```sh
-git clone https://github.com/johnlindquist/pi-emphasis /tmp/pi-emphasis
-git -C /tmp/pi-emphasis checkout <commit>
-diff /tmp/pi-emphasis/index.ts bstack/pi/extensions/pi-emphasis/index.ts
-diff /tmp/pi-emphasis/LICENSE bstack/pi/extensions/pi-emphasis/LICENSE
+d="$(mktemp -d)"
+git clone https://github.com/johnlindquist/pi-emphasis "$d"
+git -C "$d" checkout <commit>
+diff "$d"/index.ts bstack/pi/extensions/pi-emphasis/index.ts
+diff "$d"/LICENSE bstack/pi/extensions/pi-emphasis/LICENSE
 ```
 
 A newer commit is copied in whole. Then update the commit and the sha256 here, and

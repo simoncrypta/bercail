@@ -365,6 +365,50 @@ AGENT
   wait_for '[[ ! -e "$seen" && ! -e "$root/$dead" ]]'
 }
 
+@test "a recorded desk's start sweeps your old temp dir entries by itself, while the agent runs" {
+  local pid
+  arrange_record
+  hc_streams_events
+  mkdir -p "$BERCAIL_TMP_ROOT/old-copy/bin"
+  : >"$BERCAIL_TMP_ROOT/old-copy/bin/op"
+  chmod a-w "$BERCAIL_TMP_ROOT/old-copy/bin"
+  find "$BERCAIL_TMP_ROOT/old-copy" -exec touch -d '3 days ago' {} +
+  pi_sleeps
+  AGENT_LIFE=30 desk pi >/dev/null &
+  pid=$!
+  wait_for '[[ ! -e "$BERCAIL_TMP_ROOT/old-copy" ]]'
+  kill -0 "$pid" || fail "the sweep came only after the agent exited"
+  kill "$pid"
+}
+
+@test "a desk that exits while its start sweep still runs leaves no scratch: that sweep does not hold the folder" {
+  local root="$XDG_CACHE_HOME/bercail/scratch" seen
+  arrange_record
+  hc_streams_events
+  # The start sweep passes the live agent's folder by, then looks at the temp
+  # dir, which asks id for the uid. This id says it is there and waits to be
+  # let go (15s at most); the agent ends once the sweep is in it.
+  cat >"$BATS_TEST_TMPDIR/bin/id" <<ID
+#!/bin/sh
+: >"$BATS_TEST_TMPDIR/in-id"
+for _ in \$(seq 1 150); do [ -e "$BATS_TEST_TMPDIR/let-go" ] && break; sleep 0.1; done
+exec /usr/bin/id "\$@"
+ID
+  cat >"$BATS_TEST_TMPDIR/bin/pi" <<PI
+#!/usr/bin/env bash
+printf '%s' "\$TMPDIR" >"$BATS_TEST_TMPDIR/seen"
+for _ in \$(seq 1 100); do [[ -e "$BATS_TEST_TMPDIR/in-id" ]] && break; sleep 0.1; done
+PI
+  chmod +x "$BATS_TEST_TMPDIR/bin/id" "$BATS_TEST_TMPDIR/bin/pi"
+  hash -r
+  desk pi >/dev/null
+  seen="$(cat "$BATS_TEST_TMPDIR/seen")"
+  [[ "$seen" == "$root"/* ]] || fail "no scratch TMPDIR: $seen"
+  [[ -e "$BATS_TEST_TMPDIR/in-id" ]] || fail "the agent ended before the start sweep reached the temp dir"
+  wait_for '[[ ! -e "$seen" ]]' || { : >"$BATS_TEST_TMPDIR/let-go"; return 1; }
+  : >"$BATS_TEST_TMPDIR/let-go"
+}
+
 @test "a desk with no watcher keeps the TMPDIR it was given, so it leaves no scratch" {
   local root="$XDG_CACHE_HOME/bercail/scratch"
   printf '#!/usr/bin/env bash\nprintf "%%s" "$TMPDIR" >"%s/seen"\n' "$BATS_TEST_TMPDIR" >"$BATS_TEST_TMPDIR/bin/pi"

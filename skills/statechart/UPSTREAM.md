@@ -21,10 +21,11 @@ bercail's own files:
 To check the copy, or move it to a newer commit, compare it with upstream:
 
 ```sh
-git clone --filter=blob:none https://github.com/cursor/plugins /tmp/plugins
-git -C /tmp/plugins checkout <commit>
-diff -r --exclude=test /tmp/plugins/pstack/skills/statechart/scripts skills/statechart/scripts
-diff -r /tmp/plugins/pstack/skills/statechart/references skills/statechart/references
+d="$(mktemp -d)"
+git clone --filter=blob:none https://github.com/cursor/plugins "$d"
+git -C "$d" checkout <commit>
+diff -r --exclude=test "$d"/pstack/skills/statechart/scripts skills/statechart/scripts
+diff -r "$d"/pstack/skills/statechart/references skills/statechart/references
 ```
 
 The only differences are bercail's three scripts. A newer commit is copied in whole,

@@ -135,7 +135,8 @@ shep_run() {
     || _shep_err "could not write $state/workspace/.pi/settings.json; Pi's compaction defaults apply"
   shep_context_write "$state/context.md" || _shep_err "could not write $state/context.md; Shep starts without it"
   shep_pi_argv
-  (cd "$state/workspace" && "${SHEP_PI_ARGV[@]}") || code=$?
+  # Its own TMPDIR, removed when Shep exits, as a desk's is.
+  (cd "$state/workspace" && "${BERCAIL_SELF:-bercail}" scratch run -- "${SHEP_PI_ARGV[@]}") || code=$?
   _shep_ended "$code"
 }
 

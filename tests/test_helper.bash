@@ -15,7 +15,9 @@ isolate() {
   # Pi's agent dir follows HOME only when this is unset; set, it is the real one.
   # Git's would send every fixture repo's commits to the real repo.
   unset PI_CODING_AGENT_DIR GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
-  mkdir -p "$HOME" "$TMPDIR"
+  # What a sweep takes as /tmp: never the real one.
+  export BERCAIL_TMP_ROOT="$BATS_TEST_TMPDIR/system-tmp"
+  mkdir -p "$HOME" "$TMPDIR" "$BERCAIL_TMP_ROOT"
   mkdir -m 700 "$XDG_RUNTIME_DIR"
   export DESKTOP_TEST="${BATS_TEST_FILENAME##*/}: $BATS_TEST_DESCRIPTION"
   # bats keeps its BATS_TEST_TIMEOUT watchdog's pid in a local, gone by the time
