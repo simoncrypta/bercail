@@ -3,11 +3,11 @@
 # A fixed scaffold, not a policy editor or a source of trust.
 
 _policy_init_policy() {
-  local profile="$1" backend="$2" commit=ask push=ask
-  if [[ "$profile" == branch-pr || "$profile" == branch-trail ]]; then commit=allow; push=branch; fi
+  local profile="$1" backend="$2" push=ask
+  if [[ "$profile" == branch-pr || "$profile" == branch-trail ]]; then push=branch; fi
   printf '%s\n' \
     '# Prepared by bercail policy init; review before adopting.' \
-    "commit = \"$commit\"" "push = \"$push\""
+    "push = \"$push\""
   if [[ "$profile" == branch-pr ]]; then
     printf '%s\n' 'integrate = "pr"' 'pr_draft = true'
   fi

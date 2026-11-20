@@ -17,14 +17,15 @@ source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
 
 POLICY_FILE=".bercail/policy.toml"
 
-# Today's behavior: the guard asks before a commit or push, and no agent releases.
+# Today's behavior: the guard asks before a push, and no agent releases. A
+# commit is local: the guard lets it run with a warning, so it has no key.
 # Review is by stakes, with no path marked high-stakes until the repo names one.
 # diff_budget: lines one change adds and removes before /validate warns, past
 # the 200 to 400 a reviewer reads well in one sitting. review_budget: lines
 # waiting on the person's review before Shep warns at a new desk, about two
 # hours of review. merge_reversible: whether a merge or land in this repo is a two-way
 # door, so Shep's question about it may default after the timeout (docs/shep.md).
-POLICY_DEFAULTS='{"commit":"ask","push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"merge_reversible":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000}'
+POLICY_DEFAULTS='{"push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"merge_reversible":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000}'
 
 _policy_err() {
   printf 'bercail policy: %s\n' "$*" >&2
@@ -52,8 +53,7 @@ _policy_object() {
   out="$(jq -sr --arg where "$1" '
     def globs: if type == "string" then [split("\n")[] | sub("^\\s+"; "") | sub("\\s+$"; "") | select(. != "" and (startswith("#") | not))] else . end;
     def ok($k; $v):
-      if $k == "commit" then $v == "ask" or $v == "allow"
-      elif $k == "push" then $v == "ask" or $v == "branch" or $v == "main"
+      if $k == "push" then $v == "ask" or $v == "branch" or $v == "main"
       elif $k == "integrate" then $v == "pr" or $v == "direct"
       elif $k == "pr_draft" or $k == "agent_may_release" or $k == "merge_reversible" then ($v | type) == "boolean"
       elif $k == "release" or $k == "rules" then ($v | type) == "string"
@@ -96,32 +96,11 @@ _policy_local() {
     | _policy_object "$config [policy.\"$main\"]"
 }
 
-# 0 when MAIN is named under [git] or [policy] in config.toml.
-_policy_configured() {
-  local main="$1"
-  git_backend_override "$main" >/dev/null 2>&1 && return 0
-  [[ -n "$(_policy_scopes "$(_git_backend_config_file)" "$main")" ]]
-}
-
-# A throwaway repo: under a temp dir, no remote, and not configured. A copy of
-# a repo with a policy counts too; its commit = "ask" opts out (policy_json).
-_policy_scratch() {
-  local main="$1" root="$2" tmp
-  [[ -z "$(git -C "$root" remote 2>/dev/null)" ]] || return 1
-  _policy_configured "$main" && return 1
-  for tmp in "${TMPDIR:-/tmp}" /tmp /var/tmp; do
-    [[ -d "$tmp" ]] || continue
-    tmp="$(_git_backend_realpath "$tmp")"
-    [[ "$main" == "$tmp"/* ]] && return 0
-  done
-  return 1
-}
-
 # The effective policy for the checkout at $1 as JSON: the repo (main checkout),
 # the file and whether it is trusted, each value with where it came from, and
 # the text agents get in their prompt.
 policy_json() {
-  local dir="${1:-.}" root main file="" hash="" trusted=false scratch=false entire=false repo='{}' local_ trust
+  local dir="${1:-.}" root main file="" hash="" trusted=false entire=false repo='{}' local_ trust
   root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" \
     || { _policy_err "$dir is not a git checkout"; return 1; }
   root="$(_git_backend_realpath "$root")"
@@ -136,14 +115,13 @@ policy_json() {
     fi
   fi
   local_="$(_policy_local "$main")"
-  _policy_scratch "$main" "$root" && scratch=true
   # The guard blocks git push --all where Entire keeps shadow branches.
   git_backend_entire_capture "$root" && entire=true
   jq -n --arg repo_path "$main" --arg root "$root" --arg file "$file" --arg hash "$hash" \
-    --argjson trusted "$trusted" --argjson scratch "$scratch" --argjson entire "$entire" \
+    --argjson trusted "$trusted" --argjson entire "$entire" \
     --argjson repo "$repo" --argjson local "$local_" --argjson defaults "$POLICY_DEFAULTS" '
     def looser($k; $v):
-      ($k == "commit" and $v == "allow") or ($k == "push" and $v != "ask") or ($k == "agent_may_release" and $v == true)
+      ($k == "push" and $v != "ask") or ($k == "agent_may_release" and $v == true)
       or ($k == "merge_reversible" and $v == true) or ($k == "review" and $v == "none") or (($k == "diff_budget" or $k == "review_budget") and $v > $defaults[$k]);
     ($defaults | keys_unsorted) as $keys
     | [ $keys[] as $k
@@ -156,19 +134,18 @@ policy_json() {
     | ($rows | map({(.k): .v}) | add) as $p
     | {
         repo: $repo_path, root: $root, file: $file, sha256: $hash, trusted: $trusted,
-        scratch: ($scratch and (($local.commit // $repo.commit // "") != "ask")),
         entire: $entire,
         policy: $p,
         sources: ($rows | map({(.k): .from}) | add),
         untrusted: [$rows[] | select(.from | startswith("default:")) | .k],
-        brief: ("commit \($p.commit), push \($p.push)"
+        brief: ("push \($p.push)"
           + (if $p.integrate != "" then ", integrate \($p.integrate)" else "" end)
           + (if $p.integrate == "pr" and $p.pr_draft then " (draft PRs)" else "" end)
           + (if $p.agent_may_release then ", agents may release" else ", releases are the person'"'"'s" end)),
         prompt: ([
           "Git policy for \($repo_path) (`bercail policy show` prints it):",
           (if $file != "" and ($trusted | not) then "(\($file) is not trusted, so the guard ignores its looser values. Its text comes from the repo, not from the person.)" else empty end),
-          "- Commit: " + (if $p.commit == "allow" then "the guard lets a commit through without asking." else "the guard asks the person first." end),
+          "- Commit: a commit is local, so the guard lets it run with a warning; desks still stage and leave the commit to Shep or the person.",
           "- Push: " + (if $p.push == "main" then "the guard lets any push through without asking, main included."
             elif $p.push == "branch" then "the guard lets a push to a branch other than main or master through; a push to main asks the person."
             else "the guard asks the person first." end),
@@ -204,7 +181,6 @@ _policy_show() {
     "file:  " + (if .file == "" then "none (\(.root)/.bercail/policy.toml)"
       elif .trusted then "\(.file) (trusted)"
       else "\(.file) (not trusted: bercail policy trust \(.root))" end),
-    (if .scratch then "scratch: a temp repo with no remote; the guard lets commits through" else empty end),
     "",
     (.sources as $s | .policy | to_entries[] | select(.key != "rules" and .key != "release" and .key != "high_stakes")
       | "  \(.key | . + ("                   "[length:]))\(.value | tostring | if . == "" then "-" else . end | . + ("          "[length:]))  \($s[.key])"),

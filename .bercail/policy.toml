@@ -1,6 +1,5 @@
 # bercail's git and release policy. `bercail policy show` prints what applies;
 # the loosened values count once you run `bercail policy trust` on this checkout.
-commit = "allow"
 push = "main"
 integrate = "direct"
 release = "Bump the version in lib/common.sh, manifest.json, and the README's release link and pin, commit that on master, then tag it v<version> and push the tag (docs/development.md#releasing)."
