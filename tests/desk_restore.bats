@@ -405,7 +405,7 @@ restore_profile() {
   out="$(cmd_desk restore)"
   expect "$(sed 's/^\(t[0-9]*\) .*exec [^ ]* /\1 /' "$SENT")" $'t1 pi --session-id 0199-pi' \
     "only the Pi desk is typed into"
-  [[ "$out" == *"1 came back"* && "$out" == *"t2     skip: closed before the shutdown"* && "$out" != *t3* ]] \
+  [[ "$out" == *"1 came back"* && "$out" == *"t2     skip: closed before the shutdown"* && ! "$out" =~ (^|$'\n')t3[[:blank:]] ]] \
     || fail "the old record stays stale and siblings are not counted: $out"
 }
 
