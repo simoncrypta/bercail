@@ -347,14 +347,17 @@ socket_at() {
   mkdir -p "$tmp/many" "$tmp/mapped"
   # Enough names that find is still writing when grep finds the held one first.
   (cd "$tmp/many" && seq 1 20000 | xargs touch)
-  cp /usr/bin/sleep "$tmp/mapped/prog" && ln "$tmp/mapped/prog" "$BATS_TEST_TMPDIR/prog-link"
+  # bash, which runs as prog-link; a multi-call sleep refuses another name.
+  cp "$(command -v bash)" "$tmp/mapped/prog" && ln "$tmp/mapped/prog" "$BATS_TEST_TMPDIR/prog-link"
+  mkfifo "$BATS_TEST_TMPDIR/hold.fifo"
   : >"$tmp/loose"
   aged 3 "$tmp/many" "$tmp/mapped" "$tmp/loose"
   (cd "$tmp/many" && exec sleep 300) &
   cwd_pid=$!
   printf '%s\n' "$cwd_pid" >"$BATS_TEST_TMPDIR/holders"
   # Run by the loader, the program is only mapped: no fd, and the loader is the exe.
-  "$ldso" "$BATS_TEST_TMPDIR/prog-link" 300 &
+  # A builtin read on the FIFO waits, so no child outlives the holder's kill.
+  "$ldso" "$BATS_TEST_TMPDIR/prog-link" -c 'read -r -t 300 _ <>"$1"' _ "$BATS_TEST_TMPDIR/hold.fifo" &
   pid=$!
   printf '%s\n' "$pid" >>"$BATS_TEST_TMPDIR/holders"
   for _ in $(seq 1 100); do grep -q prog-link "/proc/$pid/maps" 2>/dev/null && break; sleep 0.05; done
