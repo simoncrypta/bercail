@@ -270,6 +270,8 @@ bercail shep mistake list   # each key with its count, most frequent first
 
 A key is a-z, 0-9 and `-`, the same each time. When a key reaches its second time, the command says so, and [`SHEP.md`](../shep/SHEP.md) has Shep write an issue for a guardrail (a lint rule, a test, the guard, or a doctor check) and tell you.
 
+What counts as good conduct for Shep is written down as [behavior specs](../.agents/behaviors/README.md), for reviewing its traces rather than for its prompt. Their README maps each group of mistakes to a spec, or marks it a product bug.
+
 ### The start context
 
 Each `bercail shep run` writes `~/.local/state/bercail/shep/context.md` and hands it to Pi with `--append-system-prompt`: the known repos, one short line each, and the standing rules. A restart picks up repos and rules that changed while Shep was down.
