@@ -1,5 +1,6 @@
 // bercail's Pi guard. The decision functions are pure; the default export wires
-// tool_call, the repo's git policy (bercail policy show), and the approval log.
+// tool_call and tool_result, the repo's git policy (bercail policy show), the
+// approval log, and the log of warnings and refusals.
 import { appendFileSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,11 +8,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /** The part of a repo's effective policy (lib/policy.sh) the guard enforces. */
 export type Policy = {
-  commit: "ask" | "allow";
   push: "ask" | "branch" | "main";
   agentMayRelease: boolean;
-  /** A temp-dir repo with no remote: commits go through. */
-  scratch: boolean;
   /** Entire captures sessions here (.entire/settings.json, enabled). */
   entire: boolean;
   /** For the log: the main checkout, and where each value came from. */
@@ -20,10 +18,8 @@ export type Policy = {
 };
 
 export const defaultPolicy: Policy = {
-  commit: "ask",
   push: "ask",
   agentMayRelease: false,
-  scratch: false,
   entire: false,
   repo: "",
   from: {},
@@ -53,20 +49,22 @@ export type GuardInput = {
   gitEnv?: boolean;
   /** Within one command: a GIT_CONFIG* variable now points git at other config. */
   gitConfigEnv?: boolean;
-  /** Within one command: repos it made with git init under a mktemp -d dir. */
-  fresh?: ReadonlySet<string>;
+  /** What entire agent-help lists as read-only: top-level names under "", subcommands under their command. */
+  entireHelp?: Record<string, readonly string[]>;
   /** Within one command: an earlier part may have switched the branch. */
   branchMoved?: boolean;
   /** Where a read-only role's write tool may write: the temp dirs, and new files under ROOT/.bercail/. */
   readOnlyWrites?: { tmp: string[]; root: string; exists: (path: string) => boolean };
 };
 
+// warnings: lines the command runs with, shown in its result and logged.
 export type GuardDecision =
-  | { action: "allow"; approved?: string[] }
+  | { action: "allow"; approved?: string[]; warnings?: string[] }
   | { action: "block"; reason: string }
-  | { action: "ask"; reason: string }
+  | { action: "ask"; reason: string; warnings?: string[] }
   | { action: "need-branch"; dir: string }
-  | { action: "need-policy"; dir: string };
+  | { action: "need-policy"; dir: string }
+  | { action: "need-entire-help"; command: string };
 
 const force = "Force-push is blocked. Push without --force, or ask the person.";
 const plusRef = "A refspec starting with + is a force-push. Push the branch without +.";
@@ -79,13 +77,22 @@ const configKey = (key: string) =>
 const prMerge =
   "Pull request merging is blocked (gh pr merge, gt merge, gh api .../pulls/N/merge). Do not merge the pull request.";
 const toMain = "A push to main or master is blocked. Push the pull request branch instead.";
-const headless = "A headless run stages its changes and leaves commit and push to the person.";
+const headless = "A headless run stages its changes and leaves the push to the person.";
+const deskCommit =
+  "This commit ran, but desks stage their changes and leave them uncommitted: Shep or the person lands them. Review shows only uncommitted changes, so this commit hides the work from it. Say in your report that you committed.";
+const shepCommit = "This commit ran. It stays local; a push still asks. Say in your report what you committed.";
+const shepBgCommit =
+  "Background Shep reads, runs checks and waits; it does not commit. Report what is ready, and Shep lands it from its own session.";
 const headlessRelease = "A headless run does not tag or release. Leave the release to the person.";
 const autopilotRelease = "Autopilot does not tag or release. Leave the release to the person.";
 const readOnly = "This role is read-only. Do not edit files or change the git tree.";
 const readOnlyTool =
   "This role is read-only. Do not edit files. Write only under /tmp or $TMPDIR, or a new file under the worktree's .bercail/ (not description.md, validate.json, handoff-result.json or policy.toml).";
 const unknownBranch = "Could not read the current branch, so this push is blocked. Push the branch by name.";
+const unknownBranchAsk =
+  "Could not read the current branch. Allow this push? Say yes only if it is not main or master.";
+const tooManyRepos = "This command touches too many repos to check. Split it into one command per repo.";
+const tooManyReposAsk = "This command touches more repos than the guard checks. Allow it?";
 const trustCommand =
   "Trusting a repo's policy is the person's call. Ask them to run bercail policy trust in their own shell.";
 const protectedFile = "This file decides what bercail's guard lets through. Ask the person to edit it.";
@@ -110,6 +117,9 @@ const brainSetup =
   "This Brain or Graph command sets it up, syncs memories, runs background work, or runs a binary it names. Suggest it to the person; do not run it.";
 const brainSpend =
   "This Brain command calls a model on the person's tokens (distill, recall --expand, remember without --path, refresh --agent). Leave it to the person.";
+const brainSpendAsk = "This Brain command calls a model on your tokens. Allow it?";
+const entireListed =
+  "bercail does not know this entire command; it ran because entire agent-help lists it as read-only.";
 const brainRemember =
   'A memory reaches every branch and desk at once. Propose it in your report as Memory: "<text>" --path <p>, and Shep records it once the person agrees.';
 const emptySecret =
@@ -126,10 +136,20 @@ const basecampFlags =
   "Put basecamp's flags after its command and action (basecamp todos list --in 1), so the guard can tell what it runs.";
 const unclosedSub =
   "The guard cannot find where this $( or backtick ends (a heredoc with an apostrophe inside $( ) does that). Write the body to a file first, then pass its path.";
+const unclosedWarn =
+  "The guard could not find where a $( or backtick ends, so it did not check the rest of this command. Next time, write the body to a file first, then pass its path.";
+const lostCwd =
+  "The guard lost track of the folder after a cd it could not follow, so it checked a relative write target by its name only.";
 
 const allow: GuardDecision = { action: "allow" };
 const block = (reason: string): GuardDecision => ({ action: "block", reason });
+const ask = (reason: string): GuardDecision => ({ action: "ask", reason });
 const approve = (reason: string): GuardDecision => ({ action: "allow", approved: [reason] });
+const warn = (warning: string): GuardDecision => ({ action: "allow", warnings: [warning] });
+
+// A UI asks the person; with no one to ask, it is a refusal.
+const askOr = (input: GuardInput, question: string, refusal: string): GuardDecision =>
+  input.hasUI ? ask(question) : block(refusal);
 
 function readOnlyRole(role: string): boolean {
   return role === "judge" || role === "discuss";
@@ -1114,21 +1134,44 @@ function decideTrailMerge(words: string[], input: GuardInput): GuardDecision {
   return { action: "ask", reason: "Merge this Entire trail into its base? Say yes only if you asked Shep to." };
 }
 
-function decideEntire(kind: EntireKind, words: string[], dir: string | undefined, input: GuardInput): GuardDecision {
+// reading: the words as this kind was read from them, for agent-help's list.
+function decideEntire(
+  kind: EntireKind,
+  words: string[],
+  dir: string | undefined,
+  input: GuardInput,
+  reading = words,
+): GuardDecision {
   if (kind === "read") return allow;
   if (kind === "approve") return block(entireMerge);
   if (kind === "merge") return decideTrailMerge(words, input);
   if (kind === "person") return block(entirePerson);
   if (kind === "destroy") return block(entireDestroy);
   if (kind === "setup") return block(brainSetup);
-  if (kind === "spend") return block(brainSpend);
+  if (kind === "spend") return askOr(input, brainSpendAsk, brainSpend);
   // Memories go through Shep and the person, as standing rules do.
   if (kind === "remember") return input.role === "shep" ? allow : block(brainRemember);
   if (readOnlyRole(input.role)) return block(readOnly);
   if (kind === "push") return decidePush([], dir, input);
   if (kind === "write" || kind === "refresh") return allow;
-  if (!input.hasUI) return block(entireUnknown);
-  return { action: "ask", reason: "Allow this entire command? bercail does not know it to be read-only." };
+  if (!input.hasUI) return entireListedRead(reading, input);
+  return ask("Allow this entire command? bercail does not know it to be read-only.");
+}
+
+// A headless run has no one to ask, so an entire command bercail does not know
+// runs only when entire agent-help, read in the wrapper, lists it as read-only.
+// Brain and Graph are plugins agent-help does not list.
+function entireListedRead(words: string[], input: GuardInput): GuardDecision {
+  if (words[0] !== "entire" || pluginCall(words)) return block(entireUnknown);
+  const [first, sub] = entirePath(words);
+  const cmd = entireAliases[first] ?? first;
+  const top = input.entireHelp?.[""];
+  if (!top) return { action: "need-entire-help", command: "" };
+  if (top.includes(cmd)) return warn(entireListed);
+  if (sub === undefined || !/^[a-z][a-z0-9-]*$/.test(cmd)) return block(entireUnknown);
+  const subs = input.entireHelp?.[cmd];
+  if (!subs) return { action: "need-entire-help", command: cmd };
+  return subs.includes(sub) ? warn(entireListed) : block(entireUnknown);
 }
 
 function isGhRelease(words: string[]): boolean {
@@ -1227,26 +1270,39 @@ const basecampResources = new Set(
 const basecampListing = new Set(["todos", "projects", "todolists"]);
 const basecampLogin = new Set(["login", "logout", "setup", "quick-start"]);
 
-// basecamp's command and action, past the known flags before them; undefined
-// when another flag comes first.
-function basecampCall(words: string[]): string[] | undefined {
+// basecamp's command and action, past the known flags before them. Another flag
+// first: undefined, or with valued set, read as taking the next word or not.
+function basecampCall(words: string[], valued?: boolean): string[] | undefined {
   const out: string[] = [];
   for (let i = 1; i < words.length && out.length < 2; i++) {
     const word = words[i];
     const flag = word.split("=")[0];
     if (!word.startsWith("-")) out.push(word);
     else if (basecampValue.has(flag)) i += word.includes("=") ? 0 : 1;
-    else if (!basecampSwitch.has(word)) return undefined;
+    else if (basecampSwitch.has(word)) continue;
+    else if (valued === undefined) return undefined;
+    else if (valued && !word.includes("=")) i++;
   }
   return out;
 }
 
-// Its login and token are the person's in every role. Shep may write; any other
-// role may only read, and what bercail does not know as a read is a write.
+// With a flag it does not know before the command, the guard cannot tell which
+// word is the command, so it decides both readings: it warns when both are
+// allowed, and refuses as the worse one does.
 function decideBasecamp(words: string[], role: string): GuardDecision {
   if (words[0] !== "basecamp") return allow;
   const call = basecampCall(words);
-  if (!call) return block(basecampFlags);
+  if (call) return decideBasecampCall(call, role);
+  for (const valued of [false, true]) {
+    const got = decideBasecampCall(basecampCall(words, valued) ?? [], role);
+    if (got.action === "block") return block(`${got.reason} ${basecampFlags}`);
+  }
+  return warn(basecampFlags);
+}
+
+// Its login and token are the person's in every role. Shep may write; any other
+// role may only read, and what bercail does not know as a read is a write.
+function decideBasecampCall(call: string[], role: string): GuardDecision {
   const [command, action] = call;
   // profile create logs a new profile in; profile delete revokes its credential.
   const login =
@@ -1379,6 +1435,27 @@ function protectedTarget(target: string, input: GuardInput, files: string[], dir
     // A symlink loop: the guard cannot tell where the write lands.
     return true;
   }
+}
+
+// What could make the unparsed rest of a command one the guard refuses or asks
+// about: git and the forges, entire, a push, the person's commands, op,
+// basecamp, typing for the person, and the names of the files it protects.
+const refusalTriggers = new RegExp(
+  [
+    String.raw`\b(git|gh|gt|origin|entire(-brain|-graph)?|push|op|basecamp|wtype|ydotool|dotoolc?|xdotool|evemu-\w+|hyprctl|uinput)\b`,
+    String.raw`question\s+answer|policy\s+trust|bercail\s+todo`,
+    String.raw`config\.toml|policy-trust\.json|questions\.(json|lock)|todo\.json|bercail/shep`,
+  ].join("|"),
+);
+
+// Quotes and backslashes go first: 'answer' and g\it are still the words.
+function refusable(text: string): boolean {
+  return refusalTriggers.test(text.replace(/['"\\]/g, ""));
+}
+
+// A write target the guard places from the cwd: not absolute, ~ or a $VAR.
+function relativeTarget(target: string): boolean {
+  return !/^[/~]/.test(target) && !/[$`]/.test(target);
 }
 
 // The guard's own files and Shep's state.
@@ -1516,13 +1593,14 @@ function gitWrite(sub: string, args: string[]): boolean {
   return false;
 }
 
-function publish(kind: "commit" | "push" | "release", input: GuardInput): GuardDecision {
-  if (input.hasUI) {
-    if (kind === "release")
-      return { action: "ask", reason: "Allow this tag or release? This repo's policy leaves releases to the person." };
-    return { action: "ask", reason: `Allow this git ${kind}? No leaves the changes staged for the person.` };
-  }
-  return block(kind === "release" ? headlessRelease : headless);
+function publish(kind: "push" | "release", input: GuardInput): GuardDecision {
+  if (kind === "release")
+    return askOr(
+      input,
+      "Allow this tag or release? This repo's policy leaves releases to the person.",
+      headlessRelease,
+    );
+  return askOr(input, "Allow this git push? No keeps it local for the person.", headless);
 }
 
 // The policy for a git dir: need-policy until the wrapper has looked it up. A dir
@@ -1583,7 +1661,7 @@ function decidePush(args: string[], dir: string | undefined, input: GuardInput):
     if (dests.includes("")) {
       const branch = branchOf(dir, input);
       if (typeof branch !== "string") return branch;
-      if (branch === "") return block(unknownBranch);
+      if (branch === "") return worse(decision, askOr(input, unknownBranchAsk, unknownBranch));
       if (isMainRef(branch)) return block(toMain);
     }
     return worse(decision, approve("autopilot pushes its pull request branch"));
@@ -1605,16 +1683,13 @@ function decidePush(args: string[], dir: string | undefined, input: GuardInput):
   return worse(decision, publish("push", input));
 }
 
-function decideCommit(dir: string | undefined, input: GuardInput): GuardDecision {
+// A commit is local and reversible, so it runs in every repo with a warning; only
+// a push publishes. Read-only roles and background Shep never commit.
+function decideCommit(input: GuardInput): GuardDecision {
   if (readOnlyRole(input.role)) return block(readOnly);
+  if (input.role === "shep-bg") return block(shepBgCommit);
   if (input.role === "autopilot") return approve("autopilot commits to its pull request branch");
-  if (dir !== undefined && input.fresh?.has(dir))
-    return approve("scratch repo: this command made it with git init under mktemp -d");
-  const policy = policyFor(dir, input);
-  if (!isPolicy(policy)) return policy;
-  if (policy.commit === "allow") return approve(because(policy, "commit", "allow"));
-  if (policy.scratch) return approve(`${policy.repo}: scratch repo (temp dir, no remote)`);
-  return publish("commit", input);
+  return warn(input.role === "shep" ? shepCommit : deskCommit);
 }
 
 function decideGit(git: GitCall, input: GuardInput): GuardDecision {
@@ -1625,18 +1700,29 @@ function decideGit(git: GitCall, input: GuardInput): GuardDecision {
   if (sub === "push") return decidePush(args, git.dir, input);
   if (sub === "tag" && tagWrites(args)) return decideRelease(git.dir, input);
   if (readOnlyRole(input.role) && gitWrite(sub, args)) return block(readOnly);
-  if (sub === "commit") return decideCommit(git.dir, input);
+  if (sub === "commit") return decideCommit(input);
   return allow;
 }
 
+function lookup(decision: GuardDecision): boolean {
+  return ["need-branch", "need-policy", "need-entire-help"].includes(decision.action);
+}
+
+// A refusal wins, then a lookup, then an ask. Warnings add up, once each.
 function worse(current: GuardDecision, next: GuardDecision): GuardDecision {
   if (next.action === "block" || current.action === "block") return next.action === "block" ? next : current;
-  if (next.action === "need-branch" || next.action === "need-policy") return next;
-  if (current.action === "need-branch" || current.action === "need-policy") return current;
-  if (next.action === "ask") return next;
-  if (current.action === "ask") return current;
-  const approved = [...(current.approved ?? []), ...(next.approved ?? [])];
-  return approved.length ? { action: "allow", approved } : allow;
+  if (lookup(next)) return next;
+  if (lookup(current)) return current;
+  const warned = (d: GuardDecision) => ("warnings" in d && d.warnings) || [];
+  const warnings = [...new Set([...warned(current), ...warned(next)])];
+  const extra = warnings.length ? { warnings } : {};
+  if (next.action === "ask") return { ...next, ...extra };
+  if (current.action === "ask") return { ...current, ...extra };
+  const approved = [
+    ...(current.action === "allow" ? (current.approved ?? []) : []),
+    ...(next.action === "allow" ? (next.approved ?? []) : []),
+  ];
+  return { action: "allow", ...(approved.length ? { approved } : {}), ...extra };
 }
 
 // Where a cd or pushd leaves the shell, or undefined when the guard cannot tell.
@@ -1652,20 +1738,6 @@ function cdTarget(words: string[], cwd: string | undefined, home: string | undef
   return placeIn(cwd, target);
 }
 
-// The dir git init makes a repo in, or undefined when the repo goes elsewhere.
-const initValue = new Set(["-b", "--initial-branch", "--template", "--object-format", "--ref-format"]);
-
-function initDir(git: GitCall): string | undefined {
-  let target = ".";
-  for (let i = 0; i < git.args.length; i++) {
-    const arg = git.args[i];
-    if (arg.split("=")[0] === "--separate-git-dir") return undefined;
-    if (initValue.has(arg)) i++;
-    else if (!arg.startsWith("-")) target = arg;
-  }
-  return placeIn(git.dir, target);
-}
-
 // NAME=value set once, outside a pipe or a skipped branch, and only to a
 // mktemp -d dir: what $NAME and \${NAME} mean until a subshell closes.
 type TempVars = Map<string, { value: string; chained: boolean }>;
@@ -1673,7 +1745,7 @@ type TempVars = Map<string, { value: string; chained: boolean }>;
 const declares = new Set(["export", "declare", "typeset", "readonly"]);
 
 // Words that start code which may run in another order, more than once, or not at
-// all: past one, the guard no longer knows a repo was made where it thinks.
+// all: past one, the guard no longer knows what a variable holds.
 const compound = new Set([
   "if",
   "then",
@@ -1700,12 +1772,6 @@ const compound = new Set([
 function assignedOnce(command: string, name: string): boolean {
   const spelled = `(?:(?<![\\w$./-])(?<!\\$\\{)|(?<=(?:^|[^\\w$-])-[A-Za-z]+))${name}(?!\\w)`;
   return (command.match(new RegExp(spelled, "g")) ?? []).length === 1;
-}
-
-// ln and cp -s make symlinks, and a symlink in the dir can lead out of it.
-function linksOut(words: string[]): boolean {
-  if (words[0] === "ln") return true;
-  return words[0] === "cp" && words.some((word) => word === "--symbolic-link" || /^-[^-]*s/.test(word));
 }
 
 function recordTemps(command: string, segment: Segment, words: string[], vars: TempVars): void {
@@ -1941,8 +2007,6 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   )
     ? undefined
     : input.graphiteAliases;
-  const fresh = new Set(input.fresh);
-  const chainedFresh = new Set<string>();
   // Where the shell was before each cd after &&: that cd may not have run.
   let skippedCd: (string | undefined)[] = [];
   const vars: TempVars = new Map();
@@ -1950,17 +2014,21 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   let closed = false;
   for (const segment of segments) {
     // Apply a ) before the next segment, even when it stood alone after a ;.
-    // No inner variables, scratch evidence or cwd can be borrowed outside it.
+    // No inner variables or cwd can be borrowed outside it.
     if (closed) {
       cwds = [undefined];
       skippedCd = [];
       straight = false;
-      fresh.clear();
       vars.clear();
     }
     // tokenize makes each unquoted ) a word of its own; a quoted one is text.
     closed = segment.words.some((word, i) => word === ")" && !segment.quoted[i]);
-    if (segment.unclosed) return block(unclosedSub);
+    // Past an unclosed $( the rest is unchecked: refused when it could hold
+    // something the guard refuses or asks about, else run with a warning.
+    if (segment.unclosed) {
+      if (refusable(command)) return block(unclosedSub);
+      decision = worse(decision, warn(unclosedWarn));
+    }
     // export GIT_DIR=... holds for the rest of the command, so it counts from here on.
     if (segment.words.some((word) => gitPlace.test(word))) gitEnv = true;
     if (segment.words.some((word) => gitConfigVar.test(word))) gitConfigEnv = true;
@@ -1969,20 +2037,17 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     // What ran after && may not have run once that chain ends.
     if (segment.before !== "&&") {
       for (const [name, v] of vars) if (v.chained) vars.delete(name);
-      for (const dir of chainedFresh) fresh.delete(dir);
-      chainedFresh.clear();
       cwds = [...new Set([...cwds, ...skippedCd])];
       skippedCd = [];
     }
     const bare = unparen(segment.marked, segment.quoted);
-    // Past a branch, loop, function, || or pipe, no repo counts as made here. A ( subshell
+    // Past a branch, loop, function, || or pipe, no mktemp -d variable holds. A ( subshell
     // runs in a straight line inside, so that holds until its ).
     if (compound.has(bare[0]) || ["||", "|", "&"].includes(segment.before)) {
       straight = false;
-      fresh.clear();
       vars.clear();
     }
-    const here = { ...input, cwd: cwdOf(), cwds, gitEnv, gitConfigEnv, branchMoved, fresh, graphiteAliases };
+    const here = { ...input, cwd: cwdOf(), cwds, gitEnv, gitConfigEnv, branchMoved, graphiteAliases };
     for (const sub of segment.subs)
       decision = worse(decision, decideBash(sub, { ...here, graphiteAliases: undefined }, depth + 1));
     if (segment.subs.length) here.graphiteAliases = graphiteAliases = undefined;
@@ -2014,10 +2079,6 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (words[0] === "cd" || words[0] === "pushd")
       cwds = [...new Set(cwds.map((cwd) => (unseen ? undefined : cdTarget(words, cwd, input.home))))];
     else if (words[0] === "popd") cwds = [undefined];
-    if (linksOut(words)) {
-      straight = false;
-      fresh.clear();
-    }
     const script = shellScript(words);
     if (script) decision = worse(decision, decideBash(script, here, depth + 1));
     // What eval or source sets stays set, and the guard cannot see what that is.
@@ -2030,9 +2091,12 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     // The words as written go last, so a block names what the agent wrote.
     const valueReading =
       forge.words[0] === "entire" && !pluginCall(forge.words) ? entireValueReading(forge.words) : undefined;
-    const kinds = [valueReading, forge.words].map((reading) => reading && entireKind(reading));
+    const readings = [valueReading, forge.words];
+    const kinds = readings.map((reading) => reading && entireKind(reading));
     if (kinds[1]) {
-      for (const kind of kinds) if (kind) decision = worse(decision, decideEntire(kind, forge.words, forge.dir, here));
+      kinds.forEach((kind, i) => {
+        if (kind) decision = worse(decision, decideEntire(kind, forge.words, forge.dir, here, readings[i]));
+      });
       // It runs them in --repo, which forgeCall left out of forge.dir.
       for (const script of pluginScripts(forge.words))
         decision = worse(decision, decideBash(script, { ...here, cwd: forge.dir, cwds: undefined }, depth + 1));
@@ -2047,10 +2111,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       return block(force);
     if (publishing) {
       if (hasNoVerify("push", words)) return block(noVerify);
-      decision = worse(
-        decision,
-        publishing === "commit" ? decideCommit(forge.dir, here) : decidePush([], forge.dir, here),
-      );
+      decision = worse(decision, publishing === "commit" ? decideCommit(here) : decidePush([], forge.dir, here));
     }
     if (sync && readOnlyRole(input.role)) decision = worse(decision, block(readOnly));
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
@@ -2062,6 +2123,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     const targets = writeTargets(words, raw);
     if (writesGuardFiles(targets, here)) decision = worse(decision, block(protectedFile));
     if (writesTodoFiles(targets, here)) decision = worse(decision, block(todoFile));
+    if (cwds.includes(undefined) && targets.some(relativeTarget)) decision = worse(decision, warn(lostCwd));
     if (!help && (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout")))
       branchMoved = true;
     if (isGhRelease(forge.words) || isGhApiRelease(forge.words)) {
@@ -2069,18 +2131,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     }
     const git = parseGit(words, here.cwd);
     if (git && !help) {
-      // A worktree in the dir points it at another repo, which a git init there reinitializes.
-      if (git.sub === "worktree") {
-        straight = false;
-        fresh.clear();
-      }
-      const made = git.sub === "init" && straight && !gitEnv ? initDir(git) : undefined;
-      if (made && tempRoot(made)) {
-        fresh.add(made);
-        if (segment.before === "&&") chainedFresh.add(made);
-      }
-      // Other config cannot move a commit out of a repo this command just made.
-      if (gitEnv || (gitConfigEnv && !(git.dir && fresh.has(git.dir)))) git.dir = undefined;
+      if (gitEnv || gitConfigEnv) git.dir = undefined;
       decision = worse(decision, decideGit(git, here));
       if (movesBranch(git)) branchMoved = true;
     }
@@ -2133,11 +2184,10 @@ type PolicyJson = {
   repo: string;
   /** The checkout's top folder: this worktree. */
   root?: string;
-  scratch: boolean;
   /** Entire captures sessions in this checkout (git_backend_entire_capture). */
   entire?: boolean;
   prompt: string;
-  policy: { commit: Policy["commit"]; push: Policy["push"]; agent_may_release: boolean };
+  policy: { push: Policy["push"]; agent_may_release: boolean };
   sources: Record<string, string>;
 };
 
@@ -2162,10 +2212,8 @@ async function policyJson(
 export function policyFromJson(json: PolicyJson | undefined): Policy {
   if (!json) return defaultPolicy;
   return {
-    commit: json.policy.commit === "allow" ? "allow" : "ask",
     push: json.policy.push === "main" || json.policy.push === "branch" ? json.policy.push : "ask",
     agentMayRelease: json.policy.agent_may_release === true,
-    scratch: json.scratch === true,
     entire: json.entire === true,
     repo: json.repo,
     from: json.sources ?? {},
@@ -2198,9 +2246,10 @@ export function redact(command: string): string {
   return clean.length > 500 ? `${clean.slice(0, 500)}…` : clean;
 }
 
-function logApproval(command: string, approved: string[], input: GuardInput): void {
+// One line in a log under the state dir.
+function appendLog(name: string, command: string, input: GuardInput, fields: Record<string, unknown>): void {
   try {
-    const file = join(stateDir(), "guard-approvals.jsonl");
+    const file = join(stateDir(), name);
     mkdirSync(dirname(file), { recursive: true });
     const entry = {
       at: new Date().toISOString(),
@@ -2208,11 +2257,43 @@ function logApproval(command: string, approved: string[], input: GuardInput): vo
       role: input.role || "lead",
       cwd: input.cwd,
       command: redact(command),
-      approved,
+      ...fields,
     };
     appendFileSync(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
   } catch {
     // The log is for the person's audit; a full disk must not stop the agent.
+  }
+}
+
+function logApproval(command: string, approved: string[], input: GuardInput): void {
+  appendLog("guard-approvals.jsonl", command, input, { approved });
+}
+
+// Warnings and refusals share a log, so one seen often becomes evidence for a fix.
+function logWarning(tool: string, command: string, kind: "warning" | "refusal", reasons: string[], input: GuardInput) {
+  appendLog("guard-warnings.jsonl", command, input, { tool, kind, reasons });
+}
+
+// The line a warning adds to the tool's result; the agent repeats it in its report.
+const warningLine = (warning: string) => `bercail guard warning: ${warning}`;
+
+// What entire agent-help --json lists as read-only: top-level commands, or a
+// command's subcommands. [] when entire is missing or says nothing.
+async function entireReadOnly(
+  pi: ExtensionAPI,
+  command: string,
+  cwd: string,
+  signal: AbortSignal | undefined,
+): Promise<string[]> {
+  try {
+    const args = ["agent-help", ...(command ? [command] : []), "--json"];
+    const result = await pi.exec("entire", args, { timeout: 10000, signal, cwd });
+    const json = JSON.parse(result.stdout) as { subcommands?: { name?: unknown; audience?: unknown }[] };
+    return (json.subcommands ?? [])
+      .filter((sub) => sub.audience === "read-only" && typeof sub.name === "string")
+      .map((sub) => sub.name as string);
+  } catch {
+    return [];
   }
 }
 
@@ -2258,6 +2339,10 @@ export default function (pi: ExtensionAPI) {
     else delete sections[policySection];
   });
 
+  // entire agent-help's read-only lists, read once a session; warnings by tool call.
+  const entireHelp: Record<string, string[]> = {};
+  const warned = new Map<string, string[]>();
+
   pi.on("tool_call", async (event, ctx) => {
     const input = event.input as { command?: string; path?: string };
     const command = event.toolName === "bash" ? String(input.command ?? "") : undefined;
@@ -2278,13 +2363,13 @@ export default function (pi: ExtensionAPI) {
       },
     };
     let decision = decideTool(event.toolName, command, guardInput, input.path);
-    for (let i = 0; i < 8 && (decision.action === "need-branch" || decision.action === "need-policy"); i++) {
+    for (let i = 0; i < 8 && lookup(decision); i++) {
       if (decision.action === "need-branch") {
         guardInput = {
           ...guardInput,
           branches: { ...guardInput.branches, [decision.dir]: await branchAt(pi, decision.dir, ctx.signal) },
         };
-      } else {
+      } else if (decision.action === "need-policy") {
         guardInput = {
           ...guardInput,
           policies: {
@@ -2292,23 +2377,64 @@ export default function (pi: ExtensionAPI) {
             [decision.dir]: policyFromJson(await policyJson(pi, decision.dir, ctx.signal)),
           },
         };
+      } else if (decision.action === "need-entire-help") {
+        const key = decision.command;
+        entireHelp[key] ??= await entireReadOnly(pi, key, ctx.cwd, ctx.signal);
+        guardInput = { ...guardInput, entireHelp: { ...guardInput.entireHelp, [key]: entireHelp[key] } };
       }
       decision = decideTool(event.toolName, command, guardInput, input.path);
     }
-    if (decision.action === "allow") {
-      if (decision.approved?.length) logApproval(command ?? "", decision.approved, guardInput);
-      return;
+    // Past the lookups it makes, headless refuses. A desk decides the rest on
+    // worst-case facts, so a rule that refuses still refuses (an unread branch,
+    // the default policy in an Entire repo, no read-only entire command), and
+    // anything else asks.
+    if (lookup(decision) && !ctx.hasUI) decision = block(tooManyRepos);
+    if (lookup(decision)) {
+      let worst = guardInput;
+      for (let i = 0; i < 64 && lookup(decision); i++) {
+        if (decision.action === "need-branch")
+          worst = { ...worst, branches: { ...worst.branches, [decision.dir]: "" } };
+        else if (decision.action === "need-policy")
+          worst = {
+            ...worst,
+            policies: { ...worst.policies, [decision.dir]: { ...defaultPolicy, entire: true, repo: decision.dir } },
+          };
+        else if (decision.action === "need-entire-help")
+          worst = { ...worst, entireHelp: { ...worst.entireHelp, [decision.command]: [] } };
+        decision = decideTool(event.toolName, command, worst, input.path);
+      }
+      if (decision.action !== "block") decision = ask(tooManyReposAsk);
     }
-    if (decision.action === "need-branch" || decision.action === "need-policy") {
-      return {
-        block: true,
-        reason: "This command touches too many repos to check. Split it into one command per repo.",
-      };
-    }
+    const logged = command ?? input.path ?? "";
+    const refuse = (reason: string) => {
+      logWarning(event.toolName, logged, "refusal", [reason], guardInput);
+      return { block: true, reason };
+    };
     if (decision.action === "ask") {
-      if (ctx.hasUI && (await ctx.ui.confirm("Allow this git command?", decision.reason))) return;
-      return { block: true, reason: ctx.hasUI ? "The person said no. Leave the changes staged." : headless };
+      if (!ctx.hasUI) return refuse(headless);
+      if (!(await ctx.ui.confirm("Allow this command?", decision.reason)))
+        return refuse(`The person said no to: ${decision.reason} Leave it for them.`);
+    } else if (decision.action === "allow") {
+      if (decision.approved?.length) logApproval(logged, decision.approved, guardInput);
+    } else if (decision.action === "block") {
+      return refuse(decision.reason);
     }
-    return { block: true, reason: decision.reason };
+    const warnings = "warnings" in decision ? (decision.warnings ?? []) : [];
+    if (warnings.length) {
+      logWarning(event.toolName, logged, "warning", warnings, guardInput);
+      warned.set(event.toolCallId, warnings);
+    }
+  });
+
+  // A warning goes at the top of the tool's result, where the agent reads it.
+  pi.on("tool_result", async (event) => {
+    const warnings = warned.get(event.toolCallId);
+    if (!warnings) return;
+    warned.delete(event.toolCallId);
+    const text = warnings.map(warningLine).join("\n");
+    return {
+      content: [{ type: "text" as const, text }, ...event.content],
+      ...(event.structuredContent === undefined ? {} : { structuredContent: event.structuredContent }),
+    };
   });
 }

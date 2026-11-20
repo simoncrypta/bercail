@@ -104,7 +104,6 @@ todo.basecamp account
 todo.basecamp project
 todo.basecamp todolist
 herdr backend
-policy commit
 policy push
 policy integrate
 policy pr_draft

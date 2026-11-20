@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # bercail policy: the repo's .bercail/policy.toml, the local override, trust by
 # hash (a loosening value counts only once trusted, and an edit goes back to the
-# default), scratch repos, and what the guard decides from that JSON. A temp HOME.
+# default), the old commit key, and what the guard decides from that JSON. A temp HOME.
 
 setup() {
   load test_helper
@@ -62,7 +62,7 @@ if declare -f bats_test_function | grep -q 'printf -v test_description'; then
   }
 fi
 
-# Sets REPO and WT: a repo with a remote (so not scratch), one commit, a linked worktree.
+# Sets REPO and WT: a repo with a remote, one commit, a linked worktree.
 init_repo() {
   REPO="$BATS_TEST_TMPDIR/repo"
   git init -q "$REPO"
@@ -78,8 +78,7 @@ write_policy() {
   mkdir -p "$1/.bercail"
   cat >"$1/.bercail/policy.toml" <<'EOF'
 # team policy
-commit = "allow"   # no prompt
-push = 'main'
+push = 'main'   # no prompt
 integrate = "direct"
 pr_draft = true
 release = "Bump \"VERSION\", then tag v*."
@@ -99,8 +98,7 @@ commit_policy() {
   git -C "$WT" merge -q main
 }
 
-# Sets SCRATCH. Under $TMPDIR so policy's temp-dir check sees it; isolate points
-# TMPDIR at this test, and the shell script's mktemp dir was under the same check.
+# Sets SCRATCH: a repo under $TMPDIR with no remote, which used to be a special case.
 scratch_repo() {
   SCRATCH="$TMPDIR/scratch-$BATS_TEST_NUMBER"
   git init -q "$SCRATCH"
@@ -110,10 +108,10 @@ scratch_repo() {
 @test "no policy file is the default" {
   local REPO WT
   init_repo
-  [[ "$(field "$REPO" '.policy | [.commit, .push, .agent_may_release] | join(" ")')" == "ask ask false" ]] \
+  [[ "$(field "$REPO" '.policy | [.push, .agent_may_release, has("commit")] | join(" ")')" == "ask false false" ]] \
     || fail "no policy is not the default: $(policy show --json "$REPO")"
   [[ "$(field "$REPO" '[.sources[]] | unique | join(",")')" == default ]] || fail "sources without a policy"
-  [[ "$(field "$REPO" '.file')" == "" && "$(field "$REPO" .scratch)" == false ]] || fail "a repo with a remote is scratch"
+  [[ "$(field "$REPO" '.file')" == "" ]] || fail "a file with no policy"
 }
 
 @test "merge_reversible: unset and false are false, true counts only once trusted or set locally" {
@@ -141,13 +139,14 @@ scratch_repo() {
   local REPO WT out
   commit_policy
   out="$(policy show --json "$REPO")"
-  jq -e '.policy.commit == "ask" and .policy.push == "ask" and .policy.integrate == "direct" and .policy.pr_draft == true' <<<"$out" >/dev/null \
+  jq -e '.policy.push == "ask" and .policy.integrate == "direct" and .policy.pr_draft == true' <<<"$out" >/dev/null \
     || fail "untrusted loosening applied: $out"
-  jq -e '.untrusted == ["commit", "push"] and (.sources.commit | test("repo says allow, not trusted"))' <<<"$out" >/dev/null \
+  jq -e '.untrusted == ["push"] and (.sources.push | test("repo says main, not trusted"))' <<<"$out" >/dev/null \
     || fail "untrusted values are not named: $out"
   jq -e '.policy.release == "Bump \"VERSION\", then tag v*." and .policy.rules == "Use gh, never gt.\nSimon merges."' <<<"$out" >/dev/null \
     || fail "strings did not parse: $out"
-  jq -e '.prompt | test("Use gh, never gt.") and test("guard asks the person first") and test("is not trusted")' <<<"$out" >/dev/null \
+  jq -e '.prompt | test("Use gh, never gt.") and test("guard asks the person first") and test("is not trusted")
+    and test("Commit: a commit is local, so the guard lets it run with a warning")' <<<"$out" >/dev/null \
     || fail "the prompt text: $(jq -r .prompt <<<"$out")"
   policy show "$REPO" | grep -q "not trusted: bercail policy trust" || fail "show does not say how to trust"
 }
@@ -156,12 +155,12 @@ scratch_repo() {
   local REPO WT out
   commit_policy
   out="$(policy trust "$REPO")"
-  [[ "$out" == *"trusted $REPO/.bercail/policy.toml"* && "$out" == *"agents now: commit allow, push main"* ]] \
+  [[ "$out" == *"trusted $REPO/.bercail/policy.toml"* && "$out" == *"agents now: push main"* ]] \
     || fail "trust did not say what it trusted: $out"
   if field "$REPO" .prompt | grep -q "is not trusted"; then fail "a trusted policy is labeled untrusted"; fi
   jq -e --arg m "$REPO" '.[$m].sha256 | length == 64' "$TRUST" >/dev/null || fail "no hash in $(cat "$TRUST")"
-  [[ "$(field "$REPO" '[.trusted, .policy.commit, .policy.push] | join(" ")')" == "true allow main" ]] || fail "trust did not apply"
-  [[ "$(field "$WT" '[.repo, .trusted, .policy.commit] | join(" ")')" == "$REPO true allow" ]] \
+  [[ "$(field "$REPO" '[.trusted, .policy.push] | join(" ")')" == "true main" ]] || fail "trust did not apply"
+  [[ "$(field "$WT" '[.repo, .trusted, .policy.push] | join(" ")')" == "$REPO true main" ]] \
     || fail "the worktree does not share the trust: $(policy show --json "$WT")"
 }
 
@@ -169,13 +168,13 @@ scratch_repo() {
   local REPO WT
   commit_policy
   policy trust "$REPO" >/dev/null
-  printf 'push = "branch"\n' >>"$WT/.bercail/policy.toml"
-  [[ "$(field "$WT" '[.trusted, .policy.commit, .policy.push] | join(" ")')" == "false ask ask" ]] \
+  printf 'pr_draft = false\n' >>"$WT/.bercail/policy.toml"
+  [[ "$(field "$WT" '[.trusted, .policy.push] | join(" ")')" == "false ask" ]] \
     || fail "an edited policy kept its trust: $(policy show --json "$WT")"
   [[ "$(field "$REPO" '.trusted')" == true ]] || fail "the main checkout lost its trust"
   git -C "$WT" checkout -q -- .bercail/policy.toml
   policy untrust "$REPO" | grep -q "untrusted $REPO" || fail "untrust said nothing"
-  [[ "$(field "$REPO" '[.trusted, .policy.commit] | join(" ")')" == "false ask" ]] || fail "untrust did not go back to asking"
+  [[ "$(field "$REPO" '[.trusted, .policy.push] | join(" ")')" == "false ask" ]] || fail "untrust did not go back to asking"
 }
 
 @test 'config.toml [policy."<main checkout>"] overrides without trust' {
@@ -186,39 +185,36 @@ scratch_repo() {
 "~/elsewhere" = "gh"
 
 [policy."${REPO/#$HOME/\~}"]
-commit = "allow"
+push = "branch"
 integrate = "pr"
 
 [policy."/somewhere/else"]
 push = "main"
 EOF
   out="$(policy show --json "$WT")"
-  jq -e '.policy.commit == "allow" and .sources.commit == "local" and .policy.integrate == "pr" and .policy.push == "ask"' <<<"$out" >/dev/null \
+  jq -e '.policy.push == "branch" and .sources.push == "local" and .policy.integrate == "pr"' <<<"$out" >/dev/null \
     || fail "the local override: $out"
 }
 
 @test "bad values warn and fall back" {
   local REPO WT err
   commit_policy
-  printf 'commit = "always"\nmerge = "yes"\npush = maybe\n' >"$WT/.bercail/policy.toml"
+  printf 'push = "always"\nmerge = "yes"\nintegrate = maybe\n' >"$WT/.bercail/policy.toml"
   err="$(policy show --json "$WT" 2>&1 >/dev/null)"
-  [[ "$err" == *'commit = "always" is not allowed'* && "$err" == *"unknown key merge"* && "$err" == *"push = maybe"* ]] \
+  [[ "$err" == *'push = "always" is not allowed'* && "$err" == *"unknown key merge"* && "$err" == *"integrate = maybe"* ]] \
     || fail "warnings: $err"
   git -C "$WT" checkout -q -- .bercail/policy.toml
 }
 
-@test "scratch is a temp repo with no remote or config" {
-  local SCRATCH
+@test "an old commit key is ignored with a warning, and a temp repo with no remote is no special case" {
+  local SCRATCH err
   scratch_repo
-  [[ "$(field "$SCRATCH" .scratch)" == true ]] || fail "a temp repo with no remote is not scratch"
-  policy show "$SCRATCH" | grep -q "^scratch:" || fail "show does not say scratch"
-  mkdir -p "$SCRATCH/.bercail" && printf 'push = "main"\n' >"$SCRATCH/.bercail/policy.toml"
-  [[ "$(field "$SCRATCH" .scratch)" == true ]] || fail "a temp copy of a repo with a policy is not scratch"
-  printf 'commit = "ask"\n' >"$SCRATCH/.bercail/policy.toml"
-  [[ "$(field "$SCRATCH" .scratch)" == false ]] || fail "commit = \"ask\" did not opt out of scratch"
-  rm -rf "$SCRATCH/.bercail"
-  printf '\n[git]\n"%s" = "gh"\n' "$SCRATCH" >>"$CONFIG"
-  [[ "$(field "$SCRATCH" .scratch)" == false ]] || fail "a configured repo is scratch"
+  mkdir -p "$SCRATCH/.bercail" && printf 'commit = "allow"\npush = "ask"\n' >"$SCRATCH/.bercail/policy.toml"
+  err="$(policy show --json "$SCRATCH" 2>&1 >/dev/null)"
+  [[ "$err" == *"unknown key commit, ignored"* ]] || fail "an old commit key did not warn: $err"
+  [[ "$(field "$SCRATCH" '[has("scratch"), (.policy | has("commit")), .policy.push] | join(" ")' 2>/dev/null)" == "false false ask" ]] \
+    || fail "scratch or commit is still in the policy: $(policy show --json "$SCRATCH" 2>/dev/null)"
+  if policy show "$SCRATCH" 2>/dev/null | grep -q "^scratch:"; then fail "show still has a scratch line"; fi
 }
 
 @test "errors say what is wrong" {
@@ -242,18 +238,25 @@ EOF
       import { readFileSync } from "node:fs";
       const { decideBash, policyFromJson } = await import(process.argv[1]);
       const json = JSON.parse(readFileSync(0, "utf8"));
-      const headless = process.argv[3] === "headless";
-      const input = { role: headless ? "" : process.argv[3], hasUI: !headless, cwd: json.root,
+      const headless = process.argv[3] === "headless" || process.argv[3] === "shep-bg";
+      const input = { role: headless && process.argv[3] !== "shep-bg" ? "" : process.argv[3], hasUI: !headless, cwd: json.root,
         policies: { [json.root]: policyFromJson(json) }, branches: { [json.root]: "feature" } };
-      console.log(decideBash(process.argv[2], input).action);
+      const got = decideBash(process.argv[2], input);
+      console.log(got.action + (got.warnings ? "+warning" : ""));
     ' "$ROOT/bstack/pi/extensions/guard.ts" "$2" "${3:-}"
   }
-  [[ "$(decide "$WT" "git commit -m x")" == ask ]] || fail "untrusted commit did not ask"
-  [[ "$(decide "$WT" "git commit -m x" headless)" == block ]] || fail "untrusted headless commit was not blocked"
+  # A commit warns in a repo that asks, desk or headless; the judge and background
+  # Shep are refused; a push there still asks, and is refused headless.
+  [[ "$(decide "$WT" "git commit -m x")" == allow+warning ]] || fail "untrusted commit did not warn"
+  [[ "$(decide "$WT" "git commit -m x" headless)" == allow+warning ]] || fail "untrusted headless commit did not warn"
+  [[ "$(decide "$WT" "git commit -m x" judge)" == block ]] || fail "a judge's commit went through"
+  [[ "$(decide "$WT" "git commit -m x" shep-bg)" == block ]] || fail "a background Shep's commit went through"
+  [[ "$(decide "$WT" "git push origin main")" == ask ]] || fail "untrusted push did not ask"
+  [[ "$(decide "$WT" "git push origin main" headless)" == block ]] || fail "untrusted headless push was not blocked"
   policy trust "$WT" >/dev/null
-  [[ "$(decide "$WT" "git commit -m x")" == allow ]] || fail "trusted commit did not go through"
+  [[ "$(decide "$WT" "git commit -m x")" == allow+warning ]] || fail "trusted commit did not warn"
   [[ "$(decide "$WT" "git push origin main")" == allow ]] || fail "trusted push to main did not go through"
-  [[ "$(decide "$WT" "git commit -m x" headless)" == allow ]] || fail "trusted headless commit did not go through"
+  [[ "$(decide "$WT" "git push origin main" headless)" == allow ]] || fail "trusted headless push did not go through"
   [[ "$(decide "$WT" "git push --force origin feature")" == block ]] || fail "force-push under a trusted policy"
   [[ "$(decide "$WT" "git tag v1.0.0")" == ask ]] || fail "a tag without agent_may_release"
   [[ "$(field "$WT" .entire)" == false ]] || fail "no .entire/settings.json: Entire is off"
@@ -263,12 +266,11 @@ EOF
   [[ "$(decide "$WT" "git push --all origin")" == block ]] || fail "push --all where Entire keeps shadow branches"
   rm -rf "$WT/.entire"
   printf 'rules = "changed"\n' >>"$WT/.bercail/policy.toml"
-  [[ "$(decide "$WT" "git commit -m x")" == ask ]] || fail "an edited policy still allowed the commit"
+  [[ "$(decide "$WT" "git push origin main")" == ask ]] || fail "an edited policy still allowed the push"
   git -C "$WT" checkout -q -- .bercail/policy.toml
-  [[ "$(decide "$SCRATCH" "git commit -m x")" == ask ]] || fail "a configured repo is still scratch"
   : >"$CONFIG"
-  [[ "$(decide "$SCRATCH" "git commit -m x" headless)" == allow ]] || fail "a scratch commit did not go through"
-  [[ "$(decide "$SCRATCH" "git push /tmp/x.git HEAD:main")" == ask ]] || fail "a scratch push did not ask"
+  [[ "$(decide "$SCRATCH" "git commit -m x" headless)" == allow+warning ]] || fail "a temp repo's commit did not warn"
+  [[ "$(decide "$SCRATCH" "git push /tmp/x.git HEAD:main")" == ask ]] || fail "a temp repo's push did not ask"
 }
 
 # A policy file in the main checkout with the review keys in $1, untracked.

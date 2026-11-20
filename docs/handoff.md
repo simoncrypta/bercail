@@ -6,7 +6,7 @@ The job lives in a [beads](https://beads.gascity.com/) issue. [Shep](shep.md), b
 
 | Stage | Binary | Headless argv (the last word is the prompt) |
 |-------|--------|-----------------------------------------------|
-| `bstack` | pi | `pi -p --mode json --session-id <uuid> …` on the lead profile (asks are rejected: no commit, push, or merge) |
+| `bstack` | pi | `pi -p --mode json --session-id <uuid> …` on the lead profile (asks are rejected: no push or merge; a commit runs with a guard warning) |
 | `autopilot` | pi | the same argv with `BERCAIL_ROLE=autopilot` (commits and pushes a PR's fixes); with `--branch`, a desk on the PR's existing branch |
 
 ```bash
