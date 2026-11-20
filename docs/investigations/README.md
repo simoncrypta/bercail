@@ -12,6 +12,9 @@ usage.
   statechart and Herdr mod-sync outcomes, with their remaining limits.
 - [Evidence preservation](evidence-preservation.md): what the cleanup inventory
   and private recovery archive establish, and why originals still need custody.
+- [Decision-question detector](decision-detector.md): v0.18 J16's offline test
+  of Haiku 5.5 as the check for decisions asked in chat, with its labels and
+  runner.
 
 ## Reading the evidence
 
