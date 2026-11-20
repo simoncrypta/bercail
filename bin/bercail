@@ -118,6 +118,9 @@ cmd_doctor() {
   source "$(find_lib_dir)/todo.sh"
   doctor_todo
   doctor_entire
+  # shellcheck source=/dev/null
+  source "$(find_lib_dir)/scratch.sh"
+  doctor_scratch
   return "$failures"
 }
 
@@ -232,6 +235,15 @@ main() {
       # shellcheck source=/dev/null
       source "$(find_lib_dir)/todo.sh"
       cmd_todo "$@"
+      ;;
+    scratch)
+      # Only common.sh: every role agent starts through this, so it stays quick
+      # and no other lib can stop an agent from starting.
+      # shellcheck source=/dev/null
+      source "$(find_lib_dir)/common.sh"
+      # shellcheck source=/dev/null
+      source "$(find_lib_dir)/scratch.sh"
+      cmd_scratch "$@"
       ;;
     describe)
       load_libs

@@ -184,10 +184,12 @@ reset_pass() {
 }
 
 # A unix socket file at $1, as the core's would be: node binds it and exits.
+# Bound from its folder: a path is at most 107 bytes, and an agent's TMPDIR
+# under ~/.cache makes the full one longer.
 BIND_JS='require("node:net").createServer().listen(process.argv[1], () => process.exit(0))'
 make_socket() {
   [[ -n "$NODE" ]] || unavailable "node (not a mise shim) not found" || return
-  "$NODE" -e "$BIND_JS" "$1"
+  (cd "$(dirname "$1")" && "$NODE" -e "$BIND_JS" "./$(basename "$1")")
 }
 
 # --boot waits forever without the core socket. Tests that are not about that wait create it.
@@ -513,6 +515,15 @@ EOF
   [[ "$out" == *"2 came back"* ]] || fail "both counted: $out"
 }
 
+@test "the fake core's socket binds under a TMPDIR deeper than a socket path allows" {
+  local sock
+  sock="$BATS_TEST_TMPDIR/$(printf '%0100d' 0)/run/herdr-core/default.sock"
+  mkdir -p "${sock%/*}"
+  ((${#sock} > 107)) || fail "the path is too short to prove anything: $sock"
+  make_socket "$sock"
+  [[ -S "$sock" ]] || fail "no socket at $sock"
+}
+
 @test "--boot waits for the core, runs once, notifies with the count" {
   local out
   reset_pass
@@ -520,7 +531,7 @@ EOF
   # The wait stays in the loop until the core's socket shows up.
   cat >"$BATS_TEST_TMPDIR/bin/sleep" <<EOF
 #!/usr/bin/env bash
-[[ -S "$SOCK" ]] || "$NODE" -e '$BIND_JS' "$SOCK"
+[[ -S "$SOCK" ]] || (cd "${SOCK%/*}" && "$NODE" -e '$BIND_JS' "./${SOCK##*/}")
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/sleep"
   hash -r

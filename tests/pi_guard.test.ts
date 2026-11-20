@@ -693,7 +693,14 @@ test("the guard extension lets a judge write in TMPDIR and a new file in the wor
   try {
     for (const path of [join(root, ".bercail/judge.md"), join(dir, "x"), "/tmp/x"])
       expect(await call("write", path), path).toBeUndefined();
-    for (const path of [join(root, ".bercail/validate.json"), join(root, "lib/x.sh"), join(root, "lib/.bercail/x")])
+    // A worktree copied into TMPDIR: its desk files are still not the judge's to write.
+    const copied = [join(dir, "copy/.bercail/description.md"), join(dir, "copy/.bercail/validate.json")];
+    for (const path of [
+      join(root, ".bercail/validate.json"),
+      join(root, "lib/x.sh"),
+      join(root, "lib/.bercail/x"),
+      ...copied,
+    ])
       expect(await call("write", path), path).toMatchObject({ block: true });
     expect(await call("edit", join(root, ".bercail/judge.md"))).toMatchObject({ block: true });
   } finally {

@@ -9,9 +9,11 @@ Post-install CLI (bercail):
   help          This help
   install       Full install from the release mise or packslip unpacked;
                 --client MACHINE installs only the Herdr app half, for bercail on MACHINE
-  doctor        Check dependencies and integration (and Entire, run inside a repo that uses it);
+  doctor        Check dependencies, integration and leftover scratch (and Entire, in a repo that uses it);
                 on a client, the Herdr app half and that the backend runs this version
   bstack        bercail's Pi setup: status | setup
+  scratch       Each agent's TMPDIR (~/.cache/bercail/scratch/<pid>, leased by .<pid>): sweep (remove the
+                folders of runs that ended; doctor lists them) | run -- CMD | dir PID (what agents start with)
   config        A config.toml value as bercail reads it: config get <section> <key>
   desk          Desk agents: restore [--dry-run] (bring back what a reboot took) |
                 model DESK PROVIDER/MODEL[:thinking] (switch a live desk's model)
@@ -196,6 +198,7 @@ Config:
   ~/.agents/skills/statechart/                TLA+ statecharts with TLC ([bstack] statechart = true)
   ~/.local/share/bercail/statechart.env       where TLC and java are, for the statechart skill
   ~/.local/state/bercail/desk-sessions/       which session runs in which desk
+  ~/.cache/bercail/scratch/                   each agent run's TMPDIR, removed when it ends
   ~/.local/share/bercail/pi/                  bstack's Pi profile
   ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates
 

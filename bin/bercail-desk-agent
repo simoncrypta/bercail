@@ -9,6 +9,9 @@ set -euo pipefail
 PI_LEAD="$HOME/.local/share/bercail/pi/lead.json"
 # Every Pi desk loads it: it tells the record which session runs there.
 PI_DESK_EXTENSION="$HOME/.local/share/bercail/pi-extensions/bercail-desk.ts"
+# Beside this script once installed; a packaged bercail is on PATH.
+BERCAIL="$(dirname "$0")/bercail"
+[[ -x "$BERCAIL" ]] || BERCAIL=bercail
 
 prompt=""
 model=""
@@ -66,9 +69,12 @@ fi
 # An idle harness writes nothing. Heartbeat the record, using hc events to
 # notice its exit without waiting a full minute. Session identity comes from
 # the Pi desk extension, not hc's turn-only status reports.
+# Once the harness is gone, its scratch folder and any a killed sibling left are
+# swept. HUP and TERM are ignored so closing the terminal does not end the
+# watcher first.
 watch_desk() {
   local pid="$1" record="$2" events
-  trap '' INT
+  trap '' INT HUP TERM
   exec </dev/null >/dev/null 2>&1
   while kill -0 "$pid"; do
     exec 3< <(hc events --json --terminal "$HC_TERMINAL_ID")
@@ -85,6 +91,7 @@ watch_desk() {
     exec 3<&-
     kill -0 "$pid" && sleep 5
   done
+  "$BERCAIL" scratch sweep
 }
 
 # 0 when FLAG takes the next argv word. An equals form already holds its value.
@@ -177,9 +184,19 @@ remember_desk() {
     return 0
   fi
   (set +e; watch_desk "$$" "$record") &
+  WATCHED=1
 }
 
+WATCHED=""
 remember_desk || true
+
+# The harness's own TMPDIR, named for this pid, which exec hands to it: only with
+# a watcher to sweep it. The sweep of runs that ended unwatched does not hold up
+# the start.
+if [[ -n "$WATCHED" ]] && scratch="$("$BERCAIL" scratch dir "$$" 2>/dev/null)"; then
+  export TMPDIR="$scratch"
+  ("$BERCAIL" scratch sweep >/dev/null 2>&1 &)
+fi
 
 # An autopilot desk: the guard lets it commit and push its PR branch, and its
 # prompt says to drive that PR to green. After the record, so a restore brings
