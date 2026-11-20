@@ -130,6 +130,15 @@ Brain's and Graph's versions, that the guide and the `AGENTS.md` block are
 committed, that no watcher is installed, and that a public repo's memories are
 not synced to Entire.
 
+## Research
+
+Where capture is on, the `how` and `why` skills start from Entire's record:
+`why` from the checkpoint behind a line (`entire why`, `checkpoint explain`,
+`entire search`, `brain recall`), and `how` from Graph's `query`, `neighbors`
+and `impact`. Their commands are reads for the guard, except
+`checkpoint explain --generate` and `brain recall --expand`, which spend
+tokens.
+
 ## The guard
 
 On top of the repo's policy, for every role:

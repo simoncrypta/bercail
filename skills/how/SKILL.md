@@ -20,7 +20,27 @@ a new teammate through the code. Change nothing.
 Write the question in one sentence before you read. When the code answers a
 different question than the one asked, say so.
 
-## 2. Fan out (wide only)
+## 2. Find it in an Entire repo
+
+In a repo where Entire capture is on (`entire status` says Enabled), find the
+code with Graph before you grep:
+
+```bash
+entire graph query --head --format agent --max-context-bytes 4096 --query "<question>"
+entire graph neighbors --head --format agent --max-context-bytes 4096 --symbol <Name> --direction in   # callers; out: callees
+entire graph impact --head --symbol <Name>                                                             # what depends on it
+entire search --code "<literal>"                                                                       # the pushed code; --all-repos for every repo
+entire brain recall "<subsystem>" --json                                                               # recorded gotchas and invariants
+```
+
+`--head` reads the last commit; drop it when the answer depends on uncommitted
+edits. Graph's relations are static: an empty result is not proof of no
+callers. Grep is still the tool for literal strings, config keys and file
+names. Check each hit and each memory in the code before you cite it, with
+file:line. When one of these fails (no login, no network, Graph or Brain not
+set up), use grep and git, and say which one failed.
+
+## 3. Fan out (wide only)
 
 Take 2 to 4 angles, one at a time. Pick the angles that fit:
 
@@ -32,7 +52,7 @@ Take 2 to 4 angles, one at a time. Pick the angles that fit:
 For each, keep the question in view and note file:line for every claim, no
 fixes.
 
-## 3. Answer
+## 4. Answer
 
 ```
 ## Overview        what it does and why it exists, 2-4 sentences
