@@ -1,8 +1,8 @@
 # Shep, the orchestrator
 
-**Shep orchestrates coding agents in the Herdr app through bercail.** It writes beads issues, hands each one to a desk, follows the desks, and tells you what came back. It does not write project code: every coding job runs in a visible desk. It hands jobs to bstack, on Pi.
+**Shep orchestrates coding agents in the Herdr app through bercail.** It writes each job as a beads issue, or a trail in an Entire repo, hands each one to a desk, follows the desks, and tells you what came back. It does not write project code: every coding job runs in a visible desk, on bstack's Pi.
 
-Shep ships with bercail. Its rules are one file, [`shep/SHEP.md`](../shep/SHEP.md), and it runs on Pi: bercail starts Pi in Shep's own folder and session, on the models bstack already uses. Nothing to set up beyond bercail.
+Shep ships with bercail. Its runtime steps are one file, [`shep/SHEP.md`](../shep/SHEP.md); this page is the contract behind them. bercail starts Pi in Shep's own folder and session, on the models bstack already uses. Nothing to set up beyond bercail.
 
 ## Let Shep set it up
 
@@ -10,222 +10,110 @@ Shep ships with bercail. Its rules are one file, [`shep/SHEP.md`](../shep/SHEP.m
 
 ## How Shep runs a job
 
-Bercail's workflow (beads issues, named stages, result files, review when a desk is done) is designed around Shep. Shep owns the workflow; bercail runs what Shep asks for and reports back in files Shep reads:
+1. Shep writes the job as a [beads](https://beads.gascity.com/) issue, or in an Entire repo as a [trail](#trails-as-jobs): the ask, the repo, links, the main user workflow, the local setup the desk may do, what done looks like, and the proof: the repo's tests and verify skill, recorded by /validate in `.bercail/validate.json`, never bespoke evidence manifests or checker scripts.
+2. Shep calls [`bercail shep task dispatch`](#dispatch). A job with a desk continues in that desk's session. Only a job whose records show no owner gets a first [visible handoff](handoff.md), prompted with one line pointing at the issue; a missing or unresolved owner is not no owner.
+3. When the desk finishes or blocks, Shep gets [a message](#desk-events), reads the issue's [brief](#briefs-and-the-board), and reports to you.
 
-1. Shep writes the job as a [beads](https://beads.gascity.com/) issue (`bd create`), or in an Entire repo as a [trail](#trails-as-jobs): the ask, the repo, links, and any "plan only" note.
-2. Shep calls `bercail shep task dispatch` with the explicit repo, issue, logical target and message ([contract below](#dispatch)). It resolves existing ownership before preparing a branch.
-3. An existing task continues in its original Pi/session and checkout: the message reaches that desk at its next turn, even while it works. Only a task with no owner reserves a first [visible handoff](handoff.md), with a one-line prompt pointing at the issue. Ambiguous, stale, missing or partial results stop; they never trigger a replacement or headless fallback.
-4. When the desk finishes or blocks, Shep hears about it [as a message in its session](#desk-events). It reads the [brief](#briefs-and-the-board) for the issue (its desk's state, the question when it is blocked, the latest report, cut short) and reports to you. `hc wait <desk>` also works (`desk` and `space` are in the spawn JSON).
+Every coding job and follow-up is a desk you can see. Shep may wait 10 seconds or less on purpose, and waits for a starting desk with `dispatch --wait-ready` rather than sleeping; longer waits go to a [background Shep](#background-sheps). A command that takes its own time, such as a dispatch spawning a desk, is not such a wait. When a step is refused, Shep tells you, takes the next step SHEP.md gives, and writes a bercail issue when there is none or the refusal looks wrong. It never works around a refusal with something the guard does not see, such as a script file or `python -c`.
 
-The Shep that ships with bercail never runs headless stages: a coding job or a code follow-up is always a desk you can see. Waiting is different: Shep never blocks its own thread on CI, a deploy, a desk, or a release, and hands that to a [background Shep](#background-sheps). `handoff-spawn` still has headless stages for other callers; a headless run opens nothing in the app, returns when it ends, and leaves `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`).
+For someone else's PR, Shep runs `bercail review-pr <PR url-or-branch>` and asks you only about PRs flagged in `prs[].thin` and `prs[].pass`: review anyway (`bercail review-pr run N --stack DIR`) or ask the author ([review](review.md#someone-elses-pr-bercail-review-pr)). To move a desk to another model, when you ask or a [standing rule](#standing-rules) allows, Shep runs [`bercail desk model`](config.md#a-desks-model); it never types into a desk.
 
-To review someone else's PR there is no issue and no stage: Shep runs `bercail review-pr <PR url-or-branch>` and reads the printed JSON for the whole stack. Shep states each PR's intent and CI. Non-thin decisions passes are queued in the review space's visible desk session (parallel headless passes without Herdr), and each PR's `run.json` says when it is `ready`. Read `prs[].thin` and `prs[].pass`: only flagged PRs wait for a decision. For each flagged PR, ask whether to review anyway (`bercail review-pr run N --stack DIR`) or ask the author. A thin PR must not hold up the rest of the stack. When all cards are ready, the desk writes the stack summary shown above the picker. See [review](review.md#someone-elses-pr-bercail-review-pr).
-
-Shep never types into a desk. To move a desk to another model when you ask, or when a [standing rule](#standing-rules) lets it, Shep runs [`bercail desk model <desk> <provider/model[:thinking]>`](config.md#a-desks-model), which the desk takes as a model switch, not as chat.
-
-Bercail works without Shep, but Shep is the intended orchestrator. To do Shep's part by hand, write the issue with `bd create`, then use the task dispatch below. Raw `handoff-spawn` is create-only, not an existing-task continuation.
+Bercail works without Shep: write the issue with `bd create` (or the trail with `entire trail create`) and use dispatch. Raw `handoff-spawn` only creates; its headless stages leave `.bercail/handoff-result.json` (`ready`, `blocked`, or `failed`).
 
 ## Dispatch
 
-Dispatch takes JSON on stdin. No shell interpolation or terminal typing is
-used to deliver work. For example:
+Dispatch reads JSON on stdin, so no shell interpolation or typing delivers work:
 
 ```bash
 printf '%s\n' '{"repo":"/home/me/Work/app","issue":"app-7","target":"pr:12","requestId":"amend-2","stage":"autopilot","message":"Amend the reviewed changes and publish the new head"}' | bercail shep task dispatch
 ```
 
-`repo`, `issue`, `target`, `requestId` and `message` are explicit; `stage` is
-`bstack` (the default) or `autopilot`. Any other field is refused by name.
-Targets are `task:ID`, `pr:N`, or a GitHub PR URL belonging to this repo. Add
-`branch` only for first creation. The canonical main checkout/common Git directory
-serializes reservations across issue aliases. Native PR branch facts resolve
-legacy handoffs before absence can be assumed. A task may later bind its new PR
-only when that PR belongs to its original branch. Cross-repository fork PR
-adoption is unsupported and remains UNKNOWN, not a new preparation job.
+`repo`, `issue`, `target`, `requestId` and `message` are required (for a [trail](#trails-as-jobs), `issue` or `target` alone); `stage` is `bstack` (the default) or `autopilot`; `branch` is required for a first desk and only there; `adoptReason` and `forkReason` are below. Other fields are refused by name. A target is `task:ID`, `trail:<n>` in an Entire repo, `pr:N`, or a GitHub PR URL of this repo. A job binds a later PR only on its own branch, and a legacy handoff on a fork's PR is UNKNOWN. The repo's dispatch lock serializes dispatches across issue aliases.
 
-Dispatch reopens the beads issue and keeps who owns it under
-`metadata.bercail_task`: the target, the branch, the verified owner (desk,
-space, session, process), the latest desk creation, any adoptions, and the
-`retired` request ids that never reach a desk again. It keeps no list of
-requests and no receipts: whether the work is done is what the
-[brief](#briefs-and-the-board) shows, the desk's state, its latest report and
-`describe check` on its staged change. A follow-up is saved as `pending`, with
-its payload, and a later save clears it once its queue file is written: a retry
-of it must carry the same payload, and goes only to the same verified owner. An adoption retires the
-creation it replaces and any pending follow-up. A retry finds a queued
-follow-up's file before it looks at `retired`. A v0.17 record is read through
-its `requests` list: the latest creation not blocked or complete is its
-creation, every other request is retired, and a retry of old work is matched on
-its message and stage. The next save drops the list. A deliberate exploration uses a separate issue and
-`forkReason`; it cannot inherit the original session or authority.
+**The record.** Dispatch reopens a beads issue (never a trail) and keeps under `metadata.bercail_task` (a trail: its [local job record](#trails-as-jobs)) the target, branch, verified owner (desk, space, session, process), latest creation, adoptions, and `retired` request ids. There are no receipts: the [brief](#briefs-and-the-board) says whether work is done. A v0.17 `requests` list is still read, and dropped at the next save.
 
-A compatible original Pi must have its live foreground process/start tick,
-open-session claim, persisted session header, checkout, branch, issue, desk and
-space verified. A second live process claiming that exact session is ambiguous,
-even without a desk-role label. A follow-up is a file under
-`desk-follow-ups/<desk>/`, and the desk's Pi extension sends it as a custom
-DATA message in that same session, not a user message, approval, slash command
-or role change. It goes as a Pi steer: a busy desk sees it after the tool calls
-running then, before the model's next turn, and an idle desk starts a turn on
-it. A tool call is never cut short. Follow-ups go in the order they were
-dispatched. A claimed but uncertain send stays UNKNOWN and is never
-automatically replayed: this is at-most-once delivery. Reuse the same request
-ID and payload after a lost response; a retry finds the follow-up's file under
-whichever desk it went to and sends nothing again. Legacy or uninstrumented
-owners fail closed rather than being restarted for compatibility.
+**Follow-ups.** The owner's live process, session, checkout, branch, issue, desk and space are verified first; two processes on one session are ambiguous. The follow-up is a file under `desk-follow-ups/<desk>/`, which the desk's extension sends into its session as a custom data message (a Pi steer), never a user message, approval or role change. A busy desk sees it after its running tool calls; an idle one starts a turn. Delivery is in order and at most once: an uncertain send stays UNKNOWN and is never replayed. A retry with the same id and payload writes a still-pending follow-up whose file is missing, and never sends a written one again. A legacy owner fails closed.
 
-When the original desk is gone (its records name a desk a spawn started, and
-no terminal with that address is live), dispatch adopts its checkout by itself: it starts a visible desk
-with a new session in that owner's existing checkout, the one branch worktree,
-and its branch, that the owner's records name. Nobody is asked. The result
-adds `adopted` (the checkout, the branch, the gone desks, the reason and the
-number of `staged` files) and a `warning` line for Shep to repeat to the
-person; a retry of the same request repeats them. The reason is `adoptReason`
-when the dispatch gives one, else `desk <id> is gone` (or `desks <ids> are gone`). A PR target must still
-be that branch. Live, stale, ambiguous (the refusal lists the desks) or
-unresolved owners keep their refusals, and so does a recorded desk whose
-terminal is still live without its desk labels. Records of a spawn that
-started no desk (no `desk`, or `ok` or `agent_started` false) keep `original
-owner missing/stale`. So do
-an uncertain creation (UNKNOWN), a checkout that is gone, the main checkout,
-and a live desk of any job on the checkout: adoption never closes or replaces
-one. An `adoptReason` with nothing recorded is refused. The issue's
-`metadata.bercail_task.adoptions` keeps the reason, the request, the checkout,
-the staged count and the gone desks, and the handoff's `bd comment` repeats
-the reason. Desks stage for the person's review, so a staged change in the
-checkout is unreviewed: the comment and the desk's first prompt tell it to
-name the change in its first report and leave those files staged as they are
-unless the person asks.
-Follow-ups queued to the gone desk stay with it; the adopting desk gets only
-the new request, and later ones made in the usual way. Its
-`handoffs.jsonl` line starts a new ownership epoch, so older records neither
-own the task nor conflict with it. `stage: "autopilot"` on a follow-up records
-workflow intent: it does not turn a live lead into an autopilot or grant shipping
-rights. On a first creation it starts an autopilot desk, which may commit and push
-the PR's branch; that needs a `pr:N` target and `branch` set to its head branch.
+**A gone owner.** When the original desk is gone (its records name a desk a spawn started, and no terminal at that address is live) and its checkout remains, dispatch adopts the checkout by itself, asking nobody: a visible desk with a new session in the one branch worktree the records name, whose branch a PR target must still be. The result adds `adopted` (checkout, branch, gone desks, reason, and the number of `staged` files) and a `warning` line for Shep to repeat to you; a retry repeats them. The reason defaults to `desk <id> is gone` or `desks <ids> are gone`. Use `adoptReason` if you know why; without a record it is refused.
 
-A first desk on a PR's own branch (a `pr:N` target whose head is `branch`) starts
-at origin's head of that branch: handoff-spawn fetches it and checks it out, and
-fast-forwards a stale local branch. It never cuts the branch again, and it refuses
-a local branch with commits origin lacks.
+The handoff comment gives the reason. If the checkout has staged files, the comment and the new desk's prompt tell it to name them in its first report and leave them staged for your review. The adoption record keeps the staged count, retires the replaced request ids and starts a new ownership epoch in `handoffs.jsonl`. Follow-ups already queued to the gone desk stay there.
 
-A new desk's first prompt is its issue. A retry of the creation's request ID,
-once the desk is up, binds its session as the owner and queues the message
-there; it never launches again. `bercail shep task dispatch --wait-ready` does
-that retry itself: once a desk started, it waits up to 60 seconds for the
-desk's Pi to write its record and open-session claim with the pinned session,
-then returns the retry's `queued` result with `ready: true`, the creation and
-any adoption. When the minute passes first, or the retry refuses the desk, it
-returns the `started` result with `ready: false` and a `next` that says why.
-A dispatch that starts no desk returns at once.
+Dispatch normally to a verified live owner; it does not need adoption. Adoption refuses stale, ambiguous or unresolved owners, a desk still live without its labels, an UNKNOWN creation, a missing checkout, the main checkout or a checkout with a live desk. Ambiguity lists the desks. Spawn records without a `desk`, or with `ok` or `agent_started` explicitly false, do not establish a gone owner: `original owner missing/stale`.
 
-Text Shep or a lead types into a desk with `hc send` is submitted: hc pastes
-it and presses Enter. Press no `hc keys enter` after it; that key answers
-whatever prompt the desk shows. A send to a desk that is still starting can
-be dropped: dispatch's own message goes in the desk's queue, never by
-`hc send`.
+**A PR's branch.** Any first desk on a PR's own branch (a `pr:N` target whose head is `branch`) starts at origin's head of that branch, fetched and fast-forwarded, never cut again; a local branch with commits origin lacks refuses. With `stage: "autopilot"` that desk may commit and push the branch. A restack any desk prepares is yours to publish with the `git push --force-with-lease` its report gives, never Shep's. On a follow-up, `autopilot` is intent only: a live lead stays a lead.
 
-Dispatch gives handoff-spawn `[shep] spawn_timeout` seconds (600 by default) to
-start the desk, then stops it and the processes it started. The creation is then
-UNKNOWN. The repo's dispatch lock is held meanwhile, so another dispatch in that
-repo stops with `dispatch lock held` until the spawn ends; run it again then. A creation that stopped before its desk can be finished: retry the same
-`requestId` and payload. When there is no `handoffs.jsonl` line for the issue
-(the spawn writes one when it finishes), no live terminal for the issue, and the
-branch's worktree is clean with only idle shells in it, dispatch starts the desk
-there. When the spawn left no worktree, it starts the creation again. An
-autopilot request also needs the PR's own branch, as on a first dispatch. Anything
-else keeps the UNKNOWN, with the reason in `next`, and launches nothing.
+**Creation.** A new desk's first prompt is its issue. Dispatch gives handoff-spawn `[shep] spawn_timeout` seconds (600), then stops it and the creation is UNKNOWN; meanwhile the repo's other dispatches get `dispatch lock held`. A retry of the same request finishes a creation that stopped before its desk: with no `handoffs.jsonl` line and no live terminal for the issue, it starts the desk in a clean worktree holding only idle shells, or creates again when there is no worktree. Anything else stays UNKNOWN, with why in `next`. Once the desk is up, a retry binds its session, queues the message there, and never launches again. `bercail shep task dispatch --wait-ready` does that retry itself: once a desk starts, it waits up to 60 seconds for both Pi's desk record and open-session claim to name the pinned session. On success it returns `queued` and `ready: true` with the creation and any adoption. When the minute passes first, or the retry refuses, it returns `started` with `ready: false` and a `next` that says why. A dispatch that starts no desk returns at once.
 
-A target held by another issue moves only when that issue is closed with
-`bd supersede <it> --with <this issue>` and none of its desks is live. Its
-`handoffs.jsonl` lines then neither own the target nor conflict with the new desk.
+Text sent to a desk with `hc send` is submitted: hc pastes it and presses Enter. Press no `hc keys enter` after it, since that key answers whatever prompt the desk shows. A send to a desk still starting can be dropped, so dispatch's own message goes in the desk's queue, never by `hc send`.
 
-`bercail shep runtime` and `bercail doctor` report source/install resource hashes
-separately from live startup evidence. The desk bridge's evaluated generation
-marker and captured prompt hash are available for instrumented processes; a
-legacy session or uninstrumented guard is explicitly UNKNOWN. Today's file hash,
-a version string, and even matching source/install files do not prove what an
-old process evaluated. Diagnostics never deploy, reload or replace an owner.
+**Other owners.** A target held by another issue moves only once `bd supersede <it> --with <this issue>` closes it and none of its desks is live. Parallel exploration is a separate issue with `forkReason`.
+
+`bercail shep runtime` and `bercail doctor` report file hashes apart from what live processes started with (a legacy session is UNKNOWN), and never deploy, reload or replace an owner.
 
 ## Trails as jobs
 
-In a repo whose git backend is `entire`, everything is a trail: code, research, admin and waits. There are no beads there. A trail job is `trail:<n>`, the project trail's number, and it goes wherever a beads id goes: dispatch's `issue` and `target` (either alone works; they must match), `shep bg --issue`, `shep brief`, a question's `issue`, `todo add --issue` and `mistake --issue`. A trail number repeats across repos, so `brief` finds a trail's repo from its desk or handoff record, else needs `--repo`.
+In a repo whose git backend is `entire`, everything is a trail: code, research, admin and waits, and there are no beads. A trail job is `trail:<n>`, the project trail's number, and it goes wherever a beads id goes: dispatch's `issue` and `target` (either alone works; they must match), `shep bg --issue`, `shep brief`, a question's `issue`, `todo add --issue` and `mistake --issue`. A number repeats across repos, so `brief` finds a trail's repo from the desks and handoff records that name it, and needs `--repo` when they name no repo or more than one.
 
 | Step | What |
 |------|------|
 | Create | Shep: `entire trail create --no-branch --title … --body … --type task --json` from the main checkout. The trail is in the planning phase |
-| Dispatch | `{"repo": …, "target": "trail:<n>", "requestId": …, "message": …, "branch": …}`. The trail is not changed |
+| Dispatch | `{"repo": …, "target": "trail:<n>", "requestId": …, "message": …, "branch": …}`. The trail is not changed; a closed one is refused, with the command that reopens it |
 | Report | the desk: `bercail job comment trail:<n>` with the report on stdin |
 | Link | Shep, once the branch is pushed: `entire trail link <n> --branch <branch>` |
-| Close | Shep: `entire trail update <n> --status closed`, after the merge, or for a job with no branch once its report is in |
+| Close | Shep: `entire trail update <n> --status closed`, after the merge, or once the job is done and reported with nothing to publish or link |
 
-The trail holds the ask. This machine holds the rest, in `~/.local/state/bercail/jobs/<repo>-<hash>/`, where `<hash>` is the first 12 hex digits of the main checkout's path's SHA-256:
+The trail holds the ask. This machine holds the rest, in `~/.local/state/bercail/jobs/<repo>-<hash>/` (`<hash>`: the first 12 hex digits of the main checkout's path's SHA-256):
 
-- `<n>.json`: the job record, the same fields beads' `bercail_task` holds (target, branch, the owner's desk, session and pid, the creation), written by dispatch under its lock. `entire trail update` cannot write a trail's metadata, and a desk's address means nothing on another machine anyway.
+- `<n>.json`: the job record, the fields beads' `bercail_task` holds (target, branch, the owner's desk, session and pid, the creation), written by dispatch under its lock. `entire trail update` cannot write a trail's metadata, and a desk's address means nothing on another machine anyway.
 - `<n>.comments.jsonl`: one `{text, author, created_at}` per line, appended: the handoff note, a todo's link, and the desk's report. Entire refuses `entire trail comment` from an agent session (trail discussions are for people), so a report cannot go on the trail. Feedback on the code goes in `entire trail finding`.
 
-`bercail job show trail:<n>` prints the trail (status, phase, type, priority, URL, body, changes) and those comments: it is what a desk reads for its job. It does not read the people's discussion on the trail; it names the command that does (`entire trail comment list --trail <n>`). The reports are on the machine that ran the job only: the hosted trail does not show them, so a person who wants a summary there posts it. Entire needs the network and the person's login: when it does not answer, or answers in a shape bercail does not know, the trail job commands fail and say so, and the board shows the repo as UNKNOWN.
+`bercail job show trail:<n>` prints the trail (status, phase, type, priority, URL, body, changes) and those comments: it is what a desk reads for its job. It does not read the people's discussion; it names the command that does (`entire trail comment list --trail <n>`). The reports stay on the machine that ran the job: a person who wants a summary on the hosted trail posts it. Entire needs the network and the person's login: when it does not answer, or answers in a shape bercail does not know, the trail job commands fail and say so, and the board shows the repo as UNKNOWN.
 
-A job with no code is still a desk on a local branch: nothing is pushed or linked, and the trail stays in planning until Shep closes it. A wait is a background Shep on the trail (`shep bg --issue trail:<n>`), named `shep-bg-<name>-<hash>-trail-<n>`, the main checkout's folder name and 4 hex digits of its path's SHA-256, since the same number can be another project's.
+A job with nothing to ship is still a desk on a local branch: nothing is pushed or linked, and the trail stays in planning until Shep closes it once the job is done and reported. A wait is a background Shep on the trail (`shep bg --issue trail:<n>`), named `shep-bg-<name>-<hash>-trail-<n>`: the main checkout's folder name and 4 hex digits of its path's SHA-256, since the same number can be another project's.
 
-Entire has no dependency field. A line `Blocked by: #12, #15` in a trail's body names trails of the same project that must be closed or merged (phase `complete`) first. While one is not, the trail is blocked: dispatch refuses a new desk on it and names them (a live desk carries on, and adopting a gone desk's checkout warns with them), the brief says `blocked: waits on #12`, the board lists it as blocked and, once they are, as ready, and `bercail job list` shows each open trail as `ready` or `blocked by …`. A number no trail has, and a line that is not a list of `#N`, keep it blocked and say so. Shep writes the line at create or with `entire trail update <n> --body`.
+Entire has no dependency field. A line `Blocked by: #12, #15` in a trail's body names trails of the same project that must be closed or merged (phase `complete`) first. Until they are, dispatch refuses a new desk and names them (a live desk carries on, and adopting a gone desk's checkout warns with them), the brief says `blocked: waits on #12`, the board adds `blocked by …` to a job's line and lists a trail not started as blocked or ready, and `bercail job list` shows each open trail as `ready` or `blocked by …`. A number no trail has, or a line that is not a list of `#N`, keeps it blocked and says so. Shep writes the line at create or with `entire trail update <n> --body`.
 
-The board reads an Entire repo's trails with one `entire trail list --project <forge>/<project> --repo <origin> --status open` (and its pages, 100 trails each), the project taken from the origin remote (`entire://host/et/<project>/<repo>`), so a repo shows only its own open trails, a closed history costs nothing, and it never makes a `trail show` per trail. A page token that is neither null nor a cursor makes the list fail. When a `Blocked by:` line names a trail that list lacks (closed, another repo's in the project, or none), one more list call reads the whole project, closed trails included, however many such blockers there are. Each repo's list gets 6 of the board's 10 seconds: one slow repo is UNKNOWN and the rest of the board stays, but two slow ones run the board past 10 seconds and it is UNKNOWN as a whole. While a repo still has `.beads` (Lesentiel until J20 moves its issues), the board shows its beads jobs and its trails together; once `.beads` is gone it reads trails only. Dispatch, `job show` and `job comment` check that the trail is scoped to the checkout's repo (its `repoIds` hold the id `entire repo view` gives), so a closed trail still has a brief. A question binds project-wide, as `bercail job id trail:<n>` reads it: the trail's Entire id and URL, with no repo check and no local comments. A trail in the `complete` phase was merged and is still open: it is not a job, and the board counts those on one line, so Shep closes them. Any other open trail is a job when it has a job record or has left planning (`draft` and `planning` count as planning); the rest count as other open issues. A job's line shows its phase.
+The board reads an Entire repo's open trails with one `entire trail list --project <forge>/<project> --repo <origin> --status open` and its pages (100 trails each; past 20 pages, either list fails), the project taken from the origin remote (`entire://host/et/<project>/<repo>`): a repo shows only its own open trails, this list never reads closed history, and there is no `trail show` per trail. A page token that is neither null nor a cursor fails the list. When a `Blocked by:` line names a trail that list lacks (closed, another repo's in the project, or none), one more list reads the whole project, closed trails included, however many such blockers there are. Each repo's list gets 6 of the board's 10 seconds: one slow repo is UNKNOWN and the rest stays while the board still ends within its 10 seconds, so two slow ones make the whole board UNKNOWN. While a repo still has `.beads` (Lesentiel until J20 moves its issues), the board shows its beads jobs and its trails together; once `.beads` is gone it reads trails only.
+
+Dispatch, `job show` and `job comment` check that the trail is scoped to the checkout's repo (its `repoIds` hold the id `entire repo view` gives), so a closed trail still has a brief. A question binds project-wide, as `bercail job id trail:<n>` reads it: the trail's Entire id and URL, with no repo check and no local comments. A trail in the `complete` phase was merged and is still open: it is not a job, and the board counts those on one line so Shep closes them. Any other open trail is a job when it has a job record, a live desk or background Shep, or has left planning (`draft` and `planning` count as planning); the rest count as other open issues. A job's line shows its phase.
 
 ## The Shep view
 
-The bercail layout opens on Shep: its terminal fills the window, with the spaces and agents on the right. It is the control room for every desk; the desks stay in their spaces.
+The bercail layout opens on Shep: its terminal fills the window, with the spaces and agents on the right.
 
-- **Start.** The app starts Shep once per session as one hc terminal, `bercail-shep` (label `bercail.role=shep`), outside every space. The terminal runs `bercail shep run`, which starts Shep on Pi. A Shep that is already running, after a window restart for example, is shown again rather than started twice. Quit it and it stays quit until you click **Start Shep**.
-- **Spaces.** Click a space to see it, or press `Ctrl+Space` and search for it: the navigator moves left and the space's desk, tabs and panels fill the rest. **Back to Shep** at the top of the navigator, or `Ctrl+Shift+H`, returns to the same Shep session. Nothing is started or stopped by switching, and the keyboard goes back where it was in each view.
-- **Agents.** Click an agent or a desk in the agents list to open its own terminal in a dialog over either view. While it is open, what you type goes to that agent; nothing is sent for you. ✕ or a click beside the dialog closes it and puts the keyboard back where it was; **Show in space** goes to its space.
-- **Decisions.** **Decisions N** in Shep's header shows or hides the [Decisions panel](#the-decisions-panel): what Shep asks you, a card each with Shep's brief, its recommendation and a picker, and **Discuss** to talk it over in a read-only branch first. A new card changes the count, nothing else.
-- **Authority.** The view only shows things. Shep's tools and approvals are Pi's with bercail's guard, the same as in any other terminal, and the desks' rules don't change. Shep loads the same guard as the desks, so a repo's trusted [git policy](config.md#git-policy-per-repo) lets Shep's pushes there through as it does a desk's, and a commit runs with a [warning](config.md#warnings-and-refusals) in every repo. Background Shep's commits are refused. Shep sits in its own folder, not a repo, so instead of a policy in its prompt it runs `bercail policy show <repo>` before it commits, merges, pushes, or releases. It commits or opens a PR with the description the desk's `/validate` wrote (`bercail describe commit|body`), never one of its own; a stale one goes back to the desk. A [high-stakes](config.md#review-by-stakes-and-size) change waits for your LGTM before Shep commits or merges it, even in a repo that integrates straight to main and even under a standing rule to merge without asking.
+- **Start.** The app starts Shep once per session as one hc terminal, `bercail-shep` (label `bercail.role=shep`), outside every space, running `bercail shep run`. A running Shep is shown again, never started twice. Quit it and it stays quit until **Start Shep**.
+- **Spaces.** Click a space, or `Ctrl+Space` and search, to fill the window with it. **Back to Shep**, or `Ctrl+Shift+H`, returns. Switching starts and stops nothing, and the keyboard goes back where it was.
+- **Agents.** Click an agent to open its terminal in a dialog; what you type goes to it, and nothing is sent for you. **Show in space** goes to its space.
+- **Decisions.** **Decisions N** shows or hides the [Decisions panel](#the-decisions-panel).
+- **Authority.** The view only shows things. The same guard applies the repo's trusted [push policy](config.md#git-policy-per-repo) to Shep and its desks. A foreground Shep commit in any repo runs with a [guard warning](config.md#warnings-and-refusals); a background Shep cannot commit. Shep repeats guard warnings in its report. Warnings and refusals, including your “no”, go in `~/.local/state/bercail/guard-warnings.jsonl`. It runs `bercail policy show <repo>` before it commits, merges, pushes or releases, ships with the desk's `/validate` description, and holds a change that needs [review](config.md#review-by-stakes-and-size) for your LGTM. A trail merge asks you through the guard whatever the policy.
 
-When Pi exits with an error, its message stays on screen until you press Enter.
+When Pi exits with an error, its message stays until you press Enter.
 
-When the terminal is closed or `bercail shep run` gets `SIGHUP`, `SIGINT` or `SIGTERM`, it sends Pi `SIGTERM`. After a 5-second grace (up to a second more), what still runs gets `SIGKILL`, since a Pi stuck after a provider switch ignores `SIGTERM`: Pi and the helpers `ps` showed under it, before the `SIGTERM` or, while Pi is the same process, at the end. A helper that left Pi's tree before the first look is not one of them. The stop runs in a process group of its own, so it finishes even after `hc kill`, which kills the terminal's group, `bercail shep run` included, a second after the hangup. When `bercail shep run` is still there, as after a `kill` of its pid, it names the pids it sent `SIGKILL` and exits 128 plus the signal, without waiting for Enter. Without `ps`, such a `bercail shep run` can still stop Pi, after the same grace, but not its helpers. Shep's scratch folder (`TMPDIR`) is removed after the stop, once nothing has it as `TMPDIR` for up to a second; after `hc kill`, or with a process still holding it, `bercail scratch sweep` removes it later.
+When the terminal closes or `bercail shep run` gets `SIGHUP`, `SIGINT` or `SIGTERM`, it sends Pi `SIGTERM`. After a grace of 5 seconds by default (up to a second more), what still runs gets `SIGKILL`, since a Pi stuck after a provider switch ignores `SIGTERM`: Pi and the helpers `ps` showed under it, before the `SIGTERM` or, while Pi is the same process, at the end. A helper that left Pi's tree before the first look is not one of them. The stop runs in its own process group, so it finishes even after `hc kill`, which kills the terminal's group, `bercail shep run` included, a second after the hangup. A `bercail shep run` still there, as after a `kill` of its pid, names the pids it sent `SIGKILL`, if any, and exits 128 plus the signal, without waiting for Enter. Without `ps` it can still stop Pi, after the same grace, but not its helpers. Shep's scratch folder (`TMPDIR`) is removed after the stop, once nothing has it as `TMPDIR`, waiting up to a second for that; after `hc kill`, or with a process still holding it, `bercail scratch sweep` removes it later.
 
 ## Shep on Pi
 
-Shep on Pi runs in `~/.local/state/bercail/shep/workspace` with its sessions in `pi-sessions/` beside it, whatever folder you are in, and continues the same session each time it starts (`pi --continue`). It uses bstack's lead model and Pi extensions (from `~/.local/share/bercail/pi/lead.json`); the same logins as your desks. Its rules and its [start context](#what-shep-knows) are passed with `--append-system-prompt`, and it loads no context files, so your global Pi `AGENTS.md` (your Pi persona) is neither changed nor read by Shep. Its Pi extensions include `inbox.ts` for [desk events](#desk-events), `compaction.ts` for [compaction](#compaction), and `question-commands.ts` for [targeted questions](#targeted-questions). It gets the `handoff`, `desk-restore`, `how`, `why`, `unslop`, and `describe` skills, and Pi's own tools. It needs `pi` on the PATH (`bercail bstack setup` installs it).
+Shep runs in `~/.local/state/bercail/shep/workspace`, with sessions in `pi-sessions/` beside it, and continues the most recent session at each start (`pi --continue`). It uses bstack's lead model, extensions and logins (`~/.local/share/bercail/pi/lead.json`). Its rules and [start context](#what-shep-knows) go in with `--append-system-prompt`, and it loads no context files, so your global Pi `AGENTS.md` is untouched. Its extensions include the desk's `bercail-desk.ts`, `inbox.ts` ([desk events](#desk-events)), `compaction.ts` ([compaction](#compaction)) and `question-commands.ts` ([questions](#targeted-questions)). It gets the `handoff`, `desk-restore`, `how`, `why`, `unslop` and `describe` skills that are installed, and needs `pi` on the PATH (`bercail bstack setup`).
 
-```bash
-bercail shep status      # queued, awaiting persistence, persisted notices, live background Sheps
-bercail shep repos       # your known repos: git backend, policy trust, open issues (--json too)
-bercail shep board       # one line per open job across those repos, then what waits on you
-bercail shep queue       # what waits on your review, with sizes and stakes (--repo DIR: against its budget)
-bercail shep brief ID    # one issue: its desk and state, the question it is blocked on, the latest report
-bercail shep list        # Shep's standing rules: remember "RULE" [--scope S] adds one, forget N drops one
-bercail shep mistake list  # the mistakes ledger by group: mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] records one
-bercail shep diagram FILE  # a Mermaid diagram without its click and link statements (stdin without FILE)
-```
+Its commands are in [the CLI reference](cli.md#install--cli); `bercail shep diagram [FILE]` is [below](#diagrams-in-chat).
 
-An older `~/.config/bercail/config.toml` may still have `backend` and `session` under `[shep]`. bercail no longer reads them; delete them whenever you like. The keys `[shep]` holds now are for [compaction](#compaction).
+bercail no longer reads `backend` and `session` under `[shep]`; delete them whenever you like.
 
 ## Diagrams in chat
 
-Pi draws a `mermaid` code block in Shep's replies as Unicode box art (Pi's `markdown.mermaid` setting, on by default; Shep leaves it so). Shep draws one only when a flow has three or more states or branches, as a `stateDiagram-v2` or `flowchart TD` of about 15 nodes at most, with no deep nesting. Past that the art stops being readable: a 40-state graph with cross jumps came out four screens tall with its labels cut. Edge labels stay under about 20 characters, and only one edge is labeled where a state branches, because labels on edges leaving the same row print over each other. Other guards go in the text. Every diagram is followed by its transitions as a plain list, which is what you read when the art degrades and what a screen reader gets. A diagram too wide for the pane, or over 128 nodes, shows as its source instead.
+Pi draws a `mermaid` block as box art (`markdown.mermaid`, on by default). Shep uses about 15 nodes at most, short labels and at most one labeled edge out of a branching state, then gives the transitions as text. A diagram too wide for the pane, or over 128 nodes, shows as source.
 
-Pi turns a diagram's `click` and `link` targets into terminal hyperlinks, `javascript:` ones included. HTML labels, `%%{init}%%` directives and `url(...)` styles print as text or are ignored, and nothing is fetched. So a diagram Shep did not write, such as a PR's `chart.mmd` or one in a desk's report, goes through `bercail shep diagram` before Shep pastes it. It prints the diagram without its `click` and `link` statements (`click A href "url"` is one), and says on stderr how many it dropped. It errs toward dropping. The renderer deletes control characters before it parses and splits words on Unicode spaces, so `cl\x01ick` or a no-break space before `click` still makes a link. The helper deletes the same control characters from every line, splits statements on `;` outside double quotes, and skips any leading space or non-ASCII character before it looks for the word, in any case. A statement that merely starts with the word, such as a state named `link`, goes too. Other lines are printed as they were, less those control characters.
+Pi turns `click` and `link` targets into live links, `javascript:` included, so a diagram Shep did not write goes through `bercail shep diagram` first. It drops those statements, erring toward dropping, and says on stderr how many. The renderer deletes control characters and splits words on Unicode spaces, so `cl\x01ick` or a no-break space before `click` still links; the helper deletes the same characters, splits statements on `;` outside quotes, and skips leading spaces and non-ASCII bytes, so those are caught. A state named `link` goes too.
 
-A statechart from a desk is the [statechart skill](bstack.md#statecharts)'s `chart.pi.md`: 20 states or fewer, either the path to a bug or a smaller view of the model, then the states that break a rule and every arrow in words, since Pi draws no colours and shows the source when the chart is wider than the pane. Over 20 states it has no chart, and Shep gives the bug's path from `report.md` as numbered text. The Shep inbox chart is 78 columns wide, so Pi draws it in a pane of 80 columns or more.
+A desk's statechart is the [statechart skill](bstack.md#statecharts)'s `chart.pi.md`, 20 states or fewer with its rule-breaking states in words, since Pi draws no colours. Over 20 states, Shep gives the bug's path from `report.md` as numbered text. The Shep inbox chart is 78 columns wide; in a narrower pane Pi shows its source.
 
 ## What Shep knows
 
-Shep's session is one long conversation, and most of it is tool output. What it needs to know for good sits outside it, in files bercail keeps, so a compaction or a new session loses none of it.
+What Shep needs for good sits in files bercail keeps, outside its session, so a compaction or a new session loses none of it.
 
 ### Known repos
 
-Shep needs no list of your repos to keep up. bercail works it out each time from what it already knows:
-
-- the `[git]` and `[policy."<path>"]` keys of `config.toml`,
-- trusted policies (`~/.local/state/bercail/policy-trust.json`),
-- handoff records (`~/.local/state/bercail/handoffs.jsonl`); a record whose worktree is gone gives its main checkout, from the `<main>.<branch>` name `handoff-spawn` uses,
-- the folders of live desks,
-- and `~/.local/state/bercail/shep/repos`, one path per line (`#` starts a comment), for a repo bercail has not seen yet.
-
-Each folder becomes its main checkout; one that is no longer a git checkout drops out. `bercail shep repos` prints a line per repo: the path, its git backend (as `handoff-spawn` picks it), its [policy](config.md#git-policy-per-repo) (`policy trusted`, `policy untrusted`, or `no policy`), its open issues (not closed; `no beads` when it has no `.beads` or `bd` does not answer within 10 seconds), and where bercail saw it. `--json` gives the same as an array.
+bercail works the repos out each time from `config.toml`'s `[git]` and `[policy."<path>"]` keys, trusted policies, handoff records (a gone worktree gives its main checkout from its `<main>.<branch>` name), live desks' folders, and `~/.local/state/bercail/shep/repos` (one path per line, `#` for comments) for a repo it has not seen. Each becomes its main checkout; a folder that is no longer a checkout drops out. `bercail shep repos [--json]` prints each with its git backend, [policy](config.md#git-policy-per-repo) (`policy trusted`, `policy untrusted`, `no policy`), open issues (`no beads` without a `.beads`, `UNKNOWN` when `bd` fails or is slow), and where it was seen.
 
 ### Briefs and the board
 
@@ -242,52 +130,51 @@ latest report: comment 2 of 2, Desk at 2026-11-11 00:43 (812 characters):
 Staged, uncommitted. What changed: …
 ```
 
-The repo is `--repo DIR`, else the issue's handoff record, its live desk, or the known repo whose `bd` has it. When the job's worktree has staged changes, a `staged:` line gives their size and [stakes](config.md#review-by-stakes-and-size), says when the change waits for your LGTM, and ends with what [`bercail describe check`](cli.md) says of it: `describe check ok`, or `describe check fails:` and the first thing it fails on. The desk is the live terminal labelled with the issue, else the record's (`gone` when it has ended). A desk [handed off with `--model`](handoff.md) ends its line with `model <provider/id:thinking>`, from its `bercail.model` label, or the record's when it has ended. A blocked desk adds the last 15 lines of its screen, where its question is. The report is the latest comment that is not the handoff note. One longer than `--budget` characters (1500 by default) keeps its first two thirds and its last third, and says how much was cut and that `bd comments <id>` has the rest. Measured on three real issues, a brief was 1,600 to 2,000 characters (about 400 to 500 tokens) against 31,000 to 54,000 for `bd show` plus `hc read --lines 60`: 16 to 33 times smaller.
+The repo is `--repo DIR`, else the issue's handoff record, its live desk, or the known repo whose `bd` has it (a trail gets no beads scan). The desk is the live terminal labelled with the issue, else the record's (`gone` when it ended), with `model …` when handed off with `--model`. A `staged:` line gives the staged change's size and [stakes](config.md#review-by-stakes-and-size), whether it needs your LGTM, and what [`bercail describe check`](cli.md) says. A blocked desk adds the end of its screen (up to 15 lines). The report is the latest comment that is not the handoff note or a todo link; past `--budget` characters (1500) it keeps its first two thirds and last third and points to `bd comments <id>` (a trail: `bercail job show <trail> --repo <checkout>`).
 
-`bercail shep board` lists one line per open job across the known repos (in an Entire repo, its [trails](#trails-as-jobs)): `<id>: <title>`, its status when not `open`, its desk and state, its branch, and its model when it was handed off with `--model`. A job is an issue that is not closed and has a live desk, or is `in_progress` or `blocked`. A repo's other open issues are a count, with how many of them were handed off to a desk that has since ended. Then: the repos with no jobs, desks still open on closed or unknown issues, and **Waiting on the person**: blocked desks, finished desks to review, finished background Sheps to report and end, and your [todos](#todos-for-the-person). The board shows no reports: a finished desk's line names the brief that has its report.
-
-When anything waits on your review, the board ends with the **review queue**, which `bercail shep queue` prints on its own:
+`bercail shep board` lists each open job across the known repos (in an Entire repo, its [trails](#trails-as-jobs)) (`<id>: <title>`, status, desk and state, branch, model): an issue not closed with a live desk, or `in_progress` or `blocked`. Then other open issues as a count per repo, repos with no jobs, desks open on closed or unknown issues, and **Waiting on the person**: blocked desks, finished desks and background Sheps, and your [todos](#todos-for-the-person). When anything waits on your review, it ends with the **review queue**, which `bercail shep queue` prints alone:
 
 ```
-Review queue: 15 lines in 4 changes
-~/Work/app: 15 of 10 lines, over its review budget
+Review queue: 12 lines in 3 changes
+~/Work/app: 12 of 10 lines, over its review budget
 - app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · described · ~/Work/app.export
 - PR #12: Teammate fix · 4 lines · https://github.com/o/app/pull/12
-- PR #15: Old job PR · 3 lines · https://github.com/o/app/pull/15
 - app-3: Old job · 2 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/app.old
 ```
 
-A staged change is on the queue when its desk is not working (done, idle, blocked, or gone); a desk still working is not waiting on you yet. Each one that counts says `described` when `describe check` passes on it, or `describe check fails:` and why. The check reads a copy of the worktree's index, so reading the queue does not change when the changes were last staged. It skips one rule, no beads ids in the body, since the queue reads no full beads list; the brief runs the whole check. Each one has a state, read from records, never from prose:
+Parent and child links are not read as replacements. A staged change is queued once its desk is not working, marked `described` or `describe check fails:` and why (from a copy of the index, without the no-beads-ids rule). Its state comes from records, never prose:
 
-- **review**: it waits on you. **lgtm**: the same, and its policy wants your LGTM (it touches a `high_stakes` path).
-- **superseded**: `bd supersede` or `bd duplicate` names its issue's replacement, or the issue's latest handoff went to another worktree that is still there (the job moved to a fresh one).
-- **unknown**: bd cannot say, or a closed issue still has staged changes without proven custody/outcome. It still counts; closed does not mean safe to clean up.
-- **stale**: no open Herdr space has the worktree: not the desk's or the handoff's space, and no space whose folder, or one of whose terminals, is in it. Spaces are read from the open window (`herdr-app ls`); with no window answering, nothing is stale.
+- **review**: it waits on you. **lgtm**: the same, and its policy requires your review (a `high_stakes` path, or `review = "always"`).
+- **superseded**: `bd supersede` or `bd duplicate` names a replacement, or the latest handoff went to another worktree that still exists. Listed last, not counted.
+- **unknown**: bd cannot say, or a closed issue still has staged changes. It counts: closed is not safe to clean up.
+- **stale**: no open Herdr space has the worktree (from `herdr-app ls`; with no window answering, nothing is stale). Not counted; listed as cleanup candidates.
 
-Superseded work is listed last as `not counted` and stays out of the budget. Stale worktrees are not counted either, and each repo lists them on one line: `- not counted: 2 stale worktrees with no Herdr space, cleanup candidates: ~/Work/app.a, ~/Work/app.b`. Parent and child links are not read: a child issue does not say it replaces its parent. A change with no issue is review. On a repo with a GitHub remote, an open PR counts when it is not a draft, not approved, and either asks you for a review or comes from a handoff's branch. A staged change's lines leave out lockfiles, generated and binary files; a PR's leave out lockfiles. Each repo's total is weighed against its policy's [`review_budget`](config.md#review-by-stakes-and-size). `queue --repo` reads only that repo's review sources, with a 6-second total bound; board has a 10-second bound. A failed/slow source returns UNKNOWN, not an empty list. Shep reports an over-budget or incomplete snapshot without holding already accepted work for it.
+An open GitHub PR counts when it is not a draft, not approved, and asks you for review or comes from a handoff branch. Lines leave out lockfiles, and generated and binary files in staged changes. Each repo is weighed against its [`review_budget`](config.md#review-by-stakes-and-size). `queue --repo` has a 6-second bound and the board 10; a slow source is UNKNOWN, never an empty list, and never holds accepted work.
 
-On a repo hosted on Entire (origin `entire://<host>/et/<project>/<repo>`), the queue also lists each trail change in review: an open change in that repo, on an open trail in the building phase. It reads them with Entire's read-only commands: the repo's one trail list per refresh (`bercail job list`, with its pages; on the board, the list the board already read), then `entire trail show` and `entire trail finding list` only on the trails in review, in parallel. The calls grow with the trails in review and the list's pages, not with the repo's trails. A page that fails makes the queue UNKNOWN rather than missing trails. A change says its trail, the change as `<repo>/<n>`, its open findings by severity, its gates, and the change's page on entire.com:
+On a repo hosted on Entire (origin `entire://<host>/et/<project>/<repo>`), the queue also lists each trail change in review: an open change in that repo, on an open trail in the building phase. It uses Entire's read-only commands: the repo's one trail list per refresh (`bercail job list`, with its pages; on the board, the list the board already read), then one `entire trail show` per open trail in the building phase and one `entire trail finding list` per open change of this repo on it, the trails in parallel, so the calls grow with those trails and the list's pages, not with the repo's trails. A change says its trail, the change as `<repo>/<n>`, its open findings by severity, its gates, and its page on entire.com:
 
 ```
 - trail 7: Read the gateway frames · change kvm/9 · 3 open findings (1 high, 2 low) · gates: waiting on approvals · https://entire.com/et/lab/-/trails/7/changes/kvm/9
 ```
 
-The gates read as the [background Shep's trail wait](#background-sheps) reads them: `every blocking gate passed`, the blocking gates that `failed`, `waiting on` the others, or `no gate state yet` when Entire has none. A trail change counts as waiting on you but brings no lines: its lines were counted when it was staged, and its findings and gates are what wait now. A handoff on the change's branch lends it the desk's worktree and space. An Entire read that fails, or answers with what is not its JSON, makes the queue UNKNOWN, as a failed PR read does.
+The gates read as the [background Shep's trail wait](#background-sheps) reads them: `every blocking gate passed`, the blocking gates that `failed`, `waiting on` the others, or `no gate state yet`. A trail change waits on you but brings no lines: they were counted when staged, and its findings and gates are what wait now. A handoff on the change's branch lends it the desk's worktree and space. A failed list page, a failed Entire read, or an answer that is not its JSON makes the queue UNKNOWN, as a failed PR read does.
 
-`bercail shep queue --json` is the same queue as data (`schema: "bercail.queue/v1"`), for the Herdr app: `at`, when it was read; `items`, what waits first, the longest waiting first (`since`: when a worktree's changes were last staged, or when a PR was opened), each with its `state`, `why`, `by` (the replacement), `counts`, its `space` (the desk's or the handoff's Herdr space), its `change` (size and stakes) and, for a staged change that counts, `described` (`ok`, and `why` when it fails; `null` otherwise); and `repos`, each repo's counted lines against its budget. A trail change is `kind: "trail"`, with `trail`, `repository` and `number` (the change), `url`, `branch`, `findings` (`open`, `high`, `medium`, `low`) and `gates` (`state`: ready, pending, failed or unknown; `text`).
+`bercail shep queue --json` (`schema: "bercail.queue/v1"`) is the same for the Herdr app: `at`, when it was read; `items`, those that count first, each group longest waiting first (`since`: when a worktree's changes were last staged, a PR was opened, or a trail change's `updatedAt`), each with its `kind`, `state`, `counts` and, when known, `space`; and `repos`, each repo's lines against its budget. A staged change adds `why`, `by` (the replacement), `change` (size and stakes) and `described` (`null` when it does not count); a PR or trail change adds its `lines` (a trail change's are 0). A trail change is `kind: "trail"`, with `trail`, `repository` and `number` (the change), `url`, `branch`, `findings` (`open`, `high`, `medium`, `low`) and `gates` (`state`: ready, pending, failed or unknown; `text`).
+
+To retire a landed worktree, use `bercail cleanup <worktree>` from outside its space. The guard asks you first. Cleanup archives `.bercail/`, ends the desk and siblings, removes the checkout and closes its space without deleting the branch. With a window open it reports the sidebar's open and recent space counts. See the [CLI reference](cli.md) for refusals. This is separate from [agent scratch](bstack.md#how-it-runs): temporary copies belong under the agent's disk-backed `TMPDIR`. Bercail reclaims managed scratch after the run and its processes exit; `bercail doctor` lists leftovers and `bercail scratch sweep` removes eligible ones.
 
 ### Review in the Herdr app
 
-The bercail layout's spaces list reads that JSON every five minutes, and after a desk's status changes (at most every 30 seconds). It only shows what bercail says; nothing it reads switches your view or moves the keyboard.
+The spaces list reads that JSON every five minutes, and after a desk's status changes (at most every 30 seconds). Nothing it reads moves your view or keyboard.
 
-- A space whose work waits on you has a mark after its name: `◆` and the lines that wait, with `?` when its state is unknown. The mark is red when a change there needs your LGTM, and the theme's accent color when review is optional. Superseded work says `superseded` in a dim color; a closed issue with staged work has an UNKNOWN mark until custody/outcome is proven. Hover a mark for each item; the tooltip says "needs your LGTM" where it applies, so the red is not the only cue. In the narrow rail, the space's number takes the same color.
-- The Spaces header counts what waits (`◆ 3 to review`, red while one needs your LGTM, or `2 to clean up` when only that is left), and adds `(stale)` when the last good read is more than 15 minutes old or the last read failed.
-- `Ctrl+Shift+J` goes to the next space that waits, in queue order, from either view ([keys](keys.md)).
-- A click on the count opens the **Review** list over either view: each item's space (as Herdr names it), issue and title, lines, stakes, whether it needs your LGTM, how long it has waited, and its state, then what does not count, then the stale worktrees with no Herdr space under their own cleanup heading. The header shows when bercail read the queue and marks older results stale. If a read fails, the panel clears the rows and shows the error. A trail change shows its open findings in place of lines, and its gates. **Open space** shows the space; **Open review** shows it and opens its Review tab; **Open PR** opens a PR in the browser, and **Open trail** a trail change's page. There is no merge, commit or LGTM button, and nothing answers a desk.
+- A space whose work waits has a mark: `◆` and its lines, `?` when unknown. It is red when a change needs your LGTM, the accent color otherwise; the tooltip says "needs your LGTM" too. Superseded work is dim.
+- The Spaces header counts what waits (`◆ 3 to review`, or `2 to clean up`), with `(stale)` when the last good read is over 15 minutes old or the last read failed. A failed read clears the list and shows the error, never "nothing waits".
+- `Ctrl+Shift+J` goes to the next space that waits, in queue order ([keys](keys.md)).
+- A click on the count opens the **Review** list: each item's space, issue, lines, stakes, LGTM, age and state, then what does not count, then stale worktrees under a cleanup heading. A trail change shows its open findings in place of lines, and its gates. **Open space**, **Open review** (its Review tab), **Open PR** and **Open trail** (a trail change's page) are its only actions: no merge, commit or LGTM button.
 
 ### Todos for the person
 
-Some steps only you can take: create a tailnet login, make a 1Password vault, plug in a device. bercail puts them on your todo lists, in the tool you already read, instead of a line in Shep's chat or an issue titled "Todo (Simon): …". You can have one list per project or repo: each is a named target, and the job's repo picks it ([set them up](config.md#todos)). Basecamp is the one backend for now.
+Steps only you can take (create a login, plug in a device) go on your todo lists, not in Shep's chat. Each list is a named target, picked by the job's repo ([set them up](config.md#todos)); Basecamp is the one backend.
 
 ```bash
 bercail todo add "Create a Tailscale login for the HA box" --notes "Admin console, Users, Invite" --due 2026-11-20 --issue app-7 --repo ~/Work/app
@@ -298,17 +185,15 @@ bercail todo show 900        # its title, open or done and where, due date, link
 bercail todo done 900        # complete it (if you have not), and stop the board showing it
 ```
 
-- **Which list.** `--target`, else the route of the job's repo (`--repo`, or the checkout of `--issue`), else the default ([routing](config.md#todos)). Shep adds each todo with its job's repo, so the route picks the list. When a todo fits no target, Shep asks you which one; when you name one ("lesentiel todos go to the Lesentiel list"), Shep runs `bercail todo target add` and `bercail todo route`, so the next one goes there by itself. Shep's start context lists the targets and their routes.
-- **Who writes.** Shep. A desk proposes a todo in its report as `Todo: "<text>"`, the way it proposes a memory, and Shep adds it. For every role but Shep, the guard blocks `bercail todo add`, `done`, `route`, `target add` and `target rm`, and every `basecamp` command it does not know as a read. The reads are `list` and `show` on a resource (`todos`, `todolists`, `projects`, …), bare `todos`, `todolists` and `projects`, `search`, `show`, `url`, `me`, `timeline`, `help`, `version`, `commands`, `auth status` and `config show`. Logging in or out (`auth`, `login`, `logout`, `setup`, `quick-start`, `profile create` and `profile delete`) and the token commands are yours: the guard blocks them in every role, Shep's included. So is any `basecamp` command with a flag the guard does not know before its command or action: the CLI would read that flag as taking the next word, so the guard could not tell what runs. A Discuss branch runs no commands at all. The guard is a seatbelt: a script it never sees, or a wrapper it does not unwrap (`mise exec`, `find -exec`), can still run `basecamp`, and it does not stop a command that reads the keyring or basecamp's `credentials.json`.
-- **The link to the job.** `--issue <id>` (with `--repo`, the issue's checkout, when you are not in it) checks that `bd` knows the issue before anything is written, then comments `bercail todo: "<title>" waits on the person in basecamp (<target>): <url>` on it. `bercail shep brief <id>` shows that comment as its own `todo:` line, and keeps the desk's report as the latest report. The beads id goes only in the todo's last notes line (`bercail: app-7 in app`): beads is local, and Basecamp's reader cannot open it.
-- **On the board.** `bercail shep board` lists each open todo under **Waiting on the person**, grouped by target, with its issue, due date, target and link: `open in lesentiel`. Once you tick one off in Basecamp, its line says `done in lesentiel; continue app-7, then bercail todo done 900`, until Shep picks the job up and runs `bercail todo done`. One you remove in Basecamp shows the same way, and so does every older todo once its target names another list. When a target's list does not answer within 10 seconds, or you are logged out, the board says so in one line for that target and shows the others.
-- **How completion is noticed.** When the board is read: at Shep's start, after each compaction, and whenever Shep or you run it. One `basecamp todos list` call per target, side by side, against the todos bercail added. There is no poller: it would need a process holding your Basecamp login in the background to save Shep a minute it does not need, since nothing in a job moves until Shep reads the board anyway.
-- **What it keeps.** `~/.local/state/bercail/todos.jsonl`: one line per todo bercail added (when, target, backend, id, link, title, issue and repo) and one per `bercail todo done`. The todo itself lives in Basecamp.
-- **What goes in one.** Plain words for someone who was not there: what to do and where. No secrets, tokens or vault values; the title and notes are sent to Basecamp as written.
+- **Which list.** `--target`, else the route of the job's repo, else the default. When none fits, Shep asks you, and sets a target and route from your answer.
+- **Who writes.** Shep; a desk proposes `Todo: "<text>"`. For every other role the guard blocks `bercail todo add`, `done`, `route`, `target add` and `target rm`, and any `basecamp` command it does not know as a read (`list` and `show` on a resource, bare `todos`, `todolists`, `projects`, `search`, `show`, `url`, `me`, `timeline`, `help`, `version`, `commands`, `auth status`, `config show`). Login, logout and token commands are blocked even for Shep. For an unknown `basecamp` flag before the action, the guard checks both readings (switch or value): it warns if both are allowed for the role, otherwise it refuses. A seatbelt: a script or an unwrapped wrapper (`mise exec`, `find -exec`) gets past it, and reads of the keyring or `credentials.json` are not stopped.
+- **The link to the job.** `--issue` (with `--repo` outside the issue's checkout) checks that `bd` knows the issue (a trail: that `bercail job show` finds it), then comments the todo's link on it (a trail: `bercail job comment`), which the brief shows as a `todo:` line. The job's id goes only in the todo's last notes line.
+- **On the board.** Open todos are listed by target. One you tick off or remove, or one whose target now names another list, says `done in lesentiel; continue app-7, then bercail todo done 900` until Shep runs `bercail todo done`. A list that does not answer in 10 seconds, or a logout, is one line for that target, and the others still show. The board reads Basecamp each time it runs; there is no poller holding your login.
+- **What it keeps.** `~/.local/state/bercail/todos.jsonl`, a line per todo added and per `todo done`. The text goes to Basecamp as written, so no secrets.
 
 ### Standing rules
 
-A rule you give Shep in conversation ("merge bercail work straight to master", "you may answer cm0's prompts") would otherwise live only in its session. Shep records it as soon as you say it, and tells you:
+Shep records a rule you give it in conversation as soon as you say it, so it outlives the session:
 
 ```bash
 bercail shep remember "Merge finished desk work straight to master and push" --scope bercail
@@ -316,13 +201,15 @@ bercail shep list        # 1. 2026-11-11 [bercail] Merge finished desk work stra
 bercail shep forget 1
 ```
 
-They live in `~/.local/state/bercail/shep/preferences.md`, one `- DATE [SCOPE] RULE` line each; `--scope` is a repo, an issue, a desk, or `all` (the default). The same rule and scope twice is kept once. A rule for everyone who uses bercail belongs in [`shep/SHEP.md`](../shep/SHEP.md) or a repo's [policy](config.md#git-policy-per-repo) instead.
+They are `- DATE [SCOPE] RULE` lines in `~/.local/state/bercail/shep/preferences.md` (`--scope` is a repo, issue, desk, or `all`, the default; a repeat is kept once), in the start context and every compaction summary. A rule for everyone belongs in [`shep/SHEP.md`](../shep/SHEP.md) or a repo's [policy](config.md#git-policy-per-repo).
+
+In a repo with Entire's Brain, a desk proposes a memory about the code as `Memory: "<text>" --path <p>` and never records one. Shep records it with `entire brain remember` only on your yes: a memory reaches every branch and desk at once, and Brain has no review queue.
 
 ### Mistakes
 
-A mistake that shows up twice should get a fix in the system, not a second fix by hand. Shep keeps a ledger of them in `~/.local/state/bercail/shep/mistakes.jsonl`, one line each time: when, a short key, what happened, and where (repo and issue).
+A mistake seen twice should get a fix in the system, not a second fix by hand. Shep keeps a ledger in `~/.local/state/bercail/shep/mistakes.jsonl`: when, a short key, what happened, the repo and issue.
 
-One cause often shows up under several keys, so each key belongs to a group, and the count that matters is the group's. A group has a short ID, a name, and what its mistakes count against: `process` (a bercail step that caused them), `tool`, or `conduct` (how an agent worked). `~/.local/state/bercail/shep/mistake-groups.json` holds the groups and which group each key is in.
+One cause often shows up under several keys, so each key belongs to a group, and the group's count is the one that matters. A group has a short ID, a name, and what its mistakes count against: `process` (a bercail step that caused them), `tool`, or `conduct` (how an agent worked). `~/.local/state/bercail/shep/mistake-groups.json` holds the groups and their keys.
 
 ```bash
 bercail shep mistake group G7 "Test isolation" --against tool tests-touch-real-state   # make or rename a group, move keys into it
@@ -330,18 +217,17 @@ bercail shep mistake tests-touch-real-state "the handoff test wrote to the real 
 bercail shep mistake list   # each group with its count and keys, most frequent first
 ```
 
-A key is a-z, 0-9 and `-`, the same each time. A key in no group yet needs `--group` when it is recorded, and keeps that group after. Only `mistake group` moves a key, because a move changes the count of all its past entries. When a group reaches its second time, the command says so, with the fix that fits what the group counts against. A `tool` group gets a guardrail (a lint rule, a test, the guard, or a doctor check), a `conduct` group gets a rule in SHEP.md or a skill, or a check, and a `process` group gets the step that caused it removed or simplified. [`SHEP.md`](../shep/SHEP.md) has Shep write that issue and tell you.
+A key is a-z, 0-9 and `-`, the same each time. A key in no group needs `--group` when it is recorded, and keeps that group after; only `mistake group` moves a key, since a move changes the count of its past entries. At a group's second time the command says so, with the fix that fits: a guardrail for a `tool` group (a lint rule, a test, the guard, or a doctor check), a rule in SHEP.md or a skill, or a check, for a `conduct` group, and removing or simplifying the step for a `process` group. Shep writes that issue and tells you.
 
 What counts as good conduct for Shep is written down as [behavior specs](../.agents/behaviors/README.md), for reviewing its traces rather than for its prompt. Their README maps each group of mistakes to a spec, or marks it a product bug.
 
 ### The start context
 
-Each `bercail shep run` writes `~/.local/state/bercail/shep/context.md` and hands it to Pi with `--append-system-prompt`: the known repos, one short line each, and the standing rules. A restart picks up repos and rules that changed while Shep was down.
+Each `bercail shep run` writes `~/.local/state/bercail/shep/context.md` and passes it to Pi: the known repos, one line each, the todo targets and routes, and the standing rules. A restart picks up what changed while Shep was down.
 
 ## Targeted questions
 
-Questions have durable tokens such as `Q42@3`, independent of the conversation.
-In text-only Shep:
+A question has a durable token such as `Q42@3`, independent of the conversation:
 
 ```text
 /questions                 list pending questions, choices and exact targets
@@ -350,73 +236,21 @@ In text-only Shep:
 /thread all                clear the selected topic
 ```
 
-A bare `yes`, `1` or `LGTM` answers nothing, even when one question is pending.
-An omitted or stale revision is rejected; a conflicting answer is retained as
-rejected rather than overwriting the first proposal. Repeated request IDs are
-idempotent; reusing an ID with different content is an error. New notices never
-select a thread or change focus. This remains one Pi conversation with shared
-context, not separate threads with isolated histories.
+A bare `yes`, `1` or `LGTM` answers nothing. A stale revision is rejected, a conflicting reply kept as rejected, and a repeated request id is idempotent (with other content, an error). Notices never select a thread. It is one shared Pi conversation, not isolated threads.
 
-**Replies are unverified proposals, not approvals.** Pi commands can be called
-by extensions; `interactive`, RPC and terminal keystrokes are not proof of a
-human sender. There is no public `approve` or `--confirmed` switch. All
-replies leave the question pending.
-Only your pick in the [Decisions panel](#the-decisions-panel) or a Discuss
-branch answers a question (`answered`). A proposal never permits
-a desk prompt, guard approval, commit, merge, publication, spend or scope change.
+**Replies are unverified proposals.** Extensions can call Pi commands, and no input source, RPC or keystroke proves a person sent one. There is no `approve` switch or trusted confirmation path, so a reply leaves the question pending. Only your pick on the [Decisions panel](#the-decisions-panel) or in Discuss answers. A proposal never permits a desk prompt, guard approval, commit, merge, publication, spend or scope change, and Shep never calls one your decision.
 
-Shep's `shep_question` tool creates or revises a question bound to an explicit
-checkout and job, after checking the job against the repo's beads. It does not
-discover jobs from a bare issue ID. The desk is optional. A named desk is
-checked against hc and its `desk-sessions` record, and only a desk that passes
-lends the question its space and session. A desk that is gone, has no record (a
-background Shep terminal), sits in another folder, belongs to another job, or
-has no verifiable Pi session is a **warning** on the card, and so is a job
-question with no desk; the card still reaches the panel and can be answered.
-Only a wrong kind or field, or an issue the repo's beads does not have, is
-refused. In an Entire repo the job can be a trail, `trail:<n>`: it is checked
-with `entire trail show <n>` instead of beads, a trail the repo's project does
-not have is refused, and the question keeps the trail's Entire ID and its URL.
-An answer holds to the ID: the same number in another project is another job,
-which makes the card stale and which a revision cannot move to. A moved URL
-does not. Repo
-identity is the canonical local git common-directory path, shared across its
-worktrees; another clone is a separate local identity. Review/action questions
-record desk, space, session, worktree, intended action, branch, head, staged
-tree, and resolved base plus its ref. A planning question records no branch,
-head or staged tree, so new commits leave it fresh. An answer holds to the job,
-the branch, the staged tree and the base, not to the desk, and to HEAD only
-loosely: one commit of the approved tree on the asked HEAD and branch (a single
-parent, that tree) keeps it fresh, and so does a base of HEAD or that branch
-moved by that commit. Other commits, another branch, or an outside base that
-moved make it stale. Changed intent or candidate supersedes the old
-revision; prior proposals remain in history. Each question also carries Shep's
-`brief` (what is decided, why now, what each choice does) and its
-`recommendation` (one of the choices, with one line of why), for the card.
-A question that no longer applies (its desk stopped, an event made it moot)
-is withdrawn by Shep (`shep_question_withdraw`, or `question withdraw`) with a
-reason and the time. A withdrawn question leaves the panel and Shep's question
-state and can never be answered. It is not an answer: no picker source and no
-decision event.
+`shep_question` binds a question to an explicit checkout and job, checked against the repo's beads, and never finds a job from a bare issue id. A repo is its git common directory, shared by its worktrees; another clone is a separate repo. The desk is optional: a named desk is checked against hc and its `desk-sessions` record, and only one that passes lends the question its space and session. A desk that is gone, has no record, sits in another folder, belongs to another job or has no verifiable Pi session is a **warning** on the card, as is a job question with no desk; the card still reaches the panel and can be answered. Invalid fields, an unknown issue, an unreadable checkout or a base ref that cannot be resolved stop the request. In an Entire repo the job can be a [trail](#trails-as-jobs), checked with `entire trail show <n>` instead of beads: a trail the repo's project lacks is refused, and the question keeps the trail's Entire ID and URL. An answer holds to the ID: the same number in another project is another job, which makes the card stale and which a revision cannot move to; a moved URL does not. Review and action questions record desk, space, session, worktree, action, branch, head, staged tree, and the base ref with what it resolved to; a planning question records no branch, head or tree, so commits leave it fresh unless it names a base that moves. An answer holds to the job, branch, staged tree and base, not the desk, and to HEAD only loosely: one commit of the approved tree on the asked HEAD and branch (a single parent, that tree) keeps it fresh, as does a base of HEAD or that branch moved by that commit. A changed intent or candidate is a new revision (a revision cannot change repo, job or topic). Withdrawing (`shep_question_withdraw`, with a reason) takes a question off the panel for good, and is not an answer.
+
+`bercail shep question check Q42@3` rechecks target and policy and always reports `authority: false`: fresh is not permission, and guard, shipping and desk-prompt authority stay separate. It re-reads the desk, branch and candidate live. A changed repo, job, branch, head (beyond that one commit), tree, base or action makes it **stale**; an unreadable target or policy makes it **unavailable**. Neither can reuse an answer. Desk problems are its `warnings`, never a reason to bind to a replacement terminal. Shep reports the warnings. It must recheck the target and policy through the usual safeguards before an authorized action: `check` runs nothing and does not close a race with a shipping command.
+
+The ledger, not the transcript, owns question state. Shep reloads it before each model run and in compaction or rollover, and stops deciding when it is unavailable. The store is `questions.json` under `$XDG_STATE_HOME/bercail/shep/` (`~/.local/state` by default).
 
 ### Reversible questions
 
-A decision that can be walked back should not keep work waiting on you. Shep
-marks such a question `reversible` when it asks it. It waits for you until its
-deadline, 30 minutes after it was asked (`[shep] decision_timeout` in
-[config](config.md), in minutes; `0` never defaults). If nobody picked by then,
-it takes Shep's recommendation. Shep says so on the card and in chat, with the
-deadline the helper returned.
+A decision that can be walked back should not keep work waiting on you. Shep marks such a question `reversible`. It waits for you until its deadline, 30 minutes after it was asked by default (`[shep] decision_timeout` in [config](config.md), in minutes; `0` never defaults), then takes Shep's recommendation. Shep's brief on the card says it defaults to the recommendation when the card counts down, and in chat Shep gives the returned deadline; with none returned, it waits for you.
 
-What may default follows Bezos's one-way and two-way doors. A two-way door is
-cheap to walk back, so it may default. A one-way door always waits for you. The
-helper, not Shep, decides with this table (`door()` in `shep/pi/questions.ts`,
-one test per row) and refuses `reversible` on a one-way door: Shep asks again
-without it. An action question's action is its effect, and only `commit`,
-`merge` and `land` are in the table; the helper captured its head, staged tree
-and base. A planning pick has no action. The question's prompt, choices and
-brief are read too, and can only make it stricter: a one-way row's word there
-wins, and so does a merge or commit word without that action.
+A two-way door is cheap to walk back, so it may default; a one-way door always waits for you. The helper decides with this table (`door()` in `shep/pi/questions.ts`, one test per row) and refuses `reversible` on a one-way door. Only the actions `commit`, `merge` and `land` are in it; a planning pick has no action. The prompt, choices and brief can only make it stricter.
 
 | Door | Row | For example |
 |------|-----|-------------|
@@ -426,78 +260,29 @@ wins, and so does a merge or commit word without that action.
 | one-way | an LGTM or approval | approve, `--reviewed-by` |
 | one-way | a release or tag | release, tag, ship |
 | one-way | a deletion | delete, remove, `rm`, `git clean`, reset, prune |
-| one-way | money | pay, buy, spend, a price |
+| one-way | money | pay, buy, spend, a `$` |
 | one-way | an outward post | post, comment, email, announce, send, reply |
 | one-way | a device or deploy action | device, deploy |
 | one-way | an action no two-way row names | any action but `commit`, `merge` or `land`, and any action on a planning question |
 | one-way | a merge asked without action merge or land | merge or land in the words of a planning pick or a commit |
-| one-way | a commit asked without action commit | commit in the words of a planning pick |
+| one-way | a commit asked without action commit | commit in the words of a planning pick, a merge or a land |
 | two-way or one-way | a merge or land | action `merge` or `land`: two-way only where the repo's policy says [`merge_reversible = true`](config.md#git-policy-per-repo), trusted |
 | two-way | a local commit | action `commit` |
 | two-way | a planning pick | no action: which desks to start, their order, a scope or approach, keeping or skipping a step that publishes nothing |
 
-A land is asked as action `land`. bercail does not look up whether a forge is public, so the word push makes any
-question a one-way door. The words can make a harmless choice one-way ("the
-release plan"); they never make a one-way door two-way.
+bercail does not know whether a forge is public, so the word push makes a question one-way. Words can make a harmless choice one-way ("the release plan"), never the reverse.
 
-The deadline is in the ledger, so nobody polls by hand and Shep never waits for
-it. Shep's question extension runs `bercail shep question expire` in its own
-process when Shep starts and every 30 seconds after, so a deadline passed
-while Shep was stopped fires at its next start. Each due question gets the
-live check first, and the policy is read again. A question that changed since
-Shep asked keeps waiting for you, and its card says so. A merge the policy no
-longer calls reversible waits too, and its card has no countdown. Past the
-deadline of a door that is still two-way, the store refuses your pick and the
-panel offers none: the default is recorded at Shep's next check. The check
-runs just before the ledger's write, as for your pick, so Shep runs `question
-check` again before it acts on a default. For a reversible question it also
-gives the door with the policy it just read; Shep acts only while the check is
-fresh and the door two-way.
+The deadline is in the ledger. Shep's question extension runs `bercail shep question expire` at start and every 30 seconds, so at its next start it defaults the questions that are due, still fresh and still two-way. Each due question is checked live and the policy reread: one whose candidate changed keeps waiting for you, and a merge the policy no longer calls reversible waits with no countdown and can still be picked. Past the deadline of a door still two-way, the panel offers no pick. Shep checks again before acting on a default, and acts only while fresh and two-way.
 
-The default is the ledger's answer, not yours. It records the recommendation
-with the source `default after timeout`, at most once per question revision.
-Shep gets a [decision event](#desk-events) that says nobody picked, and acts on
-it once. Once the event is in Shep's inbox, the ledger marks the default
-`told`. If it could not be written, every later run tries again, however late;
-a told default, or one whose event is already in the inbox or delivered, is
-not sent again. One case is not covered: a crash between writing the event and
-marking it, then 30 days with no run that succeeds, after Shep's inbox has
-dropped the delivered copy. While Shep runs, it marks it within 30 seconds.
-Shep's question state lists defaults apart from your picks. Reports and
-descriptions say the choice was defaulted. A default is never an LGTM or a
-reviewer: a defaulted commit never carries `--reviewed-by`. The guard still
-blocks agents from `question answer`, and that op refuses the default's source.
+The default is the ledger's answer, not yours: source `default after timeout`, once per revision, with a [decision event](#desk-events) saying nobody picked, retried until it is in Shep's inbox (then marked `told`). Shep lists defaults apart from your picks and says the choice was defaulted. A default is never an LGTM or a reviewer, so no `--reviewed-by`; `question answer` refuses its source.
 
 ### The Decisions panel
 
-Every decision Shep asks you is also a card in the Shep view. **Decisions N**
-in Shep's header counts the pending ones; click it to show or hide the panel
-under Shep's terminal. A new card only changes the count: nothing opens, moves
-or takes the keyboard.
-
-Each card says, in words, where (the desk's space as Herdr names it), what (a
-change's lines and stakes), what Shep asks, Shep's brief, its recommendation
-and why, the choices, and when it was asked; the panel says when it last
-checked. A card whose candidate changed since Shep asked (a new
-staged tree, new commits, another branch or another base) says **stale** and what changed: Shep
-must ask again. One it cannot check (the checkout is gone, the policy could not
-be read) says **unknown** and why. A desk problem (gone, in another folder,
-another job's, no verifiable session, or no desk at all) is a `Warning:` line on
-a card that can still be answered. A card bound to a trail has **Open trail**,
-which opens the trail's page on entire.com. A [two-way door](#reversible-questions) counts
-down to its deadline (`two-way door: defaults to auth in 23 min`); other cards
-have no timer. Once it defaults, the card says **defaulted** and the choice it
-took, has no choices or answer button, and stays a day. **Discuss** on it still
-works: say there what you would change, and closing it tells Shep, with the
-branch's last reply. **Decisions N** counts only the cards that wait on you. Question tokens are the ledger's keys and never show. The panel reloads when the ledger changes, and every 30 seconds while it
-shows. With a [`[herdr] backend`](config.md#bercail-on-another-machine), it
-reads, answers and discusses on that machine, and looks at its questions every
-30 seconds, shown or not.
+Each question Shep asks is also a card. **Decisions N** in Shep's header counts the pending ones and shows or hides the panel; a new card only changes the count. A card says where (the desk's space), what (lines and stakes), what Shep asks, its brief, recommendation and why, the choices, and when. If the live check finds the candidate **stale**, the card says what changed and waits for Shep to ask again; one it cannot check (the checkout is gone, the policy unreadable) says **unknown**. A desk problem, or no desk at all, is a `Warning:` line on a card that can still be answered. A card bound to a trail has **Open trail**, its page on entire.com. A [two-way door](#reversible-questions) with a deadline counts down (`two-way door: defaults to auth in 23 min`), and once defaulted says **defaulted** for a day; Discuss on it still works, and closing it tells Shep what you would change. Tokens never show. The panel reloads with the ledger, and every 30 seconds while shown; with a [`[herdr] backend`](config.md#bercail-on-another-machine), on that machine.
 
 #### Answering
 
-The picker on a fresh card starts on Shep's recommendation (★). Click in the
-panel to give it the keyboard, then:
+The picker on a fresh card starts on Shep's recommendation (★). Click in the panel to give it the keyboard, then:
 
 | Key | Does |
 |-----|------|
@@ -506,123 +291,47 @@ panel to give it the keyboard, then:
 | Enter | answer with the picked choice |
 | d | open Discuss |
 
-A click on a choice picks it, and **Answer** records it. A card with no
-recommendation waits for a pick. Stale and unknown cards have no picker. A
-question with no choices is answered in Shep's chat.
+A click picks a choice and **Answer** records it. A card with no recommendation waits for a pick; stale and unknown cards have none; a question with no choices is discussed in chat, which records no answer.
 
-An answer runs a live check first, then the store's checked transition: once per
-question revision, one of its choices, only while nothing changed. It records
-the choice, where you picked it (`panel picker` or `discuss picker`), the time,
-and the head and staged tree the check saw. A second pick on the same revision
-is refused. Shep gets one [decision event](#desk-events) per pick, and its
-question state lists the last ten answers on every turn.
+The picker records an answer once per revision, only while the live check is fresh, with its source (`panel picker` or `discuss picker`), time, head and tree. A second pick is refused. Shep gets one [decision event](#desk-events) per pick.
 
-This counts a click or a key in the panel as yours. It is a local record you
-own, not proof of who pressed it: any program running as you can type or click
-(`wtype`, `ydotool`, `/dev/uinput`, Hyprland's virtual pointer), and Herdr sees
-those as yours. Herdr's scripted paths (keys.json, the palette, `herdr-app do`,
-toasts) reach a mod's commands, never the panel, and no command answers. The
-guard is the seatbelt for agents: it blocks writes to Shep's state folder,
-`questions.json` included,
-`bercail shep question answer`, and typing or clicking for you (`wtype`,
-`ydotool`, `xdotool`, `dotool`, `evemu`, `/dev/uinput`, and `hyprctl`'s
-`sendshortcut`, `sendkeystate` and `pass`, or a `dispatch exec` of one). A seatbelt,
-not a sandbox: a script file or another language gets past it.
+A click or key in the panel counts as yours: a record you own, not proof of who pressed it, since any program running as you can type or click. Herdr's scripted paths (keys.json, the palette, `herdr-app do`) never reach the panel. For agents the guard blocks writes to Shep's state folder, `questions.json` included, `bercail shep question answer`, and synthetic input (`wtype`, `ydotool`, `xdotool`, `dotool`, `evemu`, `/dev/uinput`, and `hyprctl`'s `sendshortcut`, `sendkeystate`, `pass`, or a `dispatch exec` of one). A seatbelt, not a sandbox.
 
 #### Discuss
 
-**Discuss** (or `d`) opens a dialog with Pi on a branch of the session the
-question came from, to talk it over before you pick:
+**Discuss** (or `d`) opens Pi on a branch of the session the question came from: if the desk was verified when Shep asked, Discuss branches its last complete entry. Otherwise it branches Shep's session through the turn that asked, including when the job's desk was gone. The branch is a new session in `~/.local/state/bercail/shep/discuss/`; the sources are only read, and `--continue` never picks it up. It runs the lead's model with `read`, `grep`, `find` and `ls` only, and `BERCAIL_ROLE=discuss`, under which the guard blocks every command and edit. `/pick` in it checks live and records the pick like the panel.
 
-- A desk's question (its desk checked out when Shep asked) branches that desk's
-  own Pi session at its last complete entry (a tool call still waiting for its result is left out).
-- Any other question, including a job's whose desk was gone, branches Shep's
-  session at the entry that asked it, through that turn's tool results and
-  reply, and nothing after.
+✕ or `/pick` closes it; **Continue discussion** reopens it. Closing without a pick sends Shep one event. Both events carry the branch's last reply, cut to 600 characters, as data. Each question has its own branch. A branch's first turn sends it all uncached; with the Claude bridge it gets its own session.
 
-The branch is a new session file in `~/.local/state/bercail/shep/discuss/`. The
-desk's and Shep's sessions are only read, and both keep running. It is not in
-Shep's `pi-sessions/`, so Shep's `--continue` never picks it up. Shep compacting
-or restarting while a branch is open changes neither: the branch is its own copy
-from the moment it was made.
-
-The branch reads but does not act. It runs on the lead's model with Pi's
-`read`, `grep`, `find` and `ls` tools only, no discovered extensions, skills,
-prompt templates or MCP, and `BERCAIL_ROLE=discuss`, under which the guard
-blocks every command and edit. So it cannot spawn or message desks, commit,
-merge, push, or record memories or rules. `/pick` in it shows the choices (Shep's
-recommendation marked), checks the question live, and records the pick like the
-panel does; a stale question says why and records nothing.
-
-The dialog closes with ✕ (a click beside it does not), or by itself after
-`/pick`. Closing ends the branch's Pi; **Continue discussion** opens the same
-branch again. When it closes without a pick, Shep gets one event saying so. Both
-events carry the branch's last reply, cut to 600 characters, as data. Pi's own
-branch summary would take a model call at close, so it is not used. Two
-questions can be discussed at once: each has its own branch, terminal and events.
-
-Cost: a branch's first turn sends the whole branch (after any compaction, its
-summary and the entries since) as new input. Its tools and system prompt differ
-from the source's, so the prompt cache does not carry over; later turns in the
-branch are cached as usual. With the Claude bridge, the branch gets its own new
-Claude Code session and never touches the source's.
-
-The CLI works without Pi or a mod too:
+The CLI works without Pi or a mod:
 
 ```bash
-bercail shep questions              # bounded pending projection
+bercail shep questions              # bounded pending projection (up to 20)
 bercail shep questions --json       # full snapshot and retained revisions
 bercail shep question check Q42@3   # recheck the candidate and current policy, with desk warnings (and a reversible one's door)
 bercail shep question thread release-plan
-bercail shep question panel         # the Decisions panel's JSON: pending questions, each checked, and a day of defaults
-bercail shep question expire        # record the defaults that are due (Shep's runtime runs it every 30 seconds)
+bercail shep question panel         # the panel's JSON: pending questions, each checked, and a day of defaults
+bercail shep question expire        # record the defaults that are due
 bercail shep question discuss Q42@3 # make (or find) the question's branch; prints its session file
-bercail shep discuss Q42@3          # Pi on that branch, read-only: what the Discuss dialog runs
+bercail shep discuss Q42@3          # Pi on that branch, read-only: what the dialog runs
 ```
 
-`question create`, `revise`, `reply`, `answer` and `withdraw` read JSON on
-stdin (`answer` is the panel's: `requestId`, `token`, `choice` and `source`; the
-guard blocks it for agents; `withdraw` takes `requestId`, `token` and `reason`). For example, a
-planning topic without a desk:
+`question create`, `revise`, `reply`, `answer` and `withdraw` read JSON on stdin. `answer` is the panel's (`requestId`, `token`, `choice`, `source`), and the guard blocks it for agents; `withdraw` takes `requestId`, `token` and `reason`. A planning topic without a desk:
 
 ```bash
 printf '%s\n' '{"requestId":"plan-1","kind":"planning","prompt":"Which approach?","options":["small","full"],"origin":{"event":"conversation:entry-7","session":"shep-session","entry":"entry-7"},"repo":"/path/to/repo","issue":null,"topic":"release-plan","desk":null,"base":null,"action":null}' | bercail shep question create
 printf '%s\n' '{"requestId":"answer-1","token":"Q1@1","answer":"small","source":"local-cli:unverified"}' | bercail shep question reply
 ```
 
-For a job, provide its issue and its desk address when it has one (`null`
-otherwise); review/action also require an action and base ref. `revise` uses the same fields plus `token` and a new
-request ID. A revision cannot change repo, job or topic: create another question
-instead. `check` always reports `authority: false`, including when fresh. Recheck
-target and policy again through existing procedures before an authorized action;
-this helper does not execute one or close a race with a separate shipping command.
-
-State lives in `~/.local/state/bercail/shep/questions.json` (or under
-`$XDG_STATE_HOME`). Kernel `flock` serializes read/modify/write across processes;
-fsync plus atomic rename preserves the previous complete snapshot on interruption.
-Process death releases the lock. A corrupt store fails closed and is not
-replaced. Selected topic persists separately from incoming notices. Before each
-model run and in compaction/rollover, Shep reloads this store rather than
-reconstructing question state from narrative. The bounded projection shows up
-to 20 pending questions; the JSON snapshot contains the full history.
-
-A read-only Herdr board, unread/reconciliation UI, isolated conversation views
-and proof of who picked an answer are not part of this feature.
+For a job, give its issue and its desk address when it has one (`null` otherwise); review and action also need an action and base ref. `revise` takes the same fields plus `token` and a new request id. `flock` serializes writers, and fsync plus atomic rename keeps the last complete snapshot on interruption. A corrupt store fails closed and is not replaced.
 
 ## Compaction
 
-Pi compacts a session when its context passes `window - reserveTokens`: it summarizes the older part and keeps the most recent `keepRecentTokens` word for word. Pi's defaults (16384 and 20000) let Shep's 1M-token window fill to about 984k tokens first, which Shep's single session never reached. Shep gets its own numbers, and its own summary.
+Pi compacts when the context passes `window - reserveTokens`, keeping the last `keepRecentTokens` as they were. Shep has its own threshold and summary.
 
 ### Settings
 
-bercail writes Shep's compaction into its workspace's `.pi/settings.json`, which Pi reads as project settings, and Shep leaves `~/.pi/agent/settings.json` alone (bstack's [bridge reserve](bstack.md#how-it-runs) lives there):
-
-```json
-{"compaction": {"enabled": true, "keepRecentTokens": 50000,
-  "modelOverrides": {"claude-bridge/claude-opus-5-5": {"keepRecentTokens": 50000, "reserveTokens": 750000}}}}
-```
-
-Pi loads project settings only from a folder you trust, and `--no-context-files` does not change that: without trust they are skipped, or Pi asks. Shep's workspace is a folder only bercail writes to, so Shep starts Pi with `--approve`, which trusts it for that process and saves nothing. Other keys in that file are kept; bercail rewrites `compaction` at each start, from `config.toml`:
+bercail writes `compaction` into Shep's workspace `.pi/settings.json` at each start, keeping its other keys, and leaves `~/.pi/agent/settings.json` alone. Shep starts Pi with `--approve`, which trusts that folder for the process only.
 
 ```toml
 [shep]
@@ -631,111 +340,77 @@ keep_recent = 50000   # recent tokens kept word for word
 rollover = false      # true: a fresh session instead of a threshold compaction, and each new day
 ```
 
-`compact_at` becomes `reserveTokens = window - compact_at` for the lead model, with its window from `pi --list-models` (1M for Opus 5.5, so 750000). Why 250k: most of Shep's context is `bd`, `hc` and log output that is stale once a job moves on, and every turn sends all of it again; past a quarter of the window that costs time and money for nothing, and a compaction starts over from a fresh board. Why 50k: the last several desk events and your last exchanges stay as they were, briefs included, while the summary is rebuilt. When bercail cannot place `compact_at` (not a number, not below the window, or a window `pi --list-models` does not show), Pi's threshold applies and bercail says why at start. On a model whose window is 250k or less, the default `compact_at` leaves Pi's threshold without a word. On a `claude-bridge` model the reserve is never below bstack's 40000, so a `compact_at` within 40k of the window compacts at `window - 40000` instead, before Claude Code refuses the prompt. Changes take effect at Shep's next start.
+`compact_at` becomes `reserveTokens = window - compact_at`. 250k because most of Shep's context is `bd`, `hc` and log output, stale once a job moves on and resent every turn; 50k keeps the last desk events and exchanges. A `compact_at` that cannot be placed leaves Pi's threshold, with a word at start; on a window of 250k or less, the default leaves it silently. A `claude-bridge` reserve is never below bstack's 40000. Changes apply at the next start.
 
 ### The summary
 
-`compaction.ts` builds the summary Pi saves, for `/compact` and for automatic compaction alike, from four parts:
-
-1. **The job board**, from `bercail shep board` at that moment. It replaces whatever the old messages said about jobs.
-2. **The standing rules**, from `preferences.md`.
-3. **Durable questions**, reloaded from the ledger with IDs/revisions and unverified proposals. This is a snapshot; `/questions` reloads it.
-4. **Narrative decisions and discussion** from Pi's `serializeConversation` text. The model is told not to reconstruct question state or approval authority. This rationale is not permission to act.
-
-If any part fails (the board, the model, an empty answer), it returns nothing and Pi compacts the default way: the session is never lost. Each compaction, each fallback with its reason, and each failed compaction (`session_compact_failed`) is a line in `~/.local/state/bercail/shep/compaction.log`.
+`compaction.ts` builds it from the job board (`bercail shep board` then), the standing rules, the durable questions reloaded from the ledger, and the narrative, which the model is told not to rebuild question state or approval from. If a part fails, Pi compacts its default way. Each compaction, fallback and failure is logged in `~/.local/state/bercail/shep/compaction.log`.
 
 ### Rollover
 
-With `rollover = true`, Shep does not compact forever. When the context passes `compact_at`, it skips that compaction and, as soon as Shep is idle, starts a fresh session whose first message is the board, rules and durable questions and names the previous session's file. The first turn on a new day does the same. `/shep-rollover` in Shep does it by hand, whatever the setting. A rollover that fails (the board does not build, say) is logged, and compaction takes over again until Shep restarts.
-
-To go back to the old session, run `/resume` in Shep and pick it; the rollover's first message names its file. Once you write in it, it is the most recent session in `pi-sessions/`, so `bercail shep run` continues it from then on.
+With `rollover = true`, past `compact_at` Shep instead starts a fresh session once idle, whose first message is the board, rules and questions and names the old session's file. So does the first turn of a day, and `/shep-rollover` by hand whatever the setting. A failed rollover is logged, and compaction takes over until Shep restarts. `/resume` goes back to an old session; once you write in it, `bercail shep run` continues it.
 
 ## Background Sheps
 
-Shep never watches, waits, polls, or sleeps on anything itself. When something needs waiting on (a CI run, a deploy, a desk, a release), or a step you approved has to happen once it is done, Shep writes it as a beads issue (what to wait for, what to do after, when to stop, what not to do), starts a background Shep on it, tells you in one line, and goes back to you.
+Shep never deliberately waits more than 10 seconds itself. For a CI run, a deploy, a desk or a release, or a step you approved for after it, Shep writes a job, a beads issue or a no-branch trail in an Entire repo (what to wait for, what to do after, when to stop, what not to do), starts a background Shep on it, tells you in one line, and goes back to you.
 
 ```bash
-bercail shep bg --issue bercail-ow2                     # from the issue's repo
-bercail shep bg --issue bercail-ow2 --cwd ~/Work/bercail
+bercail shep bg --issue bercail-ow2        # from the issue's repo, or pass --cwd <checkout>
 ```
 
-It prints `{address, name, cwd, issue, issue_title}`. The background Shep is one hc terminal named `shep-bg-<id>`, started in the background with no space, so nothing in the app moves or takes focus; the agents list shows it. It runs `bercail-desk-agent` with the lead's selected model/provider and guard, but replaces the coding prompt with [`shep/BACKGROUND.md`](../shep/BACKGROUND.md). It disables skill, context, prompt-template, MCP and automatic extension discovery. Its tools are read/search/list, `bash` and `shep_wait`. It reads its issue with `bd show` and `bd comments`, and reports with `bd comment` (a trail: `bercail job show` and `bercail job comment`). It has no write or edit tool and launches no agents. `shep_wait` waits on a CI run (`gh run watch`), a desk (`hc wait`), a delay of up to an hour, or an Entire trail's gates: `kind: trail`, `target` the trail as `<n>` or `<repo>/<n>`, and `head` the commit (7 or more hex digits). It reads `entire trail show <target> --json` every 30 seconds, for up to an hour, on the change the trail was reached through or its one open change. It returns once that change's head is `head` and it is mergeable. It stops with an error when the head has moved, a blocking gate has failed, or the change is already merged or closed. Entire's gate state can also be null, which counts as not ready. Missing required lead/model/guard resources fail admission; no generic Pi fallback. Its first message is one line pointing at the issue. A second `bg` for an issue whose background Shep is still live is refused.
+It prints `{address, name, cwd, issue, issue_title}`. The worker is one hc terminal, `shep-bg-<id>`, with no space, so nothing moves. It runs `bercail-desk-agent` on the lead's model and guard, with [`shep/BACKGROUND.md`](../shep/BACKGROUND.md) as its prompt and discovery off. It has read/search/list, guarded `bash` and `shep_wait`. It reads the issue with `bd show` and `bd comments`, reports with `bd comment` (a trail: `bercail job show` and `bercail job comment`), then stops. As `shep-bg` it can run checks but not launch agents, change the checkout, commit, push, tag, release, open a PR, link or merge a trail. It writes only scratch files and its report: the guard refuses a shell write it recognizes outside its temp folders, new unprotected files under `.bercail/` and the standard streams, and a `/tmp` write warns while its `TMPDIR` is elsewhere; there is no write or edit tool. Issue prose cannot widen those limits. The guard is not an OS sandbox. Missing resources fail the start, with no generic fallback. A second `bg` for a live worker's issue is refused.
 
-Its labels are `bercail.role=agent`, `bercail.shep=bg`, `bercail.issue`, and `bercail.issue_title`, with no `bercail.space`. The notify follower treats it like a desk, so its finish or block reaches Shep as a [desk event](#desk-events) whose text says `Background Shep <address>` and whose `agent.role` is `shep-bg`. It is started with `--no-notify`, so hc types nothing into Shep's prompt, `--outlive-parent`, so restarting Shep does not end the wait, and `--rm`. Once Shep has reported a finished one, `hc kill <name>` ends and removes it; killing it sends no second event.
+`shep_wait` waits for CI (`gh run watch`), a desk (`hc wait`), a delay of up to an hour, or a trail. For `kind: trail`, give `target` as `<n>` or `<repo>/<n>` and `head` as at least seven hex digits. Every 30 seconds for up to an hour it reads `entire trail show <target> --json` for the addressed change or the trail's single open change. It returns when that head is mergeable; null gate state means not ready. A different head, failed blocking gate, or merged or closed change stops the wait with an error.
 
-It runs with `BERCAIL_ROLE=shep-bg`. The guard lets its bash read, run checks and comment, but refuses a commit, push, tag, release, PR, `entire trail link`, a git command that moves the tree (`switch`, `pull`, `cherry-pick`, `gh pr checkout`, …) or a shell write outside `/tmp`, `$TMPDIR` and `/dev/null`, under any policy, and an `entire trail merge` as for every role but Shep. Generated issue prose cannot widen that. The worker never runs the follow-up: it reports the outcome on the issue and stops, and its finish reaches Shep as a desk event. Shep runs the follow-up, such as `entire trail merge`, in its own session after your yes or a standing rule, where the guard asks. This is a narrow trusted-extension profile, not an OS sandbox. A worker report or completed wait does not complete a later author/publish or cleanup request.
+Its labels are `bercail.role=agent`, `bercail.shep=bg`, `bercail.issue` and `bercail.issue_title`, so its finish reaches Shep as a [desk event](#desk-events) saying `Background Shep <address>` (`agent.role` `shep-bg`). It starts with `--no-notify`, `--outlive-parent` and `--rm`; `hc kill <name>` ends it once reported. Its first prompt only names the issue. A step that needs a person comes back in its report with its target, blocker and next action, never as an unwatched prompt, and a finished wait does not complete what it waited for. Shep ends a finished worker; a blocked one stays until its step is settled. The worker never runs the follow-up: a trail merge, for instance, stays in Shep's session after your yes or a standing rule, where the guard can ask.
 
 ## Landing a change
 
-Once the person has reviewed a desk's staged change and asked Shep to ship it, Shep runs `bercail land <worktree>` (with `--reviewed-by "<their name>"` when the change waits for their LGTM). It refuses anything but Shep (`BERCAIL_ROLE=shep`), a checkout on the trunk itself or on no branch, and a description that fails `bercail describe check`. Then it commits the staged tree with the text `bercail describe commit` prints. A rerun whose commit is already HEAD makes no second one.
+After review and your request to ship, Shep runs `bercail land <worktree>` with `--reviewed-by "<name>"` when your LGTM is required. Only Shep can run it, on a branch other than trunk, with a valid `/validate` description. It commits the staged tree with the `bercail describe commit` text, then starts a waiter and returns. Rerunning with the described tree already at HEAD makes no second commit. **Land does not push.** Shep pushes the named branch to origin so branch CI runs.
 
-It then starts a background hc terminal, `land-<12-character sha>`, labelled `bercail.land=wait` and `bercail.land_head=<sha>`, and ends. That terminal runs `bercail land --wait <sha> <worktree>`: every 30 seconds, for up to two hours, it reads the runs GitHub started for the push of that commit to that branch (`gh run list --commit <sha> --branch <branch> --event push`). Every such run counts and none is picked by name, so it assumes the repo's CI runs on a branch push: in a repo whose CI runs only on PRs, another workflow that runs on push would make it ready on its own. It writes one `land` event to Shep's inbox:
+The hc terminal `land-<12-character sha>` (`bercail.land=wait`, `bercail.land_head=<sha>`) runs `bercail land --wait <sha> <worktree>`. Every 30 seconds for up to two hours it checks `gh run list --commit <sha> --branch <branch> --event push`. It does not select workflows by name: if required CI runs only on PRs, an unrelated passing push workflow can give a false ready. Bercail's CI runs on every branch push.
 
-- `ready`: every run finished, and at least one passed. The text names the commit to push: `git push origin <sha>:<trunk>` where the repo commits straight to main.
-- `failed`: a run finished any other way, or only skipped or neutral runs finished. Its text names the runs and says not to land it.
-- `moved`: CI passed, but the branch is no longer at that commit. The new commits need their own review and land.
-- `timeout`: no result in time. The text says whether there was no run (the branch is not pushed) or one still going.
+Shep gets one `bercail.land/v1` inbox event (`kind: land`), with the status, commit, branch and runs. Its text comes from those facts, not desk prose; the issue comes from the checkout's handoff record.
 
-`bercail land` never pushes. Shep pushes the branch (`git -C <worktree> push origin <branch>`, which land prints as the next step) so its CI runs. On a `ready` event, Shep lands the commit it names the way the repo's policy says: a push to main, a PR, or a trail, with plain git, gh or entire under its guard, which keeps the policy's rules and its ask. Only a `ready` event says ready. The guard does not yet check that a push to main is a commit whose CI passed: Shep's rules say so, not a refusal. bercail's own CI runs on every branch push for this.
-
-```json
-{"source":"bercail","schema":"bercail.land/v1","kind":"land","sink":"shep","at":"2026-11-20T00:39:22Z",
- "event_id":"land:<sha>:2026-11-20T00:39:22Z",
- "land":{"status":"ready","head":"<sha>","branch":"feat/login","runs":[{"name":"CI","conclusion":"success","url":"..."}]},
- "space":{"repo":"app","checkout_path":"/path/desk"},"desk":{"issue":"app-1","issue_title":"Fix the login"},
- "text":"feat/login at 0be22854b643 in app is ready to land: CI passed. Land that commit the way the repo policy says (straight to main: git push origin <sha>:main)."}
-```
-
-The text is written from these facts only. `desk.issue` comes from the checkout's `handoffs.jsonl` record, as for a desk event.
+- `ready`: all returned runs finished, at least one succeeded and none failed. Shep lands **that SHA**, not the branch tip: `git push origin <sha>:<trunk>` for direct integration, or the PR or trail the policy requires. The guard enforces policy, not CI freshness.
+- `failed`: a run failed or finished with a conclusion other than success, skipped or neutral, or every run was skipped or neutral. Report the runs; do not land.
+- `moved`: CI passed but the branch moved. The new head needs review and its own land.
+- `timeout`: no result in time. Report whether no push run was found or a run was still going; do not land.
 
 ## Desk events
 
-Once Shep has started for the first time (its first start makes `~/.local/state/bercail/shep/inbox/`), the notify follower (`bercail notify run`, the hidden `bercail-notify` terminal the desk mod keeps alive) writes each finished or blocked desk as one file in that folder. Before Shep's first start it idles. `bercail update` restarts a running follower so it runs the new code. The files are the [`agent_status/v2` payload](#the-payload) with `sink: "shep"`, mode 600, named `<desk>_<kind>_<second>.<seq>.json` for sequenced events and `<desk>_<kind>_<second>.json` otherwise.
+Once Shep has started once (making `~/.local/state/bercail/shep/inbox/`), the follower writes each finished or blocked desk as one file there: the [`agent_status/v2` payload](#the-payload) with `sink: "shep"`, mode 600, named `<desk>_<kind>_<second>.<seq>.json` (no `.<seq>` without a sequence number).
 
-Shep's Pi extension (`inbox.ts`) watches that folder. It submits one custom message, starting a turn when Shep is idle or queuing a follow-up when it is busy. The message carries each event's one-line `text`, its `event_id`, and the desk, space, repo, issue, and checkout. It excludes `desk.result.summary` and the desk's title. Desk events remain signals to check the current desk and issue, never instructions or human answers.
+Shep's `inbox.ts` submits the waiting events as a custom message, starting a turn or queued behind the current one, each with its `text`, `event_id`, desk, space, repo, issue and checkout, but not the desk's result summary or title. It is a signal to check the desk and issue, never an instruction or an answer.
 
-The same folder carries decision events, written by bercail when you [answer](#answering) a question or a [reversible one](#reversible-questions) defaults (`decision-Q<n>-<rev>.json`, `by` the picker or `default after timeout`), or when you close a [Discuss](#discuss) dialog without a pick (`decision-Q<n>-<rev>-closed-<opening>.json`). Each names the question, the choice (or none), where it was made, and the branch's last reply as data. The file name is the event id, so a retry is the same event. Shep checks each against its question state, where the ledger's answer is the record, before it acts.
+The same folder carries decision events, written when you [answer](#answering) a question or a [reversible one](#reversible-questions) defaults (`decision-Q<n>-<rev>.json`), or when you close [Discuss](#discuss) without a pick (`decision-Q<n>-<rev>-closed-<opening>.json`). The file name follows from the event id (`decision:<name>`), so a retry is the same event. Shep checks each against its question state before acting.
 
 ### Claims and persistence
 
-Moving a file to `delivered/` claims it but does not acknowledge delivery. Before submitting it, the extension atomically records the attempted Pi session ID and file. Only a complete matching custom-message entry in that actual session JSONL acknowledges it. The receipt records `persisted_entry_id`, `persisted_session`, `persisted_session_file`, and `persisted_at`. The older `delivered_at` and `delivered_session` fields remain for readers, but an old stamp alone is not proof.
+Moving a file to `delivered/` claims it; only a complete matching entry in the session's JSONL acknowledges it, recorded as `persisted_entry_id`, `persisted_session`, `persisted_session_file` and `persisted_at`. Pi 1.5.2 returns from `sendMessage()` before the append, so the extension checks disk on later hooks and polls, never trusting memory.
 
-This distinction matters in Pi 1.5.2: `sendMessage()` returns before a queued follow-up is consumed, and `message_end` runs before the session append. A new custom-only session can even reach its first model request before Pi creates the session file. The extension checks disk on later hooks and polls. It never acknowledges a memory-only entry.
-
-After a process dies, the next consumer recovers unacknowledged files in `delivered/`, including old unstamped claims. It first checks the original session. A saved entry repairs the receipt without another message. A readable session without that entry permits replay. A file that did not exist before the attempt and still does not exist permits replay too, assuming nobody externally deleted it. A missing previously existing session, unreadable or incomplete history, or an ambiguous old session ID holds the event as uncertain. Restore access to that original session and restart Shep to retry verification. It does not silently bind the event to a replacement session.
-
-One consumer holds a local Linux `flock` for its session lifetime, through a child that exits when Pi's stdin pipe closes. There is no expiring lease to steal from a busy session. Another consumer pauses without claiming files. If `flock` is unavailable or the lock is lost, delivery pauses visibly. Restart a paused contender after the owning consumer ends. The lock file must not be deleted while consumers run.
+After a crash, the next consumer recovers unacknowledged claims: a saved entry repairs the receipt with no second message; a readable session without it, or one never created, allows a replay; a missing or unreadable session holds the event as uncertain until that session is restored and Shep restarts; a conflicting claim holds it until the conflict is resolved. Neither is bound to a replacement. One consumer holds a `flock` for its session's life, and delivery pauses visibly without it; restart a paused contender once the owner ends. Do not delete the lock file while consumers run.
 
 ### Duplicates and limits
 
-Repeated envelopes with the same event ID produce one injected message, even under different filenames. Receipts are kept for 30 days. Unacknowledged and uncertain claims are not aged out. Compaction and tree navigation do not invalidate disk persistence evidence. Legacy stamps are checked against the named session instead of being trusted.
-
-With an intact local spool, readable session storage and eventual session progress, accepted events survive a process crash after claim or enqueue. A crash after session persistence but before acknowledgement does not inject a second notice. These are process-crash guarantees, not transactional power-loss durability. External deletion of session history, an independently killed lock holder, and replay after receipt retention are outside those guarantees.
-
-Transport deduplication does not prove exactly-once model reports or arbitrary external actions. A response can stream before its assistant entry is saved, and an external action can complete before its result is recorded. Shep must recheck current source state and use action-specific idempotency where available. Persistence means neither handled, action-completed, nor read by the person. No read or handled acknowledgement is invented here.
-
-Within an ordered `hc events` stream, the follower ignores replayed status events by sequence number, before they can change the desk's status or send a second finish. A later finish has a different sequence number, so it is not dropped just because the desk, session and report are unchanged. A new status event is not proof of a new Pi turn; when the core reports a second transition, the follower does not guess whether it's a duplicate.
-
-The inbox filename omits the follower's process ID. For live status events with a valid sequence number, it includes that number so two finishes in the same second reach Shep separately. Without a usable sequence number (for example, when recovering a transition from a snapshot), the follower still coalesces changes for the same desk and kind in the same second. The delivery guarantee applies to retained accepted envelopes, not to every historical desk transition.
+One event id gives one message, under any file name, while its receipt is kept: 30 days; uncertain claims never age out. These are process-crash guarantees, not power-loss ones. Persisted does not mean handled or read, and transport deduplication does not make a model report or an outside action exactly once: Shep rechecks state before acting. The follower drops replayed `hc events` by sequence number; without one, a desk's changes of one kind in one second are coalesced.
 
 ### Reconciliation after follower gaps
 
-The follower also writes one private `source-state.json` beside the inbox. It is a current projection from snapshots and status changes, not a second job database or an event log. It includes observed timestamps and desk/space/repo/issue/checkout mappings, but no desk-authored prose, results, event IDs or human answers. Whole snapshots replace gone mappings.
-
-When a done, idle or blocked source mapping has no represented inbox notice, Shep receives an explicitly **reconstructed, possibly stale history-gap observation** with its observation time and a separate local notice ID. That ID is not a historical finish or block event ID. Identical represented observations are suppressed. For status transitions that enqueue an event, the follower queues it before publishing that transition's source state. When the follower looks up changed labels on a desk it already tracks, `hc get` can show a status the stream has not delivered yet. The source keeps the last streamed status until the next status event. A first-seen desk still uses the lookup to recover its current status. Shep reads `source-state.json` before claiming the inbox so those writes landing mid-drain cannot also produce a reconstructed notice. A source snapshot cannot recover intervening transitions, a vanished desk, historical completion times or answers. Check the current board or brief before acting.
+The follower keeps `source-state.json` beside the inbox: current desk mappings with observed times, and no desk prose, results or answers. When a done, idle or blocked desk has no notice, Shep gets a **reconstructed, possibly stale history-gap observation** with its own notice id. The follower queues an event before it publishes that state, and Shep reads the state before claiming the inbox, so a change whose matching mapping is still kept in an event or receipt does not also come back reconstructed. That is no guarantee across a gap or past receipt expiry. Check the board or brief before acting on one.
 
 ### Proving it arrived
 
-`bercail shep status` separates queued files, claims awaiting persistence (including uncertain holds), persisted notices and quarantined malformed files. It names the last persistence receipt. In the session, a notice is a `custom_message` with `customType: "bercail-desk-event"`. Its presence is distinct from Shep's subsequent reply or your reading it.
+`bercail shep status` lists queued files, claims awaiting persistence (uncertain ones included), persisted notices and quarantined malformed files, and the last receipt. In the session a notice is a `custom_message` with `customType: "bercail-desk-event"`, which is not Shep's reply or your reading it.
 
 ### The follower
 
-`bercail notify run` follows the desk agents (hc terminals labelled `bercail.role=agent`) with `hc events`. It queues only these:
+`bercail notify run`, the hidden `bercail-notify` terminal the desk mod keeps alive, follows the desk agents (`bercail.role=agent`) with `hc events` and queues two kinds:
 
 - `finished`: working or blocked → done or idle
 - `blocked`: once each time the agent blocks
 
-`run` is the only `notify` command. The webhook sinks (`notify add`, `status`, `test`, `repo` and `check`, and `~/.config/bercail/notify.d/`) were removed in v0.18; bercail no longer reads that folder and leaves it in place.
+Before Shep's first start it idles, and `bercail update` restarts it on new code. `run` is the only `notify` command: the webhook sinks were removed in v0.18, and `~/.config/bercail/notify.d/` is no longer read.
 
 ### The payload
 
@@ -751,6 +426,10 @@ Each event file is `bercail.agent_status/v2`:
  "text":"lef2745-2vs: Fix the login timeout. Desk t9 (Render-preview_Leftlane_app) finished."}
 ```
 
-`agent.address` is the hc terminal (`hc get`/`hc read` it). `agent.role` is `desk`, or `shep-bg` for a [background Shep](#background-sheps). `desk.issue` and `desk.issue_title` are the terminal's `bercail.issue` and `bercail.issue_title` labels when it has them. `desk.issue`, `desk.issue_title`, `stage`, and `harness` otherwise come from the matching `handoffs.jsonl` record (`harness` falls back to `agent.app`; `issue_title` is null when that record has none); a record or result for another issue than the labels name is left out. `desk.result` is `status`, `summary` (its first 500 characters), and `session_id` from the checkout's `.bercail/handoff-result.json` when one exists (usually `null`: headless runs have no desk terminal, so they send nothing). `text` is one line for a person: `<id>: <title>. Desk <address> (<space name>) finished.` or `is blocked.` (`Background Shep <address>` for a background Shep); the bare id when there is no title, and no parentheses when the space has no name.
+`agent.address` is the hc terminal. `agent.role` is `desk`, or `shep-bg` for a [background Shep](#background-sheps). `desk.issue` and `issue_title` come from the terminal's labels, else the matching `handoffs.jsonl` record, as do `stage` and `harness` (which falls back to `agent.app`); a record for another issue is left out. `desk.result` is from the checkout's `.bercail/handoff-result.json` (`status`, the first 500 characters of `summary`, `session_id`), usually `null`. `text` is one line: `<id>: <title>. Desk <address> (<space name>) finished.` or `is blocked.`, with `Background Shep <address>` for a worker.
 
-**Headless runs send nothing.** Only desks (`handoff-spawn --branch`) have a terminal the follower can watch. For a headless run, `handoff-spawn` returns when the run ends and `.bercail/handoff-result.json` holds the outcome. To wait on a desk yourself, use `hc wait <desk>`.
+**Headless runs send nothing**: they have no terminal to watch. `handoff-spawn` returns when one ends, with the outcome in `.bercail/handoff-result.json`. To wait on a desk yourself, use `hc wait <desk>`.
+
+## Why
+
+Shep's rules follow the [No AI Slop manifesto](https://www.slopmanifesto.com/); [the docs index](README.md) maps each value to what bercail does.

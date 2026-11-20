@@ -84,6 +84,12 @@ async function body(run: string): Promise<void> {
   symlinkSync(PI, join(binp, "pi"));
   const share = join(home, ".local/share/bercail/shep");
   copyFileSync(join(ROOT, "shep/SHEP.md"), join(share, "SHEP.md"));
+  // `bercail shep run` loads the desk extension from the install (lib/shep.sh).
+  mkdirSync(join(home, ".local/share/bercail/pi-extensions"), { recursive: true });
+  copyFileSync(
+    join(ROOT, "config/pi/extensions/bercail-desk.ts"),
+    join(home, ".local/share/bercail/pi-extensions/bercail-desk.ts"),
+  );
   copyFileSync(join(ROOT, "shep/pi/inbox.ts"), join(share, "pi/inbox.ts"));
   for (const file of ["compaction.ts", "questions.ts", "question-commands.ts", "question-target.ts", "question-cli.ts"])
     copyFileSync(join(ROOT, "shep/pi", file), join(share, "pi", file));

@@ -97,6 +97,12 @@ async function body(dir: string): Promise<void> {
     "pi/question-cli.ts",
   ])
     copyFileSync(join(ROOT, "shep", rel), join(share, rel));
+  // `bercail shep run` loads the desk extension from the install (lib/shep.sh).
+  mkdirSync(join(home, ".local/share/bercail/pi-extensions"), { recursive: true });
+  copyFileSync(
+    join(ROOT, "config/pi/extensions/bercail-desk.ts"),
+    join(home, ".local/share/bercail/pi-extensions/bercail-desk.ts"),
+  );
   writeFileSync(
     join(home, ".local/share/bercail/pi/lead.json"),
     JSON.stringify(["pi", "--model", "fake/model:high", "-e", join(ROOT, "tests/shep_context_provider.ts")]),
