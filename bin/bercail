@@ -259,6 +259,12 @@ main() {
       export BERCAIL_SELF
       cmd_review_pr "$@"
       ;;
+    cleanup)
+      load_libs
+      # shellcheck source=/dev/null
+      source "$(find_lib_dir)/cleanup.sh"
+      cmd_cleanup "$@"
+      ;;
     update)
       update_from_tree "$@"
       load_libs
