@@ -394,6 +394,141 @@ GH
 ~/Work/app: 0 of 10 lines wait on the person; a new desk fits its review budget." ]] || fail "empty queue: $out"
 }
 
+# ~/Work/kvm, hosted on Entire as et/lab/kvm, and an entire stand-in that reads
+# $HC_DATA/entire/: list.json, show-<n>.json and findings-<repo>-<n>.json.
+trail_fixture() {
+  repo kvm
+  git -C "$HOME/Work/kvm" remote add origin entire://aws-us-east-2.entire.io/et/lab/kvm
+  printf '%s\n' "$HOME/Work/kvm" >"$STATE/repos"
+  worktree kvm fix
+  record --arg p "$HOME/Work/kvm.fix" '{path: $p, branch: "fix", issue: "trail:7", space: "sp3"}'
+  trail_data
+  cat >"$BATS_TEST_TMPDIR/bin/entire" <<'EOF'
+#!/usr/bin/env bash
+printf 'entire %s\n' "$*" >>"$LOG"
+d="$HC_DATA/entire"
+[[ " $* " == *" --project et/lab "* ]] || exit 2
+case "$1 $2 $3" in
+  "trail list --project") [[ " $* " == *" --repo et/lab/kvm --status open "* ]] && cat "$d/list.json" ;;
+  "trail show "*) cat "$d/show-$3.json" ;;
+  "trail finding list") [[ "$4" == --trail ]] && cat "$d/findings-${5/\//-}.json" ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/entire"
+}
+
+# The open trails. Trail 7 waits on approvals with three open findings;
+# trail 6 passed its gates. Trail 7's change in another repo, trail 5 (planning)
+# and trail 8 (complete) are not this checkout's review.
+trail_data() {
+  local d="$HC_DATA/entire"
+  mkdir -p "$d"
+  jq -n '{items: [{number: 8, phase: "complete"}, {number: 7, phase: "building"}, {number: 6, phase: "building"},
+    {number: 5, phase: "planning"}], nextPageToken: null}' >"$d/list.json"
+  jq -n '{number: 7, title: "Read the gateway frames", changes: [
+    {repository: "kvm", number: 9, branch: "fix", status: "open", updatedAt: "2026-11-19T10:00:00Z",
+     url: "https://entire.com/et/lab/-/trails/7/changes/kvm/9",
+     mergeability: {head_sha: "abc", mergeable: false, gates: [
+       {gate_key: "approvals", blocking: true, status: "pending"}, {gate_key: "findings", blocking: true, status: "passed"},
+       {gate_key: "checks", blocking: false, status: "failed"}]}},
+    {repository: "kvm", number: 4, branch: "old", status: "merged", url: "u4", mergeability: null},
+    {repository: "web", number: 2, branch: "fix", status: "open", url: "u-web", mergeability: null}]}' >"$d/show-7.json"
+  jq -n '{number: 6, title: "Pin the transport", changes: [
+    {repository: "kvm", number: 11, branch: "pin", status: "open", updatedAt: "2026-11-18T10:00:00Z",
+     url: "https://entire.com/et/lab/-/trails/6/changes/kvm/11",
+     mergeability: {head_sha: "def", mergeable: true, gates: [{gate_key: "approvals", blocking: true, status: "passed"}]}}]}' \
+    >"$d/show-6.json"
+  jq -n '{counts: {Open: 3, OpenHigh: 1, OpenMedium: 0, OpenLow: 2, Resolved: 4}, findings: []}' >"$d/findings-kvm-9.json"
+  jq -n '{counts: {Open: 0, OpenHigh: 0, OpenMedium: 0, OpenLow: 0}, findings: []}' >"$d/findings-kvm-11.json"
+}
+
+@test "shep queue and board: an Entire repo's trail changes in review, with their open findings, gates and trail links" {
+  local out want
+  trail_fixture
+  out="$(shep queue --repo "$HOME/Work/kvm")" || fail "queue: $out"
+  want="Review queue: 0 lines in 2 changes
+~/Work/kvm: 0 of 1000 lines
+- trail 6: Pin the transport · change kvm/11 · no open findings · gates: every blocking gate passed · https://entire.com/et/lab/-/trails/6/changes/kvm/11
+- trail 7: Read the gateway frames · change kvm/9 · 3 open findings (1 high, 2 low) · gates: waiting on approvals · https://entire.com/et/lab/-/trails/7/changes/kvm/9
+~/Work/kvm: 0 of 1000 lines wait on the person; a new desk fits its review budget."
+  [[ "$out" == "$want" ]] || fail "queue: $(diff <(printf '%s\n' "$want") <(printf '%s\n' "$out"))"
+  out="$(shep queue --repo "$HOME/Work/kvm" --json)" || fail "queue: $out"
+  jq -e --arg p "$HOME/Work/kvm.fix" '.items[1] | .kind == "trail" and .trail == 7 and .counts and .space == "sp3" and .path == $p
+    and .findings == {open: 3, high: 1, medium: 0, low: 2} and .gates.state == "pending"' <<<"$out" >/dev/null || fail "json: $out"
+  out="$(shep board)" || fail "board: $out"
+  [[ "$out" == *$'\n- trail 7: Read the gateway frames · change kvm/9 · 3 open findings (1 high, 2 low) · '* ]] || fail "board: $out"
+  if grep '^entire ' "$LOG" | grep -v -E '^entire trail (list|show|finding list) '; then fail "entire ran more than reads"; fi
+  if grep -E '^entire trail (show|finding list) .*(\b[58]\b|web)' "$LOG"; then fail "read trails that are not in review here"; fi
+}
+
+@test "shep queue: a failed or malformed trail read is UNKNOWN, never a queue without the trail" {
+  local out file body
+  trail_fixture
+  # Entire fails, or exits 0 with nothing or with what is not its JSON: each is UNKNOWN.
+  while IFS='|' read -r file body; do
+    trail_data
+    if [[ "$body" == gone ]]; then rm "$HC_DATA/entire/$file.json"; else printf '%s' "$body" >"$HC_DATA/entire/$file.json"; fi
+    out="$(shep queue --repo "$HOME/Work/kvm" --json)" && fail "$file $body: $out"
+    jq -e '.status == "unknown" and .items == null' <<<"$out" >/dev/null || fail "$file $body: $out"
+  done <<'EOF'
+findings-kvm-9|gone
+findings-kvm-9|not json
+findings-kvm-9|{}
+findings-kvm-9|
+show-7|{"changes":{"a":1}}
+show-7|
+list|{"nextPageToken":null}
+list|
+EOF
+  # A second page is more than the one list a refresh may read: UNKNOWN, not a cut.
+  trail_data
+  jq '.nextPageToken = "p2"' "$HC_DATA/entire/list.json" >"$HC_DATA/entire/list.tmp"
+  mv "$HC_DATA/entire/list.tmp" "$HC_DATA/entire/list.json"
+  : >"$LOG"
+  out="$(shep queue --repo "$HOME/Work/kvm" --json)" && fail "a second page: $out"
+  jq -e '.status == "unknown"' <<<"$out" >/dev/null || fail "a second page: $out"
+  [[ "$(grep -c '^entire ' "$LOG")" == 1 ]] || fail "read past the first list: $(cat "$LOG")"
+}
+
+@test "shep queue: a trail worker that dies is UNKNOWN, never a trail with nothing in review" {
+  trail_fixture
+  run bash -c 'set -euo pipefail; for f in common git-backend shep-context; do source "$ROOT/lib/$f.sh"; done
+    _shep_queue_trail() { kill -KILL "$BASHPID"; }
+    _shep_queue_trails "$HOME/Work/kvm"'
+  [[ "$status" -ne 0 ]] || fail "a dead worker read as: $output"
+}
+
+@test "shep queue and board: one trail list a refresh, and a show and findings only for each trail in review, however many trails" {
+  local calls
+  trail_fixture
+  shep queue --repo "$HOME/Work/kvm" >/dev/null
+  calls="$(grep -c '^entire ' "$LOG")"
+  [[ "$calls" == 5 && "$(grep -c '^entire trail list ' "$LOG")" == 1 ]] || fail "queue: $(cat "$LOG")"
+  : >"$LOG"
+  shep board >/dev/null
+  [[ "$(grep -c '^entire ' "$LOG")" == 5 && "$(grep -c '^entire trail list ' "$LOG")" == 1 ]] || fail "board: $(cat "$LOG")"
+  # 96 more open trails, a full page, none in review: planning (with a desk's handoff, too) and complete.
+  record --arg p "$HOME/Work/kvm.plan" '{path: $p, branch: "plan", issue: "trail:20", space: "sp4"}'
+  jq '.items += [range(20; 116) | {number: ., phase: (if . % 2 == 0 then "planning" else "complete" end)}]' \
+    "$HC_DATA/entire/list.json" >"$HC_DATA/entire/list.tmp"
+  mv "$HC_DATA/entire/list.tmp" "$HC_DATA/entire/list.json"
+  : >"$LOG"
+  shep queue --repo "$HOME/Work/kvm" >/dev/null
+  [[ "$(grep -c '^entire ' "$LOG")" == "$calls" ]] || fail "Entire calls grew from $calls: $(cat "$LOG")"
+  [[ "$(grep -c '^entire trail show ' "$LOG")" == 2 && "$(grep -c '^entire trail finding list ' "$LOG")" == 2 ]] \
+    || fail "a show or findings read for a trail not in review: $(cat "$LOG")"
+}
+
+@test "shep queue: a page of large findings is read from Entire's output, not from an argument" {
+  local out
+  trail_fixture
+  jq -n '{counts: {Open: 100, OpenHigh: 0, OpenMedium: 100, OpenLow: 0},
+    findings: [range(100) | {body: ("x" * 4000), severity: "medium", status: "open"}]}' >"$HC_DATA/entire/findings-kvm-9.json"
+  out="$(shep queue --repo "$HOME/Work/kvm")" || fail "queue: $out"
+  [[ "$out" == *"- trail 7: Read the gateway frames · change kvm/9 · 100 open findings (100 medium) · "* ]] || fail "$out"
+}
+
 @test "shep board ends with the review queue, and leaves it out when nothing waits" {
   local out
   queue_fixture

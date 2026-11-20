@@ -121,7 +121,7 @@ async function panel(store: QuestionStore, state: string) {
         change = { lines: c.lines, stakes: c.stakes };
       } catch {}
     }
-    const { repo, topic, worktree, space } = q.target;
+    const { repo, topic, worktree, space, url } = q.target;
     cards.push({
       token: tokenOf(q),
       kind: q.kind,
@@ -134,7 +134,7 @@ async function panel(store: QuestionStore, state: string) {
       // A deadline only while it is still a two-way door, with the policy just read.
       deadline: !check || door(q, () => mergesIn(check)).door === "two-way" ? (q.deadline ?? null) : null,
       defaulted: q.answer ? { choice: q.answer.choice, at: q.answer.at } : null,
-      target: { repo, topic, worktree, space },
+      target: { repo, topic, worktree, space, url: url ?? null },
       status: check?.status ?? "defaulted",
       reasons: check?.reasons ?? [],
       warnings: check?.warnings ?? [],

@@ -239,7 +239,15 @@ A staged change is on the queue when its desk is not working (done, idle, blocke
 
 Superseded work is listed last as `not counted` and stays out of the budget. Stale worktrees are not counted either, and each repo lists them on one line: `- not counted: 2 stale worktrees with no Herdr space, cleanup candidates: ~/Work/app.a, ~/Work/app.b`. Parent and child links are not read: a child issue does not say it replaces its parent. A change with no issue is review. On a repo with a GitHub remote, an open PR counts when it is not a draft, not approved, and either asks you for a review or comes from a handoff's branch. A staged change's lines leave out lockfiles, generated and binary files; a PR's leave out lockfiles. Each repo's total is weighed against its policy's [`review_budget`](config.md#review-by-stakes-and-size). `queue --repo` reads only that repo's review sources, with a 6-second total bound; board has a 10-second bound. A failed/slow source returns UNKNOWN, not an empty list. Shep reports an over-budget or incomplete snapshot without holding already accepted work for it.
 
-`bercail shep queue --json` is the same queue as data (`schema: "bercail.queue/v1"`), for the Herdr app: `at`, when it was read; `items`, what waits first, the longest waiting first (`since`: when a worktree's changes were last staged, or when a PR was opened), each with its `state`, `why`, `by` (the replacement), `counts`, its `space` (the desk's or the handoff's Herdr space), its `change` (size and stakes) and, for a staged change that counts, `described` (`ok`, and `why` when it fails; `null` otherwise); and `repos`, each repo's counted lines against its budget.
+On a repo hosted on Entire (origin `entire://<host>/et/<project>/<repo>`), the queue also lists each trail change in review: an open change in that repo, on an open trail in the building phase. It reads them with Entire's read-only commands: one `entire trail list` per refresh, then `entire trail show` and `entire trail finding list` only on the trails in review, in parallel. The calls grow with the trails in review, not with the repo's trails. A list reads at most 100 open trails: when Entire has another page, the queue is UNKNOWN rather than missing trails, and closing the complete ones brings it back. A change says its trail, the change as `<repo>/<n>`, its open findings by severity, its gates, and the change's page on entire.com:
+
+```
+- trail 7: Read the gateway frames · change kvm/9 · 3 open findings (1 high, 2 low) · gates: waiting on approvals · https://entire.com/et/lab/-/trails/7/changes/kvm/9
+```
+
+The gates read as the [background Shep's trail wait](#background-sheps) reads them: `every blocking gate passed`, the blocking gates that `failed`, `waiting on` the others, or `no gate state yet` when Entire has none. A trail change counts as waiting on you but brings no lines: its lines were counted when it was staged, and its findings and gates are what wait now. A handoff on the change's branch lends it the desk's worktree and space. An Entire read that fails, or answers with what is not its JSON, makes the queue UNKNOWN, as a failed PR read does.
+
+`bercail shep queue --json` is the same queue as data (`schema: "bercail.queue/v1"`), for the Herdr app: `at`, when it was read; `items`, what waits first, the longest waiting first (`since`: when a worktree's changes were last staged, or when a PR was opened), each with its `state`, `why`, `by` (the replacement), `counts`, its `space` (the desk's or the handoff's Herdr space), its `change` (size and stakes) and, for a staged change that counts, `described` (`ok`, and `why` when it fails; `null` otherwise); and `repos`, each repo's counted lines against its budget. A trail change is `kind: "trail"`, with `trail`, `repository` and `number` (the change), `url`, `branch`, `findings` (`open`, `high`, `medium`, `low`) and `gates` (`state`: ready, pending, failed or unknown; `text`).
 
 ### Review in the Herdr app
 
@@ -248,7 +256,7 @@ The bercail layout's spaces list reads that JSON every five minutes, and after a
 - A space whose work waits on you has a mark after its name: `◆` and the lines that wait, with `?` when its state is unknown. The mark is red when a change there needs your LGTM, and the theme's accent color when review is optional. Superseded work says `superseded` in a dim color; a closed issue with staged work has an UNKNOWN mark until custody/outcome is proven. Hover a mark for each item; the tooltip says "needs your LGTM" where it applies, so the red is not the only cue. In the narrow rail, the space's number takes the same color.
 - The Spaces header counts what waits (`◆ 3 to review`, red while one needs your LGTM, or `2 to clean up` when only that is left), and adds `(stale)` when the last good read is more than 15 minutes old or the last read failed.
 - `Ctrl+Shift+J` goes to the next space that waits, in queue order, from either view ([keys](keys.md)).
-- A click on the count opens the **Review** list over either view: each item's space (as Herdr names it), issue and title, lines, stakes, whether it needs your LGTM, how long it has waited, and its state, then what does not count, then the stale worktrees with no Herdr space under their own cleanup heading. The header shows when bercail read the queue and marks older results stale. If a read fails, the panel clears the rows and shows the error. **Open space** shows the space; **Open review** shows it and opens its Review tab; **Open PR** opens a PR in the browser. There is no merge, commit or LGTM button, and nothing answers a desk.
+- A click on the count opens the **Review** list over either view: each item's space (as Herdr names it), issue and title, lines, stakes, whether it needs your LGTM, how long it has waited, and its state, then what does not count, then the stale worktrees with no Herdr space under their own cleanup heading. The header shows when bercail read the queue and marks older results stale. If a read fails, the panel clears the rows and shows the error. A trail change shows its open findings in place of lines, and its gates. **Open space** shows the space; **Open review** shows it and opens its Review tab; **Open PR** opens a PR in the browser, and **Open trail** a trail change's page. There is no merge, commit or LGTM button, and nothing answers a desk.
 
 ### Todos for the person
 
@@ -339,7 +347,12 @@ background Shep terminal), sits in another folder, belongs to another job, or
 has no verifiable Pi session is a **warning** on the card, and so is a job
 question with no desk; the card still reaches the panel and can be answered.
 Only a wrong kind or field, or an issue the repo's beads does not have, is
-refused. Repo
+refused. In an Entire repo the job can be a trail, `trail:<n>`: it is checked
+with `entire trail show <n>` instead of beads, a trail the repo's project does
+not have is refused, and the question keeps the trail's Entire ID and its URL.
+An answer holds to the ID: the same number in another project is another job,
+which makes the card stale and which a revision cannot move to. A moved URL
+does not. Repo
 identity is the canonical local git common-directory path, shared across its
 worktrees; another clone is a separate local identity. Review/action questions
 record desk, space, session, worktree, intended action, branch, head, staged
@@ -443,7 +456,8 @@ staged tree, new commits, another branch or another base) says **stale** and wha
 must ask again. One it cannot check (the checkout is gone, the policy could not
 be read) says **unknown** and why. A desk problem (gone, in another folder,
 another job's, no verifiable session, or no desk at all) is a `Warning:` line on
-a card that can still be answered. A [two-way door](#reversible-questions) counts
+a card that can still be answered. A card bound to a trail has **Open trail**,
+which opens the trail's page on entire.com. A [two-way door](#reversible-questions) counts
 down to its deadline (`two-way door: defaults to auth in 23 min`); other cards
 have no timer. Once it defaults, the card says **defaulted** and the choice it
 took, has no choices or answer button, and stays a day. **Discuss** on it still

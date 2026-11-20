@@ -598,6 +598,23 @@ eq([cardWords(warned).word, cardWords(warned).warnings, answerable(warned)],
 EOF
 }
 
+@test "a card bound to a trail links the trail's page; a card bound to a beads issue has no link" {
+  mod_case <<'EOF'
+const url = "https://entire.com/et/lab/-/trails/7";
+const view = { ...PANEL_VIEW, cards: [card("Q1@1", { target: { ...card("Q1@1").target, url } }), card("Q2@1")] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+els.length = 0;
+d.render(cx);
+eq(els.filter((e) => e.id?.startsWith("decision-trail-")).map((e) => e.id), ["decision-trail-Q1@1"], "trail links");
+const opened = [];
+els.find((e) => e.id === "decision-trail-Q1@1").click(null, { ...cx, open_url: (u) => opened.push(u) });
+eq(opened, [url], "Open trail");
+eq(answers(), [], "opening the trail answers nothing");
+EOF
+}
+
 @test "Enter answers with Shep's pick, keys move between cards and choices, and a stale card answers nothing" {
   mod_case <<'EOF'
 setup({ terminals: [shep], exec: panelExec(PANEL_VIEW) });

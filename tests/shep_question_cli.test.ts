@@ -456,6 +456,52 @@ test("rejects a wrong issue returned by the repo's beads", () => {
   expect(result.stderr).toMatch(/issue|job/i);
 });
 
+test("a question on trail:<n> is checked with Entire, not beads, and its card links the trail", () => {
+  const url = "https://entire.com/et/lab/-/trails/7";
+  const shown = (value: unknown) =>
+    writeFileSync(
+      join(dir, "bin/entire"),
+      `#!/bin/sh\nprintf 'entire %s\\n' "$*" >> '${dir}/argv'\ntest "$PWD" = '${repo}' || exit 2\n` +
+        `test "$*" = 'trail show 7 --json' || { echo 'project trail #'"$3"' not found in et/lab' >&2; exit 1; }\n` +
+        `printf '%s' '${JSON.stringify(value)}'\n`,
+      { mode: 0o755 },
+    );
+  shown({ number: 7, id: "T7", url, title: "Read the frames" });
+  terminal({ labels: { "bercail.role": "agent", "bercail.issue": "trail:7", "bercail.space": "sp1" } });
+  record({ issue: "trail:7" });
+  const q = ok("create", spec({ issue: "trail:7" }));
+  expect(q.target).toMatchObject({ issue: "trail:7", trailId: "T7", url, desk: "t9", space: "sp1" });
+  const argv = readFileSync(join(dir, "argv"), "utf8");
+  expect(argv).toContain("entire trail show 7 --json");
+  expect(argv).not.toMatch(/^bd /m);
+  expect(ok("panel").cards[0]).toMatchObject({ status: "fresh", target: { url } });
+  // The trail's ID is what an answer holds to, not its link: a moved page leaves the card
+  // fresh, and another project's trail 7 makes it stale.
+  shown({ number: 7, id: "T7", url: "https://entire.com/et/lab-renamed/-/trails/7" });
+  expect(ok("check", undefined, [`${q.id}@${q.revision}`])).toMatchObject({ fresh: true });
+  shown({ number: 7, id: "OTHER", url: "https://entire.com/et/other/-/trails/7" });
+  expect(ok("check", undefined, [`${q.id}@${q.revision}`])).toMatchObject({
+    fresh: false,
+    reasons: ["trailId changed"],
+  });
+  // Nor can a revision move the question to it.
+  const moved = call("revise", spec({ requestId: "moved", issue: "trail:7", token: `${q.id}@${q.revision}` }));
+  expect(moved.status).not.toBe(0);
+  expect(moved.stderr).toContain("revision cannot change repo, issue or topic");
+  shown({ number: 7, id: "T7", url });
+  // A trail the project does not have refuses, as an issue from another repo does.
+  const missing = call("create", spec({ requestId: "other", topic: "other", issue: "trail:8", desk: null }));
+  expect(missing.status).not.toBe(0);
+  expect(missing.stderr).toContain("project trail #8 not found in et/lab");
+  shown({ number: 9, id: "T9", url });
+  const wrong = call("create", spec({ requestId: "wrong", topic: "wrong", issue: "trail:7", desk: null }));
+  expect(wrong.stderr).toContain("trail 7 does not match the repo's Entire project");
+  // A beads issue's card has no link.
+  const plain = ok("create", spec({ requestId: "plain", topic: "plain", desk: null }));
+  expect(plain.target).not.toHaveProperty("url");
+  expect(plain.target).not.toHaveProperty("trailId");
+});
+
 test("a colliding issue id in another repository cannot retarget an existing question", () => {
   const first = ok("create", spec());
   repo = join(dir, "foreign");

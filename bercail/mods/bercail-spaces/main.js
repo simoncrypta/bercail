@@ -181,8 +181,14 @@ export function nextReview(rows, current) {
 // Not by color alone: the tooltip and the list say "needs your LGTM".
 const waitColor = (t, needsLgtm) => (needsLgtm ? t.ansi1 : t.accent);
 
-// One line on an item, for tooltips and the list.
+// A trail change's open findings, shortly: "3 findings", "1 finding".
+const findings = (item) => `${item.findings.open} finding${item.findings.open === 1 ? "" : "s"}`;
+
+// One line on an item, for tooltips and the list. A trail change brings no lines: its
+// findings and gates wait.
 export function itemLabel(item) {
+  if (item.kind === "trail")
+    return `Trail ${item.trail}${item.title ? `: ${item.title}` : ""} · ${findings(item)} · gates: ${item.gates.text}`;
   const head = item.kind === "pr" ? `PR #${item.number}` : item.issue ?? item.path;
   const title = item.title ? `: ${item.title}` : "";
   const state = [lgtm(item) && "needs your LGTM", item.state === "unknown" ? `state unknown: ${item.why}` : item.why]
@@ -825,12 +831,16 @@ export default class Spaces extends View {
       const heading =
         item.kind === "pr"
           ? `PR #${item.number}: ${item.title ?? ""}`
-          : item.issue
+          : item.kind === "trail"
+            ? `Trail ${item.trail}: ${item.title ?? ""}`
+            : item.issue
             ? `${item.issue}${item.title ? `: ${item.title}` : ""}`
             : (item.title ?? "no issue");
       const by = item.by?.startsWith("/") ? ` (${tilde(item.by)})` : "";
       const state = { unknown: `unknown: ${item.why}`, cleanup: `${item.why}: clean up`, stale: `${item.why}: clean up`, superseded: `${item.why}${by}` }[item.state];
-      const facts = [item.kind === "pr" ? "PR" : `stakes ${item.change?.stakes ?? "?"}`, lgtm(item) && "needs your LGTM", state]
+      const facts = (item.kind === "trail"
+        ? [`gates: ${item.gates.text}`]
+        : [item.kind === "pr" ? "PR" : `stakes ${item.change?.stakes ?? "?"}`, lgtm(item) && "needs your LGTM", state])
         .filter(Boolean)
         .join(" · ");
       const targets = [];
@@ -844,6 +854,7 @@ export default class Spaces extends View {
         }));
       }
       if (item.kind === "pr" && item.url) targets.push(target(`review-pr-${n}`, "Open PR", (_e, cx) => cx.open_url(item.url)));
+      if (item.kind === "trail" && item.url) targets.push(target(`review-trail-${n}`, "Open trail", (_e, cx) => cx.open_url(item.url)));
       if (!targets.length) targets.push(div().flex_none().px(8).text_color(t.dim).child("no space"));
       return h_flex()
         .id(`review-row-${n}`)
@@ -857,10 +868,10 @@ export default class Spaces extends View {
           v_flex()
             .flex_1()
             .min_w(0)
-            .child(div().truncate().text_color(t.foreground).child(space?.name ?? tilde(item.kind === "pr" ? item.repo : item.path)))
+            .child(div().truncate().text_color(t.foreground).child(space?.name ?? tilde(item.path ?? item.repo)))
             .child(div().truncate().text_size(11.5).text_color(t.dim).child(heading)),
         )
-        .child(div().flex_none().w(72).text_color(t.muted).child(`${size(lines(item))} lines`))
+        .child(div().flex_none().w(72).text_color(t.muted).child(item.kind === "trail" ? findings(item) : `${size(lines(item))} lines`))
         .child(div().flex_none().w(190).truncate().text_color(lgtm(item) ? t.ansi1 : item.counts ? t.muted : t.dim).child(facts))
         .child(div().flex_none().w(40).text_color(t.dim).child(ago(item.since, now) || "–"))
         .child(h_flex().flex_none().gap(2).children(targets));

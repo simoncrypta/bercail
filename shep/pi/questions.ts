@@ -13,6 +13,9 @@ export interface QuestionTarget {
   action: string | null;
   /** The checked-out branch's full ref, null when detached; absent in questions asked before it was kept. */
   branch?: string | null;
+  /** When the issue is `trail:<n>`: the trail's Entire ID, and its page for the card. Absent otherwise. */
+  trailId?: string;
+  url?: string;
   head: string | null;
   stagedTree: string | null;
   base: string | null;
@@ -154,8 +157,10 @@ function spec(value: unknown): asserts value is QuestionSpec {
     "base",
     "baseRef",
   ];
-  shape(value.target, [...keys, ...optional(value.target as Record<string, unknown>, ["branch"])]);
+  shape(value.target, [...keys, ...optional(value.target as Record<string, unknown>, ["branch", "trailId", "url"])]);
   if (value.target.branch != null) text(value.target.branch);
+  if (value.target.trailId !== undefined) text(value.target.trailId);
+  if (value.target.url !== undefined) text(value.target.url);
   // The desk is optional for every kind: a question binds to its repo and issue.
   const desk = ["desk", "space", "session"];
   for (const key of keys)
@@ -281,8 +286,9 @@ function validate(value: unknown): asserts value is State {
     } else question(r.result);
   }
 }
+// A trail's ID too: the same trail:<n> in another project is another job.
 const sameScope = (a: QuestionSpec, b: QuestionSpec) =>
-  ["repo", "issue", "topic"].every(
+  ["repo", "issue", "trailId", "topic"].every(
     (key) => a.target[key as keyof QuestionTarget] === b.target[key as keyof QuestionTarget],
   );
 const canonical = (value: unknown): string =>

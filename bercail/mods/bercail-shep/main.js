@@ -909,6 +909,9 @@ export default class BercailShep extends View {
           .when(Boolean(w.timer), (el) =>
             el.child(div().flex_none().text_size(11).text_color(t.foreground).child(w.timer)),
           )
+          .when(Boolean(c.target?.url), (el) =>
+            el.child(button(`decision-trail-${c.token}`, "Open trail", true, (_e, cx) => cx.open_url(c.target.url))),
+          )
           .child(
             button(`decision-discuss-${c.token}`, c.discussed ? "Continue discussion" : "Discuss", true, (_e, cx) =>
               this.discuss(c, cx),

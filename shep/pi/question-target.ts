@@ -123,6 +123,28 @@ function deskFacts(desk: string, issue: string | null, worktree: string): { spac
   return { space: record.space, session: record.session };
 }
 
+// Trail N of the worktree's Entire project, as `trail:<n>` names it: its ID, which
+// an answer holds to (another project's trail N is another job), and its URL, for
+// the card's link. A trail the project does not have refuses, as an issue from
+// another repo does.
+function trailFacts(n: string, worktree: string): { trailId: string; url: string } {
+  let shown;
+  try {
+    shown = JSON.parse(run("entire", ["trail", "show", n, "--json"], worktree));
+  } catch (error) {
+    fail(`entire trail show ${n}: ${((error as { stderr?: string }).stderr || (error as Error).message).trim()}`);
+  }
+  if (
+    shown?.number !== Number(n) ||
+    typeof shown.id !== "string" ||
+    !shown.id ||
+    typeof shown.url !== "string" ||
+    !shown.url.startsWith("https://")
+  )
+    fail(`trail ${n} does not match the repo's Entire project`);
+  return { trailId: shown.id, url: shown.url };
+}
+
 // The target and its desk warnings.
 function inspectTarget(input: TargetInput): { target: QuestionTarget; warnings: string[] } {
   if (!["planning", "review", "action"].includes(input.kind)) fail("invalid kind");
@@ -136,11 +158,16 @@ function inspectTarget(input: TargetInput): { target: QuestionTarget; warnings: 
   }
   const worktree = realpathSync(git(realpathSync(input.repo), "rev-parse", "--show-toplevel"));
   const repo = identity(worktree);
+  let trail: { trailId: string; url: string } | null = null;
   if (input.issue !== null) {
     if (input.issue.startsWith("-")) fail("invalid issue id");
-    const jobs = JSON.parse(run("bd", ["show", input.issue, "--json"], worktree));
-    if (!Array.isArray(jobs) || jobs.length !== 1 || jobs[0]?.id !== input.issue)
-      fail("issue does not match the repo's beads job");
+    const n = /^trail:([1-9]\d*)$/.exec(input.issue)?.[1];
+    if (n) trail = trailFacts(n, worktree);
+    else {
+      const jobs = JSON.parse(run("bd", ["show", input.issue, "--json"], worktree));
+      if (!Array.isArray(jobs) || jobs.length !== 1 || jobs[0]?.id !== input.issue)
+        fail("issue does not match the repo's beads job");
+    }
   }
   const warnings: string[] = [];
   let facts: { space: string; session: string } | null = null;
@@ -167,6 +194,7 @@ function inspectTarget(input: TargetInput): { target: QuestionTarget; warnings: 
     baseRef: input.base,
     base: input.base === null ? null : commit(worktree, input.base),
     action: input.action,
+    ...trail,
   };
   return { target, warnings };
 }
@@ -174,8 +202,8 @@ function inspectTarget(input: TargetInput): { target: QuestionTarget; warnings: 
 export const captureTarget = (input: TargetInput): QuestionTarget => inspectTarget(input).target;
 
 // What an answer holds to: the job, the staged tree, the base and HEAD as below. Not
-// the desk, whose problems are warnings.
-const UNBOUND = new Set<keyof QuestionTarget>(["space", "session"]);
+// the desk, whose problems are warnings, nor the trail's link.
+const UNBOUND = new Set<keyof QuestionTarget>(["space", "session", "url"]);
 
 // The approved tree was committed: `now` is one commit, with `old` its only parent and
 // the approved tree its tree. Anything more (other commits, a merge, an amend) is new work.

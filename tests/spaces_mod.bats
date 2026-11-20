@@ -321,6 +321,24 @@ if (!text(v.render()).includes("queue unread: bercail shep queue exited 1")) fai
 EOF
 }
 
+@test "the Review list: a trail change shows its findings and gates and links the trail; its desk's space opens it" {
+  mod_case <<'EOF'
+herdr.props = { role: "reviews", overlay: "o7" };
+const trail = (extra) => ({ kind: "trail", repo: "/w/kvm", trail: 7, repository: "kvm", number: 9, title: "Read the frames",
+  url: "https://entire.com/et/lab/-/trails/7/changes/kvm/9", branch: "fix", state: "review", counts: true, lines: 0,
+  since: "2026-11-14T11:00:00Z", findings: { open: 3, high: 1, medium: 0, low: 2 }, gates: { state: "pending", text: "waiting on approvals" }, ...extra });
+herdr.shared["bercail.review"] = { q: { ...Q, items: [trail({ path: "/w/s1", space: "s1" }), trail({ trail: 6, number: 11, findings: { open: 1 } })] }, error: null };
+const v = new Spaces();
+v.init({}, cx());
+const tree = v.render();
+const row = (n) => text(views(`review-row-${n}`)(tree));
+expect(row(0), ["export", "Trail 7: Read the frames", "3 findings", "gates: waiting on approvals", "1h", "Open space", "Open trail"], "trail row in its desk's space");
+expect(row(1).slice(0, 3), ["/w/kvm", "Trail 6: Read the frames", "1 finding"], "trail row with no desk: its repo");
+E(views("review-trail-0")(tree)).click({}, cx());
+expect(herdr.calls, [["open_url", "https://entire.com/et/lab/-/trails/7/changes/kvm/9"]], "open trail");
+EOF
+}
+
 @test "a space bercail made with no window is named from its Shell's label, once, on its own machine, without moving the view" {
   mod_case <<'EOF'
 const SHELL = (address, space, name) => ({ address, state: "live", labels: { "herdr.space": space, "bercail.space_name": name } });
