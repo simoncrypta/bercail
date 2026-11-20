@@ -39,6 +39,28 @@ _shep_bd() {
   _git_backend_bounded 2 env "${clean[@]}" bd "$@"
 }
 
+# A trail job, trail:N (lib/jobs.ts), wherever a beads id goes in an Entire repo.
+_shep_is_trail() { [[ "$1" =~ ^trail:[1-9][0-9]{0,8}$ ]]; }
+
+# bercail job, from this lib: a trail's comments and records, and Entire's view of it.
+_shep_job() {
+  _shep_need_policy
+  _git_backend_bounded 20 node "$(dirname "${BASH_SOURCE[0]}")/jobs.ts" "$@"
+}
+
+# A beads id or a trail, else says so.
+_shep_job_id_ok() {
+  [[ "$1" =~ ^[A-Za-z0-9._-]+$ ]] || _shep_is_trail "$1" && return 0
+  _shep_err "issue id '$1' is neither a beads id nor a trail (trail:N)"
+  return 1
+}
+
+# Why a job is not found in a repo, by its kind.
+_shep_job_unknown() {
+  if _shep_is_trail "$1"; then printf 'Entire has no %s for %s (bercail job show %s --repo %s)' "$1" "$2" "$1" "$2"
+  else printf 'bd does not know %s in %s' "$1" "$2"; fi
+}
+
 # --- known repos ----------------------------------------------------------------
 
 # Every folder bercail has seen a repo in, as "source<TAB>path", plus
@@ -96,11 +118,30 @@ _shep_open_issues() {
     | {id, title, status, labels: (.labels // [])}]' <<<"$raw" 2>/dev/null
 }
 
+# An Entire repo's open trails, as {issues, complete, review}: the trails still
+# in flight in the issues' shape, with what their "Blocked by:" line still waits
+# on, how many are complete but still open (merged, and nobody closed them), and
+# the numbers of those in review (phase building), which the queue reads from it.
+# A trail is in progress once dispatched (it has a job record) or past planning
+# (it has a branch). Fails when Entire does not answer.
+_shep_open_trails() {
+  local raw
+  # Within the board's 10 seconds, so a slow Entire is this repo's UNKNOWN, not the board's.
+  _shep_need_policy
+  raw="$(_git_backend_bounded 6 node "$(dirname "${BASH_SOURCE[0]}")/jobs.ts" list --repo "$1" --json </dev/null 2>/dev/null)" || return 1
+  jq -ce '{issues: [.[] | select(.phase != "complete")
+      | {id, title, phase, labels: [], waiting: .waiting_on,
+         status: (if .record != null or ((.phase // "planning") | IN("planning", "draft") | not) then "in_progress" else "open" end)}],
+     complete: ([.[] | select(.phase == "complete")] | length),
+     review: [.[] | select(.phase == "building") | .id | ltrimstr("trail:")]}' <<<"$raw" 2>/dev/null
+}
+
 # Known repos as a JSON array: path, git backend, policy (trusted, untrusted,
-# none), open issue count (null without beads), where bercail saw the repo,
-# and the open issues themselves for the board.
+# none), open issue count (null without beads or trails), where bercail saw the
+# repo, and the open issues themselves for the board: beads issues, and in an
+# Entire repo its open trails (complete: the trails left to close).
 _shep_repos_json() {
-  local main from backend policy issues beads
+  local main from backend policy issues beads trails
   while IFS=$'\t' read -r main from; do
     backend="$(git_backend "$main" 2>/dev/null)" || backend=""
     policy="$(policy_json "$main" 2>/dev/null \
@@ -108,10 +149,18 @@ _shep_repos_json() {
     beads=false
     [[ ! -d "$main/.beads" ]] || beads=true
     issues="$(_shep_open_issues "$main")" || issues=null
-    jq -nc --arg path "$main" --arg from "$from" --arg backend "$backend" --arg policy "$policy" --argjson issues "$issues" --argjson beads "$beads" '
-      {path: $path, backend: (if $backend == "" then null else $backend end),
+    trails=null
+    [[ "$backend" != entire ]] || trails="$(_shep_open_trails "$main")" || trails=false
+    jq -nc --arg path "$main" --arg from "$from" --arg backend "$backend" --arg policy "$policy" --argjson issues "$issues" --argjson beads "$beads" \
+      --argjson trails "$trails" '
+      # A source that failed makes the whole list UNKNOWN, never a shorter one.
+      (if $trails == false or ($beads and $issues == null) or ($issues == null and $trails == null) then null
+       else ($issues // []) + ($trails.issues // []) end) as $all
+      | {path: $path, backend: (if $backend == "" then null else $backend end),
        policy: (if $policy == "" then null else $policy end),
-       open: (if $issues == null then null else ($issues | length) end), from: ($from | split(",")), issues: $issues, beads:$beads}'
+       open: (if $all == null then null else ($all | length) end), from: ($from | split(",")), issues: $all, beads:$beads,
+       entire: ($backend == "entire"), complete: (if ($trails | type) == "object" then $trails.complete else null end),
+       review: (if ($trails | type) == "object" then $trails.review elif $trails == false then false else null end)}'
   done < <(_shep_repo_list) | jq -sc .
 }
 
@@ -119,7 +168,10 @@ _shep_repos_json() {
 SHEP_JQ_DEFS='
   def tilde: if startswith($home + "/") then "~" + .[($home | length):] else . end;
   def cut($n): if length > $n then (.[0:($n - 1)] | sub(" +$"; "")) + "…" else . end;
-  def flat: gsub("[[:space:][:cntrl:]]+"; " ") | sub("^ +"; "") | sub(" +$"; "");'
+  def flat: gsub("[[:space:][:cntrl:]]+"; " ") | sub("^ +"; "") | sub(" +$"; "");
+  def unknown_open: if .open != null then "\(.open) open"
+    elif .beads or .entire then "UNKNOWN (\([if .beads then "beads" else empty end, if .entire then "Entire" else empty end] | join(" or ")) unavailable)"
+    else "no beads" end;'
 
 shep_repos() {
   local json=0 out
@@ -131,7 +183,7 @@ shep_repos() {
   esac
   out="$(_shep_repos_json)"
   if ((json)); then
-    jq 'map(del(.issues, .beads))' <<<"$out"
+    jq 'map(del(.issues, .beads, .entire, .complete, .review))' <<<"$out"
     return 0
   fi
   jq -r --arg home "$HOME" --arg state "$(shep_state_dir)" "$SHEP_JQ_DEFS"'
@@ -140,7 +192,7 @@ shep_repos() {
       | .[] | (.path | tilde) as $p
       | "\($p)\(if $w > ($p | length) then " " * ($w - ($p | length)) else "" end)  \(.backend // "?")  "
         + ({trusted: "policy trusted  ", untrusted: "policy untrusted", none: "no policy       "}[.policy // ""] // "policy ?        ")
-        + "  " + (if .open != null then "\(.open) open" elif .beads then "UNKNOWN (beads unavailable)" else "no beads" end) + "  (\(.from | join(", ")))"
+        + "  " + unknown_open + "  (\(.from | join(", ")))"
     end' <<<"$out"
 }
 
@@ -218,7 +270,7 @@ _shep_screen_tail() {
 
 shep_brief() {
   local issue="" repo="" budget="$SHEP_BRIEF_BUDGET" records desks rec desk main="" issue_json comments screen="" candidate
-  local worktree change staged="" hints
+  local worktree change staged="" hints more
   local usage="usage: bercail shep brief ISSUE [--repo DIR] [--budget CHARS]"
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -231,7 +283,7 @@ shep_brief() {
     esac
   done
   [[ -n "$issue" ]] || { _shep_err "$usage"; return 1; }
-  [[ "$issue" =~ ^[A-Za-z0-9._-]+$ ]] || { _shep_err "issue id '$issue' has characters a beads id does not"; return 1; }
+  _shep_job_id_ok "$issue" || return 1
   _shep_need_policy
   [[ "$budget" =~ ^[0-9]+$ && "$budget" -ge 200 ]] || { _shep_err "--budget takes a number of characters, 200 or more"; return 1; }
   records="$(_shep_records_json)"
@@ -253,16 +305,26 @@ shep_brief() {
   else
     main="$(_shep_main_of "$(jq -r '.path // empty' <<<"$rec")" "$(jq -r '.branch // empty' <<<"$rec")")" \
       || main="$(_shep_main_of "$(jq -r '.cwd // empty' <<<"$desk")")" || main=""
-    if [[ -z "$main" ]]; then
+    # Trail numbers repeat across repos: only a desk or a record names a trail's.
+    if [[ -z "$main" ]] && ! _shep_is_trail "$issue"; then
       while IFS=$'\t' read -r candidate _; do
         [[ -d "$candidate/.beads" ]] && _shep_bd_issue "$candidate" "$issue" >/dev/null && { main="$candidate"; break; }
       done < <(_shep_repo_list)
     fi
   fi
   [[ -n "$main" ]] || { _shep_err "no known repo has $issue; pass its checkout with --repo"; return 1; }
-  issue_json="$(_shep_bd_issue "$main" "$issue")" \
-    || { _shep_err "bd does not know $issue in $main; pass its checkout with --repo"; return 1; }
-  comments="$(cd "$main" && _shep_bd comments "$issue" --json 2>/dev/null </dev/null | jq -c 'if type == "array" then . else [] end' 2>/dev/null)" || comments='[]'
+  if _shep_is_trail "$issue"; then
+    issue_json="$(_shep_job show "$issue" --repo "$main" --json </dev/null)" \
+      || { _shep_err "$(_shep_job_unknown "$issue" "$main"); pass its checkout with --repo"; return 1; }
+    comments="$(jq -c '.comments' <<<"$issue_json")"
+    issue_json="$(jq -c 'del(.comments, .body, .record)' <<<"$issue_json")"
+    more="bercail job show $issue --repo $main"
+  else
+    issue_json="$(_shep_bd_issue "$main" "$issue")" \
+      || { _shep_err "bd does not know $issue in $main; pass its checkout with --repo"; return 1; }
+    comments="$(cd "$main" && _shep_bd comments "$issue" --json 2>/dev/null </dev/null | jq -c 'if type == "array" then . else [] end' 2>/dev/null)" || comments='[]'
+    more="bd comments $issue"
+  fi
   [[ -n "$comments" ]] || comments='[]'
   if [[ "$(jq -r '.state // empty' <<<"$desk")" == blocked ]]; then
     screen="$(_shep_screen_tail "$(jq -r .address <<<"$desk")")"
@@ -273,19 +335,24 @@ shep_brief() {
     staged="staged: $(desc_change_line "$change") · $(_shep_described "$worktree" | jq -r 'if .ok then "describe check ok" else "describe check fails: \(.why)" end')"
   fi
   jq -nr --arg home "$HOME" --arg repo "$main" --argjson issue "$issue_json" --argjson comments "$comments" \
-    --argjson rec "$rec" --argjson desk "$desk" --arg screen "$screen" --argjson budget "$budget" --arg staged "$staged" "$SHEP_JQ_DEFS"'
+    --argjson rec "$rec" --argjson desk "$desk" --arg screen "$screen" --argjson budget "$budget" --arg staged "$staged" \
+    --arg more "$more" "$SHEP_JQ_DEFS"'
     def who: if $desk.bg then "background Shep \($desk.name // $desk.address)" else "desk \($desk.address)" end;
-    def trim($n; $id):
+    def trim($n):
       if length <= $n then .
       else (($n * 2 / 3) | floor) as $h | ($n - $h) as $t
-        | .[0:$h] + "\n[… \(length - $n) characters cut; the whole comment: bd comments \($id)]\n" + .[(length - $t):] end;
+        | .[0:$h] + "\n[… \(length - $n) characters cut; the whole comment: \($more)]\n" + .[(length - $t):] end;
     ($issue.id) as $id
     | ([$comments | to_entries[] | select((.value.text // "") | startswith("bercail handoff:") or startswith("bercail todo:") | not)]) as $reports
     | "\($id): \($issue.title // "" | flat)",
-      ([$issue.status, (if $issue.priority != null then "P\($issue.priority)" else empty end), $issue.issue_type]
+      ([$issue.status, $issue.phase,
+        ($issue.priority | if type == "number" then "P\(.)" elif . == null or . == "none" then empty else "priority \(.)" end),
+        $issue.issue_type, $issue.url]
         | map(select(. != null and . != "")) | join(" "))
         + (if ($issue.labels // []) | length > 0 then " · labels \($issue.labels | join(", "))" else "" end)
         + " · repo \($repo | tilde)",
+      (if ($issue.waiting_on // []) | length > 0 then "blocked: waits on \($issue.waiting_on | join(", "))"
+       elif ($issue.blocked_by // []) | length > 0 then "ready: \($issue.blocked_by | join(", ")) closed or merged" else empty end),
       ([ (if $desk then "\(who) \($desk.state)" elif $rec.desk then "desk \($rec.desk) gone" else "no desk" end),
          (if ($desk.space // $rec.space) then "space " + ([$rec.label, ($desk.space // $rec.space)] | map(select(.)) | if length == 2 then "\(.[0]) (\(.[1]))" else .[0] end) else empty end),
          (if $rec.branch then "branch \($rec.branch)" else empty end),
@@ -296,10 +363,10 @@ shep_brief() {
       (if $screen != "" then "\(who) is blocked; its screen ends with:", ($screen | split("\n")[] | "  | " + .),
         "(the whole screen: hc read \($desk.address) --lines 60)" else empty end),
       (if ($reports | length) == 0 then
-         "no report yet (\($comments | length) comment\(if ($comments | length) == 1 then "" else "s" end); bd comments \($id))"
+         "no report yet (\($comments | length) comment\(if ($comments | length) == 1 then "" else "s" end); \($more))"
        else ($reports[-1].value) as $c
          | "latest report: comment \($reports[-1].key + 1) of \($comments | length), \($c.author // "?") at \($c.created_at // "?" | sub("T"; " ") | sub(":[0-9]{2}(\\.[0-9]+)?Z$"; "")) (\($c.text | length) characters):",
-           ($c.text | gsub("\n{3,}"; "\n\n") | sub("\n+$"; "") | trim($budget; $id))
+           ($c.text | gsub("\n{3,}"; "\n\n") | sub("\n+$"; "") | trim($budget))
        end)'
 }
 
@@ -336,7 +403,7 @@ _shep_board_snapshot() {
     ($desks | map(select(.issue)) | map({key: (.repo + "\u001f" + .issue), value: .}) | from_entries) as $live
     | [ $repos[] | . as $r | ($r.issues // [])[] | . as $i | ($rec[($r.path + "\u001f" + $i.id)]) as $h | ($live[($r.path + "\u001f" + $i.id)]) as $d
         | select($d or $i.status == "in_progress" or $i.status == "blocked")
-        | {repo: $r.path, id: $i.id, title: $i.title, status: $i.status, desk: $d, rec: $h} ] as $jobs
+        | {repo: $r.path, id: $i.id, title: $i.title, status: $i.status, phase: $i.phase, waiting: $i.waiting, desk: $d, rec: $h} ] as $jobs
     | ([$repos[] | .path as $repo | (.issues // [])[] | $repo + "\u001f" + .id]) as $open
     | ( $repos[] | . as $r | [$jobs[] | select(.repo == $r.path)] as $mine | select($mine | length > 0)
         | ([$mine[].id]) as $ids
@@ -345,13 +412,22 @@ _shep_board_snapshot() {
           + (if ($r.open - ($mine | length)) > 0 then ", \($r.open - ($mine | length)) other open issues"
               + (if $gone > 0 then " (\($gone) handed off to a desk that is gone)" else "" end) else "" end),
           ($mine[] | "- " + head(.)
-            + (if .status != "open" then " [\(.status)]" else "" end)
+            + (if .phase then " [\(.phase)]" elif .status != "open" then " [\(.status)]" else "" end)
+            + (if (.waiting // []) | length > 0 then " · blocked by \(.waiting | join(", "))" else "" end)
             + " · " + (if .desk then "\(who(.desk)) \(.desk.state)" elif .rec.desk then "desk \(.rec.desk) gone" else "no desk" end)
             + " · " + (.rec.branch // "-")
             + ((if .desk then .desk.model else .rec.model end) | if . then " · model \(.)" else "" end)) ),
       ([ $repos[] | . as $r | select(([$jobs[] | select(.repo == $r.path)] | length) == 0)
-         | "\($r.path | tilde) (" + (if .open != null then "\(.open) open" elif .beads then "UNKNOWN (beads unavailable)" else "no beads" end) + ")" ]
+         | "\($r.path | tilde) (" + unknown_open + ")" ]
        | if length > 0 then "Other repos: " + join(", ") else empty end),
+      ($repos[] | . as $r | [($r.issues // [])[] | select((.waiting // []) | length > 0)
+         | select(.id as $x | $jobs | any(.repo == $r.path and .id == $x) | not) | "\(.id) by \(.waiting | join(", "))"]
+       | select(length > 0) | "\($r.path | tilde): blocked, not started: " + join("; ")),
+      ($repos[] | . as $r | [($r.issues // [])[] | select(.phase and .status == "open" and ((.waiting // []) | length == 0))
+         | select(.id as $x | $jobs | any(.repo == $r.path and .id == $x) | not) | .id]
+       | select(length > 0) | "\($r.path | tilde): ready, not started: " + join(", ")),
+      ($repos[] | select((.complete // 0) > 0)
+       | "\(.path | tilde): \(.complete) complete trail\(if .complete == 1 then "" else "s" end) still open; close each with entire trail update N --status closed (bercail job list --repo \(.path | tilde))"),
       ([ $desks[] | select(.issue and ((.repo + "\u001f" + .issue) as $x | $open | index($x) | not)) | "\(who(.)) \(.state) (\(.issue))" ]
        | if length > 0 then "Desks on closed or unknown issues: " + join(", ") else empty end),
       "Waiting on the person:",
@@ -397,23 +473,26 @@ _shep_queue_prs() {
 # findings and its gate state. The change's lines were counted when it was
 # staged, so it brings none here: its findings and gates are what wait. []
 # when origin is not on Entire. A failed or malformed read is UNKNOWN, never an
-# empty list. One trail list a refresh, whatever the number of trails (Simon's
-# budget): a second page is UNKNOWN too, never a silent cut. Only trails in
-# review are shown, in parallel, as each read takes about a second and
-# the queue has six; process substitutions, not files, so a timeout's kill
-# leaves nothing behind. A worker ends with ok: one that dies says nothing.
+# empty list. REVIEW, the trail numbers in review as a JSON array, comes from the
+# board's list of the repo's trails (false when that list failed: UNKNOWN with no
+# second try); without it, bercail job list reads them, so a
+# refresh lists a repo's trails once (with its pages), whatever their number
+# (Simon's budget). Only trails in review are shown, in parallel, as each read
+# takes about a second and the queue has six; process substitutions, not files,
+# so a timeout's kill leaves nothing behind. A worker ends with ok: one that dies
+# says nothing.
 _shep_queue_trails() {
-  local main="$1" url project name page trails n fd got out="" rc=0
+  local main="$1" review="${2:-}" url project name trails n fd got out="" rc=0
   local -a fds=()
   url="$(git -C "$main" remote get-url origin 2>/dev/null)" || return 1
   [[ "$url" =~ ^entire://[^/]+/(et/[^/]+)/([^/]+)$ ]] || { printf '[]'; return 0; }
   project="${BASH_REMATCH[1]}" name="${BASH_REMATCH[2]}"
-  page="$(cd "$main" && _git_backend_bounded 4 entire trail list --project "$project" --repo "$project/$name" \
-    --status open --limit 100 --json </dev/null 2>/dev/null)" || return 1
-  # -e: no reply at all is no list either.
-  trails="$(jq -er 'if .nextPageToken != null then error("more than one page")
-    elif (.items | type) == "array" then .items | map(select(.phase == "building") | .number | tostring) | join(" ")
-    else error("no trail list") end' <<<"$page" 2>/dev/null)" || return 1
+  [[ "$review" != false ]] || return 1
+  if [[ -z "$review" || "$review" == null ]]; then
+    review="$(_git_backend_bounded 4 node "$(dirname "${BASH_SOURCE[0]}")/jobs.ts" list --repo "$main" --json </dev/null 2>/dev/null \
+      | jq -ce '[.[] | select(.phase == "building") | .id | ltrimstr("trail:")]' 2>/dev/null)" || return 1
+  fi
+  trails="$(jq -er 'join(" ")' <<<"$review" 2>/dev/null)" || return 1
   for n in $trails; do
     exec {fd}< <(_shep_queue_trail "$main" "$project" "$name" "$n" && printf 'ok\n')
     fds+=("$fd")
@@ -604,7 +683,7 @@ _shep_queue_json() {
   fi
   while IFS= read -r main; do
     [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
-    trails="$(_shep_queue_trails "$main")" || return 1
+    trails="$(_shep_queue_trails "$main" "$(jq -c --arg m "$main" '(first(.[] | select(.path == $m)) // {}) | .review' <<<"$repos")")" || return 1
     # The desk that made the change, by its handoff's branch, lends its worktree and space.
     items="$(jq -c --argjson trails "$trails" --argjson rec "$records" --arg m "$main" '. + [$trails[] | . as $i
       | ([$rec[] | select(.repo == $m and .branch == $i.branch)] | first) as $r
@@ -854,7 +933,7 @@ shep_mistake() {
   what="$(printf '%s' "$what" | tr '\n\t\r' '   ' | sed 's/  */ /g; s/^ //; s/ $//')"
   [[ -n "$key" && -n "$what" ]] || { _shep_err "$SHEP_MISTAKE_USAGE"; return 1; }
   [[ "$key" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || { _shep_err "$SHEP_MISTAKE_KEY_ERR"; return 1; }
-  [[ -z "$issue" || "$issue" =~ ^[A-Za-z0-9._-]+$ ]] || { _shep_err "issue id '$issue' has characters a beads id does not"; return 1; }
+  [[ -z "$issue" ]] || _shep_job_id_ok "$issue" || return 1
   if [[ -n "$repo" ]]; then
     _shep_need_policy
     main="$(_shep_main_of "$repo")" || { _shep_err "$repo is not a git checkout"; return 1; }

@@ -309,6 +309,39 @@ lesentiel:
   [[ ! -e "$LEDGER" ]] || fail "the ledger has an entry: $(cat "$LEDGER")"
 }
 
+@test "todo add --issue trail:N links the todo in the trail's comments on this machine, and a trail Entire does not have writes nothing" {
+  local out file
+  need node
+  basecamp_config
+  git init -q -b main "$HOME/Work/app"
+  git -C "$HOME/Work/app" remote add origin entire://entire.example/et/proj/app
+  # entire knows trail 3 only.
+  cat >"$BATS_TEST_TMPDIR/bin/entire" <<'EOF'
+#!/usr/bin/env bash
+printf 'entire %s\n' "$*" >>"$LOG"
+trail='{"number":3,"title":"Put the HA box on the tailnet","status":"open","phase":"planning","repoIds":["R1"],"changes":[]}'
+case "$1 $2" in
+  "repo view") echo '{"id":"R1"}' ;;
+  "trail list") echo "{\"items\":[$trail],\"nextPageToken\":null}" ;;
+  "trail show") [[ "$3" == 3 ]] || { echo "project trail #$3 not found" >&2; exit 1; }; echo "$trail" ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/entire"
+  todo add "Create the tailnet login" --issue trail:3 --repo "$HOME/Work/app" >/dev/null || fail "add"
+  [[ "$(todo list --json | jq -r '.[0].notes')" == "bercail: trail:3 in app" ]] || fail "notes: $(todo list --json)"
+  file="$(find "$XDG_STATE_HOME/bercail/jobs" -name 3.comments.jsonl)"
+  jq -e '.text | startswith("bercail todo: \"Create the tailnet login\" waits on the person in basecamp")' "$file" >/dev/null \
+    || fail "link: $(cat "$file")"
+  ! grep -q '^bd ' "$LOG" || fail "bd ran: $(cat "$LOG")"
+  rm "$LEDGER"
+  : >"$LOG"
+  out="$(todo add "Create the login" --issue trail:9 --repo "$HOME/Work/app" 2>&1)" && fail "an unknown trail passed: $out"
+  [[ "$out" == "bercail todo: Entire has no trail:9 for $WORK/app (bercail job show trail:9 --repo $WORK/app); pass its checkout with --repo" ]] || fail "error: $out"
+  ! grep -q '^basecamp' "$LOG" || fail "basecamp ran: $(cat "$LOG")"
+  [[ ! -e "$LEDGER" ]] || fail "the ledger has an entry: $(cat "$LEDGER")"
+}
+
 @test "no target, an unknown backend, an incomplete config and a broken todo.json fail clearly and run nothing" {
   local out
   out="$(todo list 2>&1)" && fail "no target passed: $out"

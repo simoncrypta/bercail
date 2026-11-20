@@ -48,6 +48,13 @@ pointing at the issue (`Your job is beads issue <id>: <title>. Run bd show <id> 
 without the `: <title>` when bd has no title). Shep owns the workflow
 (planning, review, which stage); bercail has no default stage.
 
+In an Entire repo the job is a trail instead: `--issue trail:<n>` (its
+project trail number), and the prompt says `Your job is trail:<n>: <title>.
+Run bercail job show trail:<n> …`. The handoff comment and the desk's report
+go on the trail's comments on this machine (`bercail job comment`), since
+Entire refuses trail comments from an agent. Headless stages take a beads
+issue only.
+
 Each real handoff adds a `bd comment` to the issue with what the agent needs
 from bercail: the worktree, and for headless stages the result file and
 session id. `--info` reports `beads` (bd on PATH). bercail install and update

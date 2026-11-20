@@ -90,6 +90,10 @@ Supported so far:
   Entire repo.
 - **Trails next to GitHub PRs** for a mirrored repo: not built yet. It will be
   opt-in per repo.
+- **Jobs:** in an Entire repo the job is a trail, `trail:<n>`, not a beads
+  issue: Shep creates it with `--no-branch`, dispatches it, links the pushed
+  branch to it (`entire trail link`, not a second `trail create`), and closes
+  it. See [trails as jobs](shep.md#trails-as-jobs).
 
 ## Brain
 

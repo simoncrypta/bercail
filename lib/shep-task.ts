@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isTrail, ownTrail, readRecord, trailNumber, trailWaits, writeRecord } from "./jobs.ts";
 
 type Owner = {
   desk: string;
@@ -126,7 +127,22 @@ function bd(repo: string, ...args: string[]): any {
   const out = run(process.env.HANDOFF_BD_BIN || bin("bd"), args, repo);
   return out ? JSON.parse(out) : null;
 }
+// The job: a beads issue, or in an Entire repo a trail of this repo, whose task
+// is the local job record (jobs.ts). A closed trail takes no desk; waiting is
+// what its "Blocked by:" line still waits on.
 function issue(repo: string, id: string): any {
+  if (isTrail(id)) {
+    const trail = ownTrail(repo, id);
+    if (trail.status === "closed")
+      throw new Error(`${id} is closed; reopen it with entire trail update ${trailNumber(id)} --status open`);
+    return {
+      id,
+      title: trail.title,
+      status: trail.status,
+      waiting: trailWaits(repo, trail),
+      metadata: { bercail_task: readRecord(repo, id) },
+    };
+  }
   const raw = bd(repo, "show", id, "--json");
   const value = Array.isArray(raw) ? raw[0] : raw;
   if (value?.id !== id) throw new Error(`bd does not know ${id} in ${repo}`);
@@ -134,14 +150,16 @@ function issue(repo: string, id: string): any {
 }
 // Write the task and, unless reopen is false, set the issue in progress. Keep
 // unrelated metadata. A failed reservation stops dispatch before the desk or
-// its queue file sees anything; a retry reads that reservation first.
+// its queue file sees anything; a retry reads that reservation first. A
+// trail's task is its local job record; the trail itself is not touched.
 function save(repo: string, value: any, task: Task, reopen = true): void {
+  delete task.requests;
+  task.v = 2;
+  if (isTrail(value.id)) return writeRecord(repo, value.id, task);
   const file = join(
     git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir"),
     "bercail-task.lock/metadata.json",
   );
-  delete task.requests;
-  task.v = 2;
   // bd 1.3.1 --metadata merges inside the storage transaction. Submit only
   // this namespace; resubmitting other keys would overwrite concurrent edits.
   writeFileSync(file, JSON.stringify({ bercail_task: task }), { mode: 0o600 });
@@ -155,7 +173,8 @@ export function logicalTarget(text: string): string {
   const pr = /^(?:pr:|https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/)([1-9][0-9]*)\/?$/i.exec(text);
   if (pr) return `pr:${pr[1]}`;
   if (/^task:[a-z0-9][a-z0-9._-]*$/i.test(text)) return text.toLowerCase();
-  throw new Error("target must be pr:N, a GitHub PR URL, or task:ID (never a branch name)");
+  if (isTrail(text)) return text;
+  throw new Error("target must be pr:N, a GitHub PR URL, task:ID, or trail:N (never a branch name)");
 }
 function mainOf(path: string): string {
   const first = git(realpathSync(path), "worktree", "list", "--porcelain").split("\n")[0]!;
@@ -231,7 +250,9 @@ function supersededBy(all: any[], id: string): Set<string> {
       .map((i: any) => i.id),
   );
 }
-function allIssues(repo: string): any[] {
+// No other job owns a trail's target: a trail job's target is itself.
+function allIssues(repo: string, id: string): any[] {
+  if (isTrail(id)) return [];
   const all = bd(repo, "list", "--all", "--json", "--limit", "0");
   if (!Array.isArray(all)) throw new Error("bd ownership lookup unavailable; no launch occurred");
   return all;
@@ -579,8 +600,15 @@ function create(repo: string, value: any, task: Task, opts: Spawn): any {
 
 function dispatch(op: string, input: any): any {
   if (op !== "dispatch") throw new Error("usage: bercail shep task dispatch (JSON on stdin)");
-  if (!input || typeof input !== "object" || !input.repo || !/^[a-z0-9][a-z0-9._-]*$/i.test(input.issue || ""))
-    throw new Error("pass explicit repo and issue as JSON on stdin");
+  // A trail is its own target: either field names it.
+  if (input && typeof input === "object" && !input.issue && isTrail(input.target || "")) input.issue = input.target;
+  if (
+    !input ||
+    typeof input !== "object" ||
+    !input.repo ||
+    !(/^[a-z0-9][a-z0-9._-]*$/i.test(input.issue || "") || isTrail(input.issue || ""))
+  )
+    throw new Error("pass explicit repo and issue (a beads id, or trail:N in an Entire repo) as JSON on stdin");
   const allowed = new Set([
     "repo",
     "issue",
@@ -608,7 +636,9 @@ function dispatch(op: string, input: any): any {
   try {
     const value = issue(repo, input.issue);
     let task = migrated(value.metadata?.bercail_task);
-    const target = logicalTarget(input.target || "");
+    const target = logicalTarget(input.target || (isTrail(value.id) ? value.id : ""));
+    if (isTrail(value.id) !== isTrail(target) || (isTrail(target) && target !== value.id))
+      throw new Error(`a trail job's target is its own trail: dispatch ${value.id} with target ${value.id}`);
     if (/^https:/i.test(input.target)) {
       const slug = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\//i.exec(input.target)?.[1]?.toLowerCase();
       const remote = git(repo, "remote", "get-url", "origin").replace(/\.git$/, "");
@@ -639,7 +669,7 @@ function dispatch(op: string, input: any): any {
       task.aliases = [...(task.aliases || []), task.target];
       task.target = target;
     }
-    const all = allIssues(repo);
+    const all = allIssues(repo, value.id);
     const released = supersededBy(all, value.id);
     const recorded = records(repo);
     // A superseded issue gives up its target once none of its desks is live.
@@ -736,6 +766,7 @@ function dispatch(op: string, input: any): any {
             throw new Error(
               `stage autopilot starts a desk only on ${target}'s own branch, and ${task!.branch} is not it`,
             );
+          if (value.waiting?.length) throw new Error(blocked(value));
           path = leftover(repo, value.id, task!.branch, history, existing ? pr!.headRefOid : "");
         } catch (error) {
           const why = (error as Error).message;
@@ -815,6 +846,8 @@ function dispatch(op: string, input: any): any {
         "creation outcome UNKNOWN; retry its own requestId to finish a partial creation, or inspect the worktree/space facts; do not launch another",
       );
     const adoption = adopting ? adoptable(repo, value.id, target, task, history, input) : null;
+    // A new desk waits for the trails a "Blocked by:" line names; a live or adopted one goes on.
+    if (!owner && !adoption && value.waiting?.length) throw new Error(blocked(value));
     task ||= {
       v: 2,
       repo,
@@ -875,10 +908,19 @@ function dispatch(op: string, input: any): any {
       forkReason: input.forkReason ? String(input.forkReason) : undefined,
       adoptReason: record?.reason,
     });
-    return record ? { ...done, ...told(record, done.creation.desk) } : done;
+    if (!record) return done;
+    // An adoption goes on with the gone desk's work, blocked or not; the person hears what it waits on.
+    const adopted = told(record, done.creation.desk);
+    if (value.waiting?.length) adopted.warning += ` ${blocked(value)}.`;
+    return { ...done, ...adopted };
   } finally {
     rmSync(lock, { recursive: true });
   }
+}
+
+// Why a trail takes no new desk yet: what its "Blocked by:" line still waits on.
+function blocked(value: any): string {
+  return `${value.id} is blocked by ${value.waiting.join(", ")}; dispatch it once they are closed or merged, or change its Blocked by line (entire trail update ${trailNumber(value.id)} --body …)`;
 }
 
 // The person is told of an adoption, not asked: warning is the line Shep repeats.

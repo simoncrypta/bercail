@@ -1301,6 +1301,37 @@ EOF
     || fail "hc run labels: $(cat "$DESK_ARGV" 2>/dev/null) log=$(cat "$DESK_HC_LOG")"
 }
 
+@test "a trail spawn reads and comments through bercail job, never bd, and refuses a beads issue on a trail target or a closed trail" {
+  local out
+  _desk_fixture trail-spawn
+  mkdir -p "$DESK_REPO/.beads"
+  # bercail job knows trail 8 (open) and 9 (closed); comments go to a log.
+  cat >"$BATS_TEST_TMPDIR/no-bercail" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2 $3" in
+  "job show trail:8") echo '{"id":"trail:8","title":"Measure the cold start","status":"open"}' ;;
+  "job show trail:9") echo '{"id":"trail:9","title":"Done","status":"closed"}' ;;
+  "job comment trail:8") printf '%s\t%s\n' "$3" "$(cat)" >>"$JOB_COMMENTS" ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/no-bercail"
+  export JOB_COMMENTS="$BATS_TEST_TMPDIR/job-comments"
+  out="$(ISSUE=trail:8 _desk_spawn 2>"$BATS_TEST_TMPDIR/trail.err")" || fail "trail spawn: $out $(cat "$BATS_TEST_TMPDIR/trail.err")"
+  jq -e '.issue == "trail:8" and .target == "trail:8" and .issue_title == "Measure the cold start"' <<<"$out" >/dev/null || fail "json: $out"
+  jq -e 'index("bercail.issue=trail:8") and any(.[]; startswith("Your job is trail:8: Measure the cold start. Run `bercail job show trail:8`"))' \
+    "$DESK_ARGV" >/dev/null || fail "hc run: $(cat "$DESK_ARGV")"
+  grep -q $'^trail:8\tbercail handoff: .*post your final report on this trail with bercail job comment trail:8 (the report on stdin)' "$JOB_COMMENTS" \
+    || fail "handoff comment: $(cat "$JOB_COMMENTS")"
+  [[ ! -s "$BD_COMMENTS" && ! -e "$DESK_REPO.feat/.beads/redirect" ]] || fail "bd was used for a trail"
+  out="$(_desk_spawn --branch other --target trail:8 2>&1)" && fail "a beads issue took a trail target: $out"
+  [[ "$out" == *"--target trail:8 is a trail: pass --issue trail:8"* ]] || fail "mixed: $out"
+  out="$(ISSUE=trail:9 _desk_spawn --branch closed-trail 2>&1)" && fail "a closed trail took a desk: $out"
+  [[ "$out" == *"job trail:9 not found or closed (bercail job show trail:9)"* ]] || fail "closed: $out"
+  out="$(handoff_run_headless bstack "$DESK_REPO" trail:8 "" 1 "" 2>&1)" && fail "headless took a trail: $out"
+  [[ "$out" == *"headless stages take a beads issue; start a desk for trail:8 with --branch"* ]] || fail "headless: $out"
+}
+
 @test "an adoption starts a fresh desk in the existing worktree and records its reason" {
   local out existing session
   _desk_fixture adopt

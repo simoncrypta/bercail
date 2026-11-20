@@ -192,6 +192,11 @@ _todo_ledger_add() {
   jq -c "$@" >>"$file"
 }
 
+# bercail job (lib/jobs.ts), for a todo linked to a trail, trail:N.
+_todo_job() {
+  node "$(dirname "${BASH_SOURCE[0]}")/jobs.ts" "$@"
+}
+
 todo_add() {
   local title="" notes="" due="" issue="" repo="" target="" main="" state item line
   while [[ $# -gt 0 ]]; do
@@ -219,14 +224,18 @@ todo_add() {
   if [[ -n "$repo" ]]; then
     main="$(_todo_repo_key "$repo")" || { _todo_err "no folder $repo; pass the job's checkout with --repo"; return 1; }
   fi
-  if [[ -n "$issue" ]]; then
-    [[ "$issue" =~ ^[A-Za-z0-9._-]+$ ]] || { _todo_err "issue id '$issue' has characters a beads id does not"; return 1; }
+  if [[ "$issue" =~ ^trail:[1-9][0-9]{0,8}$ ]]; then
+    # Before the backend: a todo must not point at a trail that is not there.
+    _todo_job show "$issue" --repo "$main" --json </dev/null >/dev/null 2>&1 \
+      || { _todo_err "Entire has no $issue for $main (bercail job show $issue --repo $main); pass its checkout with --repo"; return 1; }
+  elif [[ -n "$issue" ]]; then
+    [[ "$issue" =~ ^[A-Za-z0-9._-]+$ ]] || { _todo_err "issue id '$issue' is neither a beads id nor a trail (trail:N)"; return 1; }
     # Before the backend: a todo must not point at an issue that is not there.
     (cd "$main" && bd show "$issue" --json </dev/null >/dev/null 2>&1) \
       || { _todo_err "bd does not know $issue in $main; pass its checkout with --repo"; return 1; }
-    # Beads is local: the backend's reader gets the id only as a last line.
-    notes="${notes:+$notes$'\n\n'}bercail: $issue in $(basename "$main")"
   fi
+  # The job is local to the person's machine: the backend's reader gets the id only as a last line.
+  [[ -z "$issue" ]] || notes="${notes:+$notes$'\n\n'}bercail: $issue in $(basename "$main")"
   state="$(_todo_state)" || return 1
   target="$(_todo_route "$state" "$target" "$main")" || return 1
   _todo_use "$state" "$target" || return 1
@@ -240,7 +249,14 @@ todo_add() {
   printf 'added to %s: %s\n' "$TODO_TARGET" "$(_todo_line "$item")"
   [[ -n "$issue" ]] || return 0
   line="bercail todo: \"$(jq -r .title <<<"$item")\" waits on the person in $TODO_BACKEND ($TODO_TARGET): $(jq -r '.url // "(no link)"' <<<"$item")"
-  if (cd "$main" && bd comment "$issue" "$line" </dev/null >/dev/null 2>&1); then
+  if [[ "$issue" == trail:* ]]; then
+    if printf '%s' "$line" | _todo_job comment "$issue" --repo "$main" >/dev/null 2>&1; then
+      printf 'linked on %s\n' "$issue"
+    else
+      _todo_err "added, but bercail could not comment on $issue in $main; add the link by hand: bercail job comment $issue --repo $main"
+      return 1
+    fi
+  elif (cd "$main" && bd comment "$issue" "$line" </dev/null >/dev/null 2>&1); then
     printf 'linked on %s\n' "$issue"
   else
     _todo_err "added, but bd could not comment on $issue in $main; add the link by hand: bd comment $issue \"$line\""

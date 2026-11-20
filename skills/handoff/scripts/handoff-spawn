@@ -543,7 +543,7 @@ handoff_spawn_main() {
   [[ -n "$stage" ]] || handoff_die "--stage bstack|autopilot is required; bercail does not pick a stage"
   [[ "$stage" == bstack || "$stage" == autopilot ]] || handoff_die "unknown stage: $stage"
   [[ -n "$issue" ]] || handoff_die "--issue <beads id> is required; the job lives in that issue"
-  handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id: $issue"
+  handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id or trail:N: $issue"
   [[ -z "$model" || "$model" =~ ^[^/[:space:]]+/[^[:space:]]+$ ]] \
     || handoff_die "--model takes PROVIDER/MODEL[:thinking], as pi --list-models names it (claude-bridge/claude-opus-5-5:high), not $model"
   [[ -z "$base" || -n "$branch" ]] \
@@ -571,12 +571,12 @@ handoff_spawn_main() {
   command -v git >/dev/null 2>&1 || handoff_die "git is required"
   command -v wt >/dev/null 2>&1 || handoff_die "wt (worktrunk) is required"
   command -v jq >/dev/null 2>&1 || handoff_die "jq is required"
-  handoff_bin_present "$(handoff_bd_bin)" \
+  handoff_is_trail "$issue" || handoff_bin_present "$(handoff_bd_bin)" \
     || handoff_die "bd (beads) is not on PATH; the job is a beads issue (bercail update installs beads)"
   [[ -f "$helper" ]] || handoff_die "missing $helper"
 
   main="$(_git_backend_realpath "$PWD")"
-  handoff_issue_exists "$main" "$issue" || handoff_die "beads issue $issue not found (bd show $issue)"
+  handoff_issue_exists "$main" "$issue" || handoff_die "job $issue not found or closed ($(handoff_show_cmd "$issue"))"
   issue_title="$(handoff_issue_title "$main" "$issue")"
 
   handoff_herdr_ok \
@@ -593,8 +593,14 @@ handoff_spawn_main() {
     mkdir "$lock" 2>/dev/null || handoff_die "visible dispatch lock held: $lock; inspect the previous spawn before retrying"
     trap 'rmdir "$lock" 2>/dev/null || true' EXIT
   fi
+  # A trail is its own target, and only a trail's.
+  if handoff_is_trail "$issue"; then
+    [[ "${target:-$issue}" == "$issue" ]] || handoff_die "a trail job's target is its own trail: --target $issue"
+    target="$issue"
+  fi
+  [[ "$target" != trail:* || "$target" == "$issue" ]] || handoff_die "--target $target is a trail: pass --issue $target"
   target="${target:-task:$issue}"
-  [[ "$target" =~ ^(task:[A-Za-z0-9._-]+|pr:[1-9][0-9]*)$ ]] || handoff_die "--target must be task:ID or pr:N"
+  [[ "$target" =~ ^(task:[A-Za-z0-9._-]+|pr:[1-9][0-9]*|trail:[1-9][0-9]*)$ ]] || handoff_die "--target must be task:ID, pr:N or trail:N"
   if [[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl" ]]; then
     while IFS= read -r prior; do
       path="$(jq -r '.path // empty' <<<"$prior")"
@@ -684,16 +690,16 @@ handoff_spawn_main() {
   label="$(_wt_generate_session_name "$sibling")"
 
   # Before the handoff comment and the desk agent, so both write to the main store.
-  handoff_share_main_beads "$sibling"
+  handoff_is_trail "$issue" || handoff_share_main_beads "$sibling"
 
   # The checkout facts used to be a prompt preamble. They go on the issue now.
   if [[ "$stage" == autopilot ]]; then
     role=autopilot
-    intro="$(printf 'bercail handoff: stage autopilot, desk agent pi, linked worktree %s (branch %s, the head of %s). Stay in this checkout. Drive the PR to green with the autopilot skill: you may commit and push its fixes to %s, never force-push, merge, or release. %s When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
-      "$sibling" "$branch" "$target" "$branch" "$(handoff_policy_line "$sibling")" "$issue")"
+    intro="$(printf 'bercail handoff: stage autopilot, desk agent pi, linked worktree %s (branch %s, the head of %s). Stay in this checkout. Drive the PR to green with the autopilot skill: you may commit and push its fixes to %s, never force-push, merge, or release. %s When you stop, post your final report on %s: what changed, what you ran to prove it, and what is left or blocked.' \
+      "$sibling" "$branch" "$target" "$branch" "$(handoff_policy_line "$sibling")" "$(handoff_report_cmd "$issue")")"
   else
-    intro="$(printf 'bercail handoff: stage %s, desk agent %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr. %s Do not open Review; when the desk agent finishes, Review opens itself in this space once the user looks at it. When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
-      "$stage" pi "$sibling" "$branch" "$(handoff_policy_line "$sibling")" "$issue")"
+    intro="$(printf 'bercail handoff: stage %s, desk agent %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr. %s Do not open Review; when the desk agent finishes, Review opens itself in this space once the user looks at it. When you stop, post your final report on %s: what changed, what you ran to prove it, and what is left or blocked.' \
+      "$stage" pi "$sibling" "$branch" "$(handoff_policy_line "$sibling")" "$(handoff_report_cmd "$issue")")"
   fi
   if [[ "$backend" == gt ]]; then
     intro="$(printf '%s\nUse gt, not raw git commit/push, unless asked.' "$intro")"
@@ -703,6 +709,8 @@ handoff_spawn_main() {
       intro="$(printf '%s Stack %s on %s with gh stack init or gh stack add, then gh stack submit. Do not open a PR that only targets %s.' "$intro" "$branch" "$base" "$base")"
     elif [[ -n "$base" && "$backend" == origin ]]; then
       intro="$(printf '%s Stack %s on %s with origin stack track --onto and origin pr create --stack-on. Do not open a PR that only targets %s.' "$intro" "$branch" "$base" "$base")"
+    elif [[ -n "$base" && "$backend" == entire ]] && handoff_is_trail "$issue"; then
+      intro="$(printf '%s This job is already %s: do not create another trail. Shep links this branch to it, on %s, once it is pushed.' "$intro" "$issue" "$base")"
     elif [[ -n "$base" && "$backend" == entire ]]; then
       intro="$(printf '%s Entire has no stacks: open the trail with entire trail create --base %s, and once %s lands, move it with entire trail retarget.' "$intro" "$base" "$base")"
     fi

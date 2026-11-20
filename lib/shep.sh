@@ -183,11 +183,15 @@ shep_bg_list() {
 # Past this, a label title is cut and ends in "…", as handoff-spawn's are.
 SHEP_TITLE_MAX=60
 
-# Title of beads issue ID from DIR, one line, cut to SHEP_TITLE_MAX. Fails when
-# bd does not know the issue there.
+# Title of beads issue or trail ID from DIR, one line, cut to SHEP_TITLE_MAX.
+# Fails when bd or Entire does not know the job there.
 _shep_issue_title() {
   local dir="$1" id="$2" raw
-  raw="$(cd "$dir" && _shep_bd show "$id" --json 2>/dev/null </dev/null)" || return 1
+  if _shep_is_trail "$id"; then
+    raw="$(_shep_job show "$id" --repo "$dir" --json 2>/dev/null </dev/null)" || return 1
+  else
+    raw="$(cd "$dir" && _shep_bd show "$id" --json 2>/dev/null </dev/null)" || return 1
+  fi
   jq -er --argjson max "$SHEP_TITLE_MAX" '
     (if type == "array" then .[0] else . end).title // empty
     | gsub("[[:space:][:cntrl:]]+"; " ") | gsub("^ +| +$"; "")
@@ -202,7 +206,7 @@ _shep_issue_title() {
 # --outlive-parent: a Shep restart does not drop the wait. --rm: `hc kill` is
 # the whole cleanup once it has reported.
 shep_bg() {
-  local issue="" cwd="$PWD" title name lead brief prompt stop="." out model ext guard
+  local issue="" cwd="$PWD" title name lead brief prompt stop="." out model ext guard main
   local hc="${HC_BIN:-hc}" agent="$LOCAL_BIN/bercail-desk-agent"
   local -a cmd
   while [[ $# -gt 0 ]]; do
@@ -215,11 +219,19 @@ shep_bg() {
     esac
   done
   [[ -n "$issue" ]] || { _shep_err "usage: bercail shep bg --issue ID [--cwd DIR]"; return 1; }
-  [[ "$issue" =~ ^[A-Za-z0-9._-]+$ ]] || { _shep_err "issue id '$issue' has characters a beads id does not"; return 1; }
+  _shep_job_id_ok "$issue" || return 1
   cwd="$(cd "$cwd" 2>/dev/null && pwd -P)" || { _shep_err "no folder $cwd; pass the repo's checkout with --cwd"; return 1; }
   title="$(_shep_issue_title "$cwd" "$issue")" \
-    || { _shep_err "bd does not know $issue in $cwd; run it from the issue's repo or pass --cwd"; return 1; }
+    || { _shep_err "$(_shep_job_unknown "$issue" "$cwd"); run it from the job's repo or pass --cwd"; return 1; }
   name="shep-bg-$(printf '%s' "${issue,,}" | tr -c 'a-z0-9_-' '-')"
+  # Trail numbers repeat across projects: a trail's worker is named by its main
+  # checkout too (a hash of its path, after a hint of its name), cut to fit hc's 32.
+  if _shep_is_trail "$issue"; then
+    main="$(_shep_main_of "$cwd" 2>/dev/null)" || main="$cwd"
+    name="$(basename "$main")"
+    name="$(printf '%s' "${name,,}" | tr -c 'a-z0-9_-' '-')"
+    name="shep-bg-${name:0:$((18 - ${#issue}))}-$(printf '%s' "$main" | sha256sum | cut -c1-4)-trail-${issue#trail:}"
+  fi
   name="${name:0:32}"
   if "$hc" get "$name" --json 2>/dev/null </dev/null | jq -e '.state == "live"' >/dev/null 2>&1; then
     _shep_err "$name is already running; see it with: hc read $name, or end it with: hc kill $name"
@@ -233,7 +245,11 @@ shep_bg() {
     TERM=xterm-256color COLORTERM=truecolor)
   title="${title%.}"
   [[ "$title" != *… ]] || stop=""
-  prompt="Your job is beads issue $issue: $title$stop Run \`bd show $issue\` (read its comments too) and do exactly what it describes, then stop."
+  if _shep_is_trail "$issue"; then
+    prompt="Your job is $issue: $title$stop Run \`bercail job show $issue\` (its body and comments) and do exactly what it describes, then stop."
+  else
+    prompt="Your job is beads issue $issue: $title$stop Run \`bd show $issue\` (read its comments too) and do exactly what it describes, then stop."
+  fi
   cmd+=("$agent" --prompt "$prompt")
   lead="${BSTACK_PI_DIR:-${BERCAIL_SHARE_DIR:-$HOME/.local/share/bercail}/pi}/lead.json"
   [[ -r "$lead" ]] && jq -e 'type == "array" and .[0] == "pi" and index("--model") != null

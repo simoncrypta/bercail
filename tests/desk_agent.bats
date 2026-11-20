@@ -209,6 +209,16 @@ AGENT
   expect "$(record .issue)" '"bercail-237.15"' "the period that ends the sentence is not in the id"
 }
 
+@test "a trail desk's record names its trail, as dispatch's follow-ups check it" {
+  arrange_record
+  printf '{"labels":{"bercail.role":"agent","bercail.space":"sp1","bercail.issue":"trail:12","bercail.issue_title":"Measure it"}}\n' >"$BATS_TEST_TMPDIR/terminal.json"
+  desk --prompt 'Your job is trail:12: Measure it. Run `bercail job show trail:12` (its body and comments) and do the work it describes.' pi >/dev/null
+  expect "$(record '[.issue, .issue_title]')" '["trail:12","Measure it"]' "the record names the trail, as its label does"
+  printf '{"labels":{"bercail.role":"agent","bercail.space":"sp1","bercail.issue":"trail:13","bercail.issue_title":"Migrate beads issue app-9"}}\n' >"$BATS_TEST_TMPDIR/terminal.json"
+  desk --prompt 'Your job is trail:13: Migrate beads issue app-9. Run `bercail job show trail:13` (its body and comments) and do the work it describes.' pi >/dev/null
+  expect "$(record .issue)" '"trail:13"' "a beads id in the trail's title is not the job"
+}
+
 @test "a resume keeps session, flags and issue" {
   seed_issue
   desk pi --session-id 0199-given --verbose >/dev/null

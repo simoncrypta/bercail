@@ -1,5 +1,6 @@
 # Headless Pi runner. Sourced by handoff-spawn.
-# The job lives in a beads issue (bd). An agent's prompt is one line pointing at it.
+# The job lives in a beads issue (bd), or in an Entire repo a trail (trail:N,
+# through bercail job). An agent's prompt is one line pointing at it.
 # Stages are bstack and autopilot. Both run Pi.
 # shellcheck shell=bash
 
@@ -25,13 +26,39 @@ handoff_bd_bin() {
 }
 
 # Beads ids are a prefix, a dash, and a hash, with optional .N children
-# (bercail-0s1, bercail-0s1.2). Reject anything that could be a flag or a path.
+# (bercail-0s1, bercail-0s1.2), or trail:N. Reject anything that could be a flag or a path.
 handoff_issue_id_ok() {
-  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_]*-[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_]*-[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || handoff_is_trail "$1"
+}
+
+# An Entire trail job: trail:<project trail number>.
+handoff_is_trail() {
+  [[ "$1" =~ ^trail:[1-9][0-9]{0,8}$ ]]
+}
+
+# A trail job is read and commented through bercail job: its comments stay on
+# this machine, since Entire refuses trail comments from an agent session.
+handoff_job() {
+  "${BERCAIL_BIN:-bercail}" job "$@"
+}
+
+# The command that shows the job, for prompts and errors.
+handoff_show_cmd() {
+  if handoff_is_trail "$1"; then printf 'bercail job show %s' "$1"; else printf 'bd show %s' "$1"; fi
+}
+
+# Where the desk posts its report, for the handoff comment.
+handoff_report_cmd() {
+  if handoff_is_trail "$1"; then printf 'this trail with bercail job comment %s (the report on stdin)' "$1"
+  else printf 'this issue with bd comment %s' "$1"; fi
 }
 
 handoff_issue_exists() {
   local dir="$1" id="$2"
+  if handoff_is_trail "$id"; then
+    handoff_job show "$id" --repo "$dir" --json 2>/dev/null </dev/null | jq -e '.status == "open"' >/dev/null
+    return
+  fi
   (cd "$dir" && "$(handoff_bd_bin)" show "$id" --json >/dev/null 2>&1)
 }
 
@@ -70,6 +97,11 @@ handoff_share_main_beads() {
 
 handoff_issue_comment() {
   local dir="$1" id="$2" text="$3"
+  if handoff_is_trail "$id"; then
+    printf '%s' "$text" | handoff_job comment "$id" --repo "$dir" >/dev/null \
+      || printf 'handoff: could not add the handoff comment to %s\n' "$id" >&2
+    return 0
+  fi
   printf '%s' "$text" | (cd "$dir" && "$(handoff_bd_bin)" comment "$id" --stdin >/dev/null) \
     || printf 'handoff: could not add the handoff comment to %s\n' "$id" >&2
 }
@@ -81,7 +113,11 @@ HANDOFF_TITLE_MAX=60
 # unknown issue, bad JSON). Whitespace and control runs become one space.
 handoff_issue_title() {
   local dir="$1" id="$2" raw="" title=""
-  raw="$(cd "$dir" && "$(handoff_bd_bin)" show "$id" --json 2>/dev/null)" || return 0
+  if handoff_is_trail "$id"; then
+    raw="$(handoff_job show "$id" --repo "$dir" --json 2>/dev/null </dev/null)" || return 0
+  else
+    raw="$(cd "$dir" && "$(handoff_bd_bin)" show "$id" --json 2>/dev/null)" || return 0
+  fi
   title="$(jq -r --argjson max "$HANDOFF_TITLE_MAX" '
     (if type == "array" then .[0] else . end).title // ""
     | gsub("[[:space:][:cntrl:]]+"; " ")
@@ -110,7 +146,10 @@ handoff_issue_prompt() {
   local id="$1" title="${2:-}" stop="."
   title="${title%.}"
   [[ "$title" != *… ]] || stop=""
-  if [[ -n "$title" ]]; then
+  if handoff_is_trail "$id"; then
+    printf 'Your job is %s%s Run `bercail job show %s` (its body and comments) and do the work it describes.' \
+      "$id" "${title:+: $title}$stop" "$id"
+  elif [[ -n "$title" ]]; then
     printf 'Your job is beads issue %s: %s%s Run `bd show %s` (read its comments too) and do the work it describes.' "$id" "$title" "$stop" "$id"
   else
     printf 'Your job is beads issue %s. Run `bd show %s` (read its comments too) and do the work it describes.' "$id" "$id"
@@ -404,6 +443,7 @@ handoff_run_headless() {
 
   [[ -n "$issue" ]] || handoff_die "stage $stage needs --issue <beads id> (the prompt points at that issue)"
   handoff_issue_id_ok "$issue" || handoff_die "not a beads issue id: $issue"
+  ! handoff_is_trail "$issue" || handoff_die "headless stages take a beads issue; start a desk for $issue with --branch"
   [[ -n "$worktree" ]] || worktree="$PWD"
   [[ -d "$worktree" ]] || handoff_die "worktree not found: $worktree"
   worktree="$(_git_backend_realpath "$worktree")"

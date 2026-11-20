@@ -24,6 +24,7 @@ Post-install CLI (bercail):
   uninstall     Remove marker block and managed files
   notify        run: the desk follower that feeds Shep's inbox (the desk mod starts it)
   shep          Shep, the orchestrator on Pi: status (queued, awaiting persistence, persisted) | run |
+                Each ISSUE or ID below is a beads id, or trail:N in an Entire repo (bercail job).
                 bg --issue ID [--cwd DIR] (waits and reports: bash under the guard, no commit, push or edit) |
                 task dispatch [--wait-ready] (JSON stdin; a first visible desk, or a follow-up into the original desk's session,
                   shown at its next turn even while it works; a gone owner's checkout gets a new desk, unasked;
@@ -41,8 +42,14 @@ Post-install CLI (bercail):
                 question create|revise|reply|answer|withdraw (JSON on stdin) | check TOKEN | thread TOPIC |
                 panel (the Decisions panel's JSON) | expire (record due defaults; Shep's runtime runs it) |
                 discuss TOKEN (make or find its branch) | closed TOKEN OPENING
+  job           A trail job in an Entire repo, trail:N (its trail number) wherever an issue id goes:
+                show trail:N [--repo DIR] [--json] (the trail, its changes, and its comments) |
+                comment trail:N [--repo DIR] (text on stdin; the comment stays on this machine, where
+                desks post their report, since Entire refuses trail comments from an agent) |
+                list [--repo DIR] [--json] (the repo's open trails, ready or blocked, with the local job record) |
+                id trail:N [--repo DIR] (its Entire id and URL, project-wide: what a question binds to)
   todo          What only you can do, on one of your todo lists (targets; Basecamp for now):
-                add "TITLE" [--notes TEXT] [--due YYYY-MM-DD] [--issue ID] [--repo DIR] [--target NAME] |
+                add "TITLE" [--notes TEXT] [--due YYYY-MM-DD] [--issue ID|trail:N] [--repo DIR] [--target NAME] |
                 list [--target NAME] [--json] | show ID | done ID. Shep adds them; desks propose Todo: "<text>".
                 add goes to --target, else the route of the job's repo, else the default.
                 target add NAME URL [--backend NAME] [--create "LIST"] [--json] (reads the list first) |

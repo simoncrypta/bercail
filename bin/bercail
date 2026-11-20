@@ -236,6 +236,10 @@ main() {
       source "$(find_lib_dir)/todo.sh"
       cmd_todo "$@"
       ;;
+    job)
+      # A trail job in an Entire repo (lib/jobs.ts): read by desks, so no other lib.
+      exec node "$(find_lib_dir)/jobs.ts" "$@"
+      ;;
     scratch)
       # Only common.sh: every role agent starts through this, so it stays quick
       # and no other lib can stop an agent from starting.

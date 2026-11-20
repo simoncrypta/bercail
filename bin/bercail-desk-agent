@@ -155,7 +155,13 @@ remember_desk() {
   space="$(jq -r 'select(.labels["bercail.role"] == "agent") | .labels["bercail.space"] // empty' <<<"$hcjson")" || return 0
   [[ -n "$space" ]] || return 0
   # A child id has dots (bercail-237.15); the period that ends the sentence is not in it.
-  [[ "$prompt" =~ beads\ issue\ ([A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*) ]] && issue="${BASH_REMATCH[1]}"
+  # In an Entire repo the job is a trail: "Your job is trail:12: ...", read first,
+  # since its title may name a beads issue.
+  if [[ "$prompt" =~ ^Your\ job\ is\ (trail:[1-9][0-9]*) ]]; then
+    issue="${BASH_REMATCH[1]}"
+  elif [[ "$prompt" =~ beads\ issue\ ([A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*) ]]; then
+    issue="${BASH_REMATCH[1]}"
+  fi
   # Private only when we create it. An existing dir keeps its mode, and this
   # does not change the process umask the harness inherits. Parents, if missing,
   # keep that umask too.

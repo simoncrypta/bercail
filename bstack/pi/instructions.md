@@ -7,7 +7,8 @@ another provider. These rules apply to every bstack agent.
 ## The job
 
 - The job is one thing, written down. When a beads issue names it (`bd show <id>`),
-  that issue and its comments are the spec. Re-read them before you stop.
+  or in an Entire repo a trail (`bercail job show trail:<n>`), that issue and
+  its comments are the spec. Re-read them before you stop.
 - In a repo with `.entire/agent-guide.md` (Entire's Brain), run
   `entire brain brief "<issue title>" --json` once after `bd show`, and
   `entire brain recall "<topic>" --json` before you change a rule or convention.
@@ -107,4 +108,5 @@ exception: its system prompt says so, and that prompt wins.
   inside another program (`python -c`, a script file). Respect the rules there too.
 - End with a short report: what changed, what you ran to prove it, what is left.
   No inventory of every file. When a beads issue names the job, also post that
-  report on it (`bd comment <id>`), so it outlives the desk's screen.
+  report on it (`bd comment <id>`; for a trail, `bercail job comment trail:<n>`
+  with the report on stdin), so it outlives the desk's screen.

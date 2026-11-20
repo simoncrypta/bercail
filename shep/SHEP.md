@@ -211,6 +211,29 @@ The board line says when the backend does not answer; tell the person once.
    replaces it, run `bd supersede <that issue> --with <this issue>` on their
    yes, then dispatch again. A live desk of the superseded issue still stops it.
 
+In an Entire repo (git backend `entire`) there are no beads: the job is a
+trail, `trail:<n>`, wherever a step above or below takes an issue id
+(dispatch, `shep bg --issue`, `brief`, questions, `todo add --issue`,
+`mistake --issue`). Research, admin and waits are trails too.
+
+- Create it from the main checkout: `entire trail create --no-branch --title
+  "<ask>" --body "<the ask, links, what done looks like>" --type task --json`.
+  Its `number` is the job, `trail:<n>`. Dispatch it with `target: "trail:<n>"`
+  from that repo's checkout. Its desk still gets a local branch; nothing is
+  pushed or linked unless the job has code.
+- When it must wait for other trails, put `Blocked by: #12, #15` on a line of
+  its body (at create, or `entire trail update <n> --body`). Dispatch refuses a
+  new desk while one of them is neither closed nor merged, and names them;
+  `bercail job list` shows each open trail as ready or blocked.
+- Its job record and comments stay on this machine: `bercail job show
+  trail:<n>`. Entire refuses trail comments from an agent, so the handoff,
+  a todo's link and the desk's report are local comments. Review feedback on
+  the code goes in `entire trail finding`, never in a comment.
+- Once the desk's branch is pushed, link it: `entire trail link <n> --branch <branch>`.
+- Close the trail with `entire trail update <n> --status closed` once it is
+  merged, or for a job with no branch, once its report is in. The board
+  counts complete trails still open: close those too.
+
 Every coding job and follow-up has a visible owner. No headless/generic Pi
 fallback. On a follow-up, `stage: "autopilot"` expresses workflow intent, not a
 privileged runtime role or shipping grant; a live lead remains a lead. On a
@@ -237,8 +260,9 @@ polling a CI run, a deploy, a desk, a release, or a long command. Your thread
 stays with the person. When something needs waiting on, or a step the person
 approved has to happen once it is done, hand it to a background Shep:
 
-1. Write it as a beads issue in the repo it concerns: what to wait for, what
-   comes after, when to stop, and what not to do. For an Entire trail's gates,
+1. Write it as a beads issue in the repo it concerns (a trail with no
+   branch in an Entire repo): what to wait for, what comes after, when to
+   stop, and what not to do. For an Entire trail's gates,
    name the trail (`<n>` or `<repo>/<n>`) and the head they must pass on.
 2. From that repo's checkout, run `bercail shep bg --issue <id>` (or pass
    `--cwd <checkout>`). It starts Pi in a background terminal, with no space
@@ -264,7 +288,7 @@ desk, the issue, and the event id, nothing the desk wrote. For each one:
   blocked, and its latest report, cut to about 1500 characters. Use it instead of
   `bd show` and `hc read`.
 - Read more only when the brief says it was cut and the part you need is
-  missing: `bd comments <issue>` for the whole report, `hc read <desk> --lines 60`
+  missing: `bd comments <issue>` (`bercail job show <trail>`) for the whole report, `hc read <desk> --lines 60`
   for the whole screen.
 - Tell the person, in a few lines: `<id>: <title>`, finished or blocked, what
   changed (the description's title when the desk wrote one), its size and

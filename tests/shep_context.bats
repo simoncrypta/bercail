@@ -208,7 +208,7 @@ no report yet (0 comments; bd comments app-3)" ]] || fail "brief app-3: $out"
   out="$(shep brief app-2 --repo "$BATS_TEST_TMPDIR" 2>&1)" && fail "brief with a --repo that is no checkout passed"
   [[ "$out" == *"is not a git checkout"* ]] || fail "bad --repo: $out"
   out="$(shep brief 'app 2;x' 2>&1)" && fail "a bad id passed"
-  [[ "$out" == *"has characters a beads id does not"* ]] || fail "bad id: $out"
+  [[ "$out" == *"is neither a beads id nor a trail (trail:N)"* ]] || fail "bad id: $out"
 }
 
 @test "shep board: a line per job in each known repo, other repos, stray desks, and what waits on the person" {
@@ -395,8 +395,10 @@ GH
 }
 
 # ~/Work/kvm, hosted on Entire as et/lab/kvm, and an entire stand-in that reads
-# $HC_DATA/entire/: list.json, show-<n>.json and findings-<repo>-<n>.json.
+# $HC_DATA/entire/: list.json (list-<token>.json for a later page), show-<n>.json
+# and findings-<repo>-<n>.json. bercail job list reads the trails, on Node.
 trail_fixture() {
+  need node
   repo kvm
   git -C "$HOME/Work/kvm" remote add origin entire://aws-us-east-2.entire.io/et/lab/kvm
   printf '%s\n' "$HOME/Work/kvm" >"$STATE/repos"
@@ -409,7 +411,9 @@ printf 'entire %s\n' "$*" >>"$LOG"
 d="$HC_DATA/entire"
 [[ " $* " == *" --project et/lab "* ]] || exit 2
 case "$1 $2 $3" in
-  "trail list --project") [[ " $* " == *" --repo et/lab/kvm --status open "* ]] && cat "$d/list.json" ;;
+  "trail list --project") [[ " $* " == *" --repo entire://aws-us-east-2.entire.io/et/lab/kvm "* ]] || exit 2
+    page="$(sed -n 's/.* --page-token \([^ ]*\).*/\1/p' <<<"$*")"
+    cat "$d/list${page:+-$page}.json" ;;
   "trail show "*) cat "$d/show-$3.json" ;;
   "trail finding list") [[ "$4" == --trail ]] && cat "$d/findings-${5/\//-}.json" ;;
   *) exit 2 ;;
@@ -425,7 +429,7 @@ trail_data() {
   local d="$HC_DATA/entire"
   mkdir -p "$d"
   jq -n '{items: [{number: 8, phase: "complete"}, {number: 7, phase: "building"}, {number: 6, phase: "building"},
-    {number: 5, phase: "planning"}], nextPageToken: null}' >"$d/list.json"
+    {number: 5, phase: "planning"}] | map(.status = "open"), nextPageToken: null}' >"$d/list.json"
   jq -n '{number: 7, title: "Read the gateway frames", changes: [
     {repository: "kvm", number: 9, branch: "fix", status: "open", updatedAt: "2026-11-19T10:00:00Z",
      url: "https://entire.com/et/lab/-/trails/7/changes/kvm/9",
@@ -479,16 +483,22 @@ findings-kvm-9|
 show-7|{"changes":{"a":1}}
 show-7|
 list|{"nextPageToken":null}
+list|{"items":[],"nextPageToken":false}
 list|
 EOF
-  # A second page is more than the one list a refresh may read: UNKNOWN, not a cut.
+  # A second page is read, never cut: a trail in review there is in the queue; a
+  # page that fails is UNKNOWN.
   trail_data
-  jq '.nextPageToken = "p2"' "$HC_DATA/entire/list.json" >"$HC_DATA/entire/list.tmp"
+  jq '.nextPageToken = "p2" | .items |= map(select(.number != 6))' "$HC_DATA/entire/list.json" >"$HC_DATA/entire/list.tmp"
   mv "$HC_DATA/entire/list.tmp" "$HC_DATA/entire/list.json"
+  jq -n '{items: [{number: 6, phase: "building", status: "open"}], nextPageToken: null}' >"$HC_DATA/entire/list-p2.json"
   : >"$LOG"
-  out="$(shep queue --repo "$HOME/Work/kvm" --json)" && fail "a second page: $out"
-  jq -e '.status == "unknown"' <<<"$out" >/dev/null || fail "a second page: $out"
-  [[ "$(grep -c '^entire ' "$LOG")" == 1 ]] || fail "read past the first list: $(cat "$LOG")"
+  out="$(shep queue --repo "$HOME/Work/kvm" --json)" || fail "a second page: $out"
+  jq -e '[.items[] | .trail] == [6, 7]' <<<"$out" >/dev/null || fail "a second page: $out"
+  [[ "$(grep -c '^entire trail list ' "$LOG")" == 2 ]] || fail "pages: $(cat "$LOG")"
+  rm "$HC_DATA/entire/list-p2.json"
+  out="$(shep queue --repo "$HOME/Work/kvm" --json)" && fail "a failed second page: $out"
+  jq -e '.status == "unknown"' <<<"$out" >/dev/null || fail "a failed second page: $out"
 }
 
 @test "shep queue: a trail worker that dies is UNKNOWN, never a trail with nothing in review" {
@@ -510,7 +520,7 @@ EOF
   [[ "$(grep -c '^entire ' "$LOG")" == 5 && "$(grep -c '^entire trail list ' "$LOG")" == 1 ]] || fail "board: $(cat "$LOG")"
   # 96 more open trails, a full page, none in review: planning (with a desk's handoff, too) and complete.
   record --arg p "$HOME/Work/kvm.plan" '{path: $p, branch: "plan", issue: "trail:20", space: "sp4"}'
-  jq '.items += [range(20; 116) | {number: ., phase: (if . % 2 == 0 then "planning" else "complete" end)}]' \
+  jq '.items += [range(20; 116) | {number: ., status: "open", phase: (if . % 2 == 0 then "planning" else "complete" end)}]' \
     "$HC_DATA/entire/list.json" >"$HC_DATA/entire/list.tmp"
   mv "$HC_DATA/entire/list.tmp" "$HC_DATA/entire/list.json"
   : >"$LOG"

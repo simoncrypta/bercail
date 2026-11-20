@@ -123,26 +123,26 @@ function deskFacts(desk: string, issue: string | null, worktree: string): { spac
   return { space: record.space, session: record.session };
 }
 
-// Trail N of the worktree's Entire project, as `trail:<n>` names it: its ID, which
-// an answer holds to (another project's trail N is another job), and its URL, for
-// the card's link. A trail the project does not have refuses, as an issue from
-// another repo does.
-function trailFacts(n: string, worktree: string): { trailId: string; url: string } {
+// The trail `trail:<n>` names in the checkout's Entire project, as `bercail job id` reads
+// it (lib/jobs.ts, bercail's one trail reader): its ID, which an answer holds to (another
+// project's trail N is another job), and its URL, for the card's link. A trail the project
+// does not have refuses, as an issue from another repo does.
+function trailFacts(id: string, worktree: string): { trailId: string; url: string } {
   let shown;
   try {
-    shown = JSON.parse(run("entire", ["trail", "show", n, "--json"], worktree));
+    shown = JSON.parse(run(process.env.BERCAIL_SHEP_BIN || "bercail", ["job", "id", id, "--repo", worktree], worktree));
   } catch (error) {
-    fail(`entire trail show ${n}: ${((error as { stderr?: string }).stderr || (error as Error).message).trim()}`);
+    fail(`bercail job id ${id}: ${((error as { stderr?: string }).stderr || (error as Error).message).trim()}`);
   }
   if (
-    shown?.number !== Number(n) ||
-    typeof shown.id !== "string" ||
-    !shown.id ||
+    shown?.id !== id ||
+    typeof shown.trail_id !== "string" ||
+    !shown.trail_id ||
     typeof shown.url !== "string" ||
     !shown.url.startsWith("https://")
   )
-    fail(`trail ${n} does not match the repo's Entire project`);
-  return { trailId: shown.id, url: shown.url };
+    fail(`${id} does not match the repo's Entire trail`);
+  return { trailId: shown.trail_id, url: shown.url };
 }
 
 // The target and its desk warnings.
@@ -161,8 +161,7 @@ function inspectTarget(input: TargetInput): { target: QuestionTarget; warnings: 
   let trail: { trailId: string; url: string } | null = null;
   if (input.issue !== null) {
     if (input.issue.startsWith("-")) fail("invalid issue id");
-    const n = /^trail:([1-9]\d*)$/.exec(input.issue)?.[1];
-    if (n) trail = trailFacts(n, worktree);
+    if (input.issue.startsWith("trail:")) trail = trailFacts(input.issue, worktree);
     else {
       const jobs = JSON.parse(run("bd", ["show", input.issue, "--json"], worktree));
       if (!Array.isArray(jobs) || jobs.length !== 1 || jobs[0]?.id !== input.issue)
