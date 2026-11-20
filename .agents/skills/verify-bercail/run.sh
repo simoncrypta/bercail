@@ -139,7 +139,7 @@ check "bercail has no PR template" out_has describe-template none
 
 step policy-show 0 "$bercail" policy show --json "$repo"
 check "the CLI reads this repo's policy" jq -e '.file != "" and .policy.integrate == "direct"' "$evidence/policy-show.out"
-check "a fresh HOME does not trust it" jq -e '.trusted == false and .policy.commit == "ask"' "$evidence/policy-show.out"
+check "a fresh HOME does not trust it" jq -e '.trusted == false and .policy.push == "ask"' "$evidence/policy-show.out"
 
 # Shep: a start (the stub pi exits at once) writes its compaction settings and
 # its start context with a known repo and a rule.

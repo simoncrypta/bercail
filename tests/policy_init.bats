@@ -47,7 +47,7 @@ entire_remote() {
   run policy init --repo "$REPO" --profile guarded --backend gh --verify sample
   [[ "$status" -eq 0 ]] || fail "explicit preview failed: $output"
   [[ "$output" == *"$REPO/.bercail/policy.toml"* && "$output" == *"$REPO/.agents/skills/verify-sample/SKILL.md"* ]] || fail "preview omits destinations: $output"
-  [[ "$output" == *'commit = "ask"'* && "$output" == *'review = "always"'* && "$output" == *'INCOMPLETE'* ]] || fail "preview omits safe contents: $output"
+  [[ "$output" == *'push = "ask"'* && "$output" != *'commit ='* && "$output" == *'review = "always"'* && "$output" == *'INCOMPLETE'* ]] || fail "preview omits safe contents: $output"
   [[ ! -e "$REPO/.bercail" && ! -e "$REPO/.agents" ]] || fail "preview created directories"
   [[ "$(sha256sum "$CONFIG" "$TRUST" "$REPO/.git/index")" == "$before" && ! -e "$TOOL_CALLS" ]] || fail "preview touched owner state, index or invoked a live tool"
 }
@@ -94,7 +94,7 @@ entire_remote() {
   [[ "$output" == *'Init never creates or changes trust'* && "$output" == *'Existing matching trust and local overrides may already apply'* ]] || fail "trust caveat missing: $output"
   [[ "$output" == *'bercail policy trust '* && "$output" == *'other branches/desks are unchanged'* ]] || fail "separate adoption/trust missing: $output"
   out="$(policy show --json "$REPO")"
-  jq -e '.trusted == false and .policy.commit == "ask" and .policy.push == "ask" and .policy.review == "always" and .policy.agent_may_release == false and .policy.integrate == ""' <<<"$out" >/dev/null || fail "unsafe policy: $out"
+  jq -e '.trusted == false and .policy.push == "ask" and .policy.review == "always" and .policy.agent_may_release == false and .policy.integrate == ""' <<<"$out" >/dev/null || fail "unsafe policy: $out"
   [[ "$(find "$REPO/.agents" -type f | wc -l)" -eq 1 && -f "$REPO/.agents/skills/verify-sample/SKILL.md" ]] || fail "unexpected starter files"
   [[ ! -e "$REPO/.bercail/description.md" && ! -e "$REPO/.bercail/verify" ]] || fail "fabricated validation evidence"
   [[ "$(sha256sum "$CONFIG" "$TRUST")" == "$before" && ! -e "$TOOL_CALLS" ]] || fail "write touched owner state or invoked a live tool"
@@ -104,10 +104,10 @@ entire_remote() {
   local out
   run policy init --repo "$REPO" --profile branch-pr --backend gh --write
   [[ "$status" -eq 0 ]] || fail "branch-pr failed: $output"
-  grep -qx 'commit = "allow"' "$REPO/.bercail/policy.toml" || fail "branch-pr did not request allow"
+  if grep -q '^commit' "$REPO/.bercail/policy.toml"; then fail "branch-pr wrote the old commit key"; fi
   grep -qx 'push = "branch"' "$REPO/.bercail/policy.toml" || fail "branch-pr did not request branch"
   out="$(policy show --json "$REPO")"
-  jq -e '.trusted == false and .policy.commit == "ask" and .policy.push == "ask" and .policy.review == "always" and .policy.agent_may_release == false and .policy.integrate == "pr" and .policy.pr_draft == true' <<<"$out" >/dev/null || fail "branch-pr self-trusted: $out"
+  jq -e '.trusted == false and .policy.push == "ask" and .policy.review == "always" and .policy.agent_may_release == false and .policy.integrate == "pr" and .policy.pr_draft == true' <<<"$out" >/dev/null || fail "branch-pr self-trusted: $out"
   [[ ! -e "$TOOL_CALLS" ]] || fail "branch-pr invoked external setup"
 }
 
@@ -120,7 +120,7 @@ entire_remote() {
   run policy init --repo "$REPO" --profile branch-pr --backend gh --verify sample --write
   [[ "$status" -eq 0 && "$output" == *'Existing matching trust and local overrides may already apply'* ]] || fail "matching trust caveat missing: $output"
   out="$(policy show --json "$REPO")"
-  jq -e '.trusted == true and .policy.commit == "allow" and .policy.push == "branch" and .policy.review == "always" and .policy.agent_may_release == false' <<<"$out" >/dev/null || fail "independent gates collapsed: $out"
+  jq -e '.trusted == true and .policy.push == "branch" and .policy.review == "always" and .policy.agent_may_release == false' <<<"$out" >/dev/null || fail "independent gates collapsed: $out"
   [[ "$(sha256sum "$TRUST" "$CONFIG")" == "$before" && ! -e "$TOOL_CALLS" ]] || fail "existing owner state changed"
   [[ "$(find "$REPO/.bercail" -type f | wc -l)" -eq 1 ]] || fail "fabricated evidence or approval"
   grep -q 'INCOMPLETE' "$REPO/.agents/skills/verify-sample/SKILL.md" || fail "trust completed verification"
@@ -128,12 +128,12 @@ entire_remote() {
 
 @test "existing local owner overrides remain effective and unchanged" {
   local before out
-  printf '[policy."%s"]\ncommit = "allow"\npush = "branch"\n' "$REPO" >"$CONFIG"
+  printf '[policy."%s"]\npush = "branch"\n' "$REPO" >"$CONFIG"
   before="$(sha256sum "$TRUST" "$CONFIG")"
   run init_guarded --write
   [[ "$status" -eq 0 && "$output" == *'Existing matching trust and local overrides may already apply'* ]] || fail "local override caveat missing: $output"
   out="$(policy show --json "$REPO")"
-  jq -e '.trusted == false and .policy.commit == "allow" and .policy.push == "branch" and .sources.commit == "local" and .policy.review == "always"' <<<"$out" >/dev/null || fail "local override lost: $out"
+  jq -e '.trusted == false and .policy.push == "branch" and .sources.push == "local" and .policy.review == "always"' <<<"$out" >/dev/null || fail "local override lost: $out"
   [[ "$(sha256sum "$TRUST" "$CONFIG")" == "$before" ]] || fail "local override changed"
 }
 
@@ -147,7 +147,7 @@ entire_remote() {
   jq -n --arg repo "$REPO" --arg hash "$hash" '{($repo): {sha256: $hash}}' >"$TRUST"
   before="$(sha256sum "$CONFIG" "$TRUST" "$file" "$REPO/.agents/skills/verify-sample/SKILL.md")"
   run init_guarded --verify sample --write
-  [[ "$status" -eq 0 && "$output" == *'Identical: no change.'* && "$output" == *'commit = "ask"'* && "$output" == *'INCOMPLETE'* ]] || fail "repeat omits contents or failed: $output"
+  [[ "$status" -eq 0 && "$output" == *'Identical: no change.'* && "$output" == *'push = "ask"'* && "$output" == *'INCOMPLETE'* ]] || fail "repeat omits contents or failed: $output"
   [[ "$(stat -c '%i %Y' "$file" "$REPO/.agents/skills/verify-sample/SKILL.md")" == "$stamp" ]] || fail "repeat replaced or touched files"
   [[ "$(sha256sum "$CONFIG" "$TRUST" "$file" "$REPO/.agents/skills/verify-sample/SKILL.md")" == "$before" ]] || fail "repeat changed bytes"
   out="$(policy show --json "$REPO")"
@@ -254,7 +254,7 @@ entire_remote() {
   [[ "$status" -eq 0 && "$output" == *"Target: $wt/.bercail/policy.toml"* && "$output" == *"Main identity (not a write target): $REPO"* ]] || fail "worktree resolution failed: $output"
   [[ ! -e "$wt/subdir/.bercail" && "$(sha256sum "$REPO/.bercail/policy.toml" "$TRUST" "$CONFIG")" == "$before" ]] || fail "worktree write touched main or owner state"
   out="$(policy show --json "$wt")"
-  jq -e --arg repo "$REPO" '.repo == $repo and .trusted == false and .policy.commit == "ask" and .policy.push == "ask"' <<<"$out" >/dev/null || fail "changed worktree hash trusted: $out"
+  jq -e --arg repo "$REPO" '.repo == $repo and .trusted == false and .policy.push == "ask"' <<<"$out" >/dev/null || fail "changed worktree hash trusted: $out"
 }
 
 @test "init rejects an explicit non-gh override without changing owner configuration" {
@@ -283,11 +283,11 @@ entire_remote() {
 }
 
 @test "Entire GitHub mirror preserves the exact gh scaffold bytes without backend probes" {
-  local profile commit push expected
+  local profile push expected
   git -C "$REPO" remote set-url origin entire://example.com/gh/owner/repo
   for profile in guarded branch-pr; do
-    if [[ "$profile" == guarded ]]; then commit=ask; push=ask; else commit=allow; push=branch; fi
-    expected="$(printf '%s\n' '# Prepared by bercail policy init; review before adopting.' "commit = \"$commit\"" "push = \"$push\""
+    if [[ "$profile" == guarded ]]; then push=ask; else push=branch; fi
+    expected="$(printf '%s\n' '# Prepared by bercail policy init; review before adopting.' "push = \"$push\""
       if [[ "$profile" == branch-pr ]]; then printf '%s\n' 'integrate = "pr"' 'pr_draft = true'; fi
       printf '%s\n' 'agent_may_release = false' 'review = "always"' 'rules = "Use gh. Permission to publish is not validation evidence or human review."')"
     run policy init --repo "$REPO" --profile "$profile" --backend gh
@@ -321,7 +321,7 @@ entire_remote() {
   hash="$(sha256sum "$file" | cut -d' ' -f1)"
   [[ "$output" == *"sha256: $hash"* ]] || fail "Entire hash missing: $output"
   out="$(policy show --json "$REPO")"
-  jq -e '.trusted == false and .policy.commit == "ask" and .policy.push == "ask" and .policy.integrate == "" and .policy.review == "always" and .policy.agent_may_release == false' <<<"$out" >/dev/null || fail "Entire self-trusted: $out"
+  jq -e '.trusted == false and .policy.push == "ask" and .policy.integrate == "" and .policy.review == "always" and .policy.agent_may_release == false' <<<"$out" >/dev/null || fail "Entire self-trusted: $out"
   jq -n --arg repo "$REPO" --arg hash "$hash" '{($repo): {sha256: $hash}}' >"$TRUST"
   touch -t 200001010000 "$file" "$skill"
   stamp="$(stat -c '%i %Y' "$file" "$skill")"
@@ -330,10 +330,10 @@ entire_remote() {
   [[ "$status" -eq 0 && "$output" == *'Identical: no change.'* ]] || fail "Entire repeat failed: $output"
   [[ "$(stat -c '%i %Y' "$file" "$skill")" == "$stamp" && "$(sha256sum "$CONFIG" "$TRUST" "$file" "$skill")" == "$before" ]] || fail "repeat changed files"
   out="$(policy show --json "$REPO")"
-  jq -e '.trusted == true and .policy.commit == "allow" and .policy.push == "branch" and .policy.integrate == "" and .policy.review == "always" and .policy.agent_may_release == false' <<<"$out" >/dev/null || fail "Entire gates collapsed: $out"
+  jq -e '.trusted == true and .policy.push == "branch" and .policy.integrate == "" and .policy.review == "always" and .policy.agent_may_release == false' <<<"$out" >/dev/null || fail "Entire gates collapsed: $out"
   printf '\n# reviewed change\n' >>"$file"
   out="$(policy show --json "$REPO")"
-  jq -e '.trusted == false and .policy.commit == "ask" and .policy.push == "ask"' <<<"$out" >/dev/null || fail "changed Entire hash trusted: $out"
+  jq -e '.trusted == false and .policy.push == "ask"' <<<"$out" >/dev/null || fail "changed Entire hash trusted: $out"
   [[ "$(find "$REPO/.bercail" -type f | wc -l)" -eq 1 && ! -e "$TOOL_CALLS" ]] || fail "fabricated evidence or tool calls"
   grep -q 'STOP: this starter is not verification evidence' "$skill" || fail "starter no longer incomplete"
 }
@@ -341,7 +341,7 @@ entire_remote() {
 @test "Entire guarded is supported and backend-specific publishing profiles cannot cross" {
   entire_remote
   run policy init --repo "$REPO" --profile guarded --backend entire
-  [[ "$status" -eq 0 && "$output" == *'commit = "ask"'* && "$output" == *'push = "ask"'* && "$output" == *'project-level Trail'* ]] || fail "Entire guarded failed: $output"
+  [[ "$status" -eq 0 && "$output" == *'push = "ask"'* && "$output" == *'project-level Trail'* ]] || fail "Entire guarded failed: $output"
   run policy init --repo "$REPO" --profile branch-pr --backend entire --write
   [[ "$status" -ne 0 && "$output" == *'branch-pr requires --backend gh'* ]] || fail "Entire PR profile accepted: $output"
   run policy init --repo "$REPO" --profile branch-trail --backend gh --write
@@ -468,10 +468,10 @@ entire_remote() {
   [[ "$status" -eq 0 && "$output" == *"Target: $wt/.bercail/policy.toml"* && "$output" == *"Main identity (not a write target): $REPO"* ]] || fail "Entire worktree override failed: $output"
   [[ "$(sha256sum "$REPO/.bercail/policy.toml" "$CONFIG" "$TRUST")" == "$before" && ! -e "$wt/subdir/.bercail" && ! -e "$TOOL_CALLS" ]] || fail "worktree modified main or probed"
   out="$(policy show --json "$wt")"
-  jq -e --arg repo "$REPO" '.repo == $repo and .trusted == true and .policy.commit == "allow" and .policy.push == "branch" and .policy.review == "always"' <<<"$out" >/dev/null || fail "main hash not used: $out"
+  jq -e --arg repo "$REPO" '.repo == $repo and .trusted == true and .policy.push == "branch" and .policy.review == "always"' <<<"$out" >/dev/null || fail "main hash not used: $out"
   printf '\n# changed candidate\n' >>"$wt/.bercail/policy.toml"
   out="$(policy show --json "$wt")"
-  jq -e '.trusted == false and .policy.commit == "ask" and .policy.push == "ask"' <<<"$out" >/dev/null || fail "changed worktree hash trusted: $out"
+  jq -e '.trusted == false and .policy.push == "ask"' <<<"$out" >/dev/null || fail "changed worktree hash trusted: $out"
 }
 
 @test "Entire policy and skill conflicts preflight without overwriting or partial preparation" {

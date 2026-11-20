@@ -188,6 +188,17 @@ bstack_pi_dead() {
     | group_by(.provider) | map(last) | .[] | [.provider, .at, .model, .reason] | @tsv' "$file" 2>/dev/null || true
 }
 
+# The guard's warnings and refusals in the last 7 days, from its log, as
+# "<warnings>\t<refusals>\t<count>\t<most frequent reason>". Bad lines are skipped.
+bstack_guard_week() {
+  local file="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/guard-warnings.jsonl"
+  [[ -s "$file" ]] || { printf '0\t0\t0\t\n'; return 0; }
+  jq -rRn '[inputs | fromjson? | objects | select(((.at // "") | sub("\\.[0-9]+Z$"; "Z") | try fromdateiso8601 catch 0) > now - 604800)]
+    | ([.[] | .reasons // [] | .[] | strings] | group_by(.) | max_by(length) // []) as $top
+    | [([.[] | select(.kind == "warning")] | length), ([.[] | select(.kind == "refusal")] | length),
+       ($top | length), ($top[0] // "" | .[0:120])] | @tsv' "$file" 2>/dev/null || printf '0\t0\t0\t\n'
+}
+
 _bstack_pi_version_ok() {
   local v min
   v="$(pi --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -1)"
@@ -522,6 +533,14 @@ doctor_bstack() {
   while IFS=$'\t' read -r provider at model why; do
     log "  dead  bstack $provider ($model) at $at: $why (add credits or a subscription)"
   done < <(bstack_pi_dead)
+  local warnings refusals times top
+  IFS=$'\t' read -r warnings refusals times top < <(bstack_guard_week)
+  if ((warnings + refusals == 0)); then
+    log "  ok  guard: no warnings or refusals in the last 7 days"
+  else
+    log "  guard  $warnings warning(s) and $refusals refusal(s) in the last 7 days; most often ($times): $top"
+    log "        (jq . ${XDG_STATE_HOME:-$HOME/.local/state}/bercail/guard-warnings.jsonl)"
+  fi
   if [[ -f "$BSTACK_PI_DIR/models" ]] && [[ "$(_bstack_resolved_text)" != "$(<"$BSTACK_PI_DIR/models")" ]]; then
     log "  stale  bstack models (a login or model changed since the last deploy; bercail update)"
     missing=1

@@ -647,6 +647,30 @@ EOF
   unset FAKE_PI_READY
 }
 
+@test "doctor counts the guard's warnings and refusals of the last 7 days, names the most frequent, and skips bad lines" {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="claude-bridge openai"
+  deploy_bstack >/dev/null 2>&1
+  local log="$XDG_STATE_HOME/bercail/guard-warnings.jsonl" out now
+  out="$(doctor_bstack)" || fail "doctor with no guard log: $out"
+  grep -qx '  ok  guard: no warnings or refusals in the last 7 days' <<<"$out" || fail "no log: $out"
+  now="$(date -u +%FT%T.000Z)"
+  mkdir -p "$(dirname "$log")"
+  {
+    printf '{"at":"%s","kind":"refusal","reasons":["old"]}\n' "$(date -u -d '-8 days' +%FT%T.000Z)"
+    printf 'not json\n'
+    printf '{"at":"%s","kind":"warning","reasons":["This commit ran"]}\n' "$now"
+    printf '{"at":"%s","kind":"warning","reasons":["This commit ran","lost track"]}\n' "$now"
+    printf '{"at":"%s","kind":"refusal","reasons":["Force-push is blocked."]}\n' "$now"
+  } >"$log"
+  out="$(doctor_bstack)" || fail "guard warnings are a report, not a failure: $out"
+  grep -qF '  guard  2 warning(s) and 1 refusal(s) in the last 7 days; most often (2): This commit ran' <<<"$out" \
+    || fail "counts: $out"
+  grep -qF "(jq . $log)" <<<"$out" || fail "no pointer to the log: $out"
+  unset FAKE_PI_READY
+}
+
 @test "Pi bridge install is required and idempotent; doctor verifies actual bridge, Claude Code auth and minimum Pi version" {
   reset_home
   write_pi_config
