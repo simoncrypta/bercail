@@ -159,6 +159,8 @@ bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   bridge, the rate-limit extension, pi-emphasis (status pills and icons in
   replies; PI_EMPHASIS_GUIDANCE=0 drops its prompt rules), and bercail's
   guard, which follows each repo's trusted git policy (bercail policy show).
+  A commit runs in every repo with a "bercail guard warning:" line in its result
+  (the judge, Discuss and background Shep are refused); a push follows the policy.
   Direct, unquoted sole --help on recognized
   git builtins and gt create/modify/submit/merge is a read, not a write approval. Graphite help
   needs a known, unmodified alias configuration with no override of that command.
@@ -182,6 +184,7 @@ Config:
   ~/.config/bercail/config.toml               review, [bstack], [git], [policy."<repo>"]
   ~/.local/state/bercail/policy-trust.json    repos whose git policy you trusted
   ~/.local/state/bercail/guard-approvals.jsonl  what the guard let through, and why
+  ~/.local/state/bercail/guard-warnings.jsonl   what it warned about or refused (bercail doctor counts a week's)
   ~/.config/bercail/todo.json                 todo targets, routes and the default (bercail todo target, route)
   ~/.local/state/bercail/todos.jsonl          the todos bercail added, and the ones Shep marked done
   ~/.config/herdr-app/layouts/bercail.json    the layout
