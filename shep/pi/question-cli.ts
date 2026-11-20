@@ -98,7 +98,7 @@ async function main() {
 }
 
 // What the Decisions panel shows: each pending question with its brief, Shep's
-// recommendation, live check and deadline, and the staged change's size and stakes for
+// recommendation, live check (its desk warnings too) and deadline, and the staged change's size and stakes for
 // a review or action; then the questions that defaulted in the last day. Answering is
 // `answer`; this only reads.
 async function panel(store: QuestionStore, state: string) {
@@ -137,6 +137,7 @@ async function panel(store: QuestionStore, state: string) {
       target: { repo, topic, worktree, space },
       status: check?.status ?? "defaulted",
       reasons: check?.reasons ?? [],
+      warnings: check?.warnings ?? [],
       change,
     });
   }

@@ -290,7 +290,7 @@ describe("durable targeted questions", () => {
     ]);
   });
 
-  test("planning permits legitimate nulls while review and action require every target field", () => {
+  test("planning permits legitimate nulls while review and action require every target field but the desk's", () => {
     const spec = fields();
     const nullable = {
       ...spec.target,
@@ -306,8 +306,13 @@ describe("durable targeted questions", () => {
       baseRef: null,
     };
     expect(store.create("planning", { ...spec, target: nullable }, resolveSpec).target).toEqual(nullable);
+    const deskless = { ...spec.target, desk: null, space: null, session: null };
     for (const kind of ["review", "action"] as const)
-      for (const key of Object.keys(spec.target)) {
+      expect(store.create(`deskless-${kind}`, { ...spec, kind, target: deskless }, resolveSpec).target).toEqual(
+        deskless,
+      );
+    for (const kind of ["review", "action"] as const)
+      for (const key of Object.keys(spec.target).filter((k) => !["desk", "space", "session"].includes(k))) {
         expect(() =>
           store.create(
             `bad-${kind}-${key}`,
@@ -316,7 +321,7 @@ describe("durable targeted questions", () => {
           ),
         ).toThrow(/nonempty/);
       }
-    expect(store.snapshot().questions).toHaveLength(1);
+    expect(store.snapshot().questions).toHaveLength(3);
   });
 
   test.each([

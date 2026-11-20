@@ -75,7 +75,7 @@ EOF
   cp "$ROOT/bercail/keys.json" "$BATS_TEST_TMPDIR/keys.json"
   cat >"$BATS_TEST_TMPDIR/prelude.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
-import Shep, { find, viewOf, stackPlan, focusPlan, withView, loadDecisions, cardWords } from "./bercail-shep.mjs";
+import Shep, { find, viewOf, stackPlan, focusPlan, withView, loadDecisions, cardWords, answerable } from "./bercail-shep.mjs";
 import Spaces from "./bercail-spaces.mjs";
 import { els } from "./gpui.mjs";
 
@@ -124,7 +124,8 @@ const card = (token, extra = {}) => ({
 });
 const PANEL_VIEW = { state: "/state/shep", at: "2026-11-14T21:00:00.000Z", cards: [
   card("Q1@1"),
-  card("Q2@3", { status: "stale", reasons: ["stagedTree changed", "head changed"] }),
+  card("Q2@3", { status: "stale", reasons: ["stagedTree changed", "base changed"],
+    warnings: ["desk t9 is gone or not live at its recorded address"] }),
   card("Q3@1", { kind: "planning", prompt: "Which job first?", options: [], change: null,
     target: { repo: "/w/app/.git", topic: "plan", worktree: "/w/app", space: null },
     status: "unavailable", reasons: ["policy unavailable; not checked"] }),
@@ -575,7 +576,8 @@ const all = texts();
 for (const want of [
   "Guard-empty-secret_Bercail, 347 lines, high-stakes", "LGTM to land it?", "The guard now blocks empty secrets.",
   "Shep recommends LGTM: tests pass", "1 LGTM ★", "2 Not yet", "Answer LGTM",
-  "open", "stale", "Changed since Shep asked: the staged change, new commits. Shep must ask again.",
+  "open", "stale", "Changed since Shep asked: the staged change, the base. Shep must ask again.",
+  "Warning: desk t9 is gone or not live at its recorded address.",
   "app", "unknown", "Can't check it now: the repo's policy could not be read.", "No choices: answer Shep in chat.",
 ]) if (!all.includes(want)) fail(`missing "${want}" in ${JSON.stringify(all)}`);
 if (!all.some((x) => x.startsWith("3 waiting on you"))) fail(`no count in ${JSON.stringify(all)}`);
@@ -589,6 +591,10 @@ eq(buttons, ["decision-choice-Q1@1-0", "decision-choice-Q1@1-1", "decision-discu
   "decision-discuss-Q2@3", "decision-discuss-Q3@1"], "card buttons");
 // A space Herdr no longer shows is said so.
 eq(cardWords(card("Q4@1"), []).title, "bercail.guard (its space is closed), 347 lines, high-stakes", "closed space");
+// A desk problem is a warning on a card that can still be answered.
+const warned = card("Q5@1", { warnings: ["no desk: bound to the repo and issue only"] });
+eq([cardWords(warned).word, cardWords(warned).warnings, answerable(warned)],
+  ["open", ["Warning: no desk: bound to the repo and issue only."], true], "a warned card");
 EOF
 }
 

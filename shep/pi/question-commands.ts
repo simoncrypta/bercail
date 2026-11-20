@@ -162,7 +162,7 @@ export default function (pi: ExtensionAPI) {
     name: "shep_question",
     label: "Shep question",
     description:
-      "Create or revise a durable targeted question. Capture current repo/job/desk/session and candidate; never grants authority. A reversible two-way door with a recommendation takes it at its deadline. Returns at most 50KB.",
+      "Create or revise a durable targeted question, bound to the repo and issue. Captures the candidate (staged tree and base) and the desk when there is one; a desk that is gone, elsewhere or another job's is a warning on the card, not a refusal. Never grants authority. A reversible two-way door with a recommendation takes it at its deadline. Returns at most 50KB.",
     parameters: Type.Object({
       requestId: Type.String(),
       kind: Type.Union([Type.Literal("planning"), Type.Literal("review"), Type.Literal("action")]),
@@ -188,7 +188,9 @@ export default function (pi: ExtensionAPI) {
       repo: Type.String({ description: "Explicit checkout path, never a bare issue lookup" }),
       issue: Type.Union([Type.String(), Type.Null()]),
       topic: Type.String(),
-      desk: Type.Union([Type.String(), Type.Null()]),
+      desk: Type.Union([Type.String(), Type.Null()], {
+        description: "The job's desk address when it has one; null for a job whose desk is gone",
+      }),
       base: Type.Union([Type.String(), Type.Null()]),
       action: Type.Union([Type.String(), Type.Null()]),
       originEvent: Type.String({

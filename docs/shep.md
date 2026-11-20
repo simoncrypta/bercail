@@ -330,14 +330,26 @@ Only your pick in the [Decisions panel](#the-decisions-panel) or a Discuss
 branch answers a question (`answered`). A proposal never permits
 a desk prompt, guard approval, commit, merge, publication, spend or scope change.
 
-Shep's `shep_question` tool creates or revises a question after verifying the
-explicit checkout/job and desk session against existing beads, hc and
-`desk-sessions` records. It does not discover jobs from a bare issue ID. Repo
+Shep's `shep_question` tool creates or revises a question bound to an explicit
+checkout and job, after checking the job against the repo's beads. It does not
+discover jobs from a bare issue ID. The desk is optional. A named desk is
+checked against hc and its `desk-sessions` record, and only a desk that passes
+lends the question its space and session. A desk that is gone, has no record (a
+background Shep terminal), sits in another folder, belongs to another job, or
+has no verifiable Pi session is a **warning** on the card, and so is a job
+question with no desk; the card still reaches the panel and can be answered.
+Only a wrong kind or field, or an issue the repo's beads does not have, is
+refused. Repo
 identity is the canonical local git common-directory path, shared across its
 worktrees; another clone is a separate local identity. Review/action questions
-record desk, space, session, worktree, intended action, head, staged tree, and
-resolved base plus its ref. A planning question records no head or staged tree,
-so new commits leave it fresh. Changed intent or candidate supersedes the old
+record desk, space, session, worktree, intended action, branch, head, staged
+tree, and resolved base plus its ref. A planning question records no branch,
+head or staged tree, so new commits leave it fresh. An answer holds to the job,
+the branch, the staged tree and the base, not to the desk, and to HEAD only
+loosely: one commit of the approved tree on the asked HEAD and branch (a single
+parent, that tree) keeps it fresh, and so does a base of HEAD or that branch
+moved by that commit. Other commits, another branch, or an outside base that
+moved make it stale. Changed intent or candidate supersedes the old
 revision; prior proposals remain in history. Each question also carries Shep's
 `brief` (what is decided, why now, what each choice does) and its
 `recommendation` (one of the choices, with one line of why), for the card.
@@ -426,10 +438,12 @@ or takes the keyboard.
 Each card says, in words, where (the desk's space as Herdr names it), what (a
 change's lines and stakes), what Shep asks, Shep's brief, its recommendation
 and why, the choices, and when it was asked; the panel says when it last
-checked. A card whose candidate changed since Shep asked (new commits, a new
-staged tree, another base, or the desk) says **stale** and what changed: Shep
-must ask again. One it cannot check (the desk ended, the policy could not be
-read) says **unknown** and why. A [two-way door](#reversible-questions) counts
+checked. A card whose candidate changed since Shep asked (a new
+staged tree, new commits, another branch or another base) says **stale** and what changed: Shep
+must ask again. One it cannot check (the checkout is gone, the policy could not
+be read) says **unknown** and why. A desk problem (gone, in another folder,
+another job's, no verifiable session, or no desk at all) is a `Warning:` line on
+a card that can still be answered. A [two-way door](#reversible-questions) counts
 down to its deadline (`two-way door: defaults to auth in 23 min`); other cards
 have no timer. Once it defaults, the card says **defaulted** and the choice it
 took, has no choices or answer button, and stays a day. **Discuss** on it still
@@ -479,10 +493,11 @@ not a sandbox: a script file or another language gets past it.
 **Discuss** (or `d`) opens a dialog with Pi on a branch of the session the
 question came from, to talk it over before you pick:
 
-- A desk's question (it names a desk) branches that desk's own Pi session at
-  its last complete entry (a tool call still waiting for its result is left out).
-- A question Shep asked in chat branches Shep's session at the entry that asked
-  it, through that turn's tool results and reply, and nothing after.
+- A desk's question (its desk checked out when Shep asked) branches that desk's
+  own Pi session at its last complete entry (a tool call still waiting for its result is left out).
+- Any other question, including a job's whose desk was gone, branches Shep's
+  session at the entry that asked it, through that turn's tool results and
+  reply, and nothing after.
 
 The branch is a new session file in `~/.local/state/bercail/shep/discuss/`. The
 desk's and Shep's sessions are only read, and both keep running. It is not in
@@ -516,7 +531,7 @@ The CLI works without Pi or a mod too:
 ```bash
 bercail shep questions              # bounded pending projection
 bercail shep questions --json       # full snapshot and retained revisions
-bercail shep question check Q42@3   # recheck candidate/mapping and current policy (and a reversible one's door)
+bercail shep question check Q42@3   # recheck the candidate and current policy, with desk warnings (and a reversible one's door)
 bercail shep question thread release-plan
 bercail shep question panel         # the Decisions panel's JSON: pending questions, each checked, and a day of defaults
 bercail shep question expire        # record the defaults that are due (Shep's runtime runs it every 30 seconds)
@@ -534,8 +549,8 @@ printf '%s\n' '{"requestId":"plan-1","kind":"planning","prompt":"Which approach?
 printf '%s\n' '{"requestId":"answer-1","token":"Q1@1","answer":"small","source":"local-cli:unverified"}' | bercail shep question reply
 ```
 
-For a job, provide its issue and exact desk address; review/action also require
-an action and base ref. `revise` uses the same fields plus `token` and a new
+For a job, provide its issue and its desk address when it has one (`null`
+otherwise); review/action also require an action and base ref. `revise` uses the same fields plus `token` and a new
 request ID. A revision cannot change repo, job or topic: create another question
 instead. `check` always reports `authority: false`, including when fresh. Recheck
 target and policy again through existing procedures before an authorized action;

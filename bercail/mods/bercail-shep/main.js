@@ -283,10 +283,9 @@ function watchDecisions(cx) {
 const REASONS = {
   "repo changed": "the repo",
   "head changed": "new commits",
+  "branch changed": "the branch",
   "stagedTree changed": "the staged change",
   "base changed": "the base",
-  "space changed": "the desk's space",
-  "session changed": "the desk's session",
   "worktree changed": "the worktree",
 };
 
@@ -322,7 +321,8 @@ function countdown(card, word) {
     : `two-way door: defaults to ${pick} at Shep's next check`;
 }
 
-// A card in words: where (the space as Herdr names it), what (size and stakes), its state.
+// A card in words: where (the space as Herdr names it), what (size and stakes), its state,
+// and its desk warnings (a desk that is gone or elsewhere still lets the card be answered).
 // Question tokens are the ledger's keys, never shown.
 export function cardWords(card, all = spaces(), backend = S.backend) {
   const t = card.target ?? {};
@@ -362,6 +362,7 @@ export function cardWords(card, all = spaces(), backend = S.backend) {
     ...state,
     asked: `asked ${clock(card.createdAt)}`,
     timer: countdown(card, state.word),
+    warnings: (card.warnings ?? []).map((x) => `Warning: ${x}.`),
   };
 }
 
@@ -899,6 +900,7 @@ export default class BercailShep extends View {
       )
       .when(!c.options?.length, (el) => el.child(div().text_color(t.dim).child("No choices: answer Shep in chat.")))
       .when(Boolean(w.why), (el) => el.child(div().text_color(color).child(w.why)))
+      .children(w.warnings.map((x) => div().text_color(t.unknown).child(x)))
       .child(
         h_flex()
           .gap(8)

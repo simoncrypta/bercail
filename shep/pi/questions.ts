@@ -11,6 +11,8 @@ export interface QuestionTarget {
   space: string | null;
   session: string | null;
   action: string | null;
+  /** The checked-out branch's full ref, null when detached; absent in questions asked before it was kept. */
+  branch?: string | null;
   head: string | null;
   stagedTree: string | null;
   base: string | null;
@@ -152,9 +154,17 @@ function spec(value: unknown): asserts value is QuestionSpec {
     "base",
     "baseRef",
   ];
-  shape(value.target, keys);
+  shape(value.target, [...keys, ...optional(value.target as Record<string, unknown>, ["branch"])]);
+  if (value.target.branch != null) text(value.target.branch);
+  // The desk is optional for every kind: a question binds to its repo and issue.
+  const desk = ["desk", "space", "session"];
   for (const key of keys)
-    if (value.target[key] !== null || value.kind !== "planning" || key === "repo" || key === "topic")
+    if (
+      value.target[key] !== null ||
+      (value.kind !== "planning" && !desk.includes(key)) ||
+      key === "repo" ||
+      key === "topic"
+    )
       text(value.target[key]);
   const repo = value.target.repo as string;
   if (!isAbsolute(repo) || normalize(repo) !== repo)

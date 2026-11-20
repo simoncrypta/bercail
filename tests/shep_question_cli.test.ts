@@ -259,14 +259,128 @@ test("a new commit leaves a planning question fresh but makes a review question 
   expect(ok("check", undefined, [`${review.id}@${review.revision}`])).toMatchObject({ fresh: false, status: "stale" });
 });
 
-test("a moved base ref is stale even when head and candidate stay unchanged", () => {
+test("an approval names the staged tree: committing that tree keeps it, changing the tree does not", () => {
+  writeFileSync(join(repo, "file"), "two\n");
+  git("add", "file");
+  const tree = git("write-tree");
+  ok("create", spec());
+  ok("create", spec({ requestId: "later", topic: "login-2" }));
+  expect(pick("p1", "yes")).toMatchObject({ accepted: true, question: { answer: { stagedTree: tree } } });
+  git("commit", "-qm", "the approved tree");
+  expect(git("rev-parse", "HEAD^{tree}")).toBe(tree);
+  // Shep re-reads the live state before it acts: the committed tree still holds.
+  expect(ok("check", undefined, ["Q1@1"])).toMatchObject({ status: "fresh", reasons: [] });
+  // A question still pending when its tree was committed can be answered.
+  expect(pick("p2", "yes", "Q2@1")).toMatchObject({ accepted: true });
+  writeFileSync(join(repo, "file"), "three\n");
+  git("add", "file");
+  expect(ok("check", undefined, ["Q1@1"])).toMatchObject({ status: "stale", reasons: ["stagedTree changed"] });
+});
+
+test("only one commit of the approved tree on the asked HEAD keeps an approval", () => {
+  git("branch", "review-base");
+  writeFileSync(join(repo, "file"), "two\n");
+  git("add", "file");
+  const tree = git("write-tree");
+  ok("create", spec());
+  ok("create", spec({ requestId: "outside", topic: "outside", base: "review-base" }));
+  // Another ref moved onto the approved tree while this checkout stayed put: not this job's commit.
+  const elsewhere = execFileSync("git", ["-C", repo, "commit-tree", tree, "-p", git("rev-parse", "HEAD")], {
+    env,
+    input: "landed elsewhere\n",
+    encoding: "utf8",
+  }).trim();
+  git("update-ref", "refs/heads/review-base", elsewhere);
+  expect(ok("check", undefined, ["Q2@1"])).toMatchObject({ status: "stale", reasons: ["base changed"] });
+  // Other work, then back to the approved tree: the history holds commits nobody reviewed.
+  writeFileSync(join(repo, "file"), "other\n");
+  git("commit", "-qam", "unreviewed");
+  writeFileSync(join(repo, "file"), "two\n");
+  git("commit", "-qam", "back to the approved tree");
+  expect(git("write-tree")).toBe(tree);
+  expect(ok("check", undefined, ["Q1@1"])).toMatchObject({
+    status: "stale",
+    reasons: ["head changed", "base changed"],
+  });
+});
+
+test("the approved tree committed on another branch of the checkout is stale", () => {
+  writeFileSync(join(repo, "file"), "two\n");
+  git("add", "file");
+  const q = ok("create", spec());
+  expect(q.target.branch).toBe(git("symbolic-ref", "HEAD"));
+  git("switch", "-qc", "elsewhere");
+  git("commit", "-qm", "the approved tree, on another branch");
+  expect(ok("check", undefined, ["Q1@1"])).toMatchObject({
+    status: "stale",
+    reasons: ["branch changed", "head changed", "base changed"],
+  });
+});
+
+test("a base named by the branch's full ref moves with its commit when a tag shares the name", () => {
+  const job = git("symbolic-ref", "HEAD");
+  git("tag", job.replace(/^refs\/heads\//, ""));
+  writeFileSync(join(repo, "file"), "two\n");
+  git("add", "file");
+  ok("create", spec({ base: job }));
+  git("commit", "-qm", "the approved tree");
+  expect(ok("check", undefined, ["Q1@1"])).toMatchObject({ status: "fresh", reasons: [] });
+});
+
+test("a branch is known by its full ref, not a short name a tag can make ambiguous", () => {
+  const job = git("symbolic-ref", "--short", "HEAD");
+  git("tag", job);
+  writeFileSync(join(repo, "file"), "two\n");
+  git("add", "file");
+  ok("create", spec());
+  git("switch", "-qc", `heads/${job}`);
+  git("branch", "-D", job);
+  expect(git("symbolic-ref", "--short", "HEAD")).toBe(`heads/${job}`);
+  git("commit", "-qm", "the approved tree, on a look-alike branch");
+  expect(ok("check", undefined, ["Q1@1"])).toMatchObject({ status: "stale" });
+  expect(ok("check", undefined, ["Q1@1"]).reasons).toContain("branch changed");
+});
+
+test("a question asked before branches were kept stays fresh, but gets no pass for a commit", () => {
+  writeFileSync(join(repo, "file"), "two\n");
+  git("add", "file");
+  ok("create", spec());
+  const file = join(env.BERCAIL_SHEP_STATE!, "questions.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  delete ledger.questions[0].target.branch;
+  delete ledger.requests[0].result.target.branch;
+  writeFileSync(file, JSON.stringify(ledger));
+  expect(ok("check", undefined, ["Q1@1"])).toMatchObject({ status: "fresh", reasons: [] });
+  git("switch", "-qc", "elsewhere");
+  git("commit", "-qm", "the approved tree, on another branch");
+  expect(ok("check", undefined, ["Q1@1"])).toMatchObject({
+    status: "stale",
+    reasons: ["head changed", "base changed"],
+  });
+});
+
+test("a base named for the job's branch moves with its commit; an outside ref moved to it does not", () => {
+  const job = git("symbolic-ref", "--short", "HEAD");
+  git("branch", "outside");
+  writeFileSync(join(repo, "file"), "two\n");
+  git("add", "file");
+  ok("create", spec({ base: job }));
+  ok("create", spec({ requestId: "outside", topic: "outside", base: "outside" }));
+  git("commit", "-qm", "the approved tree");
+  git("update-ref", "refs/heads/outside", git("rev-parse", "HEAD"));
+  expect(ok("check", undefined, ["Q1@1"])).toMatchObject({ status: "fresh", reasons: [] });
+  expect(ok("check", undefined, ["Q2@1"])).toMatchObject({ status: "stale", reasons: ["base changed"] });
+});
+
+test("a base moved by other work is stale even when head and candidate stay unchanged", () => {
   git("branch", "review-base");
   const q = ok("create", spec({ base: "review-base" }));
-  const newCommit = execFileSync(
-    "git",
-    ["-C", repo, "commit-tree", git("write-tree"), "-p", git("rev-parse", "HEAD")],
-    { env, input: "other base\n", encoding: "utf8" },
-  ).trim();
+  const otherTree = execFileSync("git", ["-C", repo, "mktree"], { env, input: "", encoding: "utf8" }).trim();
+  const newCommit = execFileSync("git", ["-C", repo, "commit-tree", otherTree, "-p", git("rev-parse", "HEAD")], {
+    env,
+    input: "other base\n",
+    encoding: "utf8",
+  }).trim();
   git("update-ref", "refs/heads/review-base", newCommit);
   expect(ok("check", undefined, [`${q.id}@${q.revision}`])).toMatchObject({ fresh: false, authority: false });
 });
@@ -303,7 +417,11 @@ test("panel shows each pending question with its live state and size, and answer
   });
   expect(view.cards[2].change).toBeNull();
   terminal({ state: "dead" });
-  expect(ok("panel").cards.map((c: any) => c.status)).toEqual(["unavailable", "unavailable", "fresh"]);
+  expect(ok("panel").cards.map((c: any) => [c.status, c.warnings])).toEqual([
+    ["stale", ["desk t9 is gone or not live at its recorded address"]],
+    ["fresh", ["desk t9 is gone or not live at its recorded address"]],
+    ["fresh", []],
+  ]);
   expect(readFileSync(join(env.BERCAIL_SHEP_STATE!, "questions.json"), "utf8")).toBe(before);
   expect([old.id, current.id]).toEqual(["Q1", "Q2"]);
 });
@@ -322,7 +440,6 @@ test("reports current policy without granting authority, and never calls unavail
 });
 
 test.each([
-  ["missing explicit job desk", { desk: null }, "desk"],
   ["missing origin event", { origin: { event: "", session: "s", entry: "e" } }, "origin"],
   ["missing action", { action: null }, "action"],
   ["missing base", { base: null }, "base"],
@@ -355,28 +472,66 @@ test("a colliding issue id in another repository cannot retarget an existing que
   expect(result.stderr).toMatch(/cannot change repo/);
 });
 
-test("rejects a desk from another checkout rather than looking up a replacement", () => {
-  terminal({ cwd: dir });
-  const result = call("create", spec());
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toMatch(/worktree|checkout|cwd/i);
+// bercail-shhh's cases: a job whose desk is gone or not its own still reaches the panel,
+// bound to its repo and issue, with the desk problem on the card; the pick re-reads it.
+test.each([
+  [
+    "1, a background Shep terminal with no desk record",
+    () => {
+      rmSync(join(env.XDG_STATE_HOME!, "bercail/desk-sessions/t9.json"));
+      terminal({ labels: { "bercail.role": "shep-bg", "bercail.issue": "app-1" } });
+    },
+    {},
+    "desk t9 has no desk session record",
+  ],
+  ["2, a desk in another folder", () => terminal({ cwd: dir }), {}, "desk t9 is not in the target worktree"],
+  [
+    "3, a space whose live terminal belongs to another job",
+    () => terminal({ labels: { "bercail.role": "agent", "bercail.issue": "other-1", "bercail.space": "sp1" } }),
+    {},
+    "desk t9 belongs to another job",
+  ],
+  ["4, a job question with no desk", () => {}, { desk: null }, "no desk: bound to the repo and issue only"],
+])("case %s reaches the panel with a warning and can be answered", (_name, arrange, extra, warning) => {
+  arrange();
+  const q = ok("create", spec(extra));
+  expect(q.target).toMatchObject({
+    repo: join(repo, ".git"),
+    issue: "app-1",
+    worktree: repo,
+    space: null,
+    session: null,
+    stagedTree: git("write-tree"),
+  });
+  expect(ok("panel").cards).toMatchObject([{ token: "Q1@1", status: "fresh", reasons: [], warnings: [warning] }]);
+  expect(pick("p1", "yes")).toMatchObject({ accepted: true, question: { status: "answered" } });
 });
 
 test.each([
-  ["another job", { labels: { "bercail.role": "agent", "bercail.issue": "other-1", "bercail.space": "sp1" } }],
-  ["another space", { labels: { "bercail.role": "agent", "bercail.issue": "app-1", "bercail.space": "sp2" } }],
+  ["another space", { labels: { "bercail.role": "agent", "bercail.issue": "app-1", "bercail.space": "sp2" } }, "space"],
   [
     "a sibling rather than a desk",
     { labels: { "bercail.role": "bstack-builder", "bercail.issue": "app-1", "bercail.space": "sp1" } },
+    "another job",
   ],
-  ["a gone terminal", { state: "finished" }],
-  ["a missing session", { records: {} }],
-  ["a terminal alias", { address: "t10" }],
-])("rejects %s at the explicit desk", (_name, extra) => {
+  ["a gone terminal", { state: "finished" }, "gone"],
+  ["a missing session", { records: {} }, "session could not be verified"],
+  ["a terminal alias", { address: "t10" }, "gone"],
+])("warns of %s at the named desk and binds none of its session", (_name, extra, warning) => {
   terminal(extra);
-  const result = call("create", spec());
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toMatch(/desk|session/i);
+  const q = ok("create", spec());
+  expect(q.target).toMatchObject({ desk: "t9", space: null, session: null });
+  const check = ok("check", undefined, [`${q.id}@${q.revision}`]);
+  expect(check).toMatchObject({ status: "fresh", authority: false });
+  expect(check.warnings).toEqual([expect.stringContaining(warning)]);
+});
+
+test("a desk hc cannot read, or a null desk record, is a warning, not a refusal", () => {
+  rmSync(join(dir, "terminal.json"));
+  const q = ok("create", spec());
+  expect(ok("check", undefined, [`${q.id}@${q.revision}`]).warnings).toEqual(["desk t9 is gone"]);
+  json(join(env.XDG_STATE_HOME!, "bercail/desk-sessions/t9.json"), null);
+  expect(ok("check", undefined, [`${q.id}@${q.revision}`]).warnings).toEqual(["desk t9 has no desk session record"]);
 });
 
 test("an idle desk with null hc records is verified by its exact live process claim", () => {
@@ -392,7 +547,7 @@ test("an idle desk with null hc records is verified by its exact live process cl
   terminal({ records: null, foreground: { pid: process.pid, cwd: repo } });
   const q = ok("create", spec());
   expect(q.target.session).toBe("desk-session");
-  expect(ok("check", undefined, [`${q.id}@${q.revision}`])).toMatchObject({ fresh: true, authority: false });
+  expect(ok("check", undefined, [`${q.id}@${q.revision}`])).toMatchObject({ fresh: true, warnings: [] });
 });
 
 test("an old process claim cannot prove a session after PID reuse", () => {
@@ -401,27 +556,30 @@ test("an old process claim cannot prove a session after PID reuse", () => {
   json(join(claims, `${process.pid}.json`), { pid: process.pid, start_ticks: "0", sessions: ["desk-session"] });
   record({ pid: process.pid });
   terminal({ records: null, foreground: { pid: process.pid, cwd: repo } });
-  const result = call("create", spec());
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toMatch(/session/);
+  const q = ok("create", spec());
+  expect(q.target.session).toBeNull();
+  expect(ok("check", undefined, ["Q1@1"]).warnings).toEqual(["desk t9's Pi session could not be verified"]);
 });
 
-test("lost or replaced desk session remains unavailable, never rebound", () => {
+test("a desk on a replaced session is said on the card and never rebound", () => {
   const q = ok("create", spec());
   record({ session: "replacement" });
   terminal({ records: { replacement: { app: "pi" } } });
-  expect(ok("check", undefined, [`${q.id}@${q.revision}`])).toMatchObject({ fresh: false, authority: false });
+  const check = ok("check", undefined, [`${q.id}@${q.revision}`]);
+  expect(check).toMatchObject({ fresh: true, current: { session: "replacement" } });
+  expect(check.warnings).toEqual(["desk t9 runs another session than when Shep asked"]);
+  expect(ok("json").questions[0].target.session).toBe("desk-session");
   rmSync(join(env.XDG_STATE_HOME!, "bercail/desk-sessions/t9.json"));
-  expect(ok("check", undefined, [`${q.id}@${q.revision}`])).toMatchObject({ fresh: false, authority: false });
+  expect(ok("check", undefined, [`${q.id}@${q.revision}`]).warnings).toEqual(["desk t9 has no desk session record"]);
 });
 
-test("unmapped planning topics need no desk while job questions never infer one", () => {
+test("planning topics need no desk, and a job's planning question without one says so", () => {
   const q = ok("create", spec({ kind: "planning", issue: null, desk: null, base: null, action: null }));
   expect(q.target.desk).toBeNull();
   expect(q.target.session).toBeNull();
-  const result = call("create", spec({ requestId: "other", kind: "planning", desk: null }));
-  expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain("desk");
+  expect(ok("check", undefined, ["Q1@1"]).warnings).toEqual([]);
+  ok("create", spec({ requestId: "other", topic: "job-plan", kind: "planning", desk: null }));
+  expect(ok("check", undefined, ["Q2@1"]).warnings).toEqual(["no desk: bound to the repo and issue only"]);
 });
 
 test.each(["approved", "confirmed", "verified", "authority"])(
