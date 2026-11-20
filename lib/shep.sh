@@ -12,6 +12,8 @@
 
 # shellcheck source=lib/shep-context.sh
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
+# shellcheck source=lib/scratch.sh
+source "$(dirname "${BASH_SOURCE[0]}")/scratch.sh"
 
 SHEP_SKILLS=(handoff desk-restore how why unslop describe)
 SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--group ID] [--repo DIR] [--issue ID] | mistake group ID \"NAME\" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|expire|discuss|closed"
@@ -120,9 +122,100 @@ _shep_ended() {
   return 0
 }
 
+# Seconds a stopped Pi has to exit on SIGTERM before it is killed.
+SHEP_STOP_GRACE="${BERCAIL_SHEP_STOP_GRACE:-5}"
+[[ "$SHEP_STOP_GRACE" =~ ^(0|[1-9][0-9]{0,3})$ ]] || SHEP_STOP_GRACE=5
+
+# Every live process at or under pid ROOT, one "pid start" per line. The start
+# time (to the second) is what tells a pid the system reused from the process
+# that had it. Fails when ps does.
+_shep_tree() {
+  LC_ALL=C ps -A -o pid=,ppid=,stat=,lstart= | awk -v root="$1" '
+    $3 !~ /^Z/ { up[$1] = $2; start[$1] = $4 " " $5 " " $6 " " $7 " " $8 }
+    END { for (p in up) { q = p; while (q != root && q in up) q = up[q]; if (q == root) print p, start[p] } }'
+}
+
+# The pids in TREE (from _shep_tree) still alive as the same process.
+_shep_alive() {
+  LC_ALL=C ps -A -o pid=,stat=,lstart= | awk 'NR == FNR { want[$0]; next }
+    $2 !~ /^Z/ && ($1 " " $3 " " $4 " " $5 " " $6 " " $7) in want { print $1 }' <(printf '%s\n' "$1") -
+}
+
+# TERM to Pi at PID, then SIGKILL to whatever of it and its helpers still runs
+# SHEP_STOP_GRACE seconds later: a Pi stuck after a provider switch ignores
+# TERM. Helpers are what ps shows under Pi at the first look, taken before the
+# TERM because a helper leaves Pi's tree once Pi dies, and at the last look,
+# while Pi is the same process. A pid gets a signal only while ps shows it
+# with the start time first seen. Prints the pids it sent SIGKILL. Without ps
+# it does nothing.
+_shep_pi_stop() {
+  local pid="$1" tree root last left end p
+  tree="$(_shep_tree "$pid")" || return 0
+  root="$(grep "^$pid " <<<"$tree")" || return 0
+  kill -TERM "$pid" 2>/dev/null || true
+  # SECONDS counts whole seconds, so <= waits the full grace, up to a second more.
+  end=$((SECONDS + SHEP_STOP_GRACE))
+  while ((SECONDS <= end)); do
+    left="$(_shep_alive "$tree")" || return 0
+    [[ -n "$left" ]] || return 0
+    sleep 0.1
+  done
+  last="$(_shep_tree "$pid")" || last=""
+  ! grep -qxF "$root" <<<"$last" || tree+=$'\n'"$last"
+  left="$(_shep_alive "$tree")" || return 0
+  for p in $left; do
+    kill -KILL "$p" 2>/dev/null && printf '%s\n' "$p"
+  done
+  return 0
+}
+
+# Runs Pi in DIR as a job, not in the foreground: bash holds a trap until its
+# foreground child exits, so a stop could not reach Pi. The job keeps the
+# terminal (its stdin, the foreground group) and gets INT and QUIT back, which
+# bash ignores in a job. A stop (HUP, INT or TERM) runs _shep_pi_stop in a
+# process group of its own: hc kill SIGKILLs the terminal's group a second
+# after its hangup, wrapper included, and the stop must outlive that to kill a
+# stuck Pi's helpers. Only a wrapper that survives prints the note and returns
+# 128 + the signal, with SHEP_PI_STOPPED set; otherwise Pi's status.
+_shep_pi_job() {
+  local dir="$1" pid code=0 left end
+  shift
+  SHEP_PI_STOPPED=""
+  trap 'SHEP_PI_STOPPED=HUP' HUP
+  trap 'SHEP_PI_STOPPED=INT' INT
+  trap 'SHEP_PI_STOPPED=TERM' TERM
+  (cd "$dir" && trap - INT QUIT && exec "$@") <&0 &
+  pid=$!
+  # A trapped signal ends the wait at once. One that came before it is in the
+  # flag; one in the instant between the check and the wait is missed.
+  [[ -n "$SHEP_PI_STOPPED" ]] || wait "$pid" || code=$?
+  if [[ -n "$SHEP_PI_STOPPED" ]]; then
+    trap '' HUP INT TERM
+    # Bash's job notices ("Killed") go to /dev/null; the note goes to fd 3.
+    {
+      left="$(exec </dev/null; set -m; _shep_pi_stop "$pid" & wait "$!")"
+      left="${left//$'\n'/ }"
+      # The stop could not see Pi (no ps). This shell's job table still knows
+      # it, Pi being its only job: kill %+ signals Pi only while bash has not
+      # reaped it.
+      if [[ -n "$(jobs -rp)" ]]; then
+        kill -TERM %+ 2>/dev/null || true
+        end=$((SECONDS + SHEP_STOP_GRACE))
+        while [[ -n "$(jobs -rp)" ]] && ((SECONDS <= end)); do sleep 0.1; done
+        [[ -z "$(jobs -rp)" ]] || ! kill -KILL %+ 2>/dev/null || left="${left:+$left }$pid"
+      fi
+      [[ -z "$left" ]] || _shep_err "force-kill: sent SIGKILL ${SHEP_STOP_GRACE}s after Pi's SIGTERM to pids $left" 2>&3 || true
+      wait "$pid" || true
+    } 3>&2 2>/dev/null
+    code=$((128 + $(kill -l "$SHEP_PI_STOPPED")))
+  fi
+  trap - HUP INT TERM
+  return "$code"
+}
+
 # What the Shep view's terminal runs.
 shep_run() {
-  local state code=0
+  local state dir="" code=0 i
   if ! command -v pi >/dev/null 2>&1; then
     _shep_err "Pi is not installed; install it with: mise use -g pi (or run: bercail bstack setup)"
     _shep_ended 1
@@ -135,8 +228,25 @@ shep_run() {
     || _shep_err "could not write $state/workspace/.pi/settings.json; Pi's compaction defaults apply"
   shep_context_write "$state/context.md" || _shep_err "could not write $state/context.md; Shep starts without it"
   shep_pi_argv
-  # Its own TMPDIR, removed when Shep exits, as a desk's is.
-  (cd "$state/workspace" && "${BERCAIL_SELF:-bercail}" scratch run -- "${SHEP_PI_ARGV[@]}") || code=$?
+  # Its own TMPDIR, removed when Shep exits, as a desk's is: bercail scratch
+  # run's steps, here, so that Pi stays the job a stop signals.
+  if dir="$(scratch_dir "$$")"; then
+    export TMPDIR="$dir"
+  else
+    _shep_err "no scratch folder under $(scratch_root); Pi runs on TMPDIR=${TMPDIR:-/tmp}"
+  fi
+  _shep_pi_job "$state/workspace" "${SHEP_PI_ARGV[@]}" || code=$?
+  # After the stop. A child Pi started as it was killed may hold the folder an
+  # instant; one that holds it longer leaves it to bercail scratch sweep.
+  if [[ -n "$dir" ]]; then
+    for ((i = 0; i < 10; i++)); do
+      _scratch_held "$dir" || break
+      sleep 0.1
+    done
+    _scratch_release "$dir"
+  fi
+  # A stop closes the terminal; nobody is there to press Enter.
+  [[ -n "$SHEP_PI_STOPPED" ]] && return "$code"
   _shep_ended "$code"
 }
 

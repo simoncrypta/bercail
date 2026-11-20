@@ -137,6 +137,203 @@ EOF
   [[ -z "$(ls -A "$TMPDIR")" ]] || fail "Shep wrote to the TMPDIR it was given: $(ls -A "$TMPDIR")"
 }
 
+# Pi as it hung after a provider switch: TERM and HUP do nothing, and its helper
+# runs in a session of its own, out of Pi's process group. It writes its pid and
+# the helper's to $PIDS, its TMPDIR to $PIDS.tmpdir, and the time of each TERM
+# to $PIDS.term. With ORPHAN_ON_TERM set, a TERM also starts a process outside
+# its tree, on its TMPDIR, that outlives it by half a second. The stop's grace
+# is 2s.
+stuck_pi() {
+  export BERCAIL_SHEP_STOP_GRACE=2 PIDS="$BATS_TEST_TMPDIR/pids"
+  cat >"$BATS_TEST_TMPDIR/bin/pi" <<'EOF'
+#!/usr/bin/env bash
+[[ " $* " != *" --list-models "* ]] || { printf 'provider  model  context\nfake      lead   1M\n'; exit 0; }
+trap 'date +%s%N >>"$PIDS.term"; [[ -z "${ORPHAN_ON_TERM:-}" ]] || (setsid bash -c "while kill -0 $$; do sleep 0.05; done 2>/dev/null; sleep 0.5" &)' TERM
+trap '' HUP
+printf '{"type":"session","id":"s1"}\n{"type":"message","text":"kept"}\n' >"$BERCAIL_SHEP_STATE/pi-sessions/s1.jsonl"
+setsid sleep 300 &
+printf '%s' "$TMPDIR" >"$PIDS.tmpdir"
+printf '%s %s\n' "$$" "$!" >"$PIDS"
+while :; do sleep 0.1; done
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/pi"
+}
+
+# Starts bercail shep run in the background ($1: setsid for a process group of
+# its own) and waits for the fake Pi's pids. Sets RUN_PID.
+start_run() {
+  local i
+  ${1:-} "$ROOT/bin/bercail" shep run </dev/null >"$BATS_TEST_TMPDIR/out" 2>&1 &
+  RUN_PID=$!
+  for ((i = 0; i < 50; i++)); do [[ -s "$PIDS" ]] && break; sleep 0.1; done
+  [[ -s "$PIDS" ]] || fail "the fake Pi never started"
+}
+
+# 0 once none of the pids runs, within SECS seconds.
+gone_within() {
+  local secs="$1" i p live
+  shift
+  for ((i = 0; i < secs * 10; i++)); do
+    live=""
+    for p in "$@"; do kill -0 "$p" 2>/dev/null && live=1; done
+    [[ -n "$live" ]] || return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+# A failed test must not leave its fake Pi or helper running. Only this test's
+# processes: they carry its PIDS.
+teardown() {
+  local p
+  [[ -f "${PIDS:-}" ]] || return 0
+  for p in $(<"$PIDS") ${RUN_PID:-}; do
+    ! grep -qxzF "PIDS=$PIDS" "/proc/$p/environ" 2>/dev/null || kill -KILL "$p" 2>/dev/null || true
+  done
+}
+
+@test "a stop force-kills a Pi that ignores SIGTERM after the grace, with its helper, and keeps its session" {
+  local rc=0 start elapsed out pi helper
+  need setsid
+  reset
+  stuck_pi
+  start_run
+  read -r pi helper <"$PIDS"
+  cp "$STATE/pi-sessions/s1.jsonl" "$BATS_TEST_TMPDIR/session"
+  start="$(date +%s%N)"
+  kill -TERM "$RUN_PID"
+  gone_within 8 "$RUN_PID" || fail "bercail shep run still running 8s after TERM"
+  wait "$RUN_PID" || rc=$?
+  elapsed=$((($(date +%s%N) - start) / 1000000))
+  out="$(<"$BATS_TEST_TMPDIR/out")"
+  gone_within 1 "$pi" "$helper" || fail "left running: Pi or its helper; out: $out"
+  ((elapsed >= 2000 && elapsed < 4500)) || fail "the stop took ${elapsed}ms, not the 2s grace"
+  [[ "$rc" == 143 ]] || fail "exit $rc, not 143 (TERM)"
+  [[ "$out" == *force-kill*"pids "*"$pi"* && "$out" == *"$helper"* ]] || fail "no word of the force-kill: $out"
+  [[ "$out" != *'Press Enter'* && "$out" != *Killed* ]] || fail "a stop waited on Enter or left a job notice: $out"
+  cmp -s "$BATS_TEST_TMPDIR/session" "$STATE/pi-sessions/s1.jsonl" || fail "the session changed"
+}
+
+@test "a stop on Shep's scratch TMPDIR still force-kills Pi and its helper, then removes the folder" {
+  local rc=0 out pi helper tmp root="$XDG_CACHE_HOME/bercail/scratch"
+  need setsid
+  reset
+  stuck_pi
+  # The release waits out a process that holds the folder for an instant.
+  export ORPHAN_ON_TERM=1
+  start_run
+  read -r pi helper <"$PIDS"
+  tmp="$(<"$PIDS.tmpdir")"
+  [[ "$tmp" =~ ^"$root"/[0-9]+$ && -d "$tmp" ]] || fail "Pi's TMPDIR is not Shep's scratch folder: $tmp"
+  kill -TERM "$RUN_PID"
+  gone_within 8 "$RUN_PID" || fail "bercail shep run still running 8s after TERM"
+  wait "$RUN_PID" || rc=$?
+  out="$(<"$BATS_TEST_TMPDIR/out")"
+  gone_within 1 "$pi" "$helper" || fail "left running: Pi or its helper; out: $out"
+  [[ "$rc" == 143 && "$out" == *force-kill*"pids "*"$pi"* ]] || fail "exit $rc, out: $out"
+  [[ -s "$PIDS.term" ]] || fail "Pi itself never got SIGTERM"
+  [[ ! -e "$tmp" && ! -e "$root/.${tmp##*/}" ]] || fail "the scratch folder outlived Shep: $(ls -A "$root")"
+}
+
+@test "a stop still kills a stuck Pi and its helper after hc kill has killed bercail's process group" {
+  local pi helper
+  need setsid
+  reset
+  stuck_pi
+  # Its own process group, as the terminal's program has.
+  start_run setsid
+  read -r pi helper <"$PIDS"
+  # What hc kill sends the terminal's process group, as measured on Herdr.
+  kill -HUP -- "-$RUN_PID"
+  sleep 0.5
+  kill -TERM -- "-$RUN_PID"
+  sleep 0.5
+  kill -KILL -- "-$RUN_PID"
+  # The 2s grace runs from the hangup and may overrun by a second; a loaded box
+  # takes longer to start it.
+  gone_within 5 "$pi" "$helper" || fail "left running after the grace: Pi or its helper"
+}
+
+@test "without ps, a stop still gives a stuck Pi the grace, then force-kills it and says so" {
+  local rc=0 term gone grace out pi helper
+  need setsid
+  reset
+  stuck_pi
+  # A ps that fails slowly: the grace must still start at Pi's TERM.
+  printf '#!/bin/sh\nsleep 2.5\nexit 1\n' >"$BATS_TEST_TMPDIR/bin/ps"
+  chmod +x "$BATS_TEST_TMPDIR/bin/ps"
+  start_run
+  read -r pi helper <"$PIDS"
+  kill -TERM "$RUN_PID"
+  gone_within 10 "$RUN_PID" "$pi" || fail "bercail shep run or Pi still running 10s after TERM"
+  gone="$(date +%s%N)"
+  wait "$RUN_PID" || rc=$?
+  out="$(<"$BATS_TEST_TMPDIR/out")"
+  term="$(head -n 1 "$PIDS.term")" || fail "Pi never got SIGTERM"
+  # The fake notes a TERM up to 0.1s late, between its sleeps.
+  grace=$(((gone - term) / 1000000))
+  ((grace >= 1800)) || fail "Pi got ${grace}ms between SIGTERM and SIGKILL, not the 2s grace"
+  [[ "$rc" == 143 && "$out" == *force-kill*"pids $pi"* ]] || fail "exit $rc, out: $out"
+}
+
+@test "a stop signals no pid that ps shows with another start time" {
+  local kills
+  # Pi 400 with helper 401 at the first look. After the grace 400 is another
+  # process (a new start time) with a child 402, and 401 is the same helper.
+  cat >"$BATS_TEST_TMPDIR/bin/ps" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == *ppid* && ! -e "$PS_SEEN" ]]; then
+  : >"$PS_SEEN"
+  printf '400 1 S Fri Nov 20 10:00:00 2026\n401 400 S Fri Nov 20 10:00:01 2026\n'
+elif [[ "$*" == *ppid* ]]; then
+  printf '400 1 S Fri Nov 20 10:00:09 2026\n402 400 S Fri Nov 20 10:00:10 2026\n401 1 S Fri Nov 20 10:00:01 2026\n'
+else
+  printf '400 S Fri Nov 20 10:00:09 2026\n401 S Fri Nov 20 10:00:01 2026\n402 S Fri Nov 20 10:00:10 2026\n'
+fi
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/ps"
+  export PS_SEEN="$BATS_TEST_TMPDIR/ps-seen" KILLS="$BATS_TEST_TMPDIR/kills"
+  kills="$(BERCAIL_SHEP_STOP_GRACE=0 bash -euo pipefail -c '
+    source "$ROOT/lib/shep.sh"
+    kill() { printf "%s\n" "$*" >>"$KILLS"; }
+    _shep_pi_stop 400 >/dev/null
+    cat "$KILLS"')"
+  [[ "$kills" == $'-TERM 400\n-KILL 401' ]] || fail "signals sent: $kills"
+}
+
+@test "a stop grace that is not a plain decimal number of seconds is 5s" {
+  local grace
+  for grace in 08 typo -1 ""; do
+    [[ "$(BERCAIL_SHEP_STOP_GRACE="$grace" bash -euo pipefail -c 'source "$ROOT/lib/shep.sh"; echo "$SHEP_STOP_GRACE"')" == 5 ]] \
+      || fail "grace '$grace' is not 5s"
+  done
+  [[ "$(BERCAIL_SHEP_STOP_GRACE=0 bash -euo pipefail -c 'source "$ROOT/lib/shep.sh"; echo "$SHEP_STOP_GRACE"')" == 0 ]] || fail "grace 0 changed"
+}
+
+@test "a stop ends a Pi that exits on SIGTERM at once, without a force-kill" {
+  local rc=0 start elapsed out
+  reset
+  export BERCAIL_SHEP_STOP_GRACE=5 PIDS="$BATS_TEST_TMPDIR/pids"
+  cat >"$BATS_TEST_TMPDIR/bin/pi" <<'EOF'
+#!/usr/bin/env bash
+[[ " $* " != *" --list-models "* ]] || { printf 'provider  model  context\nfake      lead   1M\n'; exit 0; }
+trap 'exit 0' TERM
+printf '%s\n' "$$" >"$PIDS"
+while :; do sleep 0.1; done
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/pi"
+  start_run
+  start="$(date +%s%N)"
+  kill -TERM "$RUN_PID"
+  gone_within 8 "$RUN_PID" || fail "bercail shep run still running 8s after TERM"
+  wait "$RUN_PID" || rc=$?
+  elapsed=$((($(date +%s%N) - start) / 1000000))
+  out="$(<"$BATS_TEST_TMPDIR/out")"
+  gone_within 1 "$(<"$PIDS")" || fail "Pi was left running"
+  ((elapsed < 2000)) || fail "the stop took ${elapsed}ms for a Pi that exits on TERM"
+  [[ "$rc" == 143 && -z "$out" ]] || fail "exit $rc, out: $out"
+}
+
 @test "no Pi: it says how to install it" {
   local out
   reset
