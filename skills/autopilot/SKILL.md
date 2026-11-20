@@ -31,13 +31,16 @@ Use the same backend for checkout, stack updates, and publication:
 Never hand-make a PR merely based on another PR's branch, and never run `gt`
 in a `gh` or `origin` repo. Do not rewrite someone else's stack members. If
 native sync/restack needs a force-push or an unauthorized branch update, stop
-and report it; autopilot's no-force-push and no-merge rules still apply.
+and report it (section 4 for a restack); autopilot's no-force-push and no-merge
+rules still apply.
 
 Before edits, prove that the native backend can honor the exact local and remote
 effects. Graphite submit's implicit lease-force default is not fast-forward-only;
 modify may restack children. If exact scope cannot be enforced, stop or obtain an
-explicit stage-only fallback. Never silently replace the native workflow with raw
-git. A required high-stakes LGTM is the person's, separate from the role's
+explicit stage-only fallback. A restack of the PR's own branch is the exception:
+prove only that the local preparation touches nothing but that branch, then
+follow section 4, which leaves publishing to the person. Never silently replace
+the native workflow with raw git. A required high-stakes LGTM is the person's, separate from the role's
 commit/push allowance, and replies/body edits need their existing authority.
 
 The snapshot helper and GitHub commands below apply to `gh` and `gt` only.
@@ -60,7 +63,7 @@ Run `pr-state.sh`, do what `next` says, push, then run it again.
 
 | `next` | Do |
 |--------|----|
-| `conflicts` | For an independent `gh` branch, `git fetch origin <base> && git merge origin/<base>`; resolve from both sides' intent, test, commit, push. For a stack, use the backend's stack update commands above, not a plain merge into one layer. Stop if publication requires a force-push. |
+| `conflicts` | For an independent `gh` branch, `git fetch origin <base> && git merge origin/<base>`; resolve from both sides' intent, test, commit, push. For a stack, use the backend's stack update commands above, not a plain merge into one layer. When publishing needs a force-push, section 4. |
 | `fix-ci` | Take one failing check. `gh run view <run> --log-failed`. Reproduce locally with the same command. Fix the cause, run it again, commit, push. |
 | `answer-threads` | Section 2. |
 | `wait-ci` | `pr-state.sh --wait 900`. It returns when a check finishes, a thread arrives, or the head moves (exit 124 on timeout: run it again). |
@@ -127,6 +130,31 @@ Stop and report when `next` is `green`, `merged`, or `closed`, or:
 Report in five lines or fewer: the PR, the state (`green` or what blocks it),
 what you pushed (commit subjects), the threads you answered, whether the PR
 body is current, and what waits on a person. Do not merge. Say "ready to merge" when it is.
+
+## 4. A restack the person publishes
+
+Autopilot never publishes a rewritten branch, and no agent does: the person
+pushes it from their own terminal. When the PR's own head branch must be
+restacked or rebased onto its base, prepare it and stop:
+
+1. Before you restack, fetch and pin the PR head the restack starts from, in
+   full (`git rev-parse <remote>/<branch>`).
+2. Restack, resolve, and run the checks on the result, as for `conflicts`.
+3. Read where a push goes: `git remote get-url --push --all <remote>`. More
+   than one URL, or one that is not the PR's repository: stop and report that,
+   with no push command. Read the branch's head there again
+   (`git ls-remote <push url> refs/heads/<branch>`). When it is not the pinned
+   head, someone pushed meanwhile: stop and report that, not the restack.
+4. Stop and report the branch, the push URL, the pinned head, the new head
+   (`git rev-parse HEAD`), the checks you ran, and the command for the person:
+
+```bash
+git push --no-follow-tags <push url> --force-with-lease=refs/heads/<branch>:<pinned head> <new head>:refs/heads/<branch>
+```
+
+Do not try `gt submit`, `gh stack submit`, a force flag, or a `+` refspec in
+its place: the guard blocks a force-push for every role. The lease makes the
+push fail if the branch there no longer equals the pinned head when it runs.
 
 ## Inside bercail
 

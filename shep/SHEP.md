@@ -202,7 +202,11 @@ first desk for a PR's own branch (`branch` is its head), it starts an autopilot
 desk at the PR's fetched head, which may commit and push that branch. Say in
 the message what the desk should do and how far (stage, commit, publish). A
 backend limit the desk hits goes in its report, never an append-only/raw Git
-substitution or a fresh preparation branch.
+substitution or a fresh preparation branch. A restack the desk prepared is
+the person's to publish: pass on its report (the branch, the pinned and new
+heads, the checks, and its `git push --force-with-lease` command, from the
+autopilot skill's section 4) for them to run in their own terminal. Never run
+it yourself.
 
 Whether the work is done is what `bercail shep brief` shows: the desk's
 state, its latest report, and `describe check` on its staged change. A done

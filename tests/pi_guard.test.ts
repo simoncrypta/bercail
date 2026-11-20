@@ -785,6 +785,16 @@ for (const [command, branch, answers] of commands) {
     }));
 }
 
+// A restack is the person's to publish: autopilot's force-push block says what to report.
+test("autopilot's force-push block tells it to stop and report the restack for the person", () => {
+  const lease = `git push origin --force-with-lease=refs/heads/feature:${"a".repeat(40)} ${"b".repeat(40)}:refs/heads/feature`;
+  for (const command of [lease, "git push --force-with-lease", "gt submit --force"]) {
+    blocked(command, auto, /the person does\. Stop and report the branch, the PR head you fetched before the restack/);
+    blocked(command, { ...auto, hasUI: true }, /the person does/);
+    blocked(command, tui, /Force-push is blocked\. Push without --force/);
+  }
+});
+
 // Under the loosest policy the hard blocks still hold, for every role.
 for (const role of roleNames) {
   test(`under the loosest policy the hard blocks still hold: ${role}`, () => {

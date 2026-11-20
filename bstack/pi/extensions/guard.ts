@@ -69,6 +69,9 @@ export type GuardDecision =
   | { action: "need-policy"; dir: string };
 
 const force = "Force-push is blocked. Push without --force, or ask the person.";
+const autopilotForce =
+  "Force-push is blocked: autopilot does not publish a rewritten branch, the person does. Stop and report the branch, the PR head you fetched before the restack, the new head, and the checks you ran (the autopilot skill's section 4).";
+const forceFor = (input: GuardInput) => block(input.role === "autopilot" ? autopilotForce : force);
 const plusRef = "A refspec starting with + is a force-push. Push the branch without +.";
 const mirror = "git push --mirror is blocked.";
 const deleteMain = "Deleting main or master is blocked.";
@@ -1557,7 +1560,7 @@ function decideRelease(dir: string | undefined, input: GuardInput): GuardDecisio
 
 function decidePush(args: string[], dir: string | undefined, input: GuardInput): GuardDecision {
   const facts = pushFacts(args);
-  if (facts.force) return block(force);
+  if (facts.force) return forceFor(input);
   if (facts.plus) return block(plusRef);
   if (facts.mirror) return block(mirror);
   if (facts.deleteMain) return block(deleteMain);
@@ -2044,7 +2047,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     const forgePlain = plainWords(forge.words);
     const sync = words[0] === "gh" && forgePlain[1] === "repo" && forgePlain[2] === "sync";
     if ((publishing === "push" || sync) && words.some((word) => word === "-f" || word.startsWith("--force")))
-      return block(force);
+      return forceFor(input);
     if (publishing) {
       if (hasNoVerify("push", words)) return block(noVerify);
       decision = worse(
