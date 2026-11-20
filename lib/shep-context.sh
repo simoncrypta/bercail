@@ -588,15 +588,19 @@ _shep_queue_text() {
         else "\(.path | tilde): \(.lines) of \(.budget) lines wait on the person; a new desk fits its review budget." end)'
 }
 
+# How long the queue's status sources get, in seconds. Tests raise it so a
+# loaded machine cannot turn their queue into UNKNOWN.
+SHEP_QUEUE_WAIT="${BERCAIL_SHEP_QUEUE_WAIT:-6}"
+
 shep_queue() {
   local out rc=0
   _shep_need_policy
-  out="$(_git_backend_bounded 6 "${BERCAIL_SELF:-bercail}" shep queue-snapshot "$@")" || rc=$?
+  out="$(_git_backend_bounded "$SHEP_QUEUE_WAIT" "${BERCAIL_SELF:-bercail}" shep queue-snapshot "$@")" || rc=$?
   if ((rc)); then
     if [[ " $* " == *" --json "* ]]; then
-      printf '{"schema":"bercail.queue/v1","status":"unknown","items":null,"repos":null,"error":"status sources failed or exceeded 6s; not a dispatch gate"}\n'
+      printf '{"schema":"bercail.queue/v1","status":"unknown","items":null,"repos":null,"error":"status sources failed or exceeded %ss; not a dispatch gate"}\n' "$SHEP_QUEUE_WAIT"
     else
-      printf 'Review queue: UNKNOWN (status sources failed or exceeded 6s); accepted work can still dispatch.\n' >&2
+      printf 'Review queue: UNKNOWN (status sources failed or exceeded %ss); accepted work can still dispatch.\n' "$SHEP_QUEUE_WAIT" >&2
     fi
     return "$rc"
   fi

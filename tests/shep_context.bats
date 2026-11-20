@@ -11,6 +11,9 @@ setup() {
   set -o pipefail
   export HERDR_APP_BIN="$BATS_TEST_TMPDIR/no-herdr-app"
   export LOG="$BATS_TEST_TMPDIR/log" HC_DATA="$BATS_TEST_TMPDIR/hc"
+  # The queue's 6s budget is for a person waiting; a loaded test machine must
+  # not turn a fixture's queue into UNKNOWN (bercail-5wm8.33).
+  export BERCAIL_SHEP_QUEUE_WAIT=120
   # Only the stand-ins, then the system bins; the live cases look for Pi on the old PATH.
   OLD_PATH="$PATH"
   export PATH="$BATS_TEST_TMPDIR/bin:/usr/bin:/bin"
@@ -577,7 +580,7 @@ spaces_fixture() {
   printf '#!/bin/sh\necho '\''{"spaces":[]}'\''\n' >"$HERDR_APP_BIN"
   chmod +x "$HERDR_APP_BIN"
 
-  out="$(shep queue --json)" || fail "queue failed within its 6s bound: $out"
+  out="$(shep queue --json)" || fail "queue --json: $out"
   jq -e '[.items[].issue] == [range(1; 15) | "web-\(.)"]
     and all(.items[]; .state == "stale" and .counts == false)
     and .repos[0].changes == 0' <<<"$out"
@@ -868,7 +871,7 @@ EOF
   printf 'change\n' >"$HOME/Work/web.feat10/change"
   git -C "$HOME/Work/web.feat10" add change
 
-  out="$(shep queue --json)" || fail "queue failed within its 6s bound: $out"
+  out="$(shep queue --json)" || fail "queue --json: $out"
 
   jq -e --arg path "$REAL_HOME/Work/web.feat10" '[.items[] | [.path, .state]] == [[$path, "review"]]' <<<"$out"
   [[ "$(grep -c 'hc ls .*--label' "$LOG")" == 1 ]]
@@ -882,13 +885,25 @@ EOF
 #!/bin/sh
 case "$1" in api) echo me ;; pr) exit 3 ;; esac
 EOF
-  out="$(shep queue --repo "$HOME/Work/app" --json)" && fail "$out"
-  jq -e '.status == "unknown" and .items == null and .repos == null' <<<"$out"
+  out="$(unset BERCAIL_SHEP_QUEUE_WAIT; shep queue --repo "$HOME/Work/app" --json)" && fail "$out"
+  jq -e '.status == "unknown" and .items == null and .repos == null
+    and .error == "status sources failed or exceeded 6s; not a dispatch gate"' <<<"$out"
   printf '#!/bin/sh\nexec sleep 30\n' >"$BATS_TEST_TMPDIR/bin/gh"
   start=$SECONDS
   out="$(shep queue --repo "$HOME/Work/app" --json)" && fail "$out"
   [[ $((SECONDS-start)) -lt 8 ]] || fail "repo intake exceeded eight seconds"
   jq -e '.status == "unknown" and .items == null' <<<"$out"
+}
+
+@test "BERCAIL_SHEP_QUEUE_WAIT sets the queue's budget: a source past it, though inside its own bound, makes the queue UNKNOWN" {
+  local out
+  # herdr-app answers inside its own 2s bound, but after the queue's 1s.
+  printf '#!/bin/sh\nsleep 1.5\necho '\''{"spaces":[]}'\''\n' >"$HERDR_APP_BIN"
+  chmod +x "$HERDR_APP_BIN"
+  out="$(BERCAIL_SHEP_QUEUE_WAIT=1 shep queue --json)" && fail "a 1s budget let a 1.5s source through: $out"
+  jq -e '.status == "unknown" and .error == "status sources failed or exceeded 1s; not a dispatch gate"' <<<"$out"
+  out="$(BERCAIL_SHEP_QUEUE_WAIT=1 shep queue 2>&1)" && fail "$out"
+  [[ "$out" == "Review queue: UNKNOWN (status sources failed or exceeded 1s); accepted work can still dispatch." ]] || fail "$out"
 }
 
 # bats test_tags=live
