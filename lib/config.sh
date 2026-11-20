@@ -4,8 +4,9 @@
 # An update that replaces the CLI running it is the old release's code copying
 # the new release's files: old steps, and old lists that do not name what the
 # new release added. Start again on the new CLI, whose update runs the source
-# tree's own bercail (update_from_tree in bin/bercail). Once per update. Only
-# v0.14.0's updater gets here.
+# tree's own bercail (update_from_tree in bin/bercail). Once per update. Only a
+# tree whose bin/bercail links to the installed one gets here: update_from_tree
+# does not exec it, and the installed CLI copies that tree's libs.
 restart_update() {
   [[ -z "${BERCAIL_UPDATE_RESTARTED:-}" ]] || return 0
   local -a args=(update)
@@ -376,13 +377,12 @@ deploy_bercail_config() {
   local src file sub
   src="$(install_src_dir)"
   while IFS= read -r -d '' file; do
-    sub="${file#"$src/config/agentic-dev"/}"
-    [[ "$sub" == "config.toml" || "$sub" == "config-reader.sh" ]] && continue
+    sub="${file#"$src/config/bercail"/}"
+    [[ "$sub" == "config.toml" ]] && continue
     copy_file "$file" "$BERCAIL_CONFIG_DIR/$sub"
-  done < <(find "$src/config/agentic-dev" -type f -print0 2>/dev/null)
-  # Older releases installed a reader here; lib/toml.sh replaced it. The
-  # webhook sink example went with the sinks; a user's notify.d stays.
-  run rm -f "$BERCAIL_CONFIG_DIR/config-reader.sh" "$BERCAIL_CONFIG_DIR/notify.sink.example"
+  done < <(find "$src/config/bercail" -type f -print0 2>/dev/null)
+  # The webhook sink example went with the sinks; a user's notify.d stays.
+  run rm -f "$BERCAIL_CONFIG_DIR/notify.sink.example"
 }
 
 deploy_lib() {
@@ -444,60 +444,6 @@ detach_running_bercail() {
   cp -p "$bin" "$bin.new" && ln -f "$bin" "$bin.old" && mv -f "$bin.new" "$bin" \
     && : >"$bin.old"
   rm -f "$bin.new" "$bin.old"
-}
-
-# The records of a handoff log that still name a folder: the worktree, or, once
-# that is gone, its main checkout (<main> from <main>.<branch>), which Shep reads.
-_handoffs_with_a_folder() {
-  local file="$1" path branch
-  local -a live=()
-  while IFS= read -r -d '' path && IFS= read -r -d '' branch; do
-    if [[ -d "$path" ]] || [[ -n "$branch" && "$path" == *".$branch" && -d "${path%".$branch"}" ]]; then
-      live+=("$path")
-    fi
-  done < <(jq -jR 'fromjson? | select(type == "object" and (.path | type) == "string")
-    | .path, "\u0000", ((.branch // "") | tostring), "\u0000"' "$file")
-  jq -cR 'fromjson? | select(type == "object" and (.path | type) == "string")
-    | select(.path as $p | $ARGS.positional | index($p) != null)' "$file" --args "${live[@]}"
-}
-
-# Before v1 the handoff log lived in ~/.local/state/agentic-dev. Move what is
-# there into bercail's state dir and leave a link at the old path, so code
-# started before the update keeps writing to the same log.
-migrate_state_dir() {
-  local state="${XDG_STATE_HOME:-$HOME/.local/state}"
-  local old="$state/agentic-dev" new="$state/bercail" log tmp entry total kept
-  [[ -d "$old" && ! -L "$old" ]] || return 0
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] move $old into $new and link the old path to it"
-    return 0
-  fi
-  mkdir -p "$new"
-  log="$old/handoffs.jsonl"
-  if [[ -f "$log" ]]; then
-    tmp="$(mktemp "$new/handoffs.jsonl.XXXXXX")"
-    if _handoffs_with_a_folder "$log" >"$tmp"; then
-      total="$(wc -l <"$log")" kept="$(wc -l <"$tmp")"
-      [[ ! -f "$new/handoffs.jsonl" ]] || cat "$new/handoffs.jsonl" >>"$tmp"
-      mv "$tmp" "$new/handoffs.jsonl"
-      rm -f "$log"
-      info "moved $kept handoff records to $new/handoffs.jsonl (dropped $((total - kept)) with no folder left)"
-    else
-      rm -f "$tmp"
-      warn "could not read $log; leaving $old where it is"
-      return 0
-    fi
-  fi
-  for entry in "$old"/* "$old"/.[!.]*; do
-    [[ -e "$entry" || -L "$entry" ]] || continue
-    [[ -e "$new/${entry##*/}" ]] || mv "$entry" "$new/"
-  done
-  if rmdir "$old" 2>/dev/null; then
-    ln -s bercail "$old"
-    info "moved $old into $new; the old path is now a link to it"
-  else
-    warn "$old still holds $(ls -A "$old" | tr '\n' ' ')($new has the same names). Move them, then run: bercail update"
-  fi
 }
 
 # Remove the old switch. An off install (including --no-bstack, which wrote no
@@ -648,15 +594,6 @@ migrate_graphite_config() {
   info "moved the [graphite] entries of $dest under [git]"
 }
 
-# v0.14.0 still copies this shim by name. Remove the installed command, but keep
-# bin/agentic-dev in the repo until that updater is below the upgrade floor.
-remove_agentic_dev_shim() {
-  local shim="$LOCAL_BIN/agentic-dev"
-  grep -qsx '# Compat shim. The CLI is bercail.' "$shim" || return 0
-  info "remove: $shim (the command is bercail)"
-  run rm -f "$shim"
-}
-
 # A checksum of the installed CLI when it is the one running, else nothing: a
 # clone's bin/bercail and install.sh run the tree they deploy.
 _running_install_sum() {
@@ -780,8 +717,6 @@ deploy_configs() {
 
   describe_install_source
   prompt_user_config
-  migrate_state_dir
-  remove_agentic_dev_shim
   migrate_graphite_config
   migrate_bstack_switch
 

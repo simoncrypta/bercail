@@ -16,7 +16,7 @@ const resources: [string, string][] = [
   ["bstack/pi/extensions/guard.ts", "pi/extensions/guard.ts"],
   ["bstack/pi/instructions.md", "pi/instructions.md"],
   ["config/worktrunk/herdr-layout.sh", "../config/worktrunk/herdr-layout.sh"],
-  ...["handoff", "review", "desk-restore", "how", "why", "unslop", "describe"].map((name): [string, string] => [
+  ...["handoff", "desk-restore", "how", "why", "unslop", "describe"].map((name): [string, string] => [
     `skills/${name}/SKILL.md`,
     `skills/${name}/SKILL.md`,
   ]),

@@ -88,8 +88,8 @@ bercail never force-pushes and never merges. See [commands](../cli.md).
 ## tuicr: your review
 
 When the desk goes `done`, tuicr opens on the uncommitted change (how and when:
-[review](../review.md)). Leave comments on lines, then ask the agent to wait for
-them (the `review` skill); it fixes them and stages again.
+[review](../review.md)). Leave comments on lines, export them (tuicr copies them to
+the clipboard) and paste them to the agent; it fixes them and stages again.
 
 You commit and open the PR. That is the line bstack does not cross without
 being asked. After it, autopilot takes over.

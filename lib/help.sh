@@ -187,7 +187,6 @@ Config:
   ~/.config/worktrunk/herdr-layout.sh
   ~/.config/worktrunk/config.toml             worktrunk hooks
   ~/.agents/skills/handoff/                   handoff skill (canonical)
-  ~/.agents/skills/review/                    tuicr review skill (wait / optional GH publish)
   ~/.agents/skills/bstack/                    bstack playbooks
   ~/.agents/skills/{how,why,unslop,autopilot}/  explain, history, cleanup, PR to green
   ~/.agents/skills/desk-restore/              put a desk with no record back by hand
@@ -199,9 +198,9 @@ Config:
   ~/.local/share/bercail/pi/                  bstack's Pi profile
   ~/.config/herdr-core/templates/bstack-*.md  bstack roles as hc templates
 
-Agent skills (\`handoff\`, \`review\`, \`bstack\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`, \`unit-testing\`, \`describe\`):
+Agent skills (\`handoff\`, \`bstack\`, \`how\`, \`why\`, \`unslop\`, \`autopilot\`, \`desk-restore\`, \`unit-testing\`, \`describe\`):
   Installed to ~/.agents/skills/<id> (https://agentskills.io), with a link in
-  ~/.pi/agent/skills for each. Source: skills/handoff/, skills/review/.
+  ~/.pi/agent/skills for each. Source: skills/<id>/.
   Manual: npx skills add simoncrypta/bercail -s handoff -g
   Handoff stages: bstack and autopilot, both Pi. Each works a beads issue; the
   prompt is one line pointing at it. Headless runs (\`pi -p\`) write
@@ -221,7 +220,7 @@ show_summary() {
   log "Desk agent: pi (handoff stages: bstack, autopilot)"
   log "Review command: $(read_layout_review 2>/dev/null || echo tuicr)"
   log "Config: ${BERCAIL_USER_CONFIG}"
-  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,review,bstack,autopilot,how,why,unslop,desk-restore,unit-testing,describe}"
+  log "Skills: ${AGENTS_SKILLS_DIR}/{handoff,bstack,autopilot,how,why,unslop,desk-restore,unit-testing,describe}"
   log ""
   log "Try: dev"
   log "Help: bercail help"

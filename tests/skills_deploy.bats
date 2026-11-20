@@ -33,13 +33,7 @@ setup() {
   [[ -f "$AGENTS_SKILLS_DIR/handoff/resources/git-workflow.md" ]] || fail "resource git-workflow.md missing"
   [[ ! -e "$AGENTS_SKILLS_DIR/handoff/MANIFEST" ]] || fail "an older release's MANIFEST stays"
   [[ -x "$AGENTS_SKILLS_DIR/handoff/scripts/handoff-spawn" ]] || fail "handoff-spawn missing or not executable"
-  [[ -f "$AGENTS_SKILLS_DIR/review/SKILL.md" ]] || fail "canonical review skill missing"
-  grep -q '^name: review$' "$AGENTS_SKILLS_DIR/review/SKILL.md" || fail "review frontmatter missing"
-  [[ -f "$AGENTS_SKILLS_DIR/review/scripts/wait-comments.sh" ]] || fail "wait-comments helper missing"
-  [[ -x "$AGENTS_SKILLS_DIR/review/scripts/publish-github.sh" ]] || fail "publish-github helper missing or not executable"
-  [[ -f "$AGENTS_SKILLS_DIR/review/scripts/is-agent.jq" ]] || fail "the jq both review scripts include is missing"
   [[ -L "$HOME/.pi/agent/skills/handoff" ]] || fail "pi skill symlink missing"
-  [[ -L "$HOME/.pi/agent/skills/review" ]] || fail "pi review symlink missing"
   [[ -L "$HOME/.pi/agent/skills/bstack" && -L "$HOME/.pi/agent/skills/autopilot" ]] \
     || fail "pi links for bstack and autopilot missing"
   grep -q '^name: unit-testing$' "$AGENTS_SKILLS_DIR/unit-testing/SKILL.md" || fail "canonical unit-testing skill missing"
@@ -71,7 +65,10 @@ old_council_skill() {
   printf -- '---\nname: council\n---\n\nLaunch every `bstack-council-*` subagent.\n' >"$AGENTS_SKILLS_DIR/council/SKILL.md"
   printf 'SKILL.md\nMANIFEST\n' >"$AGENTS_SKILLS_DIR/council/MANIFEST"
   ln -s "$AGENTS_SKILLS_DIR/council" "$HOME/.pi/agent/skills/council"
-  BERCAIL_COUNCIL_SKILL_SHA256=(e96b7755055330174617ea71f5b56f9410f0ad3c4abd73de8ed18e86704c1ba3)
+  BERCAIL_RETIRED_SKILL_FILES=(
+    "council/SKILL.md e96b7755055330174617ea71f5b56f9410f0ad3c4abd73de8ed18e86704c1ba3"
+    "council/MANIFEST acdcb3c48ccf4ce67b0a88f86261ab8a4f28ca34ab7d342f272391975ca8fb7f"
+  )
 }
 
 @test "deploy_skills removes the council skill an older release installed, and its pi link" {
@@ -115,6 +112,76 @@ old_council_skill() {
   remove_managed_skills >/dev/null
   [[ ! -e "$AGENTS_SKILLS_DIR/council" && ! -L "$HOME/.pi/agent/skills/council" ]] \
     || fail "uninstall keeps the retired council skill"
+}
+
+# The review skill as RELEASE installed it, with its Pi link.
+old_review_skill() {
+  need_tag "${1:-v0.17.4}"
+  mkdir -p "$AGENTS_SKILLS_DIR/review" "$HOME/.pi/agent/skills"
+  git -C "$ROOT" archive "${1:-v0.17.4}" skills/review | tar -x --strip-components=2 -C "$AGENTS_SKILLS_DIR/review"
+  ln -s "$AGENTS_SKILLS_DIR/review" "$HOME/.pi/agent/skills/review"
+}
+
+need_tag() {
+  git -C "$ROOT" rev-parse -q --verify "refs/tags/$1" >/dev/null \
+    || fail "release tag $1 is missing: git -C $ROOT fetch --tags"
+}
+
+@test "deploy_skills removes the review skill every release installed, and its pi link" {
+  local tag n=0
+  need_tag v0.17.4
+  while IFS= read -r tag; do
+    git -C "$ROOT" cat-file -e "$tag:skills/review/SKILL.md" 2>/dev/null || continue
+    old_review_skill "$tag"
+    deploy_skills >/dev/null
+    [[ ! -e "$AGENTS_SKILLS_DIR/review" ]] || fail "an update keeps $tag's review skill: $(find "$AGENTS_SKILLS_DIR/review")"
+    [[ ! -L "$HOME/.pi/agent/skills/review" ]] || fail "an update keeps the pi link to $tag's review skill"
+    n=$((n + 1))
+  done < <(git -C "$ROOT" tag -l 'v*')
+  ((n > 30)) || fail "only $n releases shipped the review skill"
+}
+
+@test "deploy_skills keeps a review script someone edited and a file they added, and removes the rest" {
+  old_review_skill
+  printf '# mine\n' >>"$AGENTS_SKILLS_DIR/review/scripts/publish-github.sh"
+  printf 'mine\n' >"$AGENTS_SKILLS_DIR/review/notes.md"
+  deploy_skills >/dev/null 2>&1
+  [[ ! -e "$AGENTS_SKILLS_DIR/review/SKILL.md" && ! -e "$AGENTS_SKILLS_DIR/review/scripts/wait-comments.sh" ]] \
+    || fail "an update keeps the review files bercail shipped"
+  grep -qx '# mine' "$AGENTS_SKILLS_DIR/review/scripts/publish-github.sh" || fail "an update removed an edited script"
+  grep -qx mine "$AGENTS_SKILLS_DIR/review/notes.md" || fail "an update removed a file bercail did not install"
+}
+
+@test "deploy_skills keeps a review skill whose scripts folder is a link, and the files behind it" {
+  old_review_skill
+  mv "$AGENTS_SKILLS_DIR/review/scripts" "$BATS_TEST_TMPDIR/my-scripts"
+  ln -s "$BATS_TEST_TMPDIR/my-scripts" "$AGENTS_SKILLS_DIR/review/scripts"
+  deploy_skills >/dev/null 2>&1
+  [[ -f "$BATS_TEST_TMPDIR/my-scripts/wait-comments.sh" && -f "$BATS_TEST_TMPDIR/my-scripts/publish-github.sh" ]] \
+    || fail "an update removed files through a linked scripts folder"
+  [[ -L "$AGENTS_SKILLS_DIR/review/scripts" ]] || fail "an update removed the linked scripts folder"
+}
+
+@test "a dry run names each review file it would remove once, and removes none" {
+  local out
+  old_review_skill
+  out="$(DRY_RUN=1 deploy_skills 2>&1)"
+  [[ "$(grep -c "remove: $AGENTS_SKILLS_DIR/review/SKILL.md$" <<<"$out")" == 1 ]] || fail "SKILL.md named more than once: $out"
+  [[ -f "$AGENTS_SKILLS_DIR/review/SKILL.md" && -L "$HOME/.pi/agent/skills/review" ]] || fail "a dry run removed the skill"
+}
+
+@test "deploy_skills keeps a folder of the old council skill that bercail never shipped there" {
+  old_council_skill
+  mkdir "$AGENTS_SKILLS_DIR/council/scripts"
+  deploy_skills >/dev/null 2>&1
+  [[ -d "$AGENTS_SKILLS_DIR/council/scripts" ]] || fail "an update removed a council/scripts folder bercail never shipped"
+}
+
+@test "uninstall removes the review skill an older release installed" {
+  old_review_skill
+  remove_managed_skills >/dev/null
+  [[ ! -e "$AGENTS_SKILLS_DIR/review" && ! -L "$HOME/.pi/agent/skills/review" ]] \
+    || fail "uninstall keeps the retired review skill"
 }
 
 @test "deploy_skills preserves a foreign path in the pi skills dir" {

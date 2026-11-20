@@ -692,7 +692,7 @@ handoff_spawn_main() {
     intro="$(printf 'bercail handoff: stage autopilot, desk agent pi, linked worktree %s (branch %s, the head of %s). Stay in this checkout. Drive the PR to green with the autopilot skill: you may commit and push its fixes to %s, never force-push, merge, or release. %s When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
       "$sibling" "$branch" "$target" "$branch" "$(handoff_policy_line "$sibling")" "$issue")"
   else
-    intro="$(printf 'bercail handoff: stage %s, desk agent %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr. %s Do not open Review or invoke the review skill; when the desk agent finishes, Review opens itself in this space once the user looks at it. When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
+    intro="$(printf 'bercail handoff: stage %s, desk agent %s, linked worktree %s (branch %s). Stay in this checkout. Stage your changes with git add and leave them uncommitted for human review in tuicr. %s Do not open Review; when the desk agent finishes, Review opens itself in this space once the user looks at it. When you stop, post your final report on this issue with bd comment %s: what changed, what you ran to prove it, and what is left or blocked.' \
       "$stage" pi "$sibling" "$branch" "$(handoff_policy_line "$sibling")" "$issue")"
   fi
   if [[ "$backend" == gt ]]; then

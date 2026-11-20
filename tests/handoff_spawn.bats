@@ -897,8 +897,6 @@ HELPER
     || fail "a desk reports on the issue, where headless runs and Shep read it"
   grep -q 'leave them uncommitted for human review' "$BD_COMMENTS" \
     || fail "handoff intro should tell the child to keep changes staged, not committed"
-  if grep -q 'agentic-dev.layout' "$BD_COMMENTS"; then fail "handoff intro must not name the old Herdr plugin"; fi
-  if grep -q 'review/SKILL.md' "$BD_COMMENTS"; then fail "handoff intro must not tell the child to load the review skill"; fi
 }
 
 @test "a hung gt warns and the desk still starts" {

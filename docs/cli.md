@@ -51,7 +51,6 @@ Call by name. Skills install to `~/.agents/skills`, with a link to each in `~/.p
 | Skill | What |
 |-------|------|
 | `handoff` | Run a beads issue on a stage, headless or as a `--branch` desk (`--base` stacks it on a parent branch). See [handoff](handoff.md) |
-| `review` | Wait for **human** tuicr notes; publish to GitHub only if asked. See [review](review.md) |
 | `bstack` | Playbooks for rigorous work, routed by role. See [bstack](bstack.md) |
 | `how` / `why` | How code works now; why it is that way, from git, PRs, and beads. Read-only |
 | `unslop` | Clean machine-writing tells out of prose and a diff |
@@ -61,12 +60,6 @@ Call by name. Skills install to `~/.agents/skills`, with a link to each in `~/.p
 | `describe` | Write, check and ship a change's description (the PR body or the commit message) to one standard and the repo's template |
 | `statechart` | Model a stateful change in TLA+, check it with TLC, chart it for the owner, and replay it on the real code. Only with `[bstack] statechart = true`. See [statecharts](bstack.md#statecharts) |
 
-autopilot's PR snapshot, `pr-state.sh`, is in [Ship with autopilot](bstack/06-autopilot.md#what-it-does). The review helpers:
-
-```bash
-~/.agents/skills/review/scripts/wait-comments.sh --repo . [--timeout N]
-~/.agents/skills/review/scripts/publish-github.sh --repo . \
-  [--event comment|approve|request-changes] [--body TEXT] [--dry-run]
-```
+autopilot's PR snapshot, `pr-state.sh`, is in [Ship with autopilot](bstack/06-autopilot.md#what-it-does).
 
 Manual skill install: `npx skills add simoncrypta/bercail --skill handoff -g`

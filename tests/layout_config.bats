@@ -179,7 +179,7 @@ EOF
   grep -q '^\[shep\]' "$BERCAIL_USER_CONFIG" || fail "did not find the documented config"
   out="$(doctor_config)"
   assert_eq "" "$out" "docs/config.md"
-  cp "$ROOT/config/agentic-dev/config.toml.example" "$BERCAIL_USER_CONFIG"
+  cp "$ROOT/config/bercail/config.toml.example" "$BERCAIL_USER_CONFIG"
   out="$(doctor_config)"
   assert_eq "" "$out" "config.toml.example"
   default_user_config >"$BERCAIL_USER_CONFIG"

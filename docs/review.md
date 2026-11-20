@@ -8,7 +8,7 @@ It opens when the desk agent finishes a turn (done, or working → idle) and the
 
 The desk mod reads `config.toml` when it loads, so a change to `review` or `auto_review` reaches it after the mod reloads (an app restart does it).
 
-Inside tuicr, `j`/`k` move around. The `review` skill waits for your notes and publishes them to GitHub only when you ask; its helper scripts are listed under [skills](cli.md#skills).
+Inside tuicr, `j`/`k` move around. tuicr exports your comments to the clipboard, to paste to the desk agent, or to the GitHub PR.
 
 ## Someone else's PR: `bercail review-pr`
 
