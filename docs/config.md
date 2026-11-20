@@ -267,7 +267,7 @@ Not yet: the worktrunk hook and `handoff-spawn --branch` open a new space only i
 - worktrunk hooks (`~/.config/worktrunk/config.toml`, `herdr-layout.sh`).
 - `~/.local/bin/{bercail,bercail-desk-agent}` (a mise or packslip install keeps its own `bercail`), and `~/.local/share/bercail/` (in it, `release/` is the release a curl install unpacked).
 - `~/.agents/skills/{handoff,bstack,autopilot,how,why,unslop,desk-restore,unit-testing,describe}`, with a link to each in `~/.pi/agent/skills`.
-- bstack's Pi profile in `~/.local/share/bercail/pi/` and role templates in `~/.config/herdr-core/templates/` (see [Make it yours](bstack/08-make-it-yours.md#your-own-files)). bstack installs `npm:pi-claude-bridge@0.12.0` into Pi's package settings, and a 40k compaction reserve for each `claude-bridge` model in `compaction.modelOverrides` there ([why](bstack.md#how-it-runs)).
+- bstack's Pi profile in `~/.local/share/bercail/pi/` and role templates in `~/.config/herdr-core/templates/` (see [Make it yours](bstack/08-make-it-yours.md#your-own-files)). bstack installs `npm:pi-claude-bridge@0.12.0` into Pi's package settings, and a 40k compaction reserve for each `claude-bridge` model in `compaction.modelOverrides` there ([why](bstack.md#how-it-runs)). It sets Pi's restore-queued key, `app.message.dequeue`, to `alt+q` in `~/.pi/agent/keybindings.json` when you have not set it, and records that in `~/.local/state/bercail/pi-keybindings.json` so uninstall takes back only that key ([why](keys.md)).
 - The Pi extension `~/.local/share/bercail/pi-extensions/bercail-desk.ts` that every Pi desk loads with `-e`.
 - `diff_watch_interval_ms` in `~/.config/tuicr/config.toml`, unless you set it already.
 - On Linux and Omarchy, the extras in [platforms](development.md#platforms).

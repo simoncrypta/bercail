@@ -458,6 +458,110 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     || fail "says how to fix it: $(cat "$BATS_TEST_TMPDIR/pi.log")"
 }
 
+PI_KEYS() { printf '%s' "$HOME/.pi/agent/keybindings.json"; }
+
+@test "deploy moves Pi's restore-queued key off the layout's Alt+Up into a fresh keybindings.json" {
+  reset_home
+  write_pi_config
+  FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  jq -e '. == {"app.message.dequeue": "alt+q"}' "$(PI_KEYS)" >/dev/null || fail "keybindings: $(cat "$(PI_KEYS)")"
+  FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "second deploy"
+  grep -q "unchanged: $(PI_KEYS)" "$BATS_TEST_TMPDIR/pi.log" || fail "a second deploy changes nothing: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+}
+
+@test "deploy adds the restore-queued key beside the person's other Pi bindings" {
+  reset_home
+  write_pi_config
+  mkdir -p "$HOME/.pi/agent"
+  printf '%s\n' '{"app.session.new": "ctrl+shift+n", "tui.altScreen.pageUp": []}' >"$(PI_KEYS)"
+  FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  jq -e '. == {"app.session.new": "ctrl+shift+n", "tui.altScreen.pageUp": [], "app.message.dequeue": "alt+q"}' "$(PI_KEYS)" >/dev/null \
+    || fail "keybindings: $(cat "$(PI_KEYS)")"
+
+  # A file Pi cannot read stays as it is.
+  printf '["not", "keys"]\n' >"$(PI_KEYS)"
+  FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  assert_eq '["not", "keys"]' "$(cat "$(PI_KEYS)")" "unreadable keybindings untouched"
+  grep -q 'is not one JSON object; set these Pi keys there by hand' "$BATS_TEST_TMPDIR/pi.log" \
+    || fail "says how to fix it: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  printf '{} []\n' >"$(PI_KEYS)"
+  FAKE_PI_READY="claude-bridge" deploy_bstack >/dev/null 2>&1 || fail "deploy"
+  assert_eq '{} []' "$(cat "$(PI_KEYS)")" "two JSON values untouched"
+}
+
+@test "deploy keeps the restore-queued key the person set, says so, and uninstall leaves it" {
+  reset_home
+  write_pi_config
+  mkdir -p "$HOME/.pi/agent"
+  printf '%s\n' '{"app.message.dequeue": ["ctrl+shift+u"]}' >"$(PI_KEYS)"
+  FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  jq -e '. == {"app.message.dequeue": ["ctrl+shift+u"]}' "$(PI_KEYS)" >/dev/null || fail "their key changed: $(cat "$(PI_KEYS)")"
+  grep -qF 'keeping your Pi key app.message.dequeue = ["ctrl+shift+u"]' "$BATS_TEST_TMPDIR/pi.log" \
+    || fail "says it kept theirs: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+
+  # Their own alt+q is theirs too: bercail did not add it.
+  printf '%s\n' '{"app.message.dequeue": "alt+q"}' >"$(PI_KEYS)"
+  FAKE_PI_READY="claude-bridge" deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy"
+  grep -qF 'keeping your Pi key app.message.dequeue = "alt+q"' "$BATS_TEST_TMPDIR/pi.log" \
+    || fail "says it kept their alt+q: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  remove_bstack >/dev/null 2>&1
+  jq -e '. == {"app.message.dequeue": "alt+q"}' "$(PI_KEYS)" >/dev/null || fail "uninstall took their key: $(cat "$(PI_KEYS)" 2>&1)"
+}
+
+@test "uninstall takes back only the restore-queued key bercail added" {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="claude-bridge"
+  deploy_bstack >/dev/null 2>&1
+  jq -e '.["app.message.dequeue"] == "alt+q"' "$(PI_KEYS)" >/dev/null || fail "deploy adds the key"
+  remove_bstack >/dev/null 2>&1
+  [[ ! -e "$(PI_KEYS)" ]] || fail "a file left with no binding goes: $(cat "$(PI_KEYS)")"
+
+  printf '%s\n' '{"app.session.new": "ctrl+shift+n"}' >"$(PI_KEYS)"
+  deploy_bstack >/dev/null 2>&1
+  remove_bstack >/dev/null 2>&1
+  jq -e '. == {"app.session.new": "ctrl+shift+n"}' "$(PI_KEYS)" >/dev/null || fail "keybindings: $(cat "$(PI_KEYS)")"
+
+  # Changed after bercail added it: the person's now.
+  deploy_bstack >/dev/null 2>&1
+  jq '.["app.message.dequeue"] = "alt+w"' "$(PI_KEYS)" >"$BATS_TEST_TMPDIR/k" && mv "$BATS_TEST_TMPDIR/k" "$(PI_KEYS)"
+  remove_bstack >/dev/null 2>&1
+  jq -e '. == {"app.session.new": "ctrl+shift+n", "app.message.dequeue": "alt+w"}' "$(PI_KEYS)" >/dev/null \
+    || fail "uninstall took a changed key: $(cat "$(PI_KEYS)")"
+
+  # An empty file of the person's stays, empty.
+  printf '{}\n' >"$(PI_KEYS)"
+  deploy_bstack >/dev/null 2>&1
+  remove_bstack >/dev/null 2>&1
+  jq -e '. == {}' "$(PI_KEYS)" >/dev/null || fail "uninstall removed the person's own file"
+
+  # Uninstall takes the key back from each agent dir it went into, whichever dir
+  # Pi is pointed at then, and leaves another dir's own alt+q.
+  rm -f "$(PI_KEYS)"
+  PI_CODING_AGENT_DIR="$HOME/other-agent" deploy_bstack >/dev/null 2>&1
+  printf '%s\n' '{"app.message.dequeue": "alt+q"}' >"$(PI_KEYS)"
+  deploy_bstack >/dev/null 2>&1
+  PI_CODING_AGENT_DIR="$HOME/third-agent" remove_bstack >/dev/null 2>&1
+  [[ ! -e "$HOME/other-agent/keybindings.json" ]] || fail "uninstall left the key in the dir it went into"
+  jq -e '. == {"app.message.dequeue": "alt+q"}' "$(PI_KEYS)" >/dev/null || fail "uninstall took another dir's own key"
+
+  # A relative agent dir is the one under the folder deploy ran in.
+  mkdir -p "$HOME/a" "$HOME/b/agent"
+  (cd "$HOME/a" && PI_CODING_AGENT_DIR=agent deploy_bstack >/dev/null 2>&1)
+  printf '%s\n' '{"app.message.dequeue": "alt+q"}' >"$HOME/b/agent/keybindings.json"
+  (cd "$HOME/b" && remove_bstack >/dev/null 2>&1)
+  [[ ! -e "$HOME/a/agent/keybindings.json" ]] || fail "uninstall left the relative dir's key"
+  jq -e '. == {"app.message.dequeue": "alt+q"}' "$HOME/b/agent/keybindings.json" >/dev/null \
+    || fail "uninstall from another folder took that folder's own key"
+
+  # A record bercail cannot read stops nothing.
+  mkdir -p "$XDG_STATE_HOME/bercail"
+  printf '%s\n' "{\"$(PI_KEYS)\": {\"keys\": \"not a map\"}}" >"$XDG_STATE_HOME/bercail/pi-keybindings.json"
+  remove_bstack >/dev/null 2>&1 || fail "uninstall stopped on a bad record"
+  jq -e '. == {"app.message.dequeue": "alt+q"}' "$(PI_KEYS)" >/dev/null || fail "a bad record changed the file"
+  unset FAKE_PI_READY
+}
+
 @test "Pi deploy leaves a template without the marker alone" {
   reset_home
   write_pi_config

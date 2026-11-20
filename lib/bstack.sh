@@ -29,6 +29,9 @@ BSTACK_PI_RENDERED=(instructions.md agents/bstack-builder.md agents/bstack-judge
   prompts/unslop.md prompts/pr-review.md prompts/bstack-setup.md prompts/statechart.md)
 # Templates older releases rendered: the council's seats, removed in v0.18.
 BSTACK_PI_RETIRED=(bstack-council-claude bstack-council-gpt bstack-council-grok)
+# Pi keys the bercail layout takes before Pi sees them, moved: Alt+Up is the
+# previous space there and Pi's restore-queued key. Alt+Q is Pi's own on Windows.
+BSTACK_PI_KEYS='{"app.message.dequeue":"alt+q"}'
 
 # --- config.toml --------------------------------------------------------------
 
@@ -418,6 +421,85 @@ _bstack_pi_bridge_compaction() {
   copy_file "$work/pi-settings.json" "$file"
 }
 
+# Absolute, so the record names the same file from any folder.
+_bstack_pi_keys_file() {
+  local dir="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+  [[ "$dir" == /* ]] || dir="$PWD/$dir"
+  printf '%s/keybindings.json' "$dir"
+}
+
+# What bercail added to each Pi keybindings.json it wrote, by path: whether it
+# created the file, and the keys, so uninstall takes back only those.
+_bstack_pi_keys_record() {
+  printf '%s/bercail/pi-keybindings.json' "${XDG_STATE_HOME:-$HOME/.local/state}"
+}
+
+# FILE as one JSON object, compact, or fail: a file that is not one, such as
+# two values in a row, is not one bercail edits.
+_bstack_json_object() {
+  jq -e -c -s 'select(length == 1 and (.[0] | type) == "object") | .[0]' "$1" 2>/dev/null
+}
+
+# Each of BSTACK_PI_KEYS goes into Pi's keybindings.json, unless the person set
+# that action: theirs stays, and is said. Their other bindings are kept.
+_bstack_pi_keys() {
+  local work="$1" file record current='{}' prior='{}' exists=false result line
+  file="$(_bstack_pi_keys_file)"
+  record="$(_bstack_pi_keys_record)"
+  if [[ -s "$file" ]] && ! current="$(_bstack_json_object "$file")"; then
+    warn "$file is not one JSON object; set these Pi keys there by hand: $BSTACK_PI_KEYS"
+    return 1
+  fi
+  [[ ! -e "$file" ]] || exists=true
+  [[ ! -s "$record" ]] || prior="$(_bstack_json_object "$record")" || prior='{}'
+  # Ours: absent, or still as bercail added it to this file. A value equal to
+  # ours that bercail did not add is the person's.
+  result="$(jq -c --argjson ours "$BSTACK_PI_KEYS" --argjson prior "$prior" --arg file "$file" --argjson exists "$exists" '
+    . as $cur
+    | ($prior[$file] // {}) as $was
+    | ($was.keys // {}) as $added
+    | [$ours | keys_unsorted[] as $k | select(($cur | has($k) | not) or ($added | has($k) and .[$k] == $cur[$k])) | $k] as $mine
+    | {file: (reduce $mine[] as $k ($cur; .[$k] = $ours[$k])),
+       record: ($prior + {($file): {created: (($was.created // false) or ($exists | not)),
+         keys: (reduce $mine[] as $k ({}; .[$k] = $ours[$k]))}}),
+       kept: [$ours | keys_unsorted[] as $k | select(($cur | has($k)) and ($mine | index([$k]) | not))
+         | "keeping your Pi key \($k) = \($cur[$k] | tojson) in \($file) (bercail sets \($ours[$k] | tojson))"]}' \
+    <<<"$current")" || return 1
+  if [[ "$(jq -c '.file' <<<"$result")" == "$current" ]]; then
+    info "unchanged: $file"
+  else
+    jq '.file' <<<"$result" >"$work/pi-keybindings.json"
+    copy_file "$work/pi-keybindings.json" "$file" || return 1
+  fi
+  jq '.record' <<<"$result" >"$work/pi-keys-record.json"
+  copy_file "$work/pi-keys-record.json" "$record" >/dev/null
+  while IFS= read -r line; do info "$line"; done < <(jq -r '.kept[]' <<<"$result")
+}
+
+# Take back, from each file in the record, the keys bercail added there that the
+# person has not changed since. A file bercail created and left empty goes.
+_bstack_remove_pi_keys() {
+  local record entries file entry left
+  record="$(_bstack_pi_keys_record)"
+  [[ -f "$record" ]] || return 0
+  entries="$(_bstack_json_object "$record")" || entries='{}'
+  while IFS= read -r -d '' file; do
+    entry="$(jq -c --arg f "$file" '.[$f]' <<<"$entries")"
+    [[ -f "$file" ]] && left="$(_bstack_json_object "$file")" || continue
+    left="$(jq -c --argjson e "$entry" '
+      reduce ($e.keys // {} | to_entries[]) as $k (.; if .[$k.key] == $k.value then del(.[$k.key]) else . end)' <<<"$left")" \
+      || continue
+    [[ "$left" != "$(_bstack_json_object "$file")" ]] || continue
+    info "remove: bercail's Pi keys from $file"
+    if [[ "$left" == '{}' && "$(jq -r '.created? // false' <<<"$entry")" == true ]]; then
+      run rm -f "$file"
+    elif [[ "$DRY_RUN" -ne 1 ]]; then
+      jq . <<<"$left" >"$file"
+    fi
+  done < <(jq -j 'keys[] | . + "\u0000"' <<<"$entries")
+  run rm -f "$record"
+}
+
 # Install Pi and the Claude bridge.
 _bstack_install_pi() {
   maybe_mise_install pi pi || return 1
@@ -616,12 +698,15 @@ deploy_bstack() {
   fi
   _bstack_deploy_pi "$work" || result=$?
   _bstack_pi_bridge_compaction "$work" || true
+  _bstack_pi_keys "$work" || true
   rm -rf "$work"
   return "$result"
 }
 
-# Remove what deploy_bstack wrote, and only files that still carry the marker.
+# Remove what deploy_bstack wrote: files that still carry the marker, and the
+# Pi keys it added that are still as it set them.
 remove_bstack() {
+  _bstack_remove_pi_keys
   if ! _bstack_pi_rendered_any; then
     info "bstack: nothing to remove in $BSTACK_PI_DIR"
     return 0

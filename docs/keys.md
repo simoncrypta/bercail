@@ -49,6 +49,8 @@ The keys from `Ctrl+Space` to `Ctrl+Shift+J` act in the space view. Pressed in t
 
 These keys go to the layout, never to the program in Shep or the desk. If your input method switches on `Ctrl+Space` (fcitx5's default, macOS's input sources), rebind it in that section. `Ctrl+Up`/`Down` and `Ctrl+Shift+Up`/`Down` are not bercail's: they reach Shep or the desk, and Pi jumps between prompts with them.
 
+`Alt+Up`/`Down` belong to the layout, so Pi never sees them. Pi restores queued messages to the editor with `Alt+Up`, so under bercail that key is `Alt+Q`, Pi's own on Windows: `bercail update` sets `app.message.dequeue` to `alt+q` in `~/.pi/agent/keybindings.json` and keeps the rest of that file. A value you set there yourself stays, and the update says so; `bercail uninstall` takes back only bercail's `alt+q`. `bercail doctor` lists each Pi `app.*` key the layout still takes, as `shadowed`: Pi's `/scoped-models` reorders models with `Alt+Up`/`Down` too, and you can bind those elsewhere in that file.
+
 `bercail update` keeps the keys you changed or removed in that section and warns about each one, and about any `terminal` key that takes one of bercail's. `bercail doctor` lists them too.
 
 The rest are the Herdr app's: `Ctrl+Shift+T`/`W` new/close tab, `Ctrl+Shift+O`/`E` split, `Ctrl+Shift+X` close pane, `Ctrl+Shift+Z` zoom, `Alt+1`…`9` tabs, `Alt+H`/`J`/`K`/`L` panes, `Ctrl+Shift+B` sidebar, `Ctrl+Shift+L` layout, `Ctrl+Shift+?` all keys.

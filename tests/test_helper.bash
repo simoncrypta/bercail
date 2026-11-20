@@ -12,6 +12,9 @@ isolate() {
   export XDG_STATE_HOME="$HOME/.local/state" XDG_CONFIG_HOME="$HOME/.config"
   export XDG_DATA_HOME="$HOME/.local/share" XDG_CACHE_HOME="$HOME/.cache"
   export XDG_RUNTIME_DIR="$BATS_TEST_TMPDIR/run" TMPDIR="$BATS_TEST_TMPDIR/tmp"
+  # Pi's agent dir follows HOME only when this is unset; set, it is the real one.
+  # Git's would send every fixture repo's commits to the real repo.
+  unset PI_CODING_AGENT_DIR GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
   mkdir -p "$HOME" "$TMPDIR"
   mkdir -m 700 "$XDG_RUNTIME_DIR"
   export DESKTOP_TEST="${BATS_TEST_FILENAME##*/}: $BATS_TEST_DESCRIPTION"

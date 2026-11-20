@@ -54,7 +54,48 @@ doctor_herdr_app() {
     log "  missing  Herdr keys $HERDR_APP_KEYS_SECTION in $HERDR_APP_CONFIG_DIR/keys.json (run: bercail update)"
     missing=$((missing + 1))
   fi
+  ! command -v pi >/dev/null 2>&1 || _pi_keys_shadowed "$HERDR_APP_CONFIG_DIR/keys.json" \
+    | while IFS= read -r line; do log "  shadowed  $line"; done
   [[ "$missing" -eq 0 ]]
+}
+
+# Pi's app.* keys by default on Linux and macOS (Pi 1.6.0, docs/keybindings.md).
+PI_APP_KEYS='{"app.interrupt":"escape","app.clear":"ctrl+c","app.exit":"ctrl+d","app.suspend":"ctrl+z",
+"app.editor.external":"ctrl+g","app.clipboard.pasteImage":"ctrl+v","app.session.togglePath":"ctrl+p",
+"app.session.toggleSort":"ctrl+s","app.session.toggleNamedFilter":"ctrl+n","app.session.rename":"ctrl+r",
+"app.session.delete":"ctrl+d","app.session.deleteNoninvasive":"ctrl+backspace","app.model.select":"ctrl+l",
+"app.model.cycleForward":"ctrl+p","app.model.cycleBackward":"shift+ctrl+p","app.models.save":"ctrl+s",
+"app.thinking.cycle":"shift+tab","app.thinking.save":"ctrl+s","app.thinking.toggle":"ctrl+t",
+"app.tools.expand":"ctrl+o","app.message.copy":"ctrl+x","app.message.followUp":"alt+enter",
+"app.message.dequeue":"alt+up","app.tree.foldOrUp":["ctrl+left","alt+left"],
+"app.tree.unfoldOrDown":["ctrl+right","alt+right"],"app.tree.editLabel":"shift+l",
+"app.tree.toggleLabelTimestamp":"shift+t","app.tree.filter.default":"ctrl+d","app.tree.filter.noTools":"ctrl+t",
+"app.tree.filter.userOnly":"ctrl+u","app.tree.filter.labeledOnly":"ctrl+l","app.tree.filter.all":"ctrl+a",
+"app.tree.filter.cycleForward":"ctrl+o","app.tree.filter.cycleBackward":"shift+ctrl+o","app.models.enableAll":"ctrl+a",
+"app.models.clearAll":"ctrl+x","app.models.toggleProvider":"ctrl+p","app.models.reorderUp":"alt+up",
+"app.models.reorderDown":"alt+down"}'
+
+# Each Pi app.* key the bercail layout takes before Pi sees it: Pi's default, or
+# the one in Pi's keybindings.json. Herdr writes ctrl-shift-p, Pi shift+ctrl+p.
+# A key the terminal section hands to the program reaches Pi.
+_pi_keys_shadowed() {
+  local keys="$1" pi_keys mine='{}'
+  pi_keys="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/keybindings.json"
+  [[ ! -s "$pi_keys" ]] || mine="$(jq -e -c -s 'select(length == 1 and (.[0] | type) == "object") | .[0]' "$pi_keys" 2>/dev/null)" || mine='{}'
+  jq -r --arg s "$HERDR_APP_KEYS_SECTION" --argjson def "$PI_APP_KEYS" --argjson mine "$mine" --arg file "$pi_keys" '
+    def norm(sep): ascii_downcase | split(sep)
+      | (.[:-1] | map(select(. != "")) | sort)
+        + [if .[-1] == "" then sep else .[-1] end | {esc: "escape", return: "enter"}[.] // .]
+      | join("+");
+    def bound: if type == "object" then to_entries | map(.key |= norm("-")) | from_entries else {} end;
+    (.terminal | bound | with_entries(select(.value == "terminal"))) as $pass
+    | (.[$s] | bound | with_entries(.key as $k | select(.value != "terminal" and ($pass | has($k) | not)))) as $layout
+    | (.[$s] // {} | if type == "object" then with_entries(.value = .key) | to_entries | map({key: (.key | norm("-")), value: .value}) | from_entries else {} end) as $herdr
+    | ($def + $mine) | to_entries[] | select(.key | startswith("app."))
+    | .key as $a | .value | (if type == "string" then [.] elif type == "array" then map(strings) else [] end)[]
+    | norm("+") as $k | select($layout | has($k))
+    | "Pi \($a) (\($k)): the bercail layout takes \($herdr[$k]) for \($layout[$k] | tostring); bind it to another key in \($file)"' \
+    "$keys" 2>/dev/null
 }
 
 # Herdr updates itself; bercail only says when an update waits on a restart.

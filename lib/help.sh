@@ -127,6 +127,7 @@ Keys in the bercail layout:
   Ctrl+Shift+F / G     Show or hide files / changes
   Ctrl+Alt+Left/Right  Move between panes (left from the leftmost reaches the desk)
   Alt+Up/Down          Previous/next space (repos and other spaces, not worktrees)
+                       (Pi's restore-queued key moves to Alt+Q: ~/.pi/agent/keybindings.json)
   Ctrl+Alt+Up/Down     Previous/next worktree space of this repo (main checkout too)
   Alt+Shift+Up/Down    Previous/next agent (desks too)
   Ctrl+Shift+Q         Close this space

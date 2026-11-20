@@ -113,6 +113,26 @@ app_edits_then_update() {
   fi
 }
 
+@test "doctor names each Pi app key the bercail layout takes before Pi sees it" {
+  deploy_herdr_app >/dev/null
+  printf '#!/bin/sh\nexit 0\n' >"$BATS_TEST_TMPDIR/bin/pi" && chmod +x "$BATS_TEST_TMPDIR/bin/pi"
+  out="$(doctor_herdr_app 2>&1)" || fail "a shadowed Pi key is not a failure: $out"
+  grep -q 'shadowed  Pi app.message.dequeue (alt+up): the bercail layout takes alt-up for bercail-desk.space-prev' <<<"$out" \
+    || fail "doctor: Pi's default dequeue key: $out"
+  grep -q 'shadowed  Pi app.models.reorderDown (alt+down)' <<<"$out" || fail "doctor: every app key: $out"
+
+  # Moved in Pi's keybindings.json, or handed to the program by the terminal
+  # section: no longer shadowed. A rebound agent key does not stop the check.
+  mkdir -p "$HOME/.pi/agent"
+  printf '%s\n' '{"app.message.dequeue": "alt+q", "app.clear": 7, "app.session.new": "ctrl+esc"}' >"$HOME/.pi/agent/keybindings.json"
+  jq '.terminal = {"alt-down": "terminal"} | .["layout:bercail"]["ctrl-escape"] = "x.y"
+      | .["layout:bercail"]["ctrl-shift-a"] = "mine.agent"' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
+  out="$(doctor_herdr_app 2>&1)" || true
+  if grep -q 'app.message.dequeue\|reorderDown' <<<"$out"; then fail "doctor: moved keys are not shadowed: $out"; fi
+  grep -q 'shadowed  Pi app.session.new (ctrl+escape): the bercail layout takes ctrl-escape for x.y' <<<"$out" \
+    || fail "doctor: the person's own Pi key, after one Pi cannot read: $out"
+}
+
 @test "update keeps the app's layout edits and restores the mod" {
   app_edits_then_update
   jq -e '.background == "chrome"' "$APP/layouts/bercail.json" >/dev/null || fail "an unchanged shipped layout must not replace the app's"
