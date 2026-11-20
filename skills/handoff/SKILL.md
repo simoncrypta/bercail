@@ -100,7 +100,7 @@ not a follow-up route; it refuses an existing handoff or occupied desk. A
 stale/ambiguous/partial result is not permission to make another preparation
 checkout. `--target pr:N|task:ID` records a target; a deliberate parallel
 exploration needs a separate issue and `--fork-reason`.
-`--adopt-reason` (from dispatch's `adoptReason` only) starts a new-session desk in
+`--adopt-reason` (from dispatch only, when it adopts) starts a new-session desk in
 the existing worktree of a branch whose original desk is gone. `--reuse-worktree`
 and `--released` are dispatch's too: finishing a creation that stopped before its
 desk, and a target given up by a superseded issue.

@@ -1312,6 +1312,8 @@ EOF
   [[ "$out" == *"shep task dispatch"* ]] || fail "raw adoption must go through dispatch: $out"
   out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn 2>&1)" && fail "$out"
   [[ "$out" == *"already has a handoff"* ]] || fail "no reason, no adoption: $out"
+  echo draft >"$existing/draft.txt"
+  git -C "$existing" add draft.txt
   out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --adopt-reason 'desk t130 exited; Simon asked to update the PR' 2>"$BATS_TEST_TMPDIR/adopt.err")" \
     || fail "adoption failed: $out $(cat "$BATS_TEST_TMPDIR/adopt.err")"
   ! grep -q '^wt ' "$DESK_HERDR_LOG" || fail "adoption must not create a worktree: $(cat "$DESK_HERDR_LOG")"
@@ -1323,6 +1325,12 @@ EOF
     || fail "handoffs.jsonl: $(cat "$DESK_STATE/bercail/handoffs.jsonl")"
   grep -q 'Adopted: desk t130 exited; Simon asked to update the PR' "$BD_COMMENTS" \
     || fail "the reason must be on the issue: $(cat "$BD_COMMENTS")"
+  staged='The checkout holds a staged change the person has not reviewed. Name it in your first report, and leave those files staged as they are unless the person asks.'
+  grep -qF "$staged" "$BD_COMMENTS" || fail "the staged change must be named on the issue: $(cat "$BD_COMMENTS")"
+  # The comment is best effort, so the desk's first prompt says it too.
+  jq -e --arg s "$staged" '.[-1] | startswith("Your job is beads issue") and endswith($s)' "$DESK_ARGV" >/dev/null \
+    || fail "the staged change must be in the desk's prompt: $(cat "$DESK_ARGV")"
+  [[ "$(git -C "$existing" diff --cached --name-only)" == draft.txt ]] || fail "the staged change must stay staged"
   out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --adopt-reason x --branch nope 2>&1)" && fail "$out"
   [[ "$out" == *"no existing worktree"* ]] || fail "adoption needs an existing checkout: $out"
 }

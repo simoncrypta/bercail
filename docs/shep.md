@@ -74,16 +74,28 @@ ID and payload after a lost response; a retry finds the follow-up's file under
 whichever desk it went to and sends nothing again. Legacy or uninstrumented
 owners fail closed rather than being restarted for compatibility.
 
-When the original desk is gone, dispatch stops with `original owner missing/stale`.
-With the person's yes, the same dispatch plus `adoptReason` (why, and who asked)
-starts a visible desk with a new session in that owner's existing checkout:
-the one branch worktree, and its branch, that the owner's records name. A PR
-target must still be that branch. Live, stale, ambiguous or unresolved owners
-keep their refusals. So do an uncertain creation (UNKNOWN), no record, the
-main checkout, and a live desk of any job on the checkout: adoption never
-closes or replaces one. The issue's
-`metadata.bercail_task.adoptions` keeps the reason, the request, the checkout
-and the gone desks, and the handoff's `bd comment` repeats the reason.
+When the original desk is gone (its records name a desk a spawn started, and
+no terminal with that address is live), dispatch adopts its checkout by itself: it starts a visible desk
+with a new session in that owner's existing checkout, the one branch worktree,
+and its branch, that the owner's records name. Nobody is asked. The result
+adds `adopted` (the checkout, the branch, the gone desks, the reason and the
+number of `staged` files) and a `warning` line for Shep to repeat to the
+person; a retry of the same request repeats them. The reason is `adoptReason`
+when the dispatch gives one, else `desk <id> is gone` (or `desks <ids> are gone`). A PR target must still
+be that branch. Live, stale, ambiguous (the refusal lists the desks) or
+unresolved owners keep their refusals, and so does a recorded desk whose
+terminal is still live without its desk labels. Records of a spawn that
+started no desk (no `desk`, or `ok` or `agent_started` false) keep `original
+owner missing/stale`. So do
+an uncertain creation (UNKNOWN), a checkout that is gone, the main checkout,
+and a live desk of any job on the checkout: adoption never closes or replaces
+one. An `adoptReason` with nothing recorded is refused. The issue's
+`metadata.bercail_task.adoptions` keeps the reason, the request, the checkout,
+the staged count and the gone desks, and the handoff's `bd comment` repeats
+the reason. Desks stage for the person's review, so a staged change in the
+checkout is unreviewed: the comment and the desk's first prompt tell it to
+name the change in its first report and leave those files staged as they are
+unless the person asks.
 Follow-ups queued to the gone desk stay with it; the adopting desk gets only
 the new request, and later ones made in the usual way. Its
 `handoffs.jsonl` line starts a new ownership epoch, so older records neither
@@ -99,7 +111,19 @@ a local branch with commits origin lacks.
 
 A new desk's first prompt is its issue. A retry of the creation's request ID,
 once the desk is up, binds its session as the owner and queues the message
-there; it never launches again.
+there; it never launches again. `bercail shep task dispatch --wait-ready` does
+that retry itself: once a desk started, it waits up to 60 seconds for the
+desk's Pi to write its record and open-session claim with the pinned session,
+then returns the retry's `queued` result with `ready: true`, the creation and
+any adoption. When the minute passes first, or the retry refuses the desk, it
+returns the `started` result with `ready: false` and a `next` that says why.
+A dispatch that starts no desk returns at once.
+
+Text Shep or a lead types into a desk with `hc send` is submitted: hc pastes
+it and presses Enter. Press no `hc keys enter` after it; that key answers
+whatever prompt the desk shows. A send to a desk that is still starting can
+be dropped: dispatch's own message goes in the desk's queue, never by
+`hc send`.
 
 Dispatch gives handoff-spawn `[shep] spawn_timeout` seconds (600 by default) to
 start the desk, then stops it and the processes it started. The creation is then

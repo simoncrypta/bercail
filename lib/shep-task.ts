@@ -82,12 +82,14 @@ function migrated(task: Task | undefined): Task | undefined {
   return task;
 }
 // A new desk on a gone owner's checkout, and why. The desks it names are gone.
+// staged: the files staged there, which the person has not reviewed.
 type Adoption = {
   request: string;
   reason: string;
   at: string;
   path: string;
   branch: string;
+  staged: number;
   from: { desk: string; session: string; space: string }[];
 };
 // A retry asks for the same work: the same payload, or, for a v0.17 request
@@ -368,8 +370,13 @@ function adoptable(repo: string, id: string, target: string, task: Task | undefi
     session: r.session || "",
     space: r.space || "",
   }));
-  return { path, branch, from };
+  // Desks stage for the person's review, so a staged change there is unreviewed.
+  const staged = git(path, "diff", "--cached", "--name-only").split("\n").filter(Boolean).length;
+  return { path, branch, from, staged };
 }
+// The live desk that owns the task, or null when none is live: its records
+// then name a gone owner, or no owner at all. A recorded desk whose terminal is
+// still live is not gone, whatever its labels say.
 function findOwner(
   repo: string,
   id: string,
@@ -377,7 +384,6 @@ function findOwner(
   saved?: Owner | null,
   fork = false,
   history = records(repo),
-  adopt = false,
 ): Owner | null {
   const handoffs = owned(history, id, target, fork);
   if (handoffs.some((r) => r.unresolved))
@@ -393,10 +399,20 @@ function findOwner(
     }
   });
   if (candidates.length > 1)
-    throw new Error("ambiguous owners; reconcile the original desks explicitly, no launch occurred");
+    throw new Error(
+      `ambiguous owners ${candidates.map((t) => t.address).join(", ")}; reconcile the original desks explicitly, no launch occurred`,
+    );
   if (!candidates.length) {
-    if ((saved || handoffs.length) && !adopt)
-      throw new Error("original owner missing/stale; inspect the recorded checkout/space, no replacement was started");
+    const recorded = new Set([saved?.desk, ...handoffs.map((r) => r.desk)].filter(Boolean));
+    const still = !recorded.size
+      ? []
+      : JSON.parse(run(bin("hc"), ["ls", "--json"], repo))
+          .terminals.filter((t: any) => t.state === "live" && recorded.has(t.address))
+          .map((t: any) => t.address);
+    if (still.length)
+      throw new Error(
+        `recorded desk ${still.join(", ")} is still live but not a verifiable desk; inspect it, no adoption or launch occurred`,
+      );
     return null;
   }
   const owner = verify(repo, candidates[0], id, saved);
@@ -561,7 +577,7 @@ function create(repo: string, value: any, task: Task, opts: Spawn): any {
   }
 }
 
-export function taskCommand(op: string, input: any): any {
+function dispatch(op: string, input: any): any {
   if (op !== "dispatch") throw new Error("usage: bercail shep task dispatch (JSON on stdin)");
   if (!input || typeof input !== "object" || !input.repo || !/^[a-z0-9][a-z0-9._-]*$/i.test(input.issue || ""))
     throw new Error("pass explicit repo and issue as JSON on stdin");
@@ -608,8 +624,8 @@ export function taskCommand(op: string, input: any): any {
       !input.message.trim()
     )
       throw new Error("dispatch needs a work message, and stage bstack or autopilot");
-    const adopting = input.adoptReason !== undefined;
-    if (adopting && (typeof input.adoptReason !== "string" || !input.adoptReason.trim() || input.forkReason))
+    const asked = input.adoptReason !== undefined;
+    if (asked && (typeof input.adoptReason !== "string" || !input.adoptReason.trim() || input.forkReason))
       throw new Error(
         "adoptReason must say why a new desk takes over the gone owner's checkout (and cannot go with forkReason)",
       );
@@ -684,6 +700,7 @@ export function taskCommand(op: string, input: any): any {
     if (sent) {
       if (!same({ ...sent.file.request, payload: sent.file.v === 2 ? sent.file.request.payload : "" }, request))
         throw new Error("requestId payload changed; this is not a retry");
+      const adopted = task?.adoptions?.find((a) => a.request === input.requestId);
       return {
         status: "queued",
         owner: sent.file.owner,
@@ -691,6 +708,7 @@ export function taskCommand(op: string, input: any): any {
         delivery: sent.file.delivery,
         authority: false,
         retry: true,
+        ...(adopted ? told(adopted, sent.file.owner.desk) : {}),
       };
     }
     if (task?.retired?.includes(input.requestId))
@@ -754,22 +772,35 @@ export function taskCommand(op: string, input: any): any {
       }
       if (prior.status === "started" && task!.owner) {
         const original = findOwner(repo, value.id, target, task!.owner, !!task!.forkReason, history);
-        if (!original) throw new Error("original owner missing; retry once it is back");
+        if (!original)
+          throw new Error(
+            `original owner ${task!.owner.desk} is gone; this request was for it. Dispatch the work with a new requestId, which adopts its checkout`,
+          );
         const path = queue(repo, value.id, original, request);
-        return { status: "queued", owner: original, path, authority: false, retry: true };
+        // A retry of an adoption tells the person again, in case the first answer was lost.
+        const adopted = task!.adoptions?.find((a) => a.request === prior.id);
+        return {
+          status: "queued",
+          owner: original,
+          path,
+          authority: false,
+          retry: true,
+          ...(adopted ? told(adopted, original.desk) : {}),
+        };
       }
       return { status: prior.status, owner: task!.owner, next: prior.next, authority: false, retry: true };
     }
-    const owner = findOwner(
-      repo,
-      value.id,
-      target,
-      task?.owner,
-      !!(task?.forkReason || input.forkReason),
-      history,
-      adopting,
-    );
-    if (adopting && owner)
+    const fork = !!(task?.forkReason || input.forkReason);
+    const owner = findOwner(repo, value.id, target, task?.owner, fork, history);
+    // No live owner, and the records name the desk a spawn started: it is gone,
+    // so a new desk adopts its checkout. A failed spawn's record may name a desk
+    // it found there but never started; older records have no flags.
+    const before = owned(history, value.id, target, fork);
+    const started = before.some((r) => r.desk && r.ok !== false && r.agent_started !== false);
+    const adopting = !owner && (asked || !!task?.owner || started);
+    if (!owner && !adopting && before.length)
+      throw new Error("original owner missing/stale; inspect the recorded checkout/space, no replacement was started");
+    if (asked && owner)
       throw new Error(
         `live original owner ${owner.desk}; continue it with a normal dispatch, adoption is only for a gone owner`,
       );
@@ -803,18 +834,19 @@ export function taskCommand(op: string, input: any): any {
       throw new Error(
         "stage autopilot starts a desk only on an open PR's own branch: target pr:N, with branch set to that PR's head branch",
       );
+    let record: Adoption | undefined;
     if (adoption) {
+      const desks = adoption.from.map((r) => r.desk);
+      const gone = desks.length > 1 ? `desks ${desks.join(", ")} are gone` : `desk ${desks[0]} is gone`;
+      record = {
+        request: request.id,
+        reason: asked ? input.adoptReason.trim() : gone,
+        at: new Date().toISOString(),
+        ...adoption,
+      };
       // The gone owner's follow-ups stay queued to its desk: none moves to the new session.
       task.branch = adoption.branch;
-      task.adoptions = [
-        ...(task.adoptions || []),
-        {
-          request: request.id,
-          reason: input.adoptReason.trim(),
-          at: new Date().toISOString(),
-          ...adoption,
-        },
-      ];
+      task.adoptions = [...(task.adoptions || []), record];
       task.retired = [
         ...(task.retired || []),
         ...(task.creation ? [task.creation.id] : []),
@@ -835,22 +867,77 @@ export function taskCommand(op: string, input: any): any {
     }
     task.creation = { ...request, status: "creating", next: "Inspect visible creation result" };
     save(repo, value, task);
-    return create(repo, value, task, {
+    const done = create(repo, value, task, {
       existing,
       reuse: false,
       released,
       adoption,
       forkReason: input.forkReason ? String(input.forkReason) : undefined,
-      adoptReason: adoption ? input.adoptReason.trim() : undefined,
+      adoptReason: record?.reason,
     });
+    return record ? { ...done, ...told(record, done.creation.desk) } : done;
   } finally {
     rmSync(lock, { recursive: true });
   }
 }
 
+// The person is told of an adoption, not asked: warning is the line Shep repeats.
+function told({ reason, path, branch, from, staged }: Adoption, desk: string) {
+  const files = staged
+    ? ` It holds ${staged} staged file${staged === 1 ? "" : "s"} the person has not reviewed; the desk names them in its first report and leaves them staged unless asked.`
+    : "";
+  return {
+    adopted: { reason, path, branch, from, staged },
+    warning: `Adopted: ${reason}, so desk ${desk} starts a new session in ${path} (${branch}).${files} Tell the person; nothing waits on them.`,
+  };
+}
+
+// The new desk's Pi is up once its record and its open-session claim name the
+// session handoff-spawn pinned: what verify reads.
+function up(desk: string, session: string): boolean {
+  try {
+    const r = json(join(state(), "desk-sessions", `${desk}.json`));
+    const claim = json(join(process.env.XDG_RUNTIME_DIR!, "bercail/open-sessions", `${r.pid}.json`));
+    return r.session === session && r.follow_up === 1 && !!claim.sessions?.includes(session);
+  } catch {
+    return false;
+  }
+}
+
+const READY_SECONDS = 60;
+
+// --wait-ready: once a new desk started, wait for its Pi, then retry the
+// request, which binds that session as the owner and queues the message there.
+// Shep gets one answer instead of sleeping and retrying.
+export function taskCommand(op: string, input: any, flags: string[] = []): any {
+  const unknown = flags.filter((flag) => flag !== "--wait-ready");
+  if (unknown.length) throw new Error(`unknown flag ${unknown.join(", ")}; dispatch takes --wait-ready`);
+  const done = dispatch(op, input);
+  if (!flags.includes("--wait-ready") || done.status !== "started") return done;
+  const until = Date.now() + READY_SECONDS * 1000;
+  while (!up(done.creation.desk, done.creation.session)) {
+    if (Date.now() >= until)
+      return {
+        ...done,
+        ready: false,
+        next: `desk ${done.creation.desk}'s Pi did not claim its session in ${READY_SECONDS}s; retry this requestId once it is up`,
+      };
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  }
+  // The desk exists either way: a refused binding keeps the creation's answer.
+  try {
+    const { retry: _, ...queued } = dispatch(op, input);
+    return { ...done, ...queued, ready: true };
+  } catch (error) {
+    return { ...done, ready: false, next: `the message was not queued: ${(error as Error).message}` };
+  }
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    console.log(JSON.stringify(taskCommand(process.argv[2] || "", JSON.parse(readFileSync(0, "utf8")))));
+    console.log(
+      JSON.stringify(taskCommand(process.argv[2] || "", JSON.parse(readFileSync(0, "utf8")), process.argv.slice(3))),
+    );
   } catch (error) {
     console.error(`bercail shep task: ${(error as Error).message}`);
     process.exitCode = 1;

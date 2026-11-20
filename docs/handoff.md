@@ -53,11 +53,13 @@ Each `--branch` spawn appends one line to `${XDG_STATE_HOME:-~/.local/state}/ber
 Raw visible creation refuses a prior handoff for this repo/issue/target and a
 desk already occupying the resolved space. `--target pr:N|task:ID` records the
 logical target; deliberate parallel exploration uses a separate issue and
-`--fork-reason`. `--adopt-reason TEXT`, passed only by dispatch's
-[`adoptReason`](shep.md#dispatch) once it has found
+`--fork-reason`. `--adopt-reason TEXT`, passed only by
+[dispatch](shep.md#dispatch) once it has found
 the original desk gone, skips step 2 and the dirty copy and stack tracking. It starts the desk,
 with a new session, in the existing worktree of `--branch`, and puts TEXT in
-the issue comment and the `handoffs.jsonl` line. `--reuse-worktree`, also from
+the issue comment and the `handoffs.jsonl` line. When that worktree has staged
+changes, the comment and the desk's prompt tell it to name them in its first
+report and leave them staged unless the person asks. `--reuse-worktree`, also from
 dispatch only, finishes a creation that stopped before its desk: it starts the
 desk in the existing clean worktree of `--branch`, with no dirty copy, and no
 stack tracking on a PR's branch. `--released ID` (dispatch only,

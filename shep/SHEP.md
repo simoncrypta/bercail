@@ -172,7 +172,10 @@ The board line says when the backend does not answer; tell the person once.
    an over-budget or UNKNOWN snapshot without holding accepted work for it.
 3. Use `bercail shep task dispatch` with JSON on stdin: `repo`, `issue`,
    `target`, a stable `requestId`, and `message`. Add `branch` only for a
-   first visible desk. Reuse the request ID after an uncertain response; do
+   first visible desk. Pass `--wait-ready` when it starts a desk: it returns
+   once the desk's Pi is up, with the message queued in its session, so you
+   never sleep and retry. With `ready: false`, the desk started but the
+   message is not queued: its `next` says why. Reuse the request ID after an uncertain response; do
    not mint a new launch. That retry also finishes an UNKNOWN creation whose
    spawn stopped before its desk (a spawn timeout); when it cannot, its
    `next` says why. A follow-up reopens the issue and queues DATA in its
@@ -184,13 +187,16 @@ The board line says when the backend does not answer; tell the person once.
    ambiguous or partial result. Do not create another preparation checkout.
    Deliberate parallel exploration uses a separate issue and `forkReason`;
    it does not take over the original owner's session or authority.
-5. When the original desk is gone (`original owner missing/stale`) and its
-   checkout still exists, tell the person and ask. Only on their yes,
-   dispatch again with `adoptReason`: why, and that they asked. It starts a
-   visible desk with a new session in that checkout and records the adoption
-   on the issue. Follow-ups queued to the gone desk stay with it; dispatch
-   them again with new request IDs. A live desk on that checkout stops it:
-   name it to the person, never close it yourself.
+5. When the original desk is gone and its checkout still exists, dispatch
+   adopts it by itself: a visible desk with a new session in that checkout,
+   recorded on the issue. The result's `warning` says so: tell the person in
+   one line, without asking. When it names staged files, the person has not
+   reviewed them; the new desk names them in its first report and leaves
+   them staged. Add `adoptReason` only when you know why the desk went.
+   Follow-ups queued to the gone desk stay with it; dispatch them again with
+   new request IDs. Two live desks on the task, or a live desk on that
+   checkout, stop it with their addresses: name them to the person, never
+   close one yourself.
 6. When another issue already owns the target and the person says this issue
    replaces it, run `bd supersede <that issue> --with <this issue>` on their
    yes, then dispatch again. A live desk of the superseded issue still stops it.

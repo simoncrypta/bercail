@@ -125,6 +125,8 @@ task() { "$ROOT/bin/bercail" shep task "$@"; }
   done
   out="$(request | jq '.outcome="publish" | .authoring="gt m -a"' | task dispatch 2>&1)" && fail "$out"
   [[ "$out" == *"unknown task field outcome, authoring"* ]] || fail "$out"
+  out="$(request | task dispatch --wait 2>&1)" && fail "$out"
+  [[ "$out" == *"unknown flag --wait; dispatch takes --wait-ready"* ]] || fail "$out"
   [[ ! -d "$XDG_STATE_HOME/bercail/desk-follow-ups" ]]
 }
 
@@ -139,7 +141,7 @@ task() { "$ROOT/bin/bercail" shep task "$@"; }
   local out
   owner t8 s2
   out="$(request | task dispatch 2>&1)" && fail "$out"
-  [[ "$out" == *"ambiguous"* ]]
+  [[ "$out" == *"ambiguous owners t8, t9"* ]] || fail "the refusal lists the owners: $out"
   rm "$TASK_DATA/t8.hc" "$XDG_STATE_HOME/bercail/desk-sessions/t8.json"
   jq '.start_ticks="stale"' "$XDG_STATE_HOME/bercail/desk-sessions/t9.json" >"$BATS_TEST_TMPDIR/r"
   mv "$BATS_TEST_TMPDIR/r" "$XDG_STATE_HOME/bercail/desk-sessions/t9.json"
@@ -474,6 +476,14 @@ orphan() {
 #!/usr/bin/env bash
 printf 'spawn %s\n' "$*" >>"$LOG"
 cp "$TASK_NEW" "$TASK_DATA/t10.hc"
+# TASK_LATE: the new desk's record shows up once dispatch has saved the started creation.
+if [[ -n ${TASK_LATE:-} ]]; then
+  {
+    until jq -e '.metadata.bercail_task.creation.status == "started"' "$TASK_DATA/app-1.json" >/dev/null 2>&1; do sleep 0.1; done
+    sleep 0.5
+    mv "$TASK_LATE" "$XDG_STATE_HOME/bercail/desk-sessions/t10.json"
+  } </dev/null >/dev/null 2>&1 &
+fi
 jq -nc --arg p "$TASK_REPO.fix" --arg r "${*: -1}" '{ok:true,agent_started:true,path:$p,branch:"fix",space:"sp1",desk:"t10",session:"s2",issue:"app-1",target:"pr:12",adoptReason:$r}' | tee -a "$XDG_STATE_HOME/bercail/handoffs.jsonl"
 SPAWN
   chmod +x "$BERCAIL_HANDOFF_SPAWN"
@@ -491,24 +501,100 @@ GH
 
 adopt() { request "${1:-r1}" | jq '.adoptReason="desk t9 exited; Simon asked to update the PR"'; }
 
-@test "a PR branch whose desk is gone is adopted only with a recorded reason, in a new session on its checkout" {
+@test "dispatch adopts a gone desk's checkout by itself, in a new session, and says so" {
   local out
   orphan
-  out="$(request | task dispatch 2>&1)" && fail "$out"
-  [[ "$out" == *"missing/stale"* ]]
   jq -nc --arg cwd "$REPO.fix" '{address:"t178",cwd:$cwd,state:"live",labels:{"bercail.role":"agent","bercail.space":"sp1"}}' >"$TASK_DATA/t178.hc"
-  out="$(adopt | task dispatch 2>&1)" && fail "$out"
+  out="$(request | task dispatch 2>&1)" && fail "$out"
   [[ "$out" == *"live desk t178"* ]] || fail "an occupied checkout is not adoptable: $out"
   rm "$TASK_DATA/t178.hc"
-  out="$(adopt | task dispatch)" || fail "$out"
+  out="$(request | task dispatch)" || fail "$out"
   jq -e '.status == "started" and .creation.desk == "t10" and .creation.session == "s2"' <<<"$out"
-  grep -q -- '--branch fix .*--adopt-reason desk t9 exited; Simon asked to update the PR' "$LOG"
-  jq -e '.metadata.bercail_task.adoptions[0] | .reason == "desk t9 exited; Simon asked to update the PR" and .request == "r1" and .branch == "fix" and .from[0].desk == "t9"' "$TASK_DATA/app-1.json"
-  out="$(adopt | task dispatch)" || fail "$out"
-  jq -e '.status == "queued" and .owner.desk == "t10" and .owner.session == "s2"' <<<"$out"
+  jq -e '.adopted.from[0].desk == "t9" and .adopted.staged == 0 and (.warning | startswith("Adopted: desk t9 is gone, so desk t10 starts a new session") and contains("Tell the person"))' <<<"$out" || fail "$out"
+  grep -q -- '--branch fix .*--adopt-reason desk t9 is gone$' "$LOG" || fail "$(cat "$LOG")"
+  jq -e '.metadata.bercail_task.adoptions[0] | .reason == "desk t9 is gone" and .request == "r1" and .branch == "fix" and .from[0].desk == "t9"' "$TASK_DATA/app-1.json"
+  # Its retry queues the message, and says again what was adopted.
+  out="$(request | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t10" and .owner.session == "s2" and (.warning | startswith("Adopted: desk t9 is gone"))' <<<"$out" || fail "$out"
   out="$(request r2 | task dispatch)" || fail "$out"
   jq -e '.status == "queued" and .owner.desk == "t10"' <<<"$out"
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
+}
+
+@test "a recorded desk still live without its labels, or a spawn that started no desk, is not adopted" {
+  local out
+  cp "$TASK_DATA/t9.hc" "$BATS_TEST_TMPDIR/t9.hc"
+  orphan
+  jq 'del(.labels["bercail.role"])' "$BATS_TEST_TMPDIR/t9.hc" >"$TASK_DATA/t9.hc"
+  out="$(request | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"recorded desk t9 is still live"* ]] || fail "$out"
+  rm "$TASK_DATA/t9.hc"
+  # handoff-spawn logs a partial creation too: no desk, ok false.
+  jq -nc --arg p "$REPO.fix" '{ok:false,agent_started:false,path:$p,branch:"fix",issue:"app-1",space:"",desk:"",target:"pr:12"}' >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(request | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"original owner missing/stale"* ]] || fail "$out"
+  # A failed spawn may log the desk it found in the space without starting it.
+  jq -nc --arg p "$REPO.fix" '{ok:false,agent_started:false,path:$p,branch:"fix",issue:"app-1",space:"sp1",desk:"t9",target:"pr:12"}' >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(request | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"original owner missing/stale"* ]] || fail "$out"
+  ! grep -q '^spawn ' "$LOG" || fail "a refused adoption spawned: $(cat "$LOG")"
+}
+
+@test "an adoption names the staged change the person has not reviewed, and leaves it staged" {
+  local out
+  orphan
+  echo draft >"$REPO.fix/draft.txt"
+  git -C "$REPO.fix" add draft.txt
+  out="$(request | task dispatch)" || fail "$out"
+  jq -e '.adopted.staged == 1 and (.warning | contains("It holds 1 staged file the person has not reviewed"))' <<<"$out" || fail "$out"
+  jq -e '.metadata.bercail_task.adoptions[0].staged == 1' "$TASK_DATA/app-1.json"
+  [[ "$(git -C "$REPO.fix" diff --cached --name-only)" == draft.txt ]]
+}
+
+@test "an adoptReason, when Shep has one, is the reason recorded" {
+  local out
+  orphan
+  out="$(adopt | task dispatch)" || fail "$out"
+  jq -e '.adopted.reason == "desk t9 exited; Simon asked to update the PR"' <<<"$out" || fail "$out"
+  grep -q -- '--adopt-reason desk t9 exited; Simon asked to update the PR$' "$LOG"
+  jq -e '.metadata.bercail_task.adoptions[0].reason == "desk t9 exited; Simon asked to update the PR"' "$TASK_DATA/app-1.json"
+}
+
+@test "--wait-ready returns once the new desk's Pi claims its session, with the message queued there" {
+  local out record="$XDG_STATE_HOME/bercail/desk-sessions/t10.json"
+  orphan
+  # The new desk's Pi writes its record a moment after the spawn returns.
+  mv "$record" "$BATS_TEST_TMPDIR/t10.json"
+  export TASK_LATE="$BATS_TEST_TMPDIR/t10.json"
+  out="$(request | task dispatch --wait-ready)" || fail "$out"
+  jq -e '.status == "queued" and .ready and .owner.desk == "t10" and .owner.session == "s2" and .creation.desk == "t10" and .adopted.from[0].desk == "t9" and (has("retry") | not)' <<<"$out" || fail "$out"
+  [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups/t10" -name '*.json' | wc -l)" == 1 ]]
+  grep -q '"id":"r1"' "$XDG_STATE_HOME/bercail/desk-follow-ups/t10/"*.json
+  # Its answer was lost: the retry finds the queued message and says again what was adopted.
+  out="$(request | task dispatch --wait-ready)" || fail "$out"
+  jq -e '.status == "queued" and .retry and .owner.desk == "t10" and (.warning | startswith("Adopted: desk t9 is gone"))' <<<"$out" || fail "$out"
+  [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups/t10" -name '*.json' | wc -l)" == 1 ]]
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
+}
+
+@test "--wait-ready keeps the adoption's answer when the new desk cannot take the message" {
+  local out record="$XDG_STATE_HOME/bercail/desk-sessions/t10.json"
+  orphan
+  jq '.start_ticks="stale"' "$record" >"$BATS_TEST_TMPDIR/r" && mv "$BATS_TEST_TMPDIR/r" "$record"
+  out="$(request | task dispatch --wait-ready)" || fail "$out"
+  jq -e '.status == "started" and .ready == false and .creation.desk == "t10" and .adopted.from[0].desk == "t9" and (.warning | startswith("Adopted:")) and (.next | contains("not queued: stale process for t10"))' <<<"$out" || fail "$out"
+  [[ ! -d "$XDG_STATE_HOME/bercail/desk-follow-ups/t10" ]]
+}
+
+@test "--wait-ready gives up after a minute with the desk started and how to finish" {
+  local out clock="$BATS_TEST_TMPDIR/clock.mjs"
+  orphan
+  rm "$XDG_STATE_HOME/bercail/desk-sessions/t10.json"
+  # Each read of the clock is 30 s later, so the minute passes at once.
+  printf 'let now = 0;\nDate.now = () => (now += 30000);\n' >"$clock"
+  out="$(request | NODE_OPTIONS="--import=$clock" task dispatch --wait-ready)" || fail "$out"
+  jq -e '.status == "started" and .ready == false and (.next | contains("retry this requestId once it is up"))' <<<"$out" || fail "$out"
+  [[ ! -d "$XDG_STATE_HOME/bercail/desk-follow-ups/t10" ]]
 }
 
 @test "adoption still refuses a live, stale, ambiguous or unbound owner" {

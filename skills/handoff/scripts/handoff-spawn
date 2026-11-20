@@ -453,7 +453,7 @@ handoff_spawn_main() {
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0
-  local base="" fresh="" model="" target="" fork_reason="" adopt_reason="" session="" lock="" prior path prior_main created=""
+  local base="" fresh="" model="" target="" fork_reason="" adopt_reason="" staged="" session="" lock="" prior path prior_main created=""
   local existing=0 reuse=0 released="" role=""
 
   while [[ $# -gt 0 ]]; do
@@ -532,7 +532,7 @@ handoff_spawn_main() {
   [[ "${BERCAIL_ROLE:-}" != shep || ( -n "$branch" && "${BERCAIL_TASK_RESERVED:-}" == 1 ) ]] || handoff_die "Shep coding dispatch must use bercail shep task dispatch (visible original owner, no raw/headless fallback)"
   # Only dispatch has checked that the original desk is gone and recorded why.
   [[ -z "$adopt_reason" || ( -n "$branch" && "${BERCAIL_TASK_RESERVED:-}" == 1 ) ]] \
-    || handoff_die "--adopt-reason comes from bercail shep task dispatch with adoptReason, which checks the original desk is gone; run that"
+    || handoff_die "--adopt-reason comes from bercail shep task dispatch, which checks the original desk is gone; run that"
   # Only dispatch has checked the partial worktree is clean with no desk, and that each released issue's desks are gone.
   [[ ( "$reuse" -eq 0 && -z "$released" ) || ( -n "$branch" && "${BERCAIL_TASK_RESERVED:-}" == 1 ) ]] \
     || handoff_die "--reuse-worktree and --released come from bercail shep task dispatch, which checks the partial creation and the superseded issues; run that"
@@ -708,10 +708,14 @@ handoff_spawn_main() {
     fi
   fi
   [[ -z "$adopt_reason" ]] \
-    || intro="$(printf '%s\nAdopted: %s. The previous desk is gone; this desk starts a new session in its checkout and inherits none of that session, its follow-ups, or its authority.' "$intro" "${adopt_reason%.}")"
-  handoff_issue_comment "$sibling" "$issue" "$intro"
+    || intro="$(printf '%s\nAdopted: %s. This desk starts a new session in the checkout of the gone desk and inherits none of its session, its follow-ups, or its authority.' "$intro" "${adopt_reason%.}")"
+  # Desks stage for the person's review, so what the gone desk staged is
+  # unreviewed. The prompt carries it too: the comment is best effort.
+  [[ -z "$adopt_reason" ]] || git -C "$sibling" diff --cached --quiet \
+    || staged="The checkout holds a staged change the person has not reviewed. Name it in your first report, and leave those files staged as they are unless the person asks."
+  handoff_issue_comment "$sibling" "$issue" "$intro${staged:+ $staged}"
 
-  prompt="$(handoff_issue_prompt "$issue" "$issue_title")"
+  prompt="$(handoff_issue_prompt "$issue" "$issue_title")${staged:+ $staged}"
 
   # The desk agent runs the lead from lead.json. It gets the one-line prompt
   # through WT_HERDR_AGENT_PROMPT, the issue through WT_HERDR_ISSUE and

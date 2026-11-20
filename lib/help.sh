@@ -23,8 +23,9 @@ Post-install CLI (bercail):
   notify        run: the desk follower that feeds Shep's inbox (the desk mod starts it)
   shep          Shep, the orchestrator on Pi: status (queued, awaiting persistence, persisted) | run |
                 bg --kind wait|admin --issue ID [--cwd DIR] (observation/wait/report only) |
-                task dispatch (JSON stdin; a first visible desk, or a follow-up into the original desk's session,
-                  shown at its next turn even while it works; adoptReason: a new desk on a gone owner's checkout) |
+                task dispatch [--wait-ready] (JSON stdin; a first visible desk, or a follow-up into the original desk's session,
+                  shown at its next turn even while it works; a gone owner's checkout gets a new desk, unasked;
+                  --wait-ready: return once a new desk's Pi is up, with the message queued) |
                 runtime (source/installed fingerprints and actual startup evidence; read-only) |
                 discuss TOKEN (a read-only Pi on the question's branch: what Discuss runs) |
                 repos [--json] (your known repos) | board (open jobs, what waits on you) |
