@@ -10,7 +10,7 @@
 #   bercail shep board
 #   bercail shep queue [--repo DIR] [--json]
 #   bercail shep remember "RULE" [--scope SCOPE] | forget N | list
-#   bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list
+#   bercail shep mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group | mistake list
 
 # The describe, policy and git-backend libs, on first use: the piped installer
 # sources this file without them.
@@ -716,19 +716,50 @@ shep_forget() {
 
 # --- mistakes ledger -------------------------------------------------------------------
 
-# One JSON line per mistake seen: {at, key, what, repo, issue}. A key seen twice
-# asks for a guardrail instead of another fix by hand.
+# One JSON line per mistake seen: {at, key, what, repo, issue}. A group seen twice
+# asks for a fix in the system instead of another fix by hand.
 shep_mistakes_file() {
   printf '%s/mistakes.jsonl' "$(shep_state_dir)"
 }
 
-SHEP_MISTAKE_USAGE='usage: bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list'
+# {groups: {ID: {name, against}}, keys: {KEY: ID}}: one cause shows up under many
+# keys, so the twice-rule counts a key's group, and the group says what it counts
+# against.
+shep_mistake_groups_file() {
+  printf '%s/mistake-groups.json' "$(shep_state_dir)"
+}
+
+SHEP_MISTAKE_USAGE='usage: bercail shep mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] | mistake list'
+SHEP_MISTAKE_KEY_ERR="KEY is a short name in a-z, 0-9 and -, the same each time the mistake shows up (bercail shep mistake list shows the ones in use)"
+SHEP_MISTAKE_JQ_DEFS="$SHEP_JQ_DEFS"'
+  def times: "\(.) time\(if . == 1 then "" else "s" end)";
+  def where: [.issue, (.repo // empty | tilde)] | map(select(.));
+  def against: {process: "the process", tool: "a tool", conduct: "conduct"}[.] // .;'
+
+_shep_mistake_groups() {
+  local file
+  file="$(shep_mistake_groups_file)"
+  if [[ -s "$file" ]]; then jq -c '{groups: (.groups // {}), keys: (.keys // {})}' "$file"
+  else printf '{"groups":{},"keys":{}}\n'; fi
+}
+
+# Replaces the groups file with stdin, whole.
+_shep_mistake_groups_write() {
+  local file tmp
+  file="$(shep_mistake_groups_file)"
+  mkdir -p "$(dirname "$file")"
+  tmp="$(mktemp "$file.XXXXXX")"
+  cat >"$tmp" && mv "$tmp" "$file"
+}
 
 shep_mistake() {
-  local key="" what="" repo="" issue="" main="" file count
+  local key="" what="" group="" repo="" issue="" main="" file groups had
   [[ "${1:-}" != list ]] || { shift; _shep_mistake_list "$@"; return; }
+  [[ "${1:-}" != group ]] || { shift; _shep_mistake_group "$@"; return; }
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --group) group="${2:-}"; shift 2 || shift $# ;;
+      --group=*) group="${1#*=}"; shift ;;
       --repo) repo="${2:-}"; shift 2 || shift $# ;;
       --repo=*) repo="${1#*=}"; shift ;;
       --issue) issue="${2:-}"; shift 2 || shift $# ;;
@@ -743,40 +774,98 @@ shep_mistake() {
   done
   what="$(printf '%s' "$what" | tr '\n\t\r' '   ' | sed 's/  */ /g; s/^ //; s/ $//')"
   [[ -n "$key" && -n "$what" ]] || { _shep_err "$SHEP_MISTAKE_USAGE"; return 1; }
-  [[ "$key" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] \
-    || { _shep_err "KEY is a short name in a-z, 0-9 and -, the same each time the mistake shows up (bercail shep mistake list shows the ones in use)"; return 1; }
+  [[ "$key" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || { _shep_err "$SHEP_MISTAKE_KEY_ERR"; return 1; }
   [[ -z "$issue" || "$issue" =~ ^[A-Za-z0-9._-]+$ ]] || { _shep_err "issue id '$issue' has characters a beads id does not"; return 1; }
   if [[ -n "$repo" ]]; then
     _shep_need_policy
     main="$(_shep_main_of "$repo")" || { _shep_err "$repo is not a git checkout"; return 1; }
   fi
+  groups="$(_shep_mistake_groups)" || { _shep_err "$(shep_mistake_groups_file) is not JSON; fix or remove it"; return 1; }
+  had="$(jq -r --arg k "$key" '.keys[$k] // empty' <<<"$groups")"
+  if [[ -z "$group" ]]; then
+    group="$had"
+    [[ -n "$group" ]] || { _shep_err "$key is in no group yet: give it a --group (bercail shep mistake list shows the groups)"; return 1; }
+  elif [[ -n "$had" && "$had" != "$group" ]]; then
+    # A move changes the count of every past entry, so it is its own command.
+    _shep_err "$key is in group $had; move it, with all its entries, by: bercail shep mistake group $group \"NAME\" --against KIND $key"
+    return 1
+  elif ! jq -e --arg g "$group" '.groups | has($g)' <<<"$groups" >/dev/null; then
+    _shep_err "there is no group $group; make it with: bercail shep mistake group $group \"NAME\" --against process|tool|conduct"
+    return 1
+  elif [[ -z "$had" ]]; then
+    groups="$(jq -c --arg k "$key" --arg g "$group" '.keys[$k] = $g' <<<"$groups")"
+    _shep_mistake_groups_write <<<"$groups"
+  fi
   file="$(shep_mistakes_file)"
   mkdir -p "$(dirname "$file")"
   jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg key "$key" --arg what "$what" --arg repo "$main" --arg issue "$issue" \
     '{at: $at, key: $key, what: $what} + (if $repo == "" then {} else {repo: $repo} end) + (if $issue == "" then {} else {issue: $issue} end)' >>"$file"
-  count="$(jq -c --arg k "$key" 'select(.key == $k)' "$file" 2>/dev/null | grep -c '' || true)"
-  printf 'recorded %s: %s\n' "$key" "$what"
-  ((count >= 2)) || return 0
-  jq -nr --arg home "$HOME" --arg k "$key" --argjson n "$count" "$SHEP_JQ_DEFS"'
-    [inputs | select(.key == $k)] | first as $f
-    | "\($k) has now happened \($n) times; the first: \($f.at[0:10])" + ([$f.issue, ($f.repo // empty | tilde)] | map(select(.)) | if length > 0 then " (" + join(", ") + ")" else "" end) + ".",
-      "A mistake seen twice is fixed in the system: file an issue for a guardrail (a lint rule, a test, the guard, or a doctor check) instead of fixing it by hand again."' "$file"
+  printf 'recorded %s (%s): %s\n' "$key" "$group" "$what"
+  jq -nr --arg home "$HOME" --arg g "$group" --argjson groups "$groups" "$SHEP_MISTAKE_JQ_DEFS"'
+    [inputs | select(type == "object" and $groups.keys[.key] == $g)] as $es | ($es | length) as $n
+    | select($n >= 2) | $es[0] as $f | $groups.groups[$g] as $gr | ($es | map(.key) | unique | length) as $k
+    | "\($g) \($gr.name) has now happened \($n | times) under \($k) key\(if $k == 1 then "" else "s" end); the first: \($f.at[0:10])"
+      + ($f | where | if length > 0 then " (" + join(", ") + ")" else "" end) + ".",
+      {process: "It counts against the process, not the desks: file an issue that removes or simplifies the step that caused it, instead of adding a check on the desks.",
+       conduct: "A mistake seen twice is fixed in the system: file an issue for a rule in SHEP.md or a skill, or a check that catches it, instead of fixing it by hand again."}[$gr.against]
+      // "A mistake seen twice is fixed in the system: file an issue for a guardrail (a lint rule, a test, the guard, or a doctor check) instead of fixing it by hand again."' "$file"
 }
 
-# Each key with its count, the most frequent first, then one line per time it
-# happened.
+# Makes or renames group ID and moves each KEY into it, recorded yet or not.
+_shep_mistake_group() {
+  local id="" name="" against="" key groups usage='usage: bercail shep mistake group ID "NAME" --against process|tool|conduct [KEY...]'
+  local -a keys=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --against) against="${2:-}"; shift 2 || shift $# ;;
+      --against=*) against="${1#*=}"; shift ;;
+      -*) _shep_err "$usage"; return 1 ;;
+      *)
+        if [[ -z "$id" ]]; then id="$1"
+        elif [[ -z "$name" ]]; then name="$1"
+        else keys+=("$1"); fi
+        shift ;;
+    esac
+  done
+  name="$(printf '%s' "$name" | tr '\n\t\r' '   ' | sed 's/  */ /g; s/^ //; s/ $//')"
+  [[ -n "$id" && -n "$name" ]] || { _shep_err "$usage"; return 1; }
+  [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,15}$ ]] || { _shep_err "ID is a short name in A-Z, a-z, 0-9 and -, such as G2"; return 1; }
+  [[ "$against" =~ ^(process|tool|conduct)$ ]] \
+    || { _shep_err "--against is process, tool or conduct: what the group's mistakes count against, and so what fixes them"; return 1; }
+  for key in "${keys[@]}"; do
+    [[ "$key" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || { _shep_err "$SHEP_MISTAKE_KEY_ERR"; return 1; }
+  done
+  groups="$(_shep_mistake_groups)" || { _shep_err "$(shep_mistake_groups_file) is not JSON; fix or remove it"; return 1; }
+  groups="$(jq -c --arg id "$id" --arg name "$name" --arg against "$against" \
+    '.groups[$id] = {name: $name, against: $against} | .keys += ($ARGS.positional | map({key: ., value: $id}) | from_entries)' \
+    --args "${keys[@]}" <<<"$groups")"
+  _shep_mistake_groups_write <<<"$groups"
+  jq -r --arg home "$HOME" --arg id "$id" "$SHEP_MISTAKE_JQ_DEFS"'.groups[$id] as $g | ([.keys[] | select(. == $id)] | length) as $k
+    | "group \($id) \($g.name): counts against \($g.against | against), \($k) key\(if $k == 1 then "" else "s" end)"' <<<"$groups"
+}
+
+# Each group with its count, the most frequent first, then its keys the same
+# way, then one line per time it happened. Keys in no group come last.
 _shep_mistake_list() {
-  local file
+  local file groups
   [[ $# -eq 0 ]] || { _shep_err "$SHEP_MISTAKE_USAGE"; return 1; }
   file="$(shep_mistakes_file)"
   if [[ ! -s "$file" ]]; then
-    printf 'no mistakes recorded yet; record one with: bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID]\n'
+    printf 'no mistakes recorded yet; record one with: bercail shep mistake KEY "WHAT" --group ID [--repo DIR] [--issue ID]\n'
     return 0
   fi
-  jq -nr --arg home "$HOME" "$SHEP_JQ_DEFS"'
-    [inputs | select(type == "object" and .key)] | group_by(.key) | sort_by(-length, .[0].at)[]
-    | "\(.[0].key): \(length) time\(if length == 1 then "" else "s" end)",
-      (.[] | "  \(.at[0:10])  " + ([.issue, (.repo // empty | tilde)] | map(select(.)) | join(" · ") | if . == "" then "" else . + ": " end) + .what)' "$file"
+  groups="$(_shep_mistake_groups)" || { _shep_err "$(shep_mistake_groups_file) is not JSON; fix or remove it"; return 1; }
+  jq -nr --arg home "$HOME" --argjson groups "$groups" "$SHEP_MISTAKE_JQ_DEFS"'
+    [inputs | select(type == "object" and .key)] as $all
+    | [($groups.groups | keys[]), (if any($all[]; $groups.keys[.key] == null) then null else empty end)]
+    | map(. as $id | {id: $id, es: [$all[] | select($groups.keys[.key] == $id)]})
+    | sort_by(.id == null, -(.es | length), (.es[0].at // "~"))[]
+    | (.es | group_by(.key) | sort_by(-length, .[0].at)) as $ks
+    | (if .id == null then "no group (bercail shep mistake group ID \"NAME\" --against KIND KEY... puts a key in one)"
+       else "\(.id) \($groups.groups[.id].name) (counts against \($groups.groups[.id].against | against))" end)
+      + ": \(.es | length | times), \($ks | length) key\(if ($ks | length) == 1 then "" else "s" end)",
+      ($ks[] | "  \(.[0].key): \(length | times)",
+        (.[] | "    \(.at[0:10])  " + (where | join(" · ") | if . == "" then "" else . + ": " end) + .what))' "$file"
 }
 
 # --- what Shep gets at start ----------------------------------------------------------

@@ -615,53 +615,107 @@ spaces_fixture() {
   [[ "$out" == *"app-2: Add the export · 6 lines staged in 1 file · stakes high, needs the person's LGTM · described · ~/Work/app.export"* ]] || fail "queue: $out"
 }
 
-@test "shep mistake records each time, with where it happened" {
+@test "shep mistake records each time, with where it happened and its key's group" {
   local out file="$STATE/mistakes.jsonl"
   repo app
   worktree app login
-  out="$(shep mistake pipefail-grep-q $'printf | grep -q under pipefail\n  SIGPIPEd' --repo "$HOME/Work/app.login" --issue app-1)"
-  [[ "$out" == "recorded pipefail-grep-q: printf | grep -q under pipefail SIGPIPEd" ]] || fail "first: $out"
+  shep mistake group G7 "Test isolation" --against tool >/dev/null
+  out="$(shep mistake pipefail-grep-q $'printf | grep -q under pipefail\n  SIGPIPEd' --group G7 --repo "$HOME/Work/app.login" --issue app-1)"
+  [[ "$out" == "recorded pipefail-grep-q (G7): printf | grep -q under pipefail SIGPIPEd" ]] || fail "first: $out"
   jq -e --arg r "$REAL_HOME/Work/app" '.key == "pipefail-grep-q" and .repo == $r and .issue == "app-1" and (.at | test("^[0-9]{4}-"))' "$file" >/dev/null \
     || fail "the line: $(cat "$file")"
+  out="$(shep mistake pipefail-grep-q "again, no --group")" || fail "a grouped key needs no --group: $out"
+  [[ "$out" == "recorded pipefail-grep-q (G7): again, no --group"* ]] || fail "second: $out"
 }
 
-@test "shep mistake says so from the second time a key shows up, and asks for a guardrail" {
+@test "shep mistake group makes or renames a group and moves keys into it" {
   local out
-  repo app
-  shep mistake pipefail-grep-q "first" --repo "$HOME/Work/app" --issue app-1 >/dev/null
-  shep mistake desk-pushed-main "another key" >/dev/null
-  out="$(shep mistake pipefail-grep-q "the same in doctor" --issue app-2)"
-  [[ "$out" == "recorded pipefail-grep-q: the same in doctor
-pipefail-grep-q has now happened 2 times; the first: $(date -u +%Y-%m-%d) (app-1, ~/Work/app).
-A mistake seen twice is fixed in the system: file an issue for a guardrail (a lint rule, a test, the guard, or a doctor check) instead of fixing it by hand again." ]] \
-    || fail "second: $out"
+  out="$(shep mistake group G2 "Bespoke checks" --against process verify-log-word-match)"
+  [[ "$out" == "group G2 Bespoke checks: counts against the process, 1 key" ]] || fail "make: $out"
+  out="$(shep mistake group G7 "Test isolation" --against tool verify-log-word-match tests-touch-real-state)"
+  [[ "$out" == "group G7 Test isolation: counts against a tool, 2 keys" ]] || fail "move: $out"
+  out="$(shep mistake group G2 "Bespoke verification" --against process)"
+  [[ "$out" == "group G2 Bespoke verification: counts against the process, 0 keys" ]] || fail "rename: $out"
+  jq -e '.groups.G2 == {name: "Bespoke verification", against: "process"} and .keys == {"verify-log-word-match": "G7", "tests-touch-real-state": "G7"}' \
+    "$STATE/mistake-groups.json" >/dev/null || fail "the file: $(cat "$STATE/mistake-groups.json")"
+  out="$(shep mistake verify-log-word-match "matched a word in the log" --group G2 2>&1)" && fail "--group moved a grouped key"
+  [[ "$out" == *'verify-log-word-match is in group G7; move it, with all its entries, by: bercail shep mistake group G2 "NAME" --against KIND verify-log-word-match'* ]] \
+    || fail "move by record: $out"
+  [[ ! -e "$STATE/mistakes.jsonl" ]] || fail "a refused mistake was written: $(cat "$STATE/mistakes.jsonl")"
 }
 
-@test "shep mistake list groups each key's times, the most frequent first" {
+@test "shep mistake asks for a fix from the second time a group shows up, by what the group counts against" {
+  local out today
+  today="$(date -u +%Y-%m-%d)"
+  repo app
+  shep mistake group G2 "Bespoke verification" --against process verify-log-word-match native-response-shape-assumption >/dev/null
+  shep mistake group G5 "Landing by hand" --against conduct merged-on-red-ci >/dev/null
+  shep mistake group G7 "Test isolation" --against tool pipefail-grep-q >/dev/null
+  out="$(shep mistake verify-log-word-match "first" --repo "$HOME/Work/app" --issue app-1)"
+  [[ "$out" == "recorded verify-log-word-match (G2): first" ]] || fail "first of a group: $out"
+  shep mistake pipefail-grep-q "another group" >/dev/null
+  out="$(shep mistake native-response-shape-assumption "another key, same cause" --issue app-2)"
+  [[ "$out" == "recorded native-response-shape-assumption (G2): another key, same cause
+G2 Bespoke verification has now happened 2 times under 2 keys; the first: $today (app-1, ~/Work/app).
+It counts against the process, not the desks: file an issue that removes or simplifies the step that caused it, instead of adding a check on the desks." ]] \
+    || fail "process: $out"
+  out="$(shep mistake pipefail-grep-q "the same in doctor")"
+  [[ "$out" == *"G7 Test isolation has now happened 2 times under 1 key; the first: $today."$'\n'"A mistake seen twice is fixed in the system: file an issue for a guardrail (a lint rule, a test, the guard, or a doctor check) instead of fixing it by hand again." ]] \
+    || fail "tool: $out"
+  shep mistake merged-on-red-ci "first" >/dev/null
+  out="$(shep mistake merged-on-red-ci "again")"
+  [[ "$out" == *"file an issue for a rule in SHEP.md or a skill, or a check that catches it, instead of fixing it by hand again." ]] || fail "conduct: $out"
+}
+
+@test "shep mistake list prints each group with its counts, then its keys, the most frequent first" {
   local out today
   today="$(date -u +%Y-%m-%d)"
   out="$(shep mistake list)"
-  [[ "$out" == 'no mistakes recorded yet; record one with: bercail shep mistake KEY "WHAT" [--repo DIR] [--issue ID]' ]] || fail "empty list: $out"
-  shep mistake desk-pushed-main "pushed master itself" >/dev/null
-  shep mistake pipefail-grep-q "first" --issue app-1 >/dev/null
+  [[ "$out" == 'no mistakes recorded yet; record one with: bercail shep mistake KEY "WHAT" --group ID [--repo DIR] [--issue ID]' ]] || fail "empty list: $out"
+  shep mistake group G8 "Spend" --against tool >/dev/null
+  shep mistake group G5 "Landing by hand" --against conduct >/dev/null
+  shep mistake group G7 "Test isolation" --against tool >/dev/null
+  shep mistake desk-pushed-main "pushed master itself" --group G5 >/dev/null
+  shep mistake pipefail-grep-q "first" --issue app-1 --group G7 >/dev/null
   shep mistake pipefail-grep-q "second" >/dev/null
+  shep mistake tests-touch-real-state "wrote the real handoffs.jsonl" --group G7 >/dev/null
+  printf '{"at":"2026-11-13T00:00:00Z","key":"old-key","what":"from before groups"}\n' >>"$STATE/mistakes.jsonl"
   out="$(shep mistake list)"
-  [[ "$out" == "pipefail-grep-q: 2 times
-  $today  app-1: first
-  $today  second
-desk-pushed-main: 1 time
-  $today  pushed master itself" ]] || fail "list: $out"
+  [[ "$out" == "G7 Test isolation (counts against a tool): 3 times, 2 keys
+  pipefail-grep-q: 2 times
+    $today  app-1: first
+    $today  second
+  tests-touch-real-state: 1 time
+    $today  wrote the real handoffs.jsonl
+G5 Landing by hand (counts against conduct): 1 time, 1 key
+  desk-pushed-main: 1 time
+    $today  pushed master itself
+G8 Spend (counts against a tool): 0 times, 0 keys
+no group (bercail shep mistake group ID \"NAME\" --against KIND KEY... puts a key in one): 1 time, 1 key
+  old-key: 1 time
+    2026-11-13  from before groups" ]] || fail "list: $out"
 }
 
-@test "shep mistake refuses a bad key, no WHAT, or a --repo that is no checkout, and writes nothing" {
+@test "shep mistake refuses a bad key, no WHAT, a new key with no group, or a --repo that is no checkout, and writes nothing" {
   local out
   out="$(shep mistake 'Bad Key' x 2>&1)" && fail "a bad key passed"
   [[ "$out" == *"KEY is a short name in a-z, 0-9 and -"* ]] || fail "bad key: $out"
   out="$(shep mistake some-key 2>&1)" && fail "no WHAT passed"
   [[ "$out" == *'usage: bercail shep mistake KEY "WHAT"'* ]] || fail "no what: $out"
-  out="$(shep mistake some-key x --repo "$BATS_TEST_TMPDIR" 2>&1)" && fail "a --repo that is no checkout passed"
+  out="$(shep mistake some-key x 2>&1)" && fail "a new key with no group passed"
+  [[ "$out" == *"some-key is in no group yet: give it a --group"* ]] || fail "no group: $out"
+  out="$(shep mistake some-key x --group G9 2>&1)" && fail "a group that does not exist passed"
+  [[ "$out" == *'there is no group G9; make it with: bercail shep mistake group G9 "NAME" --against process|tool|conduct'* ]] || fail "unknown group: $out"
+  shep mistake group G9 "Secrets" --against conduct >/dev/null
+  out="$(shep mistake some-key x --group G9 --repo "$BATS_TEST_TMPDIR" 2>&1)" && fail "a --repo that is no checkout passed"
   [[ "$out" == *"is not a git checkout"* ]] || fail "bad repo: $out"
   [[ ! -e "$STATE/mistakes.jsonl" ]] || fail "a refused mistake was written: $(cat "$STATE/mistakes.jsonl")"
+  jq -e '.keys == {}' "$STATE/mistake-groups.json" >/dev/null || fail "a refused mistake moved a key: $(cat "$STATE/mistake-groups.json")"
+  out="$(shep mistake group G9 "Secrets" --against people 2>&1)" && fail "a bad --against passed"
+  [[ "$out" == *"--against is process, tool or conduct"* ]] || fail "bad against: $out"
+  out="$(shep mistake group G9 "Secrets" --against tool 'Bad Key' 2>&1)" && fail "a bad key in a group passed"
+  [[ "$out" == *"KEY is a short name"* ]] || fail "bad group key: $out"
+  jq -e '.groups.G9.against == "conduct"' "$STATE/mistake-groups.json" >/dev/null || fail "a refused group was written: $(cat "$STATE/mistake-groups.json")"
 }
 
 # pi: logs each run; --list-models prints the table for $FAKE_WINDOW (none when empty).

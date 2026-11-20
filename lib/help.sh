@@ -31,7 +31,8 @@ Post-install CLI (bercail):
                 brief ISSUE [--repo DIR] [--budget CHARS] (the desk state in that repo, describe check, latest report) |
                 queue [--repo DIR] [--json] (bounded status; UNKNOWN is not an empty queue or a dispatch gate) |
                 remember "RULE" [--scope SCOPE] | list | forget N (Shep's standing rules) |
-                mistake KEY "WHAT" [--repo DIR] [--issue ID] | mistake list (the mistakes ledger) |
+                mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] |
+                mistake list (the mistakes ledger, by group) |
                 diagram [FILE] (a Mermaid diagram without its click and link statements) |
                 questions [--json] (pending targeted questions; replies are unverified) |
                 question create|revise|reply|answer|withdraw (JSON on stdin) | check TOKEN | thread TOPIC |
