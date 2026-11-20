@@ -677,6 +677,108 @@ test("a read-only role in a worktree under a temp dir still may not write the de
   }
 });
 
+test("a read-only role in a worktree under a temp dir may not write the worktree's other files", () => {
+  const readOnlyWrites = { tmp: ["/tmp"], root: "/tmp/wt", exists: () => false };
+  const input = { ...judge, cwd: "/tmp/wt/lib", readOnlyWrites };
+  for (const path of ["/tmp/wt/lib/x.sh", "x.sh", "../README.md", "/tmp/wt/new.md"])
+    assertMatch((decideTool("write", undefined, input, path) as Decision).reason ?? "", /read-only/, path);
+  for (const path of ["/tmp/wt/.bercail/answer.md", "/tmp/x", "/tmp/wt2/x"])
+    assertEqual(decideTool("write", undefined, input, path).action, "allow", path);
+  // Started in a temp dir itself, or in a folder that holds $TMPDIR: the temp dirs stay scratch.
+  const inTmp = { ...judge, cwd: "/tmp", readOnlyWrites: { ...readOnlyWrites, root: "/tmp" } };
+  assertEqual(decideTool("write", undefined, inTmp, "/tmp/x").action, "allow");
+  // Nor may it move or delete the worktree, or a folder that holds it.
+  for (const command of ["mv /tmp/wt /tmp/x", "rm -rf /tmp/wt", "rm -rf /tmp"]) blocked(command, input, /read-only/);
+  const home = { tmp: ["/tmp", "/home/me/.cache/s"], root: "/home/me", exists: () => false };
+  assertEqual(
+    decideTool("write", undefined, { ...judge, readOnlyWrites: home }, "/home/me/.cache/s/x").action,
+    "allow",
+  );
+});
+
+test("a read-only role's write follows symlinks to where it lands", () => {
+  const dir = mkdtempSync(join(tmpdir(), "guard-links-"));
+  try {
+    const [root, tmp] = [join(dir, "wt"), join(dir, "tmp")];
+    mkdirSync(join(root, ".bercail/sub"), { recursive: true });
+    mkdirSync(join(root, "lib"));
+    mkdirSync(tmp);
+    symlinkSync(join(root, ".bercail/description.md"), join(tmp, "desc"));
+    symlinkSync(join(root, "lib"), join(tmp, "lib"));
+    symlinkSync(join(root, ".bercail"), join(tmp, "notes"));
+    symlinkSync(join(tmp, "loop"), join(tmp, "loop"));
+    symlinkSync(join(tmp, "x"), join(root, ".bercail/out"));
+    symlinkSync(join(root, ".bercail/sub"), join(tmp, "sub"));
+    const input = { ...judge, cwd: root, readOnlyWrites: { tmp: [tmp], root, exists: onDisk } };
+    const got = (path: string) => decideTool("write", undefined, input, path) as Decision;
+    for (const path of [join(tmp, "desc"), join(tmp, "lib/x.sh"), join(tmp, "loop"), join(root, ".bercail/out")])
+      assertMatch(got(path).reason ?? "", /read-only/, path);
+    // Through a link, a new file under .bercail/ is still a new file there.
+    for (const path of [join(tmp, "notes/answer.md"), join(tmp, "x")]) assertEqual(got(path).action, "allow", path);
+    blocked(`echo x > ${join(tmp, "lib/x.sh")}`, input, /read-only/);
+    // The shell's .. follows the link: this lands on .bercail/description.md.
+    blocked(`echo x > ${tmp}/sub/../description.md`, input, /read-only/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a read-only role's shell writes reach only where its write tool may", () => {
+  const there = new Set(["/work/.bercail/judge.md"]);
+  const input = {
+    ...judge,
+    home: "/home/me",
+    readOnlyWrites: { tmp: ["/tmp"], root: "/work", exists: (p: string) => there.has(p) },
+  };
+  for (const command of [
+    "echo x > lib/x.sh",
+    "echo x >> /work/README.md",
+    "cat > ~/.bashrc",
+    "printf x | tee lib/x",
+    "rm -rf lib",
+    "mv /tmp/a lib/a",
+    "cp /tmp/a /work/lib/a",
+    "sed -i s/a/b/ lib/x.sh",
+    "sed -i -es/a/b/ lib/x.sh",
+    "perl -pi -es/a/b/ lib/x.sh",
+    "touch -r/tmp/marker lib/x.sh",
+    "touch -r -r lib/x.sh",
+    "touch lib/x",
+    "chmod +x lib/x.sh",
+    "echo > .bercail/description.md",
+    "echo >> .bercail/judge.md",
+    "ln -s /tmp/x .bercail/validate.json",
+    "cd /work/lib && echo > x",
+    "true && cd /tmp; echo > y",
+    "bash -c 'echo > lib/x'",
+    'd=$(mktemp -d) && echo > "$d/../../work/x"',
+  ])
+    blocked(command, input, /read-only/);
+  for (const command of [
+    "make test > /tmp/log 2>&1",
+    "grep -r x lib 2>/dev/null",
+    "echo x > .bercail/answer.md",
+    "cp lib/x.sh /tmp/x.sh",
+    "cp README.md /tmp",
+    "sed -i 's/a/b/' /tmp/x",
+    "sed -i -e s/a/b/ /tmp/x",
+    "perl -pi -e s/a/b/ /tmp/x",
+    "chmod +x /tmp/x.sh",
+    "touch -r lib/x.sh /tmp/x",
+    "truncate -s 0 /tmp/x",
+    "install -d -m 755 /tmp/d",
+    "rm -f /tmp/x",
+    "cd /tmp && echo > x",
+    // Where the guard cannot place the write, it lets it through.
+    'out=$(mktemp); make > "$out"',
+    'cd "$(mktemp -d)" && echo > x',
+    'd=$(mktemp -d) && echo > "$d/x"',
+  ])
+    allowed(command, input);
+  // Other roles write where they like.
+  allowed("echo x > lib/x.sh", { ...input, role: "" });
+});
+
 test("the guard extension lets a judge write in TMPDIR and a new file in the worktree's .bercail/", async () => {
   // Neither is under /tmp, where a judge may write anything, and nothing is on disk there.
   const root = "/nonexistent-bercail/wt";
@@ -1082,6 +1184,34 @@ test("the files that decide the guard's answers are the person's to edit; secret
   );
 });
 
+test("a file tool's path is taken as written: Pi expands no $VAR in it", () => {
+  const dir = mkdtempSync(join(tmpdir(), "guard-literal-"));
+  try {
+    mkdirSync(join(dir, "shep"));
+    symlinkSync(join(dir, "shep"), join(dir, "$x"));
+    const input = {
+      ...tui,
+      home: "/h",
+      protectedFiles: ["/h/.config/bercail/config.toml"],
+      protectedDirs: [join(dir, "shep")],
+      todoFiles: ["/h/.config/bercail/todo.json"],
+    };
+    // A folder literally named $x that links into Shep's state.
+    assertMatch(
+      (decideTool("write", undefined, input, join(dir, "$x/inbox.json")) as Decision).reason ?? "",
+      /decides/,
+    );
+    // Folders literally named $HOME and $FOO under the cwd hold no protected file.
+    for (const path of ["$HOME/.config/bercail/config.toml", "@$HOME/.config/bercail/todo.json", "$FOO/config.toml"])
+      assertEqual(decideTool("write", undefined, input, path).action, "allow", path);
+    // The shell does expand them.
+    blocked('echo > "$HOME/.config/bercail/config.toml"', input, /decides/);
+    blocked("echo > $FOO/config.toml", input, /decides/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("a delete is a delete however it is spelled", () => {
   // Ways around a policy the judge found. A delete is a delete however it is spelled.
   for (const role of ["desk", "headless", "shep"] as const) {
@@ -1228,6 +1358,16 @@ test("a write to a protected file or Shep's state folder refuses, by path, by na
     "shred -u ~/.local/state/bercail/policy-trust.json",
     "install -d ~/.local/state/bercail/shep/inbox/x",
     "sed -bi s/a/b/ ~/.config/bercail/config.toml",
+    // A value glued to its flag leaves the next word a file.
+    "sed -i -es/a/b/ ~/.config/bercail/config.toml",
+    "sed -i -e1cnew ~/.config/bercail/config.toml",
+    "sed -i -f/tmp/rewrite ~/.config/bercail/config.toml",
+    "perl -pi -es/a/b/ ~/.local/state/bercail/policy-trust.json",
+    "perl -pi '-es/a/b/;# note' ~/.local/state/bercail/policy-trust.json",
+    "touch -r/tmp/marker ~/.config/bercail/config.toml",
+    "truncate -r/tmp/marker ~/.config/bercail/config.toml",
+    // A flag's value is not a flag.
+    "touch -r -r ~/.config/bercail/config.toml",
     // Paths the guard cannot place, by name.
     'cat y > "$CFG/bercail/config.toml"',
     "echo '{}' | tee $S/questions.json",

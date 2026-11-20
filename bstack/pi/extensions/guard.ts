@@ -141,17 +141,33 @@ function readOnlyRole(role: string): boolean {
 const deskFiles = new Set(["description.md", "validate.json", "handoff-result.json", "policy.toml"]);
 
 // A read-only role writes its answer and scratch files: anywhere under the temp
-// dirs, and a new file under the worktree's .bercail/, which git ignores. The
-// .bercail/ rules come first, since a worktree may itself live under /tmp.
-function readOnlyWrite(path: string, input: GuardInput): boolean {
+// dirs, and a new file under the worktree's .bercail/, which git ignores. Both the
+// path as spelled and the file it lands on, through symlinks, must be one of those.
+// Pi's tools drop a .. before they open a path; the shell has the kernel follow it.
+function readOnlyWrite(path: string, input: GuardInput, cwd = input.cwd, shell = false): boolean {
   const where = input.readOnlyWrites;
-  if (!where || (input.cwd === undefined && !isAbsolute(path))) return false;
-  const full = resolve(input.cwd ?? "/", path);
+  if (!where || (cwd === undefined && !isAbsolute(path))) return false;
+  const spelled = resolve(cwd ?? "/", path);
+  const opened = shell && !isAbsolute(path) ? `${cwd}/${path}` : shell ? path : spelled;
+  try {
+    return [spelled, canonical(opened)].every((full) => readOnlyPlace(full, where));
+  } catch {
+    return false; // A symlink loop: the guard cannot tell where the write lands.
+  }
+}
+
+// The .bercail/ rules come first, since a worktree may itself live under /tmp. That
+// worktree is still the one under review: the rest of it, the worktree itself, or a
+// folder holding it is not scratch. A temp dir itself is, as cp's destination.
+function readOnlyPlace(full: string, where: NonNullable<GuardInput["readOnlyWrites"]>): boolean {
   if (basename(dirname(full)) === ".bercail" && deskFiles.has(basename(full))) return false;
-  const under = (dir: string) => full.startsWith(`${resolve(dir)}/`);
-  const dir = join(where.root, ".bercail");
-  if (under(dir)) return !where.exists(full);
-  return where.tmp.some(under);
+  const spellings = (dir: string) => [resolve(dir), canonical(dir)];
+  const within = (path: string, dir: string) => spellings(dir).some((d) => path.startsWith(`${d}/`));
+  if (within(full, join(where.root, ".bercail"))) return !where.exists(full);
+  const roots = spellings(where.root);
+  const tree = roots.some((root) => full === root || full.startsWith(`${root}/`) || root.startsWith(`${full}/`));
+  if (tree && roots.some((root) => where.tmp.some((dir) => within(root, dir)))) return false;
+  return where.tmp.some((dir) => spellings(dir).includes(full) || within(full, dir));
 }
 
 function isMainRef(ref: string): boolean {
@@ -1296,6 +1312,21 @@ const redirect = /^(?:\d*>>?|&>>?)(.*)$/;
 const everyOperand = new Set(["tee", "mv", "rm", "unlink", "shred", "truncate", "chmod", "touch"]);
 const toDestination = new Set(["cp", "ln", "install"]);
 const inPlace: Record<string, RegExp> = { sed: /^-[bnrsuzE]*i|^--in-place/, perl: /^-[^-MIei]*i/ };
+// Flags whose next word is a value, not a file: a script, a size, a date, a mode. A
+// short one only when it ends a cluster of flags that take none, as getopt reads it;
+// in -r/tmp/x the value is glued on, and the next word is a file.
+const valueFlag: Record<string, RegExp> = {
+  sed: /^(-[nrsuzEb]*[ef]|--expression|--file)$/,
+  perl: /^-[pnaswtTWXc]*[eE]$/,
+  touch: /^(-[acfhm]*[dtr]|--date|--reference)$/,
+  truncate: /^(-[co]*[sr]|--size|--reference)$/,
+  install: /^(-[bcCdDpsv]*[mogS]|--mode|--owner|--group|--suffix)$/,
+  chmod: /^--reference$/,
+};
+// A script given by flag, its value glued on (-es/a/b/) or not. Matching too much
+// only keeps the script a target.
+const scriptFlag: Record<string, RegExp> = { sed: /^(-[^-]*[ef]|--expression|--file)/, perl: /^-[^-]*[eE]/ };
+const chmodMode = /^[0-7]{1,4}$|^[ugoa]*[-+=][-+=rwxXstugoa,]*$/;
 
 function writeTargets(words: string[], raw: string[]): string[] {
   const targets = raw.flatMap((word, i) => {
@@ -1304,8 +1335,19 @@ function writeTargets(words: string[], raw: string[]): string[] {
   });
   const operands = words.filter((word, i) => !redirect.test(word) && redirect.exec(words[i - 1] ?? "")?.[1] !== "");
   const [name, ...args] = operands;
-  const dashes = args.indexOf("--");
-  const plain = args.filter((arg, i) => (dashes >= 0 && i > dashes) || !arg.startsWith("-"));
+  // One pass, so a flag's value (touch -r -r FILE) is never read as a flag or as --.
+  const valued = valueFlag[name];
+  const plain: string[] = [];
+  let ended = false;
+  for (let i = 0; i < args.length; i++) {
+    if (ended || !args[i].startsWith("-")) plain.push(args[i]);
+    else if (args[i] === "--") ended = true;
+    else if (valued?.test(args[i])) i++;
+  }
+  // With no flag to give it, the first operand is sed's or perl's script, or chmod's mode.
+  const given = args.some((arg) => scriptFlag[name]?.test(arg) || /^--reference(=|$)/.test(arg));
+  if (((name === "sed" || name === "perl") && !given) || (name === "chmod" && !given && chmodMode.test(plain[0] ?? "")))
+    plain.shift();
   const makesDirs = name === "install" && args.some((arg) => arg === "--directory" || /^-[^-]*d/.test(arg));
   if (everyOperand.has(name) || makesDirs || (inPlace[name] && args.some((arg) => inPlace[name].test(arg))))
     targets.push(...plain);
@@ -1355,10 +1397,16 @@ function expandDirs(path: string, home: string | undefined): string {
 // shell may be in. A path the guard cannot place (an unknown $VAR, or a relative
 // path once the cwd is lost) is checked by name: a protected file's last two
 // parts, or its file name.
-function protectedTarget(target: string, input: GuardInput, files: string[], dirs: string[]): boolean {
+function protectedTarget(
+  target: string,
+  input: GuardInput,
+  files: string[],
+  dirs: string[],
+  literal: boolean,
+): boolean {
   if (!files.length && !dirs.length) return false;
-  const path = expandDirs(target, input.home);
-  const placed = !/[$`]/.test(path) && !path.startsWith("~");
+  const path = literal ? target : expandDirs(target, input.home);
+  const placed = literal || (!/[$`]/.test(path) && !path.startsWith("~"));
   const cwds = input.cwds ?? [input.cwd];
   const fulls = !placed ? [] : path.startsWith("/") ? [path] : cwds.map((cwd) => cwd && `${cwd}/${path}`);
   if (!placed || fulls.includes(undefined)) {
@@ -1381,15 +1429,29 @@ function protectedTarget(target: string, input: GuardInput, files: string[], dir
   }
 }
 
-// The guard's own files and Shep's state.
-function writesGuardFiles(targets: string[], input: GuardInput): boolean {
+// The guard's own files and Shep's state. A literal path is a file tool's: Pi
+// expands no $VAR in it, and toolPath has already expanded its ~.
+function writesGuardFiles(targets: string[], input: GuardInput, literal = false): boolean {
   const files = input.protectedFiles ?? [];
   const dirs = input.protectedDirs ?? [];
-  return targets.some((target) => protectedTarget(target, input, files, dirs));
+  return targets.some((target) => protectedTarget(target, input, files, dirs, literal));
 }
 
-function writesTodoFiles(targets: string[], input: GuardInput): boolean {
-  return targets.some((target) => protectedTarget(target, input, input.todoFiles ?? [], []));
+function writesTodoFiles(targets: string[], input: GuardInput, literal = false): boolean {
+  return targets.some((target) => protectedTarget(target, input, input.todoFiles ?? [], [], literal));
+}
+
+// A read-only role's shell write goes where its write tool may, or into a mktemp -d
+// dir, from each dir the shell may be in. The terminal devices are not files. A
+// target the guard cannot place (a $VAR it does not know, or a relative path once
+// the cwd is lost) passes.
+function readOnlyTarget(target: string, input: GuardInput): boolean {
+  if (/^\/dev\/(null|stdout|stderr|tty|fd\/\d+)$/.test(target)) return true;
+  const path = expandDirs(target, input.home);
+  if (/[$`]/.test(path) || path.startsWith("~")) return true;
+  const cwds = isAbsolute(path) ? [input.cwd] : (input.cwds ?? [input.cwd]);
+  if (!isAbsolute(path) && cwds.includes(undefined)) return true;
+  return cwds.every((cwd) => tempRoot(resolve(cwd ?? "/", path)) || readOnlyWrite(path, input, cwd, true));
 }
 
 // git commands that leave HEAD on its branch. Anything else, an alias included,
@@ -2060,6 +2122,9 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     decision = worse(decision, decideBasecamp(words, input.role));
     if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
     const targets = writeTargets(words, raw);
+    // A protected file's reason, below, wins over this one.
+    if (readOnlyRole(input.role) && !targets.every((target) => readOnlyTarget(target, here)))
+      decision = worse(decision, block(readOnlyTool));
     if (writesGuardFiles(targets, here)) decision = worse(decision, block(protectedFile));
     if (writesTodoFiles(targets, here)) decision = worse(decision, block(todoFile));
     if (!help && (words[0] === "gt" || (words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout")))
@@ -2113,8 +2178,8 @@ export function decideTool(
     if (readOnlyRole(input.role) && !(tool === "write" && path && readOnlyWrite(path, input)))
       return block(readOnlyTool);
     const targets = path ? [path] : [];
-    if (writesGuardFiles(targets, input)) return block(protectedFile);
-    if (writesTodoFiles(targets, input)) return block(todoFile);
+    if (writesGuardFiles(targets, input, true)) return block(protectedFile);
+    if (writesTodoFiles(targets, input, true)) return block(todoFile);
   }
   if (tool === "bash") return input.role === "discuss" ? block(discussOnly) : decideBash(command ?? "", input);
   return allow;
