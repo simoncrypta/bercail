@@ -16,6 +16,8 @@ desk agent per space, review in tuicr. Bash CLI plus Herdr mods, skills, and doc
 - `tests/*.bats`: one bats-core file per area, one `@test` per case, each in its own
   temp HOME with stand-ins (`hc`, `curl`, `pi`, …). `.agents/skills/verify-bercail/`
   drives the CLI end to end.
+- `.agents/behaviors/`: Shep's behavior specs, for reviewing its traces; not
+  loaded into its prompt.
 - `docs/`: the reference (`docs/README.md` is the index). `site/` is the bercail.dev
   site and its Worker.
 
