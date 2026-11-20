@@ -2,7 +2,9 @@
 // extension runs as `bercail shep question expire`): the ledger takes Shep's
 // recommendation past the deadline, once, and Shep's inbox gets one decision event that
 // says it was not the person's pick.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import type { ChildProcess } from "node:child_process";
+import { once } from "node:events";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
@@ -12,6 +14,17 @@ const check = vi.hoisted(() => ({ status: "fresh", reasons: [] as string[] }));
 vi.mock("../shep/pi/question-target.ts", () => ({
   checkQuestion: async () => ({ ...check, current: { head: null, stagedTree: null } }),
 }));
+// Every child Shep's runtime spawns, so a test can wait for each one to exit.
+const spawned = vi.hoisted(() => [] as ChildProcess[]);
+vi.mock("node:child_process", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:child_process")>();
+  const spawn = (...args: Parameters<typeof real.spawn>) => {
+    const child = real.spawn(...args);
+    spawned.push(child);
+    return child;
+  };
+  return { ...real, spawn };
+});
 import { closed, expireDue, pick } from "../shep/pi/discuss.ts";
 import { claim, eventLine } from "../shep/pi/inbox.ts";
 import register, { EXPIRE_MS } from "../shep/pi/question-commands.ts";
@@ -26,6 +39,7 @@ beforeEach(() => {
   vi.stubEnv("BERCAIL_SHEP_STATE", state);
   check.status = "fresh";
   check.reasons = [];
+  spawned.length = 0;
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   vi.setSystemTime("2026-11-19T12:00:00.000Z");
 });
@@ -163,19 +177,21 @@ test("Shep's runtime runs the expiry in its own process at start and on its time
     registerTool: () => {},
     sendMessage: (m: unknown) => sent.push(m),
   } as any);
-  const runs = async (n: number) => {
-    for (let i = 0; i < 200 && (existsSync(log) ? readFileSync(log, "utf8").split("\n").length - 1 : 0) < n; i++)
-      await new Promise((r) => setTimeout(r, 10));
-    return readFileSync(log, "utf8").trim().split("\n");
-  };
+  // Wait for each run's exit, bounded only by the test's timeout: the runtime starts no second run
+  // while one is still going, so the timer must fire only after the first has exited.
+  const runs = () => readFileSync(log, "utf8").trim().split("\n");
   handlers.session_start!({}, {});
-  expect(await runs(1)).toEqual(["shep question expire"]);
+  expect(spawned).toHaveLength(1);
+  await once(spawned[0]!, "exit");
+  expect(runs()).toEqual(["shep question expire"]);
   await vi.advanceTimersByTimeAsync(EXPIRE_MS);
-  expect(await runs(2)).toEqual(["shep question expire", "shep question expire"]);
+  expect(spawned).toHaveLength(2);
+  await once(spawned[1]!, "exit");
+  expect(runs()).toEqual(["shep question expire", "shep question expire"]);
   expect(sent).toEqual([]);
   handlers.session_shutdown!({}, {});
   expect(vi.getTimerCount()).toBe(0);
-});
+}, 30_000);
 
 test("after a default, Discuss can still tell Shep the person disagrees, and /pick changes nothing", async () => {
   const token = ask();
