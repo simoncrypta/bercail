@@ -76,7 +76,8 @@ export function eventLine(ev: any): string | null {
   if (ev.kind === "decision") return decisionLine(ev);
   const reconstructed =
     ev.kind === "reconciliation" && typeof ev.notice_id === "string" && ev.notice_id.startsWith("notice:");
-  if (ev.kind !== "finished" && ev.kind !== "blocked" && !reconstructed) return null;
+  // A land event is bercail land's CI wait: its text is written from facts only.
+  if (ev.kind !== "finished" && ev.kind !== "blocked" && ev.kind !== "land" && !reconstructed) return null;
   const text = reconstructed
     ? `Reconstructed notice: history gap; possibly stale desk status ${one(ev.agent?.status)} observed at ${one(ev.observed_at)}. No historical event id or human answer is known.`
     : one(ev.text);

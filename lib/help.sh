@@ -64,6 +64,10 @@ Post-install CLI (bercail):
                 straight to main)
                 [--checkpoints BASE] (keep the Entire-Checkpoint trailers of BASE..HEAD
                 through a squash or a reworded amend)
+  land          Shep's landing of a desk's branch: land WORKTREE [--reviewed-by NAME] runs
+                describe check, commits the staged tree with its text, and starts a
+                background wait for the commit's CI that ends in one land event in Shep's
+                inbox (ready, failed, moved or timeout). It never pushes; desks are refused
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
                 gathers every PR, with one detached sibling worktree and a Stack tab.
                 Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,

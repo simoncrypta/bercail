@@ -40,7 +40,7 @@ The Pi extensions' unit tests and the Worker's are Vitest (`tests/*.test.ts`, ru
 
 ## ci
 
-`.github/workflows/ci.yml` runs on each push to master, each PR, and each `v*` tag. Two jobs run side by side, and each starts with the setup in `.github/actions/setup` (Node 26, `npm ci`, and the mise tools the job names):
+`.github/workflows/ci.yml` runs on each push to master or any other branch, each PR, and each `v*` tag. A branch's run is the one [`bercail land`](cli.md#install--cli) waits for before Shep pushes the branch to master. Two jobs run side by side, and each starts with the setup in `.github/actions/setup` (Node 26, `npm ci`, and the mise tools the job names):
 
 - `lint` runs `tests/lint.sh`: shellcheck, at the version pinned in `SHELLCHECK_VERSION`, then `tests/lint_grep_q.sh` (`printf … | grep -q`), then `vp check` and the mods' lint. It takes about 50 seconds, most of it shellcheck. It then warns, without failing, when the [dependency tracker](#dependency-tracker) has not succeeded in 3 days.
 - `test` runs `tests/run.sh` with GNU parallel: the bats suite, then `vp test`. It takes 2.5 to 3.5 minutes on the free 4-vCPU runner, nearly all of it the bats run. bd comes from mise at the version pinned in `BD_VERSION`, and the checkout has full history for `tests/desk_upgrade.bats`.

@@ -2154,6 +2154,20 @@ test("bercail cleanup asks the person in every role that can write, and nowhere 
     allowed(command, tui);
 });
 
+test("only Shep runs bercail land; every other role is refused", () => {
+  const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
+  const lands = [
+    "bercail land ~/Work/app.login",
+    "bin/bercail land . --reviewed-by Simon",
+    "cd /tmp && BERCAIL_ROLE=shep ~/.local/bin/bercail land /w/app",
+    "bash bin/bercail land --wait 0123456789abcdef0123456789abcdef01234567 /w/app",
+  ];
+  for (const input of [tui, headless, auto, judge, { ...tui, role: "builder" }, { ...headless, role: "shep-bg" }])
+    for (const command of lands) blocked(command, input, /Landing a change \(bercail land\) is Shep's/);
+  for (const command of lands) allowed(command, shep);
+  allowed("bercail describe check ~/Work/app.login", tui);
+});
+
 test("only Shep sets where the person's todos go, and no role writes todo.json by hand", () => {
   const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
   const builder = { ...tui, role: "builder" };

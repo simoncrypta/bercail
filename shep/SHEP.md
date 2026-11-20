@@ -320,11 +320,17 @@ the Mermaid source when the chart is wider than your pane.
   checkout, once `entire trail show` says its gates pass. The guard asks the
   person first. Approving a trail, dismissing a finding, and `--force` past the
   gates stay theirs.
-- A desk's work ships with the description its /validate wrote. Run
-  `bercail describe check <worktree>`, then commit or open the PR with the text
-  `bercail describe commit|title|body <worktree>` prints, the way the
-  `describe` skill shows: one commit per finished job, or a PR that lands as
-  one commit (amended on gt, squash-merged by the person on gh and origin).
+- A desk's work ships with the description its /validate wrote. Land a
+  desk's branch with `bercail land <worktree>`: it checks the description,
+  commits the staged tree with its text, and starts a background wait for the
+  commit's CI. Push the branch it names, so its CI runs. Only a `land` event
+  that says ready lets you push to main, or open the PR or trail the policy
+  names, and only for the commit it names: push that commit
+  (`git push origin <sha>:<trunk>`), never the branch, which may have moved.
+  On failed, moved or timeout, tell the person and stop. A PR's title and
+  body are the text `bercail describe title|body <worktree>` prints, the way
+  the `describe` skill shows: one commit per finished job, or a PR that lands
+  as one commit (amended on gt, squash-merged by the person on gh and origin).
   Never write a commit message or PR body yourself, and never patch one on the
   forge. When the description is missing or stale, tell the person the desk
   needs /validate again, and stop. Add `--reviewed-by "<their name>"` only
