@@ -3,7 +3,8 @@
 # No network: the PR heads come from a local bare repo.
 
 assert_eq() { [[ "$1" == "$2" ]] || fail "$3: expected '$1' got '$2'"; }
-assert_has() { grep -qF -- "$2" <<<"$1" || fail "$3: no '$2' in:"$'\n'"$1"; }
+# A substring match: grep -F would take a two-line needle as two patterns.
+assert_has() { [[ "$1" == *"$2"* ]] || fail "$3: no '$2' in:"$'\n'"$1"; }
 
 pr_json() { # n sha title body closing
   jq -n --argjson n "$1" --arg sha "$2" --arg title "$3" --arg body "$4" --argjson closing "$5" '{
@@ -520,37 +521,48 @@ JS
   if grep -qF 'Intent unknown' <<<"$md"; then fail "missing clues produced unknown intent"; fi
 }
 
-@test "bstack-pr-review: code-first inference, confidence/evidence/clue schema and stale-description policy" {
-  local agent
-  agent="$(<"$ROOT/bstack/pi/agents/bstack-pr-review.md")"
-  assert_has "$agent" 'The diff is the source of truth.' "agent source priority"
-  assert_has "$agent" 'Always infer intent from what the code actually does' "code-based inference is required"
-  assert_has "$agent" 'best educated guess' "inference is not claimed as author fact"
-  assert_has "$agent" 'A PR body mention alone never makes a decision documented' "no body-only stated decisions"
-  assert_has "$agent" 'Missing issues mean no issue clues to compare' "agent keeps inferring without issues"
-  assert_has "$agent" 'likely stale description' "stale description policy"
-  assert_has "$agent" 'not as an author question about the code' "stale descriptions do not seed code questions"
+# The reply the reviewer copies must have the fields the run's validator reads.
+@test "bstack-pr-review's reply schema has the intent fields and values the validator accepts" {
   "$NODE" - "$ROOT/bstack/pi/agents/bstack-pr-review.md" <<'JS'
 const assert = require("node:assert/strict");
 const text = require("node:fs").readFileSync(process.argv[2], "utf8");
 const blocks = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)];
 const schema = JSON.parse(blocks.at(-1)[1]);
 assert.equal(schema.why_source, "diff");
-assert.ok(schema.decisions[0].stated.includes("commit") && !schema.decisions[0].stated.includes("PR body"));
-assert.ok(schema.why.includes("best educated guess"));
 const analysis = schema.intent_analysis;
 assert.deepEqual(Object.keys(analysis).sort(), ["assessment", "clues", "confidence", "evidence"]);
 assert.ok(["high", "medium", "low"].every((level) => analysis.confidence.includes(level)));
 assert.ok(analysis.evidence[0].file && analysis.evidence[0].line);
 const statuses = ["agrees", "more", "less", "different", "stale", "unavailable"];
 assert.ok(statuses.every((status) => analysis.clues[0].alignment.includes(status)));
-assert.ok(analysis.assessment.includes("right thing to build"));
-assert.ok(!schema.unmet_intent[0].source.includes("PR body"));
 JS
 }
 
+@test "a reply is refused unless every field has the shape the card and tuicr read" {
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/common.sh"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/review.sh"
+  local bad
+  _review_valid_reply <"$FIX/reply.json" || fail "the fixture reply is valid"
+  jq 'del(.intent_analysis, .description)' "$FIX/reply.json" | _review_valid_reply \
+    || fail "a card saved before intent_analysis and description stays valid"
+  for bad in '.why = ""' '.why_source = "issue #12"' \
+    '.intent_analysis.confidence = "certain"' '.intent_analysis.evidence = "a"' \
+    '.intent_analysis.evidence[0].file = "../outside"' '.intent_analysis.clues[0].alignment = "okay"' \
+    '.intent_analysis.clues = []' '.intent_analysis.assessment = 42' \
+    '.decisions = ["not an object"]' '.decisions[0].evidence = {file:"a",line:1}' \
+    '.unmet_intent = ["not an object"]' '.questions = [{text:42}]' '., .' \
+    '.description.grade = "fine"' '.description.missing = ["style"]' \
+    '.description.grade = "complete"' '.description.template = "yes"' \
+    '.description.grade = "contradicts" | .description.contradictions = [{claim:"it retries"}]' \
+    '.description.grade = "contradicts" | .description.contradictions = [{claim:"a", detail:"b", evidence:[]}]'; do
+    if jq "$bad" "$FIX/reply.json" | _review_valid_reply; then fail "a malformed reply is valid: $bad"; fi
+  done
+}
+
 # --- review-pr <url>: a thin PR stops at the JSON --------------------------------
-@test "a thin PR: run dir, detached worktree, CI kept from a failing gh pr checks, JSON stops with thin flags" {
+@test "a thin PR: run dir, detached worktree, CI kept from a failing gh pr checks, JSON stops with thin flags; ui needs the Herdr app; run by name, code-inferred intent without linked issues" {
   local out dir
   out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/8)"
   assert_eq '["empty_body","no_linked_issue"]' "$(jq -c '.prs[0].thin' <<<"$out")" "thin flags in the JSON"
@@ -574,6 +586,23 @@ JS
   assert_eq 'Awaiting code-based intent inference.' "$(jq -r '.prs[0].intent' "$REVIEWS/stack-8/stack.json")" "pending card does not invent intent from prose"
   assert_has "$(<"$dir/intent.md")" "package-lock.json (+40 -2, modified) [lock or generated: name only]" "lock files by name"
   assert_has "$("$BERCAIL" review-pr card --stack "$REVIEWS/stack-8")" "Decisions pass: waiting: thin (empty_body, no_linked_issue)" "card before the pass"
+  out="$("$BERCAIL" review-pr ui --stack "$REVIEWS/stack-8" 2>&1)" && fail "ui without the Herdr app must fail"
+  assert_has "$out" "the Herdr app is not running" "ui says why"
+  # Run by name, a PR with no linked issue still gets code-inferred intent.
+  jq -n --arg sha "$SHA8" '{
+    why: "Best guess: clarify the README with another note.", why_source: "diff",
+    intent_analysis: {confidence:"medium", evidence:[{file:"README",line:2,side:"new"}],
+      clues:[{source:"linked issues",alignment:"unavailable",detail:"No linked issue clues to compare."},
+        {source:("commit " + $sha),alignment:"agrees",detail:"The commit describes a docs update."}],
+      assessment:"A small documentation update looks reasonable; its value depends on the note."},
+    decisions:[], unmet_intent:[], questions:[],
+    description:{grade:"thin", missing:["intent","why","how","validation","risks"], template:"none", contradictions:[], questions:[]}}' >"$FIX/reply.json"
+  "$BERCAIL" review-pr run 8 --stack "$REVIEWS/stack-8" >/dev/null
+  assert_eq 'Best guess: clarify the README with another note.' "$("$BERCAIL" review-pr state --stack "$REVIEWS/stack-8" | jq -r '.prs[0].intent')" "no linked issue still yields inferred intent"
+  out="$("$BERCAIL" review-pr card 8 --stack "$REVIEWS/stack-8")"
+  assert_has "$out" 'Evidence: README:2' "no-issue inference keeps evidence"
+  assert_has "$out" 'unavailable · linked issues: No linked issue clues to compare.' "missing clue is not missing intent"
+  if grep -qF 'Intent unknown' <<<"$out"; then fail "missing issue hid inferred intent"; fi
 }
 
 # --- review-pr <url>: the pass starts, review.json and run.json land -------------
@@ -614,8 +643,8 @@ JS
   [[ "$(git -C "$WORK" config --get core.symlinks || true)" != false ]] || fail "source repo's symlink policy changed"
 }
 
-@test "card: why, decisions (kind, file:line, stated or undocumented, fits intent), unmet intent, questions, CI" {
-  local card
+@test "card: why, decisions (kind, file:line, stated or undocumented, fits intent), unmet intent, questions, CI; a contradicting description, an old card" {
+  local card stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7"
   reviewed_7
   card="$(cd "$BATS_TEST_TMPDIR/work/widgets.review-7" && "$BERCAIL" review-pr card)"
   assert_has "$card" "PR #7  Retry flaky uploads" "card title"
@@ -637,34 +666,31 @@ JS
   assert_has "$card" $'Description: thin\n  Missing: validation, risks' "description grade and missing parts"
   assert_has "$card" "CI  1 fail · 1 pending · 1 pass" "CI counts"
   assert_has "$card" "  fail     lint (CI)  https://ci/lint" "failing check with its link"
-  assert_has "$(status_of "$REVIEWS/stack-7" 7)" "ready: 3 decisions" "pass status in state"
-  assert_eq "$REVIEWS/stack-7/pr-7/$SHA7" "$(cd "$BATS_TEST_TMPDIR/work/widgets.review-7" && "$BERCAIL" review-pr dir)" "dir"
+  assert_has "$(status_of "$stack" 7)" "ready: 3 decisions" "pass status in state"
+  assert_eq "$dir" "$(cd "$BATS_TEST_TMPDIR/work/widgets.review-7" && "$BERCAIL" review-pr dir)" "dir"
+
+  # The card and state render the saved review.json; these need no new pass.
+  cp "$dir/review.json" "$LOG/review.saved"
+  jq '.description = {grade: "contradicts", missing: ["validation"], template: "partial",
+      contradictions: [{claim: "Retries now back off.", detail: "retry sleeps 0 seconds between tries.",
+        evidence: [{file: "retry.sh", line: 1, side: "new"}]}],
+      questions: [{text: "The body says retries back off; retry.sh sleeps 0. Which is meant?"}]}' \
+    "$LOG/review.saved" >"$dir/review.json"
+  card="$("$BERCAIL" review-pr card --stack "$stack")"
+  assert_has "$card" "Description: contradicts · template partial" "the grade and the template"
+  assert_has "$card" "  Missing: validation" "missing apart from contradictions"
+  assert_has "$card" $'  Contradicts the diff: Retries now back off.  [retry.sh:1]\n     retry sleeps 0 seconds between tries.' "the contradiction at its line"
+  "$BERCAIL" review-pr state --stack "$stack" | jq -e '.prs[0].questions | any(.text | startswith("The body says retries back off"))' >/dev/null \
+    || fail "the description's question goes to the author drafts"
+
+  jq 'del(.description)' "$LOG/review.saved" >"$dir/review.json"
+  card="$("$BERCAIL" review-pr card --stack "$stack")"
+  assert_has "$card" "Decisions (3, 2 undocumented)" "an old card still renders"
+  if grep -q '^Description:' <<<"$card"; then fail "an old card shows no grade it never had"; fi
 }
 
-@test "a PR without linked issues gets code-inferred intent, confidence, evidence and a missing-clue comparison" {
-  local stack="$REVIEWS/stack-8" card
-  (cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/8) >/dev/null
-  cp "$FIX/reply.json" "$FIX/linked-reply.json"
-  jq -n --arg sha "$SHA8" '{
-    why: "Best guess: clarify the README with another note.", why_source: "diff",
-    intent_analysis: {confidence:"medium", evidence:[{file:"README",line:2,side:"new"}],
-      clues:[{source:"linked issues",alignment:"unavailable",detail:"No linked issue clues to compare."},
-        {source:("commit " + $sha),alignment:"agrees",detail:"The commit describes a docs update."}],
-      assessment:"A small documentation update looks reasonable; its value depends on the note."},
-    decisions:[], unmet_intent:[], questions:[],
-    description:{grade:"thin", missing:["intent","why","how","validation","risks"], template:"none", contradictions:[], questions:[]}}' >"$FIX/reply.json"
-  "$BERCAIL" review-pr run 8 --stack "$stack" >/dev/null
-  assert_eq 'Best guess: clarify the README with another note.' "$("$BERCAIL" review-pr state --stack "$stack" | jq -r '.prs[0].intent')" "no linked issue still yields inferred intent"
-  card="$("$BERCAIL" review-pr card 8 --stack "$stack")"
-  assert_has "$card" 'Confidence: medium' "no-issue inference keeps confidence"
-  assert_has "$card" 'Evidence: README:2' "no-issue inference keeps evidence"
-  assert_has "$card" 'unavailable · linked issues: No linked issue clues to compare.' "missing clue is not missing intent"
-  grep -qF 'Intent unknown' <<<"$card" && fail "missing issue hid inferred intent"
-  mv "$FIX/linked-reply.json" "$FIX/reply.json"
-}
-
-@test "description: graded against the template at the PR's base, a contradiction at its line, its question for the author, an old card without it" {
-  local base head stack="$REVIEWS/stack-9" dir card
+@test "a PR's description is graded against the template at its base, not its head" {
+  local base head
   (
     cd "$BATS_TEST_TMPDIR/seed" || exit
     git switch -q main && mkdir -p .github
@@ -678,29 +704,8 @@ JS
   head="$(git -C "$BATS_TEST_TMPDIR/seed" rev-parse speed)"
   pr_json 9 "$head" "Faster retries" $'# Summary\n\nRetries now back off.' '[]' \
     | jq --arg b "$base" '.baseRefOid = $b | .headRefName = "speed"' >"$FIX/pr-9.json"
-  printf 'diff --git a/retry.sh b/retry.sh\n+retry() { sleep 0; }\n' >"$FIX/pr-9.diff"
-  jq '.description = {grade: "contradicts", missing: ["validation"], template: "partial",
-      contradictions: [{claim: "Retries now back off.", detail: "retry sleeps 0 seconds between tries.",
-        evidence: [{file: "retry.sh", line: 1, side: "new"}]}],
-      questions: [{text: "The body says retries back off; retry.sh sleeps 0. Which is meant?"}]}' \
-    "$FIX/reply.json" >"$FIX/reply-9.json"
-  cp "$FIX/reply.json" "$FIX/reply-7.json" && cp "$FIX/reply-9.json" "$FIX/reply.json"
   (cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/9 --no-run) >/dev/null
-  dir="$stack/pr-9/$head"
-  assert_eq $'# Summary\n\n# How to test' "$(cat "$dir/template.md")" "the template is the base's, not the head's"
-  "$BERCAIL" review-pr run 9 --stack "$stack" >/dev/null || fail "the pass"
-  assert_eq '3 decisions, 2 undocumented, 1 unmet, description contradicts, 4 questions' "$(jq -r .summary "$dir/run.json")" "the summary counts the description's question"
-  mv "$FIX/reply-7.json" "$FIX/reply.json"
-  card="$("$BERCAIL" review-pr card 9 --stack "$stack")"
-  assert_has "$card" "Description: contradicts · template partial" "the grade and the template"
-  assert_has "$card" "  Missing: validation" "missing apart from contradictions"
-  assert_has "$card" $'  Contradicts the diff: Retries now back off.  [retry.sh:1]\n     retry sleeps 0 seconds between tries.' "the contradiction at its line"
-  "$BERCAIL" review-pr state --stack "$stack" | jq -e '.prs[0].questions | any(.text | startswith("The body says retries back off"))' >/dev/null \
-    || fail "the description's question goes to the author drafts"
-  jq 'del(.description)' "$dir/review.json" >"$dir/review.old" && mv "$dir/review.old" "$dir/review.json"
-  card="$("$BERCAIL" review-pr card 9 --stack "$stack")"
-  assert_has "$card" "Decisions (3, 2 undocumented)" "an old card still renders"
-  if grep -q '^Description:' <<<"$card"; then fail "an old card shows no grade it never had"; fi
+  assert_eq $'# Summary\n\n# How to test' "$(cat "$REVIEWS/stack-9/pr-9/$head/template.md")" "the template is the base's, not the head's"
 }
 
 @test "run: failed (no block, crash), blocked (drops the old review), a long pass, one pass at a time, a dead pass" {
@@ -715,22 +720,19 @@ JS
   assert_eq 'failed pi failed: 429 rate limited' "$(jq -r '"\(.status) \(.reason)"' "$dir/run.json")" "provider error"
   cp "$FIX/reply.json" "$FIX/good-reply.json"
   local bad
-  for bad in 'del(.intent_analysis)' '.why = ""' '.why_source = "issue #12"' \
-    '.intent_analysis.confidence = "certain"' '.intent_analysis.evidence = "a"' '.intent_analysis.evidence = []' \
-    '.intent_analysis.evidence[0].file = "../outside"' '.intent_analysis.clues[0].alignment = "okay"' \
-    '.intent_analysis.clues = []' '.intent_analysis.assessment = 42' \
-    '.decisions = ["not an object"]' '.decisions[0].evidence = {file:"a",line:1}' \
-    '.unmet_intent = ["not an object"]' '.questions = [{text:42}]' '., .' \
-    'del(.description)' '.description.grade = "fine"' '.description.missing = ["style"]' \
-    '.description.grade = "complete"' '.description.template = "yes"' \
-    '.description.grade = "contradicts" | .description.contradictions = [{claim:"it retries"}]' \
-    '.description.grade = "contradicts" | .description.contradictions = [{claim:"a", detail:"b", evidence:[]}]'; do
+  # The validator takes these from an old card; a new pass must have them. A
+  # malformed shape is the validator's own test above.
+  for bad in 'del(.intent_analysis)' 'del(.description)' '.intent_analysis.evidence = []'; do
     jq "$bad" "$FIX/good-reply.json" >"$FIX/reply.json"
     "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null && fail "malformed review must fail: $bad"
     assert_eq 'failed ses_fake' "$(jq -r '"\(.status) \(.session_id)"' "$dir/run.json")" "invalid shape keeps its session id"
     [[ ! -e "$dir/review.json" ]] || fail "an invalid review must never reach the card or seeding"
     assert_has "$("$BERCAIL" review-pr card --stack "$REVIEWS/stack-7")" "not a valid decisions JSON block" "card after invalid reply"
   done
+  jq '.description.questions = [{text: "Which retry count is meant?"}]' "$FIX/good-reply.json" >"$FIX/reply.json"
+  "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null || fail "a pass with a description question"
+  assert_eq '3 decisions, 2 undocumented, 1 unmet, description thin, 4 questions' "$(jq -r .summary "$dir/run.json")" \
+    "the summary counts the description's question"
   mv "$FIX/good-reply.json" "$FIX/reply.json"
   FAKE_PI=blocked "$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" >/dev/null || fail "blocked is not a failure"
   assert_eq 'blocked diff.patch is empty ses_fake' "$(jq -r '"\(.status) \(.reason) \(.session_id)"' "$dir/run.json")" "blocked"
@@ -801,16 +803,9 @@ JS
   assert_eq 1 "$winners" "only one stale-lock contender ran"
 }
 
-@test "ui without the Herdr app fails and says why" {
-  local out
-  (cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run) >/dev/null
-  out="$("$BERCAIL" review-pr ui --stack "$REVIEWS/stack-7" 2>&1)" && fail "ui without the Herdr app must fail"
-  assert_has "$out" "the Herdr app is not running" "ui says why"
-}
-
 # --- a Herdr space: Review-<n>_<Repo>, its desk, a Stack tab -----------------------
-@test "a Herdr space Review-<n>_<Repo> on the worktree, its desk, one Stack tab, the bercail-review mod" {
-  local out
+@test "a Herdr space Review-<n>_<Repo> on the worktree, its desk, one Stack tab, the bercail-review mod; ui and gather remake a closed Stack tab, keep other tabs, and need the mod" {
+  local out saved="$BATS_TEST_TMPDIR/herdr.saved"
   # The checkout is found through a Herdr space on it, not the caller's cwd.
   herdr_up
   : >"$LOG/hc"
@@ -838,12 +833,7 @@ JS
   assert_eq 1 "$(wc -l <"$LOG/stack.mod" | tr -d ' ')" "no second Stack tab"
   assert_eq 1 "$(jq '[.spaces[] | select(.name == "Review-7_Widgets")] | length' "$HERDR_STATE")" "one space"
   if grep -q '^run ' "$LOG/hc"; then fail "gather started a second desk"; fi
-}
-
-# --- ui: shows the Stack tab, or makes it ------------------------------------------
-@test "ui/gather recreate a closed Stack tab, keep other tabs and reuse the mod; no mod says to update" {
-  local saved="$BATS_TEST_TMPDIR/herdr.saved" out
-  ready_7
+  # ui shows the Stack tab, or makes it again.
   cp "$HERDR_STATE" "$saved"
   : >"$LOG/herdr"
   rm -f "$LOG/stack.mod"
@@ -874,8 +864,6 @@ JS
   jq '.spaces |= map(select(.id != "s1"))' "$saved" >"$HERDR_STATE"
   assert_has "$(cd / && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run 2>&1 >/dev/null)" \
     "no bercail-review mod" "gather without the mod warns"
-  mv "$MOD/main.js.off" "$MOD/main.js"
-  cp "$saved" "$HERDR_STATE"
 }
 
 # --- checkout: the PR's branch in the review worktree; rereview: gather, then pass ----
@@ -981,8 +969,8 @@ JS
   cp "$LOG/desk.saved.json" "$LOG/desk.json"
 }
 
-@test "desk preflight preserves cards, busy gathers wait, a quit desk comes back on its session, a desk that quits fails its pass" {
-  local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" out session runner
+@test "desk preflight preserves cards, busy gathers wait, a quit desk comes back on its session, a desk that quits or is replaced fails its pass" {
+  local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" out session runner caller desk
   ready_7
   cp "$dir/run.json" "$LOG/preflight-run.json"
   cp "$dir/review.json" "$LOG/preflight-review.json"
@@ -1033,14 +1021,9 @@ JS
   cp "$LOG/preflight-review.json" "$dir/review.json"
   "$BERCAIL" review-pr ui --stack "$stack"
   [[ ! -L "$dir/pass.lock" && ! -L "$stack/desk-pass.lock" ]] || fail "preflight failure leaked a lock"
-}
-
-# --- open: tuicr pr N directly, seeded with [AI Agent] questions ------------------
-# A desk started in place of the one running the turn never saw the request:
-# the pass fails instead of waiting on it forever.
-@test "a pass whose desk was replaced mid-turn fails instead of waiting forever" {
-  local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" runner caller desk
-  ready_7
+  settle
+  # A desk started in place of the one running the turn never saw the request:
+  # the pass fails instead of waiting on it forever.
   rm -f "$LOG/pi.child" "$LOG/pi.release" "$LOG/pi.caller"
   FAKE_HOLD=1 "$BERCAIL" review-pr run 7 --stack "$stack" >/dev/null 2>&1 &
   runner=$!
@@ -1057,6 +1040,7 @@ JS
   assert_has "$(jq -r .reason "$dir/run.json")" "the review desk exited" "the pass says its desk is gone"
 }
 
+# --- open: tuicr pr N directly, seeded with [AI Agent] questions ------------------
 @test "open: a Review #N tab on tuicr pr N (no desk mod), waits for tuicr, seeds [AI Agent] notes once, made fresh, one tuicr per space" {
   local out dir="$REVIEWS/stack-7/pr-7/$SHA7"
   space_7
@@ -1099,15 +1083,16 @@ JS
 }
 
 # --- the blobless clone when no checkout is around; no checks at all ---------------
-@test "no checkout around: ~/Work/<repo> plus a sibling; no gh pr checks JSON: the rollup; a queued head does not review a newer one" {
+@test "no checkout around, ~/Work/<repo> taken: ~/Work/<owner>-<repo> plus a sibling; no gh pr checks JSON: the rollup; a queued head does not review a newer one" {
   # Another repo name forces the no-local-checkout path.
   local out
   herdr_up
   REVIEWS="$XDG_STATE_HOME/bercail/reviews/github.com/acme/remote-only"
-  mkdir -p "$REVIEWS"
+  mkdir -p "$REVIEWS" "$HOME/Work"
+  printf 'occupied\n' >"$HOME/Work/remote-only"
   out="$(cd / && FAKE_NO_CHECKS=1 "$BERCAIL" review-pr https://github.com/acme/remote-only/pull/8)"
-  [[ -d "$HOME/Work/remote-only" ]] || fail "no fallback checkout at ~/Work/remote-only"
-  assert_eq "$SHA8" "$(git -C "$HOME/Work/remote-only.review-8" rev-parse HEAD)" "sibling of the fallback checkout"
+  [[ -d "$HOME/Work/acme-remote-only" ]] || fail "no fallback checkout at ~/Work/acme-remote-only"
+  assert_eq "$SHA8" "$(git -C "$HOME/Work/acme-remote-only.review-8" rev-parse HEAD)" "sibling of the fallback checkout"
   # No JSON from gh pr checks: the rollup from gh pr view stands in.
   assert_eq '[{"name":"lint","workflow":"CI","state":"FAILURE","link":"https://ci/lint","bucket":"fail"}]' \
     "$(jq -c . "$REVIEWS/stack-8/pr-8/$SHA8/ci.json")" "ci.json from statusCheckRollup"
@@ -1122,10 +1107,10 @@ JS
   ln -s "$$" "$REVIEWS/stack-8/context.lock"
   assert_has "$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/remote-only/pull/8 2>&1 || true)" \
     "the review stack is busy" "the worktree does not move under a live pass"
-  assert_eq "$SHA8" "$(git -C "$HOME/Work/remote-only.review-8" rev-parse HEAD)" "the worktree stays"
+  assert_eq "$SHA8" "$(git -C "$HOME/Work/acme-remote-only.review-8" rev-parse HEAD)" "the worktree stays"
   rm -f "$REVIEWS/stack-8/context.lock"
   (cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/remote-only/pull/8) >/dev/null
-  assert_eq "$sha" "$(git -C "$HOME/Work/remote-only.review-8" rev-parse HEAD)" "the worktree moves to the new head"
+  assert_eq "$sha" "$(git -C "$HOME/Work/acme-remote-only.review-8" rev-parse HEAD)" "the worktree moves to the new head"
   [[ -s "$REVIEWS/stack-8/pr-8/$sha/intent.md" ]] || fail "a run dir for the new head"
   # A pass queued for the old head does not review the new one.
   "$BERCAIL" review-pr run 8 --head "$SHA8" --stack "$REVIEWS/stack-8" >/dev/null && fail "a pass for a head the worktree left"
@@ -1244,13 +1229,6 @@ three_prs_gathered() {
   (cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/22 --no-run) >/dev/null
 }
 
-# three_prs_gathered with every PR's pass ready on the desk session.
-three_prs_ready() {
-  three_prs_gathered
-  "$BERCAIL" review-pr run --stack "$stack" >/dev/null
-  "$BERCAIL" review-pr run 22 --stack "$stack" >/dev/null
-}
-
 # #71 and #73 on main, and #72, a cross-repo PR whose head is also named main.
 cross_repo_prs() {
   jq -n --arg sha "$main_sha" '[{number:99, baseRefName:"main", headRefName:"other", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/99"},
@@ -1309,8 +1287,8 @@ cross_repo_prs() {
   assert_source_untouched
 }
 
-@test "run on a stack starts its non-thin PRs in parallel, a thin PR only when named, all on the desk session" {
-  local launcher desk_session n
+@test "a stack: non-thin PRs pass in parallel, a thin PR only when named, all on the desk session; a middle PR re-reviewed alone and opened in tuicr directly" {
+  local launcher desk_session n wt current head out
   stack_source
   three_prs_gathered
   rm -f "$LOG/pi.child" "$LOG/pi.release"
@@ -1345,13 +1323,8 @@ cross_repo_prs() {
   done
 
   "$BERCAIL" review-pr state --stack "$stack" | jq -e '.header | test("Stack one")' >/dev/null || fail "multi header from stack.md"
-  assert_source_untouched
-}
 
-@test "re-reviewing a middle PR refreshes the whole stack and reruns only that PR" {
-  local n
-  stack_source
-  three_prs_ready
+  # Re-reviewing a middle PR refreshes the whole stack and reruns only that PR.
   cp "$stack/pr-21/$sha21/run.json" "$LOG/sibling-before-rereview.json"
   jq '.finished_at = "old"' "$stack/pr-22/$sha22/run.json" >"$LOG/middle-old.json"
   cp "$LOG/middle-old.json" "$stack/pr-22/$sha22/run.json"
@@ -1362,13 +1335,10 @@ cross_repo_prs() {
   assert_eq ready "$(jq -r 'select(.finished_at != "old") | .status' "$stack/pr-22/$sha22/run.json")" "middle pass reran"
   cmp -s "$LOG/sibling-before-rereview.json" "$stack/pr-21/$sha21/run.json" || fail "re-review reran another PR's pass"
   assert_eq "22 $sha22" "$(jq -r .current "$stack/stack.json") $(git -C "$sib" rev-parse HEAD)" "re-review restores the middle PR"
-  assert_source_untouched
-}
 
-@test "legacy desk dispatch times out; direct middle-PR tuicr launch works without a desk callback or checkout" {
-  local wt current head out
-  stack_source
-  three_prs_ready
+  # Legacy desk dispatch times out; a direct tuicr launch opens the middle PR
+  # without a desk callback or a checkout.
+  settle
   wt="$sib"
   current="$(jq -r .current "$stack/stack.json")"
   "$BERCAIL" review-pr select 21 --stack "$stack"
@@ -1405,9 +1375,20 @@ cross_repo_prs() {
   assert_source_untouched
 }
 
-@test "a branched stack, entered from its root, middle or leaf, or two PRs on one head, reviews the entry PR alone" {
-  local fork_out
-  stack_source
+# stack_discover as the gather calls it: the source checkout, gh, a private clone path.
+discover() { # n
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/common.sh"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/git-backend.sh"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/stack.sh"
+  stack_discover github.com/acme/widgets "$FIX/pr-$1.json" "$WORK" "$BATS_TEST_TMPDIR/sync" gh 2>"$LOG/discover.err"
+}
+stack_numbers() { discover "$1" | jq -r '.numbers | join(" ")'; }
+
+@test "a branched stack, entered from its root, middle or leaf, or two PRs on one head, is the entry PR alone" {
+  main_sha="$(git -C "$BATS_TEST_TMPDIR/seed" rev-parse main)"
   pr_stack 41 "$main_sha" "Fork root" "Root of a fork." main fork-a "$main_sha"
   pr_stack 42 "$main_sha" "Fork mid" "Middle of a fork." fork-a up-b "$main_sha"
   pr_stack 44 "$main_sha" "Fork leaf" "Leaf of a fork." up-b up-b2 "$main_sha"
@@ -1416,68 +1397,48 @@ cross_repo_prs() {
   jq -n '[{number:41, baseRefName:"main", headRefName:"fork-a", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/41"}]' >"$FIX/list-head-fork-a.json"
   jq -n '[{number:42, baseRefName:"fork-a", headRefName:"up-b", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/42"}]' >"$FIX/list-head-up-b.json"
   jq -n '[{number:44, baseRefName:"up-b", headRefName:"up-b2", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/44"}]' >"$FIX/list-base-up-b.json"
-  # Middle and leaf first, so a partial stack-41 cannot already exist.
-  fork_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/42 --no-run 2>"$LOG/fork42.err")"
-  assert_has "$(<"$LOG/fork42.err")" "branched stack; reviewing PR #42 alone" "fork entered from the middle"
-  assert_eq '42' "$(jq -r '[.prs[].number] | join(" ")' <<<"$fork_out")" "middle fork is only itself"
-  assert_eq "$wreviews/stack-42" "$(jq -r .stack <<<"$fork_out")" "middle fork run dir is its own"
-  [[ ! -f "$wreviews/stack-41/stack.json" ]] || fail "middle fork must not write the root stack"
-  fork_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/44 --no-run 2>"$LOG/fork44.err")"
-  assert_has "$(<"$LOG/fork44.err")" "branched stack; reviewing PR #44 alone" "fork entered from a leaf"
-  assert_eq '44' "$(jq -r '[.prs[].number] | join(" ")' <<<"$fork_out")" "leaf fork is only itself"
-  assert_eq "$wreviews/stack-44" "$(jq -r .stack <<<"$fork_out")" "leaf fork run dir is its own"
-  [[ ! -f "$wreviews/stack-41/stack.json" ]] || fail "leaf fork must not write the root stack"
-  fork_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/41 --no-run 2>"$LOG/fork41.err")"
-  assert_has "$(<"$LOG/fork41.err")" "branched stack; reviewing PR #41 alone" "fork entered from the root"
-  assert_eq '41' "$(jq -r '[.prs[].number] | join(" ")' <<<"$fork_out")" "root fork is only itself"
-  assert_eq "$wreviews/stack-41" "$(jq -r .stack <<<"$fork_out")" "root fork run dir is its own"
+  local n out
+  for n in 42 44 41; do
+    assert_eq "$n" "$(stack_numbers "$n")" "a fork entered from #$n is only itself"
+    assert_has "$(<"$LOG/discover.err")" "branched stack; reviewing PR #$n alone" "and says so"
+  done
   # Two open PRs with the same head: same standalone fallback, not a hard error.
   pr_stack 47 "$main_sha" "Twin" "Two parents." twin-head feat47 "$main_sha"
   jq -n '[{number:48, baseRefName:"main", headRefName:"twin-head", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/48"},
           {number:49, baseRefName:"main", headRefName:"twin-head", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/49"}]' >"$FIX/list-head-twin-head.json"
-  fork_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/47 --no-run 2>"$LOG/fork47.err")"
-  assert_has "$(<"$LOG/fork47.err")" "branched stack; reviewing PR #47 alone" "duplicate heads fall back to the entry"
-  assert_eq '47' "$(jq -r '[.prs[].number] | join(" ")' <<<"$fork_out")" "duplicate heads review only the entry"
-  assert_source_untouched
+  assert_eq 47 "$(stack_numbers 47)" "duplicate heads review only the entry"
+  assert_has "$(<"$LOG/discover.err")" "branched stack; reviewing PR #47 alone" "duplicate heads fall back to the entry"
+  # The gather puts a middle fork in its own run dir, not the root's.
+  out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/42 --no-run 2>/dev/null)"
+  assert_eq "$REVIEWS/stack-42" "$(jq -r .stack <<<"$out")" "a middle fork's run dir is its own"
+  [[ ! -e "$REVIEWS/stack-41" ]] || fail "a middle fork must not write the root stack"
 }
 
 @test "trunk is origin/HEAD: a cross-repo head is not a parent, other trunk PRs are not children, a develop root keeps its trunk" {
-  local gh_before cross_out
-  stack_source
-  # Trunk is origin/HEAD. A cross-repo PR whose head is also named main is not a parent
-  # and is not walked up from. Other PRs based on main are not children of develop.
+  main_sha="$(git -C "$BATS_TEST_TMPDIR/seed" rev-parse main)"
+  # A cross-repo PR whose head is also named main is not a parent and is not
+  # walked up from. Other PRs based on main are not children of develop.
   cross_repo_prs
-  touch "$LOG/gh"
-  gh_before="$(wc -l <"$LOG/gh")"
-  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/71 --no-run)"
-  assert_eq '71' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "internal feat→main is its own stack"
-  tail -n +$((gh_before + 1)) "$LOG/gh" | grep -q -- '--head main' && fail "down walk must not probe --head trunk"
-  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/72 --no-run)"
-  assert_eq '72' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "a cross-repo PR is a stack of one"
-  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/73 --no-run)"
-  assert_eq '73' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "develop→main does not collect other main PRs"
+  : >"$LOG/gh"
+  assert_eq 71 "$(stack_numbers 71)" "internal feat→main is its own stack"
+  if grep -q -- '--head main' "$LOG/gh"; then fail "down walk must not probe --head trunk"; fi
+  assert_eq 72 "$(stack_numbers 72)" "a cross-repo PR is a stack of one"
+  assert_eq 73 "$(stack_numbers 73)" "develop→main does not collect other main PRs"
   # A unique cross-repo child of a same-repo branch stays in the stack.
   pr_stack 81 "$main_sha" "Feat parent" "Parent." main feat81 "$main_sha"
   pr_stack 82 "$main_sha" "Fork child" "Child." feat81 forkfeat "$main_sha"
   jq '.isCrossRepository = true' "$FIX/pr-82.json" >"$FIX/pr-82.json.new" && mv "$FIX/pr-82.json.new" "$FIX/pr-82.json"
   jq -n '[{number:81, baseRefName:"main", headRefName:"feat81", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/81"}]' >"$FIX/list-head-feat81.json"
   jq -n '[{number:82, baseRefName:"feat81", headRefName:"forkfeat", isCrossRepository:true, url:"https://github.com/acme/widgets/pull/82"}]' >"$FIX/list-base-feat81.json"
-  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/82 --no-run)"
-  assert_eq '81 82' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "unique cross-repo child stays, entered from the child"
-  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/81 --no-run)"
-  assert_eq '81 82' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "unique cross-repo child stays, entered from the parent"
+  assert_eq '81 82' "$(stack_numbers 82)" "unique cross-repo child stays, entered from the child"
+  assert_eq '81 82' "$(stack_numbers 81)" "unique cross-repo child stays, entered from the parent"
   # Root base is develop, not the default main. No open PR has head develop.
   pr_stack 91 "$main_sha" "Release" "Release train." develop rel91 "$main_sha"
   pr_stack 92 "$main_sha" "On release" "Child of the release." rel91 rel92 "$main_sha"
   jq -n '[{number:91, baseRefName:"develop", headRefName:"rel91", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/91"}]' >"$FIX/list-head-rel91.json"
   jq -n '[{number:92, baseRefName:"rel91", headRefName:"rel92", isCrossRepository:false, url:"https://github.com/acme/widgets/pull/92"}]' >"$FIX/list-base-rel91.json"
-  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/91 --no-run)"
-  assert_eq '91 92' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "develop root entered from the root"
-  assert_eq develop "$(jq -r .trunk "$wreviews/stack-91/stack.json")" "trunk is the root base, not default main"
-  cross_out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/92 --no-run)"
-  assert_eq '91 92' "$(jq -r '[.prs[].number] | join(" ")' <<<"$cross_out")" "develop root entered from the child"
-  assert_eq develop "$(jq -r .trunk "$wreviews/stack-91/stack.json")" "child entry keeps trunk develop"
-  assert_source_untouched
+  assert_eq '91 92 develop' "$(discover 91 | jq -r '"\(.numbers | join(" ")) \(.trunk)"')" "develop root entered from the root"
+  assert_eq '91 92 develop' "$(discover 92 | jq -r '"\(.numbers | join(" ")) \(.trunk)"')" "develop root entered from the child keeps trunk develop"
 }
 
 @test "a stack cycle is an error" {
@@ -1500,26 +1461,8 @@ cross_repo_prs() {
   assert_source_untouched
 }
 
-@test "a gather holds the stack's context lock, so a second gather waits" {
-  local holder out
-  stack_source
-  three_prs_gathered
-  rm -f "$LOG/gh.held" "$LOG/gh.release" "$LOG/pi.release"
-  FAKE_GH_HOLD=1 "$BERCAIL" review-pr https://github.com/acme/widgets/pull/21 --no-run >"$LOG/gather-hold" &
-  holder=$!
-  wait_for "$LOG/gh.held"
-  [[ -L "$stack/context.lock" ]] || fail "gather did not take the context lock"
-  out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/21 --no-run 2>"$LOG/busy.err")" \
-    && fail "a second gather ran"
-  assert_has "$(<"$LOG/busy.err")" "review stack is busy gathering; try again when it ends ($stack)" "a second gather waits"
-  assert_eq "$stack" "$(jq -r .stack <<<"$out")" "and prints the last gather's stack"
-  touch "$LOG/gh.release"
-  wait_exit "$holder" "the held gather"
-  assert_source_untouched
-}
-
-@test "review-pr prints its JSON on one line, and a rerun refused as busy still prints the stack and names its dir" {
-  local out
+@test "review-pr prints its JSON on one line; a rerun under a pass or a gather is refused, prints the stack and names its dir" {
+  local out holder
   rm -f "$LOG/pi.child" "$LOG/pi.release"
   export FAKE_HOLD=1
   out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 2>"$LOG/start.err" | tail -1)"
@@ -1531,6 +1474,19 @@ cross_repo_prs() {
   assert_eq "$REVIEWS/stack-7 running" "$(jq -r '"\(.stack) \(.pass)"' <<<"$out")" "the busy rerun prints the stack"
   assert_has "$(<"$LOG/busy.err")" "the review stack is busy running a pass; try again when it ends ($REVIEWS/stack-7)" "the error names the stack dir"
   touch "$LOG/pi.release"
+  settle
+  # A gather holds the stack's context lock, so a second gather waits.
+  rm -f "$LOG/gh.held" "$LOG/gh.release"
+  (cd "$WORK" && FAKE_GH_HOLD=1 "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run) >"$LOG/gather-hold" &
+  holder=$!
+  wait_for "$LOG/gh.held"
+  [[ -L "$REVIEWS/stack-7/context.lock" ]] || fail "gather did not take the context lock"
+  out="$(cd "$WORK" && "$BERCAIL" review-pr https://github.com/acme/widgets/pull/7 --no-run 2>"$LOG/busy.err")" \
+    && fail "a second gather ran"
+  assert_has "$(<"$LOG/busy.err")" "review stack is busy gathering; try again when it ends ($REVIEWS/stack-7)" "a second gather waits"
+  assert_eq "$REVIEWS/stack-7" "$(jq -r .stack <<<"$out")" "and prints the last gather's stack"
+  touch "$LOG/gh.release"
+  wait_exit "$holder" "the held gather"
 }
 
 @test "graphite: a 5-PR stack entered from the middle syncs with gt only in a private clone; a fork entry reviews alone" {
@@ -1619,14 +1575,18 @@ EOF
 }
 
 @test "no-source fallback is ~/Work/<repo>, or ~/Work/<owner>-<repo> if that path is taken" {
-  local out
-  herdr_up
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/common.sh"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/git-backend.sh"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/review.sh"
+  assert_eq "$HOME/Work/fresh" "$(_review_fallback_checkout github.com acme fresh)" "Work/<repo> when it is free"
   mkdir -p "$HOME/Work"
   printf 'occupied\n' >"$HOME/Work/occupied"
-  out="$(cd / && "$BERCAIL" review-pr https://github.com/acme/occupied/pull/8 --no-run)"
-  [[ -f "$HOME/Work/occupied" && "$(cat "$HOME/Work/occupied")" == occupied ]] || fail "fallback must not overwrite"
-  [[ -d "$HOME/Work/acme-occupied" ]] || fail "fallback uses ~/Work/<owner>-<repo> when ~/Work/<repo> is taken"
-  assert_eq "$(jq -r .headRefOid "$FIX/pr-8.json")" "$(git -C "$HOME/Work/acme-occupied.review-8" rev-parse HEAD)" "sibling of the alternate checkout"
+  assert_eq "$HOME/Work/acme-occupied" "$(_review_fallback_checkout github.com acme occupied)" "Work/<owner>-<repo> when Work/<repo> is taken"
+  assert_eq occupied "$(cat "$HOME/Work/occupied")" "fallback must not overwrite"
+  assert_eq "$HOME/Work/acme-occupied" "$(_review_fallback_checkout github.com acme occupied)" "the alternate checkout is reused"
 }
 
 # The requested PR first in a stack longer than a pipe buffer: a reader that

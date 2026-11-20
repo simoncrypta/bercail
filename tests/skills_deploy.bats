@@ -28,19 +28,13 @@ setup() {
   mkdir -p "$AGENTS_SKILLS_DIR/handoff"
   : >"$AGENTS_SKILLS_DIR/handoff/MANIFEST"
   deploy_skills >/dev/null
-  [[ -f "$AGENTS_SKILLS_DIR/handoff/SKILL.md" ]] || fail "canonical skill missing"
-  grep -q '^name: handoff$' "$AGENTS_SKILLS_DIR/handoff/SKILL.md" || fail "skill frontmatter missing"
-  [[ -f "$AGENTS_SKILLS_DIR/handoff/resources/git-workflow.md" ]] || fail "resource git-workflow.md missing"
+  local id
+  for id in "${BERCAIL_SKILL_IDS[@]}"; do
+    diff -r "$ROOT/skills/$id" "$AGENTS_SKILLS_DIR/$id" || fail "skill $id is not its source"
+    [[ -L "$HOME/.pi/agent/skills/$id" ]] || fail "pi link for $id missing"
+  done
+  [[ -z "$(find "$AGENTS_SKILLS_DIR" -path '*/scripts/*' -type f ! -perm -u+x)" ]] || fail "a skill script is not executable"
   [[ ! -e "$AGENTS_SKILLS_DIR/handoff/MANIFEST" ]] || fail "an older release's MANIFEST stays"
-  [[ -x "$AGENTS_SKILLS_DIR/handoff/scripts/handoff-spawn" ]] || fail "handoff-spawn missing or not executable"
-  [[ -L "$HOME/.pi/agent/skills/handoff" ]] || fail "pi skill symlink missing"
-  [[ -L "$HOME/.pi/agent/skills/bstack" && -L "$HOME/.pi/agent/skills/autopilot" ]] \
-    || fail "pi links for bstack and autopilot missing"
-  grep -q '^name: unit-testing$' "$AGENTS_SKILLS_DIR/unit-testing/SKILL.md" || fail "canonical unit-testing skill missing"
-  [[ -L "$HOME/.pi/agent/skills/unit-testing" ]] || fail "pi link for unit-testing missing"
-  grep -q '^name: describe$' "$AGENTS_SKILLS_DIR/describe/SKILL.md" || fail "canonical describe skill missing"
-  [[ -f "$AGENTS_SKILLS_DIR/describe/standard.md" ]] || fail "the describe standard missing"
-  [[ -L "$HOME/.pi/agent/skills/describe" ]] || fail "pi link for describe missing"
 }
 
 @test "deploy_skills removes the handoff resources an older release installed" {

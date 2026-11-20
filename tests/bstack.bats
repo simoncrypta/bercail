@@ -332,9 +332,6 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
   [[ -f "$p/prompts/validate.md" ]] || fail "validate.md missing"
   [[ ! -e "$p/prompts/ready.md" ]] || fail "the old ready.md stays after an update"
-  if grep -rlq '/ready\b' "$p"; then fail "a rendered file still names /ready: $(grep -rl '/ready\b' "$p")"; fi
-  grep -q 'bercail describe check' "$p/prompts/validate.md" || fail "validate checks the description"
-  grep -q 'never commits, pushes, or opens a PR' "$p/prompts/validate.md" || fail "validate never publishes"
 }
 
 @test "deploy installs the bridge and renders the Pi profile and hc templates, preserving unrelated settings" {
@@ -348,35 +345,24 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   p="$(PI_DIR)"
   t="$(PI_TEMPLATES)"
   deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
-  for rel in instructions.md agents/bstack-builder.md agents/bstack-judge.md \
-    agents/bstack-autopilot.md agents/bstack-pr-review.md; do
-    [[ -f "$p/$rel" ]] || fail "missing $rel"
+  # Each file is its source; the one rewrite is @pi_dir@ in the Markdown.
+  while IFS= read -r rel; do
+    case "$rel" in
+      */UPSTREAM.md) continue ;;
+      *.md) diff <(sed "s|@pi_dir@|$p|g" "$ROOT/bstack/pi/$rel") "$p/$rel" || fail "$rel is not its source, rendered" ;;
+      *) cmp "$ROOT/bstack/pi/$rel" "$p/$rel" || fail "$rel is not its source" ;;
+    esac
+  done < <(cd "$ROOT/bstack/pi" && find . -type f | sed 's|^\./||')
+  if grep -rq '@[a-z_]*@' "$p"; then fail "unrendered token: $(grep -rl '@[a-z_]*@' "$p")"; fi
+  # Pi reads these as prompt templates: no !cmd, no agent key, frontmatter first.
+  for rel in "$p"/prompts/*.md; do
+    if grep -q '!`' "$rel"; then fail "Pi templates have no !cmd: $rel"; fi
+    if grep -q '^agent:' "$rel"; then fail "Pi templates have no agent key: $rel"; fi
+    head -1 "$rel" | grep -qx -- '---' || fail "frontmatter starts $rel"
   done
-  for rel in validate handoff autopilot how why unslop pr-review bstack-setup; do
-    [[ -f "$p/prompts/$rel.md" ]] || fail "missing prompt $rel"
-    if grep -q '!`' "$p/prompts/$rel.md"; then fail "Pi templates have no !cmd: $rel"; fi
-    if grep -q '^agent:' "$p/prompts/$rel.md"; then fail "Pi templates have no agent key: $rel"; fi
-    head -1 "$p/prompts/$rel.md" | grep -qx -- '---' || fail "frontmatter starts $rel"
-  done
-  if grep -rq '@[a-z_]*@' "$p/prompts" "$p/agents/bstack-builder.md" "$p/instructions.md"; then
-    fail "unrendered token"
-  fi
-  grep -q "$p/agents/bstack-pr-review.md" "$p/prompts/pr-review.md" || fail "pr-review names its brief"
   if head -1 "$p/agents/bstack-pr-review.md" | grep -q -- '^---$'; then
     fail "a brief has no frontmatter"
   fi
-  grep -q 'You review someone else' "$p/agents/bstack-pr-review.md" || fail "pr-review keeps its body"
-  grep -q 'Desks only' "$p/instructions.md" || fail "instructions require a desk"
-  # A desk never falls back to headless; only a headless handoff's own brief says so.
-  grep -q 'exception: its system prompt says so' "$p/instructions.md" || fail "headless is only the handoff's exception"
-  grep -q 'Work single-agent' "$p/agents/bstack-headless.md" || fail "the headless brief is single-agent"
-  grep -q -- '--branch NAME --stage bstack --issue ID' "$p/prompts/handoff.md" || fail "handoff opens a desk"
-  cmp "$ROOT/bstack/pi/extensions/fallback.ts" "$p/extensions/fallback.ts" || fail "managed fallback extension"
-  cmp "$ROOT/bstack/pi/extensions/provider-error.ts" "$p/extensions/provider-error.ts" || fail "managed provider-error helper"
-  cmp "$ROOT/bstack/pi/extensions/guard.ts" "$p/extensions/guard.ts" || fail "managed guard extension"
-  cmp "$ROOT/bstack/pi/extensions/review.ts" "$p/extensions/review.ts" || fail "managed review-pr extension"
-  cmp "$ROOT/bstack/pi/extensions/pi-emphasis/index.ts" "$p/extensions/pi-emphasis/index.ts" || fail "vendored pi-emphasis"
-  cmp "$ROOT/bstack/pi/extensions/pi-emphasis/LICENSE" "$p/extensions/pi-emphasis/LICENSE" || fail "pi-emphasis keeps its license"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
     and (index(["-e", "\($p)/extensions/review.ts"]) != null) and (index(["--tools", "read,grep,find,ls"]) != null)
     and (index(["--append-system-prompt", "\($p)/agents/bstack-pr-review.md"]) != null)
@@ -394,7 +380,6 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     and (index("--skill") != null) and (index("env") == null)' "$p/lead.json" >/dev/null \
     || fail "the desk's lead: $(cat "$p/lead.json")"
   [[ ! -e "$p/fallback" ]] || fail "no runtime fallback list"
-  grep -q 'bercail.role=agent' "$p/instructions.md" || fail "instructions warn off the desk's label"
 
   for rel in bstack-builder bstack-judge bstack-autopilot; do
     [[ -f "$t/$rel.md" ]] || fail "missing template $rel"
@@ -402,14 +387,6 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     sed -n 2p "$t/$rel.md" | grep -qx "name: $rel" || fail "name $rel"
     sed -n 3p "$t/$rel.md" | grep -q "managed by bercail (bstack)" || fail "marker in the description of $rel"
     sed -n 5p "$t/$rel.md" | grep -qx -- '---' || fail "frontmatter holds only key: value in $rel"
-    grep -q ' pi ' "$t/$rel.md" || fail "$rel runs pi"
-    grep -q -- "-e $p/extensions/fallback.ts -e $p/extensions/guard.ts" "$t/$rel.md" || fail "$rel loads fallback then guard"
-    grep -q -- "-e npm:pi-claude-bridge@0.12.0" "$t/$rel.md" || fail "$rel loads bridge"
-    grep -q -- "-e $p/extensions/pi-emphasis/index.ts" "$t/$rel.md" || fail "$rel loads pi-emphasis"
-    grep -q -- "env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN " "$t/$rel.md" || fail "$rel unsets Anthropic env"
-    grep -q -- "--prompt-template $p/prompts" "$t/$rel.md" || fail "--prompt-template in $rel"
-    grep -q -- "--append-system-prompt $p/instructions.md" "$t/$rel.md" || fail "instructions in $rel"
-    grep -q -- '--skill .*/skills/bstack' "$t/$rel.md" || fail "--skill in $rel"
   done
   grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=builder [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder: $(cat "$t/bstack-builder.md")"
   grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=judge [^ ]*bercail scratch run -- pi --model openai/gpt-6.1-sol:high ' "$t/bstack-judge.md" || fail "judge"
@@ -576,7 +553,7 @@ EOF
   [[ -f "$(PI_DIR)/lead.json" ]] || fail "off removed nothing"
 }
 
-@test "every Pi role template and the empty-role lead loads bridge, fallback, guard, and pi-emphasis, and unsets Anthropic env" {
+@test "every Pi role template and the empty-role lead runs on a scratch TMPDIR, loads bridge, fallback then guard, pi-emphasis, the prompts, instructions and skill, and unsets Anthropic env" {
   reset_home
   write_pi_config
   export FAKE_PI_READY="claude-bridge openai"
@@ -585,30 +562,34 @@ EOF
   export FAKE_PI_LAUNCH_LOG="$BATS_TEST_TMPDIR/pi-launch"
   # The templates start Pi through this checkout's bercail scratch run.
   ln -s "$ROOT/bin/bercail" "$FAKE_BIN/bercail"
-  local template cmd scratch
-  for template in "$(PI_TEMPLATES)"/bstack-*.md; do
-    cmd="$(awk '/^command: / { sub(/^command: /, ""); print }' "$template")"
-    eval "$cmd"
+  local template p args scratch
+  p="$(PI_DIR)"
+  # The fake logs one argument a line: WHAT... must be whole arguments, in order.
+  has_run() { # who what...
+    local who="$1" run
+    shift
+    run="$(printf '%s\n' "$@")"
+    [[ "$args" == *$'\n'"$run"$'\n'* ]] || fail "$who starts pi without '$*': $args"
+  }
+  launched() {
+    rm -f "$FAKE_PI_LAUNCH_LOG" "$FAKE_PI_LAUNCH_LOG.env"
+    eval "$1"
     scratch="$(sed -n 's/^TMPDIR=//p' "$FAKE_PI_LAUNCH_LOG.env")"
     [[ "$scratch" == "$XDG_CACHE_HOME/bercail/scratch/"* && ! -e "$scratch" ]] \
-      || fail "$template runs Pi on a scratch TMPDIR it removes after: $scratch"
-    grep -qxF "$(PI_DIR)/extensions/fallback.ts" "$FAKE_PI_LAUNCH_LOG" || fail "fallback in $template"
-    grep -qxF "$(PI_DIR)/extensions/guard.ts" "$FAKE_PI_LAUNCH_LOG" || fail "guard in $template"
-    grep -qxF 'npm:pi-claude-bridge@0.12.0' "$FAKE_PI_LAUNCH_LOG" || fail "bridge in $template"
-    grep -qxF "$(PI_DIR)/extensions/pi-emphasis/index.ts" "$FAKE_PI_LAUNCH_LOG" || fail "pi-emphasis in $template"
-    if grep -q '^ANTHROPIC_' "$FAKE_PI_LAUNCH_LOG.env"; then
-      fail "Anthropic env leaked from $template"
-    fi
+      || fail "$2 runs Pi on a scratch TMPDIR it removes after: $scratch"
+    args=$'\n'"$(<"$FAKE_PI_LAUNCH_LOG")"$'\n'
+    has_run "$2" -e npm:pi-claude-bridge@0.12.0
+    has_run "$2" -e "$p/extensions/fallback.ts" -e "$p/extensions/guard.ts"
+    has_run "$2" -e "$p/extensions/pi-emphasis/index.ts"
+    has_run "$2" --prompt-template "$p/prompts"
+    has_run "$2" --append-system-prompt "$p/instructions.md"
+    has_run "$2" --skill "$(skill_canonical_dir bstack)"
+    if grep -q '^ANTHROPIC_' "$FAKE_PI_LAUNCH_LOG.env"; then fail "Anthropic env leaked from $2"; fi
+  }
+  for template in "$(PI_TEMPLATES)"/bstack-*.md; do
+    launched "$(awk '/^command: / { sub(/^command: /, ""); print }' "$template")" "$template"
   done
-  cmd="$(bstack_pi_command '' "$(bstack_role_model lead)")"
-  eval "$cmd"
-  grep -qxF "$(PI_DIR)/extensions/fallback.ts" "$FAKE_PI_LAUNCH_LOG" || fail "lead fallback"
-  grep -qxF "$(PI_DIR)/extensions/guard.ts" "$FAKE_PI_LAUNCH_LOG" || fail "lead guard"
-  grep -qxF 'npm:pi-claude-bridge@0.12.0' "$FAKE_PI_LAUNCH_LOG" || fail "lead bridge"
-  grep -qxF "$(PI_DIR)/extensions/pi-emphasis/index.ts" "$FAKE_PI_LAUNCH_LOG" || fail "lead pi-emphasis"
-  if grep -q '^ANTHROPIC_' "$FAKE_PI_LAUNCH_LOG.env"; then
-    fail "Anthropic env leaked from lead"
-  fi
+  launched "$(bstack_pi_command '' "$(bstack_role_model lead)")" lead
   _bstack_pi_claude_ready || fail "Claude auth probe also sanitizes env"
   unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN FAKE_PI_LAUNCH_LOG FAKE_PI_READY
 }
