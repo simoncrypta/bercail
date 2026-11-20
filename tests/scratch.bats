@@ -156,14 +156,15 @@ doctor() {
 }
 
 @test "doctor names each leftover scratch folder with its size, and no live one" {
-  local out
+  local out size
   out="$(doctor)"
   [[ "$out" == *"  ok  no leftover scratch in $ROOT_DIR"* ]] || fail "none left: $out"
   dead_pid
   made "$ROOT_DIR/$DEAD" "$ROOT_DIR/$$"
   head -c 2097152 /dev/urandom >"$ROOT_DIR/$DEAD/copy"
+  read -r size _ < <(du -sh "$ROOT_DIR/$DEAD")
   out="$(doctor)"
-  [[ "$out" == *"  leftover  $ROOT_DIR/$DEAD (2.0M; bercail scratch sweep removes it)"* ]] || fail "names it with its size: $out"
+  [[ "$out" == *"  leftover  $ROOT_DIR/$DEAD ($size; bercail scratch sweep removes it)"* ]] || fail "names it with its size: $out"
   [[ "$out" != *"$ROOT_DIR/$$"* && "$out" != *"ok  no leftover"* ]] || fail "only the leftover: $out"
 }
 
