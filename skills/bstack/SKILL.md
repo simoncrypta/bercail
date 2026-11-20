@@ -84,7 +84,7 @@ each step ending in something you can check.
    skill when `.agents/skills/` has one. Check the diff's tests against the
    `unit-testing` skill's review list.
 3. Report only findings a run shows, worst first, with `file:line` and the command.
-4. Post to GitHub only when asked (the `review` skill's `publish-github.sh`).
+4. Post to GitHub only when asked.
 
 ## ship
 

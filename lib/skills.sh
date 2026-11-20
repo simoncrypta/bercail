@@ -3,15 +3,33 @@
 
 # Pi does not discover ~/.agents/skills: each skill gets a link in Pi's dir.
 PI_SKILLS_DIR="${HOME}/.pi/agent/skills"
-# The sha256 of every council SKILL.md bercail shipped before v0.18 removed it
-# (git log -- skills/council/SKILL.md). Any other bytes are someone's own copy.
-BERCAIL_COUNCIL_SKILL_SHA256=(
-  e78b96c78a486158c6cd47f916819363c95af408d69624312d5924d7eddfa1f9
-  871aa33841db78ddcc44fa6d0c2be729008fa37c54cc32536f8609312d8c9a9f
-  3324536081f78318252427c7b443a27feb42ab15828fdea99a412996cd4ea85f
-  7dbf6febe53276956af7beadac3fec2dad8b8416a7deff9535a5278776c21baf
-  c883401fa02c7aaeca145a079d334b0cea2d95b04008c6df7769cd62a0295932
-  6533b37e41edcca6f8a7bb44f35d3ba83aa9132d2a838b05846898d6147c719c
+# Every file of a retired skill bercail shipped, as "<skill>/<path> <sha256>"
+# (git log -- skills/<skill>). Any other bytes are someone's own copy.
+BERCAIL_RETIRED_SKILL_FILES=(
+  "council/SKILL.md e78b96c78a486158c6cd47f916819363c95af408d69624312d5924d7eddfa1f9"
+  "council/SKILL.md 871aa33841db78ddcc44fa6d0c2be729008fa37c54cc32536f8609312d8c9a9f"
+  "council/SKILL.md 3324536081f78318252427c7b443a27feb42ab15828fdea99a412996cd4ea85f"
+  "council/SKILL.md 7dbf6febe53276956af7beadac3fec2dad8b8416a7deff9535a5278776c21baf"
+  "council/SKILL.md c883401fa02c7aaeca145a079d334b0cea2d95b04008c6df7769cd62a0295932"
+  "council/SKILL.md 6533b37e41edcca6f8a7bb44f35d3ba83aa9132d2a838b05846898d6147c719c"
+  "council/MANIFEST acdcb3c48ccf4ce67b0a88f86261ab8a4f28ca34ab7d342f272391975ca8fb7f"
+  "review/SKILL.md 03547f0c4fc0a74dd6aefbff56842278f57f0e1ec04ce1b961e80d833f834ae7"
+  "review/SKILL.md 217a4e34bbfa61adb8b2a1461e4502fe9a703130b8a03e604be29d79837fdbc0"
+  "review/SKILL.md 24e17471ad35fe92fe0b7d30070c471640f4b7fae3d3cfececb9f09212f69a92"
+  "review/SKILL.md 472c5da804f9d95b03302911fc683d393980f2767cc726c43799c1ac17b15c25"
+  "review/SKILL.md 6153b011dd71d8b174d190542c4163bd9d70e758a19b1a7fb29566d59096f11a"
+  "review/MANIFEST caac8452c0cc084797f7fcc414bb0fe1a8a09615f9fcc961b5519c128840f418"
+  "review/MANIFEST d749414bf512319d46e711c1e60a4fa266d6cba698a4436a4d7deead67d756a3"
+  "review/MANIFEST eb9d3f60331c201c0fed957321e0d364984d0a7e10f0b15ac4bc48f67947a737"
+  "review/scripts/wait-comments.sh 0cddbb570fe549886526b2db88954fb519372e42cdc0c9af8ad179ccad3bace1"
+  "review/scripts/wait-comments.sh 88fcd2a6c47a9fbaa4fac421d940ca3a75e47691eef96f86ef88ddbccd5edb8b"
+  "review/scripts/wait-comments.sh 98f73b9707b30e92546b2e3d48fbc8a7ebd7b4a2dd4d4472da4730b2a5d6c57f"
+  "review/scripts/wait-comments.sh d0a4d2a5e7e6a3fafbb39aee392830bf65995838d7c03154a99ac37c8a099102"
+  "review/scripts/publish-github.sh 39f7e73bd80c4d5ccb840c7a8ad0407356c4350cb87e3166e72a0ee5475778fe"
+  "review/scripts/publish-github.sh 5406c0d8ef63119a1879badb3b891459cb70ece6abc9d81051eaffb461f189ae"
+  "review/scripts/publish-github.sh 6427619da42e7fa944a3ce36590b305a193e14daf9e012a225fc1220276abeca"
+  "review/scripts/publish-github.sh 6c0a86750dfc4d3ed68ecb90a3c59157ce6c18d2e65fbed0ef01ab281a081e25"
+  "review/scripts/is-agent.jq 3b3fa5730d1785dc8e21cc41894d94db962a23f4f057199d239e86f3d54c08b9"
 )
 
 # The skills to deploy and give bstack's agents. statechart only when [bstack]
@@ -109,7 +127,7 @@ deploy_skills() {
     ensure_skill_symlink "$PI_SKILLS_DIR" "$skill_id"
   done < <(_skill_ids)
   statechart_enabled || remove_statechart_skill
-  remove_council_skill
+  remove_retired_skills
 }
 
 # sha256 of a file, hex. macOS has shasum, not sha256sum.
@@ -121,23 +139,49 @@ _skill_sha256() {
   fi
 }
 
-# The council skill an older release installed: the files it shipped, byte for
-# byte, and its Pi link. bercail copies skills, so a linked folder or file is
-# someone's, and a file someone added keeps the folder.
-remove_council_skill() {
-  local dest sum
-  dest="$(skill_canonical_dir council)"
+# A skill an older release installed and this one no longer ships: the files it
+# shipped, byte for byte, and its Pi link. Its SKILL.md must be one bercail
+# shipped. bercail copies skills, so a linked folder or file is someone's, and a
+# file someone added or edited keeps the folder.
+remove_retired_skill() {
+  local id="$1" dest entry path file seen=" " dir dirs=" "
+  dest="$(skill_canonical_dir "$id")"
   [[ ! -L "$dest" && ! -L "$dest/SKILL.md" && -f "$dest/SKILL.md" ]] || return 0
-  sum="$(_skill_sha256 "$dest/SKILL.md")" || return 0
-  [[ " ${BERCAIL_COUNCIL_SKILL_SHA256[*]} " == *" $sum "* ]] || return 0
-  remove_managed_skill_symlink "$PI_SKILLS_DIR" council
-  info "remove: $dest/SKILL.md"
-  run rm -f "$dest/SKILL.md"
-  # The file list older releases' curl install wrote.
-  if [[ -f "$dest/MANIFEST" && ! -L "$dest/MANIFEST" ]] && cmp -s "$dest/MANIFEST" <(printf 'SKILL.md\nMANIFEST\n'); then
-    run rm -f "$dest/MANIFEST"
-  fi
+  _retired_skill_file_shipped "$id" SKILL.md || return 0
+  remove_managed_skill_symlink "$PI_SKILLS_DIR" "$id"
+  # Each path once: the list holds a line per shipped version.
+  for entry in "${BERCAIL_RETIRED_SKILL_FILES[@]}"; do
+    [[ "$entry" == "$id/"* ]] || continue
+    path="${entry%% *}" && path="${path#"$id/"}"
+    [[ "$seen" != *" $path "* ]] || continue
+    seen+="$path "
+    [[ "$path" != */* || "$dirs" == *" ${path%/*} "* ]] || dirs+="${path%/*} "
+    file="$dest/$path"
+    [[ -f "$file" && ! -L "$file" && ! -L "${file%/*}" ]] || continue
+    _retired_skill_file_shipped "$id" "$path" || continue
+    info "remove: $file"
+    run rm -f "$file"
+  done
+  for dir in $dirs; do
+    [[ ! -d "$dest/$dir" || -L "$dest/$dir" ]] || run rmdir "$dest/$dir" 2>/dev/null || true
+  done
   run rmdir "$dest" 2>/dev/null || warn "kept $dest: it holds files bercail did not install"
+}
+
+# Whether skill ID's PATH, as installed, is a file bercail shipped.
+_retired_skill_file_shipped() {
+  local entry sum
+  sum="$(_skill_sha256 "$(skill_canonical_dir "$1")/$2")" || return 1
+  for entry in "${BERCAIL_RETIRED_SKILL_FILES[@]}"; do
+    [[ "$entry" != "$1/$2 $sum" ]] || return 0
+  done
+  return 1
+}
+
+# The skills v0.18 removed.
+remove_retired_skills() {
+  remove_retired_skill council
+  remove_retired_skill review
 }
 
 # No statechart skill yet, or bercail's, found by bstack's wrapper in it.
@@ -170,5 +214,5 @@ remove_managed_skills() {
     fi
   done < <(printf '%s\n' "${BERCAIL_SKILL_IDS[@]}")
   remove_statechart_skill
-  remove_council_skill
+  remove_retired_skills
 }

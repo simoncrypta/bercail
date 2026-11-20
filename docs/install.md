@@ -54,14 +54,11 @@ If you'd rather add only the layout, you get the desk and Review, but the desk r
 
 ## Updating from an older release
 
-`bercail update` reaches this release from v0.14.0 or later. From an older one, install v0.14.0 first, then update:
+`bercail update` reaches this release from v0.15.0 or later. An install at v0.14.0 or older cannot update in place. v0.14.0's `bercail update`, for one, stops on `bin/agentic-dev`, a file this release no longer ships, after it has copied the new `bercail` command and shell files. Reinstall instead, with any install above (from a clone, `./install.sh`). It keeps your `config.toml`.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/simoncrypta/bercail/v0.14.0/install.sh | BERCAIL_REF=v0.14.0 bash
-bercail update
-```
+A reinstall over v0.14.0 or older leaves two things behind: the `agentic-dev` command in `~/.local/bin` (it runs `bercail`) and `~/.local/state/agentic-dev`, where those releases kept the handoff log. bercail reads neither; delete them once nothing of yours uses them.
 
-The first update to v1 removes the `agentic-dev` command (it is `bercail`), moves `~/.local/state/agentic-dev` (the handoff log) into `~/.local/state/bercail`, and leaves a link at the old path, which you can delete once nothing of yours reads it. Handoff records whose worktree and repo are both gone are dropped in the move. It also rewrites `[graphite]` entries in `config.toml`, a name v1 no longer reads, as `[git]` entries (`true` is `"gt"`, `false` is `"gh"`).
+An update rewrites `[graphite]` entries in `config.toml`, a name v1 no longer reads, as `[git]` entries (`true` is `"gt"`, `false` is `"gh"`).
 
 `handoff-spawn` prints one name for each fact from v1 on. If a script of yours reads its JSON: `graphite` is gone (read `git`: `gh`, `gt` or `origin`), `socket` is gone (read `herdr`), `workspace` is gone (read `space`), and `--workspace` is `--space`.
 
@@ -69,7 +66,7 @@ bstack has no switch from v1 on: `bercail bstack on` and `off`, `./install.sh --
 
 The shell block no longer defines `t` (open the Herdr app) and `d` (short for `dev`), and no longer removes an alias of yours by those names. If you used them, add `alias t=herdr-app` or `alias d=dev` to your own shell rc, after bercail's block.
 
-Nothing stops an older release's `bercail update` from going straight to this one: it copies the new CLI with its own code and file lists, and this release takes the update over from there. That path is not tested, and the steps that carried older installs forward (the `agentic-dev` directories and shell markers, the 0.9 keys, old worktrunk config lines) are gone. From 0.8 (the Herdr terminal and its layout plugin), the full install above also adds the Herdr app. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them.
+From 0.8 (the Herdr terminal and its layout plugin), the full install above also adds the Herdr app. bercail no longer touches `~/.config/herdr`, the old plugin, or the `herdr` binary; remove them when you no longer need them.
 
 ## A laptop, with bercail on another machine
 

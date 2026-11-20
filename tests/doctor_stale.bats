@@ -22,7 +22,7 @@ setup() {
   DRY_RUN=0
 
   mkdir -p "$BERCAIL_CONFIG_DIR" "$WORKTRUNK_CONFIG_DIR" "$AGENTS_SKILLS_DIR/handoff" \
-    "$AGENTS_SKILLS_DIR/review" "$BERCAIL_SHARE_DIR"
+    "$BERCAIL_SHARE_DIR"
   cat >"$BERCAIL_USER_CONFIG" <<'EOF'
 [layout]
 review = "tuicr"
@@ -30,7 +30,6 @@ EOF
 
   cp "$ROOT/config/worktrunk/herdr-layout.sh" "$WORKTRUNK_CONFIG_DIR/herdr-layout.sh"
   cp "$ROOT/skills/handoff/SKILL.md" "$AGENTS_SKILLS_DIR/handoff/SKILL.md"
-  cp "$ROOT/skills/review/SKILL.md" "$AGENTS_SKILLS_DIR/review/SKILL.md"
   local id
   for id in bstack autopilot how why unslop desk-restore unit-testing describe; do
     mkdir -p "$AGENTS_SKILLS_DIR/$id"

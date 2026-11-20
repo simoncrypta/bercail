@@ -1,9 +1,8 @@
 #!/usr/bin/env bats
-# The first update from v0.14.0 starts as that release's bercail: its bin, its
-# loaded libs, and its deploy_configs, which copies the new CLI and lib/ by its
-# own lists. The new lib/config.sh then restarts the update on the new CLI, and
-# that one runs the source tree's own bercail, as every later update does.
-# Install a real old release, then update it from this tree.
+# An update from v0.15.0 or later runs the source tree's own bercail: a clone's,
+# or the release archive's for a curl install. An install at v0.14.0 or older
+# cannot update in place and reinstalls. Install a real old release, then update
+# or reinstall it from this tree.
 
 setup() {
   load test_helper
@@ -83,16 +82,6 @@ update_from() {
   mkdir -p "$home/.local/share/omarchy" "$home/.config/fcitx5/conf"
   printf 'Hint Trigger=Control+Alt+h\nCustom=keep me\n' >"$box/keyboard.conf"
   cp "$box/keyboard.conf" "$home/.config/fcitx5/conf/keyboard.conf"
-  # A handoff the old release logged, in the state dir it used.
-  mkdir -p "$home/.local/state/agentic-dev"
-  printf '{"ok":true,"path":"%s","branch":"","issue":"old-1"}\n' "$home" >"$home/.local/state/agentic-dev/handoffs.jsonl"
-  case "${2:-}" in
-    off) sed -i 's/^enabled = true$/enabled = false/' "$home/.config/bercail/config.toml" ;;
-    no-bstack)
-      printf '[layout]\nreview = "tuicr"\n' >"$home/.config/bercail/config.toml"
-      rm -rf "$home/.local/share/bercail/pi"
-      ;;
-  esac
   # A name v1 no longer reads: a [graphite] entry.
   printf '\n[graphite]\n"%s" = true\n' "$box/src" >>"$home/.config/bercail/config.toml"
   # A clone install: the old CLI updates from its recorded source.
@@ -107,11 +96,9 @@ update_from() {
   fi
 }
 
-# The stand-in curl serves $box/new as the new release: each file by name under
-# raw.test, which is how v0.14.0's updater fetches, and the whole tree as
-# raw.test/archive.tar.gz, which is how this one does. It logs what was asked
-# for, and fails on a name the tree does not ship. A link is served as its
-# target's path, as raw.githubusercontent.com does.
+# The stand-in curl serves $box/new as the new release: the whole tree as
+# raw.test/archive.tar.gz, which is how an update downloads it. It logs what
+# was asked for and fails on anything else.
 serve_new_release() {
   this_tree "$box/new"
   cat >"$TOOLS/curl" <<EOF
@@ -126,26 +113,20 @@ while [ \$# -gt 0 ]; do
 done
 echo "\$url" >>"$box/curl.log"
 [ -n "\$url" ] && [ -n "\$dest" ] || exit 22
-if [ "\$url" = archive.tar.gz ]; then
-  [ ! -e "$box/no-archive" ] || exit 22
-  tar -czf "\$dest" -C "$box" new
-  exit
-fi
-[ -f "$box/new/\$url" ] || { echo "\$url" >>"$box/curl-missing"; exit 22; }
-if [ -L "$box/new/\$url" ]; then readlink "$box/new/\$url" >"\$dest"; else cp "$box/new/\$url" "\$dest"; fi
+[ "\$url" = archive.tar.gz ] && [ ! -e "$box/no-archive" ] || exit 22
+tar -czf "\$dest" -C "$box" new
 EOF
 }
 
-# A curl install has no clone to copy from. v0.14.0's updater fetches each file
-# it lists, by name, from the new release, then the new bercail takes over.
+# A curl install has no clone to copy from: its update downloads the release.
 update_from_curl() {
   local tag="$1" rc=0
   install_release "$tag"
   rm -f "$home/.local/share/bercail/source-path"
   serve_new_release
-  in_home "$home" GITHUB_RAW_BASE=https://raw.test BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz \
+  in_home "$home" BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz \
     bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 || rc=$?
-  [[ "$rc" -eq 0 ]] || { tail -20 "$box/update.log"; fail "$tag's bercail update exited $rc; not served: $(cat "$box/curl-missing" 2>/dev/null)"; }
+  [[ "$rc" -eq 0 ]] || { tail -20 "$box/update.log"; fail "$tag's bercail update exited $rc: $(cat "$box/curl.log" 2>/dev/null)"; }
   if grep -E 'unbound variable|syntax error|command not found' "$box/update.log"; then
     fail "$tag's bercail update hit a shell error"
   fi
@@ -157,7 +138,6 @@ assert_this_tree() {
     || fail "$tag: the installed libs are not this tree's"
   cmp -s "$ROOT/bin/bercail" "$home/.local/bin/bercail" || fail "$tag: bin/bercail is not this tree's"
   [[ -x "$home/.local/bin/bercail" ]] || fail "$tag: bin/bercail is not executable"
-  [[ ! -e "$home/.local/bin/agentic-dev" ]] || fail "$tag: the agentic-dev command is still installed"
   [[ -f "$home/.local/share/bercail/lib/desk.sh" ]] || fail "$tag: lib/desk.sh missing"
   [[ -f "$home/.local/share/bercail/pi-extensions/bercail-desk.ts" ]] \
     || fail "$tag: the Pi desk extension is missing"
@@ -191,118 +171,45 @@ reload_config() {
     deploy_configs' 2>&1
 }
 
-# v0.14.0 is the oldest release that updates straight to this tree (docs/install.md).
-@test "bercail v0.14.0 updates to this tree with the new libs, binary, and every Pi skill link" {
+# v0.15.0 is the oldest release that updates straight to this tree (docs/install.md).
+@test "bercail v0.15.0 updates to this tree with the new libs, binary, and every Pi skill link" {
+  need_tag v0.15.0
+  update_from v0.15.0
+  assert_this_tree v0.15.0
+}
+
+@test "an install at v0.14.0 cannot update in place, and this tree's install.sh reinstalls over it" {
   need_tag v0.14.0
-  update_from v0.14.0
+  install_release v0.14.0
+  printf '%s\n' "$ROOT" >"$home/.local/share/bercail/source-path"
+  if in_home "$home" bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1; then
+    fail "v0.14.0 updated in place: $(tail -5 "$box/update.log")"
+  fi
+  printf '\n[graphite]\n"%s" = true\n' "$box/src" >>"$home/.config/bercail/config.toml"
+  this_tree "$box/new"
+  in_home "$home" bash "$box/new/install.sh" --yes >"$box/install-2.log" 2>&1 \
+    || { tail -20 "$box/install-2.log"; fail "the reinstall failed"; }
   assert_this_tree v0.14.0
+  grep -qxF "\"$box/src\" = \"gt\"" "$home/.config/bercail/config.toml" \
+    || fail "the reinstall did not keep config.toml: $(cat "$home/.config/bercail/config.toml")"
+  assert_updates_itself v0.14.0
 }
 
-@test "the first update from v0.14.0 moves the handoff log to bercail's state dir" {
-  need_tag v0.14.0
-  update_from v0.14.0
-  [[ "$(jq -r .issue "$home/.local/state/bercail/handoffs.jsonl")" == old-1 ]] \
-    || fail "the handoff log did not move: $(ls -la "$home/.local/state")"
-  [[ -L "$home/.local/state/agentic-dev" ]] || fail "the old state dir is not a link"
-}
-
-@test "the first update from v0.14.0 rewrites [graphite] under its v1 name" {
-  need_tag v0.14.0
-  update_from v0.14.0
+@test "an update from v0.15.0 rewrites [graphite] under its v1 name" {
+  need_tag v0.15.0
+  update_from v0.15.0
   grep -qxF "\"$box/src\" = \"gt\"" "$home/.config/bercail/config.toml" \
     || fail "the [graphite] entry did not move to [git]: $(cat "$home/.config/bercail/config.toml")"
 }
 
-# Offline Pi, with its bridge available; no account is needed to deploy the profile.
-upgrade_pi() {
-  cat >"$TOOLS/pi" <<'SH'
-#!/bin/sh
-case "$1" in
-  --version) echo 1.5.2 ;;
-  --offline) printf '%s\n' 'provider model context max-out thinking images' 'claude-bridge claude-opus-5-5 1M 128K yes yes' ;;
-  auth) echo '{"status":"not_ready"}'; exit 1 ;;
-  install) exit 0 ;;
-esac
-SH
-  chmod +x "$TOOLS/pi"
-}
-
-@test "v0.14.0 with bstack disabled upgrades to the guarded lead and removes the switch" {
-  need_tag v0.14.0
-  upgrade_pi
-  update_from v0.14.0 off
-  [[ "$(grep -c 'not plain pi' "$box/update.log")" == 1 ]] || fail "the update did not explain the new lead once: $(cat "$box/update.log")"
-  grep -q '^enabled' "$home/.config/bercail/config.toml" && fail "enabled was not removed"
-  jq -e '.[0] == "pi" and any(.[]; contains("extensions/guard.ts"))' "$home/.local/share/bercail/pi/lead.json" \
-    >/dev/null || fail "the guarded lead was not deployed"
-  assert_updates_itself v0.14.0
-  if grep -q 'not plain pi' "$box/update-2.log"; then fail "the second update repeated the warning"; fi
-}
-
-@test "v0.14.0 without a bstack section upgrades to the guarded lead and warns once" {
-  need_tag v0.14.0
-  upgrade_pi
-  update_from v0.14.0 no-bstack
-  [[ "$(grep -c 'not plain pi' "$box/update.log")" == 1 ]] || fail "the update did not explain the new lead once: $(cat "$box/update.log")"
-  jq -e '.[0] == "pi" and any(.[]; contains("extensions/guard.ts"))' "$home/.local/share/bercail/pi/lead.json" \
-    >/dev/null || fail "the guarded lead was not deployed"
-  assert_updates_itself v0.14.0
-  if grep -q 'not plain pi' "$box/update-2.log"; then fail "the second update repeated the warning"; fi
-}
-
-@test "a curl install of v0.14.0 updates to this tree: every file its updater fetches by name still ships" {
-  need_tag v0.14.0
-  update_from_curl v0.14.0
-  assert_this_tree v0.14.0
-  # The new bercail took the rest from the release's archive, not file by file.
-  [[ "$(grep -cx archive.tar.gz "$box/curl.log")" == 1 ]] || fail "the archive was not fetched once: $(cat "$box/curl.log")"
-  [[ "$(tail -1 "$box/curl.log")" == archive.tar.gz ]] || fail "files were fetched by name after the archive: $(cat "$box/curl.log")"
+@test "a curl install of v0.15.0 updates to this tree from the release archive alone" {
+  need_tag v0.15.0
+  update_from_curl v0.15.0
+  assert_this_tree v0.15.0
+  if grep -vx archive.tar.gz "$box/curl.log"; then fail "fetched more than the archive"; fi
   cmp -s "$box/new/lib/review.sh" "$home/.local/share/bercail/release/lib/review.sh" \
     || fail "the release was not unpacked under ~/.local/share/bercail/release"
   [[ ! -e "$home/.local/share/bercail/source-path" ]] || fail "the release tree was recorded as a clone"
-}
-
-# v0.14.0 copies the new bin and libs by its own list, then the new bercail
-# downloads the rest. When that download fails, the libs it left must still run.
-@test "a curl install of v0.14.0 whose restarted update cannot download still runs bercail, desk restore, doctor and review-pr" {
-  need_tag v0.14.0
-  install_release v0.14.0
-  rm -f "$home/.local/share/bercail/source-path"
-  serve_new_release
-  : >"$box/no-archive"
-  if in_home "$home" GITHUB_RAW_BASE=https://raw.test BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz \
-    bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1; then
-    fail "an update with no download succeeded: $(tail -5 "$box/update.log")"
-  fi
-  grep -q 'could not download bercail from https://raw.test/archive.tar.gz' "$box/update.log" \
-    || fail "the update did not fail on the download: $(tail -5 "$box/update.log")"
-  grep -qx "BERCAIL_VERSION=\"$new_version\"" "$home/.local/share/bercail/lib/common.sh" \
-    || fail "v0.14.0 did not copy the new libs"
-  cmp -s "$ROOT/lib/deps.json" "$home/.local/share/bercail/lib/deps.json" \
-    || fail "restart_update did not fetch lib/deps.json, where doctor reads the minimums"
-  # No live terminals, as at boot before Herdr starts its desks.
-  cat >"$TOOLS/hc" <<'SH'
-#!/bin/sh
-echo '{"terminals":[]}'
-SH
-  chmod +x "$TOOLS/hc"
-  local cmd want
-  for cmd in help "desk restore --dry-run" doctor review-pr; do
-    case "$cmd" in
-      help) want="bercail v$new_version" ;;
-      review-pr) want='Usage: bercail review-pr <command>' ;;
-      desk*) want='0 would come back' ;;
-      # doctor's bstack check, which reads config.toml.
-      doctor) want='  missing  pi (bercail bstack setup)' ;;
-    esac
-    # shellcheck disable=SC2086 # cmd is a command and its arguments
-    in_home "$home" bash "$home/.local/bin/bercail" $cmd >"$box/cmd.log" 2>&1 || true
-    grep -qxF "$want" "$box/cmd.log" || fail "bercail $cmd failed on the libs v0.14.0 left: $(tail -3 "$box/cmd.log")"
-  done
-  rm "$box/no-archive"
-  in_home "$home" BERCAIL_ARCHIVE_URL=https://raw.test/archive.tar.gz bash "$home/.local/bin/bercail" update >"$box/update.log" 2>&1 \
-    || { tail -20 "$box/update.log"; fail "the next update failed"; }
-  assert_this_tree v0.14.0
 }
 
 @test "a curl install's update unpacks the next release and runs that tree's bercail; a failed download changes nothing" {
@@ -332,12 +239,6 @@ SH
   printf 'stale\n' >>"$home/.config/worktrunk/herdr-layout.sh"
   in_home "$home" bash "$home/.local/bin/bercail" doctor >"$box/doctor.log" 2>&1 || true
   grep -q 'stale  herdr-layout.sh' "$box/doctor.log" || fail "doctor did not compare with the release: $(grep herdr-layout "$box/doctor.log")"
-}
-
-@test "v0.14.0's updater hands the update to the new bercail once" {
-  need_tag v0.14.0
-  update_from v0.14.0
-  [[ "$(restarts "$box/update.log")" == 1 ]] || fail "restarted $(restarts "$box/update.log") times: $(cat "$box/update.log")"
 }
 
 @test "a curl install with HOME behind a symlink records no clone, so its update downloads the next release" {
@@ -429,16 +330,16 @@ SH
   if grep -q 'started:' <<<"$out"; then fail "restarted twice: $out"; fi
 }
 
-@test "after v0.14.0, the new bercail updates itself and keeps its binary" {
-  need_tag v0.14.0
-  update_from v0.14.0
-  assert_updates_itself v0.14.0
+@test "after v0.15.0, the new bercail updates itself and keeps its binary" {
+  need_tag v0.15.0
+  update_from v0.15.0
+  assert_updates_itself v0.15.0
 }
 
 @test "the latest release updates to this tree with the new libs, binary, and every Pi skill link" {
   local tag
   tag="$(latest_release)"
-  [[ -n "$tag" && "$tag" != v0.14.0 ]] || skip "the latest release is v0.14.0, covered above"
+  [[ -n "$tag" && "$tag" != v0.15.0 ]] || skip "the latest release is v0.15.0, covered above"
   need_tag "$tag"
   update_from "$tag"
   assert_this_tree "$tag"
@@ -447,7 +348,7 @@ SH
 @test "after the latest release, the new bercail updates itself and keeps its binary" {
   local tag
   tag="$(latest_release)"
-  [[ -n "$tag" && "$tag" != v0.14.0 ]] || skip "the latest release is v0.14.0, covered above"
+  [[ -n "$tag" && "$tag" != v0.15.0 ]] || skip "the latest release is v0.15.0, covered above"
   need_tag "$tag"
   update_from "$tag"
   assert_updates_itself "$tag"

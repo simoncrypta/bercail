@@ -222,5 +222,4 @@ assert_handed_main_store() {
   jq -e --arg id "$id" '.issue == $id and .v == 1 and (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$"))' \
     "$XDG_STATE_HOME/bercail/handoffs.jsonl" >/dev/null \
     || fail "record: $(cat "$XDG_STATE_HOME/bercail/handoffs.jsonl" 2>&1)"
-  [[ ! -e "$XDG_STATE_HOME/agentic-dev" ]] || fail "the spawn wrote under the old state dir"
 }

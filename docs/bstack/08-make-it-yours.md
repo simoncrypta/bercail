@@ -86,8 +86,9 @@ bercail, and every update rewrites it.
 bstack's skills are in `~/.agents/skills` ([the list](../cli.md#skills)), with
 a link in `~/.pi/agent/skills` for each. Every bstack role also loads them with
 `--skill`, so Pi's settings cannot filter them out. An update removes the
-`council` skill releases before v0.18 installed, and its link, when its
-`SKILL.md` is one bercail shipped; a file you added there stays.
+`council` and `review` skills releases before v0.18 installed, and their links,
+when a skill's `SKILL.md` is one bercail shipped. It removes only the files
+bercail shipped, byte for byte: a file you added or edited there stays.
 
 Add your own skill next to them. Write one when you have corrected the same
 mistake twice, not before. Better still, when a lint, a test, or a type can

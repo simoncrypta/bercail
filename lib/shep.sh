@@ -13,7 +13,7 @@
 # shellcheck source=lib/shep-context.sh
 source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 
-SHEP_SKILLS=(handoff review desk-restore how why unslop describe)
+SHEP_SKILLS=(handoff desk-restore how why unslop describe)
 SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --kind wait|admin --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--group ID] [--repo DIR] [--issue ID] | mistake group ID \"NAME\" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|expire|discuss|closed"
 
 shep_state_dir() {
