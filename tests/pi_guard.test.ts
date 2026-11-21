@@ -639,7 +639,7 @@ test("the extension shows a warning in the tool's result, and logs warnings and 
     assertMatch(((await bash("p1", "git push origin feature", headlessCtx)) as Decision).reason ?? "", /headless/);
     assertMatch(
       ((await bash("p2", "git push origin feature", deskCtx)) as Decision).reason ?? "",
-      /^The person said no to: Allow this git push\?/,
+      /^The person said no to: Allow this push to origin: feature\?/,
     );
     expect(confirm).toHaveBeenCalledOnce();
     // A headless entire command bercail does not know: agent-help says read-only, so it warns.
@@ -1979,6 +1979,58 @@ test("entire --repo does not lend cwd trust, and a trail checkout moves the bran
   blocked("entire trail create --repo gh/o/r --title x", at("headless", policies.loosest), /headless run/);
   asked("entire trail checkout 3 && git push", at("desk", policies.branch));
   asked("entire trail create --title x --checkout && git push", at("desk", policies.branch));
+});
+
+// bercail-vzm1: an intent-only trail pushes nothing, so its question says what it is.
+const reasonOf = (command: string, input: GuardInput) => decision(command, input).reason ?? "";
+const intentTrail = "entire trail create --no-branch --project et/lesentiel --title x --json";
+test("Shep creates an intent-only trail with a warning, not a push prompt", () => {
+  warned(intentTrail, at("shep", policies.default), /wrote a trail on entire\.com/);
+  warned("entire trail create --no-branch=true --title x", at("shep", policies.default), /entire\.com/);
+});
+test("a desk asks to create an intent-only trail on entire.com, never a git push", () => {
+  asked(intentTrail, at("desk", policies.default));
+  assertEqual(
+    reasonOf(intentTrail, at("desk", policies.default)),
+    "Create a trail on entire.com? The team sees it; it pushes no branch.",
+  );
+  allowed(intentTrail, at("desk", policies.branch));
+  blocked(intentTrail, at("headless", policies.default), /does not create trails on entire\.com/);
+  blocked(intentTrail, at("judge", policies.default), /read-only/);
+  blocked(intentTrail, { ...at("shep", policies.default), role: "shep-bg" }, /background Shep/i);
+});
+test("a trail create that links a branch is still a push, and says so", () => {
+  for (const command of ["entire trail create --title x", "entire trail create --no-branch=false --title x"]) {
+    asked(command, at("shep", policies.default));
+    assertMatch(reasonOf(command, at("desk", policies.default)), /^Allow this push by entire trail create\?/);
+  }
+});
+test("Shep's trail update runs with a warning; a desk's runs as before", () => {
+  warned("entire trail update 3 --status closed", at("shep", policies.default), /wrote a trail on entire\.com/);
+  assertDeepEqual(decision("entire trail update 3 --body x", at("desk", policies.default)), { action: "allow" });
+});
+test("--delete deletes every ref it lists, wherever it stands, so main is never one of them", () => {
+  for (const command of [
+    "git push --delete origin master",
+    "git push -d origin feature main",
+    "git push origin --delete feature master",
+  ])
+    for (const role of roleNames) blocked(command, at(role, policies.loosest), /Deleting main or master/);
+});
+test("a push's question names what it pushes, not the commit beside it", () => {
+  const shep = at("shep", policies.default, "feature");
+  for (const [command, want] of [
+    ["git commit -m x && git push origin HEAD:feature", "Allow this push to origin: the current branch (feature)?"],
+    ["git push origin 1a2b3c4:master", "Allow this push to origin: 1a2b3c4 as master?"],
+    ["git push", "Allow this push: the current branch (feature)?"],
+    ["git push --follow-tags origin feature", "Allow this push to origin: feature, tags?"],
+    ["git push origin feature v1.2.0", "Allow this push to origin: feature, v1.2.0?"],
+    ["git push --delete origin old stale", "Allow this push to origin: a delete of old, a delete of stale?"],
+    ["gh pr create --fill", "Allow this push by gh pr create?"],
+  ]) {
+    asked(command, shep);
+    assertEqual(reasonOf(command, shep), `${want} No keeps it local for the person.`, command);
+  }
 });
 
 // Brain and Graph, as entire brain …, entire graph …, or the plugin binary itself.

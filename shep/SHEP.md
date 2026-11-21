@@ -96,7 +96,10 @@ main checkout, and pass `--repo <checkout>` to `bercail job`.
   ask, links, what done looks like>" --type task --json`. Its `number` is the
   job. Dispatch it with `target: "trail:<n>"` (`issue` or `target` alone will
   do; both must match). Its desk still gets a local branch; nothing is pushed
-  or linked unless the job has a change to ship.
+  or linked unless the job has a change to ship. The guard runs your
+  `--no-branch` create and `entire trail update` without asking, with a
+  warning: the trail is on entire.com, where the person's team sees it. Give
+  the trail's URL in your report.
 - When it must wait for other trails, put `Blocked by: #12, #15` on a line of
   its body (at create, or `entire trail update <n> --body`). `bercail job list
   --repo <checkout>` shows each open trail as ready or blocked. When dispatch

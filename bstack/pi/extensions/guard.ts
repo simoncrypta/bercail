@@ -120,6 +120,11 @@ const entirePerson =
 const entireDestroy =
   "This entire command amends a commit, resets git state, or deletes checkpoints. Ask the person to run it.";
 const entireUnknown = "A headless run only uses entire commands bercail knows. Leave this one to the person.";
+const shepTrail =
+  "This wrote a trail on entire.com, which the person's team sees. Say in your report which trail you created or changed, with its URL.";
+const trailAsk = "Create a trail on entire.com? The team sees it; it pushes no branch.";
+const trailHeadless =
+  "A headless run does not create trails on entire.com. Put the trail you need in your report, and Shep or the person creates it.";
 const cleanupAsk =
   "Retire this worktree? bercail cleanup archives its .bercail/, ends its desk, removes the worktree and closes its space. The branch stays.";
 const cleanupHeadless =
@@ -820,6 +825,8 @@ type PushFacts = {
   mirror: boolean;
   deleteMain: boolean;
   plus: boolean;
+  /** The remote it names, if any. */
+  remote?: string;
   refspecs: string[];
   deleted: string[];
   tags: boolean;
@@ -831,7 +838,6 @@ function pushFacts(args: string[]): PushFacts {
   let forceFlag = false;
   let mirrorFlag = false;
   let deleting = false;
-  let deleteMainFlag = false;
   let plus = false;
   let tags = false;
   let every = false;
@@ -843,23 +849,13 @@ function pushFacts(args: string[]): PushFacts {
       positionals.push(...args.slice(i + 1));
       break;
     }
-    if (deleting && !arg.startsWith("-")) {
-      if (isMainRef(arg)) deleteMainFlag = true;
-      deleted.push(arg);
-      deleting = false;
-      continue;
-    }
     if (arg.startsWith("-")) {
       if (arg === "--force" || arg === "-f" || arg.startsWith("--force")) forceFlag = true;
       if (arg === "--mirror") mirrorFlag = true;
       if (arg === "--tags" || arg === "--follow-tags") tags = true;
       if (arg === "--all" || arg === "--branches") every = true;
       if (arg === "--delete" || arg === "-d") deleting = true;
-      if (arg.startsWith("--delete=")) {
-        const ref = arg.slice("--delete=".length);
-        if (isMainRef(ref)) deleteMainFlag = true;
-        deleted.push(ref);
-      }
+      if (arg.startsWith("--delete=")) deleted.push(arg.slice("--delete=".length));
       const cluster = shortCluster(arg);
       if (cluster?.includes("f")) forceFlag = true;
       if (cluster?.includes("d")) deleting = true;
@@ -873,18 +869,29 @@ function pushFacts(args: string[]): PushFacts {
   const firstIsRef =
     first !== undefined &&
     (first.includes(":") || first.startsWith("+") || first.startsWith("refs/") || first === "HEAD" || isMainRef(first));
-  const refspecs = first === undefined ? [] : firstIsRef ? positionals : positionals.slice(1);
+  const listed = first === undefined ? [] : firstIsRef ? positionals : positionals.slice(1);
+  // With --delete, git deletes every ref listed, wherever the flag stands.
+  const refspecs = deleting ? [] : listed;
+  if (deleting) deleted.push(...listed);
   for (const spec of refspecs) {
     if (spec.startsWith("+")) plus = true;
     if (spec.includes("*")) every = true;
     // :<ref> pushes nothing to <ref>: a delete.
     const bare = spec.replace(/^\+/, "");
-    if (bare.startsWith(":")) {
-      deleted.push(bare.slice(1));
-      if (isMainRef(bare.slice(1))) deleteMainFlag = true;
-    }
+    if (bare.startsWith(":")) deleted.push(bare.slice(1));
   }
-  return { force: forceFlag, mirror: mirrorFlag, deleteMain: deleteMainFlag, plus, refspecs, deleted, tags, every };
+  const remote = first === undefined || firstIsRef ? undefined : first;
+  return {
+    force: forceFlag,
+    mirror: mirrorFlag,
+    deleteMain: deleted.some(isMainRef),
+    plus,
+    remote,
+    refspecs,
+    deleted,
+    tags,
+    every,
+  };
 }
 
 function shellScript(words: string[]): string | undefined {
@@ -951,7 +958,8 @@ function forgePublish(words: string[]): "commit" | "push" | undefined {
 // What an entire command does: a read, a publish like gh pr create, a trail
 // write like gh pr edit, or one that is the person's (bercail-znd's classes,
 // starting from `entire agent-help`).
-type EntireKind = "read" | "push" | "write" | "ask" | "merge" | "approve" | "person" | "destroy" | BrainKind;
+// trail: a trail write on entire.com that pushes no git ref (create --no-branch, update).
+type EntireKind = "read" | "push" | "write" | "trail" | "ask" | "merge" | "approve" | "person" | "destroy" | BrainKind;
 // Brain and Graph (bercail-shr): a local index rebuild, a repository memory, a
 // model call on the person's tokens, and setup, sync or background work.
 type BrainKind = "refresh" | "remember" | "spend" | "setup";
@@ -1160,9 +1168,12 @@ function entireKind(words: string[]): EntireKind | undefined {
     if (path.includes("merge")) return "merge";
     if (path.includes("finding") && path.includes("dismiss")) return "approve";
     if (among(sub, "approvals list sessions show stack timeline watch")) return "read";
+    // --no-branch=false still links a branch.
+    if (sub === "create" && words.some((w) => w === "--no-branch" || w === "--no-branch=true")) return "trail";
     if (among(sub, "create link ci-pr update-branch")) return "push";
     if (sub === "finding") return among(third, "list show") ? "read" : "write";
-    if (among(sub, "update ready retarget comment rerun-review unlink attachment")) return "write";
+    if (sub === "update") return "trail";
+    if (among(sub, "ready retarget comment rerun-review unlink attachment")) return "write";
   }
   return "ask";
 }
@@ -1194,10 +1205,25 @@ function decideEntire(
   // Memories go through Shep and the person, as standing rules do.
   if (kind === "remember") return input.role === "shep" ? allow : block(brainRemember);
   if (readOnlyRole(input.role)) return block(readOnly);
-  if (kind === "push") return decidePush([], dir, input);
+  if (kind === "push") return decidePush([], dir, input, `entire ${entirePath(reading).slice(0, 2).join(" ")}`);
+  if (kind === "trail") return decideTrailWrite(entirePath(reading)[1] === "create", dir, input);
   if (kind === "write" || kind === "refresh") return allow;
   if (!input.hasUI) return entireListedRead(reading, input);
   return ask("Allow this entire command? bercail does not know it to be read-only.");
+}
+
+// Shep's trail writes run with a warning: the person is fine with the team seeing
+// trails (bercail-vzm1). A desk's create follows the push policy, with its own
+// question; an update is like gh pr edit.
+function decideTrailWrite(create: boolean, dir: string | undefined, input: GuardInput): GuardDecision {
+  if (!create) return input.role === "shep" ? warn(shepTrail) : allow;
+  const refused = noChange(input.role);
+  if (refused) return refused;
+  if (input.role === "shep") return warn(shepTrail);
+  const policy = policyFor(dir, input);
+  if (!isPolicy(policy)) return policy;
+  if (policy.push !== "ask") return approve(because(policy, "push", policy.push));
+  return askOr(input, trailAsk, trailHeadless);
 }
 
 // A headless run has no one to ask, so an entire command bercail does not know
@@ -1788,14 +1814,41 @@ function gitWrite(sub: string, args: string[]): boolean {
   return false;
 }
 
-function publish(kind: "push" | "release", input: GuardInput): GuardDecision {
+function publish(kind: "push" | "release", input: GuardInput, what = "this push"): GuardDecision {
   if (kind === "release")
     return askOr(
       input,
       "Allow this tag or release? This repo's policy leaves releases to the person.",
       headlessRelease,
     );
-  return askOr(input, "Allow this git push? No keeps it local for the person.", headless);
+  return askOr(input, `Allow ${what}? No keeps it local for the person.`, headless);
+}
+
+// What a push sends, for its question: each ref and where it goes, so a command
+// that also commits asks about its push alone (bercail-vzm1). via: the forge
+// command that pushes, when it is not git push.
+function pushWhat(facts: PushFacts, dests: string[], branch: string, via?: string): string {
+  if (via) return `this push by ${via}`;
+  const current = branch ? `the current branch (${branch})` : "the current branch";
+  const named = (ref: string) => (ref === "HEAD" ? current : ref);
+  const sent = facts.refspecs
+    .filter((spec) => !spec.startsWith(":") && !spec.includes("*"))
+    .map((spec) => {
+      const [src, dst] = spec.split(":");
+      return dst === undefined || dst === src || (src === "HEAD" && dst === branch)
+        ? named(src)
+        : `${named(src)} as ${dst}`;
+    });
+  const deletes = facts.deleted.map((ref) => `a delete of ${ref}`);
+  const bare = facts.refspecs.length === 0 && facts.deleted.length === 0 && dests.includes("");
+  const items = [
+    ...sent,
+    ...deletes,
+    ...(bare ? [current] : []),
+    ...(dests.includes("*") ? ["every branch"] : []),
+    ...(facts.tags ? ["tags"] : []),
+  ];
+  return `this push${facts.remote ? ` to ${facts.remote}` : ""}: ${items.join(", ")}`;
 }
 
 // The policy for a git dir: need-policy until the wrapper has looked it up. A dir
@@ -1829,7 +1882,7 @@ function decideRelease(dir: string | undefined, input: GuardInput): GuardDecisio
   return publish("release", input);
 }
 
-function decidePush(args: string[], dir: string | undefined, input: GuardInput): GuardDecision {
+function decidePush(args: string[], dir: string | undefined, input: GuardInput, via?: string): GuardDecision {
   const facts = pushFacts(args);
   if (facts.force) return forceFor(input);
   if (facts.plus) return block(plusRef);
@@ -1877,7 +1930,8 @@ function decidePush(args: string[], dir: string | undefined, input: GuardInput):
     }
     if (!toMainRef) return worse(decision, approve(because(policy, "push", "branch")));
   }
-  return worse(decision, publish("push", input));
+  const branch = dir === undefined || input.branchMoved ? "" : (input.branches?.[dir] ?? "");
+  return worse(decision, publish("push", input, pushWhat(facts, dests, branch, via)));
 }
 
 // A commit is local and reversible, so it runs in every repo with a warning; only
@@ -2311,7 +2365,8 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       return forceFor(input);
     if (publishing) {
       if (hasNoVerify("push", words)) return block(noVerify);
-      decision = worse(decision, publishing === "commit" ? decideCommit(here) : decidePush([], forge.dir, here));
+      const via = forgePlain.slice(0, words[0] === "gt" ? 2 : 3).join(" ");
+      decision = worse(decision, publishing === "commit" ? decideCommit(here) : decidePush([], forge.dir, here, via));
     }
     const refused = sync ? noChange(input.role) : undefined;
     if (refused) decision = worse(decision, refused);

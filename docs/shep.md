@@ -56,7 +56,7 @@ In a repo whose git backend is `entire`, everything is a trail: code, research, 
 
 | Step | What |
 |------|------|
-| Create | Shep: `entire trail create --no-branch --title … --body … --type task --json` from the main checkout. The trail is in the planning phase |
+| Create | Shep: `entire trail create --no-branch --title … --body … --type task --json` from the main checkout. The trail is in the planning phase. It pushes no branch, so the guard runs it with a [warning](config.md#warnings-and-refusals) instead of a push prompt |
 | Dispatch | `{"repo": …, "target": "trail:<n>", "requestId": …, "message": …, "branch": …}`. The trail is not changed; a closed one is refused, with the command that reopens it |
 | Report | the desk: `bercail job comment trail:<n>` with the report on stdin |
 | Link | Shep, once the branch is pushed: `entire trail link <n> --branch <branch>` |
@@ -85,7 +85,7 @@ The bercail layout opens on Shep: its terminal fills the window, with the spaces
 - **Spaces.** Click a space, or `Ctrl+Space` and search, to fill the window with it. **Back to Shep**, or `Ctrl+Shift+H`, returns. Switching starts and stops nothing, and the keyboard goes back where it was.
 - **Agents.** Click an agent to open its terminal in a dialog; what you type goes to it, and nothing is sent for you. **Show in space** goes to its space.
 - **Decisions.** **Decisions N** shows or hides the [Decisions panel](#the-decisions-panel).
-- **Authority.** The view only shows things. The same guard applies the repo's trusted [push policy](config.md#git-policy-per-repo) to Shep and its desks. A foreground Shep commit in any repo runs with a [guard warning](config.md#warnings-and-refusals); a background Shep cannot commit. Shep repeats guard warnings in its report. Warnings and refusals, including your “no”, go in `~/.local/state/bercail/guard-warnings.jsonl`. It runs `bercail policy show <repo>` before it commits, merges, pushes or releases, ships with the desk's `/validate` description, and holds a change that needs [review](config.md#review-by-stakes-and-size) for your LGTM. A trail merge asks you through the guard whatever the policy.
+- **Authority.** The view only shows things. The same guard applies the repo's trusted [push policy](config.md#git-policy-per-repo) to Shep and its desks. A foreground Shep commit in any repo runs with a [guard warning](config.md#warnings-and-refusals); a background Shep cannot commit. Shep repeats guard warnings in its report. Warnings and refusals, including your “no”, go in `~/.local/state/bercail/guard-warnings.jsonl`. It runs `bercail policy show <repo>` before it commits, merges, pushes or releases, ships with the desk's `/validate` description, and holds a change that needs [review](config.md#review-by-stakes-and-size) for your LGTM. A trail merge asks you through the guard whatever the policy. An intent-only trail (`entire trail create --no-branch`) and `entire trail update` run with a warning, since you are fine with the team seeing trails. A push the guard asks about is named in its question (`Allow this push to origin: 1a2b3c4 as master?`), so a command that also commits asks about its push alone.
 
 When Pi exits with an error, its message stays until you press Enter.
 
