@@ -19,6 +19,9 @@ usage.
   how each copy is pinned. Why copies beat subtree, submodules and fetched pins
   here, and a `git:` source for the dependency tracker that opens a `vendor`
   issue when an upstream moves.
+- [Script languages](script-languages.md): a proposal, measured on one
+  desktop, to keep bash for glue and move JSON-heavy logic to TypeScript, not
+  to dash or QuickJS.
 
 ## Reading the evidence
 
