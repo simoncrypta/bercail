@@ -17,6 +17,10 @@ One command runs the whole proof, in about three minutes:
 ```
 
 It exits 0 when every step and check passed, and prints the evidence folder.
+It holds one of the machine's test slots for the whole drive, the same ones
+`tests/run.sh` takes (`[tests] slots`, [development](../../../docs/development.md#test-slots)),
+so with every slot taken it says `waiting for a test slot` and who holds them,
+then starts when one frees.
 
 ## Tests
 

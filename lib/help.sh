@@ -9,7 +9,7 @@ Post-install CLI (bercail):
   help          This help
   install       Full install from the release mise or packslip unpacked;
                 --client MACHINE installs only the Herdr app half, for bercail on MACHINE
-  doctor        Check dependencies, integration, leftover scratch and /tmp use (and Entire, in a repo that uses it);
+  doctor        Check dependencies, integration, leftover scratch, /tmp use and test slots (and Entire, in a repo that uses it);
                 on a client, the Herdr app half and that the backend runs this version
   bstack        bercail's Pi setup: status | setup
   scratch       Each agent's TMPDIR (~/.cache/bercail/scratch/<pid>, leased by .<pid>): sweep [--dry-run] [--days N]
@@ -199,7 +199,7 @@ bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   by this extension. The lead starts roles as hc siblings.
 
 Config:
-  ~/.config/bercail/config.toml               review, [bstack], [git], [policy."<repo>"]
+  ~/.config/bercail/config.toml               review, [bstack], [git], [policy."<repo>"], [tests] slots
   ~/.local/state/bercail/policy-trust.json    repos whose git policy you trusted
   ~/.local/state/bercail/guard-approvals.jsonl  what the guard let through, and why
   ~/.local/state/bercail/guard-warnings.jsonl   what it warned about or refused (bercail doctor counts a week's)

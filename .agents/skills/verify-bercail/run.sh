@@ -4,6 +4,14 @@
 set -uo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+# The whole drive holds one machine-wide test slot (lib/slots.sh); the suite
+# it runs is inside it and takes no other.
+# shellcheck source=lib/slots.sh
+source "$repo/lib/slots.sh"
+if ! slot_held; then
+  slot_run verify-bercail bash "$repo/.agents/skills/verify-bercail/run.sh" "$@"
+  exit
+fi
 evidence="${1:-$repo/.bercail/verify/$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$evidence"
 evidence="$(cd "$evidence" && pwd)"

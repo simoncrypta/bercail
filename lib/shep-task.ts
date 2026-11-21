@@ -13,6 +13,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { availableParallelism, loadavg } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isTrail, ownTrail, readRecord, trailNumber, trailWaits, writeRecord } from "./jobs.ts";
@@ -102,6 +103,12 @@ function same(stored: Request, request: Request): boolean {
 }
 const state = () => join(process.env.XDG_STATE_HOME || join(process.env.HOME!, ".local/state"), "bercail");
 const bin = (name: string) => process.env[`${name.toUpperCase()}_BIN`] || name;
+// bd's time limit: 10 s on an idle machine, growing with the load per core
+// up to a minute. bd answers in a second alone, and in several while test
+// suites run beside it; a flat 3 s failed dispatches.
+export function patience(load: number, cores = availableParallelism()): number {
+  return Math.round(Math.min(60_000, 10_000 * Math.max(1, load / cores)));
+}
 function run(command: string, args: string[], cwd: string, timeout = 3000, input?: string): string {
   return execFileSync(command, args, {
     cwd,
@@ -123,9 +130,36 @@ function json(path: string): any {
 function git(repo: string, ...args: string[]): string {
   return run("git", args, repo);
 }
+// A bd call that runs out of time may still have written: a retry of the
+// identical request picks up whatever this attempt recorded.
 function bd(repo: string, ...args: string[]): any {
-  const out = run(process.env.HANDOFF_BD_BIN || bin("bd"), args, repo);
+  const load = loadavg()[0]!;
+  const limit = patience(load);
+  let out: string;
+  try {
+    out = run(process.env.HANDOFF_BD_BIN || bin("bd"), args, repo, limit);
+  } catch (error: any) {
+    if (error?.code !== "ETIMEDOUT") throw error;
+    throw new Error(
+      `bd ${args[0]} did not answer in ${limit / 1000}s (load ${load.toFixed(1)}); this request may be partly recorded, so retry the identical request (the same JSON), never a reworded one`,
+      { cause: error },
+    );
+  }
   return out ? JSON.parse(out) : null;
+}
+const timedOut = (error: any) => error?.cause?.code === "ETIMEDOUT";
+// Save a creation about to spawn. bd may record it and still run out of time;
+// no desk started, so it is recorded UNKNOWN, which a retry starts again.
+function reserve(repo: string, value: any, task: Task): void {
+  try {
+    save(repo, value, task);
+  } catch (error) {
+    if (!timedOut(error)) throw error;
+    task.creation!.status = "unknown";
+    task.creation!.next = "The reservation timed out before any desk started; retry this request";
+    save(repo, value, task);
+    throw error;
+  }
 }
 // The job: a beads issue, or in an Entire repo a trail of this repo, whose task
 // is the local job record (jobs.ts). A closed trail takes no desk; waiting is
@@ -776,7 +810,7 @@ function dispatch(op: string, input: any): any {
         prior.next = path
           ? `Finishing the partial creation in ${path}`
           : "Starting the creation again: the last one left no worktree";
-        save(repo, value, task!);
+        reserve(repo, value, task!);
         const done = create(repo, value, task!, {
           existing,
           reuse: !!path,
@@ -899,7 +933,7 @@ function dispatch(op: string, input: any): any {
       return { status: "queued", owner, path, authority: false };
     }
     task.creation = { ...request, status: "creating", next: "Inspect visible creation result" };
-    save(repo, value, task);
+    reserve(repo, value, task);
     const done = create(repo, value, task, {
       existing,
       reuse: false,

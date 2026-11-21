@@ -100,6 +100,7 @@ shep keep_recent
 shep rollover
 shep spawn_timeout
 shep decision_timeout
+tests slots
 todo backend
 todo.basecamp account
 todo.basecamp project

@@ -8,8 +8,9 @@ setup() {
   # A copy of the runner in a tree of its own, with the real bats and a vp that
   # passes, so the files it runs are the ones each test writes.
   tree="$BATS_TEST_TMPDIR/tree"
-  mkdir -p "$tree/tests" "$tree/node_modules/.bin"
+  mkdir -p "$tree/tests" "$tree/lib" "$tree/node_modules/.bin"
   cp "$ROOT/tests/run.sh" "$ROOT/tests/test_helper.bash" "$tree/tests/"
+  cp "$ROOT/lib/slots.sh" "$ROOT/lib/toml.sh" "$tree/lib/"
   ln -s "$ROOT/node_modules/bats/bin/bats" "$tree/node_modules/.bin/bats"
   printf '#!/bin/sh\nexit 0\n' >"$tree/node_modules/.bin/vp"
   chmod +x "$tree/node_modules/.bin/vp"
@@ -38,7 +39,7 @@ meet_file() {
 @test "run.sh runs the files side by side without GNU parallel" {
   meet_file a b
   meet_file b a
-  run env -u BATS_JOBS PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh"
+  run env BATS_JOBS=8 PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh"
   [[ "$status" -eq 0 ]] || fail "status $status: $output"
   grep -qx 'ok tests/a.bats' <<<"$output" || fail "no line for a.bats: $output"
   grep -qx '2 tests, 0 failures, 0 skipped' <<<"$output" || fail "no total: $output"
@@ -51,7 +52,7 @@ meet_file() {
   rm "$tree/tests/b.bats"
   meet_file c d
   meet_file d c
-  run env -u BATS_JOBS PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh"
+  run env BATS_JOBS=8 PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh"
   [[ "$status" -eq 0 ]] || fail "status $status: $output"
   grep -qx '4 tests, 0 failures, 0 skipped' <<<"$output" || fail "no total: $output"
 }
@@ -60,7 +61,7 @@ meet_file() {
   meet_file a b
   meet_file b a
   printf 'load test_helper\nsetup() { isolate; }\n@test "c fails" {\n  echo the reason\n  false\n}\n' >"$tree/tests/c.bats"
-  run env -u BATS_JOBS PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh"
+  run env BATS_JOBS=8 PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh"
   [[ "$status" -ne 0 ]] || fail "a failing file passed the run: $output"
   grep -qx 'not ok tests/c.bats' <<<"$output" || fail "no line for c.bats: $output"
   grep -qF 'the reason' <<<"$output" || fail "the failure's output is missing: $output"
@@ -71,7 +72,7 @@ meet_file() {
   meet_file a b
   meet_file b a
   printf 'setup_suite() { :; }\nteardown_suite() { return 1; }\n' >"$tree/tests/setup_suite.bash"
-  run env -u BATS_JOBS PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh"
+  run env BATS_JOBS=8 PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh"
   [[ "$status" -ne 0 ]] || fail "a failed teardown_suite passed the run: $output"
   grep -qx '2 tests, 0 failures, 0 skipped' <<<"$output" || fail "wrong total: $output"
 }
