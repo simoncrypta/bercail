@@ -757,7 +757,7 @@ test("an approvable push keeps the refusals, and the policy that lets it through
     blocked(command, shep, /the guard's to check and spend/);
 });
 
-test("the extension spends the person's answer on the push it would ask about, and asks without one", async () => {
+test("the extension spends the person's answer on the push it would ask about, and hands it off without one", async () => {
   const dir = mkdtempSync(join(tmpdir(), "guard-claim-"));
   vi.stubEnv("HOME", dir);
   vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
@@ -798,14 +798,14 @@ test("the extension spends the person's answer on the push it would ask about, a
       logged.map((line) => [JSON.parse(line).kind, JSON.parse(line).command]),
       [["warning", approvedPush]],
     );
-    // The same answer again is spent, so the push asks as today.
+    // The same answer again is spent, so the push goes to a Decisions card: here /work
+    // is no checkout, so it is refused. Shep never gets a dialog.
     assertMatch(
       ((await bash("p2", approvedPush)) as Decision).reason ?? "",
-      new RegExp(`^The person said no to: ${plainAsk.replace(/[?^{}]/g, "\\$&")}`),
+      new RegExp(`^${plainAsk.replace(/[?^{}]/g, "\\$&")} Shep's session never waits on a confirm`),
     );
-    expect(confirm).toHaveBeenCalledOnce();
     // Beside another call of its message, or with a GIT_DIR bash would inherit or a
-    // GIT_CONFIG only git config reads, it asks without looking for an answer.
+    // GIT_CONFIG only git config reads, it looks for no answer.
     exec.mockClear();
     answers = 1;
     await bash("p3", approvedPush, ["p4"]);
@@ -817,7 +817,7 @@ test("the extension spends the person's answer on the push it would ask about, a
       await bash(`p-${key}`, approvedPush);
       vi.stubEnv(key, undefined);
     }
-    expect(confirm).toHaveBeenCalledTimes(4);
+    expect(confirm).not.toHaveBeenCalled();
     assertDeepEqual(helper(), []);
   } finally {
     vi.unstubAllEnvs();

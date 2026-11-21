@@ -1,7 +1,20 @@
 // bercail's Pi guard. The decision functions are pure; the default export wires
 // tool_call and tool_result, the repo's git policy (bercail policy show), the
 // approval log, and the log of warnings and refusals.
-import { appendFileSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import {
+  appendFileSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -170,6 +183,8 @@ const pushApproved = (token: string) =>
   `Allowed this push without asking: the person's Decisions answer ${token} approves it, once. Say so in your report.`;
 const pushApprovalCommand =
   "Which Decisions answer approves a push is the guard's to check and spend. Push, and the guard checks.";
+const guardAskCommand =
+  "A guard card and its worker are the guard's: it starts them when Shep runs a command it would ask about. Run the command, and the guard hands it off.";
 const tmpWrite = (tmpdir: string) =>
   `This writes under /tmp, which holds RAM and keeps a file for days. Put scratch in $TMPDIR (${tmpdir}) or a mktemp -d folder instead: bercail removes it when you exit.`;
 
@@ -1434,6 +1449,16 @@ function isLand(words: string[]): boolean {
   return plain.some((word, i) => basename(word) === "bercail" && plain[i + 1] === "land");
 }
 
+// bercail guard ask, or the worker's file: only the guard starts it, on its own ticket.
+function runsGuardAsk(words: string[]): boolean {
+  const plain = plainWords(words);
+  return plain.some(
+    (word, i) =>
+      (basename(word) === "bercail" && plain[i + 1] === "guard" && plain[i + 2] === "ask") ||
+      word.endsWith("guard-ask.ts"),
+  );
+}
+
 function isPolicyTrust(words: string[]): boolean {
   const plain = plainWords(words);
   return plain.some((word, i) => word === "policy" && plain[i + 1] === "trust");
@@ -2434,6 +2459,8 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     decision = worse(decision, decideCleanup(words, here));
     if (questionOp(words, "answer")) decision = worse(decision, block(answerCommand));
     if (questionOp(words, "push-approval")) decision = worse(decision, block(pushApprovalCommand));
+    if (questionOp(words, "guard-create") || questionOp(words, "guard-claim") || runsGuardAsk(words))
+      decision = worse(decision, block(guardAskCommand));
     if (writesTodo(words) && input.role !== "shep") decision = worse(decision, block(basecampWrite));
     if (setsTodoTarget(words) && input.role !== "shep") decision = worse(decision, block(todoTargets));
     if (isLand(words) && input.role !== "shep") decision = worse(decision, block(landCommand));
@@ -2563,7 +2590,7 @@ export function onDisk(path: string): boolean {
   }
 }
 
-function stateDir(): string {
+export function stateDir(): string {
   return join(process.env.XDG_STATE_HOME || join(process.env.HOME ?? "", ".local/state"), "bercail");
 }
 
@@ -2597,7 +2624,13 @@ function logApproval(command: string, approved: string[], input: GuardInput): vo
 }
 
 // Warnings and refusals share a log, so one seen often becomes evidence for a fix.
-function logWarning(tool: string, command: string, kind: "warning" | "refusal", reasons: string[], input: GuardInput) {
+function logWarning(
+  tool: string,
+  command: string,
+  kind: "warning" | "refusal" | "handoff",
+  reasons: string[],
+  input: GuardInput,
+) {
   appendLog("guard-warnings.jsonl", command, input, { tool, kind, reasons });
 }
 
@@ -2643,6 +2676,454 @@ async function pushApproval(
   }
 }
 
+/** What the guard looks up while it decides: reads only, in the order the decision asks. */
+export type Lookups = {
+  branch: (dir: string) => Promise<string>;
+  policy: (dir: string) => Promise<Policy>;
+  entireHelp: (command: string) => Promise<readonly string[]>;
+};
+
+// The decision on a tool call with every lookup it needs made, and the input it was
+// made on. Past the lookups it makes, headless refuses. A UI decides the rest on
+// worst-case facts, so a rule that refuses still refuses (an unread branch, the
+// default policy in an Entire repo, no read-only entire command), and anything else asks.
+export async function decideLive(
+  tool: string,
+  command: string | undefined,
+  start: GuardInput,
+  path: string | undefined,
+  look: Lookups,
+): Promise<{ decision: GuardDecision; input: GuardInput }> {
+  let input = start;
+  let decision = decideTool(tool, command, input, path);
+  for (let i = 0; i < 8 && lookup(decision); i++) {
+    if (decision.action === "need-branch")
+      input = { ...input, branches: { ...input.branches, [decision.dir]: await look.branch(decision.dir) } };
+    else if (decision.action === "need-policy")
+      input = { ...input, policies: { ...input.policies, [decision.dir]: await look.policy(decision.dir) } };
+    else if (decision.action === "need-entire-help") {
+      const key = decision.command;
+      input = { ...input, entireHelp: { ...input.entireHelp, [key]: await look.entireHelp(key) } };
+    }
+    decision = decideTool(tool, command, input, path);
+  }
+  if (lookup(decision) && !input.hasUI) decision = block(tooManyRepos);
+  if (lookup(decision)) {
+    let worst = input;
+    for (let i = 0; i < 64 && lookup(decision); i++) {
+      if (decision.action === "need-branch") worst = { ...worst, branches: { ...worst.branches, [decision.dir]: "" } };
+      else if (decision.action === "need-policy")
+        worst = {
+          ...worst,
+          policies: { ...worst.policies, [decision.dir]: { ...defaultPolicy, entire: true, repo: decision.dir } },
+        };
+      else if (decision.action === "need-entire-help")
+        worst = { ...worst, entireHelp: { ...worst.entireHelp, [decision.command]: [] } };
+      decision = decideTool(tool, command, worst, path);
+    }
+    if (decision.action !== "block") decision = ask(tooManyReposAsk);
+  }
+  return { decision, input };
+}
+
+// Shep never waits on a confirm (docs/plans/shep-free-guard.md): an ask in its session
+// becomes one of these operations, pinned to the objects it acts on, and a model-free
+// worker (guard-ask.ts) runs it only on the person's Allow on a Decisions card.
+
+/** What Shep's command asks for, read from its words alone. */
+export type GuardOp =
+  | { kind: "cleanup"; path: string }
+  | { kind: "trail merge"; dir: string; trail: string | null }
+  | { kind: "push"; dir: string; remote: string; refspecs: string[] };
+
+/** What it acts on, read from disk, git and entire: the worker runs on these alone. */
+export type GuardFacts =
+  | { kind: "cleanup"; worktree: string; branch: string | null; head: string }
+  | { kind: "trail merge"; checkout: string; trailId: string; change: string; head: string; base: string }
+  | { kind: "push"; dir: string; gitDir: string; url: string; refspecs: string[] };
+
+const opWord = (word: string) => plainWord.test(word) || hashRefspec.test(word);
+
+// The one operation a command is, or why it is not one: the whole command is that
+// command, after at most one cd DIR &&, in plain words the shell reads as written.
+export function guardOperation(command: string, cwd: string | undefined, home: string | undefined): GuardOp | string {
+  const segments = segmentsOf(command);
+  const plain = segments.every(
+    (s) => !s.subs.length && !s.docs.length && !s.unclosed && !s.quoted.some(Boolean) && s.words.every(opWord),
+  );
+  const flat = segments.flatMap((s, i) => (i ? [segments[i - 1].after, ...s.words] : s.words));
+  if (!plain || command.includes("\\") || command.trim().split(/ +/).join("\0") !== flat.join("\0"))
+    return "it is not one command in plain words (no quotes, variables, substitutions or redirects)";
+  let dir = cwd;
+  if (segments.length === 2 && segments[0].after === "&&" && segments[0].words[0] === "cd") {
+    if (segments[0].words.length !== 2) return "its cd names no one folder";
+    dir = cdTarget(segments[0].words, cwd, home);
+  } else if (segments.length !== 1) return "it runs more than one command";
+  const words = segments.at(-1)!.words;
+  // git follows a symlink before a .., and the guard reads .. as text.
+  if ([...segments[0].words, ...words].some((word) => /(^|\/)\.\.(\/|$)/.test(word)))
+    return "it names a folder with .., which a symlink can send elsewhere";
+  if (dir === undefined || !isAbsolute(dir)) return "the guard cannot tell which folder it runs in";
+  if (basename(words[0]) === "bercail" && words[1] === "cleanup") {
+    if (words.length !== 3 || words[2].startsWith("-")) return "bercail cleanup takes the one worktree it retires";
+    return { kind: "cleanup", path: placeIn(dir, words[2])! };
+  }
+  if (words[0] === "entire" && words[1] === "trail" && words[2] === "merge") {
+    if (words.length > 4 || words[3]?.startsWith("-"))
+      return "a trail merge is handed off only as entire trail merge [<trail>]";
+    return { kind: "trail merge", dir, trail: words[3] ?? null };
+  }
+  if (words[0] === "git") {
+    let i = 1;
+    if (words[1] === "-C") {
+      dir = words[2] ? placeIn(dir, words[2]) : undefined;
+      i = 3;
+    }
+    if (dir === undefined) return "its git -C names no one folder";
+    const [sub, remote, ...refspecs] = words.slice(i);
+    if (sub !== "push" || !remote || !refspecs.length || [remote, ...refspecs].some((w) => w.startsWith("-")))
+      return "a push is handed off only as git [-C DIR] push REMOTE REFSPEC..., with no flags";
+    if (!remoteName.test(remote)) return "it pushes to a URL, not a remote's name";
+    return { kind: "push", dir, remote, refspecs };
+  }
+  return "it is not a cleanup, a trail merge or a push";
+}
+
+/** A read the pinning makes: its stdout without the newline that ends it, or a throw. */
+export type Read = (command: string, args: string[], cwd: string) => Promise<string>;
+
+// No GIT_DIR, GIT_CONFIG or the like of the caller's: they would point git elsewhere.
+export function cleanEnv(): NodeJS.ProcessEnv {
+  return {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(
+        ([key]) => !gitPlace.test(key) && !gitConfigVar.test(key) && key !== "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+      ),
+    ),
+    GIT_TERMINAL_PROMPT: "0",
+  };
+}
+
+export const readOut: Read = (command, args, cwd) =>
+  new Promise((done, failed) =>
+    execFile(
+      command,
+      args,
+      { cwd, env: cleanEnv(), timeout: 30000, maxBuffer: 8 * 1024 * 1024, encoding: "utf8" },
+      (error, stdout, stderr) => {
+        // Only the newline: a URL that ends in a space is another URL.
+        if (!error) return done(stdout.replace(/\n+$/, ""));
+        const why = (stderr || error.message).trim().split("\n")[0];
+        failed(Object.assign(new Error(`${command} ${args.slice(0, 3).join(" ")}: ${why}`), { code: error.code }));
+      },
+    ),
+  );
+
+// The push URLs a card can show (shep/pi/question-target.ts showable): a path, ssh with
+// no password, or http(s) or git:// with no user, and none with a query or a space.
+const showableUrl = [
+  /^\/[^\s?#]*$/,
+  /^file:\/\/\/[^\s?#]*$/,
+  /^[\w.-]+@[\w.-]+:[^\s?#]*$/,
+  /^(ssh|git\+ssh|ssh\+git):\/\/([\w.-]+@)?[\w.-]+(:\d+)?\/[^\s?#]*$/,
+  /^(https?|git):\/\/[\w.-]+(:\d+)?\/[^\s?#@]*$/,
+];
+const headRef = /^refs\/heads\/[\w./-]+$/;
+const objectId = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
+
+function fail(why: string): never {
+  throw new Error(why);
+}
+
+// The remote's one push URL as git uses it, which git then sends to as written: a
+// group, several URLs, one with a credential, or one a url.* rule rewrites again does not
+// pin. A local repo is pinned by its real path, so a symlink moved later cannot redirect it.
+async function pinUrl(read: Read, dir: string, remote: string): Promise<string> {
+  const urls = (await read("git", ["-C", dir, "remote", "get-url", "--push", "--all", "--", remote], dir))
+    .split("\n")
+    .filter(Boolean);
+  if (urls.length !== 1) fail(`${remote} must push to one URL, not ${urls.length}`);
+  let url = urls[0];
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(url) || !showableUrl.some((shape) => shape.test(url)))
+    fail(`${remote}'s push URL is not one a card can show: a path, ssh, or https with no credential or query`);
+  // git decodes a file:// URL's %-escapes, which a path read here would not.
+  if (url.startsWith("file://")) fail(`${remote}'s push URL is a file:// URL; set it to the repo's path`);
+  if (url.startsWith("/")) {
+    // realpath reads .. as text before it follows a symlink; git follows the symlink first.
+    if (/(^|\/)\.\.?(\/|$)/.test(url)) fail(`${remote}'s push URL names a folder with . or ..`);
+    try {
+      url = realpathSync(url);
+    } catch {
+      fail(`${remote}'s push URL ${url} is not a repo on this machine`);
+    }
+  }
+  // NUL-separated: a rule's key (its URL) can hold a space or a newline.
+  const rules = await read(
+    "git",
+    ["-C", dir, "config", "--null", "--get-regexp", "^url\\..*\\.(push)?insteadof$"],
+    dir,
+  ).catch((error) => (error.code === 1 ? "" : Promise.reject(error)));
+  for (const entry of rules.split("\0").filter(Boolean))
+    if (url.startsWith(entry.slice(entry.indexOf("\n") + 1))) fail(`a url.* rule rewrites ${remote}'s push URL`);
+  return url;
+}
+
+// Each refspec as <object ID>:<full branch ref>: a source git names, sent to the ref
+// git would update. A delete, a glob, a tag, or a ref git would pick from the remote's
+// refs or remote.<name>.push (a short destination, or none under that config) does not pin.
+async function pinRefspec(read: Read, dir: string, spec: string, mapped: boolean): Promise<string> {
+  const parts = spec.split(":");
+  if (parts.length > 2 || !parts[0] || spec.includes("*")) fail(`${spec} is not one source to one branch`);
+  const [src, dst] = parts;
+  const git = (...args: string[]) => read("git", ["-C", dir, ...args], dir);
+  const full =
+    src === "HEAD"
+      ? await git("symbolic-ref", "-q", "HEAD").catch(() => "")
+      : await git("rev-parse", "--symbolic-full-name", src).catch(() => "");
+  // The commit of the ref it names, so the card's ref and commit are one reading.
+  const oid = await git("rev-parse", "--verify", "--end-of-options", `${full || src}^{commit}`).catch(() =>
+    fail(`${src} is not a commit in ${dir}`),
+  );
+  if (dst !== undefined && !dst.startsWith("refs/"))
+    fail(`${spec} names its destination short, which git matches against the remote's refs; write refs/heads/${dst}`);
+  if (dst === undefined && mapped)
+    fail(`remote.<name>.push decides where ${spec} goes; write it as ${spec}:refs/heads/<branch>`);
+  const ref = dst ?? full;
+  if (!headRef.test(ref)) fail(`${spec} does not push to a branch the guard can name (refs/heads/<branch>)`);
+  if (!objectId.test(oid)) fail(`${src} did not resolve to one commit`);
+  return `${oid}:${ref}`;
+}
+
+// The change a trail merge acts on, read where Shep named it (a bare merge is the
+// branch's), and the repo's main checkout, where the worker merges it.
+async function pinTrail(read: Read, dir: string, trail: string | null) {
+  const here = realpathSync(await read("git", ["-C", dir, "rev-parse", "--show-toplevel"], dir));
+  const worktrees = await read("git", ["-C", here, "worktree", "list", "--porcelain"], here);
+  const checkout = realpathSync(worktrees.split("\n")[0].slice("worktree ".length));
+  const args = ["trail", "show", ...(trail ? [trail] : []), "--json"];
+  let shown;
+  try {
+    shown = JSON.parse(await read(process.env.ENTIRE_BIN || "entire", args, here));
+  } catch (error) {
+    fail(`entire trail show failed: ${(error as Error).message} (trails need the network and Entire's login)`);
+  }
+  const changes = Array.isArray(shown?.changes) ? shown.changes : [];
+  // A project trail's one open change; through a change or the branch, that change.
+  const named = trail === null || trail.includes("/");
+  const open = changes.filter((c: { status?: unknown }) => c?.status === "open");
+  const change = named ? changes.find((c: { current?: unknown }) => c?.current === true) : open[0];
+  if (!named && open.length !== 1) fail(`the trail has ${open.length} open changes; name one as <repo>/<number>`);
+  const head = change?.mergeability?.head_sha;
+  if (
+    typeof shown?.id !== "string" ||
+    !shown.id ||
+    change?.status !== "open" ||
+    typeof change.repository !== "string" ||
+    !/^[\w.-]+$/.test(change.repository) ||
+    !Number.isSafeInteger(change.number) ||
+    typeof head !== "string" ||
+    !objectId.test(head) ||
+    typeof change.base !== "string" ||
+    !change.base
+  )
+    fail("entire trail show names no one open change with a head and a base");
+  return {
+    kind: "trail merge" as const,
+    checkout,
+    trailId: shown.id,
+    change: `${change.repository}/${change.number}`,
+    head,
+    base: change.base,
+  };
+}
+
+// The objects an operation acts on now. It throws when they cannot be pinned.
+export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<GuardFacts> {
+  if (op.kind === "trail merge") return pinTrail(read, op.dir, op.trail);
+  if (op.kind === "cleanup") {
+    const worktree = realpathSync(op.path);
+    const git = (...args: string[]) => read("git", ["-C", worktree, ...args], worktree);
+    if (realpathSync(await git("rev-parse", "--show-toplevel")) !== worktree)
+      fail(`${op.path} is inside a worktree; name the worktree itself`);
+    const branch = await git("symbolic-ref", "-q", "HEAD").catch(() => null);
+    return { kind: "cleanup", worktree, branch, head: await git("rev-parse", "--verify", "HEAD^{commit}") };
+  }
+  const dir = realpathSync(await read("git", ["-C", op.dir, "rev-parse", "--show-toplevel"], op.dir));
+  const gitDir = realpathSync(await read("git", ["-C", dir, "rev-parse", "--absolute-git-dir"], dir));
+  const mapped = await read("git", ["-C", dir, "config", "--get-all", `remote.${op.remote}.push`], dir).then(
+    (out) => out !== "",
+    (error) => (error.code === 1 ? false : Promise.reject(error)),
+  );
+  const refspecs: string[] = [];
+  for (const spec of op.refspecs) refspecs.push(await pinRefspec(read, dir, spec, mapped));
+  if (new Set(refspecs.map((spec) => spec.split(":")[1])).size !== refspecs.length)
+    fail("it pushes to the same branch twice");
+  return { kind: "push", dir, gitDir, url: await pinUrl(read, dir, op.remote), refspecs };
+}
+
+// The fixed argv the worker runs, and where: never the text Shep wrote. A push goes
+// to the pinned URL with no tags or submodules a config could add, each commit as
+// <hash>^{commit}, which no ref named like the hash can shadow.
+export function runOf(facts: GuardFacts): { argv: string[]; cwd: string } {
+  if (facts.kind === "cleanup")
+    return { argv: [process.env.BERCAIL_BIN || "bercail", "cleanup", facts.worktree], cwd: "/" };
+  if (facts.kind === "trail merge")
+    return { argv: [process.env.ENTIRE_BIN || "entire", "trail", "merge", facts.change], cwd: facts.checkout };
+  return {
+    argv: [
+      "git",
+      "-C",
+      facts.dir,
+      "push",
+      "--no-follow-tags",
+      "--recurse-submodules=no",
+      facts.url,
+      ...facts.refspecs.map((spec) => spec.replace(":", "^{commit}:")),
+    ],
+    cwd: facts.dir,
+  };
+}
+
+// Which pinned facts differ between two pinnings of one operation.
+export function changedFacts(was: Record<string, unknown>, now: Record<string, unknown>): string[] {
+  const keys = [...new Set([...Object.keys(was), ...Object.keys(now)])];
+  return keys.filter((key) => JSON.stringify(was[key]) !== JSON.stringify(now[key])).map((key) => `${key} changed`);
+}
+
+/** A handed-off ask, under guard-asks/ (0600): what the worker runs, and for whom. */
+export type GuardTicket = {
+  v: 1;
+  id: string;
+  at: string;
+  /** One hour on: a pick after it is refused, and the card counts as a Deny. */
+  expires: string;
+  command: string;
+  cwd: string;
+  reason: string;
+  op: GuardOp;
+  facts: GuardFacts;
+  shep: { terminal: string; session: string };
+};
+
+export const guardAsks = () => join(stateDir(), "guard-asks");
+export const ticketId = /^[0-9a-f]{12}$/;
+const expiry = 3600 * 1000;
+
+// The ticket's one start state, written once: the worker's "started" or the guard's
+// "void", whichever comes first. link() fails when the other already wrote it.
+export function markStart(id: string, value: "started" | "void"): string {
+  const file = join(guardAsks(), `${id}.state`);
+  const temp = `${file}.${process.pid}.${value}`;
+  writeFileSync(temp, value, { mode: 0o600 });
+  try {
+    linkSync(temp, file);
+    return value;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    return readFileSync(file, "utf8");
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
+// A new ticket, mode 0600, never over another; it expires an hour from now.
+export function writeTicket(fields: Omit<GuardTicket, "v" | "id" | "at" | "expires">): GuardTicket {
+  const id = randomBytes(6).toString("hex");
+  const at = new Date();
+  const ticket: GuardTicket = {
+    v: 1,
+    id,
+    at: at.toISOString(),
+    expires: new Date(at.getTime() + expiry).toISOString(),
+    ...fields,
+  };
+  mkdirSync(guardAsks(), { recursive: true, mode: 0o700 });
+  writeFileSync(join(guardAsks(), `${id}.json`), `${JSON.stringify(ticket)}\n`, { mode: 0o600, flag: "wx" });
+  return ticket;
+}
+
+// Shep's ask, handed to a worker: the ticket, hc run, and the start handshake. The
+// reason Shep reads: handed off, or refused with what to do instead.
+async function handOff(
+  pi: ExtensionAPI,
+  command: string,
+  input: GuardInput,
+  asked: string,
+  session: string,
+  signal: AbortSignal | undefined,
+): Promise<{ handed: boolean; reason: string }> {
+  const refused = (why: string) => ({
+    handed: false,
+    reason: `${asked} Shep's session never waits on a confirm, and this could not go to a Decisions card: ${why}. Run a cleanup, a trail merge or a push as a command of its own (cd DIR && entire trail merge [<trail>], git -C DIR push REMOTE BRANCH), or leave it to the person.`,
+  });
+  const op = guardOperation(command, input.cwd, input.home);
+  if (typeof op === "string") return refused(op);
+  let facts: GuardFacts;
+  try {
+    facts = await pinOperation(op);
+  } catch (error) {
+    return refused((error as Error).message);
+  }
+  const wait = Number(process.env.BERCAIL_GUARD_ASK_WAIT_MS) || 10000;
+  const start = Date.now();
+  let id: string;
+  try {
+    ({ id } = writeTicket({
+      command,
+      cwd: input.cwd!,
+      reason: asked,
+      op,
+      facts,
+      shep: { terminal: process.env.HC_TERMINAL_ID ?? "", session },
+    }));
+  } catch (error) {
+    return refused(`the guard could not write its ticket: ${(error as Error).message}`);
+  }
+  const worker = `guard-ask-${id}`;
+  const bin = process.env.BERCAIL_BIN || "bercail";
+  // hc runs it from the Herdr server, so only this env prefix reaches it.
+  const env = [
+    "BERCAIL_ROLE=shep",
+    `XDG_STATE_HOME=${dirname(stateDir())}`,
+    ...["BERCAIL_BIN", "ENTIRE_BIN"].flatMap((key) => (process.env[key] ? [`${key}=${process.env[key]}`] : [])),
+  ];
+  let why = `${worker} did not start within ${Math.round(wait / 1000)} s`;
+  try {
+    const args = ["run", "--bg", "--name", worker, "--cwd", guardAsks(), "--outlive-parent", "--no-notify", "--rm"];
+    const started = await pi.exec("hc", [...args, "--", "env", ...env, bin, "guard", "ask", id], {
+      timeout: wait,
+      signal,
+    });
+    if (started.code !== 0)
+      why = `hc could not start ${worker}: ${started.stderr.trim().split("\n")[0] || `exit ${started.code}`}`;
+    else
+      while (Date.now() - start < wait && !onDisk(join(guardAsks(), `${id}.state`)))
+        await new Promise((done) => setTimeout(done, 100));
+  } catch (error) {
+    why = `hc could not start ${worker}: ${(error as Error).message}`;
+  }
+  // A worker that starts after this makes no card.
+  let state: string;
+  try {
+    state = markStart(id, "void");
+  } catch (error) {
+    return refused(`${why}, and the guard could not void its ticket: ${(error as Error).message}`);
+  }
+  if (state !== "started") return refused(why);
+  return {
+    handed: true,
+    reason: `Handed off, not run: the person answers this ${op.kind} of ${opTarget(facts)} on a Decisions card, and the worker ${worker} runs it only on their Allow, within the hour. Tell the person in one line that the card is up. Do not retry it, wait for it or run it another way; your turn goes on. Its outcome comes back as a guard event; report it then.`,
+  };
+}
+
+// The operation in a few words, and what it acts on, for the card and the event.
+export function opTarget(facts: GuardFacts): string {
+  if (facts.kind === "cleanup") return facts.worktree;
+  if (facts.kind === "trail merge") return facts.change;
+  return `${facts.url} ${facts.refspecs.map((spec) => spec.split(":")[1]).join(" ")}`;
+}
+
 const policySection = "bercail_git_policy";
 
 export default function (pi: ExtensionAPI) {
@@ -2657,8 +3138,8 @@ export default function (pi: ExtensionAPI) {
     join(stateDir(), "shep/questions.lock"),
     config,
   ];
-  // Shep's state: its ledger, inbox and sessions.
-  const protectedDirs = [join(stateDir(), "shep")];
+  // Shep's state: its ledger, inbox and sessions; and the guard's tickets for Shep's asks.
+  const protectedDirs = [join(stateDir(), "shep"), guardAsks()];
   // Not one of the guard's: a target decides where Shep writes, not what runs.
   const todoFiles = [join(dirname(config), "todo.json")];
 
@@ -2726,49 +3207,13 @@ export default function (pi: ExtensionAPI) {
         !(event as { parentToolCallId?: string }).parentToolCallId &&
         !Object.keys(process.env).some((key) => gitPlace.test(key) || key === "GIT_CONFIG"),
     };
-    let decision = decideTool(event.toolName, command, guardInput, input.path);
-    for (let i = 0; i < 8 && lookup(decision); i++) {
-      if (decision.action === "need-branch") {
-        guardInput = {
-          ...guardInput,
-          branches: { ...guardInput.branches, [decision.dir]: await branchAt(pi, decision.dir, ctx.signal) },
-        };
-      } else if (decision.action === "need-policy") {
-        guardInput = {
-          ...guardInput,
-          policies: {
-            ...guardInput.policies,
-            [decision.dir]: policyFromJson(await policyJson(pi, decision.dir, ctx.signal)),
-          },
-        };
-      } else if (decision.action === "need-entire-help") {
-        const key = decision.command;
-        entireHelp[key] ??= await entireReadOnly(pi, key, ctx.cwd, ctx.signal);
-        guardInput = { ...guardInput, entireHelp: { ...guardInput.entireHelp, [key]: entireHelp[key] } };
-      }
-      decision = decideTool(event.toolName, command, guardInput, input.path);
-    }
-    // Past the lookups it makes, headless refuses. A desk decides the rest on
-    // worst-case facts, so a rule that refuses still refuses (an unread branch,
-    // the default policy in an Entire repo, no read-only entire command), and
-    // anything else asks.
-    if (lookup(decision) && !ctx.hasUI) decision = block(tooManyRepos);
-    if (lookup(decision)) {
-      let worst = guardInput;
-      for (let i = 0; i < 64 && lookup(decision); i++) {
-        if (decision.action === "need-branch")
-          worst = { ...worst, branches: { ...worst.branches, [decision.dir]: "" } };
-        else if (decision.action === "need-policy")
-          worst = {
-            ...worst,
-            policies: { ...worst.policies, [decision.dir]: { ...defaultPolicy, entire: true, repo: decision.dir } },
-          };
-        else if (decision.action === "need-entire-help")
-          worst = { ...worst, entireHelp: { ...worst.entireHelp, [decision.command]: [] } };
-        decision = decideTool(event.toolName, command, worst, input.path);
-      }
-      if (decision.action !== "block") decision = ask(tooManyReposAsk);
-    }
+    const live = await decideLive(event.toolName, command, guardInput, input.path, {
+      branch: (dir) => branchAt(pi, dir, ctx.signal),
+      policy: async (dir) => policyFromJson(await policyJson(pi, dir, ctx.signal)),
+      entireHelp: async (key) => (entireHelp[key] ??= await entireReadOnly(pi, key, ctx.cwd, ctx.signal)),
+    });
+    let decision = live.decision;
+    guardInput = live.input;
     // A push it would ask about that the person's Decisions answer approves: the answer
     // is spent on it, and it runs with a warning naming the answer. None: it asks.
     if (decision.action === "ask" && decision.push) {
@@ -2776,6 +3221,13 @@ export default function (pi: ExtensionAPI) {
       if (token) decision = { action: "allow", warnings: [...(decision.warnings ?? []), pushApproved(token)] };
     }
     const logged = command ?? input.path ?? "";
+    // Shep never waits on a confirm: an ask goes to a worker, or is refused.
+    if (decision.action === "ask" && guardInput.role === "shep") {
+      const session = (ctx as { sessionManager?: { getSessionId?: () => string } }).sessionManager?.getSessionId?.();
+      const handed = await handOff(pi, logged, guardInput, decision.reason, session || "unknown", ctx.signal);
+      logWarning(event.toolName, logged, handed.handed ? "handoff" : "refusal", [handed.reason], guardInput);
+      return { block: true, reason: handed.reason };
+    }
     const refuse = (reason: string) => {
       logWarning(event.toolName, logged, "refusal", [reason], guardInput);
       return { block: true, reason };

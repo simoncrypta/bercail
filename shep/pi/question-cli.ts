@@ -1,9 +1,18 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import { door, mergesIn, QuestionStore, projection, tokenOf, type Question, type QuestionSpec } from "./questions.ts";
-import { captureTarget, checkQuestion, mergeReversible, withTarget } from "./question-target.ts";
+import {
+  door,
+  GUARD_CHOICES,
+  mergesIn,
+  QuestionStore,
+  projection,
+  tokenOf,
+  type Question,
+  type QuestionSpec,
+} from "./questions.ts";
+import { captureTarget, checkQuestion, mergeReversible, repoOf, withTarget } from "./question-target.ts";
 import { approvePush, closed, discussionOf, expireDue, openDiscussion, pick, settle, unsettled } from "./discuss.ts";
 
 async function main() {
@@ -38,6 +47,11 @@ async function main() {
     const [dir, remote, ...refspecs] = args;
     if (!dir || !remote || !refspecs.length) throw new Error("push-approval requires DIR REMOTE REFSPEC...");
     result = await approvePush(state, { dir, remote, refspecs });
+  } else if (op === "guard-claim") {
+    // The guard's worker: the person's Allow on its card, claimed once.
+    if (args.length !== 2 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
+      throw new Error("guard-claim requires a Qn@revision token and the ticket");
+    result = store.claimGuard(args[0]!, args[1]!);
   } else if (op === "discuss") {
     if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
       throw new Error("discuss requires a Qn@revision token");
@@ -47,11 +61,16 @@ async function main() {
   } else if (op === "closed") {
     if (args.length !== 2) throw new Error("closed requires a Qn@revision token and the opening's id");
     result = { told: closed(state, args[0]!, args[1]!) };
-  } else if (["create", "revise", "reply", "answer", "withdraw"].includes(op ?? "")) {
+  } else if (["create", "revise", "reply", "answer", "withdraw", "guard-create"].includes(op ?? "")) {
     if (args.length) throw new Error(`${op} reads JSON from stdin, not argv`);
     const input = JSON.parse(readFileSync(0, "utf8"));
     if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("expected a JSON object");
-    if (op === "withdraw") {
+    if (op === "guard-create") {
+      // The guard's worker: its card, bound to the repo of the folder it acts in.
+      if (Object.keys(input).sort().join() !== "brief,dir,guard,origin,prompt,requestId")
+        throw new Error("guard-create fields must be requestId, prompt, brief, origin, dir and guard");
+      result = store.create(input.requestId, input, () => guardSpec(input));
+    } else if (op === "withdraw") {
       if (Object.keys(input).sort().join() !== "reason,requestId,token")
         throw new Error("withdraw fields must be requestId, token and reason only");
       result = store.withdraw(input.requestId, input.token, input.reason);
@@ -98,9 +117,37 @@ async function main() {
     }
   } else
     throw new Error(
-      "usage: question-cli.ts list | json | panel | expire | create | revise | reply | answer | withdraw | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC...",
+      "usage: question-cli.ts list | json | panel | expire | create | revise | reply | answer | withdraw | guard-create | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | guard-claim Qn@revision TICKET",
     );
   console.log(JSON.stringify(result));
+}
+
+// A guard card's spec: Allow or Deny on the guard's reason, bound to the folder's repo and
+// to the ticket. The store checks its shape.
+function guardSpec(input: Record<string, any>): QuestionSpec {
+  const dir = realpathSync(String(input.dir));
+  return {
+    kind: "guard",
+    prompt: input.prompt,
+    options: GUARD_CHOICES,
+    brief: input.brief,
+    origin: input.origin,
+    guard: input.guard,
+    target: {
+      repo: repoOf(dir),
+      issue: null,
+      topic: `guard-${input.guard?.ticket}`,
+      worktree: dir,
+      desk: null,
+      space: null,
+      session: null,
+      action: null,
+      head: null,
+      stagedTree: null,
+      base: null,
+      baseRef: null,
+    },
+  };
 }
 
 // What the Decisions panel shows: each pending question with its brief, Shep's
@@ -116,7 +163,7 @@ async function panel(store: QuestionStore, state: string) {
     // A default is checked too: the person's OK or Reverse on it needs it fresh.
     const check = await checkQuestion(q);
     let change = null;
-    if (!q.answer && q.kind !== "planning" && q.target.worktree) {
+    if (!q.answer && q.kind !== "planning" && q.kind !== "guard" && q.target.worktree) {
       // describe check exits 1 while the change has no description; its JSON still holds the size.
       const r = spawnSync(bin, ["describe", "check", "--json", q.target.worktree], {
         cwd: q.target.worktree,

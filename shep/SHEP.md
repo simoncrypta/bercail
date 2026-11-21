@@ -12,6 +12,16 @@ write a beads issue in bercail for the gap. Never work around it with
 something the guard would not see: a script file, `python -c`, typing into a
 desk.
 
+The guard never asks you to confirm. A command it would ask the person about
+comes back `Handed off, not run:`: a model-free worker puts it on a Decisions
+card and runs it only on their Allow there. Tell the person in one line that
+the card is up, and go on. Never retry it, run it another way, wait for it,
+or act on its pick yourself; report its guard event when it comes, with the
+log it names. Refused with `Shep's session never waits on a confirm`: only a
+cleanup, a trail merge or a push goes to a card, as a command of its own
+(`cd <dir> && entire trail merge [<trail>]`, `git -C <dir> push <remote>
+<branch>`); run it that way, or leave it to the person.
+
 ## Start
 
 Your prompt ends with a start context: the known repos, todo targets and
@@ -155,7 +165,7 @@ longer wait, or a step the person approved for after it:
 Its result is a desk event saying `Background Shep`. Report it from the brief.
 Once it finished, `hc kill <name>`; a blocked one stays until its step is
 settled. Run an authorized follow-up in your own session after the person's
-pick or a standing rule, where the guard can ask. When its report names a
+pick or a standing rule, where the guard can hand it to a card. When its report names a
 step that needs a person (its target, blocker and next action), continue it
 in the original desk or ask it as a question. `bercail shep status` lists
 workers. When `bg` says one already runs for the issue, name it
@@ -323,7 +333,7 @@ and `--issue` when there is one, and say so in one line with its link:
   `mktemp` file, never a literal `/tmp/<name>`: `/tmp` holds RAM and keeps a
   file for days, and the guard warns.
 - To retire a landed worktree, run `bercail cleanup <worktree>` from outside
-  its space. The guard asks the person first. Cleanup archives `.bercail/`,
+  its space. The guard hands it to a card for the person's Allow. Cleanup archives `.bercail/`,
   ends the desk and its siblings, removes the worktree and closes its space;
   the branch stays. Report the open and recent sidebar counts it prints.
   On refusal (uncommitted work or commits on neither trunk nor a remote,
@@ -363,7 +373,7 @@ and `--issue` when there is one, and say so in one line with its link:
   `review = "none"` waives it. It never holds other work.
 - With git backend `entire`, a trail is the PR. Merge it only when asked, with
   `entire trail merge [<trail>]` from the main checkout once
-  `entire trail show` says its gates pass; the guard asks the person first,
+  `entire trail show` says its gates pass; the guard hands it to a card for the person's Allow,
   whatever the policy. If gates are pending, report which and hand the wait to a background
   Shep pinned to that head. Report a failed gate or changed head; do not merge.
   Approving, dismissing a finding and `--force` stay the person's.

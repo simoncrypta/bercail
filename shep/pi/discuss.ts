@@ -214,7 +214,9 @@ export async function pick(
   // Check outside the ledger transaction: it runs git and bercail policy show.
   const check = await checkQuestion(q);
   const result = store.answer(requestId, token, choice, source, check);
-  if (result.accepted) decisionEvent(state, result.question, `${q.id}-${q.revision}`, { choice, by: source });
+  // A guard card's pick is its worker's to act on, and the event names it.
+  const guard = q.guard ? { guard: { worker: q.guard.worker } } : {};
+  if (result.accepted) decisionEvent(state, result.question, `${q.id}-${q.revision}`, { choice, by: source, ...guard });
   return result;
 }
 
@@ -391,6 +393,10 @@ export function closed(state: string, token: string, opening: string): boolean {
 export const pushLine = (p: QuestionPush) =>
   `Picking "${p.approves}" on the panel card lets Shep push the answered commit to ${p.remote} (${p.url}): ${p.refs.join(", ")}, once. A /pick here does not approve the push.`;
 
+// A guard card is answered on the panel only: any agent can type into this terminal.
+export const guardLine =
+  "This is a guard card: Allow or Deny it on the panel card. A /pick here cannot answer it, since an agent can type into this terminal.";
+
 // The branch's Pi: what it is for, the question, and /pick. It has no tools that
 // act (bercail shep discuss runs it with --tools read,grep,find,ls), and the guard
 // blocks the rest under BERCAIL_ROLE=discuss.
@@ -419,6 +425,7 @@ export default function (pi: ExtensionAPI) {
           ? `Choices: ${q.options.join(" · ")}. /pick answers it.`
           : "No choices: answer Shep in chat.",
       ...(q.push ? [pushLine(q.push)] : []),
+      ...(q.guard ? [guardLine] : []),
       "A read-only branch: it reads, it cannot act. Closing it tells Shep.",
     ]);
   });
@@ -472,6 +479,7 @@ export default function (pi: ExtensionAPI) {
           "info",
         );
       if (!q || !q.options.length) return ctx.ui.notify("This question has no choices to pick.", "warning");
+      if (q.guard) return ctx.ui.notify(guardLine, "warning");
       const check = await checkQuestion(q);
       if (check.status !== "fresh")
         return ctx.ui.notify(

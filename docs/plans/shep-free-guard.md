@@ -1,8 +1,8 @@
 # Shep never waits on a guard confirm
 
-Written 2026-11-21 against `87933fd` for bercail-tuhd. This is a plan: nothing
-in it is built. guard.ts is high stakes, so the build waits for Simon's OK on
-this note and his LGTM on the change.
+Written 2026-11-21 against `87933fd` for bercail-tuhd, and built in bercail-q707.
+How it works now is in [docs/shep.md](../shep.md#guard-asks); this note keeps the
+reasoning.
 
 Goal: when a command Shep runs would make the guard ask, Shep's turn goes on
 and the ask goes to Simon on a Decisions card. A worker runs the operation only

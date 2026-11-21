@@ -17,3 +17,13 @@ setup() {
   pi_at_least "$version" 1.5 || skip "Pi $version is older than 1.5; guard live proof not run"
   PI_GUARD_BIN="$pi" node "$ROOT/tests/pi_guard_live.ts"
 }
+
+# bats test_tags=live
+@test "live: a real Pi Shep hands a push to a guard card and answers while it waits" {
+  local pi
+  pi="${PI_GUARD_BIN:-}"
+  [[ -n "$pi" ]] || pi="$(real_pi)"
+  [[ -n "$pi" ]] || skip "Pi not found; guard-ask live proof not run"
+  need git jq flock
+  node "$ROOT/tests/pi_guard_ask_live.ts" "$ROOT" "$pi"
+}

@@ -339,6 +339,14 @@ _bstack_pi_template() {
   _bstack_place "$work/$name.md" "$BSTACK_PI_TEMPLATES/$name.md" || true
 }
 
+# The guard's worker (guard-ask.ts): this checkout's, or the one deployed beside the
+# guard Pi loads.
+bstack_guard_worker() {
+  local own
+  own="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/bstack/pi/guard-ask.ts"
+  if [[ -f "$own" ]]; then printf '%s' "$own"; else printf '%s' "$BSTACK_PI_DIR/guard-ask.ts"; fi
+}
+
 _bstack_deploy_pi() {
   local work="$1" rel name
   [[ ! -d "$BSTACK_PI_DIR" ]] || run rm -rf "$BSTACK_PI_DIR"
@@ -349,6 +357,7 @@ _bstack_deploy_pi() {
   copy_file "$work/src/pi/extensions/fallback.ts" "$BSTACK_PI_DIR/extensions/fallback.ts"
   copy_file "$work/src/pi/extensions/provider-error.ts" "$BSTACK_PI_DIR/extensions/provider-error.ts"
   copy_file "$work/src/pi/extensions/guard.ts" "$BSTACK_PI_DIR/extensions/guard.ts"
+  copy_file "$work/src/pi/guard-ask.ts" "$BSTACK_PI_DIR/guard-ask.ts"
   copy_file "$work/src/pi/extensions/review.ts" "$BSTACK_PI_DIR/extensions/review.ts"
   copy_file "$work/src/pi/$BSTACK_PI_EMPHASIS" "$BSTACK_PI_DIR/$BSTACK_PI_EMPHASIS"
   copy_file "$work/src/pi/extensions/pi-emphasis/LICENSE" "$BSTACK_PI_DIR/extensions/pi-emphasis/LICENSE"
@@ -592,7 +601,7 @@ doctor_bstack() {
   else
     log "  --  Claude auth: no subscription login (claude auth login)"
   fi
-  for rel in "${BSTACK_PI_RENDERED[@]}" extensions/fallback.ts extensions/provider-error.ts extensions/guard.ts extensions/review.ts \
+  for rel in "${BSTACK_PI_RENDERED[@]}" extensions/fallback.ts extensions/provider-error.ts extensions/guard.ts guard-ask.ts extensions/review.ts \
     "$BSTACK_PI_EMPHASIS" models lead.json review.json; do
     if [[ ! -f "$BSTACK_PI_DIR/$rel" ]]; then
       log "  missing  bstack $BSTACK_PI_DIR/$rel (bercail update)"

@@ -1208,3 +1208,205 @@ describe("an answer that approves a push", () => {
     expect(approval([head(), tag])).toEqual({ approved: "Q1@1" });
   });
 });
+
+// A guard card (docs/plans/shep-free-guard.md): the guard's worker asks the person to
+// Allow an operation it pinned. bercail guard check is a stand-in that prints the
+// reasons in guard-check.json.
+describe("a guard card", () => {
+  const ticket = "0123456789ab";
+  const expires = (minutes: number) => new Date(Date.now() + minutes * 60000).toISOString();
+  const facts = {
+    kind: "push",
+    dir: "",
+    gitDir: "",
+    url: "/srv/origin.git",
+    refspecs: [`${"a".repeat(40)}:refs/heads/x`],
+  };
+  const card = (extra: Record<string, unknown> = {}) =>
+    call("guard-create", {
+      requestId: `guard-${ticket}`,
+      prompt: "Allow this push to origin: x? No keeps it local for the person.",
+      brief: "Shep ran: git -C repo push origin x.",
+      origin: { event: `guard:${ticket}`, session: "shep-session", entry: null },
+      dir: repo,
+      guard: {
+        ticket,
+        worker: `guard-ask-${ticket}`,
+        op: { kind: "push", dir: repo, remote: "origin", refspecs: ["x"] },
+        facts: { ...facts, dir: repo },
+        expires: hour,
+      },
+      ...extra,
+    });
+  const reasons = (list: string[]) => json(join(dir, "guard-check.json"), { reasons: list });
+  let hour: string;
+  beforeEach(() => {
+    hour = expires(60);
+    reasons([]);
+    writeFileSync(
+      join(dir, "bin/bercail"),
+      `#!/bin/sh\nprintf 'bercail %s\\n' "$*" >> '${dir}/argv'\ntest "$1 $2" = 'guard check' || exit 2\n/bin/cat > '${dir}/guard-check.in'\n/bin/cat '${dir}/guard-check.json'\n`,
+      { mode: 0o755 },
+    );
+  });
+
+  test("offers Allow and Deny on the repo of the folder it acts in, with no recommendation or default", () => {
+    const created = card();
+    expect(created.stderr).toBe("");
+    expect(JSON.parse(created.stdout)).toMatchObject({
+      kind: "guard",
+      options: ["Allow", "Deny"],
+      target: { repo: join(repo, ".git"), worktree: repo, topic: `guard-${ticket}`, issue: null, desk: null },
+      guard: { ticket, worker: `guard-ask-${ticket}` },
+    });
+    // The same request again is its receipt: two workers on one ticket share one card.
+    expect(JSON.parse(card().stdout).id).toBe("Q1");
+    // Its live check sends the card's op and facts to bercail guard check.
+    expect(ok("check", undefined, ["Q1@1"])).toMatchObject({ status: "fresh", reasons: [] });
+    expect(JSON.parse(readFileSync(join(dir, "guard-check.in"), "utf8"))).toEqual({
+      op: { kind: "push", dir: repo, remote: "origin", refspecs: ["x"] },
+      facts: { ...facts, dir: repo },
+    });
+    for (const [extra, why] of [
+      [
+        {
+          requestId: "r1",
+          guard: {
+            ticket,
+            worker: "guard-ask-other",
+            op: { kind: "push" },
+            facts: {},
+            expires: expires(60),
+          },
+        },
+        /names its ticket/,
+      ],
+      [
+        {
+          requestId: "r2",
+          guard: {
+            ticket,
+            worker: `guard-ask-${ticket}`,
+            op: { kind: "rm" },
+            facts: {},
+            expires: expires(60),
+          },
+        },
+        /holds its operation/,
+      ],
+    ] as const) {
+      const refused = card(extra);
+      expect(refused.status).not.toBe(0);
+      expect(refused.stderr).toMatch(why);
+    }
+  });
+
+  test("takes a panel pick once, refuses Discuss and a stale or expired card, and tells Shep its worker acts", () => {
+    card();
+    // Discuss can talk it over, not pick: an agent can type into that terminal.
+    expect(pick("d1", "Allow", "Q1@1", "discuss picker")).toMatchObject({
+      accepted: false,
+      reason: "a guard card is answered on the panel card only",
+    });
+    reasons(["url changed"]);
+    expect(pick("p0", "Allow")).toMatchObject({ accepted: false, reason: "changed since Shep asked: url changed" });
+    reasons([]);
+    expect(pick("p1", "Allow")).toMatchObject({ accepted: true });
+    const decision = event("decision-Q1-1.json");
+    expect(decision).toMatchObject({ choice: "Allow", by: "panel picker", guard: { worker: `guard-ask-${ticket}` } });
+    expect(eventLine(decision)).toMatch(
+      new RegExp(`Its worker guard-ask-${ticket} acts on it, not you: do not run it, retry it or ask again`),
+    );
+    // Its worker claims the Allow once.
+    expect(ok("guard-claim", undefined, ["Q1@1", "ffffffffffff"])).toMatchObject({
+      accepted: false,
+      reason: "not this ticket's guard card",
+    });
+    expect(ok("guard-claim", undefined, ["Q1@1", ticket])).toMatchObject({ accepted: true });
+    expect(ok("guard-claim", undefined, ["Q1@1", ticket]).reason).toMatch(/already claimed/);
+    // The questions Shep acts on once leave a guard card out.
+    expect(call("list").stdout).not.toMatch(/Answered by the person's pick/);
+  });
+
+  test("a card past its hour is stale and takes no pick, and a Deny is never claimed", () => {
+    card({
+      requestId: "old",
+      guard: {
+        ticket,
+        worker: `guard-ask-${ticket}`,
+        op: { kind: "push" },
+        facts: { kind: "push" },
+        expires: expires(-1),
+      },
+    });
+    expect(ok("check", undefined, ["Q1@1"])).toMatchObject({
+      status: "stale",
+      reasons: [expect.stringMatching(/^expired at /)],
+    });
+    expect(pick("p1", "Allow").accepted).toBe(false);
+    card();
+    expect(pick("p2", "Deny", "Q2@1")).toMatchObject({ accepted: true });
+    expect(ok("guard-claim", undefined, ["Q2@1", ticket]).reason).toBe("not the person's Allow on the panel");
+  });
+
+  test("a push approval never spends a guard card's Allow", () => {
+    execFileSync("git", ["init", "-q", "--bare", join(dir, "origin.git")], { env });
+    git("remote", "add", "origin", join(dir, "origin.git"));
+    card();
+    pick("p1", "Allow");
+    const head = `${git("rev-parse", "HEAD")}^{commit}:${git("symbolic-ref", "HEAD")}`;
+    expect(ok("push-approval", undefined, [repo, "origin", head])).toEqual({
+      approved: null,
+      reason: "no answered question in this repo approves a push",
+    });
+  });
+});
+
+test("a guard event is Shep's line from its fields alone, and a malformed one is dropped", () => {
+  const ev = {
+    source: "bercail",
+    schema: "bercail.guard_ask/v1",
+    kind: "guard",
+    sink: "shep",
+    event_id: "guard:0123456789ab",
+    terminal: "guard-ask-0123456789ab",
+    operation: "trail merge",
+    target: "lesentiel/41",
+    outcome: "ran",
+    exit: 0,
+    log: "/state/bercail/guard-asks/0123456789ab.log",
+  };
+  expect(eventLine(ev)).toBe(
+    "- The trail merge of lesentiel/41 you handed off ran on the person's Allow, exit 0; its output is in /state/bercail/guard-asks/0123456789ab.log. Tell the person in one line. [event guard:0123456789ab] (worker guard-ask-0123456789ab)",
+  );
+  expect(eventLine({ ...ev, outcome: "changed", exit: undefined, log: undefined, why: "head changed" })).toBe(
+    "- The trail merge of lesentiel/41 you handed off acts on something that changed since it was asked, so nothing ran; ask again only if it still matters (head changed). Tell the person in one line. [event guard:0123456789ab] (worker guard-ask-0123456789ab)",
+  );
+  for (const bad of [
+    { ...ev, outcome: "merged" },
+    { ...ev, operation: "rm -rf" },
+    { ...ev, terminal: "t9" },
+    { ...ev, event_id: "guard:ffffffffffff" },
+    { ...ev, exit: undefined },
+    { ...ev, outcome: "denied" },
+    { ...ev, schema: "bercail.land/v1" },
+    { ...ev, target: " " },
+    { ...ev, outcome: "constructor", exit: undefined },
+  ])
+    expect(eventLine(bad), JSON.stringify(bad)).toBeNull();
+  // A decision on a guard card needs its worker, and only a panel pick has one.
+  const decision = {
+    source: "bercail",
+    kind: "decision",
+    event_id: "decision:Q1-1",
+    question: { token: "Q1@1", prompt: "Allow this push?", topic: "guard-0123456789ab" },
+    choice: "Allow",
+    by: "panel picker",
+    guard: { worker: "guard-ask-0123456789ab" },
+  };
+  expect(eventLine(decision)).toMatch(
+    /^- The person picked "Allow" on the panel for a guard card\. Its worker guard-ask-0123456789ab acts on it/,
+  );
+  expect(eventLine({ ...decision, by: "discuss picker" })).toBeNull();
+  expect(eventLine({ ...decision, guard: { worker: "t9" } })).toBeNull();
+});

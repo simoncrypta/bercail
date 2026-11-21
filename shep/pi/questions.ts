@@ -27,7 +27,7 @@ export interface QuestionOrigin {
   entry: string | null;
 }
 export interface QuestionSpec {
-  kind: "planning" | "review" | "action";
+  kind: "planning" | "review" | "action" | "guard";
   prompt: string;
   options: string[];
   origin: QuestionOrigin;
@@ -40,7 +40,22 @@ export interface QuestionSpec {
   reversible?: true;
   /** Shep's: picking `approves` lets Shep push the answered commit to `remote`'s `refs`, once, with no second ask. */
   push?: QuestionPush;
+  /** A guard card's: the operation its worker runs on the person's Allow. */
+  guard?: QuestionGuard;
 }
+/** An ask the guard handed off from Shep's session: its worker runs `op` on `facts`, once. */
+export interface QuestionGuard {
+  /** The ticket under the state dir's guard-asks/, and the hc terminal that runs it. */
+  ticket: string;
+  worker: string;
+  /** What Shep's command asked, and what it acts on, as the guard pinned them. */
+  op: Record<string, unknown>;
+  facts: Record<string, unknown>;
+  /** Past it, a pick is refused and the card counts as a Deny. */
+  expires: string;
+}
+/** A guard card's only choices: no recommendation, and Deny is the safe one. */
+export const GUARD_CHOICES = ["Allow", "Deny"];
 export interface QuestionPush {
   approves: string;
   remote: string;
@@ -123,6 +138,8 @@ export interface Question extends QuestionSpec {
   withdrawal?: QuestionWithdrawal;
   /** Present once the answer's push was claimed, and only then. */
   pushed?: PushClaim;
+  /** Present once a guard card's worker claimed its Allow, and only then. */
+  guardClaim?: { at: string };
 }
 export interface QuestionSnapshot {
   version: 1;
@@ -164,9 +181,9 @@ function spec(value: unknown): asserts value is QuestionSpec {
     "options",
     "origin",
     "target",
-    ...optional(v ?? {}, ["brief", "recommendation", "reversible", "push"]),
+    ...optional(v ?? {}, ["brief", "recommendation", "reversible", "push", "guard"]),
   ]);
-  if (!["planning", "review", "action"].includes(value.kind as string)) fail("invalid kind");
+  if (!["planning", "review", "action", "guard"].includes(value.kind as string)) fail("invalid kind");
   text(value.prompt);
   if (!Array.isArray(value.options)) fail("invalid options");
   value.options.forEach(text);
@@ -199,21 +216,38 @@ function spec(value: unknown): asserts value is QuestionSpec {
   if (value.target.branch != null) text(value.target.branch);
   if (value.target.trailId !== undefined) text(value.target.trailId);
   if (value.target.url !== undefined) text(value.target.url);
-  // The desk is optional for every kind: a question binds to its repo and issue.
+  // The desk is optional for every kind: a question binds to its repo and issue. A guard
+  // card binds to its pinned facts instead.
   const desk = ["desk", "space", "session"];
+  const loose = value.kind === "planning" || value.kind === "guard";
   for (const key of keys)
-    if (
-      value.target[key] !== null ||
-      (value.kind !== "planning" && !desk.includes(key)) ||
-      key === "repo" ||
-      key === "topic"
-    )
+    if (value.target[key] !== null || (!loose && !desk.includes(key)) || key === "repo" || key === "topic")
       text(value.target[key]);
   const repo = value.target.repo as string;
   if (!isAbsolute(repo) || normalize(repo) !== repo)
     fail("repo must be a canonical absolute identity path supplied by the caller");
   if (value.target.worktree !== null && !isAbsolute(value.target.worktree as string)) fail("worktree must be absolute");
   if (value.push !== undefined) push(value as unknown as QuestionSpec);
+  if ((value.kind === "guard") !== (value.guard !== undefined)) fail("a guard card, and only it, has its guard");
+  if (value.guard !== undefined) guard(value as unknown as QuestionSpec);
+}
+const object = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value);
+// A guard card: Allow or Deny, nothing Shep recommends or a deadline takes, on one ticket.
+function guard(value: QuestionSpec) {
+  const g = value.guard;
+  shape(g, ["ticket", "worker", "op", "facts", "expires"]);
+  if (typeof g.ticket !== "string" || !/^[0-9a-f]{12}$/.test(g.ticket) || g.worker !== `guard-ask-${g.ticket}`)
+    fail("a guard card names its ticket and its worker, guard-ask-<ticket>");
+  text(g.expires);
+  if (
+    !object(g.op) ||
+    !["cleanup", "trail merge", "push"].includes((g.op as { kind?: string }).kind as string) ||
+    !object(g.facts) ||
+    !Number.isFinite(Date.parse(g.expires as string))
+  )
+    fail("a guard card holds its operation, its pinned facts and when it expires");
+  if (value.options.join() !== GUARD_CHOICES.join() || value.recommendation || value.reversible || value.push)
+    fail("a guard card offers Allow and Deny only, with no recommendation, default or push");
 }
 // The guard matches these as they are written in the command (guard.ts hashRefspec).
 const refName = /^refs\/(heads|tags)\/[\w./-]+$/;
@@ -246,16 +280,31 @@ function question(value: unknown): asserts value is Question {
       "recommendation",
       "reversible",
       "push",
+      "guard",
       "deadline",
       "told",
       "answer",
       "settled",
       "withdrawal",
       "pushed",
+      "guardClaim",
     ]),
   ]);
-  const { id, revision, status, createdAt, deadline, told, proposals, answer, settled, withdrawal, pushed, ...fields } =
-    value;
+  const {
+    id,
+    revision,
+    status,
+    createdAt,
+    deadline,
+    told,
+    proposals,
+    answer,
+    settled,
+    withdrawal,
+    pushed,
+    guardClaim,
+    ...fields
+  } = value;
   spec(fields);
   if (
     typeof id !== "string" ||
@@ -364,6 +413,13 @@ function question(value: unknown): asserts value is Question {
       canonical(refs.sort()) !== canonical([...fields.push.refs].sort())
     )
       fail("a push claim names the approved remote and refs");
+  }
+  if (guardClaim !== undefined) {
+    const a = answer as QuestionAnswer | undefined;
+    if (fields.kind !== "guard" || a?.choice !== "Allow" || a.source !== PUSH_SOURCE)
+      fail("only the person's Allow on a guard card is claimed by its worker");
+    shape(guardClaim, ["at"]);
+    if (!Number.isFinite(Date.parse(guardClaim.at as string))) fail("invalid guard claim time");
   }
 }
 function validate(value: unknown): asserts value is State {
@@ -724,16 +780,21 @@ export class QuestionStore {
     text(choice);
     return this.request(requestId, ["answer", token, choice, source], (state) => {
       const q = this.find(state, token);
+      // A guard card: only the panel, which no agent can type into, and only before it expires.
       const reason =
         q.status !== "pending"
           ? `question is ${q.status}`
           : !q.options.includes(choice)
             ? "not one of the question's choices"
-            : check.status !== "fresh" || !check.current
-              ? `changed since Shep asked: ${check.reasons.join(", ") || "not checked"}`
-              : isDue(q) && door(q, () => mergesIn(check)).door === "two-way"
-                ? `past its deadline: it takes Shep's recommendation, ${q.recommendation!.choice}`
-                : undefined;
+            : q.guard && source !== PUSH_SOURCE
+              ? "a guard card is answered on the panel card only"
+              : q.guard && Date.parse(q.guard.expires) <= Date.now()
+                ? `it expired at ${q.guard.expires}, which counts as a Deny`
+                : check.status !== "fresh" || !check.current
+                  ? `changed since Shep asked: ${check.reasons.join(", ") || "not checked"}`
+                  : isDue(q) && door(q, () => mergesIn(check)).door === "two-way"
+                    ? `past its deadline: it takes Shep's recommendation, ${q.recommendation!.choice}`
+                    : undefined;
       if (reason) return { question: q, accepted: false, reason };
       q.status = "answered";
       q.answer = {
@@ -836,6 +897,27 @@ export class QuestionStore {
     }, true);
   }
 
+  // A guard card's worker: the person's Allow on the panel, picked before the card expired,
+  // claimed once for this ticket. A second claim is refused, so the operation runs once.
+  claimGuard(token: string, ticket: string): AnswerResult {
+    return this.locked((state) => {
+      const q = this.find(state, token);
+      const reason =
+        q.guard?.ticket !== ticket
+          ? "not this ticket's guard card"
+          : q.guardClaim
+            ? `its Allow was already claimed at ${q.guardClaim.at}`
+            : q.status !== "answered" || q.answer?.choice !== "Allow" || q.answer.source !== PUSH_SOURCE
+              ? "not the person's Allow on the panel"
+              : Date.parse(q.answer.at) >= Date.parse(q.guard.expires)
+                ? `picked after it expired at ${q.guard.expires}`
+                : undefined;
+      if (reason) return { question: q, accepted: false, reason };
+      q.guardClaim = { at: new Date().toISOString() };
+      return { question: q, accepted: true };
+    }, true);
+  }
+
   // The decision event of its default, or of the person's OK or Reverse on it, is
   // written: the caller wrote it, or found it there.
   told(token: string, which: "default" | "settled" = "default"): void {
@@ -884,6 +966,7 @@ export function projection(snapshot: QuestionSnapshot): string {
       .filter(
         (q) =>
           q.status === "answered" &&
+          q.kind !== "guard" &&
           (q.answer!.source !== DEFAULT_SOURCE || q.settled?.outcome === "ok"
             ? "picked"
             : q.settled

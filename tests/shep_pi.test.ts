@@ -67,7 +67,7 @@ describe("only the text, the event id and ids reach the model", () => {
     expect(eventMessage(["- x"])).toMatch(/^bercail desk event \(a signal/);
     expect(eventMessage(["- x", "- y"]).split("\n")).toHaveLength(3);
     expect(eventMessage([], ["- d"])).toBe(
-      "bercail decisions (check each against the durable question state before acting; act on a pick once):\n- d",
+      "bercail decisions (check each against the durable question state before acting; act on a pick once, except a guard card's, which its worker acts on):\n- d",
     );
   });
 

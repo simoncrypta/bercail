@@ -77,6 +77,8 @@ Post-install CLI (bercail):
                 describe check, commits the staged tree with its text, and starts a
                 background wait for the commit's CI that ends in one land event in Shep's
                 inbox (ready, failed, moved or timeout). It never pushes; desks are refused
+  guard         The guard's worker for an ask it handed from Shep's session to a Decisions card:
+                ask ID (only the guard starts it) | check (a guard card's live check, JSON stdin)
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
                 gathers every PR, with one detached sibling worktree and a Stack tab.
                 Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,
@@ -204,6 +206,7 @@ Config:
   ~/.local/state/bercail/policy-trust.json    repos whose git policy you trusted
   ~/.local/state/bercail/guard-approvals.jsonl  what the guard let through, and why
   ~/.local/state/bercail/guard-warnings.jsonl   what it warned about or refused (bercail doctor counts a week's)
+  ~/.local/state/bercail/guard-asks/          Shep's asks it handed to a Decisions card: tickets, start states, run logs
   ~/.config/bercail/todo.json                 todo targets, routes and the default (bercail todo target, route)
   ~/.local/state/bercail/todos.jsonl          the todos bercail added, and the ones Shep marked done
   ~/.config/herdr-app/layouts/bercail.json    the layout

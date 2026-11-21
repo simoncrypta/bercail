@@ -325,7 +325,48 @@ export function mergeReversible(target: QuestionTarget): boolean {
   }
 }
 
+// A guard card: fresh while it is pending, not expired, and the operation pins to the
+// same facts now (bercail guard check, the guard's own pinning). No repo policy applies.
+function checkGuard(question: Question) {
+  const guard = question.guard!;
+  const reasons: string[] = [];
+  let unavailable = false;
+  if (question.status === "superseded" || question.status === "withdrawn")
+    reasons.push(`question is ${question.status}`);
+  else if (question.status === "pending") {
+    if (Date.parse(guard.expires) <= Date.now()) reasons.push(`expired at ${guard.expires}`);
+    else
+      try {
+        const shown = JSON.parse(
+          execFileSync(process.env.BERCAIL_SHEP_BIN || "bercail", ["guard", "check"], {
+            input: JSON.stringify({ op: guard.op, facts: guard.facts }),
+            encoding: "utf8",
+            timeout: 60000,
+            stdio: ["pipe", "pipe", "pipe"],
+          }),
+        );
+        if (!Array.isArray(shown?.reasons) || !shown.reasons.every((r: unknown) => typeof r === "string"))
+          fail("bercail guard check printed no reasons");
+        reasons.push(...shown.reasons);
+      } catch (error) {
+        unavailable = true;
+        reasons.push(`target unavailable: ${(error as Error).message.split("\n")[0]}`);
+      }
+  }
+  return {
+    token: `${question.id}@${question.revision}`,
+    fresh: reasons.length === 0,
+    status: unavailable ? "unavailable" : reasons.length ? "stale" : "fresh",
+    authority: false as const,
+    reasons,
+    warnings: [] as string[],
+    current: question.target,
+    policy: { status: "unavailable" as const, reason: "a guard card follows the guard, not a repo policy" },
+  };
+}
+
 export async function checkQuestion(question: Question) {
+  if (question.kind === "guard") return checkGuard(question);
   const target = question.target;
   const reasons: string[] = [];
   let current: QuestionTarget | null = null;
