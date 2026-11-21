@@ -722,7 +722,7 @@ test("the person's pick records the choice once against the checked candidate, a
   expect(call("list").stdout).toMatch(/Q1@1 Review this candidate\? -> yes \(panel picker, /);
 });
 
-test("a two-way door counts down on the panel, defaults by expire past its deadline, and stays a day as defaulted", () => {
+test("a two-way door counts down on the panel, defaults by expire past its deadline, and stays until the person says OK", () => {
   const plan = (extra: Record<string, unknown> = {}) =>
     spec({
       kind: "planning",
@@ -775,7 +775,7 @@ test("a two-way door counts down on the panel, defaults by expire past its deadl
     door: { door: "two-way", row: "a planning pick" },
   });
   cards = ok("panel").cards;
-  expect(cards[0]).toMatchObject({ status: "defaulted", defaulted: { choice: "auth" }, reasons: [] });
+  expect(cards[0]).toMatchObject({ status: "fresh", defaulted: { choice: "auth" }, reasons: [] });
   expect(cards[1].status).toBe("fresh");
   expect(ok("json").questions[0].answer).toMatchObject({ choice: "auth", source: "default after timeout" });
   expect(events()).toEqual(["decision-Q1-1.json"]);
@@ -788,13 +788,73 @@ test("a two-way door counts down on the panel, defaults by expire past its deadl
   expect(
     call("answer", { requestId: "p2", token: "Q2@1", choice: "auth", source: "default after timeout" }).stderr,
   ).toMatch(/unknown answer source/);
-  // A day after the default, the card leaves the panel.
+  // A day after the default, the card still waits for the person.
   const old = JSON.parse(before);
   old.questions[0].answer.at = new Date(Date.now() - 25 * 3600000).toISOString();
   old.questions[0].createdAt = new Date(Date.now() - 27 * 3600000).toISOString();
   old.questions[0].deadline = new Date(Date.now() - 26 * 3600000).toISOString();
   writeFileSync(file, JSON.stringify(old));
+  expect(ok("panel").cards.map((c: any) => [c.token, c.defaulted?.choice ?? null])).toEqual([
+    ["Q1@1", "auth"],
+    ["Q2@1", null],
+  ]);
+  // The person's OK: a pick's fields, with an outcome in place of a choice.
+  expect(
+    call("answer", { requestId: "ok", token: "Q1@1", choice: "auth", source: "panel picker", outcome: "ok" }).stderr,
+  ).toMatch(/answer fields must be/);
+  expect(ok("answer", { requestId: "ok", token: "Q1@1", source: "panel picker", outcome: "ok" })).toMatchObject({
+    accepted: true,
+    question: {
+      answer: { source: "default after timeout" },
+      settled: { outcome: "ok", choice: "auth", source: "panel picker" },
+    },
+  });
   expect(ok("panel").cards.map((c: any) => c.token)).toEqual(["Q2@1"]);
+  expect(event("decision-Q1-1-ok.json")).toMatchObject({ choice: "auth", by: "panel picker", confirmed: true });
+  // Shep's every turn lists it with the person's picks, as a confirmed default.
+  const list = call("list").stdout;
+  expect(list).toMatch(
+    /Answered by the person's pick[^\n]*\nQ1@1 Which desk starts first\? -> auth \(confirmed default, panel picker, /,
+  );
+  expect(list).not.toMatch(/Defaulted to your recommendation/);
+});
+
+test("a reversed default stays on the panel as reversed until Shep withdraws it", () => {
+  ok(
+    "create",
+    spec({
+      kind: "planning",
+      prompt: "Which desk starts first?",
+      options: ["auth", "search"],
+      recommendation: { choice: "auth", why: "it unblocks search" },
+      reversible: true,
+      issue: null,
+      desk: null,
+      base: null,
+      action: null,
+    }),
+  );
+  const file = join(env.BERCAIL_SHEP_STATE!, "questions.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  ledger.questions[0].createdAt = new Date(Date.now() - 3600000).toISOString();
+  ledger.questions[0].deadline = new Date(Date.now() - 1800000).toISOString();
+  ledger.requests = [];
+  writeFileSync(file, JSON.stringify(ledger));
+  expect(ok("expire")).toEqual(["Q1@1"]);
+  expect(call("answer", { requestId: "r", token: "Q1@1", source: "panel picker", outcome: "undo" }).stderr).toMatch(
+    /answer fields must be/,
+  );
+  expect(
+    ok("answer", { requestId: "r", token: "Q1@1", choice: "search", source: "panel picker", outcome: "reversed" }),
+  ).toMatchObject({ accepted: true, question: { settled: { outcome: "reversed", choice: "search" } } });
+  expect(event("decision-Q1-1-reversed.json")).toMatchObject({ choice: "search", reversed: "auth" });
+  expect(ok("panel").cards).toMatchObject([
+    { token: "Q1@1", defaulted: { choice: "auth" }, reversed: { choice: "search" } },
+  ]);
+  expect(call("list").stdout).toMatch(/Q1@1 Which desk starts first\? -> reversed auth to search \(panel picker, /);
+  ok("withdraw", { requestId: "w", token: "Q1@1", reason: "started search instead" });
+  expect(ok("panel").cards).toEqual([]);
+  expect(ok("json").questions[0]).toMatchObject({ status: "withdrawn", settled: { choice: "search" } });
 });
 
 test("a commit is a two-way door; a merge is one only while the repo's policy says merge_reversible", () => {
@@ -879,7 +939,9 @@ test("a stale question, a choice it does not offer, or a made-up source records 
     source: "panel picker",
     verified: true,
   });
-  expect(extra.stderr).toMatch(/answer fields must be requestId, token, choice and source only/);
+  expect(extra.stderr).toMatch(
+    /answer fields must be requestId, token, choice and source, or requestId, token, source and outcome "ok"/,
+  );
   expect(ok("json").questions[0].status).toBe("pending");
   expect(events()).toEqual([]);
 });

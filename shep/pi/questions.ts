@@ -52,6 +52,21 @@ export interface QuestionAnswer {
   head: string | null;
   stagedTree: string | null;
 }
+/** The person's word on a default, once. OK keeps it as their pick, with the full weight of
+ * one; Reverse rejects it, for another of the choices or none. */
+export interface QuestionSettlement {
+  requestId: string;
+  outcome: "ok" | "reversed";
+  /** OK: the default's choice. Reversed: another of the choices, or null for none. */
+  choice: string | null;
+  source: (typeof ANSWER_SOURCES)[number];
+  at: string;
+  /** The candidate the live check saw when the person said it. */
+  head: string | null;
+  stagedTree: string | null;
+  /** Its decision event is written, so it is never written again. */
+  told?: true;
+}
 /** Shep's: the question no longer applies. Not an answer. */
 export interface QuestionWithdrawal {
   requestId: string;
@@ -83,6 +98,8 @@ export interface Question extends QuestionSpec {
   }[];
   /** Present once answered, and only then. */
   answer?: QuestionAnswer;
+  /** The person's OK or Reverse on a default; present only on one. */
+  settled?: QuestionSettlement;
   /** Present once withdrawn, and only then. */
   withdrawal?: QuestionWithdrawal;
 }
@@ -181,9 +198,18 @@ function question(value: unknown): asserts value is Question {
   const keys = ["id", "revision", "status", "createdAt", "proposals", "kind", "prompt", "options", "origin", "target"];
   shape(value, [
     ...keys,
-    ...optional(v ?? {}, ["brief", "recommendation", "reversible", "deadline", "told", "answer", "withdrawal"]),
+    ...optional(v ?? {}, [
+      "brief",
+      "recommendation",
+      "reversible",
+      "deadline",
+      "told",
+      "answer",
+      "settled",
+      "withdrawal",
+    ]),
   ]);
-  const { id, revision, status, createdAt, deadline, told, proposals, answer, withdrawal, ...fields } = value;
+  const { id, revision, status, createdAt, deadline, told, proposals, answer, settled, withdrawal, ...fields } = value;
   spec(fields);
   if (
     typeof id !== "string" ||
@@ -221,7 +247,13 @@ function question(value: unknown): asserts value is Question {
       fail("invalid unverified proposal");
     if (!p.accepted) text(p.reason);
   }
-  if ((status === "answered") !== (answer !== undefined)) fail("an answered question needs its answer, and only it");
+  // A default Shep withdrew (moot, or its reversal handled) keeps its record.
+  const kept =
+    status === "withdrawn" &&
+    (answer as QuestionAnswer | undefined)?.source === DEFAULT_SOURCE &&
+    (settled as QuestionSettlement | undefined)?.outcome !== "ok";
+  if (status === "answered" ? answer === undefined : answer !== undefined && !kept)
+    fail("an answered question needs its answer, and only it");
   if (answer !== undefined) {
     shape(answer, ["requestId", "choice", "source", "at", "head", "stagedTree"]);
     text(answer.requestId);
@@ -238,6 +270,33 @@ function question(value: unknown): asserts value is Question {
       fail("unknown answer source");
     for (const key of ["head", "stagedTree"]) if (answer[key] !== null) text(answer[key]);
     if (!Number.isFinite(Date.parse(answer.at as string))) fail("invalid answer time");
+  }
+  if (settled !== undefined) {
+    const a = answer as QuestionAnswer | undefined;
+    if (a?.source !== DEFAULT_SOURCE) fail("only a default is settled");
+    shape(settled, [
+      "requestId",
+      "outcome",
+      "choice",
+      "source",
+      "at",
+      "head",
+      "stagedTree",
+      ...optional(settled as Record<string, unknown>, ["told"]),
+    ]);
+    text(settled.requestId);
+    if (settled.told !== undefined && settled.told !== true) fail("told is true or absent");
+    if (
+      settled.outcome === "ok"
+        ? settled.choice !== a.choice
+        : settled.outcome !== "reversed" ||
+          (settled.choice !== null &&
+            (settled.choice === a.choice || !fields.options.includes(settled.choice as string)))
+    )
+      fail("an OK keeps the default's choice; a Reverse names another choice or none");
+    if (!ANSWER_SOURCES.includes(settled.source as (typeof ANSWER_SOURCES)[number])) fail("unknown answer source");
+    for (const key of ["head", "stagedTree"]) if (settled[key] !== null) text(settled[key]);
+    if (!(Date.parse(settled.at as string) >= Date.parse(a.at))) fail("invalid settlement time");
   }
   if ((status === "withdrawn") !== (withdrawal !== undefined))
     fail("a withdrawn question needs its withdrawal, and only it");
@@ -574,12 +633,18 @@ export class QuestionStore {
   }
 
   // Shep's: a pending question that no longer applies (its desk stopped, events made it
-  // moot) leaves the panel and can never be answered. It records no answer and no event.
+  // moot) leaves the panel and can never be answered. So does a default without the
+  // person's OK: one Shep found moot, or a Reverse Shep has handled. It keeps the default
+  // and the Reverse, and records no answer and no event.
   withdraw(requestId: string, token: string, reason: string): Question {
     text(reason);
     return this.request(requestId, ["withdraw", token, reason], (state) => {
       const q = this.find(state, token);
-      if (q.status !== "pending") fail(`question is ${q.status}; only a pending question can be withdrawn`);
+      const open = q.status === "pending" || (q.answer?.source === DEFAULT_SOURCE && q.settled?.outcome !== "ok");
+      if (!open || q.status === "withdrawn")
+        fail(
+          `question is ${q.status}; only a pending question, or a default without the person's OK, can be withdrawn`,
+        );
       q.status = "withdrawn";
       q.withdrawal = { requestId, reason, at: new Date().toISOString() };
       return q;
@@ -649,12 +714,59 @@ export class QuestionStore {
     }, true);
   }
 
-  // Its default's decision event is written: the caller wrote it, or found it there.
-  told(token: string): void {
+  // The person's word on a default, once per revision, and only while the live check the
+  // caller ran just before found the candidate unchanged (fresh). OK makes it their pick,
+  // with the full weight of one (an LGTM where the card asked for one). Reverse rejects
+  // it, naming another of the choices (their pick) or none (choice null).
+  settle(
+    requestId: string,
+    token: string,
+    outcome: QuestionSettlement["outcome"],
+    choice: string | null,
+    source: (typeof ANSWER_SOURCES)[number],
+    check: Check,
+  ): AnswerResult {
+    if (!ANSWER_SOURCES.includes(source)) fail("unknown answer source");
+    if (outcome === "ok" && choice !== null) fail("an OK names no choice: it keeps the default's");
+    if (choice !== null) text(choice);
+    return this.request(requestId, ["settle", token, outcome, choice, source], (state) => {
+      const q = this.find(state, token);
+      const reason =
+        q.answer?.source !== DEFAULT_SOURCE
+          ? `question is ${q.status}, not defaulted: only a default takes OK or Reverse`
+          : q.settled
+            ? q.settled.outcome === "ok"
+              ? "its default already has the person's OK"
+              : "its default is already reversed"
+            : q.status !== "answered"
+              ? `question is ${q.status}`
+              : choice !== null && (choice === q.answer.choice || !q.options.includes(choice))
+                ? `not another of the question's choices: it defaulted to ${q.answer.choice}`
+                : check.status !== "fresh" || !check.current
+                  ? `changed since it defaulted: ${check.reasons.join(", ") || "not checked"}`
+                  : undefined;
+      if (reason) return { question: q, accepted: false, reason };
+      q.settled = {
+        requestId,
+        outcome,
+        choice: outcome === "ok" ? q.answer!.choice : choice,
+        source,
+        at: new Date().toISOString(),
+        head: check.current!.head,
+        stagedTree: check.current!.stagedTree,
+      };
+      return { question: q, accepted: true };
+    });
+  }
+
+  // The decision event of its default, or of the person's OK or Reverse on it, is
+  // written: the caller wrote it, or found it there.
+  told(token: string, which: "default" | "settled" = "default"): void {
     this.locked((state) => {
       const q = this.find(state, token);
-      if (q.answer?.source !== DEFAULT_SOURCE) fail("only a default is told");
-      q.told = true;
+      if (q.answer?.source !== DEFAULT_SOURCE || (which === "settled" && !q.settled)) fail("only a default is told");
+      if (which === "settled") q.settled!.told = true;
+      else q.told = true;
     }, true);
   }
 }
@@ -685,25 +797,42 @@ export function projection(snapshot: QuestionSnapshot): string {
     "Shortened fields end in …; full targets and history: bercail shep questions --json.",
   );
   // The answers, newest first: the record of an answer, whatever became of its event.
-  // A default is never listed as the person's.
-  const answered = (picked: boolean) =>
+  // A default is never listed as the person's until they said OK to it; one they
+  // reversed waits for Shep to undo it and withdraw it.
+  const said = (q: Question) =>
+    q.settled?.outcome === "ok" ? { ...q.settled, source: `confirmed default, ${q.settled.source}` } : q.answer!;
+  const at = (q: Question) => (q.settled ?? q.answer!).at;
+  const listed = (kind: "picked" | "defaulted" | "reversed") =>
     snapshot.questions
-      .filter((q) => q.answer && (q.answer.source !== DEFAULT_SOURCE) === picked)
-      .sort((a, b) => b.answer!.at.localeCompare(a.answer!.at))
+      .filter(
+        (q) =>
+          q.status === "answered" &&
+          (q.answer!.source !== DEFAULT_SOURCE || q.settled?.outcome === "ok"
+            ? "picked"
+            : q.settled
+              ? "reversed"
+              : "defaulted") === kind,
+      )
+      .sort((a, b) => at(b).localeCompare(at(a)))
       .slice(0, 10);
-  for (const [picked, head] of [
-    [true, "Answered by the person's pick (a local record, not proof of identity; act on it once):"],
-    [
-      false,
-      "Defaulted to your recommendation after the deadline (not the person's choice, never an LGTM or reviewer; act on it once, and say it was defaulted):",
-    ],
-  ] as const) {
-    const qs = answered(picked);
-    if (qs.length) lines.push(head);
-    for (const q of qs)
-      lines.push(
-        `${tokenOf(q)} ${line(q.prompt, 120)} -> ${line(q.answer!.choice, 80)} (${q.answer!.source}, ${q.answer!.at}) topic=${line(q.target.topic, 64)}`,
-      );
+  const heads = {
+    picked: "Answered by the person's pick (a local record, not proof of identity; act on it once):",
+    defaulted:
+      "Defaulted to your recommendation after the deadline (not the person's choice, never an LGTM or reviewer; act on it once, and say it was defaulted; its card waits for the person's OK or Reverse):",
+    reversed:
+      "Reversed by the person (undo what you did on the default, then act on their choice once while question check is fresh, or ask again; then withdraw it with what you did):",
+  };
+  for (const kind of ["picked", "defaulted", "reversed"] as const) {
+    const qs = listed(kind);
+    if (qs.length) lines.push(heads[kind]);
+    for (const q of qs) {
+      const r = said(q);
+      const what =
+        kind === "reversed"
+          ? `reversed ${line(q.answer!.choice, 80)} ${q.settled!.choice === null ? "with no other choice" : `to ${line(q.settled!.choice, 80)}`} (${q.settled!.source}, ${q.settled!.at})`
+          : `${line(r.choice!, 80)} (${r.source}, ${r.at})`;
+      lines.push(`${tokenOf(q)} ${line(q.prompt, 120)} -> ${what} topic=${line(q.target.topic, 64)}`);
+    }
   }
   return lines.join("\n");
 }

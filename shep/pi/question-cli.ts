@@ -2,18 +2,9 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
-import {
-  DEFAULT_SOURCE,
-  door,
-  mergesIn,
-  QuestionStore,
-  projection,
-  tokenOf,
-  type Question,
-  type QuestionSpec,
-} from "./questions.ts";
+import { door, mergesIn, QuestionStore, projection, tokenOf, type Question, type QuestionSpec } from "./questions.ts";
 import { captureTarget, checkQuestion, mergeReversible } from "./question-target.ts";
-import { closed, discussionOf, expireDue, openDiscussion, pick, recent } from "./discuss.ts";
+import { closed, discussionOf, expireDue, openDiscussion, pick, settle, unsettled } from "./discuss.ts";
 
 async function main() {
   const state = process.env.BERCAIL_SHEP_STATE;
@@ -60,9 +51,19 @@ async function main() {
         throw new Error("withdraw fields must be requestId, token and reason only");
       result = store.withdraw(input.requestId, input.token, input.reason);
     } else if (op === "answer") {
-      if (Object.keys(input).sort().join() !== "choice,requestId,source,token")
-        throw new Error("answer fields must be requestId, token, choice and source only");
-      result = await pick(state, input.requestId, input.token, input.choice, input.source);
+      // A pick names its choice; the person's OK or Reverse on a default names its
+      // outcome, and a Reverse may name another choice.
+      const keys = Object.keys(input).sort().join();
+      if (keys === "outcome,requestId,source,token" && ["ok", "reversed"].includes(input.outcome))
+        result = await settle(state, input.requestId, input.token, input.outcome, null, input.source);
+      else if (keys === "choice,outcome,requestId,source,token" && input.outcome === "reversed")
+        result = await settle(state, input.requestId, input.token, "reversed", input.choice, input.source);
+      else if (keys === "choice,requestId,source,token")
+        result = await pick(state, input.requestId, input.token, input.choice, input.source);
+      else
+        throw new Error(
+          'answer fields must be requestId, token, choice and source, or requestId, token, source and outcome "ok" or "reversed" (a Reverse may add choice)',
+        );
     } else if (op === "reply") {
       if (Object.keys(input).sort().join() !== "answer,requestId,source,token")
         throw new Error("reply fields must be requestId, token, answer and source only; no verification flags");
@@ -99,15 +100,16 @@ async function main() {
 
 // What the Decisions panel shows: each pending question with its brief, Shep's
 // recommendation, live check (its desk warnings too) and deadline, and the staged change's size and stakes for
-// a review or action; then the questions that defaulted in the last day. Answering is
-// `answer`; this only reads.
+// a review or action; and each default until the person says OK, or Shep withdraws it.
+// Answering is `answer`; this only reads.
 async function panel(store: QuestionStore, state: string) {
   const bin = process.env.BERCAIL_SHEP_BIN || "bercail";
   const cards = [];
-  const shown = (q: Question) => q.status === "pending" || (q.answer?.source === DEFAULT_SOURCE && recent(q));
+  const shown = (q: Question) =>
+    q.status === "pending" || unsettled(q) || (q.status === "answered" && q.settled?.outcome === "reversed");
   for (const q of store.snapshot().questions.filter(shown)) {
-    // A defaulted question is settled: nothing to check, and no picker.
-    const check = q.answer ? null : await checkQuestion(q);
+    // A default is checked too: the person's OK or Reverse on it needs it fresh.
+    const check = await checkQuestion(q);
     let change = null;
     if (!q.answer && q.kind !== "planning" && q.target.worktree) {
       // describe check exits 1 while the change has no description; its JSON still holds the size.
@@ -132,12 +134,13 @@ async function panel(store: QuestionStore, state: string) {
       discussed: discussionOf(state, q) !== null,
       createdAt: q.createdAt,
       // A deadline only while it is still a two-way door, with the policy just read.
-      deadline: !check || door(q, () => mergesIn(check)).door === "two-way" ? (q.deadline ?? null) : null,
+      deadline: q.answer || door(q, () => mergesIn(check)).door === "two-way" ? (q.deadline ?? null) : null,
       defaulted: q.answer ? { choice: q.answer.choice, at: q.answer.at } : null,
+      reversed: q.settled ? { choice: q.settled.choice, at: q.settled.at } : null,
       target: { repo, topic, worktree, space, url: url ?? null },
-      status: check?.status ?? "defaulted",
-      reasons: check?.reasons ?? [],
-      warnings: check?.warnings ?? [],
+      status: check.status,
+      reasons: check.reasons,
+      warnings: check.warnings,
       change,
     });
   }

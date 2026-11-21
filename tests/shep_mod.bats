@@ -677,7 +677,7 @@ eq(answers().map((a) => a.choice), ["Not yet"], "the picked choice");
 EOF
 }
 
-@test "a two-way door counts down on its card and ticks; a defaulted one says so, has no picker, and is not counted" {
+@test "a two-way door counts down on its card and ticks; a defaulted one says so, offers OK, and is counted apart" {
   mod_case <<'EOF'
 const at = (min) => new Date(Date.now() + min * 60000).toISOString();
 const plan = { kind: "planning", prompt: "Which desk first?", options: ["auth", "search"], change: null,
@@ -687,7 +687,7 @@ const view = { ...PANEL_VIEW, cards: [
   card("Q2@1", { deadline: null, defaulted: null }),
   card("Q3@1", { ...plan, deadline: at(-1), defaulted: null }),
   card("Q4@1", { ...plan, deadline: at(-1), defaulted: null, status: "stale", reasons: ["worktree changed"] }),
-  card("Q5@1", { ...plan, deadline: at(-5), status: "defaulted", reasons: [], defaulted: { choice: "auth", at: at(-4) } }),
+  card("Q5@1", { ...plan, deadline: at(-5), defaulted: { choice: "auth", at: at(-4) } }),
   card("Q6@1", { ...plan, deadline: at(65.5), defaulted: null }),
   card("Q7@1", { ...plan, deadline: at(0.5), defaulted: null }),
 ] };
@@ -706,16 +706,18 @@ eq(timers(render()), [
 ], "timers (none on the card with no deadline)");
 const all = texts();
 if (!all.includes("defaulted")) fail(`no defaulted word in ${JSON.stringify(all)}`);
-if (!all.some((x) => /^two-way door: nobody picked by (\d{4}-\d\d-\d\d )?\d\d:\d\d, so it took Shep's recommendation, auth\. Discuss tells Shep if you disagree\.$/.test(x)))
+if (!all.some((x) => /^two-way door: nobody picked by (\d{4}-\d\d-\d\d )?\d\d:\d\d, so it took Shep's recommendation, auth\. OK keeps it as your pick; Reverse tells Shep to undo it\.$/.test(x)))
   fail(`no defaulted line in ${JSON.stringify(all)}`);
 // Past its deadline a fresh card takes no pick: only Discuss is clickable.
 eq(els.filter((e) => e.click && e.id?.includes("Q3@1")).map((e) => e.id), ["decision-discuss-Q3@1"], "overdue card controls");
-// The defaulted card: Discuss only, no choices and no answer button; not waiting on you.
-eq(els.filter((e) => e.id?.includes("Q5@1") && e.id !== "decision-Q5@1").map((e) => e.id), ["decision-discuss-Q5@1"], "defaulted card controls");
-if (!all.some((x) => x.startsWith("6 waiting on you"))) fail(`panel count: ${JSON.stringify(all)}`);
+// The defaulted card: its choices (to reverse to), Discuss, Reverse and OK, no answer button; counted apart from the 6 waiting on you.
+eq(els.filter((e) => e.id?.includes("Q5@1") && e.id !== "decision-Q5@1").map((e) => e.id),
+  ["decision-choice-Q5@1-0", "decision-choice-Q5@1-1", "decision-discuss-Q5@1", "decision-reverse-Q5@1", "decision-ok-Q5@1"], "defaulted card controls");
+if (!all.includes("OK auth")) fail(`no OK button: ${JSON.stringify(all)}`);
+if (!all.some((x) => x.startsWith("6 waiting on you · 1 defaulted · "))) fail(`panel count: ${JSON.stringify(all)}`);
 els.length = 0;
 h.render(cx);
-if (!texts().includes("Decisions 6")) fail(`header: ${JSON.stringify(texts())}`);
+if (!texts().includes("Decisions 6 · 1 defaulted")) fail(`header: ${JSON.stringify(texts())}`);
 // Ten minutes on, the next draw counts down.
 const now = Date.now;
 Date.now = () => now() + 10 * 60000;
@@ -727,7 +729,93 @@ const bar = new Shep();
 bar.init({}, cx);
 els.length = 0;
 bar.render(cx);
-if (!texts().includes("read-only branch · it defaulted; closing tells Shep")) fail(`discuss bar: ${JSON.stringify(texts())}`);
+if (!texts().includes("read-only branch · it defaulted; /pick OKs or reverses it, closing tells Shep")) fail(`discuss bar: ${JSON.stringify(texts())}`);
+EOF
+}
+
+@test "o or OK records the person's OK on a fresh default only, and a default alone counts in the header" {
+  mod_case <<'EOF'
+const plan = { kind: "planning", prompt: "Which desk first?", options: ["auth", "search"], change: null,
+  recommendation: { choice: "auth", why: "it unblocks search" }, deadline: "2026-11-14T20:30:00.000Z" };
+const view = { ...PANEL_VIEW, cards: [
+  card("Q1@1", { ...plan, defaulted: { choice: "auth", at: "2026-11-14T20:31:00.000Z" } }),
+  card("Q2@1", { ...plan, defaulted: { choice: "auth", at: "2026-11-14T20:31:00.000Z" }, status: "stale", reasons: ["head changed"] }),
+  card("Q3@1", { deadline: null, defaulted: null }),
+] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+// o on the fresh default records an OK, with no choice; Enter and the number keys pick nothing on it.
+press(d, "2", "enter", "o");
+await tick();
+eq(answers().map(({ requestId, ...a }) => a), [{ token: "Q1@1", outcome: "ok", source: "panel picker" }], "the OK");
+// A stale default says why and takes no OK; o on a card that did not default records nothing.
+globalThis.herdr.execs = [];
+press(d, "down", "o", "down", "o");
+await tick();
+eq(answers(), [], "an OK on a stale default or a pending card");
+els.length = 0;
+d.render(cx);
+if (!texts().some((x) => x.endsWith("Changed since: new commits. OK and Reverse need it unchanged; Shep must ask again.")))
+  fail(`stale default: ${JSON.stringify(texts())}`);
+if (els.find((e) => e.id === "decision-ok-Q2@1")?.click) fail("a stale default's OK must not click");
+// The OK button records the same as o.
+els.find((e) => e.id === "decision-ok-Q1@1").click(null, cx);
+await tick();
+eq(answers().map((a) => [a.token, a.outcome]), [["Q1@1", "ok"]], "the button's OK");
+// With only defaults left, the header still counts them.
+setup({ terminals: [shep], exec: panelExec({ ...view, cards: view.cards.slice(0, 2) }) });
+const h = copy("header");
+await tick();
+els.length = 0;
+h.render(cx);
+if (!texts().includes("Decisions 2 defaulted")) fail(`header: ${JSON.stringify(texts())}`);
+EOF
+}
+
+@test "r reverses a fresh default, to the picked choice or none; a reversed card waits on Shep and is not counted" {
+  mod_case <<'EOF'
+const plan = { kind: "planning", prompt: "Which desk first?", options: ["auth", "search"], change: null,
+  recommendation: { choice: "auth", why: "it unblocks search" }, deadline: "2026-11-14T20:30:00.000Z" };
+const defaulted = { choice: "auth", at: "2026-11-14T20:31:00.000Z" };
+const view = { ...PANEL_VIEW, cards: [
+  card("Q1@1", { ...plan, defaulted }),
+  card("Q2@1", { ...plan, defaulted, status: "stale", reasons: ["head changed"] }),
+  card("Q3@1", { ...plan, defaulted, reversed: { choice: "search", at: "2026-11-14T20:40:00.000Z" } }),
+] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+const h = copy("header");
+await tick();
+// On the default's own choice, r reverses with no other choice; on another, to it.
+press(d, "r");
+await tick();
+press(d, "2");
+els.length = 0;
+d.render(cx);
+if (!texts().includes("Reverse to search")) fail(`reverse button: ${JSON.stringify(texts())}`);
+press(d, "r");
+await tick();
+eq(answers().map(({ requestId, ...a }) => a), [
+  { token: "Q1@1", outcome: "reversed", source: "panel picker" },
+  { token: "Q1@1", outcome: "reversed", choice: "search", source: "panel picker" },
+], "the reverses");
+// A stale default and a reversed one take no Reverse or OK.
+globalThis.herdr.execs = [];
+press(d, "down", "r", "o", "down", "1", "r", "o");
+await tick();
+eq(answers(), [], "a Reverse on a stale or reversed card");
+els.length = 0;
+d.render(cx);
+const all = texts();
+if (!all.includes("reversed")) fail(`no reversed word: ${JSON.stringify(all)}`);
+if (!all.includes("You reversed its default, auth, to search. Shep undoes what it did on it; the card leaves once Shep has."))
+  fail(`reversed line: ${JSON.stringify(all)}`);
+eq(els.filter((e) => e.id?.includes("Q3@1") && e.id !== "decision-Q3@1").map((e) => e.id), ["decision-discuss-Q3@1"], "reversed card controls");
+// The header counts the two defaults still waiting on you, not the reversed one.
+els.length = 0;
+h.render(cx);
+if (!texts().includes("Decisions 2 defaulted")) fail(`header: ${JSON.stringify(texts())}`);
 EOF
 }
 

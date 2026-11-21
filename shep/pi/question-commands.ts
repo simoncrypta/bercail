@@ -144,11 +144,11 @@ export default function (pi: ExtensionAPI) {
     name: "shep_question_withdraw",
     label: "Withdraw Shep question",
     description:
-      "Withdraw a pending question that no longer applies (its desk stopped, events made it moot). It leaves the Decisions panel and can never be answered. Not an answer.",
+      "Withdraw a pending question that no longer applies (its desk stopped, events made it moot), a default without the person's OK that is moot, or a default the person reversed once you have handled it. It leaves the Decisions panel and can never be answered. Not an answer.",
     parameters: Type.Object({
       requestId: Type.String(),
-      token: Type.String({ description: "The pending Qn@revision" }),
-      reason: Type.String({ description: "One line: why it no longer applies" }),
+      token: Type.String({ description: "The pending, defaulted or reversed Qn@revision" }),
+      reason: Type.String({ description: "One line: why it no longer applies, or what you did on a reversal" }),
     }),
     async execute(_toolCallId, input) {
       const question = store.withdraw(input.requestId, input.token, input.reason);

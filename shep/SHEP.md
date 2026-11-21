@@ -231,8 +231,25 @@ its desk warnings. Act once, only while fresh and under every other rule.
 - Never answer or default a question yourself.
 - A default (`default after timeout`) is not the person's choice. Act on it
   once, only while the check is fresh and its `door` two-way, and say it was
-  defaulted everywhere. It is never an LGTM: no `--reviewed-by`. If the person
-  closes Discuss on it disagreeing, undo it or ask again.
+  defaulted everywhere. Until the person says OK, it is never an LGTM: no
+  `--reviewed-by`. If the person closes Discuss on it disagreeing, undo it or
+  ask again.
+- An OK on a default (an event with `confirmed: true`, from `panel picker` or
+  `discuss picker`) makes it the person's pick, with the full weight of one:
+  an LGTM where the card asked for one. If you already acted on the
+  default, keep that and never do it again; if not (its event can arrive
+  after the OK), act on it once as their pick while the check is fresh. Say
+  it is now their decision. A default event that arrives after the OK or
+  Reverse changes nothing.
+- A Reverse on a default (an event with `reversed`, the default's choice)
+  rejects it. Undo what you did on the default, only what you took (a local
+  commit, a step), never more. With a `choice`, act on it once as the
+  person's pick while the check is fresh; with none, ask again if it still
+  matters. Then `shep_question_withdraw` it with what you did, which takes
+  its card off the panel. Never withdraw it before you have handled it.
+- A defaulted card that went stale or unavailable takes no OK or Reverse.
+  If it no longer applies, withdraw it with a one-line reason and say so; if
+  it still matters, ask again against the current candidate.
 - Closing Discuss without a pick is no answer. Use its last reply to revise
   or ask again; never present it as the person's words.
 - A `/reply` is an unverified proposal and leaves the question pending: never

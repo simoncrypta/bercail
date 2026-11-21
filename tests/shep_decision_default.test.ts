@@ -25,10 +25,10 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
   return { ...real, spawn };
 });
-import { closed, expireDue, pick } from "../shep/pi/discuss.ts";
+import { closed, expireDue, pick, settle } from "../shep/pi/discuss.ts";
 import { claim, eventLine } from "../shep/pi/inbox.ts";
 import register, { EXPIRE_MS } from "../shep/pi/question-commands.ts";
-import { QuestionStore, tokenOf, type QuestionSpec } from "../shep/pi/questions.ts";
+import { projection, QuestionStore, tokenOf, type QuestionSpec } from "../shep/pi/questions.ts";
 
 let dir: string;
 let state: string;
@@ -82,6 +82,8 @@ const inbox = () => {
   }
 };
 const event = (name: string) => JSON.parse(readFileSync(join(state, "inbox", name), "utf8"));
+const confirm = (s: string, requestId: string, token: string, source: "panel picker" | "discuss picker") =>
+  settle(s, requestId, token, "ok", null, source);
 const answer = (token: string) =>
   new QuestionStore(state).snapshot().questions.find((q) => tokenOf(q) === token)!.answer;
 
@@ -208,4 +210,209 @@ test("after a default, Discuss can still tell Shep the person disagrees, and /pi
     /^- The person closed Discuss on it after it defaulted to "auth"; it was a two-way door, so if they disagree, undo it or ask again for Q1@1 /,
   );
   expect(answer(token)).toMatchObject({ choice: "auth", source: "default after timeout" });
+});
+
+test("the person's OK on a default makes it their pick once, with one event, and nothing else takes it", async () => {
+  const token = ask();
+  const plain = ask("other", false);
+  // Not a default yet, or never one: OK records nothing.
+  expect(await confirm(state, "ok-early", token, "panel picker")).toMatchObject({
+    accepted: false,
+    reason: "question is pending, not defaulted: only a default takes OK or Reverse",
+  });
+  await pick(state, "p1", plain, "search", "panel picker");
+  expect(await confirm(state, "ok-picked", plain, "panel picker")).toMatchObject({
+    accepted: false,
+    reason: "question is answered, not defaulted: only a default takes OK or Reverse",
+  });
+  vi.setSystemTime("2026-11-19T12:30:00.000Z");
+  await expireDue(state);
+  // A stale target takes no OK, and the card keeps waiting.
+  check.status = "stale";
+  check.reasons = ["worktree changed"];
+  expect(await confirm(state, "ok-stale", token, "panel picker")).toMatchObject({
+    accepted: false,
+    reason: "changed since it defaulted: worktree changed",
+  });
+  check.status = "fresh";
+  check.reasons = [];
+  await expect(confirm(state, "ok-forged", token, "default after timeout" as never)).rejects.toThrow(
+    /unknown answer source/,
+  );
+  expect(inbox()).toEqual(["decision-Q1-1.json", "decision-Q2-1.json"]);
+  vi.setSystemTime("2026-11-19T13:00:00.000Z");
+  const result = await confirm(state, "ok-1", token, "discuss picker");
+  expect(result).toMatchObject({ accepted: true });
+  const q = new QuestionStore(state).snapshot().questions[0]!;
+  // The default stays as it was; the OK is its own record, from the person's picker.
+  expect(q.answer).toMatchObject({ choice: "auth", source: "default after timeout" });
+  expect(q.settled).toEqual({
+    requestId: "ok-1",
+    outcome: "ok",
+    choice: "auth",
+    source: "discuss picker",
+    at: "2026-11-19T13:00:00.000Z",
+    head: null,
+    stagedTree: null,
+    told: true,
+  });
+  expect(inbox()).toEqual(["decision-Q1-1-ok.json", "decision-Q1-1.json", "decision-Q2-1.json"]);
+  const ev = event("decision-Q1-1-ok.json");
+  expect(ev).toMatchObject({ event_id: "decision:Q1-1-ok", choice: "auth", by: "discuss picker", confirmed: true });
+  expect(eventLine(ev)).toBe(
+    '- The person said OK to the default "auth" in the discuss picker: it is now their pick, as if they had picked it on the card (an LGTM only where the card asked for one); if you already acted on the default, keep that and do not do it again; if not, act on it once as their pick while question check is fresh for Q1@1 "Which desk starts first?" (topic plan). Nothing was discussed. [event decision:Q1-1-ok]',
+  );
+  // A retry of the same OK is the same record; a second OK is refused; a pick still is.
+  expect(await confirm(state, "ok-1", token, "discuss picker")).toMatchObject({ accepted: true });
+  expect(await confirm(state, "ok-2", token, "panel picker")).toMatchObject({
+    accepted: false,
+    reason: "its default already has the person's OK",
+  });
+  expect(await pick(state, "p2", token, "search", "panel picker")).toMatchObject({ accepted: false });
+  expect(new QuestionStore(state).snapshot().questions[0]!.settled?.requestId).toBe("ok-1");
+  // Closing Discuss after the OK tells Shep nothing more: the OK said it.
+  expect(closed(state, token, "o1")).toBe(false);
+  expect(projection(new QuestionStore(state).snapshot())).toContain(
+    "Q1@1 Which desk starts first? -> auth (confirmed default, discuss picker, 2026-11-19T13:00:00.000Z)",
+  );
+});
+
+test("an OK event that is not the person's is dropped, not shown to Shep", () => {
+  const base = { source: "bercail", kind: "decision", event_id: "decision:Q1-1-ok", question: { token: "Q1@1" } };
+  expect(eventLine({ ...base, choice: "auth", by: "default after timeout", confirmed: true })).toBeNull();
+  expect(eventLine({ ...base, choice: "auth", by: "panel picker", confirmed: "yes" })).toBeNull();
+});
+
+test("the person's Reverse on a default names another choice or none, once, and its card waits for Shep's withdraw", async () => {
+  const token = ask();
+  const other = ask("other");
+  vi.setSystemTime("2026-11-19T12:30:00.000Z");
+  await expireDue(state);
+  const reverse = (id: string, t: string, choice: string | null) =>
+    settle(state, id, t, "reversed", choice, "panel picker");
+  // The default's own choice, or one the question does not offer, is no Reverse; nor is a stale target.
+  for (const choice of ["auth", "neither"])
+    expect(await reverse(`r-${choice}`, token, choice)).toMatchObject({
+      accepted: false,
+      reason: "not another of the question's choices: it defaulted to auth",
+    });
+  check.status = "stale";
+  check.reasons = ["base changed"];
+  expect(await reverse("r-stale", token, "search")).toMatchObject({
+    accepted: false,
+    reason: "changed since it defaulted: base changed",
+  });
+  check.status = "fresh";
+  check.reasons = [];
+  expect(await reverse("r-1", token, "search")).toMatchObject({ accepted: true });
+  expect(await reverse("r-2", other, null)).toMatchObject({ accepted: true });
+  const [q1, q2] = new QuestionStore(state).snapshot().questions;
+  expect(q1!.answer).toMatchObject({ choice: "auth", source: "default after timeout" });
+  expect(q1!.settled).toMatchObject({
+    requestId: "r-1",
+    outcome: "reversed",
+    choice: "search",
+    source: "panel picker",
+  });
+  expect(q2!.settled).toMatchObject({ outcome: "reversed", choice: null });
+  const ev = event("decision-Q1-1-reversed.json");
+  expect(ev).toMatchObject({
+    event_id: "decision:Q1-1-reversed",
+    choice: "search",
+    by: "panel picker",
+    reversed: "auth",
+  });
+  expect(eventLine(ev)).toBe(
+    '- The person reversed the default "auth" in the panel picker, to "search": undo what you did on the default, only what you took, then act on "search" once as their pick while question check is fresh, or ask again; then withdraw the question with what you did, which takes its card off the panel for Q1@1 "Which desk starts first?" (topic plan). Nothing was discussed. [event decision:Q1-1-reversed]',
+  );
+  expect(eventLine(event("decision-Q2-1-reversed.json"))).toMatch(
+    /^- The person reversed the default "auth" in the panel picker, with no other choice: undo what you did on the default, only what you took, then ask again if it still matters; then withdraw /,
+  );
+  // Reverse twice, or OK after it, is refused; Discuss closing adds nothing.
+  expect(await reverse("r-3", token, null)).toMatchObject({
+    accepted: false,
+    reason: "its default is already reversed",
+  });
+  expect(await confirm(state, "ok-1", token, "panel picker")).toMatchObject({
+    accepted: false,
+    reason: "its default is already reversed",
+  });
+  expect(closed(state, token, "o1")).toBe(false);
+  // Shep's list says what to do; once Shep has, its withdraw closes the card and keeps the record.
+  const listed = projection(new QuestionStore(state).snapshot());
+  expect(listed).toContain("Reversed by the person (undo what you did on the default");
+  expect(listed).toContain("Q1@1 Which desk starts first? -> reversed auth to search (panel picker, ");
+  expect(listed).toContain("Q2@1 Which desk starts first? -> reversed auth with no other choice (panel picker, ");
+  const store = new QuestionStore(state);
+  const withdrawn = store.withdraw("w-1", token, "undid the default's step and started search");
+  expect(withdrawn).toMatchObject({
+    status: "withdrawn",
+    answer: { source: "default after timeout" },
+    settled: { choice: "search" },
+  });
+  expect(() => store.withdraw("w-2", token, "again")).toThrow(/question is withdrawn/);
+  expect(projection(store.snapshot())).not.toContain("Q1@1 Which desk");
+});
+
+test("Shep may withdraw a default the person has not answered, never one they said OK to", async () => {
+  const token = ask();
+  const confirmed = ask("other");
+  vi.setSystemTime("2026-11-19T12:30:00.000Z");
+  await expireDue(state);
+  await confirm(state, "ok-1", confirmed, "panel picker");
+  const store = new QuestionStore(state);
+  expect(() => store.withdraw("w-ok", confirmed, "moot")).toThrow(
+    /question is answered; only a pending question, or a default without the person's OK, can be withdrawn/,
+  );
+  expect(store.withdraw("w-1", token, "its desk is gone")).toMatchObject({
+    status: "withdrawn",
+    answer: { choice: "auth" },
+  });
+  // Withdrawn, it takes neither OK nor Reverse.
+  expect(await confirm(state, "ok-2", token, "panel picker")).toMatchObject({
+    accepted: false,
+    reason: "question is withdrawn",
+  });
+});
+
+test("Shep's rules say what it does on an OK and on a Reverse, and the docs list their keys", () => {
+  const rules = readFileSync(new URL("../shep/SHEP.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  expect(rules).toContain("Until the person says OK, it is never an LGTM: no `--reviewed-by`.");
+  expect(rules).toContain(
+    "makes it the person's pick, with the full weight of one: an LGTM where the card asked for one.",
+  );
+  expect(rules).toContain("Undo what you did on the default, only what you took");
+  expect(rules).toContain("Never withdraw it before you have handled it.");
+  const docs = readFileSync(new URL("../docs/shep.md", import.meta.url), "utf8");
+  expect(docs).toContain("| o | OK a defaulted card: keep its default as your pick |");
+  expect(docs).toContain("| r | Reverse a defaulted card, to the picked choice when it is not the default |");
+});
+
+test("an OK or Reverse whose event could not be written is sent at Shep's next expire run, once", async () => {
+  const token = ask();
+  vi.setSystemTime("2026-11-19T12:30:00.000Z");
+  await expireDue(state);
+  // The inbox cannot be written: the ledger records the Reverse, and says so; the event waits.
+  rmSync(join(state, "inbox"), { recursive: true });
+  writeFileSync(join(state, "inbox"), "not a folder");
+  expect(await settle(state, "r-1", token, "reversed", "search", "panel picker")).toMatchObject({ accepted: true });
+  const settled = () => new QuestionStore(state).snapshot().questions[0]!.settled;
+  expect(settled()).toMatchObject({ outcome: "reversed", choice: "search" });
+  expect(settled()!.told).toBeUndefined();
+  // A retry from the panel gets a new request id and is refused; the ledger sends it instead.
+  expect(await settle(state, "r-2", token, "reversed", "search", "panel picker")).toMatchObject({ accepted: false });
+  rmSync(join(state, "inbox"));
+  expect(await expireDue(state)).toEqual([]);
+  expect(inbox()).toEqual(["decision-Q1-1-reversed.json"]);
+  expect(event("decision-Q1-1-reversed.json")).toMatchObject({
+    choice: "search",
+    by: "panel picker",
+    reversed: "auth",
+  });
+  expect(settled()!.told).toBe(true);
+  // Told is never sent again: not by the next run, nor by a retry of the first request.
+  rmSync(join(state, "inbox", "decision-Q1-1-reversed.json"));
+  await expireDue(state);
+  expect(await settle(state, "r-1", token, "reversed", "search", "panel picker")).toMatchObject({ accepted: true });
+  expect(inbox()).toEqual([]);
 });

@@ -27,8 +27,9 @@ tree, so an approval to land binds to the staged tree, not HEAD.
 desk's space name, the change's size and stakes, the choices, a short brief
 and a recommendation. When an answer arrives, Shep checks it against the
 ledger and the live state, and acts once. A defaulted answer is reported as
-defaulted, never as the person's choice and never as an LGTM. A card that no
-longer applies is withdrawn with a reason.
+defaulted, never as the person's choice and never as an LGTM, until the person
+says OK to it on the card. A card that no longer applies is withdrawn with a
+reason.
 
 **Recovery:** A desk problem (gone, another job's terminal, no session
 claim) is a warning on the card, not a reason to skip it: the card binds to

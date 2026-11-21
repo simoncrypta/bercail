@@ -611,6 +611,58 @@ describe("durable targeted questions", () => {
     }
   });
 
+  test("an OK in the ledger is the person's, on a default only, keeping its choice; anything else fails closed", () => {
+    const q = store.create("q", {}, () => reversible());
+    const token = tokenOf(q);
+    vi.setSystemTime("2026-11-14T12:30:00.000Z");
+    store.expire(token, fresh);
+    vi.setSystemTime("2026-11-14T12:40:00.000Z");
+    expect(store.settle("ok", token, "ok", null, "panel picker", fresh)).toMatchObject({ accepted: true });
+    const good = readFileSync(join(state, "questions.json"), "utf8");
+    const settled = '"settled":{"requestId":"ok","outcome":"ok","choice":"auth","source":"panel picker"';
+    expect(good).toContain(settled);
+    for (const forged of [
+      good.replace(settled, settled.replace('"choice":"auth"', '"choice":"search"')),
+      good.replace(settled, settled.replace('"panel picker"', '"default after timeout"')),
+      good.replace(settled, settled.replace('"outcome":"ok"', '"outcome":"lgtm"')),
+      good.replace('"at":"2026-11-14T12:40:00.000Z"', '"at":"2026-11-14T12:20:00.000Z"'),
+      // On the person's own pick, not a default.
+      good.replaceAll('"source":"default after timeout"', '"source":"panel picker"').replace(',"told":true', ""),
+    ]) {
+      expect(forged).not.toBe(good);
+      writeFileSync(join(state, "questions.json"), forged);
+      expect(() => store.snapshot()).toThrow(/corrupt/);
+    }
+  });
+
+  test("a Reverse in the ledger names another choice or none, and a withdrawn question keeps only a default", () => {
+    const token = tokenOf(store.create("q", {}, () => reversible()));
+    const picked = tokenOf(store.create("p", {}, () => fields("plain")));
+    vi.setSystemTime("2026-11-14T12:30:00.000Z");
+    store.expire(token, fresh);
+    store.answer("pick", picked, "yes", "panel picker", fresh);
+    expect(() => store.settle("r2", token, "ok", "search", "panel picker", fresh)).toThrow(/an OK names no choice/);
+    expect(store.settle("r", token, "reversed", "search", "panel picker", fresh)).toMatchObject({ accepted: true });
+    store.withdraw("w", token, "handled");
+    const good = readFileSync(join(state, "questions.json"), "utf8");
+    expect(() => store.snapshot()).not.toThrow();
+    const settled = '"outcome":"reversed","choice":"search"';
+    expect(good).toContain(settled);
+    for (const forged of [
+      good.replace(settled, '"outcome":"reversed","choice":"auth"'),
+      good.replace(settled, '"outcome":"reversed","choice":"neither"'),
+      // A withdrawn question with the person's own answer.
+      good.replace(
+        '"status":"answered","createdAt"',
+        '"status":"withdrawn","withdrawal":{"requestId":"w2","reason":"x","at":"2026-11-14T12:30:00.000Z"},"createdAt"',
+      ),
+    ]) {
+      expect(forged).not.toBe(good);
+      writeFileSync(join(state, "questions.json"), forged);
+      expect(() => store.snapshot()).toThrow(/corrupt/);
+    }
+  });
+
   test("past a two-way door's deadline the person's pick is refused, unless it is no longer two-way", () => {
     const plan = store.create("a", {}, () => reversible("a"));
     const merge = store.create(

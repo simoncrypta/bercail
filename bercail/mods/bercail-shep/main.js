@@ -25,7 +25,8 @@
 // - "decisions": the Decisions panel under Shep's terminal (`shep-decisions`, hidden
 //   until the header's Decisions toggle shows it): Shep's pending questions as cards,
 //   each with Shep's brief and a picker, Shep's recommendation chosen to start with.
-//   A two-way door counts down to its deadline; one that defaulted shows for a day.
+//   A two-way door counts down to its deadline; one that defaulted stays until the person
+//   OKs it, or reverses it and Shep withdraws it.
 // - "discuss": the bar of a Discuss dialog: a read-only Pi on a branch of the session
 //   the question came from (`bercail shep discuss`). props.token is the question.
 // - "modal": the bar of an agent's terminal opened over either view (bercail-agents
@@ -90,7 +91,7 @@ const DISCUSS = `${BERCAIL_PATH}; exec bercail shep discuss "$1"`;
 const CLOSED = `${BERCAIL_PATH}; exec bercail shep question closed "$1" "$2"`;
 const PANEL_ID = "shep-decisions";
 const DISCUSS_ROLE = "shep-discuss";
-const KEYS_HINT = "↑↓ card · ←→ or 1-9 choice · Enter answers · d discusses";
+const KEYS_HINT = "↑↓ card · ←→ or 1-9 choice · Enter answers · o OKs a default · r reverses it · d discusses";
 
 export function find(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -211,8 +212,14 @@ function decisionsChanged() {
   for (const wake of waiting) wake();
 }
 const nextDecisions = () => new Promise((wake) => D.waiters.push(wake));
-// The cards that wait on the person: not the ones that already defaulted.
+// The cards that wait on the person's pick, and the defaults that wait on their OK or
+// Reverse. A reversed one waits on Shep.
 const waiting = () => (D.view?.cards ?? []).filter((c) => !c.defaulted);
+const defaults = () => (D.view?.cards ?? []).filter((c) => c.defaulted && !c.reversed);
+// "2 waiting on you · 1 defaulted", or "" with neither.
+function counts(n, m) {
+  return [n ? `${n} waiting on you` : "", m ? `${m} defaulted` : ""].filter(Boolean).join(" · ");
+}
 
 function decisionsShown(tree = layout()) {
   const node = find(tree, PANEL_ID);
@@ -346,14 +353,27 @@ export function cardWords(card, all = spaces(), backend = S.backend) {
         ? "the repo's policy could not be read"
         : (REASONS[r] ?? r),
   );
-  const state =
-    card.status === "fresh"
-      ? { word: "open", why: null }
-      : card.status === "defaulted"
-        ? {
-            word: "defaulted",
-            why: `two-way door: nobody picked by ${clock(card.deadline)}, so it took Shep's recommendation, ${card.defaulted?.choice}. Discuss tells Shep if you disagree.`,
-          }
+  const took = card.defaulted
+    ? `two-way door: nobody picked by ${clock(card.deadline)}, so it took Shep's recommendation, ${card.defaulted.choice}.`
+    : null;
+  const to = card.reversed?.choice;
+  const state = card.reversed
+    ? {
+        word: "reversed",
+        why: `You reversed its default, ${card.defaulted.choice}, ${to ? `to ${to}` : "with no other choice"}. Shep undoes what it did on it${to ? "" : " or asks again"}; the card leaves once Shep has.`,
+      }
+    : took
+      ? {
+          word: "defaulted",
+          why:
+            card.status === "fresh"
+              ? `${took} OK keeps it as your pick; Reverse tells Shep to undo it.`
+              : card.status === "stale"
+                ? `${took} Changed since: ${reasons.join(", ")}. OK and Reverse need it unchanged; Shep must ask again.`
+                : `${took} Can't check it now: ${reasons.join("; ") || "no answer from bercail"}. OK and Reverse wait until it can.`,
+        }
+      : card.status === "fresh"
+        ? { word: "open", why: null }
         : card.status === "stale"
           ? { word: "stale", why: `Changed since Shep asked: ${reasons.join(", ")}. Shep must ask again.` }
           : { word: "unknown", why: `Can't check it now: ${reasons.join("; ") || "no answer from bercail"}.` };
@@ -370,6 +390,12 @@ export function cardWords(card, all = spaces(), backend = S.backend) {
 // until a two-way door's deadline: past it, the door takes Shep's recommendation.
 export const answerable = (card) =>
   card.status === "fresh" && card.options?.length > 0 && !(card.deadline && Date.parse(card.deadline) <= Date.now());
+
+// A default the person can OK or reverse: not yet, and the live check found nothing
+// changed since it defaulted.
+export const confirmable = (card) => Boolean(card.defaulted) && !card.reversed && card.status === "fresh";
+// A card whose choices the keys and clicks move: one to answer, or a default to reverse.
+const pickable = (card) => answerable(card) || confirmable(card);
 
 // The choice a card starts on: Shep's recommendation, else none (Enter waits for a pick).
 export function startChoice(card) {
@@ -747,6 +773,7 @@ export default class BercailShep extends View {
   // the panel. A new decision changes the count only.
   decisionsToggle(t) {
     const n = waiting().length;
+    const m = defaults().length;
     const open = decisionsShown();
     return (
       div()
@@ -756,7 +783,7 @@ export default class BercailShep extends View {
         .py(2)
         .rounded(5)
         .cursor_pointer()
-        .text_color(n ? t.foreground : t.dim)
+        .text_color(n || m ? t.foreground : t.dim)
         .when(open, (el) => el.bg(t.selected))
         .when(!open, (el) => el.hover((s) => s.bg(t.hover)))
         .tooltip(open ? "Hide decisions" : "Show what Shep asks you")
@@ -767,7 +794,7 @@ export default class BercailShep extends View {
           run(open ? "layout.hide" : "layout.show", { id: PANEL_ID });
           if (!open) loadDecisions();
         })
-        .child(n ? `Decisions ${n}` : "Decisions")
+        .child(n || m ? `Decisions ${[n || "", m ? `${m} defaulted` : ""].filter(Boolean).join(" · ")}` : "Decisions")
     );
   }
 
@@ -777,6 +804,7 @@ export default class BercailShep extends View {
     const cards = D.view?.cards ?? [];
     this.sel = Math.max(0, Math.min(cards.length - 1, this.sel));
     const checked = D.view?.at ? `checked ${clock(D.view.at)}` : D.loading ? "checking…" : "";
+    const open = counts(waiting().length, defaults().length);
     const list = v_flex().id("decision-list").flex_1().min_h(0).px(10).pb(10).gap(8).overflow_y_scrollbar();
     const say = (text, color = t.dim) => div().px(12).py(6).text_color(color).child(text);
     return v_flex()
@@ -803,7 +831,7 @@ export default class BercailShep extends View {
               .flex_1()
               .truncate()
               .text_color(t.dim)
-              .child(waiting().length ? `${waiting().length} waiting on you · ${KEYS_HINT}` : ""),
+              .child(open && `${open} · ${KEYS_HINT}`),
           )
           .child(div().text_size(11).text_color(t.dim).child(checked)),
       )
@@ -817,13 +845,19 @@ export default class BercailShep extends View {
     return this.picked[c.token] ?? startChoice(c);
   }
 
+  // On a default, the picked choice when it is not the default's: what Reverse goes to.
+  otherChoice(c) {
+    const at = this.choiceOf(c);
+    return c.defaulted && at !== null && c.options[at] !== c.defaulted.choice ? c.options[at] : null;
+  }
+
   key(e, cx) {
     const cards = D.view?.cards ?? [];
     const c = cards[this.sel];
     const k = e.keystroke;
     const n = c?.options?.length ?? 0;
     const choose = (i) => {
-      if (c && answerable(c)) this.picked[c.token] = i;
+      if (c && pickable(c)) this.picked[c.token] = i;
     };
     if (k === "down" || k === "j") this.sel = Math.min(cards.length - 1, this.sel + 1);
     else if (k === "up" || k === "k") this.sel = Math.max(0, this.sel - 1);
@@ -831,6 +865,8 @@ export default class BercailShep extends View {
     else if (k === "left" && n) choose(((this.choiceOf(c) ?? 0) - 1 + n) % n);
     else if (/^[1-9]$/.test(k) && Number(k) <= n) choose(Number(k) - 1);
     else if (k === "enter" && c) this.accept(c, cx);
+    else if (k === "o" && c) this.confirm(c, cx);
+    else if (k === "r" && c) this.reverse(c, cx);
     else if (k === "d" && c) this.discuss(c, cx);
     else return;
     cx.stop_propagation();
@@ -839,9 +875,10 @@ export default class BercailShep extends View {
 
   card(t, c, on, i) {
     const w = cardWords(c);
-    const color = w.word === "open" || w.word === "defaulted" ? t.dim : w.word === "stale" ? t.blocked : t.unknown;
-    const can = answerable(c) && !this.busy.has(c.token);
+    const color = c.status === "fresh" ? t.dim : c.status === "stale" ? t.blocked : t.unknown;
+    const can = pickable(c) && !this.busy.has(c.token);
     const at = this.choiceOf(c);
+    const other = this.otherChoice(c);
     const rec = c.recommendation;
     const button = (id, label, enabled, onClick) =>
       div()
@@ -866,8 +903,8 @@ export default class BercailShep extends View {
         .rounded(5)
         .border(1)
         .border_color(t.border)
-        .when(j === at && answerable(c), (el) => el.bg(t.solid).text_color(t.solid_foreground))
-        .when(j !== at || !answerable(c), (el) => el.text_color(answerable(c) ? t.foreground : t.dim))
+        .when(j === at && pickable(c), (el) => el.bg(t.solid).text_color(t.solid_foreground))
+        .when(j !== at || !pickable(c), (el) => el.text_color(pickable(c) ? t.foreground : t.dim))
         .when(can, (el) =>
           el.cursor_pointer().on_click((_e, cx) => {
             this.sel = i;
@@ -895,7 +932,7 @@ export default class BercailShep extends View {
       .child(div().text_color(t.foreground).child(c.prompt))
       .when(Boolean(c.brief), (el) => el.child(div().text_color(t.muted).child(c.brief)))
       .when(Boolean(rec), (el) => el.child(div().text_color(t.dim).child(`Shep recommends ${rec.choice}: ${rec.why}`)))
-      .when(c.options?.length > 0 && !c.defaulted, (el) =>
+      .when(c.options?.length > 0 && !c.reversed, (el) =>
         el.child(h_flex().gap(6).flex_wrap().children(c.options.map(chip))),
       )
       .when(!c.options?.length, (el) => el.child(div().text_color(t.dim).child("No choices: answer Shep in chat.")))
@@ -917,6 +954,25 @@ export default class BercailShep extends View {
               this.discuss(c, cx),
             ),
           )
+          .when(Boolean(c.defaulted) && !c.reversed, (el) =>
+            el
+              .child(
+                button(
+                  `decision-reverse-${c.token}`,
+                  other ? `Reverse to ${other}` : "Reverse",
+                  confirmable(c) && !this.busy.has(c.token),
+                  (_e, cx) => this.reverse(c, cx),
+                ),
+              )
+              .child(
+                button(
+                  `decision-ok-${c.token}`,
+                  this.busy.has(c.token) ? "Recording…" : `OK ${c.defaulted.choice}`,
+                  confirmable(c) && !this.busy.has(c.token),
+                  (_e, cx) => this.confirm(c, cx),
+                ),
+              ),
+          )
           .when(c.options?.length > 0 && !c.defaulted, (el) =>
             el.child(
               button(
@@ -930,15 +986,32 @@ export default class BercailShep extends View {
       );
   }
 
-  // The person's pick: once per card at a time, recorded on the machine with the ledger.
+  // The person's pick.
   accept(c, cx) {
     const at = this.choiceOf(c);
-    if (!answerable(c) || at === null || this.busy.has(c.token)) return;
+    if (!answerable(c) || at === null) return;
+    this.record(c, { choice: c.options[at] }, cx);
+  }
+
+  // The person's OK on a default: it becomes their pick.
+  confirm(c, cx) {
+    if (confirmable(c)) this.record(c, { outcome: "ok" }, cx);
+  }
+
+  // The person's Reverse on a default: to the picked choice when it is another, else none.
+  reverse(c, cx) {
+    const choice = this.otherChoice(c);
+    if (confirmable(c)) this.record(c, { outcome: "reversed", ...(choice ? { choice } : {}) }, cx);
+  }
+
+  // A pick or an OK: once per card at a time, recorded on the machine with the ledger.
+  record(c, fields, cx) {
+    if (this.busy.has(c.token)) return;
     this.busy.add(c.token);
     const input = JSON.stringify({
       requestId: `panel-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
       token: c.token,
-      choice: c.options[at],
+      ...fields,
       source: "panel picker",
     });
     cx.spawn(async (cx) => {
@@ -1007,7 +1080,11 @@ export default class BercailShep extends View {
           .text_size(11)
           .text_color(t.dim)
           .child(
-            c?.defaulted ? "read-only branch · it defaulted; closing tells Shep" : "read-only branch · /pick answers",
+            c?.reversed
+              ? "read-only branch · you reversed its default"
+              : c?.defaulted
+                ? "read-only branch · it defaulted; /pick OKs or reverses it, closing tells Shep"
+                : "read-only branch · /pick answers",
           ),
       )
       .child(
