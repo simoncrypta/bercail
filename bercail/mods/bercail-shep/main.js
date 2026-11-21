@@ -382,6 +382,10 @@ export function cardWords(card, all = spaces(), backend = S.backend) {
     ...state,
     asked: `asked ${clock(card.createdAt)}`,
     timer: countdown(card, state.word),
+    // The same words as Discuss's (shep/pi/discuss.ts pushLine).
+    push: card.push
+      ? `Picking "${card.push.approves}" lets Shep push the answered commit to ${card.push.remote} (${card.push.url}): ${card.push.refs.join(", ")}, once.`
+      : null,
     warnings: (card.warnings ?? []).map((x) => `Warning: ${x}.`),
   };
 }
@@ -932,6 +936,7 @@ export default class BercailShep extends View {
       .child(div().text_color(t.foreground).child(c.prompt))
       .when(Boolean(c.brief), (el) => el.child(div().text_color(t.muted).child(c.brief)))
       .when(Boolean(rec), (el) => el.child(div().text_color(t.dim).child(`Shep recommends ${rec.choice}: ${rec.why}`)))
+      .when(Boolean(w.push), (el) => el.child(div().text_color(t.foreground).child(w.push)))
       .when(c.options?.length > 0 && !c.reversed, (el) =>
         el.child(h_flex().gap(6).flex_wrap().children(c.options.map(chip))),
       )

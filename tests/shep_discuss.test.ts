@@ -196,9 +196,9 @@ test("/pick in the branch shows Shep's pick, refuses a stale question, and recor
   expect(b.seen.selects).toEqual([]);
   check.status = "fresh";
   check.reasons = [];
-  b.seen.pick = "B  (Shep recommends: smaller)";
+  b.seen.pick = "2. B  (Shep recommends: smaller)";
   await b.pick();
-  expect(b.seen.selects).toEqual([["A", "B  (Shep recommends: smaller)"]]);
+  expect(b.seen.selects).toEqual([["1. A", "2. B  (Shep recommends: smaller)"]]);
   expect(new QuestionStore(state).snapshot().questions[0]).toMatchObject({
     status: "answered",
     answer: { choice: "B", source: "discuss picker" },
@@ -208,4 +208,24 @@ test("/pick in the branch shows Shep's pick, refuses a stale question, and recor
   await b.pick();
   expect(b.seen.notes.at(-1)).toBe("Not recorded: question is answered.");
   expect(readdirSync(join(state, "inbox"))).toEqual(["decision-Q1-1.json"]);
+});
+
+test("a push question's branch says what its approving choice pushes, at the picker too", async () => {
+  vi.stubEnv("BERCAIL_SHEP_STATE", state);
+  const push = { approves: "Push it", remote: "origin", refs: ["refs/heads/master"], url: "/srv/app.git" };
+  const [head, stagedTree, base] = ["a", "b", "c"].map((c) => c.repeat(40));
+  ask(
+    { issue: "app-1", action: "land", head, stagedTree, base, baseRef: "master" },
+    { event: "chat", session: "s", entry: null },
+    { kind: "action", options: ["Push it", "Not yet"], push },
+  );
+  const b = branchPi("Q1@1");
+  const widgets: string[][] = [];
+  b.hooks.session_start!({}, { hasUI: true, ui: { setWidget: (_id: string, lines: string[]) => widgets.push(lines) } });
+  expect(widgets[0]).toContain(
+    'Picking "Push it" lets Shep push the answered commit to origin (/srv/app.git): refs/heads/master, once.',
+  );
+  b.seen.pick = undefined;
+  await b.pick();
+  expect(b.seen.selects).toEqual([["1. Push it  (pushes to origin: refs/heads/master)", "2. Not yet"]]);
 });

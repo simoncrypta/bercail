@@ -3,8 +3,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { door, mergesIn, QuestionStore, projection, tokenOf, type Question, type QuestionSpec } from "./questions.ts";
-import { captureTarget, checkQuestion, mergeReversible } from "./question-target.ts";
-import { closed, discussionOf, expireDue, openDiscussion, pick, settle, unsettled } from "./discuss.ts";
+import { captureTarget, checkQuestion, mergeReversible, withTarget } from "./question-target.ts";
+import { approvePush, closed, discussionOf, expireDue, openDiscussion, pick, settle, unsettled } from "./discuss.ts";
 
 async function main() {
   const state = process.env.BERCAIL_SHEP_STATE;
@@ -33,6 +33,11 @@ async function main() {
     // A reversible question's door with the policy just read: act on its default only
     // while it is fresh and still two-way.
     result = question.reversible ? { ...check, door: door(question, () => mergesIn(check)) } : check;
+  } else if (op === "push-approval") {
+    // The guard's: the answer that approves this push, spent on it.
+    const [dir, remote, ...refspecs] = args;
+    if (!dir || !remote || !refspecs.length) throw new Error("push-approval requires DIR REMOTE REFSPEC...");
+    result = await approvePush(state, { dir, remote, refspecs });
   } else if (op === "discuss") {
     if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
       throw new Error("discuss requires a Qn@revision token");
@@ -84,7 +89,7 @@ async function main() {
         ...(input.recommendation == null ? {} : { recommendation: input.recommendation }),
         ...(input.reversible === true ? { reversible: true as const } : {}),
         origin: input.origin,
-        target: captureTarget(input),
+        ...withTarget(captureTarget(input), input.push),
       });
       result =
         op === "create"
@@ -93,7 +98,7 @@ async function main() {
     }
   } else
     throw new Error(
-      "usage: question-cli.ts list | json | panel | expire | create | revise | reply | answer | withdraw | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING",
+      "usage: question-cli.ts list | json | panel | expire | create | revise | reply | answer | withdraw | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC...",
     );
   console.log(JSON.stringify(result));
 }
@@ -131,6 +136,7 @@ async function panel(store: QuestionStore, state: string) {
       brief: q.brief ?? null,
       options: q.options,
       recommendation: q.recommendation ?? null,
+      push: q.push ?? null,
       discussed: discussionOf(state, q) !== null,
       createdAt: q.createdAt,
       // A deadline only while it is still a two-way door, with the policy just read.

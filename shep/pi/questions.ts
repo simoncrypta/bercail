@@ -38,6 +38,23 @@ export interface QuestionSpec {
   recommendation?: { choice: string; why: string };
   /** Shep's: the choice can be undone, so the recommendation is taken at the deadline. */
   reversible?: true;
+  /** Shep's: picking `approves` lets Shep push the answered commit to `remote`'s `refs`, once, with no second ask. */
+  push?: QuestionPush;
+}
+export interface QuestionPush {
+  approves: string;
+  remote: string;
+  /** Full refs: refs/heads/<branch>, or refs/tags/<tag> on a release question. */
+  refs: string[];
+  /** The remote's one push URL when Shep asked, as git uses it; never one with credentials. */
+  url: string;
+}
+/** The one push an answer approved: the guard claimed it, so no other push can. */
+export interface PushClaim {
+  at: string;
+  remote: string;
+  /** <commit hash>:<full ref>, as the push sent them. */
+  refspecs: string[];
 }
 /** Who recorded an answer: the person's pick on a card or in a Discuss branch. */
 export const ANSWER_SOURCES = ["panel picker", "discuss picker"] as const;
@@ -102,6 +119,8 @@ export interface Question extends QuestionSpec {
   settled?: QuestionSettlement;
   /** Present once withdrawn, and only then. */
   withdrawal?: QuestionWithdrawal;
+  /** Present once the answer's push was claimed, and only then. */
+  pushed?: PushClaim;
 }
 export interface QuestionSnapshot {
   version: 1;
@@ -143,7 +162,7 @@ function spec(value: unknown): asserts value is QuestionSpec {
     "options",
     "origin",
     "target",
-    ...optional(v ?? {}, ["brief", "recommendation", "reversible"]),
+    ...optional(v ?? {}, ["brief", "recommendation", "reversible", "push"]),
   ]);
   if (!["planning", "review", "action"].includes(value.kind as string)) fail("invalid kind");
   text(value.prompt);
@@ -192,6 +211,28 @@ function spec(value: unknown): asserts value is QuestionSpec {
   if (!isAbsolute(repo) || normalize(repo) !== repo)
     fail("repo must be a canonical absolute identity path supplied by the caller");
   if (value.target.worktree !== null && !isAbsolute(value.target.worktree as string)) fail("worktree must be absolute");
+  if (value.push !== undefined) push(value as unknown as QuestionSpec);
+}
+// The guard matches these as they are written in the command (guard.ts hashRefspec).
+const refName = /^refs\/(heads|tags)\/[\w./-]+$/;
+// A push approval: one of the choices, on a question that binds to a commit, never a
+// default, with a tag only on a release question.
+function push(value: QuestionSpec) {
+  const p = value.push;
+  shape(p, ["approves", "remote", "refs", "url"]);
+  if (!value.options.includes(p.approves as string)) fail("push.approves must be one of the options");
+  if (value.kind === "planning") fail("a planning question binds to no commit, so it cannot approve a push");
+  if (value.reversible) fail("a push is a one-way door: ask it without reversible");
+  text(p.remote);
+  if (!/^[A-Za-z0-9][\w.-]*$/.test(p.remote as string)) fail("push.remote must be the remote's name");
+  text(p.url);
+  if (!Array.isArray(p.refs) || !p.refs.length || new Set(p.refs).size !== p.refs.length)
+    fail("push.refs must list each ref once");
+  for (const ref of p.refs as unknown[])
+    if (typeof ref !== "string" || !refName.test(ref))
+      fail("push.refs are full refs: refs/heads/<branch> or refs/tags/<tag>");
+  if ((p.refs as string[]).some((ref) => ref.startsWith("refs/tags/")) && value.target.action !== "release")
+    fail("a tag push needs action release");
 }
 function question(value: unknown): asserts value is Question {
   const v = value as Record<string, unknown>;
@@ -202,14 +243,17 @@ function question(value: unknown): asserts value is Question {
       "brief",
       "recommendation",
       "reversible",
+      "push",
       "deadline",
       "told",
       "answer",
       "settled",
       "withdrawal",
+      "pushed",
     ]),
   ]);
-  const { id, revision, status, createdAt, deadline, told, proposals, answer, settled, withdrawal, ...fields } = value;
+  const { id, revision, status, createdAt, deadline, told, proposals, answer, settled, withdrawal, pushed, ...fields } =
+    value;
   spec(fields);
   if (
     typeof id !== "string" ||
@@ -305,6 +349,19 @@ function question(value: unknown): asserts value is Question {
     text(withdrawal.requestId);
     text(withdrawal.reason);
     if (!Number.isFinite(Date.parse(withdrawal.at as string))) fail("invalid withdrawal time");
+  }
+  if (pushed !== undefined) {
+    const a = answer as QuestionAnswer | undefined;
+    if (!fields.push || !a || a.choice !== fields.push.approves)
+      fail("only the person's approving answer is claimed by a push");
+    shape(pushed, ["at", "remote", "refspecs"]);
+    const refs = Array.isArray(pushed.refspecs) ? pushed.refspecs.map((spec) => String(spec).split(":")[1]) : [];
+    if (
+      !Number.isFinite(Date.parse(pushed.at as string)) ||
+      pushed.remote !== fields.push.remote ||
+      canonical(refs.sort()) !== canonical([...fields.push.refs].sort())
+    )
+      fail("a push claim names the approved remote and refs");
   }
 }
 function validate(value: unknown): asserts value is State {
@@ -757,6 +814,24 @@ export class QuestionStore {
       };
       return { question: q, accepted: true };
     });
+  }
+
+  // The guard's: the answer's one push, claimed while the live check the caller ran just
+  // before is fresh. A second claim is refused, so one answer approves one push.
+  claimPush(token: string, check: Check, claim: Omit<PushClaim, "at">): AnswerResult {
+    return this.locked((state) => {
+      const q = this.find(state, token);
+      const reason = q.pushed
+        ? `its push was already claimed at ${q.pushed.at}`
+        : q.status !== "answered" || !q.push || q.answer?.choice !== q.push.approves
+          ? "not the person's approving answer"
+          : check.status !== "fresh" || !check.current
+            ? `changed since it was answered: ${check.reasons.join(", ") || "not checked"}`
+            : undefined;
+      if (reason) return { question: q, accepted: false, reason };
+      q.pushed = { at: new Date().toISOString(), ...structuredClone(claim) };
+      return { question: q, accepted: true };
+    }, true);
   }
 
   // The decision event of its default, or of the person's OK or Reverse on it, is

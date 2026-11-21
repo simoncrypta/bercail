@@ -28,9 +28,10 @@ if (mode === "crash-before" || mode === "crash-after") {
 const store = new QuestionStore(dir);
 const run = () => {
   if (mode === "reply") store.propose(input.requestId, input.token, input.answer, "worker");
+  else if (mode === "claim") fs.writeSync(1, `${store.claimPush(input.token, input.check, input.claim).accepted}\n`);
   else store.create(input.requestId, input.spec as QuestionSpec, (spec) => spec);
 };
-if (mode === "create" || mode === "reply") {
+if (mode === "create" || mode === "reply" || mode === "claim") {
   // The parent releases all writers together, without timing sleeps.
   fs.writeSync(1, "ready\n");
   process.stdin.once("data", () => {
