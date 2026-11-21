@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The dependency tracker (docs/development.md#dependency-tracker). It reads
 # lib/deps.json and keeps one GitHub issue open per tool while a stable release
-# newer than its `known` version is out.
+# newer than its `known` version is out, and one per vendored copy while its
+# upstream has a commit past `known` that changes what bercail copies.
 #
 #   deps-track.sh check [--dry-run]  look up each tool; open, update or close its issue
 #   deps-track.sh pins               offline: the manifest's shape, and every keyed pin agrees with known
@@ -18,6 +19,10 @@ MIN_AGE=86400
 # GitHub turns a schedule off after 60 days without a push; this is the alarm.
 STALE_AFTER=$((3 * 86400))
 TRACKER_TITLE="deps: tracker failing"
+# Where a git: source is cloned from; the tests point it at local repos.
+GIT_BASE="${DEPS_GIT_BASE:-https://github.com}"
+# The clone, and each blob fetch after it, fails instead of asking for a login.
+export GIT_TERMINAL_PROMPT=0
 NOW="$(date +%s)"
 DRY_RUN=0
 FAILED=()
@@ -119,11 +124,14 @@ gh_write() {
 }
 
 # Each label is created before the issue that uses it: gh will not add a missing one.
+# Labels after the third are the caller's to create.
 open_issue() {
-  local title="$1" body="$2" label="$3"
+  local title="$1" body="$2" label="$3" extra
+  local -a labels=(--label deps --label "$label")
+  for extra in "${@:4}"; do labels+=(--label "$extra"); done
   gh_write label create deps --color 0366d6 --description "A dependency moved on (.github/workflows/deps.yml)" --force >/dev/null
   gh_write label create "$label" --color c5def5 --force >/dev/null
-  gh_write issue create --title "$title" --body "$body" --label deps --label "$label" >/dev/null
+  gh_write issue create --title "$title" --body "$body" "${labels[@]}" >/dev/null
 }
 
 # The issue body for a release of tool entry $1: what moved, where bercail pins
@@ -161,6 +169,10 @@ track() {
   name="$(jq -r .name <<<"$entry")" source="$(jq -r .source <<<"$entry")" known="$(jq -r .known <<<"$entry")"
   if [[ "$source" == none ]]; then
     row "$name" "$known" "" "no feed: check by hand"
+    return 0
+  fi
+  if [[ "$source" == git:* ]]; then
+    track_git "$entry" "$issues"
     return 0
   fi
   if ! rel="$(lookup "$source" 2>"$TMP/err")" || ! tag="$(jq -er '.tag // empty' <<<"$rel" 2>>"$TMP/err")" \
@@ -209,6 +221,97 @@ track() {
   fi
 }
 
+# The issue body for vendored entry $1 whose upstream clone $2 has moved to
+# commit $3; the rest are its paths. What changed in them since known, and
+# where the steps for a move are.
+vendor_body() {
+  local entry="$1" dir="$2" target="$3" known repo log stat
+  shift 3
+  known="$(jq -r .known <<<"$entry")" repo="$(jq -r '.source | ltrimstr("git:")' <<<"$entry")"
+  # --stat fetches the blobs it compares; set -e is off under the caller's if.
+  log="$(git -C "$dir" log --oneline "$known..$target" -- "$@")" || return
+  stat="$(git -C "$dir" diff --stat=1000 "$known" "$target" -- "$@")" || return
+  printf '**%s** `%s` → `%s`.\n\nCompare: https://github.com/%s/compare/%s...%s\n' \
+    "$(jq -r .name <<<"$entry")" "${known:0:12}" "${target:0:12}" "$repo" "$known" "$target"
+  jq -r '.paths // empty | "\nPaths bercail copies: " + (map("`\(.)`") | join(", "))' <<<"$entry"
+  printf '\nCommits:\n\n```\n%s\n```\n\nFiles:\n\n```\n%s\n```\n' "$log" "$stat"
+  jq -r '"\n" + (if (.pinned_in | length) > 0 then "Pinned in:\n" + (.pinned_in | map("- `\(.)`") | join("\n"))
+      else "Nothing in bercail pins it." end)
+    + (if .notes then "\n\nNotes: \(.notes)" else "" end)' <<<"$entry"
+  cat <<EOF
+
+To take it, move the copy as its \`UPSTREAM.md\` says, then set \`known\` to $target in lib/deps.json; the next run closes this issue.
+
+Opened by .github/workflows/deps.yml.
+EOF
+}
+
+# One vendored copy (git:<owner>/<repo>): a blobless clone of upstream's default
+# branch, and one issue while a first-parent commit past known changes its
+# paths. The issue closes once known reaches the commit it names.
+track_git() {
+  local entry="$1" issues="$2" name repo known short dir tip target number="" title="" have="" body
+  local -a paths
+  name="$(jq -r .name <<<"$entry")" repo="$(jq -r '.source | ltrimstr("git:")' <<<"$entry")" known="$(jq -r .known <<<"$entry")"
+  short="${known:0:12}"
+  mapfile -t paths < <(jq -r '.paths // ["."] | .[]' <<<"$entry")
+  dir="$(mktemp -d "$TMP/git.XXXXXX")"
+  # Not shallow: the check needs known and its ancestry. No code from the clone runs.
+  if ! git clone -q --filter=blob:none --no-checkout --single-branch "$GIT_BASE/$repo" "$dir" 2>"$TMP/err" \
+    || ! tip="$(git -C "$dir" rev-parse HEAD 2>"$TMP/err")"; then
+    fail "$name" "git:$repo: $(last_error)" "$short"
+    return 0
+  fi
+  if ! git -C "$dir" merge-base --is-ancestor "$known" "$tip" 2>/dev/null; then
+    fail "$name" "git:$repo: known $known is not on its default branch: upstream rewrote its history, or known is wrong" "$short"
+    return 0
+  fi
+  # A move may pin a commit past the last one to touch paths, so this counts
+  # from known, not from that commit.
+  if ! target="$(git -C "$dir" rev-list --first-parent -1 "$known..$tip" -- "${paths[@]}" 2>"$TMP/err")"; then
+    fail "$name" "git:$repo: $(last_error)" "$short"
+    return 0
+  fi
+  IFS=$'\t' read -r number title < <(jq -r --arg l "deps:$name" \
+    'first(.[] | select(any(.labels[]; .name == $l))) | [.number, .title] | @tsv' <<<"$issues") || true
+  have="${title##* }"
+  if [[ -n "$number" ]]; then
+    # Only a full commit: git would read a word such as HEAD as a revision.
+    if [[ ! "$have" =~ ^[0-9a-f]{40}$ ]] || ! git -C "$dir" merge-base --is-ancestor "$have" "$tip" 2>/dev/null; then
+      fail "$name" "git:$repo: #$number's title ends in $have, not a commit on its default branch" "$short"
+      return 0
+    fi
+    if git -C "$dir" merge-base --is-ancestor "$have" "$known"; then
+      gh_write issue close "$number" --comment "lib/deps.json knows $name $known now." >/dev/null \
+        || { fail "$name" "could not close #$number" "$short"; return 0; }
+      number=""
+    fi
+  fi
+  if [[ -z "$target" ]]; then
+    row "$name" "$short" "${tip:0:12}" "up to date"
+    return 0
+  fi
+  if [[ -n "$number" && "$have" == "$target" ]]; then
+    row "$name" "$short" "${target:0:12}" "#$number open"
+    return 0
+  fi
+  if ! body="$(vendor_body "$entry" "$dir" "$target" "${paths[@]}" 2>"$TMP/err")"; then
+    fail "$name" "git:$repo: $(last_error)" "$short"
+    return 0
+  fi
+  if [[ -z "$number" ]]; then
+    { gh_write label create vendor --color fbca04 --description "A vendored copy's upstream moved (lib/deps.json)" --force >/dev/null \
+      && open_issue "vendor: $name $target" "$body" "deps:$name" vendor; } \
+      || { fail "$name" "could not open its issue" "$short"; return 0; }
+    row "$name" "$short" "${target:0:12}" "opened an issue"
+  else
+    { gh_write issue edit "$number" --title "vendor: $name $target" --body "$body" >/dev/null \
+      && gh_write issue comment "$number" --body "$have is superseded by $target: https://github.com/$repo/compare/$have...$target" >/dev/null; } \
+      || { fail "$name" "could not update #$number" "$short"; return 0; }
+    row "$name" "$short" "${target:0:12}" "moved #$number on from ${have:0:12}"
+  fi
+}
+
 # Open, update or close the one tracker issue after the run.
 report_failures() {
   local issues="$1" number body run
@@ -235,9 +338,12 @@ check_pins() {
   local bad=0 name known ref file key lineno line found
   if ! jq -e 'type == "array" and all(.[]; (.name | type) == "string" and (.known | type) == "string"
       and (.pinned_in | type) == "array" and has("min") and has("why") and has("notes")
-      and (.source | test("^(github:|action:)[^/]+/[^/]+$|^npm:.|^herdr:(app|core)$|^node:[0-9]+$|^none$")))' \
+      and (.source | test("^(github:|action:|git:)[^/]+/[^/]+$|^npm:.|^herdr:(app|core)$|^node:[0-9]+$|^none$"))
+      and if (.source | startswith("git:")) then (.known | test("^[0-9a-f]{40}$"))
+        and ((has("paths") | not) or (.paths | type == "array" and length > 0 and all(.[]; type == "string" and length > 0)))
+      else has("paths") | not end)' \
     "$MANIFEST" >/dev/null; then
-    printf '::error file=lib/deps.json::every entry needs name, source (github:, action:, npm:, herdr:app, herdr:core, node:<major> or none), min, why, known, pinned_in and notes\n'
+    printf '::error file=lib/deps.json::every entry needs name, source (github:, action:, git:, npm:, herdr:app, herdr:core, node:<major> or none), min, why, known, pinned_in and notes; a git: entry knows a full commit, and only a git: entry may list paths, as git pathspecs\n'
     return 1
   fi
   while IFS=$'\t' read -r name known ref; do

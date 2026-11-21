@@ -327,6 +327,13 @@ chart_of() {
   [[ "$post" != *'```'* && "$post" == *"21 states"*"report.md"* ]] || fail "$post"
 }
 
+@test "the statechart skill's UPSTREAM.md records the commit lib/deps.json knows" {
+  local known record="$ROOT/skills/statechart/UPSTREAM.md"
+  known="$(jq -r '.[] | select(.name == "pstack-statechart") | .known' "$ROOT/lib/deps.json")"
+  [[ "$known" =~ ^[0-9a-f]{40}$ ]] || fail "lib/deps.json knows no pstack-statechart commit: $known"
+  grep -q "^- Commit: $known " "$record" || fail "UPSTREAM.md names another commit than lib/deps.json ($known)"
+}
+
 # --- the Shep inbox spec, with the real TLC ------------------------------------
 
 # bats test_tags=live

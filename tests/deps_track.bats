@@ -2,7 +2,8 @@
 # The dependency tracker (.github/scripts/deps-track.sh), run on a copy in a temp
 # repo with its own lib/deps.json. Stand-in gh and curl serve the recorded
 # responses in tests/fixtures/deps/, laid out by URL, and log each call; a
-# stand-in date fixes the clock. No network.
+# stand-in date fixes the clock. A git: source clones a local upstream made in
+# the test. No network.
 
 # shellcheck disable=SC2016 # single-quoted text is literal stand-in code.
 
@@ -64,7 +65,37 @@ exec "$real_date" "\$@"
 EOF
   chmod +x "$bin/gh" "$bin/curl" "$bin/date"
   DEPS_TEST_NOW="$(date -u -d 2026-11-14T12:00:00Z +%s)"
-  export PATH="$bin:$PATH" FIX STATE DEPS_TEST_NOW
+  export PATH="$bin:$PATH" FIX STATE DEPS_TEST_NOW DEPS_GIT_BASE="file://$BATS_TEST_TMPDIR/upstream"
+}
+
+# git:owner/plugins, served over file:// with filters on, as GitHub serves it: a
+# statechart skill, its tests, a license, and a README bercail does not copy.
+# Sets PLUGINS and BASE, its first commit.
+upstream() {
+  PLUGINS="$BATS_TEST_TMPDIR/upstream/owner/plugins"
+  git init -q -b main "$PLUGINS"
+  git -C "$PLUGINS" config uploadpack.allowFilter true
+  BASE="$(commit base pstack/skills/statechart/SKILL.md pstack/skills/statechart/scripts/run.ts \
+    pstack/skills/statechart/scripts/test/run.test.ts pstack/LICENSE README.md)"
+}
+
+# A commit to the upstream, with subject $1, that changes each file after it. Prints its sha.
+commit() {
+  local subject="$1" file
+  shift
+  for file in "$@"; do
+    mkdir -p "$(dirname "$PLUGINS/$file")"
+    printf '%s\n' "$subject" >>"$PLUGINS/$file"
+  done
+  git -C "$PLUGINS" add -A
+  git -C "$PLUGINS" -c user.name=test -c user.email=test@example.com commit -qm "$subject"
+  git -C "$PLUGINS" rev-parse HEAD
+}
+
+# The statechart entry as lib/deps.json has it, at known $1, on git:owner/plugins.
+vendored() {
+  entry pstack-statechart git:owner/plugins "$1" '["skills/statechart/UPSTREAM.md"]' \
+    | jq -c '.paths = ["pstack/skills/statechart", ":!pstack/skills/statechart/scripts/test", "pstack/LICENSE"]'
 }
 
 # A manifest entry: name, source, known, then pinned_in as a JSON array.
@@ -77,11 +108,11 @@ manifest() {
   printf '%s\n' "$@" | jq -s . >"$REPO/lib/deps.json"
 }
 
-# An open issue with labels deps and $3.
+# An open issue with label deps and each label from $3 on.
 open_issue() {
-  jq --argjson n "$1" --arg title "$2" --arg label "$3" \
-    '. + [{number: $n, title: $title, labels: [{name: "deps"}, {name: $label}]}]' \
-    "$STATE/issues.json" >"$STATE/issues.next"
+  jq --argjson n "$1" --arg title "$2" \
+    '. + [{number: $n, title: $title, labels: ([{name: "deps"}] + ($ARGS.positional | map({name: .})))}]' \
+    "$STATE/issues.json" --args -- "${@:3}" >"$STATE/issues.next"
   mv "$STATE/issues.next" "$STATE/issues.json"
 }
 
@@ -264,6 +295,192 @@ assert_no_writes() {
   track check
   [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
   [[ "$(arg "$(gh_calls "issue create")" --title)" == "deps: node 26.13.1" ]] || fail "$(gh_calls "issue create")"
+}
+
+@test "a git: source whose copied paths moved past known opens one vendor issue with the log, diffstat and compare link" {
+  upstream
+  local target create body
+  target="$(commit 'run.ts reads CRLF (#12)' pstack/skills/statechart/scripts/run.ts)"
+  manifest "$(vendored "$BASE")"
+  track check
+  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
+  create="$(gh_calls "issue create")"
+  [[ "$(wc -l <<<"$create")" -eq 1 ]] || fail "one issue: $create"
+  [[ "$(arg "$create" --title)" == "vendor: pstack-statechart $target" ]] || fail "title: $create"
+  [[ "$(arg "$create" --label)" == "deps deps:pstack-statechart vendor" ]] || fail "labels: $create"
+  body="$(arg "$create" --body)"
+  [[ "$body" == "**pstack-statechart** \`${BASE:0:12}\` → \`${target:0:12}\`."* ]] || fail "delta: $body"
+  [[ "$body" == *"$(git -C "$PLUGINS" log -1 --oneline "$target")"* ]] || fail "the log: $body"
+  [[ "$body" == *" pstack/skills/statechart/scripts/run.ts | 1 +"* ]] || fail "the diffstat: $body"
+  [[ "$body" == *"https://github.com/owner/plugins/compare/$BASE...$target"* ]] || fail "compare link: $body"
+  [[ "$body" == *'- `skills/statechart/UPSTREAM.md`'* && "$body" == *"set \`known\` to $target"* ]] || fail "pinned_in and the step: $body"
+  [[ "$out" == *"pstack-statechart: opened an issue"* ]] || fail "$out"
+}
+
+@test "a git: source is current when the commits past known leave its paths alone" {
+  upstream
+  local known
+  # known is past the last commit to touch the paths, and the tip is past known.
+  known="$(commit docs README.md)"
+  commit 'more docs' README.md >/dev/null
+  manifest "$(vendored "$known")"
+  track check
+  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
+  assert_no_writes "current"
+  [[ "$out" == *"pstack-statechart: up to date"* ]] || fail "$out"
+}
+
+@test "a commit that changes only upstream's tests opens no vendor issue" {
+  upstream
+  commit 'more tests' pstack/skills/statechart/scripts/test/run.test.ts >/dev/null
+  manifest "$(vendored "$BASE")"
+  track check
+  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
+  assert_no_writes "test-only"
+  [[ "$out" == *"pstack-statechart: up to date"* ]] || fail "$out"
+}
+
+@test "a commit that changes only the license opens a vendor issue for it, not for a later test-only tip" {
+  upstream
+  local target create body
+  target="$(commit 'license year' pstack/LICENSE)"
+  commit 'more tests' pstack/skills/statechart/scripts/test/run.test.ts >/dev/null
+  manifest "$(vendored "$BASE")"
+  track check
+  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
+  create="$(gh_calls "issue create")"
+  [[ "$(arg "$create" --title)" == "vendor: pstack-statechart $target" ]] || fail "title: $create"
+  [[ "$(arg "$create" --label)" == "deps deps:pstack-statechart vendor" ]] || fail "labels: $create"
+  body="$(arg "$create" --body)"
+  [[ "$body" == *" pstack/LICENSE | 1 +"* && "$body" == *" 1 file changed"* ]] || fail "the diffstat: $body"
+  [[ "$body" != *"more tests"* && "$body" != *run.test.ts* ]] || fail "upstream's tests are left out: $body"
+}
+
+@test "a known that upstream's rewritten history no longer holds fails the lookup and opens no vendor issue" {
+  upstream
+  local gone create
+  gone="$(commit 'force-pushed away' pstack/skills/statechart/SKILL.md)"
+  git -C "$PLUGINS" reset -q --hard "$BASE"
+  commit rewritten pstack/skills/statechart/SKILL.md >/dev/null
+  manifest "$(vendored "$gone")"
+  track check
+  [[ "$rc" -eq 1 ]] || fail "rc $rc: $out"
+  create="$(gh_calls "issue create")"
+  [[ "$(wc -l <<<"$create")" -eq 1 && "$(arg "$create" --title)" == "deps: tracker failing" ]] || fail "only the tracker issue: $create"
+  [[ "$(arg "$create" --body)" == *"- pstack-statechart: git:owner/plugins: known $gone is not on its default branch: upstream rewrote its history, or known is wrong"* ]] \
+    || fail "names the entry and why: $create"
+}
+
+@test "a newer target retitles the open vendor issue and comments on it instead of opening a second" {
+  upstream
+  local first second edit comment body
+  first="$(commit first pstack/skills/statechart/scripts/run.ts)"
+  second="$(commit second pstack/skills/statechart/SKILL.md)"
+  open_issue 7 "vendor: pstack-statechart $first" deps:pstack-statechart vendor
+  manifest "$(vendored "$BASE")"
+  track check
+  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
+  [[ -z "$(gh_calls "issue create")" ]] || fail "a second issue: $(gh_calls "issue create")"
+  edit="$(gh_calls "issue edit")" comment="$(gh_calls "issue comment")"
+  [[ "$(jq -r '.[2]' <<<"$edit")" == 7 && "$(arg "$edit" --title)" == "vendor: pstack-statechart $second" ]] || fail "retitled: $edit"
+  body="$(arg "$edit" --body)"
+  [[ "$body" == *"$(git -C "$PLUGINS" log -1 --oneline "$second")"* && "$body" == *"$(git -C "$PLUGINS" log -1 --oneline "$first")"* \
+    && "$body" == *" 2 files changed"* ]] || fail "the body covers both commits: $body"
+  [[ "$body" == *"https://github.com/owner/plugins/compare/$BASE...$second"* ]] || fail "compare link: $body"
+  [[ "$(jq -r '.[2]' <<<"$comment")" == 7 ]] || fail "commented on #7: $comment"
+  [[ "$(arg "$comment" --body)" == "$first is superseded by $second: https://github.com/owner/plugins/compare/$first...$second" ]] \
+    || fail "comment: $comment"
+}
+
+@test "known reaching past the vendor issue's target closes it" {
+  upstream
+  local target known close
+  target="$(commit first pstack/skills/statechart/scripts/run.ts)"
+  # The move pinned the tip, past the commit the issue names.
+  known="$(commit docs README.md)"
+  open_issue 7 "vendor: pstack-statechart $target" deps:pstack-statechart vendor
+  manifest "$(vendored "$known")"
+  track check
+  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
+  close="$(gh_calls "issue close")"
+  [[ "$(jq -r '.[2]' <<<"$close")" == 7 ]] || fail "closed #7: $close"
+  [[ "$(arg "$close" --comment)" == "lib/deps.json knows pstack-statechart $known now." ]] || fail "comment: $close"
+  [[ -z "$(gh_calls "issue create")$(gh_calls "issue edit")$(gh_calls "issue comment")" ]] || fail "only a close: $(cat "$STATE/gh.jsonl")"
+}
+
+@test "an open vendor issue whose commit is not on upstream's branch fails the lookup and stays open" {
+  upstream
+  local missing=0123456789abcdef0123456789abcdef01234567
+  open_issue 7 "vendor: pstack-statechart $missing" deps:pstack-statechart vendor
+  manifest "$(vendored "$BASE")"
+  track check
+  [[ "$rc" -eq 1 ]] || fail "rc $rc: $out"
+  [[ -z "$(gh_calls "issue close")" ]] || fail "closed: $(gh_calls "issue close")"
+  [[ "$(arg "$(gh_calls "issue create")" --body)" == *"- pstack-statechart: git:owner/plugins: #7's title ends in $missing, not a commit on its default branch"* ]] \
+    || fail "the tracker issue says why: $(gh_calls "issue create")"
+}
+
+@test "an open issue whose title does not end in a full commit is left alone, even when git could read it" {
+  upstream
+  open_issue 7 "Release notes HEAD" deps:pstack-statechart
+  manifest "$(vendored "$BASE")"
+  track check
+  [[ "$rc" -eq 1 ]] || fail "rc $rc: $out"
+  [[ -z "$(gh_calls "issue close")$(gh_calls "issue edit")$(gh_calls "issue comment")" ]] || fail "wrote to #7: $(cat "$STATE/gh.jsonl")"
+  [[ "$(arg "$(gh_calls "issue create")" --body)" == *"- pstack-statechart: git:owner/plugins: #7's title ends in HEAD, not a commit on its default branch"* ]] \
+    || fail "the tracker issue says why: $(gh_calls "issue create")"
+}
+
+@test "an open vendor issue already at the target is left as it is" {
+  upstream
+  local target
+  target="$(commit first pstack/skills/statechart/scripts/run.ts)"
+  open_issue 7 "vendor: pstack-statechart $target" deps:pstack-statechart vendor
+  manifest "$(vendored "$BASE")"
+  track check
+  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
+  assert_no_writes "at the target"
+  [[ "$out" == *"pstack-statechart: #7 open"* ]] || fail "$out"
+}
+
+@test "a merge onto the default branch that brings in a copied change is the target, not the side branch's commit" {
+  upstream
+  local merge
+  git -C "$PLUGINS" checkout -q -b side
+  commit 'side change' pstack/skills/statechart/scripts/run.ts >/dev/null
+  git -C "$PLUGINS" checkout -q main
+  commit docs README.md >/dev/null
+  git -C "$PLUGINS" -c user.name=test -c user.email=test@example.com merge -q --no-ff -m 'merge side (#3)' side
+  merge="$(git -C "$PLUGINS" rev-parse HEAD)"
+  manifest "$(vendored "$BASE")"
+  track check
+  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
+  [[ "$(arg "$(gh_calls "issue create")" --title)" == "vendor: pstack-statechart $merge" ]] || fail "title: $(gh_calls "issue create")"
+}
+
+@test "a pathspec git cannot read fails the lookup and the run goes on to the next entry" {
+  upstream
+  manifest "$(vendored "$BASE" | jq -c '.paths = [":(not-a-magic)src"]')" "$(entry tuicr github:agavra/tuicr 0.28.0)"
+  track check
+  [[ "$rc" -eq 1 ]] || fail "rc $rc: $out"
+  [[ "$(arg "$(gh_calls "issue create")" --body)" == *"- pstack-statechart: git:owner/plugins: "*"not-a-magic"* ]] \
+    || fail "the tracker issue names git's error: $(gh_calls "issue create")"
+  [[ "$out" == *"tuicr: up to date"* ]] || fail "tuicr was not checked: $out"
+}
+
+@test "pins takes a git: entry with paths, and fails one whose known is not a full commit or paths on another source" {
+  manifest "$(vendored 3dbd22ff12742fb28c9700b9760baa29ed41dc13)"
+  track pins
+  [[ "$rc" -eq 0 && -z "$out" ]] || fail "a full commit, rc $rc: $out"
+  manifest "$(vendored 3dbd22f)"
+  track pins
+  [[ "$rc" -eq 1 && "$out" == "::error file=lib/deps.json::every entry needs"* ]] || fail "a short commit, rc $rc: $out"
+  manifest "$(entry tuicr github:agavra/tuicr 0.28.0 | jq -c '.paths = ["src"]')"
+  track pins
+  [[ "$rc" -eq 1 && "$out" == "::error file=lib/deps.json::every entry needs"* ]] || fail "paths on github:, rc $rc: $out"
+  manifest "$(vendored 3dbd22ff12742fb28c9700b9760baa29ed41dc13 | jq -c '.paths = false')"
+  track pins
+  [[ "$rc" -eq 1 && "$out" == "::error file=lib/deps.json::every entry needs"* ]] || fail "paths not a list, rc $rc: $out"
 }
 
 @test "a pin that disagrees with known fails pins and warns in check, naming the file and line" {
