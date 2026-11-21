@@ -1,7 +1,7 @@
 # Upstream
 
-- Source: https://github.com/cursor/plugins/tree/3dbd22ff12742fb28c9700b9760baa29ed41dc13/pstack/skills/statechart
-- Commit: 3dbd22ff12742fb28c9700b9760baa29ed41dc13 (2026-11-13)
+- Source: https://github.com/cursor/plugins/tree/0b46ec399d55f2829e88822998f53b84944837d3/pstack/skills/statechart
+- Commit: 0b46ec399d55f2829e88822998f53b84944837d3 (2026-11-19)
 - License: MIT, Copyright (c) 2026 Lauren Tan (LICENSE, from pstack/LICENSE)
 
 Every file under `scripts/` and `references/` is upstream's, byte for byte, except

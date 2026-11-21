@@ -26,7 +26,9 @@ for (const line of mmd.split("\n")) {
   else if ((m = /^\s*(s\d+): (.*)$/.exec(line))) {
     names.set(m[1], [...parents.filter(Boolean), text(m[2])].join(" › "));
     leaves.push(m[1]);
-  } else if ((m = /^\s*(\[\*\]|\w+) --> (\w+)(?:: (.*))?$/.exec(line))) arrows.push([m[1], m[2], m[3] && text(m[3])]);
+  } else if ((m = /^\s*(\[\*\]|\w+) --> (\w+)(?:: (.*))?$/.exec(line)))
+    // A [*] inside a parent is where the parent starts, not the chart.
+    arrows.push([m[1], m[2], m[3] && text(m[3]), parents.filter(Boolean).join(" › ")]);
   else if ((m = /^\s*class (\w+) (\w+)$/.exec(line))) marks.set(m[1], [...(marks.get(m[1]) ?? []), m[2]]);
 }
 
@@ -54,8 +56,10 @@ if (leaves.length > MAX) {
   }
   if (out.at(-1) !== "") out.push("");
   out.push("Arrows:");
-  for (const [a, b, label] of arrows)
-    out.push(`- ${a === "[*]" ? "start" : names.get(a)} -> ${names.get(b)}${label ? `: ${label}` : ""}`);
+  for (const [a, b, label, parent] of arrows) {
+    const from = a !== "[*]" ? names.get(a) : parent ? `start of ${parent}` : "start";
+    out.push(`- ${from} -> ${names.get(b)}${label ? `: ${label}` : ""}`);
+  }
 }
 writeFileSync(to, `${out.join("\n")}\n`);
 console.log(`${to}: ${leaves.length > MAX ? `no chart (${leaves.length} states)` : `${leaves.length} states`}`);
