@@ -315,6 +315,21 @@ chart_of() {
   [[ "$post" == *$'- start -> state "0"\n'* && "$post" == *'- state "18" -> state "19": step 19'* ]] || fail "arrows: $post"
 }
 
+@test "chart.pi.md says a [*] inside a parent starts that parent, not the chart" {
+  need node
+  wrapper
+  tools
+  # Upstream draws a parent's only way in as an arrow to the parent and a [*] inside it.
+  printf '%s\n' 'stateDiagram-v2' '  s0: Signed out' '  state "Trying to sign in" as s1 {' '    s2: Checking' \
+    '    [*] --> s2' '  }' '  [*] --> s0' '  s0 --> s1: Submit' >"$BATS_TEST_TMPDIR/chart.mmd"
+  run env TLA2TOOLS="$BATS_TEST_TMPDIR/tla2tools.jar" JAVA="$BIN/java" CHART="$BATS_TEST_TMPDIR/chart.mmd" \
+    "$W/statechart-bstack" Spec.tla --out "$BATS_TEST_TMPDIR/out"
+  [[ "$status" -eq 0 ]] || fail "exit $status: $output"
+  post="$(cat "$BATS_TEST_TMPDIR/out/chart.pi.md")"
+  [[ "$post" == *$'\n- start of Trying to sign in -> Trying to sign in › Checking\n'* ]] || fail "the parent's start: $post"
+  [[ "$post" == *$'\n- start -> Signed out\n'* && "$post" == *$'\n- Signed out -> Trying to sign in: Submit'* ]] || fail "arrows: $post"
+}
+
 @test "over 20 states, chart.pi.md has no chart and sends the reader to report.md's path" {
   need node
   wrapper

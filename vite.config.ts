@@ -7,7 +7,7 @@ const UPSTREAM_COPIES = [
   "skills/statechart/scripts/backends/**",
   "skills/statechart/scripts/frontends/**",
   "skills/statechart/scripts/passes/**",
-  "skills/statechart/scripts/{ir,pipeline,run,statechart,worker}.ts",
+  "skills/statechart/scripts/{ir,janitor,kill,pipeline,run,statechart,worker}.ts",
   "bstack/pi/extensions/pi-emphasis/**",
 ];
 
