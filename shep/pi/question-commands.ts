@@ -196,7 +196,7 @@ export default function (pi: ExtensionAPI) {
           },
           {
             description:
-              "A review or action question whose answer approves one push: once the person picks approves, the guard lets your next `git -C <worktree> push <remote> <hash>^{commit}:<ref>` of the answered commit run without asking, once. The card shows the remote's push URL.",
+              "A review or action question whose answer approves one push: once the person picks approves on the panel card (a Discuss pick does not count), the guard lets your next `git -C <worktree> push <remote> <hash>^{commit}:<ref>` of the answered commit run without asking, once. The card shows the remote's push URL.",
           },
         ),
       ),

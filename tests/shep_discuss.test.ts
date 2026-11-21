@@ -210,7 +210,7 @@ test("/pick in the branch shows Shep's pick, refuses a stale question, and recor
   expect(readdirSync(join(state, "inbox"))).toEqual(["decision-Q1-1.json"]);
 });
 
-test("a push question's branch says what its approving choice pushes, at the picker too", async () => {
+test("a push question's branch says only a pick on the panel card approves the push, at the picker too", async () => {
   vi.stubEnv("BERCAIL_SHEP_STATE", state);
   const push = { approves: "Push it", remote: "origin", refs: ["refs/heads/master"], url: "/srv/app.git" };
   const [head, stagedTree, base] = ["a", "b", "c"].map((c) => c.repeat(40));
@@ -223,9 +223,9 @@ test("a push question's branch says what its approving choice pushes, at the pic
   const widgets: string[][] = [];
   b.hooks.session_start!({}, { hasUI: true, ui: { setWidget: (_id: string, lines: string[]) => widgets.push(lines) } });
   expect(widgets[0]).toContain(
-    'Picking "Push it" lets Shep push the answered commit to origin (/srv/app.git): refs/heads/master, once.',
+    'Picking "Push it" on the panel card lets Shep push the answered commit to origin (/srv/app.git): refs/heads/master, once. A /pick here does not approve the push.',
   );
   b.seen.pick = undefined;
   await b.pick();
-  expect(b.seen.selects).toEqual([["1. Push it  (pushes to origin: refs/heads/master)", "2. Not yet"]]);
+  expect(b.seen.selects).toEqual([["1. Push it  (approves the push only on the panel card)", "2. Not yet"]]);
 });

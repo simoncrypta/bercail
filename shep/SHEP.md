@@ -345,7 +345,7 @@ and `--issue` when there is one, and say so in one line with its link:
   exact commit. For direct integration use `git push origin <sha>:<trunk>`,
   never the moving branch. Where the guard would ask about that push, ask it
   as a `shep_question` with `push` (`approves`: the choice that pushes,
-  `remote`, full `refs`). Once the person picks it and `question check` is
+  `remote`, full `refs`). Once the person picks it on the panel card (a Discuss pick does not count) and `question check` is
   fresh, push the answered commit with only
   `git -C <worktree> push <remote> <full sha>^{commit}:refs/heads/<trunk>`:
   the guard runs it without asking, once, and says which answer approved it;

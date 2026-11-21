@@ -787,6 +787,21 @@ describe("durable targeted questions", () => {
       accepted: false,
       reason: expect.stringMatching(/^its push was already claimed at /),
     });
+    // A Discuss pick of the approving choice approves nothing: an agent can type there.
+    const discussed = store.create(
+      "discussed",
+      {
+        ...fields("discussed", "review"),
+        options: ["Push it", "Not yet"],
+        push: { approves: "Push it", remote: "origin", refs: ["refs/heads/master"], url: "/srv/app.git" },
+      },
+      resolveSpec,
+    );
+    store.answer("d", tokenOf(discussed), "Push it", "discuss picker", live);
+    expect(store.claimPush(tokenOf(discussed), live, claim)).toMatchObject({
+      accepted: false,
+      reason: "not the person's approving answer on the panel",
+    });
     // The other choice, or a question with no push, approves nothing.
     const other = store.create(
       "other",
@@ -800,7 +815,7 @@ describe("durable targeted questions", () => {
     store.answer("no", tokenOf(other), "Not yet", "panel picker", live);
     expect(store.claimPush(tokenOf(other), live, claim)).toMatchObject({
       accepted: false,
-      reason: "not the person's approving answer",
+      reason: "not the person's approving answer on the panel",
     });
   });
 

@@ -22,6 +22,7 @@ import {
   ANSWER_SOURCES,
   DEFAULT_SOURCE,
   isDue,
+  PUSH_SOURCE,
   QuestionStore,
   tokenOf,
   type AnswerResult,
@@ -299,15 +300,18 @@ export async function approvePush(state: string, push: PushRequest): Promise<Pus
     const t = tokenOf(q);
     const p = q.push!;
     const a = q.answer!;
-    // A push question is never reversible, so its answer is the person's pick, never a default.
+    // Only a panel pick: a Discuss terminal takes typed input (hc send), and a push
+    // question is never reversible, so it never defaults.
     const reason =
       a.choice !== p.approves
         ? `was answered "${a.choice}", not "${p.approves}"`
-        : q.pushed
-          ? `already approved a push, at ${q.pushed.at}`
-          : p.remote !== push.remote || !same(p.refs, refs)
-            ? `approves a push to ${p.remote} ${p.refs.join(" ")}`
-            : pushConfigProblem(push.dir, push.remote, p.url);
+        : a.source !== PUSH_SOURCE
+          ? `was answered by the ${a.source}; only a pick on the panel card approves a push`
+          : q.pushed
+            ? `already approved a push, at ${q.pushed.at}`
+            : p.remote !== push.remote || !same(p.refs, refs)
+              ? `approves a push to ${p.remote} ${p.refs.join(" ")}`
+              : pushConfigProblem(push.dir, push.remote, p.url);
     if (reason) {
       reasons.push(`${t} ${reason}`);
       continue;
@@ -383,8 +387,9 @@ export function closed(state: string, token: string, opening: string): boolean {
 }
 
 // What picking a push question's approving choice lets Shep do, for the card and Discuss.
+// Discuss says a pick there does not approve it: only the panel card's does.
 export const pushLine = (p: QuestionPush) =>
-  `Picking "${p.approves}" lets Shep push the answered commit to ${p.remote} (${p.url}): ${p.refs.join(", ")}, once.`;
+  `Picking "${p.approves}" on the panel card lets Shep push the answered commit to ${p.remote} (${p.url}): ${p.refs.join(", ")}, once. A /pick here does not approve the push.`;
 
 // The branch's Pi: what it is for, the question, and /pick. It has no tools that
 // act (bercail shep discuss runs it with --tools read,grep,find,ls), and the guard
@@ -395,12 +400,12 @@ export default function (pi: ExtensionAPI) {
   if (!state || !token) return;
   const store = new QuestionStore(state);
   const question = () => store.snapshot().questions.find((q) => tokenOf(q) === token);
-  // Numbered, so two choices never read the same, and a push's choice says what it pushes.
+  // Numbered, so two choices never read the same; a push's choice says where it approves the push.
   const choices = (q: Question) =>
     q.options.map(
       (o, i) =>
         `${i + 1}. ${o}` +
-        (o === q.push?.approves ? `  (pushes to ${q.push.remote}: ${q.push.refs.join(", ")})` : "") +
+        (o === q.push?.approves ? "  (approves the push only on the panel card)" : "") +
         (o === q.recommendation?.choice ? `  (Shep recommends: ${q.recommendation.why})` : ""),
     );
   pi.on("session_start", (_event, ctx) => {

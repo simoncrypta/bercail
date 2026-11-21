@@ -58,6 +58,8 @@ export interface PushClaim {
 }
 /** Who recorded an answer: the person's pick on a card or in a Discuss branch. */
 export const ANSWER_SOURCES = ["panel picker", "discuss picker"] as const;
+/** The only answers that approve a push: an agent can type into a Discuss terminal (hc send), not click the panel. */
+export const PUSH_SOURCE: (typeof ANSWER_SOURCES)[number] = "panel picker";
 /** The ledger's own answer: no pick by the deadline, so Shep's recommendation. Never the person's. */
 export const DEFAULT_SOURCE = "default after timeout";
 export interface QuestionAnswer {
@@ -823,8 +825,8 @@ export class QuestionStore {
       const q = this.find(state, token);
       const reason = q.pushed
         ? `its push was already claimed at ${q.pushed.at}`
-        : q.status !== "answered" || !q.push || q.answer?.choice !== q.push.approves
-          ? "not the person's approving answer"
+        : q.status !== "answered" || !q.push || q.answer?.choice !== q.push.approves || q.answer.source !== PUSH_SOURCE
+          ? "not the person's approving answer on the panel"
           : check.status !== "fresh" || !check.current
             ? `changed since it was answered: ${check.reasons.join(", ") || "not checked"}`
             : undefined;

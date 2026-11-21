@@ -382,7 +382,7 @@ export function cardWords(card, all = spaces(), backend = S.backend) {
     ...state,
     asked: `asked ${clock(card.createdAt)}`,
     timer: countdown(card, state.word),
-    // The same words as Discuss's (shep/pi/discuss.ts pushLine).
+    // Discuss says the same, and that its /pick does not approve the push (shep/pi/discuss.ts pushLine).
     push: card.push
       ? `Picking "${card.push.approves}" lets Shep push the answered commit to ${card.push.remote} (${card.push.url}): ${card.push.refs.join(", ")}, once.`
       : null,

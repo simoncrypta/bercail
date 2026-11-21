@@ -1078,6 +1078,12 @@ describe("an answer that approves a push", () => {
   test.each([
     ["the other choice", () => pick("p1", "Not yet"), () => [head()], /Q1@1 was answered "Not yet", not "Push it"/],
     [
+      "a Discuss pick, which an agent could type",
+      () => pick("p1", "Push it", "Q1@1", "discuss picker"),
+      () => [head()],
+      /Q1@1 was answered by the discuss picker; only a pick on the panel card approves a push/,
+    ],
+    [
       "a check gone stale",
       () => {
         pick("p1", "Push it");
