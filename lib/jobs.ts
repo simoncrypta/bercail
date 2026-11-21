@@ -9,6 +9,8 @@
 //   bercail job comment trail:<n> [--repo DIR]         add a comment, text on stdin
 //   bercail job list [--repo DIR] [--json]             the repo's open trails, with their records
 //   bercail job id trail:<n> [--repo DIR]              the trail's Entire id and URL, for a question
+//   bercail job merge trail:<n> [--change R/N] [--repo DIR]   merge its change; close it once none is open
+//   bercail job supersede trail:<n> --with trail:<m>|<commit> [--repo DIR]   close it with a pointer
 //
 // Entire has no dependency field: a line "Blocked by: #12, #15" in a trail's
 // body names the trails of its project that must close or merge first.
@@ -68,6 +70,16 @@ function entire(repo: string, args: string[]): any {
     throw new Error(
       `entire ${args.slice(0, 3).join(" ")} failed in ${repo}: ${why} (trails need the network and the person's Entire login)`,
     );
+  }
+}
+
+// entire for a command with no JSON answer worth reading: its text, or its own message.
+function entireText(repo: string, args: string[]): string {
+  try {
+    return run(process.env.ENTIRE_BIN || "entire", args, repo);
+  } catch (error: any) {
+    const why = String(error?.stderr || error?.stdout || error?.message || error).trim();
+    throw new Error(`entire ${args.join(" ")} failed in ${repo}, and nothing was closed:\n${why}`);
   }
 }
 
@@ -264,6 +276,87 @@ export function job(repo: string, id: string): any {
   };
 }
 
+// A trail's changes as <repo>/<n> and status. Entire leaves the list out when
+// there are none; a list of another shape is not an empty one.
+function changesOf(trail: any, id: string): { change: string; status: string }[] {
+  if (trail.changes == null) return [];
+  if (!Array.isArray(trail.changes))
+    throw new Error(`entire trail show for ${id} returned changes that are not a list; nothing was merged or closed`);
+  return trail.changes.map((c: any) => ({ change: `${c.repository}/${c.number}`, status: c.status }));
+}
+const openOf = (changes: { change: string; status: string }[]) =>
+  changes.filter((c) => c.status === "open").map((c) => c.change);
+
+// Merge one change of the trail, then close the trail in the same step unless
+// another change, in any repo, is still open: Entire leaves a merged trail open.
+// Under Shep it is the guard worker's pinned run, on the person's Allow.
+function mergeJob(repo: string, id: string, change: string): string {
+  const trail = ownTrail(repo, id);
+  const changes = changesOf(trail, id);
+  const open = openOf(changes);
+  // Another change may open meanwhile: the close comes after a fresh look.
+  const close = `entire trail update ${trailNumber(id)} --status closed once entire trail show ${trailNumber(id)} shows no open change`;
+  if (trail.status === "closed") {
+    if (!open.length) return `${id} is already closed`;
+    throw new Error(
+      `${id} is closed with ${open.join(", ")} open; reopen it with entire trail update ${trailNumber(id)} --status open first`,
+    );
+  }
+  if (change && !open.includes(change))
+    throw new Error(`${change} is not an open change of ${id}; its open changes: ${open.join(", ") || "none"}`);
+  if (!change && open.length !== 1)
+    throw new Error(
+      open.length
+        ? `${id} has ${open.length} open changes (${open.join(", ")}); pass the one to merge with --change`
+        : changes.some((c) => c.status === "merged")
+          ? `${id} has no open change: its work is merged; close it with ${close}`
+          : `${id} has no change to merge; when its work landed elsewhere, close it with bercail job supersede ${id} --with trail:<n>|<commit>`,
+    );
+  const target = change || open[0]!;
+  // No --force: the trail's gates decide, and Entire says which failed.
+  const out = entireText(repo, ["trail", "merge", target]);
+  let after: { change: string; status: string }[];
+  try {
+    after = changesOf(trailShow(repo, id), id);
+  } catch (error) {
+    throw new Error(
+      `entire trail merge ${target} ran, but ${id} could not be read again, so it is not closed: ${(error as Error).message}; close it with ${close}`,
+    );
+  }
+  const status = after.find((c) => c.change === target)?.status || "gone";
+  if (status !== "merged")
+    throw new Error(`${target} is ${status} after entire trail merge, so ${id} stays open:\n${out}`);
+  const left = openOf(after);
+  if (left.length) return `merged ${target}; ${id} stays open for ${left.join(", ")}`;
+  try {
+    entire(repo, ["trail", "update", trailNumber(id), "--status", "closed", "--json"]);
+  } catch (error) {
+    throw new Error(`merged ${target}, but ${id} is not closed: ${(error as Error).message}; close it with ${close}`);
+  }
+  return `merged ${target}; closed ${id}`;
+}
+
+// Close a trail whose work landed elsewhere, with a line in its body that says where.
+function supersedeJob(repo: string, id: string, by: string): string {
+  const trail = ownTrail(repo, id);
+  let pointer: string;
+  if (isTrail(by)) {
+    if (by === id) throw new Error(`${id} cannot supersede itself`);
+    pointer = `Superseded by: #${trailNumber(by)} ${trailShow(repo, by).url}`;
+  } else {
+    let sha = "";
+    try {
+      sha = run("git", ["rev-parse", "--verify", "--quiet", `${by}^{commit}`], repo);
+    } catch {}
+    if (!sha) throw new Error(`--with ${by} is neither trail:<n> nor a commit of ${repo}`);
+    pointer = `Superseded by: commit ${sha}`;
+  }
+  const body = (trail.body || "").replace(/\s+$/, "");
+  const next = body.split("\n").includes(pointer) ? body : body ? `${body}\n\n${pointer}` : pointer;
+  entire(repo, ["trail", "update", trailNumber(id), "--body", next, "--status", "closed", "--json"]);
+  return `closed ${id}: ${pointer}`;
+}
+
 function showText(value: any): string {
   const changes = value.changes.map((c: any) => `- change ${c.change}: ${c.branch} into ${c.base}, ${c.status}`);
   const notes = value.comments.map((c: any) => `--- ${c.author} at ${c.created_at}\n${c.text}`);
@@ -296,9 +389,13 @@ export function jobCommand(argv: string[], stdin: () => string): string {
   let id = "";
   let dir = process.cwd();
   let json = false;
+  let change = "";
+  let by = "";
   for (let i = 0; i < rest.length; i++) {
     if (rest[i] === "--repo") dir = rest[++i] || "";
     else if (rest[i]?.startsWith("--repo=")) dir = rest[i]!.slice(7);
+    else if (op === "merge" && rest[i] === "--change" && rest[i + 1]) change = rest[++i]!;
+    else if (op === "supersede" && rest[i] === "--with" && rest[i + 1]) by = rest[++i]!;
     else if (rest[i] === "--json") json = true;
     else if (!id && !rest[i]!.startsWith("-")) id = rest[i]!;
     else throw new Error(USAGE);
@@ -347,6 +444,8 @@ export function jobCommand(argv: string[], stdin: () => string): string {
     const trail = trailShow(repo, id);
     return JSON.stringify({ id, trail_id: trail.id, url: trail.url });
   }
+  if (op === "merge" && !json) return mergeJob(repo, id, change);
+  if (op === "supersede" && by && !json) return supersedeJob(repo, id, by);
   if (op === "comment" && !json) {
     // The trail must be this repo's: a comment never points at a trail that is not.
     ownTrail(repo, id);
@@ -357,7 +456,7 @@ export function jobCommand(argv: string[], stdin: () => string): string {
 }
 
 const USAGE =
-  "usage: bercail job show trail:<n> [--repo DIR] [--json] | comment trail:<n> [--repo DIR] (text on stdin) | list [--repo DIR] [--json] | id trail:<n> [--repo DIR]";
+  "usage: bercail job show trail:<n> [--repo DIR] [--json] | comment trail:<n> [--repo DIR] (text on stdin) | list [--repo DIR] [--json] | id trail:<n> [--repo DIR] | merge trail:<n> [--change REPO/N] [--repo DIR] | supersede trail:<n> --with trail:<m>|COMMIT [--repo DIR]";
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {

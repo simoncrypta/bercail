@@ -73,7 +73,7 @@ function brief(ticket: GuardTicket): string {
     f.kind === "cleanup"
       ? `bercail cleanup of ${f.worktree} (branch ${f.branch ?? "detached"}, HEAD ${f.head})`
       : f.kind === "trail merge"
-        ? `entire trail merge ${f.change} in ${f.checkout}: trail ${f.trailId}, head ${f.head}, into ${f.base}`
+        ? `${f.job ? `bercail job merge ${f.job} --change` : "entire trail merge"} ${f.change} in ${f.checkout}: trail ${f.trailId}, head ${f.head}, into ${f.base}${f.job ? `, then closes ${f.job} once no change is open` : ""}`
         : `git push from ${f.dir} (git dir ${f.gitDir}) to ${f.url}: ${f.refspecs.join(", ")}`;
   return `Shep ran: ${ticket.command}. On Allow, its worker guard-ask-${ticket.id} runs ${facts}, once, and only if none of that has changed. The card expires at ${ticket.expires}, which counts as a Deny.`;
 }

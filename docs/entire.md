@@ -77,7 +77,7 @@ The trail is the PR.
 | Open | `bercail describe commit \| git commit -F -`, then `entire trail create --title "$(bercail describe title)" --body "$(bercail describe body)"`, which publishes the branch |
 | Update | commit, `git push`, then `entire trail update --body "$(bercail describe body)"` |
 | Ready for review | `entire trail ready` |
-| Merge | you, or Shep when you ask: `entire trail merge`, once the trail's gates pass |
+| Merge | you, or Shep when you ask: `bercail job merge trail:<n>`, once the trail's gates pass; it closes the trail once no change is open |
 
 Supported so far:
 
@@ -92,8 +92,8 @@ Supported so far:
   opt-in per repo.
 - **Jobs:** in an Entire repo the job is a trail, `trail:<n>`, not a beads
   issue: Shep creates it with `--no-branch`, dispatches it, links the pushed
-  branch to it (`entire trail link`, not a second `trail create`), and closes
-  it. See [trails as jobs](shep.md#trails-as-jobs).
+  branch to it (`entire trail link`, not a second `trail create`), and merging
+  closes it. See [trails as jobs](shep.md#trails-as-jobs).
 
 ## Brain
 
@@ -162,12 +162,14 @@ On top of the repo's policy, for every role:
   refused. The judge, Discuss and background Shep are refused.
 - **Trail writes:** `trail update`, `trail ready`, `trail comment`, and finding
   replies or resolves are allowed, except for read-only roles. Shep's
-  `trail update` runs with a warning.
+  `trail update` runs with a warning. `bercail job supersede` is a trail
+  update to the guard, and `bercail job merge` a trail merge.
 - **Dismissing a finding:** only you. It can clear a merge gate, so the guard
   blocks it for every role, through the CLI or `entire api`, as it blocks an
   approval.
 - **Merging a trail:** you, or Shep when you ask. Shep's
-  `entire trail merge [<trail>]` asks you first and the trail's gates decide
+  `bercail job merge trail:<n>`, or a plain `entire trail merge [<trail>]`,
+  goes to a guard card for your Allow, and the trail's gates decide
   the rest. It asks rather than following the repo's policy, because a project
   trail can merge a change in another repo. Shep's merge is blocked with
   `--force`, which skips the gates, or with a flag before `merge` that bercail

@@ -54,8 +54,17 @@ case "$1 $2" in
       '{number: $n, title: $t, body: $b, type: $type, priority: "none", status: "open", phase: "planning", repoIds: ["R-app"],
         url: "https://entire.example/et/proj/-/trails/\($n)", changes: []}' | tee "$TRAILS/$n.json" ;;
   "trail update")
-    jq --arg s "$(flag --status "$@")" '.status = $s' "$TRAILS/$3.json" >"$TRAILS/tmp" && mv "$TRAILS/tmp" "$TRAILS/$3.json"
+    [[ -z "${UPDATE_DOWN:-}" ]] || { echo "dial tcp: network is unreachable" >&2; exit 1; }
+    jq --arg s "$(flag --status "$@")" --arg b "$(flag --body "$@")" --argjson body "$([[ " $* " == *" --body "* ]] && echo true || echo false)" \
+      'if $s != "" then .status = $s else . end | if $body then .body = $b else . end' "$TRAILS/$3.json" >"$TRAILS/tmp" && mv "$TRAILS/tmp" "$TRAILS/$3.json"
     cat "$TRAILS/$3.json" ;;
+  "trail merge")
+    # A change <repo>/<n>: merged, unless its gates hold it ($MERGE_HELD).
+    [[ -z "${MERGE_HELD:-}" ]] || { echo "blocking gates pending: approvals" >&2; exit 1; }
+    for f in "$TRAILS"/[0-9]*.json; do
+      jq --arg c "$3" '.changes |= map(if "\(.repository)/\(.number)" == $c then .status = "merged" else . end)' "$f" >"$TRAILS/tmp" && mv "$TRAILS/tmp" "$f"
+    done
+    echo "Merged $3" ;;
   "repo view") echo "{\"id\":\"R-$(git remote get-url origin | awk -F/ '{print $NF}')\"}" ;;
   "trail comment") echo "refusing \`entire trail comment add\` from a Pi session: trail comments are for people" >&2; exit 1 ;;
   *) exit 2 ;;
@@ -397,4 +406,107 @@ trail:1: Research the login flow · planning · blocked by #2" ]] || fail "list:
   jq -e '.issue == "trail:3"' "$XDG_STATE_HOME/bercail/shep/mistakes.jsonl" >/dev/null || fail "mistake: $(cat "$XDG_STATE_HOME/bercail/shep/mistakes.jsonl")"
   out="$(bercail shep mistake wrong-trail "x" --issue 'trail:x;y' 2>&1)" && fail "a bad id passed: $out"
   [[ "$out" == *"is neither a beads id nor a trail (trail:N)"* ]] || fail "bad id: $out"
+}
+
+# changes N 'R/C:STATUS'...: trail N's changes, in the repo/number form entire shows.
+changes() {
+  local n="$1" c list="[]"
+  shift
+  for c in "$@"; do
+    list="$(jq -c --arg r "${c%%/*}" --argjson num "$(cut -d/ -f2 <<<"${c%%:*}")" --arg s "${c##*:}" \
+      '. + [{repository: $r, number: $num, branch: "b\($num)", base: "main", status: $s, url: "u"}]' <<<"$list")"
+  done
+  jq --argjson c "$list" '.changes = $c' "$TRAILS/$n.json" >"$TRAILS/t" && mv "$TRAILS/t" "$TRAILS/$n.json"
+}
+
+@test "job merge merges a trail's one open change and closes the trail in the same step" {
+  local out
+  trail 3 "Ship the export" open building
+  changes 3 app/9:open app/7:merged
+  out="$(cd "$REPO" && bercail job merge trail:3)" || fail "merge: $out"
+  [[ "$out" == "merged app/9; closed trail:3" ]] || fail "merge: $out"
+  grep -q '^entire trail merge app/9$' "$LOG" || fail "no merge of the change: $(cat "$LOG")"
+  jq -e '.status == "closed" and (.changes | all(.status == "merged"))' "$TRAILS/3.json" >/dev/null || fail "$(cat "$TRAILS/3.json")"
+  # Merged on entire.com and left open: job merge names the close, and writes nothing.
+  trail 4 "Merged by hand" open complete
+  changes 4 app/12:merged
+  : >"$LOG"
+  out="$(cd "$REPO" && bercail job merge trail:4 2>&1)" && fail "merged by hand passed: $out"
+  [[ "$out" == *"trail:4 has no open change: its work is merged; close it with entire trail update 4 --status closed once"* ]] || fail "$out"
+  ! grep -qE '^entire trail (merge|update)' "$LOG" || fail "$(cat "$LOG")"
+}
+
+@test "job merge keeps the trail open while a change in any repo is open, and asks which change when it has several" {
+  local out
+  trail 3 "Two repos" open building
+  changes 3 app/9:open api/10:open
+  out="$(cd "$REPO" && bercail job merge trail:3 2>&1)" && fail "merged with two open changes: $out"
+  [[ "$out" == *"trail:3 has 2 open changes (app/9, api/10); pass the one to merge with --change"* ]] || fail "$out"
+  out="$(cd "$REPO" && bercail job merge trail:3 --change app/8 2>&1)" && fail "merged a change not on the trail: $out"
+  [[ "$out" == *"app/8 is not an open change of trail:3"* ]] || fail "$out"
+  ! grep -q '^entire trail merge' "$LOG" || fail "a refused merge ran: $(cat "$LOG")"
+  out="$(cd "$REPO" && bercail job merge trail:3 --change app/9)" || fail "merge: $out"
+  [[ "$out" == "merged app/9; trail:3 stays open for api/10" ]] || fail "$out"
+  jq -e '.status == "open"' "$TRAILS/3.json" >/dev/null || fail "closed with api/10 open: $(cat "$TRAILS/3.json")"
+}
+
+@test "job merge closes nothing when Entire refuses the merge, names the close when it fails, and leaves a closed trail alone" {
+  local out
+  trail 3 "Held" open building
+  changes 3 app/9:open
+  out="$(cd "$REPO" && MERGE_HELD=1 bercail job merge trail:3 2>&1)" && fail "a held merge passed: $out"
+  [[ "$out" == *"entire trail merge app/9 failed in $REPO, and nothing was closed:"*"blocking gates pending: approvals"* ]] || fail "$out"
+  ! grep -q '^entire trail update' "$LOG" || fail "a held merge closed the trail: $(cat "$LOG")"
+  # The close fails after the merge: it says so, and names the close to run.
+  out="$(cd "$REPO" && UPDATE_DOWN=1 bercail job merge trail:3 2>&1)" && fail "a failed close passed: $out"
+  [[ "$out" == *"merged app/9, but trail:3 is not closed: "*"network is unreachable"*"; close it with entire trail update 3 --status closed once entire trail show 3 shows no open change" ]] || fail "$out"
+  jq -e '.status == "open" and .changes[0].status == "merged"' "$TRAILS/3.json" >/dev/null || fail "$(cat "$TRAILS/3.json")"
+  (cd "$REPO" && entire trail update 3 --status closed --json >/dev/null)
+  : >"$LOG"
+  out="$(cd "$REPO" && bercail job merge trail:3)" || fail "closed rerun: $out"
+  [[ "$out" == "trail:3 is already closed" ]] || fail "closed rerun: $out"
+  # A closed trail with a change still open is not merged until it is reopened.
+  changes 3 app/9:merged api/11:open
+  out="$(cd "$REPO" && bercail job merge trail:3 2>&1)" && fail "merged into a closed trail: $out"
+  [[ "$out" == *"trail:3 is closed with api/11 open; reopen it with entire trail update 3 --status open first"* ]] || fail "$out"
+  ! grep -qE '^entire trail (merge|update)' "$LOG" || fail "a closed trail was written: $(cat "$LOG")"
+
+  # Entire leaves the list out when there are none; another shape is not an empty one.
+  trail 5 "Nothing shipped" open planning
+  jq 'del(.changes)' "$TRAILS/5.json" >"$TRAILS/t" && mv "$TRAILS/t" "$TRAILS/5.json"
+  out="$(cd "$REPO" && bercail job merge trail:5 2>&1)" && fail "merged a trail with no change: $out"
+  [[ "$out" == *"trail:5 has no change to merge; when its work landed elsewhere, close it with bercail job supersede trail:5"* ]] || fail "$out"
+  trail 4 "No list" open building
+  jq '.changes = {"app/9": "merged"}' "$TRAILS/4.json" >"$TRAILS/t" && mv "$TRAILS/t" "$TRAILS/4.json"
+  : >"$LOG"
+  out="$(cd "$REPO" && bercail job merge trail:4 2>&1)" && fail "merged with changes of another shape: $out"
+  [[ "$out" == *"entire trail show for trail:4 returned changes that are not a list; nothing was merged or closed"* ]] || fail "$out"
+  ! grep -qE '^entire trail (merge|update)' "$LOG" || fail "$(cat "$LOG")"
+}
+
+@test "job supersede closes a trail with a line pointing at the trail or commit that holds its work" {
+  local out sha
+  trail 41 "run_check crop" open planning "Crop run_check."
+  trail 25 "Wave 2 checks" closed closed
+  out="$(cd "$REPO" && bercail job supersede trail:41 --with trail:25)" || fail "supersede: $out"
+  [[ "$out" == "closed trail:41: Superseded by: #25 https://entire.example/et/proj/-/trails/25" ]] || fail "$out"
+  jq -e '.status == "closed" and .body == "Crop run_check.\n\nSuperseded by: #25 https://entire.example/et/proj/-/trails/25"' \
+    "$TRAILS/41.json" >/dev/null || fail "$(cat "$TRAILS/41.json")"
+  # A rerun keeps one pointer.
+  (cd "$REPO" && bercail job supersede trail:41 --with trail:25 >/dev/null) || fail "rerun"
+  [[ "$(jq -r .body "$TRAILS/41.json" | grep -c '^Superseded by:')" == 1 ]] || fail "$(cat "$TRAILS/41.json")"
+
+  trail 42 "Plan" open planning
+  sha="$(git -C "$REPO" rev-parse HEAD)"
+  out="$(cd "$REPO" && bercail job supersede trail:42 --with "${sha:0:7}")" || fail "commit: $out"
+  jq -e --arg s "$sha" '.status == "closed" and .body == "Superseded by: commit \($s)"' "$TRAILS/42.json" >/dev/null \
+    || fail "$(cat "$TRAILS/42.json")"
+
+  trail 43 "Plan" open planning
+  : >"$LOG"
+  out="$(cd "$REPO" && bercail job supersede trail:43 --with nope 2>&1)" && fail "a pointer to nothing passed: $out"
+  [[ "$out" == *"--with nope is neither trail:<n> nor a commit of $REPO"* ]] || fail "$out"
+  out="$(cd "$REPO" && bercail job supersede trail:43 --with trail:43 2>&1)" && fail "$out"
+  [[ "$out" == *"trail:43 cannot supersede itself"* ]] || fail "$out"
+  ! grep -q '^entire trail update' "$LOG" || fail "a refused supersede wrote the trail: $(cat "$LOG")"
 }

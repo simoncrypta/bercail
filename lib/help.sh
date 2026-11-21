@@ -49,7 +49,10 @@ Post-install CLI (bercail):
                 comment trail:N [--repo DIR] (text on stdin; the comment stays on this machine, where
                 desks post their report, since Entire refuses trail comments from an agent) |
                 list [--repo DIR] [--json] (the repo's open trails, ready or blocked, with the local job record) |
-                id trail:N [--repo DIR] (its Entire id and URL, project-wide: what a question binds to)
+                id trail:N [--repo DIR] (its Entire id and URL, project-wide: what a question binds to) |
+                merge trail:N [--change REPO/N] [--repo DIR] (Shep: merge its open change, then close it
+                once no change is open) |
+                supersede trail:N --with trail:M|COMMIT [--repo DIR] (close it, with a Superseded by: line)
   todo          What only you can do, on one of your todo lists (targets; Basecamp for now):
                 add "TITLE" [--notes TEXT] [--due YYYY-MM-DD] [--issue ID|trail:N] [--repo DIR] [--target NAME] |
                 list [--target NAME] [--json] | show ID | done ID. Shep adds them; desks propose Todo: "<text>".

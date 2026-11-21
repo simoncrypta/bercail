@@ -1443,6 +1443,16 @@ function decideCleanup(words: string[], input: GuardInput): GuardDecision {
   return { action: "ask", reason: cleanupAsk };
 }
 
+// bercail job merge and supersede run entire trail merge and update for a trail
+// job, so each gets the answer that entire command gets.
+function decideJob(words: string[], input: GuardInput): GuardDecision {
+  const plain = plainWords(words);
+  if (basename(plain[0] ?? "") !== "bercail" || plain[1] !== "job") return allow;
+  if (plain[2] === "merge") return decideEntire("merge", ["entire", "trail", "merge"], undefined, input);
+  if (plain[2] === "supersede") return decideEntire("trail", ["entire", "trail", "update"], undefined, input);
+  return allow;
+}
+
 // bercail land: Shep's commit and CI wait for a desk's branch.
 function isLand(words: string[]): boolean {
   const plain = plainWords(words);
@@ -2457,6 +2467,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (refused) decision = worse(decision, refused);
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
     decision = worse(decision, decideCleanup(words, here));
+    decision = worse(decision, decideJob(words, here));
     if (questionOp(words, "answer")) decision = worse(decision, block(answerCommand));
     if (questionOp(words, "push-approval")) decision = worse(decision, block(pushApprovalCommand));
     if (questionOp(words, "guard-create") || questionOp(words, "guard-claim") || runsGuardAsk(words))
@@ -2733,13 +2744,14 @@ export async function decideLive(
 /** What Shep's command asks for, read from its words alone. */
 export type GuardOp =
   | { kind: "cleanup"; path: string }
-  | { kind: "trail merge"; dir: string; trail: string | null }
+  // job: a trail job's bercail job merge, which closes the trail once no change is open.
+  | { kind: "trail merge"; dir: string; trail: string | null; job?: string }
   | { kind: "push"; dir: string; remote: string; refspecs: string[] };
 
 /** What it acts on, read from disk, git and entire: the worker runs on these alone. */
 export type GuardFacts =
   | { kind: "cleanup"; worktree: string; branch: string | null; head: string }
-  | { kind: "trail merge"; checkout: string; trailId: string; change: string; head: string; base: string }
+  | { kind: "trail merge"; checkout: string; trailId: string; change: string; head: string; base: string; job?: string }
   | { kind: "push"; dir: string; gitDir: string; url: string; refspecs: string[] };
 
 const opWord = (word: string) => plainWord.test(word) || hashRefspec.test(word);
@@ -2772,6 +2784,23 @@ export function guardOperation(command: string, cwd: string | undefined, home: s
     if (words.length > 4 || words[3]?.startsWith("-"))
       return "a trail merge is handed off only as entire trail merge [<trail>]";
     return { kind: "trail merge", dir, trail: words[3] ?? null };
+  }
+  // bercail job merge trail:<n> [--change <repo>/<n>] [--repo DIR]: the trail's change, pinned
+  // as a trail merge's, that the worker merges and then closes the trail with.
+  if (basename(words[0]) === "bercail" && words[1] === "job" && words[2] === "merge") {
+    const flags: Record<string, string> = {};
+    for (let i = 4; i < words.length; i += 2) {
+      if (!["--change", "--repo"].includes(words[i]) || !words[i + 1] || flags[words[i]] !== undefined)
+        return "a trail job merge is handed off only as bercail job merge trail:<n> [--change <repo>/<n>] [--repo DIR]";
+      flags[words[i]] = words[i + 1];
+    }
+    const job = /^trail:([1-9][0-9]{0,8})$/.exec(words[3] ?? "");
+    const change = flags["--change"];
+    if (!job || (change !== undefined && !/^[\w.-]+\/[1-9][0-9]*$/.test(change)))
+      return "a trail job merge names its trail as trail:<n>, and a change as <repo>/<n>";
+    if (flags["--repo"] !== undefined) dir = placeIn(dir, flags["--repo"]);
+    if (dir === undefined) return "its --repo names no one folder";
+    return { kind: "trail merge", dir, trail: change ?? job[1], job: words[3] };
   }
   if (words[0] === "git") {
     let i = 1;
@@ -2897,14 +2926,15 @@ async function pinRefspec(read: Read, dir: string, spec: string, mapped: boolean
 
 // The change a trail merge acts on, read where Shep named it (a bare merge is the
 // branch's), and the repo's main checkout, where the worker merges it.
-async function pinTrail(read: Read, dir: string, trail: string | null) {
+async function pinTrail(read: Read, dir: string, trail: string | null, job?: string) {
   const here = realpathSync(await read("git", ["-C", dir, "rev-parse", "--show-toplevel"], dir));
   const worktrees = await read("git", ["-C", here, "worktree", "list", "--porcelain"], here);
   const checkout = realpathSync(worktrees.split("\n")[0].slice("worktree ".length));
   const args = ["trail", "show", ...(trail ? [trail] : []), "--json"];
   let shown;
   try {
-    shown = JSON.parse(await read(process.env.ENTIRE_BIN || "entire", args, here));
+    // A job merge runs in the main checkout, so it is read there: what entire shows is what runs.
+    shown = JSON.parse(await read(process.env.ENTIRE_BIN || "entire", args, job ? checkout : here));
   } catch (error) {
     fail(`entire trail show failed: ${(error as Error).message} (trails need the network and Entire's login)`);
   }
@@ -2928,6 +2958,8 @@ async function pinTrail(read: Read, dir: string, trail: string | null) {
     !change.base
   )
     fail("entire trail show names no one open change with a head and a base");
+  // A change of another trail is not this job's to merge or close.
+  if (job && `trail:${shown.number}` !== job) fail(`${change.repository}/${change.number} is not a change of ${job}`);
   return {
     kind: "trail merge" as const,
     checkout,
@@ -2935,12 +2967,13 @@ async function pinTrail(read: Read, dir: string, trail: string | null) {
     change: `${change.repository}/${change.number}`,
     head,
     base: change.base,
+    ...(job ? { job } : {}),
   };
 }
 
 // The objects an operation acts on now. It throws when they cannot be pinned.
 export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<GuardFacts> {
-  if (op.kind === "trail merge") return pinTrail(read, op.dir, op.trail);
+  if (op.kind === "trail merge") return pinTrail(read, op.dir, op.trail, op.job);
   if (op.kind === "cleanup") {
     const worktree = realpathSync(op.path);
     const git = (...args: string[]) => read("git", ["-C", worktree, ...args], worktree);
@@ -2968,6 +3001,20 @@ export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<G
 export function runOf(facts: GuardFacts): { argv: string[]; cwd: string } {
   if (facts.kind === "cleanup")
     return { argv: [process.env.BERCAIL_BIN || "bercail", "cleanup", facts.worktree], cwd: "/" };
+  if (facts.kind === "trail merge" && facts.job)
+    return {
+      argv: [
+        process.env.BERCAIL_BIN || "bercail",
+        "job",
+        "merge",
+        facts.job,
+        "--change",
+        facts.change,
+        "--repo",
+        facts.checkout,
+      ],
+      cwd: facts.checkout,
+    };
   if (facts.kind === "trail merge")
     return { argv: [process.env.ENTIRE_BIN || "entire", "trail", "merge", facts.change], cwd: facts.checkout };
   return {
@@ -3055,7 +3102,7 @@ async function handOff(
 ): Promise<{ handed: boolean; reason: string }> {
   const refused = (why: string) => ({
     handed: false,
-    reason: `${asked} Shep's session never waits on a confirm, and this could not go to a Decisions card: ${why}. Run a cleanup, a trail merge or a push as a command of its own (cd DIR && entire trail merge [<trail>], git -C DIR push REMOTE BRANCH), or leave it to the person.`,
+    reason: `${asked} Shep's session never waits on a confirm, and this could not go to a Decisions card: ${why}. Run a cleanup, a trail merge or a push as a command of its own (cd DIR && entire trail merge [<trail>], bercail job merge trail:<n> --repo DIR, git -C DIR push REMOTE BRANCH), or leave it to the person.`,
   });
   const op = guardOperation(command, input.cwd, input.home);
   if (typeof op === "string") return refused(op);

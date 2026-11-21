@@ -1981,6 +1981,27 @@ for (const command of [
     for (const input of everyoneBut(false)) blocked(command, input, /person's call/);
   });
 }
+// bercail job merge runs entire trail merge, then closes the trail: the same answers.
+for (const command of [
+  "bercail job merge trail:3",
+  "bercail job merge trail:3 --change app/9 --repo ~/Work/app",
+  "~/.local/bin/bercail job merge trail:3",
+  "env XDG_STATE_HOME=/s bercail job merge trail:3",
+  "bash -c 'bercail job merge trail:3'",
+]) {
+  test(`only Shep merges a trail job, and it asks: ${command}`, () => {
+    asked(command, at("shep", policies.loosest));
+    for (const input of everyoneBut(false)) blocked(command, input, /person's call/);
+  });
+}
+test("bercail job supersede is a trail update: Shep is warned, a desk runs it, a read-only role cannot", () => {
+  const command = "bercail job supersede trail:3 --with trail:5 --repo ~/Work/app";
+  warned(command, at("shep", policies.default), /wrote a trail on entire\.com/);
+  assertDeepEqual(decision(command, at("desk", policies.default)), { action: "allow" });
+  blocked(command, at("judge", policies.default), /read-only/);
+  for (const read of ["bercail job show trail:3 --repo merge", "bercail job list", "echo bercail job merge trail:3"])
+    assertDeepEqual(decision(read, at("desk", policies.default)), { action: "allow" });
+});
 for (const [command, reason] of [
   ["entire trail merge 3 --force --yes", /no --force/],
   ["entire trail merge --dry-run --force", /no --force/],

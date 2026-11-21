@@ -17,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
-import guard, { changedFacts, guardOperation, markStart, pinOperation } from "../bstack/pi/extensions/guard.ts";
+import guard, { changedFacts, guardOperation, markStart, pinOperation, runOf } from "../bstack/pi/extensions/guard.ts";
 
 let dir: string;
 let repo: string;
@@ -125,6 +125,38 @@ test("a cleanup pins the worktree's real path, branch and HEAD; a trail merge, i
   );
 });
 
+test("a trail job merge pins its trail's change as a trail merge does, and its worker runs bercail job merge on it", async () => {
+  const merged = {
+    kind: "trail merge",
+    checkout: repo,
+    trailId: "01TRAIL",
+    change: "app/7",
+    head: "f".repeat(40),
+    base: "main",
+    job: "trail:41",
+  } as const;
+  trail([change(6, { status: "merged" }), change(7)]);
+  expect(await pin(`bercail job merge trail:41 --repo ${repo}`)).toStrictEqual(merged);
+  expect(await pin(`cd ${repo} && bercail job merge trail:41`)).toStrictEqual(merged);
+  // From a linked worktree it is read in the main checkout, where the worker runs it.
+  const worktree = join(dir, "repo.topic");
+  git("worktree", "add", "-q", worktree, "feature");
+  expect(await pin(`cd ${worktree} && bercail job merge trail:41`)).toStrictEqual(merged);
+  expect(readFileSync(join(dir, "entire.argv"), "utf8").trim().split("\n").at(-1)).toBe(`${repo}|trail show 41 --json`);
+  expect(runOf(merged)).toStrictEqual({
+    argv: ["bercail", "job", "merge", "trail:41", "--change", "app/7", "--repo", repo],
+    cwd: repo,
+  });
+  // A change it names is read through the change, and must be its trail's.
+  trail([change(6), change(7, { current: true })]);
+  expect(await pin(`bercail job merge trail:41 --change app/7 --repo ${repo}`)).toStrictEqual(merged);
+  await expect(pin(`bercail job merge trail:42 --change app/7 --repo ${repo}`)).rejects.toThrow(
+    /app\/7 is not a change of trail:42/,
+  );
+  // Several open changes and none named: the person cannot tell which one the card merges.
+  await expect(pin(`bercail job merge trail:41 --repo ${repo}`)).rejects.toThrow(/2 open changes; name one/);
+});
+
 test.each([
   ["a second command", (r: string) => `git -C ${r} push origin feature; true`],
   ["a pipe", (r: string) => `git -C ${r} push origin feature | cat`],
@@ -144,6 +176,11 @@ test.each([
   ["a folder with ..", (r: string) => `git -C ${r}/../repo push origin feature`],
   ["a cd with ..", (r: string) => `cd ${r}/.. && entire trail merge 41`],
   ["a cleanup with ..", (r: string) => `bercail cleanup ${r}/../repo.topic`],
+  ["a job merge flag", (r: string) => `bercail job merge trail:41 --repo ${r} --force`],
+  ["a job merge of a bare number", (r: string) => `bercail job merge 41 --repo ${r}`],
+  ["a job merge of a change not <repo>/<n>", (r: string) => `bercail job merge trail:41 --change 7 --repo ${r}`],
+  ["a job merge with two --repo", (r: string) => `bercail job merge trail:41 --repo ${r} --repo /`],
+  ["a job merge --repo with ..", (r: string) => `bercail job merge trail:41 --repo ${r}/../repo`],
 ])("%s is not one operation", (_name, command) => {
   expect(typeof guardOperation(command(repo), _name.includes("no cwd") ? undefined : "/", dir)).toBe("string");
 });
@@ -329,6 +366,7 @@ const askFixtures = () => [
   "gh pr create --fill",
   `bercail cleanup ${repo}`,
   `cd ${repo} && entire trail merge 41`,
+  `bercail job merge trail:41 --repo ${repo}`,
   "entire brain distill --dry-run",
   "entire frob",
   Array.from({ length: 9 }, (_, i) => `git -C /r${i} push origin f`).join("; "),
@@ -350,8 +388,28 @@ test("Shep's session never waits on a guard confirm: every ask is handed off or 
   for (const command of askFixtures()) {
     const before = desk.confirm.mock.calls.length;
     await desk.bash(command);
-    expect(desk.confirm.mock.calls.length - before, command).toBe(command.includes("trail merge") ? 0 : 1);
+    expect(desk.confirm.mock.calls.length - before, command).toBe(/trail merge|job merge/.test(command) ? 0 : 1);
   }
+});
+
+test("Shep's bercail job merge goes to a card as a trail merge; its supersede runs with a warning", async () => {
+  const shep = session("shep", (args) => {
+    markStart(args.at(-1)!, "started");
+    return { code: 0 };
+  });
+  trail([change(7)]);
+  const got = await shep.bash(`bercail job merge trail:41 --repo ${repo}`);
+  expect(got).toMatchObject({
+    block: true,
+    reason: expect.stringMatching(/^Handed off, not run: .*trail merge of app\/7/),
+  });
+  const [name] = readdirSync(asks()).filter((n) => n.endsWith(".json"));
+  expect(JSON.parse(readFileSync(join(asks(), name), "utf8"))).toMatchObject({
+    op: { kind: "trail merge", dir: repo, trail: "41", job: "trail:41" },
+    facts: { kind: "trail merge", change: "app/7", job: "trail:41" },
+  });
+  expect(await shep.bash(`bercail job supersede trail:41 --with trail:25 --repo ${repo}`)).toBeUndefined();
+  expect(shep.confirm).not.toHaveBeenCalled();
 });
 
 test("an ask handed off writes its ticket and starts its worker, which Shep is told of", async () => {

@@ -264,7 +264,7 @@ wait
   [[ "$(bercail shep question json | jq '[.questions[] | select(.kind == "guard")] | length')" -eq 1 ]] || fail "two cards"
 }
 
-@test "a cleanup and a trail merge run their pinned argv on an Allow" {
+@test "a cleanup, a trail merge and a trail job merge run their pinned argv on an Allow" {
   # Stand-ins at the process boundary: bercail cleanup and entire log what they ran.
   WT="$BATS_TEST_TMPDIR/repo.topic"
   git -C "$REPO" worktree add -q "$WT" feature
@@ -279,6 +279,21 @@ wait
   jq -e '.outcome == "ran" and .operation == "trail merge" and .target == "repo/7"' <<<"$(event "$id")" >/dev/null \
     || fail "merge"
   grep -qx "entire $REPO|trail merge repo/7" "$LOG" || fail "argv: $(cat "$LOG")"
+
+  # A trail job merge: bercail job merge on the pinned change, which merges and then closes.
+  printf '#!/bin/sh\n[ "$1 $2" = "job merge" ] || exec "%s" "$@"\nprintf "job %%s|%%s\\n" "$PWD" "$*" >>"$LOG"\n' "$ROOT/bin/bercail" \
+    >"$BATS_TEST_TMPDIR/bin/bercail-job"
+  chmod +x "$BATS_TEST_TMPDIR/bin/bercail-job"
+  id="$(ticket "bercail job merge trail:41 --repo $REPO")"
+  BERCAIL_BIN="$BATS_TEST_TMPDIR/bin/bercail-job" worker "$id"
+  token="$(card "$id")"
+  bercail shep question json | jq -e --arg t "$token" '.questions[] | select("\(.id)@\(.revision)" == $t)
+    | .brief | contains("bercail job merge trail:41 --change repo/7") and contains("then closes trail:41")' >/dev/null \
+    || fail "brief: $(bercail shep question json | jq -c '.questions[-1].brief')"
+  pick "$token" Allow >/dev/null
+  jq -e '.outcome == "ran" and .operation == "trail merge" and .target == "repo/7"' <<<"$(event "$id")" >/dev/null \
+    || fail "job merge: $(cat "$INBOX/guard-$id.json")"
+  grep -qx "job $REPO|job merge trail:41 --change repo/7 --repo $REPO" "$LOG" || fail "argv: $(cat "$LOG")"
 
   printf '#!/bin/sh\nprintf "bercail %%s\\n" "$*" >>"$LOG"\nexec "$REAL" "$@"\n' >"$BATS_TEST_TMPDIR/bin/bercail-logged"
   chmod +x "$BATS_TEST_TMPDIR/bin/bercail-logged"

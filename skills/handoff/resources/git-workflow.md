@@ -30,8 +30,8 @@ The PR body and the commit that lands are the description the desk's /validate
 wrote (the `describe` skill shows each backend's commands). On `gh` and
 `origin` a fix is a new commit, and the person squash-merges with the
 description as the message; bercail never force-pushes there. On `entire` a
-fix is a new commit too, and the person, or Shep when they ask, merges with
-`entire trail merge` once the trail's gates pass. A direct-to-main repo gets one
+fix is a new commit too, and the person, or Shep when they ask, merges once the
+trail's gates pass (Shep's `bercail job merge trail:<n>` closes the trail too). A direct-to-main repo gets one
 commit per finished job. Desks never approve or merge a trail, or dismiss its
 findings: the guard stops them.
 

@@ -19,8 +19,9 @@ the card is up, and go on. Never retry it, run it another way, wait for it,
 or act on its pick yourself; report its guard event when it comes, with the
 log it names. Refused with `Shep's session never waits on a confirm`: only a
 cleanup, a trail merge or a push goes to a card, as a command of its own
-(`cd <dir> && entire trail merge [<trail>]`, `git -C <dir> push <remote>
-<branch>`); run it that way, or leave it to the person.
+(`cd <dir> && entire trail merge [<trail>]`, `bercail job merge trail:<n>
+--repo <dir>`, `git -C <dir> push <remote> <branch>`); run it that way, or
+leave it to the person.
 
 ## Start
 
@@ -125,9 +126,13 @@ main checkout, and pass `--repo <checkout>` to `bercail job`.
   feedback on the code goes in `entire trail finding`, never in a comment.
 - Once the desk's branch is pushed, link it: `entire trail link <n> --branch
   <branch>`.
-- Close it with `entire trail update <n> --status closed` once it is merged,
-  or once the job is done and reported with nothing to publish or link. The board
-  counts complete trails still open: close those too.
+- Merging closes it: `bercail job merge` (below) closes the trail once no
+  change is left open. When its work landed under another trail or commit,
+  close it with `bercail job supersede trail:<n> --with trail:<m>|<commit>
+  --repo <checkout>`, which adds a `Superseded by:` line to its body. A job
+  done and reported with nothing to publish or link: `entire trail update <n>
+  --status closed`. The board counts complete trails still open (merged on
+  entire.com): close those too.
 
 Every coding job and follow-up has a visible desk, never a headless fallback. A
 backend limit goes in the desk's report, not an append-only or raw Git
@@ -372,9 +377,13 @@ and `--issue` when there is one, and say so in one line with its link:
   straight-to-main and under a rule to merge without asking. Only the repo's
   `review = "none"` waives it. It never holds other work.
 - With git backend `entire`, a trail is the PR. Merge it only when asked, with
-  `entire trail merge [<trail>]` from the main checkout once
-  `entire trail show` says its gates pass; the guard hands it to a card for the person's Allow,
-  whatever the policy. If gates are pending, report which and hand the wait to a background
+  `bercail job merge trail:<n> --repo <checkout>` once `entire trail show` says
+  its gates pass; the guard hands it to a card for the person's Allow,
+  whatever the policy. On their Allow its worker merges the trail's one open
+  change (`--change <repo>/<n>` picks one of several) and closes the trail
+  when no change is left open; the guard event's log says which. When the log
+  says the merge ran but the trail is not closed, close it as the log says,
+  once `entire trail show <n>` shows no open change. If gates are pending, report which and hand the wait to a background
   Shep pinned to that head. Report a failed gate or changed head; do not merge.
   Approving, dismissing a finding and `--force` stay the person's.
 - Someone else's PR: `bercail review-pr <url or branch>`, then report what its
