@@ -113,7 +113,7 @@
     "paths": ["pstack/skills/statechart", ":!pstack/skills/statechart/scripts/test", "pstack/LICENSE"],
     "min": null,
     "why": null,
-    "known": "3dbd22ff12742fb28c9700b9760baa29ed41dc13",
+    "known": "0b46ec399d55f2829e88822998f53b84944837d3",
     "pinned_in": ["skills/statechart/UPSTREAM.md"],
     "notes": "The statechart skill, vendored from cursor/plugins (pstack/skills/statechart, MIT) without upstream's scripts/test. Upstream has no releases: a newer commit is copied in whole, SKILL.upstream.md with it (skills/statechart/UPSTREAM.md)."
   },

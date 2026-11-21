@@ -134,7 +134,7 @@ it models is stale. Say so, and never show a green chart after a failed run.
 
 Pi and bstack instead of Cursor: no `disable-model-invocation`, a bstack trigger,
 artifacts under `.bercail/statechart/`, no first-run install and a time bound
-(`statechart-bstack`), `chart.pi.md` for Pi's terminal Mermaid instead of Pele,
-the trust rule for PR reviews, the graph and the replay on real code, fairness and
-planted-bug advice from the Shep inbox spike (bercail-237.9), and posting on the
-beads issue.
+(`statechart-bstack`), no native Windows command, `chart.pi.md` for Pi's terminal
+Mermaid instead of Pele, the trust rule for PR reviews, the graph and the replay on
+real code, fairness and planted-bug advice from the Shep inbox spike
+(bercail-237.9), and posting on the beads issue.
