@@ -14,9 +14,10 @@ at `258b364`, on its own host, or from the studies its report cites.
 ## Conclusions
 
 Keep bash for process glue. Use the Node and TypeScript that bercail already
-runs for new logic that parses JSON or keeps state, and move existing bash
-plus jq to it one unit at a time, starting with a pilot. Adopt neither dash
-nor QuickJS, nor Bun or Deno.
+runs for new logic that parses JSON or keeps state. The pilot found no case
+for moving `review.sh` or `shep-context.sh` from bash plus jq
+([pilot result](#pilot-result)). Adopt neither dash nor QuickJS, nor Bun or
+Deno.
 
 - No surveyed bercail entry point has a measured speed case for another
   language. The
@@ -27,8 +28,8 @@ nor QuickJS, nor Bun or Deno.
 - dash would save about 0.5 ms a process over bash, and QuickJS about 15 ms
   over Node (measured). Neither matters at these rates, and each costs a
   rewrite or a second runtime (inferred).
-- TypeScript's case is maintenance, not speed. It is a hypothesis this page
-  could not measure, and the pilot is the way to test it.
+- TypeScript's case is maintenance, not speed. The pilot tested it and found
+  no case for porting more ([pilot result](#pilot-result)).
 
 ## What the benchmark measures, and how far it applies
 
@@ -272,10 +273,38 @@ about 7 ms for a fresh shell that runs the setup (measured). A Pi tool shell
 still runs the setup, because Pi puts `~/.pi/agent/bin` at the front of its
 PATH. A bash started under it skips the setup only if its PATH is unchanged.
 
+## Pilot result
+
+**Conclusion**, from the pilot run on 2026-11-21 against
+[`87933fd`](https://github.com/simoncrypta/bercail/commit/87933fda2a0efa8a19fa7df4a32edf42191fb8c4). It followed
+the four steps above, and `pr-state.sh` stays bash: the port did not land.
+
+- Standard output and exit codes were identical on 22 fixtures, on Node 22.18.0 and
+  26.13.1 (measured).
+- The script went from 187 bash lines to 310 TypeScript lines, plus 126 lines
+  of Vitest (measured).
+- One call took 85 ms against 19 ms for bash, and the bats file took 11.9 s
+  against 10.1 s (measured).
+- The reading task was a tie. One agent per version explained the contract
+  correctly and made the same follow-up change, with tests that failed first,
+  in 199 s on bash and 215 s on TypeScript (measured, one run each).
+- The port lost two ways bash failed closed for free: jq errors on JSON of
+  the wrong shape, and `set -e` stops on a failed `sleep`. The GPT judge's
+  first review, not the tests, found three malformed GitHub replies that read
+  as `green` until those checks were added back by hand (measured).
+
+**Verdict:** no case for porting `review.sh` or `shep-context.sh`. The gain
+is a transform that can be unit-tested in milliseconds. The cost is rewriting
+by hand the shape checks bash and jq give for free, plus a slower start
+(inferred). This verdict covers those two scripts; new JSON logic can still
+start in TypeScript. The port is archived as a diff outside git, in the pilot
+worktree's `.bercail/pilot/port.diff` (sha256 `ddc62d96`), which applies to
+`87933fd`.
+
 ## Open questions
 
 - Do agents read and change TypeScript in this repo more reliably than bash
-  and jq? The pilot's reading task is the first measurement.
+  and jq? The pilot's reading task, one run each, was a tie.
 - On macOS, does every install path put bash 4.4 or later ahead of
   `/bin/bash`? No CI job is declared there.
 - How much of a bats case's time is bercail's isolation (a HOME and stand-ins

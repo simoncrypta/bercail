@@ -19,9 +19,10 @@ usage.
   how each copy is pinned. Why copies beat subtree, submodules and fetched pins
   here, and a `git:` source for the dependency tracker that opens a `vendor`
   issue when an upstream moves.
-- [Script languages](script-languages.md): a proposal, measured on one
-  desktop, to keep bash for glue and move JSON-heavy logic to TypeScript, not
-  to dash or QuickJS.
+- [Script languages](script-languages.md): bash, dash, QuickJS and Node
+  measured on one desktop: keep bash for glue, and adopt neither dash nor
+  QuickJS. Its pilot port of autopilot's `pr-state.sh` to TypeScript did not
+  land and found no case for porting more.
 
 ## Reading the evidence
 
