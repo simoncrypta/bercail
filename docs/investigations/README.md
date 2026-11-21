@@ -15,6 +15,10 @@ usage.
 - [Decision-question detector](decision-detector.md): v0.18 J16's offline test
   of Haiku 5.5 as the check for decisions asked in chat, with its labels and
   runner.
+- [Vendoring](vendoring.md): proposal. What bercail copies from other repos and
+  how each copy is pinned. Why copies beat subtree, submodules and fetched pins
+  here, and a `git:` source for the dependency tracker that opens a `vendor`
+  issue when an upstream moves.
 
 ## Reading the evidence
 
