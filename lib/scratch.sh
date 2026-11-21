@@ -61,10 +61,12 @@ _scratch_rm() {
 # never.
 # One grep finds the environments that name the folder's pid, then each entry
 # is compared whole: grep would split a path with a newline into two patterns.
+# grep reads its own environ too, and is still alive after its output ends: run
+# on DIR, it would be the holder.
 _scratch_held() {
   local dir="$1" env var
   local -a envs=()
-  mapfile -d '' envs < <(grep -lZzF -e "${dir##*/}" /proc/[0-9]*/environ 2>/dev/null)
+  mapfile -d '' envs < <(TMPDIR='' grep -lZzF -e "${dir##*/}" /proc/[0-9]*/environ 2>/dev/null)
   for env in "${envs[@]}"; do
     [[ -O "$env" && "$env" != "/proc/$$/environ" ]] || continue
     while IFS= read -r -d '' var; do

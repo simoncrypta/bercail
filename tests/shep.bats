@@ -129,6 +129,10 @@ EOF
 printf '%s' "\$TMPDIR" >"$BATS_TEST_TMPDIR/seen"
 mktemp >"$BATS_TEST_TMPDIR/made"
 EOF
+  # The grep that looks for holders, as a loaded machine runs it: Shep reads on
+  # while it is still exiting.
+  printf '#!/bin/sh\n/usr/bin/grep "$@"; rc=$?\ncase "$*" in *environ*) exec >&-; sleep 0.3 ;; esac\nexit "$rc"\n' >"$BATS_TEST_TMPDIR/bin/grep"
+  chmod +x "$BATS_TEST_TMPDIR/bin/grep"
   shep run </dev/null >/dev/null 2>&1
   seen="$(cat "$BATS_TEST_TMPDIR/seen")" made="$(cat "$BATS_TEST_TMPDIR/made")"
   [[ "$seen" =~ ^"$root"/[0-9]+$ ]] || fail "Shep's TMPDIR is <root>/<pid>: $seen"
