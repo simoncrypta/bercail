@@ -70,9 +70,16 @@ jobs:
       # ships it; fail here if that changes.
       - name: GNU parallel
         run: command -v parallel
-      # The bats unit suite, then the TypeScript unit tests (vp test).
+      # The bats unit suite, then the TypeScript unit tests (vp test). The runner
+      # holds one run, so it takes every core rather than a slot's share; a
+      # runner with a bercail config of its own keeps its [tests] slots.
       - name: Run tests
-        run: bash tests/run.sh
+        run: |
+          if [ ! -e ~/.config/bercail/config.toml ]; then
+            mkdir -p ~/.config/bercail
+            printf '[tests]\nslots = 1\n' >~/.config/bercail/config.toml
+          fi
+          bash tests/run.sh
 
   deploy:
     if: startsWith(github.ref, 'refs/tags/v')

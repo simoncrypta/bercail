@@ -122,6 +122,9 @@ cmd_doctor() {
   source "$(find_lib_dir)/scratch.sh"
   doctor_scratch
   doctor_scratch_tmp
+  # shellcheck source=/dev/null
+  source "$(find_lib_dir)/slots.sh"
+  doctor_test_slots
   return "$failures"
 }
 

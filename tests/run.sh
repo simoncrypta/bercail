@@ -4,11 +4,13 @@
 # (test_helper.bash); setup_suite.bash cuts the run off from the desk it ran in.
 # With no arguments, the TypeScript unit tests (tests/*.test.ts) run after them
 # with vp test. The live proofs (real Pi, tagged `live`) run only with --live.
-# The unit run uses two jobs per core, since most tests spend their time
-# waiting on a child (BATS_JOBS overrides the count). With GNU parallel, bats
-# spreads files and tests over them. Without it, that many files run side by
-# side, each in its own bats run (xargs -P) with its tests 4 at a time, and a
-# file's output shows once it is done.
+# Each run first takes one of the machine's test slots (lib/slots.sh), and
+# waits for one while [tests] slots others run. It gets its share of the cores:
+# two bats jobs per core, since most tests spend their time waiting on a child
+# (BATS_JOBS overrides the count), and one Vitest worker per core. With GNU
+# parallel, bats spreads files and tests over them. Without it, a quarter that
+# many files run side by side, each in its own bats run (xargs -P) with its
+# tests 4 at a time, and a file's output shows once it is done.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -16,11 +18,20 @@ bats=node_modules/.bin/bats vp=node_modules/.bin/vp
 for tool in "$bats" "$vp"; do
   [[ -x "$tool" ]] || { printf 'tests/run.sh: %s is missing; run npm ci\n' "${tool##*/}" >&2; exit 1; }
 done
+# shellcheck source=lib/slots.sh
+source lib/slots.sh
+if ! slot_held; then
+  slot_run tests/run.sh bash "$PWD/tests/run.sh" "$@"
+  exit
+fi
 vitest=$(($# == 0))
 tags='!live'
 jobs=() per_file=0
 cores="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
-count="${BATS_JOBS:-$((cores * 2))}"
+slots="$(slot_count)"
+share=$((cores / slots))
+((share >= 1)) || share=1
+count="${BATS_JOBS:-$((share * 2))}"
 if [[ "${1:-}" == --live ]]; then
   tags=live
   shift
@@ -53,13 +64,13 @@ mv "$log" "$log.failed"
 printf "not ok %s\n" "$file"
 exit 1'
 
-# Without GNU parallel: each file in its own bats run, COUNT at a time, and
-# its tests 4 at a time (bats needs parallel only to spread files). One test
+# Without GNU parallel: each file in its own bats run, COUNT / 4 at a time, and
+# its tests 4 at a time (fewer when COUNT is) (bats needs parallel only to spread files). One test
 # at a time, review_pr.bats alone takes about 2 minutes and sets the run's length.
 # Options go to every run; a folder stands for the .bats files in it, as with
 # bats. One file runs as it is, so its output shows as it goes.
 run_files() {
-  local arg opts=() files=() logs="$tmp/logs" log rc=0
+  local arg opts=() files=() logs="$tmp/logs" log rc=0 per=$((count < 4 ? count : 4))
   for arg; do
     if [[ -d "$arg" ]]; then
       files+=("$arg"/*.bats)
@@ -75,8 +86,8 @@ run_files() {
   fi
   mkdir "$logs"
   printf '%s\0' "${files[@]}" |
-    xargs -0 -n 1 -P "$count" bash -c "$worker" worker "$logs" "$bats" \
-      --jobs 4 --no-parallelize-across-files ${opts[@]+"${opts[@]}"} --filter-tags "$tags" || rc=1
+    xargs -0 -n 1 -P "$((count / per))" bash -c "$worker" worker "$logs" "$bats" \
+      --jobs "$per" --no-parallelize-across-files ${opts[@]+"${opts[@]}"} --filter-tags "$tags" || rc=1
   for log in "$logs"/*.failed; do
     [[ -e "$log" ]] || continue
     printf '\n--- %s\n' "$(basename "${log%.failed}" | tr % /)"
@@ -99,6 +110,6 @@ else
   "$bats" ${jobs[@]+"${jobs[@]}"} --filter-tags "$tags" "$@" || rc=$?
 fi
 if ((vitest)); then
-  "$vp" test || rc=$?
+  "$vp" test --maxWorkers "$share" || rc=$?
 fi
 exit "$rc"

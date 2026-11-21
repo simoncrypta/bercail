@@ -18,7 +18,7 @@ setup() {
 #!/usr/bin/env bash
 printf 'bd %s\n' "$*" >>"$LOG"
 case "$1" in
-  show) cat "$TASK_DATA/$2.json" ;;
+  show) sleep "${TASK_BD_SLOW:-0}"; cat "$TASK_DATA/$2.json" ;;
   list) jq -s . "$TASK_DATA/"*.json ;;
   update)
     # TASK_CLOSE_ONCE_QUEUED: someone closes the issue once a follow-up is queued.
@@ -115,6 +115,12 @@ task() { "$ROOT/bin/bercail" shep task "$@"; }
   [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json' | wc -l)" == 2 ]]
   jq -e '.status == "in_progress" and .metadata.bercail_task.owner.session == "s1"' "$TASK_DATA/app-1.json"
   ! grep -Eq 'hc (run|send|keys|kill|rm)' "$LOG"
+}
+
+@test "dispatch waits out a bd that takes 5 seconds, past the old 3" {
+  local out
+  out="$(request | TASK_BD_SLOW=5 task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t9"' <<<"$out"
 }
 
 @test "dispatch is the only task command, and a v0.17 field is named, not ignored" {

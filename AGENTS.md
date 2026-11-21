@@ -26,7 +26,7 @@ desk agent per space, review in tuicr. Bash CLI plus Herdr mods, skills, and doc
 ```bash
 bin/bercail <cmd>                         # this checkout's CLI; a bare `bercail` runs the installed copy
 npm ci                                    # once: bats-core and vite-plus are pinned devDependencies
-bash tests/run.sh                         # the unit suite: bats, then vp test (CI runs this)
+bash tests/run.sh                         # the unit suite: bats, then vp test (CI runs this); waits for a free test slot
 bash tests/run.sh tests/notify.bats       # one area
 node_modules/.bin/bats -f 'regex' tests/notify.bats   # the tests whose names match
 bash tests/run.sh --live                  # the real-Pi live proofs, tagged live
@@ -36,6 +36,11 @@ npm exec -- vp check --fix                # format, lint and type-check the Type
 herdr-app check bercail/mods/bercail-desk # each mod you touch
 .agents/skills/verify-bercail/run.sh      # throwaway-HOME drive; evidence in .bercail/verify/
 ```
+
+A desk may see `waiting for a test slot`: the machine runs at most `[tests] slots`
+suites at once (`tests/run.sh` and the verify run), and yours starts when one frees.
+Let it wait; another HOME or state dir to skip the line only brings back the load
+that fails timing tests (`docs/development.md#test-slots`).
 
 There is no build step for the CLI. The site build needs `npm ci` first (see
 `docs/development.md`).
