@@ -15,7 +15,7 @@ BSTACK_ROLES=(lead build judge)
 BSTACK_PI_DIR="${BERCAIL_SHARE_DIR}/pi"
 BSTACK_PI_TEMPLATES="${XDG_CONFIG_HOME:-$HOME/.config}/herdr-core/templates"
 # The bridge declares the Pi it needs (peerDependencies); pi's min in lib/deps.json follows it.
-BSTACK_PI_BRIDGE="npm:pi-claude-bridge@0.12.0"
+BSTACK_PI_BRIDGE="npm:pi-claude-bridge@0.13.0"
 # Claude Code refuses a prompt within min(max output, 20k) + 3k tokens of the
 # window, so Pi's default 16384 reserve compacts too late on the bridge. 40k
 # compacts first, with room for the tool results Pi only estimates.

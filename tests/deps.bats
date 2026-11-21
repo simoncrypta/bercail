@@ -193,17 +193,17 @@ doctor_with_tuicr() {
   if out="$(PATH="$bin:$PATH" doctor_dependencies 2>&1)"; then rc=0; else rc=$?; fi
 }
 
-@test "doctor flags a tuicr too old to read bercail's q_quits" {
-  doctor_with_tuicr 0.25.0
-  grep -q "^  outdated  tuicr (.*; found 0.25.0, required >=0.26.0) (configured review)$" <<<"$out" ||
-    fail "tuicr 0.25.0 must be outdated: $out"
+@test "doctor flags a tuicr whose q can drop review-pr's seeded drafts" {
+  doctor_with_tuicr 0.28.0
+  grep -q "^  outdated  tuicr (.*; found 0.28.0, required >=0.29.0) (configured review)$" <<<"$out" ||
+    fail "tuicr 0.28.0 must be outdated: $out"
   [[ "$rc" -ne 0 ]] || fail "an old tuicr must count as a failure"
 }
 
 @test "doctor accepts tuicr at its minimum" {
-  doctor_with_tuicr 0.26.0
-  grep -q "^  ok  tuicr (.*; found 0.26.0, required >=0.26.0) (configured review)$" <<<"$out" ||
-    fail "tuicr 0.26.0 must be ok: $out"
+  doctor_with_tuicr 0.29.0
+  grep -q "^  ok  tuicr (.*; found 0.29.0, required >=0.29.0) (configured review)$" <<<"$out" ||
+    fail "tuicr 0.29.0 must be ok: $out"
 }
 
 @test "check_herdr_app tells the herdr terminal from the app" {

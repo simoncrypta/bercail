@@ -3,7 +3,7 @@
     "name": "pi",
     "source": "npm:@earendil-works/pi-coding-agent",
     "min": "1.5.1",
-    "why": "pi-claude-bridge 0.12.0 declares it in its peerDependencies.",
+    "why": "pi-claude-bridge 0.13.0 declares it in its peerDependencies.",
     "known": "1.5.2",
     "pinned_in": ["package.json"],
     "notes": "mise installs it as pi. @earendil-works/pi-ai, also a devDependency for the extensions' types, moves with it. docs/bstack.md, docs/bstack/01-setup.md, docs/development.md and lib/help.sh name the minimum."
@@ -13,7 +13,7 @@
     "source": "npm:pi-claude-bridge",
     "min": null,
     "why": null,
-    "known": "0.12.0",
+    "known": "0.13.0",
     "pinned_in": ["lib/bstack.sh:BSTACK_PI_BRIDGE"],
     "notes": "An exact pin. Its peerDependencies set pi's minimum. docs/bstack.md, docs/development.md and lib/help.sh name the version."
   },
@@ -40,16 +40,16 @@
     "source": "github:max-sixty/worktrunk",
     "min": "0.80.0",
     "why": "`wt list --format=json` is {schema, items: [...]} from 0.80.0 on; the shell block reads that shape.",
-    "known": "0.81.0",
+    "known": "0.82.0",
     "pinned_in": [],
     "notes": "The install fallback downloads releases/latest (lib/deps.sh)."
   },
   {
     "name": "tuicr",
     "source": "github:agavra/tuicr",
-    "min": "0.26.0",
-    "why": "q_quits in config/tuicr/config.toml arrived in 0.26.0; older tuicr ignores the key.",
-    "known": "0.28.0",
+    "min": "0.29.0",
+    "why": "From 0.29.0, q keeps a session that holds comments from tuicr review add. Older tuicr deletes it, review-pr's seeded drafts with it, when a reviewed mark is set and the TUI has not loaded them yet.",
+    "known": "0.29.0",
     "pinned_in": [],
     "notes": "tuicr ignores config keys it does not know, so a key bercail ships that needs a newer tuicr fails silently: raise the minimum with it."
   },
@@ -159,9 +159,9 @@
     "source": "npm:vite-plus",
     "min": null,
     "why": null,
-    "known": "1.6.0",
-    "pinned_in": ["package.json:vite-plus"],
-    "notes": "An exact pin, with the vite override in package.json at the same version."
+    "known": "1.7.0",
+    "pinned_in": ["package.json:\"vite-plus\""],
+    "notes": "An exact pin. package.json's vite override names the @voidzero-dev/vite-plus-core that vite-plus depends on (npm view vite-plus@<version> dependencies.vite); from 1.7.0 its version is the bundled Vite's (8.3.8000 for Vite 8.3.8), not vite-plus's."
   },
   {
     "name": "bats",
@@ -177,7 +177,7 @@
     "source": "npm:wrangler",
     "min": null,
     "why": null,
-    "known": "4.162.0",
+    "known": "4.165.0",
     "pinned_in": ["package-lock.json"],
     "notes": "package.json allows ^4.0.0; the lockfile holds the version. site/wrangler.jsonc's compatibility_date can move with it."
   },
@@ -186,7 +186,7 @@
     "source": "npm:astro",
     "min": null,
     "why": null,
-    "known": "7.4.12",
+    "known": "7.4.13",
     "pinned_in": ["package-lock.json"],
     "notes": "package.json allows ^7.4.4; the lockfile holds the version."
   },
@@ -235,7 +235,7 @@
     "source": "action:jdx/mise-action",
     "min": null,
     "why": null,
-    "known": "5.2.8",
+    "known": "5.2.10",
     "pinned_in": [".github/actions/setup/action.yml:jdx/mise-action"],
     "notes": null
   },

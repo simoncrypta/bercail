@@ -31,20 +31,20 @@ if [[ "$*" == *--credentials* ]]; then echo "credentials must never be requested
 case "$1" in
   --version) echo "${FAKE_PI_VERSION:-1.5.2}" ;;
   install)
-    [[ "$2" == npm:pi-claude-bridge@0.12.0 ]] || exit 2
+    [[ "$2" == npm:pi-claude-bridge@0.13.0 ]] || exit 2
     [[ -z "${FAKE_PI_INSTALL_FAIL:-}" ]] || exit 1
     mkdir -p "$HOME/.pi"
     touch "$HOME/.pi/bridge-installed"
     mkdir -p "$HOME/.pi/agent"
     [[ -f "$HOME/.pi/agent/settings.json" ]] || printf '{}\n' >"$HOME/.pi/agent/settings.json"
-    jq '.packages = ((.packages // []) + ["npm:pi-claude-bridge@0.12.0"] | unique)' \
+    jq '.packages = ((.packages // []) + ["npm:pi-claude-bridge@0.13.0"] | unique)' \
       "$HOME/.pi/agent/settings.json" >"$HOME/.pi/settings.tmp"
     mv "$HOME/.pi/settings.tmp" "$HOME/.pi/agent/settings.json"
     printf '%s\n' "$*" >>"$HOME/.pi/install-log"
     ;;
   list)
     [[ -f "$HOME/.pi/bridge-installed" && -z "${FAKE_PI_BRIDGE_MISSING:-}" ]] || exit 0
-    printf 'User packages:\n  npm:pi-claude-bridge@0.12.0\n    /fake/bridge\n'
+    printf 'User packages:\n  npm:pi-claude-bridge@0.13.0\n    /fake/bridge\n'
     ;;
   auth)
     for id in ${FAKE_PI_READY:-}; do
@@ -52,7 +52,7 @@ case "$1" in
     done
     printf '{"status":"not_ready"}\n'; exit 1 ;;
   --offline)
-    [[ "$*" == '--offline -e npm:pi-claude-bridge@0.12.0 --list-models' ]] || exit 2
+    [[ "$*" == '--offline -e npm:pi-claude-bridge@0.13.0 --list-models' ]] || exit 2
     [[ -f "$HOME/.pi/bridge-installed" && -z "${FAKE_PI_BRIDGE_MISSING:-}" ]] || exit 3
     cat <<'EOF'
 provider   model                       context  max-out  thinking  images
@@ -372,7 +372,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     || fail "review-pr's reviewer: $(cat "$p/review.json")"
   [[ -f "$p/agents/bstack-headless.md" ]] || fail "headless lead brief"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
-    and (index(["-e", "npm:pi-claude-bridge@0.12.0"]) != null)
+    and (index(["-e", "npm:pi-claude-bridge@0.13.0"]) != null)
     and (index(["-e", "\($p)/extensions/fallback.ts", "-e", "\($p)/extensions/guard.ts"]) != null)
     and (index(["-e", "\($p)/extensions/pi-emphasis/index.ts"]) != null)
     and (index(["--prompt-template", "\($p)/prompts"]) != null)
@@ -394,7 +394,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   grep -q 'bstack-builder.md' "$t/bstack-builder.md" || fail "builder brief"
 
   assert_eq 'mine' "$(jq -r .defaultModel "$HOME/.pi/agent/settings.json")" "unrelated settings preserved"
-  jq -e '.packages == ["npm:pi-claude-bridge@0.12.0"]' "$HOME/.pi/agent/settings.json" >/dev/null || fail "bridge installed"
+  jq -e '.packages == ["npm:pi-claude-bridge@0.13.0"]' "$HOME/.pi/agent/settings.json" >/dev/null || fail "bridge installed"
   assert_eq '{"token":"secret"}' "$(cat "$HOME/.pi/agent/auth.json")" "auth.json untouched"
 
   assert_eq "$(printf 'claude=claude-bridge/claude-opus-5-5#high\ngpt=openai/gpt-6.1-sol#high')" "$(<"$p/models")" "resolved models, no xAI"
@@ -686,7 +686,7 @@ EOF
     [[ "$scratch" == "$XDG_CACHE_HOME/bercail/scratch/"* && ! -e "$scratch" ]] \
       || fail "$2 runs Pi on a scratch TMPDIR it removes after: $scratch"
     args=$'\n'"$(<"$FAKE_PI_LAUNCH_LOG")"$'\n'
-    has_run "$2" -e npm:pi-claude-bridge@0.12.0
+    has_run "$2" -e npm:pi-claude-bridge@0.13.0
     has_run "$2" -e "$p/extensions/fallback.ts" -e "$p/extensions/guard.ts"
     has_run "$2" -e "$p/extensions/pi-emphasis/index.ts"
     has_run "$2" --prompt-template "$p/prompts"
@@ -781,7 +781,7 @@ EOF
   if out="$(FAKE_PI_BRIDGE_MISSING=1 doctor_bstack)"; then
     fail "doctor missing actual bridge despite declaration"
   fi
-  grep -q 'missing  bridge npm:pi-claude-bridge@0.12.0' <<<"$out" || fail "doctor bridge: $out"
+  grep -q 'missing  bridge npm:pi-claude-bridge@0.13.0' <<<"$out" || fail "doctor bridge: $out"
   out="$(FAKE_PI_BRIDGE_MISSING=1 bstack_status)"
   grep -q 'bridge: missing' <<<"$out" || fail "status broken bridge: $out"
   out="$(FAKE_PI_READY='openai' doctor_bstack)" || true

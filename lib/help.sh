@@ -169,7 +169,7 @@ bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   Settings: [bstack] in config.toml. statechart = true installs TLC (and Java
   when there is no java 11 or later) and the statechart skill: TLA+ models of
   stateful changes, checked with TLC and replayed on the real code.
-  Pi >=1.5.1 with pi-claude-bridge@0.12.0. Claude uses claude auth login; GPT
+  Pi >=1.5.1 with pi-claude-bridge@0.13.0. Claude uses claude auth login; GPT
   uses /login openai in pi. bercail update renders
   ~/.local/share/bercail/pi/ and herdr-core templates, and sets a 40k compaction
   reserve per claude-bridge model in Pi's settings.json, so Pi compacts before

@@ -10,7 +10,7 @@ bercail bstack setup
 ```
 
 It installs [Pi](https://pi.dev) when it is missing (bstack needs 1.5.1 or
-newer) and the Claude bridge (`npm:pi-claude-bridge@0.12.0`), then prints the
+newer) and the Claude bridge (`npm:pi-claude-bridge@0.13.0`), then prints the
 sign-ins that are still missing:
 
 | Plan | How to sign in |
