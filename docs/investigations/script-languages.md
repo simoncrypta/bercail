@@ -262,13 +262,15 @@ command shows a real end-to-end gain. Check cold and warm runs, concurrent
 desks, a bercail update, an opt-out, and where the cache is kept and for how
 long.
 
-**For the person, outside bercail.** In `~/.bash_env`, exporting
-`__MISE_BASH_ENV_LOADED` once the mise block has run would let child shells skip
-`mise activate`. The `tr` check at the top still runs. A child with the guard
-already set took 1.8 ms against 6.1 ms (measured). That would shorten each
-non-interactive bash start that reads `~/.bash_env` here (inferred). It is the
-person's dotfile and their call. Check afterwards that a nested shell still
-finds the mise shims and follows a project change.
+**For the person, outside bercail.** Exporting `__MISE_BASH_ENV_LOADED` from
+`~/.bash_env` as it stands would be unsafe. A shell whose PATH was stripped of
+mise, as the file does for `omarchy-agent-account-exec`, would inherit the flag
+and never get the shims back (measured). The safe form keys the guard on the
+PATH the file produced. A child bash skips the setup only while its PATH is
+still that one. A child with its PATH unchanged started in about 2 ms, against
+about 7 ms for a fresh shell that runs the setup (measured). A Pi tool shell
+still runs the setup, because Pi puts `~/.pi/agent/bin` at the front of its
+PATH. A bash started under it skips the setup only if its PATH is unchanged.
 
 ## Open questions
 
