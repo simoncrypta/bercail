@@ -42,7 +42,8 @@ Post-install CLI (bercail):
                 questions [--json] (pending targeted questions; replies are unverified) |
                 question create|revise|reply|answer|withdraw (JSON on stdin) | check TOKEN | thread TOPIC |
                 panel (the Decisions panel's JSON) | expire (record due defaults; Shep's runtime runs it) |
-                discuss TOKEN (make or find its branch) | closed TOKEN OPENING
+                discuss TOKEN (make or find its branch) | closed TOKEN OPENING |
+                push-approval DIR REMOTE REFSPEC... (the guard's: spends the answer that approves this push)
   job           A trail job in an Entire repo, trail:N (its trail number) wherever an issue id goes:
                 show trail:N [--repo DIR] [--json] (the trail, its changes, and its comments) |
                 comment trail:N [--repo DIR] (text on stdin; the comment stays on this machine, where

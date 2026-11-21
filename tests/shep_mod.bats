@@ -615,6 +615,21 @@ eq(answers(), [], "opening the trail answers nothing");
 EOF
 }
 
+@test "a push question's card names the choice that approves the push, its remote and its refs" {
+  mod_case <<'EOF'
+const push = { approves: "Push it", remote: "origin", refs: ["refs/heads/master"], url: "git@example.invalid:team/app.git" };
+const view = { ...PANEL_VIEW, cards: [card("Q1@1", { push }), card("Q2@1")] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+els.length = 0;
+d.render(cx);
+const line = 'Picking "Push it" lets Shep push the answered commit to origin (git@example.invalid:team/app.git): refs/heads/master, once.';
+eq(texts().filter((x) => x.startsWith("Picking ")), [line], "only the push card says what it approves");
+eq(cardWords(card("Q2@1")).push, null, "no push line without a push");
+EOF
+}
+
 @test "Enter answers with Shep's pick, keys move between cards and choices, and a stale card answers nothing" {
   mod_case <<'EOF'
 setup({ terminals: [shep], exec: panelExec(PANEL_VIEW) });

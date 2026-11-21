@@ -343,7 +343,13 @@ and `--issue` when there is one, and say so in one line with its link:
 - Push the named branch for CI. Only a `land` event with `ready` lets you
   push to trunk, or open the PR or trail the policy names, and only for its
   exact commit. For direct integration use `git push origin <sha>:<trunk>`,
-  never the moving branch. For a PR or trail use the checked commit; a trail
+  never the moving branch. Where the guard would ask about that push, ask it
+  as a `shep_question` with `push` (`approves`: the choice that pushes,
+  `remote`, full `refs`). Once the person picks it and `question check` is
+  fresh, push the answered commit with only
+  `git -C <worktree> push <remote> <full sha>^{commit}:refs/heads/<trunk>`:
+  the guard runs it without asking, once, and says which answer approved it;
+  say so in your report. For a PR or trail use the checked commit; a trail
   job links that branch to its own trail rather than opening another; take the PR title and body from `bercail describe
   title|body <worktree>`. Keep one commit per job (gt amend, gh/origin
   squash by the person). Never write or patch the message or body yourself.

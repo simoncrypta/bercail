@@ -106,10 +106,10 @@ describe("durable targeted questions", () => {
     child.stderr!.on("data", (chunk) => {
       errors += chunk.toString();
     });
-    const done = new Promise<void>((resolve, reject) => {
+    const done = new Promise<string>((resolve, reject) => {
       child.on("error", reject);
       child.on("exit", (code, signal) =>
-        code === 0 || signal === "SIGKILL" ? resolve() : reject(new Error(`worker exit ${code}: ${errors}`)),
+        code === 0 || signal === "SIGKILL" ? resolve(output) : reject(new Error(`worker exit ${code}: ${errors}`)),
       );
     });
     // Start observing both promises immediately, even when startup fails.
@@ -761,6 +761,57 @@ describe("durable targeted questions", () => {
     },
     15000,
   );
+
+  // A push question's answer, fresh, and the push the guard claims with it.
+  const pushed = () => {
+    const spec = { ...fields("push", "review"), options: ["Push it", "Not yet"] };
+    const push = { approves: "Push it", remote: "origin", refs: ["refs/heads/master"], url: "/srv/app.git" };
+    const q = store.create("push", { ...spec, push }, resolveSpec);
+    store.answer("pick", tokenOf(q), "Push it", "panel picker", live);
+    return {
+      token: tokenOf(q),
+      claim: { remote: "origin", refspecs: [`${"a".repeat(40)}^{commit}:refs/heads/master`] },
+    };
+  };
+  const live = { status: "fresh", reasons: [], current: { head: "a".repeat(40), stagedTree: "b".repeat(40) } };
+
+  test("an answer's push is claimed once, while fresh, and only for the push it approves", () => {
+    const { token, claim } = pushed();
+    expect(store.claimPush(token, { ...live, status: "stale", reasons: ["head changed"] }, claim)).toMatchObject({
+      accepted: false,
+      reason: "changed since it was answered: head changed",
+    });
+    expect(() => store.claimPush(token, live, { ...claim, remote: "upstream" })).toThrow(/approved remote and refs/);
+    expect(store.claimPush(token, live, claim)).toMatchObject({ accepted: true, question: { pushed: claim } });
+    expect(new QuestionStore(state).claimPush(token, live, claim)).toMatchObject({
+      accepted: false,
+      reason: expect.stringMatching(/^its push was already claimed at /),
+    });
+    // The other choice, or a question with no push, approves nothing.
+    const other = store.create(
+      "other",
+      {
+        ...fields("other", "review"),
+        options: ["Push it", "Not yet"],
+        push: { approves: "Push it", remote: "origin", refs: ["refs/heads/master"], url: "/srv/app.git" },
+      },
+      resolveSpec,
+    );
+    store.answer("no", tokenOf(other), "Not yet", "panel picker", live);
+    expect(store.claimPush(tokenOf(other), live, claim)).toMatchObject({
+      accepted: false,
+      reason: "not the person's approving answer",
+    });
+  });
+
+  test("simultaneous claims of one answer's push let exactly one push run", async () => {
+    const { token, claim } = pushed();
+    const workers = Array.from({ length: 4 }, () => start("claim", { token, check: live, claim }));
+    await Promise.all(workers.map((p) => p.ready));
+    workers.forEach((p) => p.child.stdin!.end("go"));
+    const outputs = await Promise.all(workers.map((p) => p.done));
+    expect(outputs.filter((o) => o.trim().endsWith("true"))).toHaveLength(1);
+  }, 15000);
 
   test("simultaneous repeated request ids create exactly one durable question", async () => {
     const workers = Array.from({ length: 4 }, () => start("create", { requestId: "same", spec: fields() }));

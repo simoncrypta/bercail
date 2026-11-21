@@ -685,6 +685,146 @@ test("the extension shows a warning in the tool's result, and logs warnings and 
   }
 });
 
+// bercail-gmd4: Shep's push of the answered commit, which a Decisions answer approves.
+const oid = "a".repeat(40);
+const approvedSpec = `${oid}^{commit}:refs/heads/master`;
+const approvedPush = `git -C /work push origin ${approvedSpec}`;
+const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none, graphiteAliases: [], alone: true };
+const plainAsk = `Allow this push to origin: ${oid}^{commit} as refs/heads/master? No keeps it local for the person.`;
+
+test("Shep's plain push of a hash to a full ref asks with the push an answer may approve", () => {
+  assertDeepEqual(decideBash(approvedPush, shep), {
+    action: "ask",
+    reason: plainAsk,
+    push: { dir: "/work", remote: "origin", refspecs: [approvedSpec] },
+  });
+  // Without -C it is the folder Shep is in.
+  expect(decideBash(`git push origin ${approvedSpec}`, shep)).toMatchObject({ push: { dir: "/work" } });
+  // A release tag asks as a release today, so its answer may approve it too.
+  const tag = `${oid}^{tag}:refs/tags/v1.0.0`;
+  expect(decideBash(`git -C /work push origin ${tag}`, shep)).toMatchObject({
+    action: "ask",
+    push: { refspecs: [tag] },
+  });
+});
+
+test.each([
+  ["a desk's push", approvedPush, tui],
+  ["a push beside another tool call of its message", approvedPush, { ...shep, alone: false }],
+  ["a program named git that is not git", `./git -C /work push origin ${approvedSpec}`, shep],
+  ["a branch name, which can move before git runs", "git -C /work push origin master", shep],
+  ["a bare hash, which a ref of that name shadows", `git -C /work push origin ${oid}:refs/heads/master`, shep],
+  ["a short ref", `git -C /work push origin ${oid}^{commit}:master`, shep],
+  ["another part before it", `cd /work && git push origin ${approvedSpec}`, shep],
+  ["another part after it", `${approvedPush}; true`, shep],
+  ["a substitution", `git -C /work push origin $(echo ${approvedSpec})`, shep],
+  ["quoting", `git -C /work push origin "${approvedSpec}"`, shep],
+  ["a variable", `git -C /work push $REMOTE ${approvedSpec}`, shep],
+  ["an env prefix", `GIT_SSH_COMMAND=ssh git -C /work push origin ${approvedSpec}`, shep],
+  ["a config override", `git -c remote.origin.url=/x -C /work push origin ${approvedSpec}`, shep],
+  ["a folder with ..", `git -C /work/../work push origin ${approvedSpec}`, shep],
+  [
+    "a relative folder",
+    `git -C work push origin ${approvedSpec}`,
+    { ...shep, policies: { ...none, "/work/work": defaultPolicy } },
+  ],
+  ["a flag that pushes more", `git -C /work push --follow-tags origin ${approvedSpec}`, shep],
+  ["a dry run, which would spend it", `git -C /work push --dry-run origin ${approvedSpec}`, shep],
+  ["a flag, even a quiet one", `git -C /work push -q origin ${approvedSpec}`, shep],
+  ["a second -C", `git -C /work -C /work push origin ${approvedSpec}`, shep],
+  ["no remote", `git -C /work push ${approvedSpec}`, shep],
+])("%s asks as today, with no push an answer could approve", (_name, command, input) => {
+  const got = decideBash(command, input as GuardInput);
+  assertEqual(got.action, "ask", `${command} → ${JSON.stringify(got)}`);
+  assertEqual("push" in got, false, `${command} → ${JSON.stringify(got)}`);
+});
+
+test("an approvable push keeps the refusals, and the policy that lets it through", () => {
+  blocked(`git -C /work push --force origin ${approvedSpec}`, shep, /Force-push/);
+  blocked(`git -C /work push origin +${approvedSpec}`, shep, /starting with \+/);
+  blocked(`git -C /work push --no-verify origin ${approvedSpec}`, shep, /no-verify/);
+  // A policy that lets the push through spends no answer.
+  const main = { ...shep, policies: { "/work": { ...defaultPolicy, push: "main" as const, repo: "/work" } } };
+  expect(decideBash(approvedPush, main)).toStrictEqual({
+    action: "allow",
+    approved: [expect.stringContaining("push = main")],
+  });
+  // Spending an answer is the guard's, never an agent's.
+  for (const command of [
+    `bercail shep question push-approval /work origin ${approvedSpec}`,
+    `node ~/.local/share/bercail/shep/pi/question-cli.ts push-approval /work origin ${approvedSpec}`,
+  ])
+    blocked(command, shep, /the guard's to check and spend/);
+});
+
+test("the extension spends the person's answer on the push it would ask about, and asks without one", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "guard-claim-"));
+  vi.stubEnv("HOME", dir);
+  vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
+  vi.stubEnv("XDG_CONFIG_HOME", join(dir, "config"));
+  vi.stubEnv("BERCAIL_ROLE", "shep");
+  vi.stubEnv("GIT_DIR", undefined);
+  vi.stubEnv("GIT_CONFIG", undefined);
+  const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
+  // The helper approves once, then says the answer is spent.
+  let answers = 1;
+  const exec = vi.fn(async (_cmd: string, args: string[]) => {
+    if (args[0] === "policy")
+      return { code: 0, stdout: JSON.stringify({ repo: "/work", policy: { push: "ask" } }), stderr: "" };
+    const out = answers-- > 0 ? { approved: "Q7@1" } : { approved: null, reason: "Q7@1 already approved a push" };
+    return { code: 0, stdout: JSON.stringify(out), stderr: "" };
+  });
+  const confirm = vi.fn(async () => false);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  const ctx = { hasUI: true, cwd: "/work", ui: { confirm } };
+  // Pi ends the assistant message, then checks each of its tool calls.
+  const bash = async (toolCallId: string, command: string, siblings: string[] = []) => {
+    const calls = [toolCallId, ...siblings].map((id) => ({ type: "toolCall", id }));
+    await handlers.message_end({ message: { role: "assistant", content: [{ type: "text" }, ...calls] } }, ctx);
+    return handlers.tool_call({ toolName: "bash", toolCallId, input: { command } }, ctx);
+  };
+  const helper = () => exec.mock.calls.filter(([, args]) => args[0] === "shep").map(([cmd, args]) => [cmd, ...args]);
+  try {
+    expect(await bash("p1", approvedPush)).toBeUndefined();
+    expect(confirm).not.toHaveBeenCalled();
+    assertDeepEqual(helper(), [["bercail", "shep", "question", "push-approval", "/work", "origin", approvedSpec]]);
+    const shown = (await handlers.tool_result(
+      { toolName: "bash", toolCallId: "p1", content: [{ type: "text", text: "out" }], isError: false },
+      {},
+    )) as { content: { text: string }[] };
+    assertMatch(shown.content[0].text, /^bercail guard warning: Allowed this push without asking: .*Q7@1/);
+    const logged = readFileSync(join(dir, "state/bercail/guard-warnings.jsonl"), "utf8").trim().split("\n");
+    assertDeepEqual(
+      logged.map((line) => [JSON.parse(line).kind, JSON.parse(line).command]),
+      [["warning", approvedPush]],
+    );
+    // The same answer again is spent, so the push asks as today.
+    assertMatch(
+      ((await bash("p2", approvedPush)) as Decision).reason ?? "",
+      new RegExp(`^The person said no to: ${plainAsk.replace(/[?^{}]/g, "\\$&")}`),
+    );
+    expect(confirm).toHaveBeenCalledOnce();
+    // Beside another call of its message, or with a GIT_DIR bash would inherit or a
+    // GIT_CONFIG only git config reads, it asks without looking for an answer.
+    exec.mockClear();
+    answers = 1;
+    await bash("p3", approvedPush, ["p4"]);
+    for (const [key, value] of [
+      ["GIT_DIR", "/elsewhere/.git"],
+      ["GIT_CONFIG", "/dev/null"],
+    ]) {
+      vi.stubEnv(key, value);
+      await bash(`p-${key}`, approvedPush);
+      vi.stubEnv(key, undefined);
+    }
+    expect(confirm).toHaveBeenCalledTimes(4);
+    assertDeepEqual(helper(), []);
+  } finally {
+    vi.unstubAllEnvs();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("git -C to a dir without a known branch asks for that dir's branch", () => {
   const nested = decision("git -C ../other push", { ...auto, branches: {} });
   assertEqual(nested.action, "need-branch", JSON.stringify(nested));

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
-import type { Question, QuestionTarget } from "./questions.ts";
+import type { Question, QuestionPush, QuestionTarget } from "./questions.ts";
 
 export interface TargetInput {
   kind: "planning" | "review" | "action";
@@ -206,15 +206,109 @@ const UNBOUND = new Set<keyof QuestionTarget>(["space", "session", "url"]);
 
 // The approved tree was committed: `now` is one commit, with `old` its only parent and
 // the approved tree its tree. Anything more (other commits, a merge, an amend) is new work.
+// It reads the commit object's own headers, which replace refs and grafts cannot fake.
 function committedOnce(cwd: string, old: string, now: string, tree: string | null): boolean {
   try {
-    return (
-      git(cwd, "rev-list", "--parents", "-n1", now) === `${now} ${old}` &&
-      git(cwd, "rev-parse", `${now}^{tree}`) === tree
-    );
+    const head = git(cwd, "--no-replace-objects", "cat-file", "commit", now).split("\n\n")[0]!;
+    const parents = [...head.matchAll(/^parent (\S+)$/gm)].map((m) => m[1]);
+    return parents.length === 1 && parents[0] === old && /^tree (\S+)$/m.exec(head)?.[1] === tree;
   } catch {
     return false;
   }
+}
+
+// The repo a folder belongs to, as a question's target names it.
+export const repoOf = (dir: string): string => identity(realpathSync(dir));
+
+// The commits an answer approves a push of: the answered HEAD, and the live HEAD a
+// fresh check saw when it is the one commit of the reviewed tree on it.
+export function approvedCommits(question: Question, head: string | null): string[] {
+  const { answer, target } = question;
+  if (!answer?.head || !target.worktree) return [];
+  const committed =
+    head && head !== answer.head && committedOnce(target.worktree, answer.head, head, answer.stagedTree);
+  return committed ? [answer.head, head] : [answer.head];
+}
+
+// The commit an object a push names peels to, read in dir without replace refs; a tag
+// must be a tag object. Null when it is not that kind of object.
+export function peeled(dir: string, oid: string, kind: "commit" | "tag"): string | null {
+  try {
+    if (git(dir, "--no-replace-objects", "rev-parse", "--verify", "--end-of-options", `${oid}^{${kind}}`) !== oid)
+      return null;
+    return git(dir, "--no-replace-objects", "rev-parse", "--verify", "--end-of-options", `${oid}^{commit}`);
+  } catch {
+    return null;
+  }
+}
+
+// The push URLs a card can show: an absolute path, ssh with no password, or http(s) or
+// git:// with no user. None holds a query, a fragment, a space or a control character.
+const showable = [
+  /^\/[^\s?#]*$/,
+  /^file:\/\/\/[^\s?#]*$/,
+  /^[\w.-]+@[\w.-]+:[^\s?#]*$/,
+  /^(ssh|git\+ssh|ssh\+git):\/\/([\w.-]+@)?[\w.-]+(:\d+)?\/[^\s?#]*$/,
+  /^(https?|git):\/\/[\w.-]+(:\d+)?\/[^\s?#@]*$/,
+];
+
+// A remote's one push URL, as git push uses it (insteadOf and pushInsteadOf applied).
+// A remote group, several push URLs, or one the card cannot show (it may hold a
+// credential) refuses; the message never holds the URL.
+export function pushUrl(dir: string, remote: string): string {
+  if (!/^[A-Za-z0-9][\w.-]*$/.test(remote)) fail("push.remote must be the remote's name");
+  let urls: string[];
+  try {
+    urls = git(dir, "remote", "get-url", "--push", "--all", "--", remote).split("\n").filter(Boolean);
+  } catch {
+    fail(`${remote} is not a remote of ${dir}`);
+  }
+  if (urls!.length !== 1) fail(`${remote} must push to one URL, not ${urls!.length}`);
+  const url = urls![0]!;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(url) || !showable.some((shape) => shape.test(url)))
+    fail(`${remote}'s push URL is not one the card can show: a path, ssh, or https with no credential or query`);
+  return url;
+}
+
+// A question's target, and its push as Shep gave it with the URL its remote pushes to
+// now. The store checks the rest.
+export function withTarget(
+  target: QuestionTarget,
+  push: Omit<QuestionPush, "url"> | null | undefined,
+): { target: QuestionTarget; push?: QuestionPush } {
+  if (push == null) return { target };
+  const worktree = target.worktree;
+  if (typeof push !== "object" || !worktree) return fail("push needs an object and the target's worktree");
+  return {
+    target,
+    push: { approves: push.approves, remote: push.remote, refs: push.refs, url: pushUrl(worktree, push.remote) },
+  };
+}
+
+// Why a push from dir to remote could send more, or elsewhere, than the card said: its
+// URL changed, config adds tags or other repos' pushes, or config could not be read.
+// Null when it cannot.
+export function pushConfigProblem(dir: string, remote: string, url: string): string | null {
+  // git config exits 1 for a key that is not set; anything else is a read that failed.
+  const config = (key: string, bool: boolean) => {
+    try {
+      return git(dir, "config", ...(bool ? ["--type=bool"] : []), "--get", key);
+    } catch (error) {
+      if ((error as { status?: number }).status === 1) return "";
+      throw new Error(`could not read ${key}`, { cause: error });
+    }
+  };
+  try {
+    if (pushUrl(dir, remote) !== url) return `${remote} no longer pushes to the URL the card showed`;
+    if (config("push.followTags", true) === "true") return "push.followTags would push tags too";
+    if (!["", "no", "check"].includes(config("push.recurseSubmodules", false)))
+      return "push.recurseSubmodules would push submodules too";
+    if (config("submodule.recurse", true) === "true") return "submodule.recurse would push submodules too";
+  } catch (error) {
+    return (error as Error).message;
+  }
+  return null;
 }
 
 // [policy] merge_reversible for the target's checkout, as bercail policy show reads it:

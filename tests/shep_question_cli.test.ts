@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, beforeEach, expect, test } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
 import { captureTarget } from "../shep/pi/question-target.ts";
 import { claim, eventLine } from "../shep/pi/inbox.ts";
 
@@ -999,4 +999,206 @@ test("Discuss branches the desk's session; each close without a pick tells Shep 
   );
   expect(ok("discuss", undefined, ["Q1@1"])).toMatchObject({ created: false, session: d.session });
   expect(call("closed", undefined, ["Q1@1", "../x"]).stderr).toMatch(/opening must be/);
+});
+
+// A push question (bercail-gmd4): the guard asks push-approval which answer approves a
+// push, then claims it once. The remote is a bare repo beside the checkout.
+describe("an answer that approves a push", () => {
+  let ref: string;
+  let origin: string;
+  // The guard's call: the answer that approves this push, spent on it.
+  const approval = (refspecs: string[], from = repo) => ok("push-approval", undefined, [from, "origin", ...refspecs]);
+  const head = () => `${git("rev-parse", "HEAD")}^{commit}:${ref}`;
+  const ask = (extra: Record<string, unknown> = {}) =>
+    ok(
+      "create",
+      spec({ options: ["Push it", "Not yet"], push: { approves: "Push it", remote: "origin", refs: [ref] }, ...extra }),
+    );
+  beforeEach(() => {
+    ref = git("symbolic-ref", "HEAD");
+    origin = join(dir, "origin.git");
+    execFileSync("git", ["init", "-q", "--bare", origin], { env });
+    git("remote", "add", "origin", origin);
+  });
+
+  test("records the remote's one push URL, and refuses a push nothing can bind or show", () => {
+    expect(ask({ push: { approves: "Push it", remote: "origin", refs: [ref], url: "forged" } }).push).toEqual({
+      approves: "Push it",
+      remote: "origin",
+      refs: [ref],
+      url: origin,
+    });
+    const refused = (extra: Record<string, unknown>, message: RegExp) => {
+      const result = call(
+        "create",
+        spec({ requestId: `r-${Math.random()}`, options: ["Push it", "Not yet"], ...extra }),
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(message);
+    };
+    const push = { approves: "Push it", remote: "origin", refs: [ref] };
+    refused({ push: { ...push, approves: "Ship" } }, /push.approves must be one of the options/);
+    refused({ kind: "planning", issue: null, desk: null, base: null, action: null, push }, /planning question/);
+    refused({ push, reversible: true, recommendation: { choice: "Push it", why: "ok" } }, /one-way door/);
+    refused({ push: { ...push, refs: ["refs/tags/v1"] } }, /a tag push needs action release/);
+    refused({ push: { ...push, refs: ["master"] } }, /full refs/);
+    git("remote", "set-url", "--add", "--push", "origin", origin);
+    git("remote", "set-url", "--add", "--push", "origin", join(dir, "mirror.git"));
+    refused({ push }, /origin must push to one URL, not 2/);
+    git("config", "--unset-all", "remote.origin.pushurl");
+    // Only a URL the card can show without a credential, nor one a linked checkout reads elsewhere.
+    for (const url of [
+      "https://bot:s3cret@example.invalid/app.git",
+      "https://s3cret@example.invalid/app.git",
+      "https://example.invalid/app.git?token=s3cret",
+      "ssh://git:s3cret@example.invalid/app.git",
+      "../origin.git",
+      "/srv/app\u0007.git",
+    ]) {
+      git("remote", "set-url", "origin", url);
+      refused({ push }, /not one the card can show/);
+    }
+    expect(JSON.stringify(ok("json"))).not.toContain("s3cret");
+    git("remote", "set-url", "origin", "git@example.invalid:team/app.git");
+    expect(ask({ requestId: "ssh" }).push.url).toBe("git@example.invalid:team/app.git");
+  });
+
+  test("the person's pick of the approving choice approves exactly that push, once", () => {
+    ask();
+    pick("p1", "Push it");
+    expect(approval([head()])).toEqual({ approved: "Q1@1" });
+    expect(ok("json").questions[0].pushed).toMatchObject({ remote: "origin", refspecs: [head()] });
+    // The same answer cannot approve a second push.
+    expect(approval([head()])).toEqual({
+      approved: null,
+      reason: expect.stringMatching(/^Q1@1 already approved a push, at /),
+    });
+  });
+
+  test.each([
+    ["the other choice", () => pick("p1", "Not yet"), () => [head()], /Q1@1 was answered "Not yet", not "Push it"/],
+    [
+      "a check gone stale",
+      () => {
+        pick("p1", "Push it");
+        writeFileSync(join(repo, "file"), "two\n");
+        git("add", "file");
+      },
+      () => [head()],
+      /Q1@1 changed since it was answered: stagedTree changed/,
+    ],
+    [
+      "another commit",
+      () => pick("p1", "Push it"),
+      () => {
+        writeFileSync(join(repo, "other"), "unreviewed\n");
+        git("add", "other");
+        const tree = git("write-tree");
+        git("rm", "-q", "--cached", "other");
+        const other = execFileSync("git", ["-C", repo, "commit-tree", tree, "-p", git("rev-parse", "HEAD")], {
+          env,
+          input: "unreviewed\n",
+          encoding: "utf8",
+        }).trim();
+        return [`${other}^{commit}:${ref}`];
+      },
+      /Q1@1 approves only [0-9a-f]{40}$/,
+    ],
+    [
+      "another ref",
+      () => pick("p1", "Push it"),
+      () => [head().replace(/:.*/, ":refs/heads/other")],
+      /approves a push to origin/,
+    ],
+    [
+      "a hash a ref could shadow",
+      () => pick("p1", "Push it"),
+      () => [`${git("rev-parse", "HEAD")}:${ref}`],
+      /each refspec must be <hash>\^\{commit\}:<full ref>/,
+    ],
+    [
+      "a remote that now pushes elsewhere",
+      () => {
+        pick("p1", "Push it");
+        git("remote", "set-url", "origin", join(dir, "elsewhere.git"));
+      },
+      () => [head()],
+      /origin no longer pushes to the URL the card showed/,
+    ],
+    [
+      "config git cannot read",
+      () => {
+        pick("p1", "Push it");
+        git("config", "push.followTags", "maybe");
+      },
+      () => [head()],
+      /could not read push.followTags/,
+    ],
+    [
+      "config that pushes tags too",
+      () => {
+        pick("p1", "Push it");
+        git("config", "push.followTags", "true");
+      },
+      () => [head()],
+      /push.followTags would push tags too/,
+    ],
+  ])("refuses %s", (_name, arrange, refspecs, reason) => {
+    ask();
+    arrange();
+    expect(approval(refspecs())).toEqual({ approved: null, reason: expect.stringMatching(reason) });
+    expect(ok("json").questions[0].pushed).toBeUndefined();
+  });
+
+  test("refuses the push from another repo, and while nobody has picked", () => {
+    ask();
+    expect(approval([head()]).reason).toBe("no answered question in this repo approves a push");
+    pick("p1", "Push it");
+    const other = join(dir, "other");
+    execFileSync("git", ["clone", "-q", repo, other], { env });
+    execFileSync("git", ["-C", other, "remote", "set-url", "origin", origin], { env });
+    expect(approval([head()], other)).toEqual({
+      approved: null,
+      reason: "no answered question in this repo approves a push",
+    });
+  });
+
+  test("the reviewed tree committed once on the answered HEAD is approved, a sibling commit of it is not", () => {
+    writeFileSync(join(repo, "file"), "two\n");
+    git("add", "file");
+    ask();
+    pick("p1", "Push it");
+    const answered = git("rev-parse", "HEAD");
+    git("commit", "-qm", "the reviewed tree");
+    const sibling = execFileSync("git", ["-C", repo, "commit-tree", git("write-tree"), "-p", answered], {
+      env,
+      input: "same tree, another commit\n",
+      encoding: "utf8",
+    }).trim();
+    expect(approval([`${sibling}^{commit}:${ref}`]).reason).toMatch(/Q1@1 approves only /);
+    expect(approval([head()])).toEqual({ approved: "Q1@1" });
+  });
+
+  test("a push sends one approved commit to every ref, not the answered HEAD to one and its child to another", () => {
+    writeFileSync(join(repo, "file"), "two\n");
+    git("add", "file");
+    const answered = git("rev-parse", "HEAD");
+    ask({ action: "release", push: { approves: "Push it", remote: "origin", refs: [ref, "refs/tags/v1.0.0"] } });
+    pick("p1", "Push it");
+    git("commit", "-qm", "the reviewed tree");
+    git("tag", "-a", "v1.0.0", "-m", "v1.0.0", answered);
+    const tag = `${git("rev-parse", "v1.0.0")}^{tag}:refs/tags/v1.0.0`;
+    expect(approval([head(), tag]).reason).toMatch(/Q1@1 approves only /);
+    expect(approval([`${answered}^{commit}:${ref}`, tag])).toEqual({ approved: "Q1@1" });
+  });
+
+  test("a release question approves its tag object and its branch together, and only together", () => {
+    git("tag", "-a", "v1.0.0", "-m", "v1.0.0");
+    const tag = `${git("rev-parse", "v1.0.0")}^{tag}:refs/tags/v1.0.0`;
+    ask({ action: "release", push: { approves: "Push it", remote: "origin", refs: [ref, "refs/tags/v1.0.0"] } });
+    pick("p1", "Push it");
+    expect(approval([tag]).reason).toMatch(/approves a push to origin/);
+    expect(approval([`${git("rev-parse", "v1.0.0")}^{tag}:${ref}`]).reason).toBe("only a tag ref takes a tag object");
+    expect(approval([head(), tag])).toEqual({ approved: "Q1@1" });
+  });
 });

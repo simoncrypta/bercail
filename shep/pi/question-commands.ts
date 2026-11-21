@@ -4,7 +4,7 @@ import { Type } from "typebox";
 import { createHash } from "node:crypto";
 import { QuestionStore, projection, tokenOf } from "./questions.ts";
 import { spawn } from "node:child_process";
-import { captureTarget, checkQuestion, mergeReversible } from "./question-target.ts";
+import { captureTarget, checkQuestion, mergeReversible, withTarget } from "./question-target.ts";
 
 const bareDecision = /^(?:yes|no|y|n|lgtm|[1-9]\d*)[.!]?$/i;
 // How often Shep's runtime looks for a reversible question past its deadline.
@@ -185,6 +185,21 @@ export default function (pi: ExtensionAPI) {
             "true: a two-way door (a planning pick with no action; action commit; or action merge or land where the repo's policy says merge_reversible), so it takes your recommendation at the returned question's deadline. The helper refuses a one-way door.",
         }),
       ),
+      push: Type.Optional(
+        Type.Object(
+          {
+            approves: Type.String({ description: "The one option that approves the push" }),
+            remote: Type.String({ description: "The remote's name, such as origin" }),
+            refs: Type.Array(Type.String(), {
+              description: "Full refs it pushes: refs/heads/<branch>; refs/tags/<tag> only with action release",
+            }),
+          },
+          {
+            description:
+              "A review or action question whose answer approves one push: once the person picks approves, the guard lets your next `git -C <worktree> push <remote> <hash>^{commit}:<ref>` of the answered commit run without asking, once. The card shows the remote's push URL.",
+          },
+        ),
+      ),
       repo: Type.String({ description: "Explicit checkout path, never a bare issue lookup" }),
       issue: Type.Union([Type.String(), Type.Null()]),
       topic: Type.String(),
@@ -213,7 +228,7 @@ export default function (pi: ExtensionAPI) {
         ...(input.recommendation ? { recommendation: input.recommendation } : {}),
         ...(input.reversible ? { reversible: true as const } : {}),
         origin,
-        target: captureTarget(input),
+        ...withTarget(captureTarget(input), input.push),
       });
       const question = reviseToken
         ? store.revise(requestId, reviseToken, intent, resolveSpec, mergeReversible)

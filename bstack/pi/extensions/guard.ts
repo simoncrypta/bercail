@@ -57,13 +57,21 @@ export type GuardInput = {
   readOnlyWrites?: { tmp: string[]; root: string; exists: (path: string) => boolean };
   /** The agent's own TMPDIR, when it is not /tmp: a write under a literal /tmp then warns. */
   tmpdir?: string;
+  /** The whole command is this one plain command: no other part, substitution or quoting. */
+  sole?: boolean;
+  /** The only tool call its assistant message made, so no other call of the session runs beside it. */
+  alone?: boolean;
 };
 
-// warnings: lines the command runs with, shown in its result and logged.
+/** A git push a Decisions answer may approve: commit hashes to full refs, from dir. */
+export type PushRequest = { dir: string; remote: string; refspecs: string[] };
+
+// warnings: lines the command runs with, shown in its result and logged. push: an ask
+// that the person's Decisions answer may approve instead (approvable).
 export type GuardDecision =
   | { action: "allow"; approved?: string[]; warnings?: string[] }
   | { action: "block"; reason: string }
-  | { action: "ask"; reason: string; warnings?: string[] }
+  | { action: "ask"; reason: string; warnings?: string[]; push?: PushRequest }
   | { action: "need-branch"; dir: string }
   | { action: "need-policy"; dir: string }
   | { action: "need-entire-help"; command: string };
@@ -158,6 +166,10 @@ const unclosedWarn =
   "The guard could not find where a $( or backtick ends, so it did not check the rest of this command. Next time, write the body to a file first, then pass its path.";
 const lostCwd =
   "The guard lost track of the folder after a cd it could not follow, so it checked a relative write target by its name only.";
+const pushApproved = (token: string) =>
+  `Allowed this push without asking: the person's Decisions answer ${token} approves it, once. Say so in your report.`;
+const pushApprovalCommand =
+  "Which Decisions answer approves a push is the guard's to check and spend. Push, and the guard checks.";
 const tmpWrite = (tmpdir: string) =>
   `This writes under /tmp, which holds RAM and keeps a file for days. Put scratch in $TMPDIR (${tmpdir}) or a mktemp -d folder instead: bercail removes it when you exit.`;
 
@@ -1291,12 +1303,10 @@ function isGhApiRelease(words: string[]): boolean {
   );
 }
 
-// bercail shep question answer, or the question helper's answer op run directly.
-function isAnswer(words: string[]): boolean {
+// bercail shep question answer or push-approval, or the question helper's op run directly.
+function questionOp(words: string[], op: string): boolean {
   const plain = plainWords(words);
-  return plain.some(
-    (word, i) => (word === "question" || word.endsWith("question-cli.ts")) && plain[i + 1] === "answer",
-  );
+  return plain.some((word, i) => (word === "question" || word.endsWith("question-cli.ts")) && plain[i + 1] === op);
 }
 
 // Programs that type or click as the person, and the kernel's input device. Through
@@ -1882,7 +1892,44 @@ function decideRelease(dir: string | undefined, input: GuardInput): GuardDecisio
   return publish("release", input);
 }
 
-function decidePush(args: string[], dir: string | undefined, input: GuardInput, via?: string): GuardDecision {
+// Shep's push that a Decisions answer may approve (bercail-gmd4): the whole command is
+// one plain git push of objects named by hash, which no ref can shadow (^{commit}), to
+// full refs, so what the guard checks is what git sends. It is the only tool call of its
+// message, so nothing else Shep runs can move a ref or the remote's URL beside it.
+// Anything else, or a push today's rules do not ask about, is decided as before.
+const hashRefspec = /^([0-9a-f]{40}|[0-9a-f]{64})\^\{(commit|tag)\}:refs\/(heads|tags)\/[\w./-]+$/;
+const plainWord = /^[\w./:@=-]+$/;
+const remoteName = /^[A-Za-z0-9][\w.-]*$/;
+
+function approvable(git: GitCall, input: GuardInput): PushRequest | undefined {
+  if (input.role !== "shep" || !input.sole || !input.alone || git.dir === undefined || git.config.length)
+    return undefined;
+  // At most one -C, to an absolute path without .., so the folder the helper checks is the one git uses.
+  const [flag, folder = "", ...more] = git.global;
+  if (
+    more.length ||
+    (flag !== undefined && (flag !== "-C" || !/^\/[\w./@-]*$/.test(folder) || /\/\.\.(\/|$)/.test(folder)))
+  )
+    return undefined;
+  // No flags: the remote, then each <hash>^{commit}:<full ref>.
+  const [remote, ...refspecs] = git.args;
+  if (!remote || !remoteName.test(remote) || !refspecs.length || !refspecs.every((spec) => hashRefspec.test(spec)))
+    return undefined;
+  return { dir: git.dir, remote, refspecs };
+}
+
+function decidePush(
+  args: string[],
+  dir: string | undefined,
+  input: GuardInput,
+  via?: string,
+  plain?: PushRequest,
+): GuardDecision {
+  const decision = pushPolicy(args, dir, input, via);
+  return plain && decision.action === "ask" ? { ...decision, push: plain } : decision;
+}
+
+function pushPolicy(args: string[], dir: string | undefined, input: GuardInput, via?: string): GuardDecision {
   const facts = pushFacts(args);
   if (facts.force) return forceFor(input);
   if (facts.plus) return block(plusRef);
@@ -1948,7 +1995,7 @@ function decideGit(git: GitCall, input: GuardInput): GuardDecision {
   if (hasNoVerify(sub, args) && ["commit", "push", "merge", "rebase"].includes(sub)) return block(noVerify);
   const risky = git.config.find((key) => riskyConfig.test(key)) ?? (sub === "config" ? configWrite(args) : undefined);
   if (risky) return configBlock(risky);
-  if (sub === "push") return decidePush(args, git.dir, input);
+  if (sub === "push") return decidePush(args, git.dir, input, undefined, approvable(git, input));
   if (sub === "tag" && tagWrites(args)) return decideRelease(git.dir, input);
   if (sub === "commit") return decideCommit(input);
   if (gitWrite(sub, args)) {
@@ -2301,7 +2348,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       straight = false;
       vars.clear();
     }
-    const here = { ...input, cwd: cwdOf(), cwds, gitEnv, gitConfigEnv, branchMoved, graphiteAliases };
+    const here = { ...input, cwd: cwdOf(), cwds, gitEnv, gitConfigEnv, branchMoved, graphiteAliases, sole: false };
     for (const sub of segment.subs)
       decision = worse(decision, decideBash(sub, { ...here, graphiteAliases: undefined }, depth + 1));
     if (segment.subs.length) here.graphiteAliases = graphiteAliases = undefined;
@@ -2322,6 +2369,19 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (!help && !bareRead && !bareCd) graphiteAliases = undefined;
     const words = commandWords(raw);
     if (words.length === 0) continue;
+    // Nothing the guard reads differently from bash: no env prefix or wrapper, and git
+    // itself, not ./git.
+    here.sole =
+      raw[0] === "git" &&
+      depth === 0 &&
+      segments.length === 1 &&
+      !segment.subs.length &&
+      !segment.docs.length &&
+      !segment.unclosed &&
+      !segment.quoted.some(Boolean) &&
+      command.trim().split(/ +/).join("\0") === raw.join("\0") &&
+      raw.every((word) => plainWord.test(word) || hashRefspec.test(word)) &&
+      words.length === raw.length;
     // /usr/bin/git is git.
     if (words[0].includes("/")) words[0] = basename(words[0]);
     // A cd in a pipe or in the background may run in a subshell: where the shell is, is unknown.
@@ -2372,7 +2432,8 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (refused) decision = worse(decision, refused);
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
     decision = worse(decision, decideCleanup(words, here));
-    if (isAnswer(words)) decision = worse(decision, block(answerCommand));
+    if (questionOp(words, "answer")) decision = worse(decision, block(answerCommand));
+    if (questionOp(words, "push-approval")) decision = worse(decision, block(pushApprovalCommand));
     if (writesTodo(words) && input.role !== "shep") decision = worse(decision, block(basecampWrite));
     if (setsTodoTarget(words) && input.role !== "shep") decision = worse(decision, block(todoTargets));
     if (isLand(words) && input.role !== "shep") decision = worse(decision, block(landCommand));
@@ -2563,6 +2624,25 @@ async function entireReadOnly(
   }
 }
 
+// The person's Decisions answer that approves this push, spent on it (bercail shep
+// question push-approval claims it under the ledger's lock), or undefined: then it asks.
+async function pushApproval(
+  pi: ExtensionAPI,
+  push: PushRequest,
+  signal: AbortSignal | undefined,
+): Promise<string | undefined> {
+  const args = ["shep", "question", "push-approval", push.dir, push.remote, ...push.refspecs];
+  try {
+    const result = await pi.exec(process.env.BERCAIL_BIN || "bercail", args, { timeout: 30000, signal });
+    const approved = (JSON.parse(result.stdout) as { approved?: unknown }).approved;
+    return result.code === 0 && typeof approved === "string" && /^Q[1-9]\d*@[1-9]\d*$/.test(approved)
+      ? approved
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 const policySection = "bercail_git_policy";
 
 export default function (pi: ExtensionAPI) {
@@ -2608,6 +2688,16 @@ export default function (pi: ExtensionAPI) {
   // entire agent-help's read-only lists, read once a session; warnings by tool call.
   const entireHelp: Record<string, string[]> = {};
   const warned = new Map<string, string[]>();
+  // Tool calls that were the only one in their assistant message: Pi checks every call of
+  // a message before it runs any, then runs them together.
+  const alone = new Set<string>();
+  pi.on("message_end", async (event) => {
+    const { message } = event as { message: { role?: string; content?: unknown } };
+    const calls = Array.isArray(message.content)
+      ? message.content.filter((part: { type?: string; id?: string }) => part?.type === "toolCall")
+      : [];
+    if (message.role === "assistant" && calls.length === 1) alone.add(calls[0].id);
+  });
 
   pi.on("tool_call", async (event, ctx) => {
     const input = event.input as { command?: string; path?: string };
@@ -2628,6 +2718,13 @@ export default function (pi: ExtensionAPI) {
         exists: onDisk,
       },
       tmpdir: process.env.TMPDIR && resolve(process.env.TMPDIR) !== "/tmp" ? process.env.TMPDIR : undefined,
+      // Not a call another tool made. No GIT_DIR of Shep's own, which bash would inherit and
+      // the helper drops, nor GIT_CONFIG, which only git config reads, so the helper's
+      // checks read what git push will.
+      alone:
+        alone.delete(event.toolCallId) &&
+        !(event as { parentToolCallId?: string }).parentToolCallId &&
+        !Object.keys(process.env).some((key) => gitPlace.test(key) || key === "GIT_CONFIG"),
     };
     let decision = decideTool(event.toolName, command, guardInput, input.path);
     for (let i = 0; i < 8 && lookup(decision); i++) {
@@ -2671,6 +2768,12 @@ export default function (pi: ExtensionAPI) {
         decision = decideTool(event.toolName, command, worst, input.path);
       }
       if (decision.action !== "block") decision = ask(tooManyReposAsk);
+    }
+    // A push it would ask about that the person's Decisions answer approves: the answer
+    // is spent on it, and it runs with a warning naming the answer. None: it asks.
+    if (decision.action === "ask" && decision.push) {
+      const token = await pushApproval(pi, decision.push, ctx.signal);
+      if (token) decision = { action: "allow", warnings: [...(decision.warnings ?? []), pushApproved(token)] };
     }
     const logged = command ?? input.path ?? "";
     const refuse = (reason: string) => {
