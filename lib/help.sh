@@ -39,8 +39,10 @@ Post-install CLI (bercail):
                 mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] |
                 mistake list (the mistakes ledger, by group) |
                 diagram [FILE] (a Mermaid diagram without its click and link statements) |
-                questions [--json] (pending targeted questions; replies are unverified) |
-                question create|revise|reply|answer|withdraw (JSON on stdin) | check TOKEN | thread TOPIC |
+                questions [--json [--all]] (pending targeted questions; replies are unverified;
+                  --json: the pending cards and the defaults not yet OK'd; --all: the whole ledger) |
+                question create|revise|reply|answer|withdraw (JSON on stdin) | get TOKEN (one revision) |
+                check TOKEN | thread TOPIC |
                 panel (the Decisions panel's JSON) | expire (record due defaults; Shep's runtime runs it) |
                 discuss TOKEN (make or find its branch) | closed TOKEN OPENING |
                 push-approval DIR REMOTE REFSPEC... (the guard's: spends the answer that approves this push)

@@ -56,7 +56,8 @@ ticket() {
 # The worker for ticket $1, in the background; its output in $BATS_TEST_TMPDIR/worker-$1.$2.
 WORKERS=()
 worker() {
-  bercail guard ask "$1" >"$BATS_TEST_TMPDIR/worker-$1.${2:-1}" 2>&1 &
+  # The script, not the function: $! is then the worker itself, which teardown can end.
+  "$ROOT/bin/bercail" guard ask "$1" >"$BATS_TEST_TMPDIR/worker-$1.${2:-1}" 2>&1 &
   WORKERS+=("$!")
 }
 
@@ -247,6 +248,24 @@ wait
   jq -e '.outcome == "unknown"' <<<"$(event "$id")" >/dev/null || fail "outcome: $(cat "$INBOX/guard-$id.json")"
   for _ in $(seq 50); do kill -0 "$child" 2>/dev/null || break; sleep 0.1; done
   ! kill -0 "$child" 2>/dev/null || fail "its merge runs on unwatched"
+}
+
+@test "the worker polls its own card with question get, never the whole ledger" {
+  # bercail as the worker runs it, each call's argv logged.
+  printf '#!/bin/sh\nprintf "bercail %%s\\n" "$*" >>"$LOG"\nexec "$REAL" "$@"\n' >"$BATS_TEST_TMPDIR/bin/logged"
+  chmod +x "$BATS_TEST_TMPDIR/bin/logged"
+  id="$(ticket "git -C $REPO push origin feature")"
+  REAL="$ROOT/bin/bercail" BERCAIL_BIN="$BATS_TEST_TMPDIR/bin/logged" BERCAIL_GUARD_ASK_POLL_MS=200 worker "$id"
+  token="$(card "$id")"
+  for _ in $(seq 100); do
+    [[ "$(grep -cx "bercail shep question get $token" "$LOG")" -ge 3 ]] && break
+    sleep 0.1
+  done
+  [[ "$(grep -cx "bercail shep question get $token" "$LOG")" -ge 3 ]] || fail "polls: $(cat "$LOG")"
+  pick "$token" Allow >/dev/null
+  jq -e '.outcome == "ran" and .exit == 0' <<<"$(event "$id")" >/dev/null || fail "ran"
+  [[ "$(pushes)" -eq 1 ]] || fail "pushed $(pushes) times"
+  if grep -E '^bercail shep (question json|questions)' "$LOG"; then fail "read the whole ledger"; fi
 }
 
 @test "two workers on one ticket run it once" {

@@ -173,7 +173,7 @@ async function ask(id: string) {
     // Nothing ran: run() reports its own end, and nothing after it throws. A card it put
     // up, even one whose reply it lost, leaves the panel: no worker would act on it.
     try {
-      const own = question(["json"]).questions.find((q: any) => q.guard?.ticket === id && q.status === "pending");
+      const own = question(["pending"]).pending.find((q: any) => q.guard?.ticket === id && q.status === "pending");
       if (own)
         question(["withdraw"], {
           requestId: `guard-${id}-failed`,
@@ -225,8 +225,7 @@ async function handle(ticket: GuardTicket) {
     }
   };
   for (;;) {
-    const q = question(["json"]).questions.find((x: any) => `${x.id}@${x.revision}` === token);
-    if (!q) return report(ticket, "failed", { why: `its card ${token} left the ledger` });
+    const q = question(["get", token]);
     if (q.status === "withdrawn") return report(ticket, "withdrawn", { why: q.withdrawal?.reason });
     if (q.status === "answered") {
       if (q.answer.choice !== "Allow") return report(ticket, "denied");

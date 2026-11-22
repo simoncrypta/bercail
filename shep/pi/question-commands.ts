@@ -2,7 +2,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { createHash } from "node:crypto";
-import { QuestionStore, projection, tokenOf } from "./questions.ts";
+import { door, mergesIn, QuestionStore, projection, tokenOf } from "./questions.ts";
 import { spawn } from "node:child_process";
 import { captureTarget, checkQuestion, mergeReversible, withTarget } from "./question-target.ts";
 
@@ -10,6 +10,10 @@ const bareDecision = /^(?:yes|no|y|n|lgtm|[1-9]\d*)[.!]?$/i;
 // How often Shep's runtime looks for a reversible question past its deadline.
 export const EXPIRE_MS = 30000;
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const cut = (text: string) => {
+  const chars = [...text];
+  return chars.length > 300 ? `${chars.slice(0, 299).join("")}…` : text;
+};
 
 export default function (pi: ExtensionAPI) {
   const state = process.env.BERCAIL_SHEP_STATE;
@@ -162,7 +166,7 @@ export default function (pi: ExtensionAPI) {
     name: "shep_question",
     label: "Shep question",
     description:
-      "Create or revise a durable targeted question, bound to the repo and issue. Captures the candidate (staged tree and base) and the desk when there is one; a desk that is gone, elsewhere or another job's is a warning on the card, not a refusal. Never grants authority. A reversible two-way door with a recommendation takes it at its deadline. Returns at most 50KB.",
+      "Create or revise a durable targeted question, bound to the repo and issue. Captures the candidate (staged tree and base) and the desk when there is one; a desk that is gone, elsewhere or another job's is a warning on the card, not a refusal. Never grants authority. A reversible two-way door with a recommendation takes it at its deadline. Returns the token, status, deadline, door and the live check's status, reasons and warnings; `bercail shep question get <token>` prints the whole revision and `question check <token>` the policy.",
     parameters: Type.Object({
       requestId: Type.String(),
       kind: Type.Union([Type.Literal("planning"), Type.Literal("review"), Type.Literal("action")]),
@@ -236,16 +240,18 @@ export default function (pi: ExtensionAPI) {
       const current = store.snapshot().questions.find((q) => tokenOf(q) === tokenOf(question));
       if (!current) throw new Error("Question receipt has no durable revision; restore the ledger before continuing.");
       const check = await checkQuestion(current);
-      const output = JSON.stringify({ token: tokenOf(question), question, check });
+      // What Shep acts on; the whole question and check, policy included, stay in details,
+      // which the session keeps and Pi never sends to the model.
+      const text = JSON.stringify({
+        token: tokenOf(current),
+        status: current.status,
+        deadline: current.deadline ?? null,
+        door: door(current, () => mergesIn(check)).door,
+        check: { status: check.status, reasons: check.reasons.map(cut), warnings: check.warnings.map(cut) },
+      });
       return {
-        content: [
-          {
-            type: "text",
-            text:
-              output.slice(0, 50000) + (output.length > 50000 ? "\n[Truncated; full record is in questions.json]" : ""),
-          },
-        ],
-        details: { question, check },
+        content: [{ type: "text", text }],
+        details: { question: current, check },
       };
     },
   });
