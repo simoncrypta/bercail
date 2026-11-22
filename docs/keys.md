@@ -54,3 +54,9 @@ These keys go to the layout, never to the program in Shep or the desk. If your i
 `bercail update` keeps the keys you changed or removed in that section and warns about each one, and about any `terminal` key that takes one of bercail's. `bercail doctor` lists them too.
 
 The rest are the Herdr app's: `Ctrl+Shift+T`/`W` new/close tab, `Ctrl+Shift+O`/`E` split, `Ctrl+Shift+X` close pane, `Ctrl+Shift+Z` zoom, `Alt+1`…`9` tabs, `Alt+H`/`J`/`K`/`L` panes, `Ctrl+Shift+B` sidebar, `Ctrl+Shift+L` layout, `Ctrl+Shift+?` all keys.
+
+## Copy
+
+Shep and the desks run Pi fullscreen, which holds the mouse: a plain drag selects in Pi, and Pi copies it on release (its `fullscreenCopyOnSelect`, on by default). bercail starts them with `PI_CLIPBOARD_OSC52=1`, so Pi sends that copy, and `Ctrl+X`'s, as OSC 52 as well as to its own machine's clipboard. The Herdr window showing it writes OSC 52 to its computer's clipboard while the app's `clipboard_write` is on (the default), so a window on a laptop, with bercail on [another machine](config.md#bercail-on-another-machine), gets it there. Pi skips OSC 52 for a copy over 75,000 bytes.
+
+Hold `Shift` while you drag to select with the Herdr app instead. It copies on release while `copy_on_select` is on (the default), and `Ctrl+Shift+C` copies the selection either way. `Ctrl+C` is not a copy key here: it goes to Pi, where a second quick press quits it.

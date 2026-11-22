@@ -37,6 +37,7 @@ fi
 {
   printf 'pi cwd=%s inbox=%s role=%s anthropic=%s discuss=%s\n' "$PWD" "${BERCAIL_SHEP_INBOX:-}" "${BERCAIL_ROLE:-}" "${ANTHROPIC_API_KEY:-unset}" "${BERCAIL_DISCUSS_TOKEN:-}"
   printf 'pi-arg %s\n' "$@"
+  printf 'pi-osc52 %s\n' "${PI_CLIPBOARD_OSC52:-unset}"
 } >>"$LOG"
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/"*
@@ -118,6 +119,11 @@ EOF
   done
   [[ "$args" != *instructions.md* && "$args" != */x/bstack* && "$args" != *desk-restore* ]] || fail "Pi got the lead's rules or a missing skill: $args"
   [[ -d "$STATE/inbox" && -d "$STATE/delivered" ]] || fail "no inbox"
+}
+
+@test "Shep starts Pi with PI_CLIPBOARD_OSC52=1" {
+  PI_CLIPBOARD_OSC52='' start_pi
+  grep -qx 'pi-osc52 1' "$LOG" || fail "Pi env: $(grep '^pi-osc52' "$LOG")"
 }
 
 @test "Shep runs on a scratch TMPDIR of its own, gone once it exits" {

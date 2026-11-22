@@ -263,7 +263,7 @@ With a backend, the layout's mods:
 - read the [Decisions panel](shep.md#the-decisions-panel)'s questions (`bercail shep question panel`) there every 30 seconds instead of watching the ledger, record its answers (`bercail shep question answer`) there, and run its Discuss branch (`bercail shep discuss`, in an hc terminal) and the close's event there;
 - run the Stack tab's `bercail review-pr` and its jobs there, and read its run dir every 5 seconds instead of watching it.
 
-With or without one, a space's desk (`Ctrl+Shift+A`, Start the agent) starts on the space's machine, under its Shell, and git and gh for a space run there too.
+With or without one, a space's desk (`Ctrl+Shift+A`, Start the agent) starts on the space's machine, under its Shell, and git and gh for a space run there too. For copying from Shep or a desk, see [Copy](keys.md#copy).
 
 A desk's labels are written on its own machine and name that machine's ids: `bercail.space=sp1` on `box` is the space `box/sp1` in the laptop's window. The mods add and remove only that machine's prefix, and never run on the laptop a path that came from the other machine.
 

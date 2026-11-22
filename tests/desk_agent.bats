@@ -118,6 +118,18 @@ seed_issue() {
   expect "$(desk pi -- '- a message')" "pi [-e] [$EXT] [--] [- a message] key=none" "the extension comes before --"
 }
 
+# Pi on the backend would wl-copy to that machine's clipboard; OSC 52 reaches the
+# Herdr window that shows the desk, a client's included.
+@test "the desk starts Pi with PI_CLIPBOARD_OSC52=1" {
+  cat >"$BATS_TEST_TMPDIR/bin/pi" <<'AGENT'
+#!/usr/bin/env bash
+printf 'osc52=%s\n' "${PI_CLIPBOARD_OSC52:-unset}"
+AGENT
+  chmod +x "$BATS_TEST_TMPDIR/bin/pi"
+  hash -r
+  expect "$(PI_CLIPBOARD_OSC52='' desk pi)" "osc52=1" "Pi gets PI_CLIPBOARD_OSC52=1"
+}
+
 # A bstack lead with a model and a thinking level, as bercail update writes it.
 arrange_lead() {
   LEAD="$HOME/.local/share/bercail/pi/lead.json"

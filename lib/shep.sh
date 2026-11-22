@@ -51,8 +51,9 @@ shep_pi_argv() {
   share="$(shep_share_dir)"
   state="$(shep_state_dir)"
   [[ "$(toml_value "$BERCAIL_USER_CONFIG" shep rollover)" != true ]] || rollover=1
+  # PI_CLIPBOARD_OSC52: a copy reaches the Herdr window showing Shep, as a desk's does.
   SHEP_PI_ARGV=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN
-    BERCAIL_ROLE=shep "BERCAIL_SHEP_INBOX=$state/inbox" "BERCAIL_SHEP_STATE=$state"
+    BERCAIL_ROLE=shep PI_CLIPBOARD_OSC52=1 "BERCAIL_SHEP_INBOX=$state/inbox" "BERCAIL_SHEP_STATE=$state"
     "BERCAIL_SHEP_BIN=${BERCAIL_SELF:-bercail}" "BERCAIL_SHEP_ROLLOVER=$rollover"
     "BERCAIL_SHEP_DECISION_TIMEOUT=$(toml_value "$BERCAIL_USER_CONFIG" shep decision_timeout)" pi)
   if [[ -r "$lead" ]]; then
