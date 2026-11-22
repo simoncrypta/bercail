@@ -25,7 +25,9 @@ POLICY_FILE=".bercail/policy.toml"
 # waiting on the person's review before Shep warns at a new desk, about two
 # hours of review. merge_reversible: whether a merge or land in this repo is a two-way
 # door, so Shep's question about it may default after the timeout (docs/shep.md).
-POLICY_DEFAULTS='{"push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"merge_reversible":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000}'
+# required_ci: the workflow files whose push runs gate a landing from one pick; a
+# repo opts in by naming them.
+POLICY_DEFAULTS='{"push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"merge_reversible":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000,"required_ci":[]}'
 
 _policy_err() {
   printf 'bercail policy: %s\n' "$*" >&2
@@ -63,6 +65,8 @@ _policy_object() {
       elif $k == "high_stakes" then ($v | type) == "array"
         and all($v[]; type == "string" and length > 0 and (test("^[/:]|(^|/)\\.\\.(/|$)") | not))
       elif $k == "diff_budget" or $k == "review_budget" then ($v | type) == "number" and $v >= 1 and $v == ($v | floor)
+      elif $k == "required_ci" then ($v | type) == "array" and ($v | unique | length) == ($v | length)
+        and all($v[]; type == "string" and test("^\\.github/workflows/[^/]+\\.ya?ml$"))
       else null end;
     (map(select(has("value")) | if .key == "high_stakes" then .value |= globs else . end | .ok = ok(.key; .value))) as $rows
     | ($rows | map(select(.ok == true) | {(.key): .value}) | add // {} | tojson),
@@ -122,7 +126,8 @@ policy_json() {
     --argjson repo "$repo" --argjson local "$local_" --argjson defaults "$POLICY_DEFAULTS" '
     def looser($k; $v):
       ($k == "push" and $v != "ask") or ($k == "agent_may_release" and $v == true)
-      or ($k == "merge_reversible" and $v == true) or ($k == "review" and $v == "none") or (($k == "diff_budget" or $k == "review_budget") and $v > $defaults[$k]);
+      or ($k == "merge_reversible" and $v == true) or ($k == "review" and $v == "none") or (($k == "diff_budget" or $k == "review_budget") and $v > $defaults[$k])
+      or ($k == "required_ci" and $v != []);
     ($defaults | keys_unsorted) as $keys
     | [ $keys[] as $k
         | if $local | has($k) then {k: $k, v: $local[$k], from: "local"}

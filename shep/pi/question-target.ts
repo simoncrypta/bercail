@@ -1,7 +1,8 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
-import type { Question, QuestionPush, QuestionTarget } from "./questions.ts";
+import { isAbsolute, join } from "node:path";
+import type { Question, QuestionLand, QuestionPush, QuestionTarget } from "./questions.ts";
 
 export interface TargetInput {
   kind: "planning" | "review" | "action";
@@ -21,9 +22,9 @@ function text(value: unknown, field: string): asserts value is string {
 function nullable(value: unknown, field: string) {
   if (value !== null) text(value, field);
 }
-function run(command: string, args: string[], cwd: string): string {
-  // Neither inherited git addressing nor a global beads database may redirect a target.
-  const env = Object.fromEntries(
+// Neither inherited git addressing nor a global beads database may redirect a target.
+const targetEnv = () =>
+  Object.fromEntries(
     Object.entries(process.env).filter(
       ([key]) =>
         !/^(BEADS_|BD_|GIT_(DIR|WORK_TREE|COMMON_DIR|INDEX_FILE|OBJECT_DIRECTORY|ALTERNATE_OBJECT_DIRECTORIES|NAMESPACE)$)/.test(
@@ -31,12 +32,13 @@ function run(command: string, args: string[], cwd: string): string {
         ),
     ),
   );
+function run(command: string, args: string[], cwd: string, timeout = 5000): string {
   return execFileSync(command, args, {
     cwd,
-    env,
+    env: targetEnv(),
     encoding: "utf8",
-    timeout: 5000,
-    maxBuffer: 1024 * 1024,
+    timeout,
+    maxBuffer: 16 * 1024 * 1024,
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
@@ -365,8 +367,200 @@ function checkGuard(question: Question) {
   };
 }
 
+const bercail = () => process.env.BERCAIL_SHEP_BIN || "bercail";
+const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+
+// bercail policy show --json for the worktree, once it says it describes that worktree and repo.
+function policyOf(worktree: string, repo: string, bin = bercail()) {
+  const value = JSON.parse(run(bin, ["policy", "show", "--json", worktree], worktree));
+  if (
+    !value ||
+    typeof value.policy !== "object" ||
+    value.policy === null ||
+    Array.isArray(value.policy) ||
+    typeof value.root !== "string" ||
+    realpathSync(value.root) !== worktree ||
+    typeof value.repo !== "string" ||
+    identity(value.repo) !== repo
+  )
+    fail("policy does not describe the target repo/worktree");
+  return value;
+}
+
+// The trunk as git_backend_trunk names it: origin's HEAD, else init.defaultBranch, master
+// or main where that branch exists.
+function trunkOf(cwd: string): string {
+  const attempt = (...args: string[]) => {
+    try {
+      return git(cwd, ...args);
+    } catch {
+      return "";
+    }
+  };
+  const origin = attempt("symbolic-ref", "--quiet", "refs/remotes/origin/HEAD");
+  if (origin.startsWith("refs/remotes/origin/")) return origin.slice("refs/remotes/origin/".length);
+  const has = (name: string) => attempt("rev-parse", "--verify", "--quiet", `refs/heads/${name}`) !== "";
+  const named = attempt("config", "--get", "init.defaultBranch");
+  if (named && has(named)) return named;
+  return has("master") ? "master" : "main";
+}
+
+// The GitHub repo a push URL names, as owner/name, or null.
+const githubOf = (url: string) =>
+  /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([\w.-]+\/[\w.-]+?)(?:\.git)?$/.exec(
+    url,
+  )?.[1] ?? null;
+
+// A land card's target and facts, read from its worktree, its job's handoff record, origin
+// and GitHub: what land-create pins, and what its check reads again. A desk that does not
+// check out is a warning and leaves the space and session null; a fact that cannot be read
+// is null, and the ledger refuses to pin it. bercail is the one the CLI runs as
+// (BERCAIL_SELF), by its real path, for these reads and for the worker.
+export function landFacts(dir: string, issue: string) {
+  text(dir, "worktree");
+  text(issue, "issue");
+  if (!/^\w[\w.-]*$/.test(issue)) fail("a land card's job is a beads issue");
+  const worktree = realpathSync(git(realpathSync(dir), "rev-parse", "--show-toplevel"));
+  const repo = identity(worktree);
+  const jobs = JSON.parse(run("bd", ["show", issue, "--json"], worktree));
+  if (!Array.isArray(jobs) || jobs.length !== 1 || jobs[0]?.id !== issue)
+    fail("issue does not match the repo's beads job");
+  const warnings: string[] = [];
+  const task = jobs[0].metadata?.bercail_task;
+  const recorded = task?.owner?.desk;
+  const desk = typeof recorded === "string" && /^[a-zA-Z0-9_-]+$/.test(recorded) ? recorded : null;
+  let found: { space: string; session: string } | string = `${issue}'s handoff record names no desk`;
+  if (desk) found = deskFacts(desk, issue, worktree);
+  if (typeof found === "string") warnings.push(found);
+  const bin = isAbsolute(bercail())
+    ? realpathSync(bercail())
+    : fail("a land card reads through the bercail the CLI runs as: set BERCAIL_SHEP_BIN to its path");
+  const registered = git(worktree, "worktree", "list", "--porcelain")
+    .split("\n")
+    .some((line) => {
+      try {
+        return line.startsWith("worktree ") && realpathSync(line.slice(9)) === worktree;
+      } catch {
+        return false;
+      }
+    });
+  const trunk = trunkOf(worktree);
+  const url = pushUrl(worktree, "origin");
+  const github = githubOf(url);
+  const remote = run("git", ["ls-remote", "--end-of-options", url, `refs/heads/${trunk}`], worktree, 60000);
+  const base =
+    remote
+      .split("\n")
+      .find((line) => line.endsWith(`\trefs/heads/${trunk}`))
+      ?.split("\t")[0] ?? null;
+  const policy = policyOf(worktree, repo, bin);
+  const required: string[] = Array.isArray(policy.policy.required_ci) ? policy.policy.required_ci : [];
+  const workflows =
+    required.length && github
+      ? JSON.parse(
+          run("gh", ["workflow", "list", "--repo", github, "--json", "id,path", "--limit", "1000"], worktree, 60000),
+        )
+      : [];
+  // describe check exits 1 on a failing description; its JSON still says what it read.
+  const described = JSON.parse(
+    spawnSync(bin, ["describe", "check", "--json", worktree], {
+      cwd: worktree,
+      env: targetEnv(),
+      encoding: "utf8",
+      timeout: 30000,
+    }).stdout || "null",
+  );
+  const reviewRequired = described?.change?.review === "required";
+  let reviewer: string | null = null;
+  if (reviewRequired)
+    try {
+      reviewer = git(worktree, "config", "--global", "--get", "user.name") || null;
+    } catch {}
+  const message = spawnSync(bin, ["describe", "commit", ...(reviewer ? ["--reviewed-by", reviewer] : []), worktree], {
+    cwd: worktree,
+    env: targetEnv(),
+    encoding: "utf8",
+    timeout: 30000,
+  });
+  // Porcelain v2 starts each entry with its kind, so the trim run() does is safe: a change
+  // the index does not hold (Y is not "."), an untracked file or an unmerged path is dirty.
+  // So is a path status cannot see, marked assume-unchanged (a lowercase tag) or skip-worktree,
+  // and a submodule's change that config would hide.
+  const dirty =
+    git(worktree, "status", "--porcelain=v2", "--untracked-files=all", "--ignore-submodules=none")
+      .split("\n")
+      .some((line) => /^[?u]/.test(line) || /^[12] .[^.]/.test(line)) ||
+    /^([a-z]|S) /m.test(git(worktree, "ls-files", "-v"));
+  const target: QuestionTarget = {
+    repo,
+    issue,
+    topic: `land-${issue}`,
+    worktree,
+    desk,
+    space: typeof found === "string" ? null : found.space,
+    session: typeof found === "string" ? null : found.session,
+    action: "land",
+    branch: branch(worktree),
+    head: commit(worktree, "HEAD"),
+    stagedTree: git(worktree, "write-tree"),
+    baseRef: trunk,
+    base,
+  };
+  const land = {
+    url,
+    github,
+    registered,
+    clean: !dirty,
+    handoffBranch: typeof task?.branch === "string" ? task.branch : null,
+    description: { tree: described?.tree ?? null, message: message.status === 0 ? sha256(message.stdout) : null },
+    policy: { file: policy.sha256, trusted: policy.trusted === true, hash: sha256(JSON.stringify(policy.policy)) },
+    requiredCi: required.map((path) => ({
+      path,
+      id: Array.isArray(workflows) ? (workflows.find((w) => w?.path === path)?.id ?? null) : null,
+    })),
+    bercail: bin,
+    review: { required: reviewRequired, highStakes: described?.change?.high_stakes ?? [] },
+    reviewer,
+  } as QuestionLand;
+  return { target, land, warnings, policy };
+}
+
+// A land card: every pinned fact read again and equal, its desk's space and session too.
+// No pass for one commit of the tree: the chain makes that commit itself.
+function checkLand(question: Question) {
+  const reasons: string[] = [];
+  let current: QuestionTarget | null = null;
+  let warnings: string[] = [];
+  let policy: { status: "checked"; current: unknown } | { status: "unavailable"; reason: string };
+  if (question.status === "superseded" || question.status === "withdrawn")
+    reasons.push(`question is ${question.status}`);
+  try {
+    const now = landFacts(question.target.worktree!, question.target.issue!);
+    ({ target: current, warnings } = now);
+    for (const key of Object.keys(question.target) as (keyof QuestionTarget)[])
+      if (question.target[key] !== now.target[key]) reasons.push(`${key} changed`);
+    for (const key of Object.keys(question.land!) as (keyof QuestionLand)[])
+      if (JSON.stringify(question.land![key]) !== JSON.stringify(now.land[key])) reasons.push(`${key} changed`);
+    policy = { status: "checked", current: now.policy };
+  } catch (error) {
+    reasons.push(`target unavailable: ${(error as Error).message.split("\n")[0]}`);
+    policy = { status: "unavailable", reason: (error as Error).message };
+  }
+  return {
+    token: `${question.id}@${question.revision}`,
+    fresh: reasons.length === 0,
+    status: policy.status === "unavailable" ? "unavailable" : reasons.length ? "stale" : "fresh",
+    authority: false as const,
+    reasons,
+    warnings,
+    current,
+    policy,
+  };
+}
+
 export async function checkQuestion(question: Question) {
   if (question.kind === "guard") return checkGuard(question);
+  if (question.kind === "land") return checkLand(question);
   const target = question.target;
   const reasons: string[] = [];
   let current: QuestionTarget | null = null;
@@ -416,21 +610,7 @@ export async function checkQuestion(question: Question) {
   let policy: { status: "checked"; current: unknown } | { status: "unavailable"; reason: string };
   try {
     text(target.worktree, "worktree");
-    const value = JSON.parse(
-      run(process.env.BERCAIL_SHEP_BIN || "bercail", ["policy", "show", "--json", target.worktree], target.worktree),
-    );
-    if (
-      !value ||
-      typeof value.policy !== "object" ||
-      value.policy === null ||
-      Array.isArray(value.policy) ||
-      typeof value.root !== "string" ||
-      realpathSync(value.root) !== target.worktree ||
-      typeof value.repo !== "string" ||
-      identity(value.repo) !== target.repo
-    )
-      fail("policy does not describe the target repo/worktree");
-    policy = { status: "checked", current: value };
+    policy = { status: "checked", current: policyOf(target.worktree, target.repo) };
   } catch (error) {
     unavailable = true;
     policy = { status: "unavailable", reason: (error as Error).message };

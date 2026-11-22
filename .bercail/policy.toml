@@ -12,13 +12,15 @@ A behavior change comes with a test in tests/ that fails without it.
 """
 review = "by-stakes"
 # A change that touches one of these waits for Simon's review before Shep
-# commits it: the guard, the policy, the install and update path, the Workers,
-# CI, and the release files. Git glob pathspecs, one a line. This file is
+# commits it: the guard, the policy, landing and the question ledger, the
+# install and update path, the Workers, CI, and the release files. Git glob pathspecs, one a line. This file is
 # always high-stakes. README.md's release link and pin are left out: they
 # change with each release commit, which Simon cuts himself.
 high_stakes = """
 bstack/pi/extensions/guard.ts
 lib/policy.sh
+lib/land.sh
+shep/pi/questions.ts
 install.sh
 bin/bercail
 lib/common.sh

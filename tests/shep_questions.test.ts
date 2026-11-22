@@ -840,6 +840,242 @@ describe("durable targeted questions", () => {
     expect(outputs.filter((o) => o.trim().endsWith("true"))).toHaveLength(1);
   }, 15000);
 
+  // A land card on one worktree, branch and job, and the person's pick on it.
+  const pinned: NonNullable<QuestionSpec["land"]> = {
+    url: "git@github.com:o/app.git",
+    github: "o/app",
+    registered: true,
+    clean: true,
+    handoffBranch: "login",
+    description: { tree: "b".repeat(40), message: "d".repeat(64) },
+    policy: { file: "e".repeat(64), trusted: true, hash: "f".repeat(64) },
+    requiredCi: [{ path: ".github/workflows/ci.yml", id: 7 }],
+    bercail: "/opt/bercail/bin/bercail",
+    review: { required: false, highStakes: [] },
+    reviewer: null,
+  };
+  const landCard = (requestId: string, target: Partial<QuestionSpec["target"]> = {}, extra = {}): string => {
+    const spec: QuestionSpec = {
+      kind: "land",
+      prompt: "Land the login fix?",
+      options: ["Ship it", "Not yet"],
+      origin: { event: `land-${requestId}`, session: "shep-session", entry: null },
+      target: {
+        repo: "/canonical/main",
+        issue: "app-1",
+        topic: "land-app-1",
+        worktree: "/canonical/main.login",
+        desk: "desk-1",
+        space: "space-1",
+        session: "desk-session",
+        action: "land",
+        branch: "refs/heads/login",
+        head: "a".repeat(40),
+        stagedTree: "b".repeat(40),
+        base: "a".repeat(40),
+        baseRef: "master",
+        ...target,
+      },
+      land: { ...pinned, handoffBranch: (target.branch ?? "refs/heads/login").slice("refs/heads/".length) },
+      ...extra,
+    };
+    return tokenOf(store.create(requestId, spec, resolveSpec));
+  };
+  const ship = (token: string, choice = "Ship it", source: "panel picker" | "discuss picker" = "panel picker") =>
+    store.answer(`pick-${token}-${choice}-${source}`, token, choice, source, live);
+
+  test("a land card offers Ship it or Not yet, the LGTM when review is required, and pins every fact", () => {
+    const lgtm = { required: true, highStakes: ["lib/land.sh"] };
+    const land = (changes: Record<string, unknown>) => ({ land: { ...pinned, ...changes } });
+    landCard("one");
+    const refused: [string, Partial<QuestionSpec["target"]>, Record<string, unknown>, RegExp][] = [
+      [
+        "recommended",
+        {},
+        { recommendation: { choice: "Ship it", why: "green" } },
+        /no recommendation, default or push/,
+      ],
+      ["reversible", {}, { reversible: true }, /no recommendation, default or push/],
+      ["other choices", {}, { options: ["Yes", "No"] }, /offers Ship it and Not yet only/],
+      ["one joined choice", {}, { options: ["Ship it,Not yet"] }, /offers Ship it and Not yet only/],
+      ["dirty", {}, land({ clean: false }), /nothing unstaged or untracked/],
+      ["unregistered", {}, land({ registered: false }), /a worktree git lists/],
+      ["another handoff branch", {}, land({ handoffBranch: "other" }), /the one its job's handoff record names/],
+      [
+        "no handoff branch, on a branch named null",
+        { branch: "refs/heads/null" },
+        land({ handoffBranch: null }),
+        /the one its job's handoff record names/,
+      ],
+      ["no desk", { desk: null, space: null, session: null }, {}, /expected nonempty text/],
+      ["commit action", { action: "commit" }, {}, /action land/],
+      ["no ci", {}, land({ requiredCi: [] }), /required_ci/],
+      ["no ci id", {}, land({ requiredCi: [{ path: ".github/workflows/ci.yml", id: null }] }), /has no GitHub ID/],
+      ["lgtm, no reviewer", {}, { ...land({ review: lgtm }), options: ["LGTM, ship it", "Not yet"] }, /nonempty/],
+      ["lgtm, plain choices", {}, land({ review: lgtm, reviewer: "Simon" }), /offers LGTM, ship it and Not yet/],
+      ["reviewer, no review", {}, land({ reviewer: "Simon" }), /reviewer only when review is required/],
+    ];
+    for (const [id, target, extra, why] of refused) expect(() => landCard(id, target, extra), id).toThrow(why);
+    const token = landCard(
+      "lgtm",
+      {},
+      { ...land({ review: lgtm, reviewer: "Simon" }), options: ["LGTM, ship it", "Not yet"] },
+    );
+    expect(store.snapshot().questions.map(tokenOf)).toEqual(["Q1@1", token]);
+  });
+
+  test("a land claim needs the person's Ship it on the panel, once, with no other chain for the worktree, branch or job", () => {
+    const first = landCard("first");
+    // Discuss can talk, not pick: an agent can type into it.
+    expect(ship(first, "Ship it", "discuss picker")).toMatchObject({
+      accepted: false,
+      reason: "a land card is answered on the panel card only",
+    });
+    const notShipped = "not the person's Ship it on a land card's panel";
+    expect(store.claimLand(first)).toMatchObject({ accepted: false, reason: notShipped });
+    const declined = landCard("declined", { issue: "app-2", worktree: "/w/2", branch: "refs/heads/b2" });
+    expect(ship(declined, "Not yet").accepted).toBe(true);
+    expect(store.claimLand(declined)).toMatchObject({ accepted: false, reason: notShipped });
+    ship(first);
+    expect(() => store.claimLand("Q1@2")).toThrow(/unknown question revision/);
+    expect(store.claimLand(first)).toMatchObject({
+      accepted: true,
+      question: { landing: { claim: { at: expect.any(String) } } },
+    });
+    expect(new QuestionStore(state).claimLand(first).reason).toMatch(/^its chain was already claimed at /);
+    // Another card on the same worktree, branch or job waits for the running chain.
+    const others = [
+      landCard("worktree", { issue: "app-3", branch: "refs/heads/b3" }),
+      landCard("branch", { issue: "app-4", worktree: "/w/4" }),
+      landCard("job", { worktree: "/w/5", branch: "refs/heads/b5" }),
+    ];
+    const elsewhere = landCard("other repo", { repo: "/canonical/other" });
+    for (const token of [...others, elsewhere]) ship(token);
+    for (const token of others)
+      expect(store.claimLand(token)).toMatchObject({
+        accepted: false,
+        reason: "Q1@1's chain is running for the same worktree, branch or job",
+      });
+    expect(store.claimLand(elsewhere).accepted).toBe(true);
+    store.landResult(first, { outcome: "changed", commit: null, warnings: [], log: "/state/land/Q1-1.log" });
+    expect(store.claimLand(others[0]!).accepted).toBe(true);
+  });
+
+  test("a start reservation is recorded once per attempt, before any claim, and grants nothing", () => {
+    const token = landCard("one");
+    const notShipped = "not the person's Ship it on a land card's panel";
+    expect(store.reserveLand(token, 1)).toMatchObject({ accepted: false, reason: notShipped });
+    ship(token);
+    expect(store.reserveLand(token, 1)).toMatchObject({
+      accepted: true,
+      question: { landing: { starts: [{ terminal: "land-q1-1", at: "2026-11-14T12:00:00.000Z" }], steps: [] } },
+    });
+    expect(store.reserveLand(token, 1).reason).toBe("start 1 is not the next one, 2");
+    expect(store.reserveLand(token, 3).reason).toBe("start 3 is not the next one, 2");
+    expect(new QuestionStore(state).reserveLand(token, 2).accepted).toBe(true);
+    // A reservation is not a claim: the chain still needs its one claim, and then takes no start.
+    expect(store.landStep(token, "check").reason).toBe("its chain is not claimed");
+    expect(store.claimLand(token).accepted).toBe(true);
+    expect(store.reserveLand(token, 3).reason).toMatch(/^its chain was already claimed at /);
+    const declined = landCard("declined", { issue: "app-2" });
+    ship(declined, "Not yet");
+    expect(store.reserveLand(declined, 1)).toMatchObject({ accepted: false, reason: notShipped });
+    expect(store.snapshot().questions[0]!.landing!.starts).toHaveLength(2);
+  });
+
+  test("a claimed chain records its steps in order and one result at the last of them, told once", () => {
+    const token = landCard("one");
+    ship(token);
+    const result = { outcome: "landed" as const, commit: "c".repeat(40), warnings: [], log: "/state/land/Q1-1.log" };
+    expect(store.landResult(token, result).reason).toBe("its chain is not claimed");
+    store.claimLand(token);
+    for (const [step, detail] of [
+      ["check"],
+      ["commit"],
+      ["push"],
+      ["ci", "1 of 2 runs passed"],
+      ["ci", "2 of 2 runs passed"],
+    ])
+      expect(store.landStep(token, step as "ci", detail).accepted).toBe(true);
+    expect(store.landStep(token, "commit").reason).toBe("commit cannot follow ci");
+    expect(store.landStep(token, "sync").reason).toBe("sync cannot follow ci");
+    expect(() => store.landStep(token, "deploy" as "ci")).toThrow(/unknown land step/);
+    expect(store.landTold(token).reason).toBe("its chain has no result");
+    // Landed means the trunk push ran.
+    expect(store.landResult(token, result).reason).toBe("landed only once the chain is past its trunk push");
+    store.landStep(token, "trunk");
+    expect(() => store.landResult(token, { ...result, commit: null })).toThrow(/landed only past the trunk push/);
+    expect(() => store.landResult(token, { ...result, outcome: "merged" as "landed" })).toThrow(/known outcome/);
+    expect(store.landResult(token, result)).toMatchObject({
+      accepted: true,
+      question: { landing: { result: { ...result, step: "trunk", at: expect.any(String) } } },
+    });
+    expect(store.landResult(token, { ...result, outcome: "unknown" }).reason).toBe("its chain already ended: landed");
+    expect(store.landStep(token, "close").reason).toBe("its chain ended: landed");
+    expect(store.landTold(token)).toMatchObject({ accepted: true, question: { landing: { result: { told: true } } } });
+    expect(new QuestionStore(state).landTold(token).reason).toBe("its result was already told");
+    // A chain that recorded no step ends at none.
+    const bare = landCard("bare", { issue: "app-2", worktree: "/w/2", branch: "refs/heads/b2" });
+    ship(bare);
+    store.claimLand(bare);
+    expect(store.landStep(bare, "ci").reason).toBe("ci cannot follow the claim");
+    expect(
+      store.landResult(bare, { ...result, outcome: "unknown", commit: null }).question.landing!.result!.step,
+    ).toBeNull();
+  });
+
+  test("a ledger edited to break a land card's rules fails closed on reload", () => {
+    const at = "2026-11-14T12:00:00.000Z";
+    const claimed = { starts: [], steps: [], claim: { at } };
+    const cases: [string, (q: any[]) => void][] = [
+      ["a chain on a declined card", (q) => ((q[0].answer.choice = "Not yet"), (q[0].landing = claimed))],
+      ["a Discuss pick", (q) => (q[0].answer.source = "discuss picker")],
+      ["two running chains on one worktree", (q) => ((q[0].landing = claimed), (q[1].landing = claimed))],
+      ["an unknown first step", (q) => (q[0].landing = { ...claimed, steps: [{ step: "deploy", at }] })],
+      [
+        "landed before the trunk push",
+        (q) =>
+          (q[0].landing = {
+            ...claimed,
+            steps: [{ step: "check", at }],
+            result: { outcome: "landed", step: "check", commit: "c".repeat(40), warnings: [], log: "/l", at },
+          }),
+      ],
+    ];
+    for (const [name, edit] of cases) {
+      rmSync(state, { recursive: true, force: true });
+      for (const [id, target] of [
+        ["one", {}],
+        ["two", { issue: "app-2", branch: "refs/heads/b2" }],
+      ] as const)
+        ship(landCard(id, target));
+      const file = join(state, "questions.json");
+      const saved = JSON.parse(readFileSync(file, "utf8"));
+      edit(saved.questions);
+      writeFileSync(file, JSON.stringify(saved));
+      expect(() => new QuestionStore(state).snapshot(), name).toThrow(/corrupt questions\.json/);
+    }
+  });
+
+  test("simultaneous reservations of one attempt, and simultaneous claims, each let exactly one through", async () => {
+    const token = landCard("one");
+    ship(token);
+    for (const [mode, input] of [
+      ["land-reserve", { token, attempt: 1 }],
+      ["land-claim", { token }],
+    ] as const) {
+      const workers = Array.from({ length: 4 }, () => start(mode, input));
+      await Promise.all(workers.map((p) => p.ready));
+      workers.forEach((p) => p.child.stdin!.end("go"));
+      const outputs = await Promise.all(workers.map((p) => p.done));
+      expect(
+        outputs.filter((o) => o.trim().endsWith("true")),
+        mode,
+      ).toHaveLength(1);
+    }
+    expect(store.snapshot().questions[0]!.landing!.starts).toHaveLength(1);
+  }, 15000);
+
   test("simultaneous repeated request ids create exactly one durable question", async () => {
     const workers = Array.from({ length: 4 }, () => start("create", { requestId: "same", spec: fields() }));
     await Promise.all(workers.map((p) => p.ready));

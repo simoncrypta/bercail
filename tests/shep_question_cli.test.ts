@@ -1,5 +1,17 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  appendFileSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vite-plus/test";
@@ -1491,4 +1503,391 @@ test("a guard event is Shep's line from its fields alone, and a malformed one is
   );
   expect(eventLine({ ...decision, by: "discuss picker" })).toBeNull();
   expect(eventLine({ ...decision, guard: { worker: "t9" } })).toBeNull();
+});
+
+describe("a land card", () => {
+  let wt: string;
+  let origin: string;
+  const wgit = (...args: string[]) => execFileSync("git", ["-C", wt, ...args], { env, encoding: "utf8" }).trim();
+  const ogit = (...args: string[]) =>
+    execFileSync("git", ["--git-dir", origin, ...args], { env, encoding: "utf8" }).trim();
+  const sha256 = (value: string) => createHash("sha256").update(value).digest("hex");
+  const policy = () => JSON.parse(readFileSync(join(dir, "land-policy.json"), "utf8"));
+  const edit = (file: string, change: (value: any) => void) => {
+    const value = JSON.parse(readFileSync(join(dir, file), "utf8"));
+    change(value);
+    json(join(dir, file), value);
+  };
+  const input = (extra: Record<string, unknown> = {}) => ({
+    requestId: "land-1",
+    prompt: "Land the login fix?",
+    brief: "Commits the staged tree, pushes it, waits for CI and lands it on master.",
+    origin: { event: "finished:t9", session: "shep-session", entry: null },
+    worktree: wt,
+    issue: "app-1",
+    ...extra,
+  });
+  const create = (extra: Record<string, unknown> = {}) => call("land-create", input(extra));
+  const check = (token = "Q1@1") => ok("check", undefined, [token]);
+
+  beforeEach(() => {
+    wt = join(dir, "repo.login");
+    origin = join(dir, "github/o/app.git");
+    execFileSync("git", ["init", "-q", "--bare", origin], { env });
+    git("push", "-q", origin, "master");
+    execFileSync("git", ["clone", "-q", "--bare", origin, join(dir, "github/o/fork.git")], { env });
+    // origin names GitHub; a stand-in ssh serves it from the local bare repos.
+    writeFileSync(join(dir, "bin/ssh"), `#!/bin/sh\nfor last; do :; done\ncd '${dir}/github' && exec sh -c "$last"\n`, {
+      mode: 0o755,
+    });
+    git("remote", "add", "origin", "git@github.com:o/app.git");
+    git("config", "core.sshCommand", join(dir, "bin/ssh"));
+    git("config", "ssh.variant", "simple");
+    git("worktree", "add", "-q", "-b", "login", wt);
+    writeFileSync(join(wt, "file"), "two\n");
+    wgit("add", "file");
+    terminal({ cwd: wt });
+    record({ cwd: wt });
+    json(join(dir, "issue.json"), [
+      { id: "app-1", title: "Login", metadata: { bercail_task: { branch: "login", owner: { desk: "t9" } } } },
+    ]);
+    json(join(dir, "land-policy.json"), {
+      repo,
+      root: wt,
+      sha256: "policy-one",
+      trusted: true,
+      policy: { push: "main", integrate: "direct", required_ci: [".github/workflows/ci.yml"] },
+    });
+    json(join(dir, "describe.json"), {
+      tree: wgit("write-tree"),
+      change: { review: "optional", high_stakes: [] },
+      fails: [],
+    });
+    writeFileSync(join(dir, "commit.txt"), "Fix the login\n\nIt was broken.\n");
+    json(join(dir, "workflows.json"), [
+      { id: 7, path: ".github/workflows/ci.yml" },
+      { id: 9, path: ".github/workflows/site.yml" },
+    ]);
+    execFileSync("git", ["config", "--global", "user.name", "Simon"], { env });
+    const fake = (name: string, body: string) =>
+      writeFileSync(join(dir, "bin", name), `#!/bin/sh\nprintf '%s %s\\n' '${name}' "$*" >> '${dir}/argv'\n${body}\n`, {
+        mode: 0o755,
+      });
+    fake(
+      "bd",
+      `test "$PWD" = '${wt}' || exit 2\ntest "$*" = 'show app-1 --json' || exit 2\n/bin/cat '${dir}/issue.json'`,
+    );
+    fake(
+      "gh",
+      `test "$*" = 'workflow list --repo o/app --json id,path --limit 1000' || test "$*" = 'workflow list --repo o/fork --json id,path --limit 1000' || exit 2\n/bin/cat '${dir}/workflows.json'`,
+    );
+    // bercail is a link to the installed copy, which the card pins by its real path.
+    fake(
+      "bercail-1",
+      [
+        `case "$1 $2 $3 $4" in`,
+        `  "policy show --json ${wt}") /bin/cat '${dir}/land-policy.json' ;;`,
+        `  "describe check --json ${wt}") /bin/cat '${dir}/describe.json' ;;`,
+        `  "describe commit ${wt} "|"describe commit --reviewed-by "*) test -f '${dir}/commit.txt' || exit 1; /bin/cat '${dir}/commit.txt'; test "$3" != --reviewed-by || printf 'Reviewed-by: %s\\n' "$4" ;;`,
+        `  *) exit 2 ;;`,
+        `esac`,
+      ].join("\n"),
+    );
+    rmSync(join(dir, "bin/bercail"));
+    symlinkSync(join(dir, "bin/bercail-1"), join(dir, "bin/bercail"));
+  });
+
+  test("pins the worktree, its job's desk, origin's trunk on GitHub, the policy, the CI gate and the description", () => {
+    const created = create();
+    expect(created.stderr).toBe("");
+    const policyNow = policy().policy;
+    expect(JSON.parse(created.stdout)).toMatchObject({
+      kind: "land",
+      options: ["Ship it", "Not yet"],
+      target: {
+        repo: join(repo, ".git"),
+        issue: "app-1",
+        topic: "land-app-1",
+        worktree: wt,
+        desk: "t9",
+        space: "sp1",
+        session: "desk-session",
+        action: "land",
+        branch: "refs/heads/login",
+        head: wgit("rev-parse", "HEAD"),
+        stagedTree: wgit("write-tree"),
+        base: ogit("rev-parse", "master"),
+        baseRef: "master",
+      },
+      land: {
+        url: "git@github.com:o/app.git",
+        github: "o/app",
+        registered: true,
+        clean: true,
+        handoffBranch: "login",
+        description: { tree: wgit("write-tree"), message: sha256("Fix the login\n\nIt was broken.\n") },
+        policy: { file: "policy-one", trusted: true, hash: sha256(JSON.stringify(policyNow)) },
+        requiredCi: [{ path: ".github/workflows/ci.yml", id: 7 }],
+        bercail: join(dir, "bin/bercail-1"),
+        review: { required: false, highStakes: [] },
+        reviewer: null,
+      },
+    });
+    expect(check()).toMatchObject({ status: "fresh", reasons: [], warnings: [] });
+    // A change that needs the LGTM offers it, and pins the person's name in its commit text.
+    edit("describe.json", (d) => (d.change = { review: "required", high_stakes: ["lib/land.sh"] }));
+    const lgtm = JSON.parse(create({ requestId: "land-2" }).stdout);
+    expect(lgtm).toMatchObject({
+      options: ["LGTM, ship it", "Not yet"],
+      land: {
+        review: { required: true, highStakes: ["lib/land.sh"] },
+        reviewer: "Simon",
+        description: { message: sha256("Fix the login\n\nIt was broken.\nReviewed-by: Simon\n") },
+      },
+    });
+    execFileSync("git", ["config", "--global", "user.name", "Someone Else"], { env });
+    expect(check("Q2@1")).toMatchObject({ status: "stale", reasons: ["description changed", "reviewer changed"] });
+  }, 60000);
+
+  test("refuses a dirty worktree, a job whose desk does not check out, and a job that is a trail", () => {
+    writeFileSync(join(wt, "new"), "x\n");
+    expect(create().stderr).toMatch(/asked on a worktree git lists, with nothing unstaged or untracked/);
+    rmSync(join(wt, "new"));
+    edit("issue.json", (jobs) => delete jobs[0].metadata.bercail_task.owner);
+    expect(create().stderr).toMatch(/a land card binds to its desk: app-1's handoff record names no desk/);
+    expect(create({ issue: "trail:4" }).stderr).toMatch(/a land card's job is a beads issue/);
+    expect(ok("json").questions).toEqual([]);
+  }, 60000);
+
+  test("each pinned fact that changes makes it stale, and so does one commit of the tree", () => {
+    expect(create().status).toBe(0);
+    const trunk = ogit("rev-parse", "master");
+    let review: Record<string, unknown>;
+    const cases: [string, () => void, () => void, string[]][] = [
+      [
+        "a new staged tree",
+        () => (writeFileSync(join(wt, "file"), "three\n"), wgit("add", "file")),
+        () => (writeFileSync(join(wt, "file"), "two\n"), wgit("add", "file")),
+        ["stagedTree changed"],
+      ],
+      [
+        "an untracked file",
+        () => writeFileSync(join(wt, "new"), "x\n"),
+        () => rmSync(join(wt, "new")),
+        ["clean changed"],
+      ],
+      [
+        "an edit hidden by assume-unchanged",
+        () => (wgit("update-index", "--assume-unchanged", "file"), writeFileSync(join(wt, "file"), "five\n")),
+        () => (writeFileSync(join(wt, "file"), "two\n"), wgit("update-index", "--no-assume-unchanged", "file")),
+        ["clean changed"],
+      ],
+      [
+        "a worktree git no longer lists",
+        () => {
+          git("worktree", "move", wt, `${wt}-moved`);
+          mkdirSync(wt);
+          for (const name of [".git", "file"]) copyFileSync(join(`${wt}-moved`, name), join(wt, name));
+        },
+        () => (rmSync(wt, { recursive: true }), git("worktree", "move", `${wt}-moved`, wt)),
+        ["registered changed"],
+      ],
+      [
+        "the handoff record's branch",
+        () => edit("issue.json", (j) => (j[0].metadata.bercail_task.branch = "other")),
+        () => edit("issue.json", (j) => (j[0].metadata.bercail_task.branch = "login")),
+        ["handoffBranch changed"],
+      ],
+      [
+        "the desk's session",
+        () => (
+          terminal({ cwd: wt, records: { "session-2": { app: "pi", state: "working" } } }),
+          record({ cwd: wt, session: "session-2" })
+        ),
+        () => (terminal({ cwd: wt }), record({ cwd: wt })),
+        ["session changed"],
+      ],
+      [
+        "an unstaged edit",
+        () => writeFileSync(join(wt, "file"), "four\n"),
+        () => writeFileSync(join(wt, "file"), "two\n"),
+        ["clean changed"],
+      ],
+      [
+        "one commit of the tree",
+        () => wgit("commit", "-qm", "the tree"),
+        () => wgit("reset", "-q", "--soft", "HEAD~1"),
+        ["head changed"],
+      ],
+      [
+        "another branch",
+        () => wgit("checkout", "-q", "-b", "other"),
+        () => (wgit("checkout", "-q", "login"), wgit("branch", "-q", "-D", "other")),
+        ["branch changed"],
+      ],
+      [
+        "the trunk moved on GitHub",
+        () =>
+          ogit("update-ref", "refs/heads/master", ogit("commit-tree", "-p", trunk, "-m", "moved", `${trunk}^{tree}`)),
+        () => ogit("update-ref", "refs/heads/master", trunk),
+        ["base changed"],
+      ],
+      [
+        "the job's desk",
+        () => edit("issue.json", (j) => (j[0].metadata.bercail_task.owner.desk = "t8")),
+        () => edit("issue.json", (j) => (j[0].metadata.bercail_task.owner.desk = "t9")),
+        ["desk changed", "space changed", "session changed"],
+      ],
+      [
+        "the desk's space",
+        () => (
+          terminal({ cwd: wt, labels: { "bercail.role": "agent", "bercail.issue": "app-1", "bercail.space": "sp2" } }),
+          record({ cwd: wt, space: "sp2" })
+        ),
+        () => (terminal({ cwd: wt }), record({ cwd: wt })),
+        ["space changed"],
+      ],
+      [
+        "origin's URL",
+        () => git("remote", "set-url", "origin", "git@github.com:o/fork.git"),
+        () => git("remote", "set-url", "origin", "git@github.com:o/app.git"),
+        ["url changed", "github changed"],
+      ],
+      [
+        "the description's tree",
+        () => edit("describe.json", (d) => (d.tree = "f".repeat(40))),
+        () => edit("describe.json", (d) => (d.tree = wgit("write-tree"))),
+        ["description changed"],
+      ],
+      [
+        "the commit text",
+        () => writeFileSync(join(dir, "commit.txt"), "Fix it\n"),
+        () => writeFileSync(join(dir, "commit.txt"), "Fix the login\n\nIt was broken.\n"),
+        ["description changed"],
+      ],
+      [
+        "the policy file",
+        () => edit("land-policy.json", (p) => (p.sha256 = "policy-two")),
+        () => edit("land-policy.json", (p) => (p.sha256 = "policy-one")),
+        ["policy changed"],
+      ],
+      [
+        "the policy's trust",
+        () => edit("land-policy.json", (p) => (p.trusted = false)),
+        () => edit("land-policy.json", (p) => (p.trusted = true)),
+        ["policy changed"],
+      ],
+      [
+        "a policy value",
+        () => edit("land-policy.json", (p) => (p.policy.push = "ask")),
+        () => edit("land-policy.json", (p) => (p.policy.push = "main")),
+        ["policy changed"],
+      ],
+      [
+        "a required workflow's ID",
+        () => edit("workflows.json", (w) => (w[0].id = 8)),
+        () => edit("workflows.json", (w) => (w[0].id = 7)),
+        ["requiredCi changed"],
+      ],
+      [
+        "a required workflow gone",
+        () => edit("workflows.json", (w) => w.shift()),
+        () => edit("workflows.json", (w) => w.unshift({ id: 7, path: ".github/workflows/ci.yml" })),
+        ["requiredCi changed"],
+      ],
+      [
+        "the installed bercail",
+        () => (
+          copyFileSync(join(dir, "bin/bercail-1"), join(dir, "bin/bercail-2")),
+          rmSync(join(dir, "bin/bercail")),
+          symlinkSync(join(dir, "bin/bercail-2"), join(dir, "bin/bercail"))
+        ),
+        () => (rmSync(join(dir, "bin/bercail")), symlinkSync(join(dir, "bin/bercail-1"), join(dir, "bin/bercail"))),
+        ["bercail changed"],
+      ],
+      [
+        "review now required",
+        () =>
+          edit(
+            "describe.json",
+            (d) => ((review = d.change), (d.change = { review: "required", high_stakes: ["lib/land.sh"] })),
+          ),
+        () => edit("describe.json", (d) => (d.change = review)),
+        ["description changed", "review changed", "reviewer changed"],
+      ],
+    ];
+    for (const [name, change, undo, reasons] of cases) {
+      change();
+      expect(check(), name).toMatchObject({ status: "stale", reasons });
+      undo();
+      expect(check(), `${name}, undone`).toMatchObject({ status: "fresh", reasons: [] });
+    }
+  }, 120000);
+
+  test("a change inside a submodule is dirt, even where the repo's config hides it", () => {
+    const sub = join(dir, "sub");
+    execFileSync("git", ["init", "-q", sub], { env });
+    writeFileSync(join(sub, "inner"), "one\n");
+    execFileSync("git", ["-C", sub, "add", "inner"], { env });
+    execFileSync("git", ["-C", sub, "commit", "-qm", "inner"], { env });
+    wgit("-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "sub");
+    edit("describe.json", (d) => (d.tree = wgit("write-tree")));
+    git("config", "diff.ignoreSubmodules", "all");
+    expect(create().status).toBe(0);
+    expect(check()).toMatchObject({ status: "fresh" });
+    writeFileSync(join(wt, "sub/inner"), "two\n");
+    expect(check()).toMatchObject({ status: "stale", reasons: ["clean changed"] });
+  }, 60000);
+
+  test("reads GitHub before it takes the ledger's lock, so a slow remote holds up no other pick", async () => {
+    ok("json");
+    // gh holds its read open until the test says go, while the lock is tried.
+    writeFileSync(
+      join(dir, "bin/gh"),
+      `#!/bin/sh\n: > '${dir}/gh-entered'\nwhile [ ! -e '${dir}/gh-go' ]; do sleep 0.05; done\n/bin/cat '${dir}/workflows.json'\n`,
+      { mode: 0o755 },
+    );
+    const child = spawn(node, [cli, "land-create"], { env, cwd: dir, stdio: ["pipe", "ignore", "pipe"] });
+    const exited = new Promise((resolve) => child.on("exit", resolve));
+    child.stdin!.end(JSON.stringify(input()));
+    for (let i = 0; i < 500 && !existsSync(join(dir, "gh-entered")); i++)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    const lock = spawnSync("flock", ["-n", join(env.BERCAIL_SHEP_STATE!, "questions.lock"), "true"]);
+    writeFileSync(join(dir, "gh-go"), "");
+    expect(await exited).toBe(0);
+    expect(lock.status).toBe(0);
+    expect(ok("json").questions).toHaveLength(1);
+  }, 60000);
+
+  test("takes the person's pick on the panel only, while fresh, and its worker claims it once", () => {
+    create();
+    expect(pick("d1", "Ship it", "Q1@1", "discuss picker")).toMatchObject({
+      accepted: false,
+      reason: "a land card is answered on the panel card only",
+    });
+    writeFileSync(join(wt, "new"), "x\n");
+    expect(pick("p0", "Ship it")).toMatchObject({ accepted: false, reason: "changed since Shep asked: clean changed" });
+    rmSync(join(wt, "new"));
+    expect(ok("land-claim", undefined, ["Q1@1"]).reason).toBe("not the person's Ship it on a land card's panel");
+    expect(pick("p1", "Ship it")).toMatchObject({ accepted: true });
+    expect(ok("land-claim", undefined, ["Q1@1"])).toMatchObject({ accepted: true });
+    expect(ok("land-claim", undefined, ["Q1@1"]).reason).toMatch(/^its chain was already claimed at /);
+    expect(ok("land-step", undefined, ["Q1@1", "ci"]).reason).toBe("ci cannot follow the claim");
+    for (const step of ["check", "commit", "push"]) ok("land-step", undefined, ["Q1@1", step]);
+    expect(ok("land-step", undefined, ["Q1@1", "ci", "1 of 1 runs passed"])).toMatchObject({ accepted: true });
+    const ended = ok("land-result", {
+      token: "Q1@1",
+      outcome: "ci-failed",
+      commit: "c".repeat(40),
+      warnings: [],
+      log: "/state/land/Q1-1.log",
+    });
+    expect(ended).toMatchObject({
+      accepted: true,
+      question: { landing: { result: { outcome: "ci-failed", step: "ci" } } },
+    });
+    expect(call("land-result", { token: "Q1@1", outcome: "landed" }).stderr).toMatch(
+      /land-result fields must be token, outcome, commit, warnings and log/,
+    );
+  }, 60000);
 });

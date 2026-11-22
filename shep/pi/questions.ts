@@ -27,7 +27,7 @@ export interface QuestionOrigin {
   entry: string | null;
 }
 export interface QuestionSpec {
-  kind: "planning" | "review" | "action" | "guard";
+  kind: "planning" | "review" | "action" | "guard" | "land";
   prompt: string;
   options: string[];
   origin: QuestionOrigin;
@@ -42,6 +42,67 @@ export interface QuestionSpec {
   push?: QuestionPush;
   /** A guard card's: the operation its worker runs on the person's Allow. */
   guard?: QuestionGuard;
+  /** A land card's facts beyond its target, pinned when it was asked. */
+  land?: QuestionLand;
+}
+/** What a land card pins beside its target, whose baseRef is the trunk and base the
+ * trunk's commit on the remote. Read again at the pick and before each effect. */
+export interface QuestionLand {
+  /** origin's one push URL, and the GitHub repo it names. */
+  url: string;
+  github: string;
+  /** The worktree is one git lists, and nothing is unstaged, untracked or hidden from status
+   * beside the staged tree: true when it was asked. */
+  registered: boolean;
+  clean: boolean;
+  /** The branch the job's handoff record names: the worktree's, when it was asked. */
+  handoffBranch: string;
+  /** The description's tree, and the sha256 of the commit text it gives. */
+  description: { tree: string; message: string };
+  /** The policy as bercail policy show read it: its file's sha256, its trust, and the sha256 of its values. */
+  policy: { file: string; trusted: boolean; hash: string };
+  /** Each required_ci workflow and its GitHub database ID. */
+  requiredCi: { path: string; id: number }[];
+  /** The installed bercail the worker runs, by its real path. */
+  bercail: string;
+  /** Whether the person's LGTM is needed, and the high-stakes paths the change touches. */
+  review: { required: boolean; highStakes: string[] };
+  /** The person's global user.name for Reviewed-by, when review is required. */
+  reviewer: string | null;
+}
+/** A land card's choices: no recommendation, no default, and the first lands it. */
+export const LAND_CHOICES = ["Ship it", "Not yet"];
+export const LGTM_LAND_CHOICES = ["LGTM, ship it", "Not yet"];
+/** The chain's steps, in order: the facts checked again, then each effect. */
+export const LAND_STEPS = ["check", "commit", "push", "ci", "trunk", "close", "cleanup", "sync"] as const;
+export const LAND_OUTCOMES = [
+  "changed",
+  "refused",
+  "ci-failed",
+  "ci-timeout",
+  "behind",
+  "push-failed",
+  "unknown",
+  "landed",
+] as const;
+/** A land card's chain after the pick: who started it, the one claim, each step as it starts, one result. */
+export interface Landing {
+  /** One per attempt to start its worker: the hc terminal, and when. */
+  starts: { terminal: string; at: string }[];
+  claim?: { at: string };
+  steps: { step: (typeof LAND_STEPS)[number]; at: string; detail?: string }[];
+  result?: LandResult;
+}
+export interface LandResult {
+  outcome: (typeof LAND_OUTCOMES)[number];
+  /** The last step the ledger has, or null when the chain recorded none. */
+  step: (typeof LAND_STEPS)[number] | null;
+  commit: string | null;
+  warnings: string[];
+  log: string;
+  at: string;
+  /** Its land event is written, so it is never written again. */
+  told?: true;
 }
 /** An ask the guard handed off from Shep's session: its worker runs `op` on `facts`, once. */
 export interface QuestionGuard {
@@ -140,6 +201,8 @@ export interface Question extends QuestionSpec {
   pushed?: PushClaim;
   /** Present once a guard card's worker claimed its Allow, and only then. */
   guardClaim?: { at: string };
+  /** A land card's chain, present from its first start reservation. */
+  landing?: Landing;
 }
 export interface QuestionSnapshot {
   version: 1;
@@ -181,9 +244,9 @@ function spec(value: unknown): asserts value is QuestionSpec {
     "options",
     "origin",
     "target",
-    ...optional(v ?? {}, ["brief", "recommendation", "reversible", "push", "guard"]),
+    ...optional(v ?? {}, ["brief", "recommendation", "reversible", "push", "guard", "land"]),
   ]);
-  if (!["planning", "review", "action", "guard"].includes(value.kind as string)) fail("invalid kind");
+  if (!["planning", "review", "action", "guard", "land"].includes(value.kind as string)) fail("invalid kind");
   text(value.prompt);
   if (!Array.isArray(value.options)) fail("invalid options");
   value.options.forEach(text);
@@ -216,12 +279,17 @@ function spec(value: unknown): asserts value is QuestionSpec {
   if (value.target.branch != null) text(value.target.branch);
   if (value.target.trailId !== undefined) text(value.target.trailId);
   if (value.target.url !== undefined) text(value.target.url);
-  // The desk is optional for every kind: a question binds to its repo and issue. A guard
-  // card binds to its pinned facts instead.
+  // The desk is optional for every kind but land: a question binds to its repo and issue.
+  // A guard card binds to its pinned facts instead.
   const desk = ["desk", "space", "session"];
   const loose = value.kind === "planning" || value.kind === "guard";
   for (const key of keys)
-    if (value.target[key] !== null || (!loose && !desk.includes(key)) || key === "repo" || key === "topic")
+    if (
+      value.target[key] !== null ||
+      (!loose && (!desk.includes(key) || value.kind === "land")) ||
+      key === "repo" ||
+      key === "topic"
+    )
       text(value.target[key]);
   const repo = value.target.repo as string;
   if (!isAbsolute(repo) || normalize(repo) !== repo)
@@ -230,6 +298,68 @@ function spec(value: unknown): asserts value is QuestionSpec {
   if (value.push !== undefined) push(value as unknown as QuestionSpec);
   if ((value.kind === "guard") !== (value.guard !== undefined)) fail("a guard card, and only it, has its guard");
   if (value.guard !== undefined) guard(value as unknown as QuestionSpec);
+  if ((value.kind === "land") !== (value.land !== undefined)) fail("a land card, and only it, has its land facts");
+  if (value.land !== undefined) land(value as unknown as QuestionSpec);
+}
+const sha = (value: unknown) => typeof value === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value);
+// A land card: the commit's facts pinned whole, its CI gate named, and Ship it or Not yet
+// with no recommendation, default or push. The first choice is the LGTM when review is required.
+function land(value: QuestionSpec) {
+  const l = value.land!;
+  const t = value.target;
+  shape(l, [
+    "url",
+    "github",
+    "registered",
+    "clean",
+    "handoffBranch",
+    "description",
+    "policy",
+    "requiredCi",
+    "bercail",
+    "review",
+    "reviewer",
+  ]);
+  for (const key of ["url", "github", "bercail"] as const) text(l[key]);
+  if (l.registered !== true || l.clean !== true)
+    fail("a land card is asked on a worktree git lists, with nothing unstaged or untracked");
+  shape(l.description, ["tree", "message"]);
+  shape(l.policy, ["file", "trusted", "hash"]);
+  shape(l.review, ["required", "highStakes"]);
+  text(l.policy.file);
+  text(l.policy.hash);
+  if (
+    typeof l.policy.trusted !== "boolean" ||
+    !sha(l.description.tree) ||
+    !/^[0-9a-f]{64}$/.test(l.description.message as string) ||
+    !isAbsolute(l.bercail) ||
+    typeof l.review.required !== "boolean" ||
+    !Array.isArray(l.review.highStakes)
+  )
+    fail("a land card pins its tree, description, policy, bercail and review");
+  l.review.highStakes.forEach(text);
+  if (!Array.isArray(l.requiredCi) || !l.requiredCi.length)
+    fail("a land card waits for the policy's required_ci: name each workflow and its ID");
+  for (const run of l.requiredCi) {
+    shape(run, ["path", "id"]);
+    text(run.path);
+    if (!Number.isSafeInteger(run.id)) fail(`required_ci workflow ${run.path} has no GitHub ID`);
+  }
+  if (l.review.required) text(l.reviewer);
+  else if (l.reviewer !== null) fail("a land card names a reviewer only when review is required");
+  if (t.action !== "land" || !sha(t.head) || !sha(t.stagedTree) || !sha(t.base) || !t.branch?.startsWith("refs/heads/"))
+    fail("a land card targets a branch's HEAD and staged tree, action land, on the trunk's commit");
+  if (typeof l.handoffBranch !== "string" || `refs/heads/${l.handoffBranch}` !== t.branch)
+    fail("a land card's branch is the one its job's handoff record names");
+  const choices = l.review.required ? LGTM_LAND_CHOICES : LAND_CHOICES;
+  if (
+    value.options.length !== choices.length ||
+    value.options.some((option, i) => option !== choices[i]) ||
+    value.recommendation ||
+    value.reversible ||
+    value.push
+  )
+    fail(`a land card offers ${choices.join(" and ")} only, with no recommendation, default or push`);
 }
 const object = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value);
 // A guard card: Allow or Deny, nothing Shep recommends or a deadline takes, on one ticket.
@@ -281,6 +411,7 @@ function question(value: unknown): asserts value is Question {
       "reversible",
       "push",
       "guard",
+      "land",
       "deadline",
       "told",
       "answer",
@@ -288,6 +419,7 @@ function question(value: unknown): asserts value is Question {
       "withdrawal",
       "pushed",
       "guardClaim",
+      "landing",
     ]),
   ]);
   const {
@@ -303,6 +435,7 @@ function question(value: unknown): asserts value is Question {
     withdrawal,
     pushed,
     guardClaim,
+    landing,
     ...fields
   } = value;
   spec(fields);
@@ -421,6 +554,75 @@ function question(value: unknown): asserts value is Question {
     shape(guardClaim, ["at"]);
     if (!Number.isFinite(Date.parse(guardClaim.at as string))) fail("invalid guard claim time");
   }
+  if (fields.kind === "land" && answer !== undefined && answer.source !== PUSH_SOURCE)
+    fail("a land card is answered on the panel only");
+  if (landing !== undefined) {
+    if (!shipped(value as unknown as Question))
+      fail("only the person's Ship it on a land card's panel starts its chain");
+    landed(value as unknown as Question);
+  }
+}
+const when = (at: unknown) => typeof at === "string" && Number.isFinite(Date.parse(at));
+// The worker's terminal for a land card's revision: hc names are lowercase.
+const landTerminal = (q: Pick<Question, "id" | "revision">) => `land-${q.id.toLowerCase()}-${q.revision}`;
+// The person's positive pick on a land card's panel: the only answer its chain acts on.
+const shipped = (q: Question) =>
+  q.kind === "land" && q.status === "answered" && q.answer?.choice === q.options[0] && q.answer.source === PUSH_SOURCE;
+// Why the chain cannot go from its last step to `step`, or undefined: it starts with the
+// check, then stays on a step (a new detail) or moves to the next.
+function advance(last: (typeof LAND_STEPS)[number] | undefined, step: (typeof LAND_STEPS)[number]) {
+  const from = last === undefined ? -1 : LAND_STEPS.indexOf(last);
+  const to = LAND_STEPS.indexOf(step);
+  if (to === -1) return "unknown land step";
+  if (to !== from && to !== from + 1) return `${step} cannot follow ${last ?? "the claim"}`;
+}
+// Landed means the trunk push ran: a chain stopped before it ended otherwise.
+const pastTrunk = (step: (typeof LAND_STEPS)[number] | null) =>
+  step !== null && LAND_STEPS.indexOf(step) >= LAND_STEPS.indexOf("trunk");
+// A land card's chain: starts on its own terminal, then a claim before any step or result,
+// steps one after another, and a result that names the last step and, when landed, the
+// commit, after the trunk push.
+function landed(q: Question) {
+  const l = q.landing!;
+  shape(l, ["starts", "steps", ...optional(l as unknown as Record<string, unknown>, ["claim", "result"])]);
+  if (!Array.isArray(l.starts) || !Array.isArray(l.steps)) fail("invalid land chain");
+  for (const start of l.starts) {
+    shape(start, ["terminal", "at"]);
+    if (start.terminal !== landTerminal(q) || !when(start.at)) fail("a land start names the card's terminal and when");
+  }
+  if (l.claim !== undefined) {
+    shape(l.claim, ["at"]);
+    if (!when(l.claim.at)) fail("invalid land claim time");
+  }
+  if (!l.claim && (l.steps.length || l.result)) fail("a land chain is claimed before any step or result");
+  l.steps.forEach((s, i) => {
+    shape(s, ["step", "at", ...optional(s as unknown as Record<string, unknown>, ["detail"])]);
+    if (advance(l.steps[i - 1]?.step, s.step) || !when(s.at)) fail("land steps are known steps, one after another");
+    if (s.detail !== undefined) text(s.detail);
+  });
+  const r = l.result;
+  if (r === undefined) return;
+  shape(r, [
+    "outcome",
+    "step",
+    "commit",
+    "warnings",
+    "log",
+    "at",
+    ...optional(r as unknown as Record<string, unknown>, ["told"]),
+  ]);
+  text(r.log);
+  if (
+    !LAND_OUTCOMES.includes(r.outcome) ||
+    r.step !== (l.steps.at(-1)?.step ?? null) ||
+    (r.commit !== null && !sha(r.commit)) ||
+    (r.outcome === "landed" && (r.commit === null || !pastTrunk(r.step))) ||
+    !Array.isArray(r.warnings) ||
+    !when(r.at) ||
+    (r.told !== undefined && r.told !== true)
+  )
+    fail("a land result is a known outcome at the last step, landed only past the trunk push with its commit");
+  r.warnings.forEach(text);
 }
 function validate(value: unknown): asserts value is State {
   shape(value, ["version", "questions", "selected", "requests"]);
@@ -439,6 +641,9 @@ function validate(value: unknown): asserts value is State {
     latest.set(q.id, q);
   }
   if ([...latest.values()].some((q) => q.status === "superseded")) fail("missing current revision");
+  const running = value.questions.filter(isRunning);
+  if (running.some((q, i) => running.slice(i + 1).some((o) => overlaps(q, o))))
+    fail("two land chains run for the same worktree, branch or job");
   if (value.selected !== null && !value.questions.some((q) => q.target.topic === value.selected))
     fail("unknown selected topic");
   const ids = new Set<string>();
@@ -460,6 +665,12 @@ function validate(value: unknown): asserts value is State {
     } else question(r.result);
   }
 }
+// A land chain that was claimed and has no result yet, and whether two such chains would
+// act on the same worktree, branch or job of one repo.
+const isRunning = (q: Question) => q.landing?.claim !== undefined && !q.landing.result;
+const overlaps = (a: Question, b: Question) =>
+  a.target.repo === b.target.repo &&
+  (["worktree", "branch", "issue"] as const).some((key) => a.target[key] === b.target[key]);
 // A trail's ID too: the same trail:<n> in another project is another job.
 const sameScope = (a: QuestionSpec, b: QuestionSpec) =>
   ["repo", "issue", "trailId", "topic"].every(
@@ -744,14 +955,15 @@ export class QuestionStore {
     text(choice);
     return this.request(requestId, ["answer", token, choice, source], (state) => {
       const q = this.find(state, token);
-      // A guard card: only the panel, which no agent can type into, and only before it expires.
+      // A guard or land card: only the panel, which no agent can type into; a guard card
+      // only before it expires.
       const reason =
         q.status !== "pending"
           ? `question is ${q.status}`
           : !q.options.includes(choice)
             ? "not one of the question's choices"
-            : q.guard && source !== PUSH_SOURCE
-              ? "a guard card is answered on the panel card only"
+            : (q.guard || q.land) && source !== PUSH_SOURCE
+              ? `a ${q.kind} card is answered on the panel card only`
               : q.guard && Date.parse(q.guard.expires) <= Date.now()
                 ? `it expired at ${q.guard.expires}, which counts as a Deny`
                 : check.status !== "fresh" || !check.current
@@ -880,6 +1092,86 @@ export class QuestionStore {
                 : undefined;
       if (reason) return { question: q, accepted: false, reason };
       q.guardClaim = { at: new Date().toISOString() };
+      return { question: q, accepted: true };
+    }, true);
+  }
+
+  // A land card's chain, each step under the ledger's lock. A start reservation names the
+  // worker's terminal before it runs, once per attempt: `attempt` is the one after the
+  // last, so two sweeps that race start one worker. It grants nothing; the claim does.
+  reserveLand(token: string, attempt: number): AnswerResult {
+    return this.landing(token, (q, l) => {
+      if (l.claim) return `its chain was already claimed at ${l.claim.at}`;
+      if (attempt !== l.starts.length + 1) return `start ${attempt} is not the next one, ${l.starts.length + 1}`;
+      l.starts.push({ terminal: landTerminal(q), at: new Date().toISOString() });
+    });
+  }
+
+  // The worker's way in: the person's Ship it on the panel, claimed once, while no other
+  // chain runs for the same worktree, branch or job in this repo.
+  claimLand(token: string): AnswerResult {
+    return this.landing(token, (q, l, state) => {
+      if (l.claim) return `its chain was already claimed at ${l.claim.at}`;
+      const running = state.questions.find((o) => o !== q && isRunning(o) && overlaps(o, q));
+      if (running) return `${tokenOf(running)}'s chain is running for the same worktree, branch or job`;
+      l.claim = { at: new Date().toISOString() };
+    });
+  }
+
+  // The step the claimed chain starts now; the same step again updates what it says.
+  landStep(token: string, step: (typeof LAND_STEPS)[number], detail?: string): AnswerResult {
+    if (!LAND_STEPS.includes(step)) fail("unknown land step");
+    if (detail !== undefined) text(detail);
+    return this.landing(token, (_q, l) => {
+      if (!l.claim) return "its chain is not claimed";
+      if (l.result) return `its chain ended: ${l.result.outcome}`;
+      const refused = advance(l.steps.at(-1)?.step, step);
+      if (refused) return refused;
+      l.steps.push({ step, at: new Date().toISOString(), ...(detail === undefined ? {} : { detail }) });
+    });
+  }
+
+  // The claimed chain's one result, at the last step the ledger has.
+  landResult(token: string, result: Pick<LandResult, "outcome" | "commit" | "warnings" | "log">): AnswerResult {
+    return this.landing(token, (_q, l) => {
+      if (!l.claim) return "its chain is not claimed";
+      if (l.result) return `its chain already ended: ${l.result.outcome}`;
+      if (result.outcome === "landed" && !pastTrunk(l.steps.at(-1)?.step ?? null))
+        return "landed only once the chain is past its trunk push";
+      l.result = {
+        outcome: result.outcome,
+        step: l.steps.at(-1)?.step ?? null,
+        commit: result.commit,
+        warnings: structuredClone(result.warnings),
+        log: result.log,
+        at: new Date().toISOString(),
+      };
+    });
+  }
+
+  // The result's land event is written: the caller wrote it, or found it there. Once.
+  landTold(token: string): AnswerResult {
+    return this.landing(token, (_q, l) => {
+      if (!l.result) return "its chain has no result";
+      if (l.result.told) return "its result was already told";
+      l.result.told = true;
+    });
+  }
+
+  // One land transition on the person's Ship it: `apply` returns why it is refused, or
+  // changes the chain. The ledger checks the whole record before it writes.
+  private landing(
+    token: string,
+    apply: (q: Question, landing: Landing, state: State) => string | undefined,
+  ): AnswerResult {
+    return this.locked((state) => {
+      const q = this.find(state, token);
+      if (!shipped(q))
+        return { question: q, accepted: false, reason: "not the person's Ship it on a land card's panel" };
+      const l = q.landing ?? { starts: [], steps: [] };
+      const reason = apply(q, l, state);
+      if (reason) return { question: q, accepted: false, reason };
+      q.landing = l;
       return { question: q, accepted: true };
     }, true);
   }
