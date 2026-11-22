@@ -553,6 +553,29 @@ EOF
   [[ "$status" -ne 0 ]] || fail "a dead worker read as: $output"
 }
 
+@test "shep queue: a trail's open changes have their findings read at once" {
+  local out
+  trail_fixture
+  # Trail 7's two changes meet in their findings reads, inside the 4s bound.
+  barrier 2
+  jq '.changes += [{repository: "kvm", number: 12, branch: "more", status: "open", url: "u12", mergeability: null}]' \
+    "$HC_DATA/entire/show-7.json" >"$HC_DATA/entire/show.tmp"
+  mv "$HC_DATA/entire/show.tmp" "$HC_DATA/entire/show-7.json"
+  cp "$HC_DATA/entire/findings-kvm-11.json" "$HC_DATA/entire/findings-kvm-12.json"
+  mv "$BATS_TEST_TMPDIR/bin/entire" "$BATS_TEST_TMPDIR/bin/entire-data"
+  cat >"$BATS_TEST_TMPDIR/bin/entire" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in "trail finding list --trail kvm/9 "* | "trail finding list --trail kvm/12 "*) meet "${5/\//-}" || exit 1 ;; esac
+exec entire-data "$@"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/entire"
+
+  out="$(shep queue --repo "$HOME/Work/kvm" --json)" || fail "queue: $out"
+
+  jq -e '[.items[] | [.trail, .number]] == [[6, 11], [7, 9], [7, 12]]' <<<"$out" >/dev/null \
+    || fail "queue: $(jq -c '[.items[] | [.trail, .number]]' <<<"$out")"
+}
+
 @test "shep queue and board: one trail list a refresh, and a show and findings only for each trail in review, however many trails" {
   local calls
   trail_fixture
@@ -1119,6 +1142,73 @@ EOF
   jq -e --arg path "$REAL_HOME/Work/web.feat10" '[.items[] | [.path, .state]] == [[$path, "review"]]' <<<"$out"
   [[ "$(grep -c 'hc ls .*--label' "$LOG")" == 1 ]]
   ! grep -q '^bd list ' "$LOG"
+}
+
+# A stand-in, meet NAME, that marks NAME started and waits up to 5s for N
+# names in all; it fails if they never come. Reads that meet must run at once:
+# one after another, the first is cut off by its bound before the rest start.
+barrier() {
+  export BARRIER="$BATS_TEST_TMPDIR/barrier"
+  mkdir -p "$BARRIER"
+  cat >"$BATS_TEST_TMPDIR/bin/meet" <<EOF
+#!/usr/bin/env bash
+touch "\$BARRIER/\$1"
+for _ in \$(seq 100); do
+  [[ "\$(find "\$BARRIER" -type f | wc -l)" -ge $1 ]] && exit 0
+  sleep 0.05
+done
+exit 1
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/meet"
+}
+
+@test "the global queue reads each repo's staged work and open PRs at once, not one repo after another" {
+  local name out
+  # bd show and gh pr list meet in each of two repos, inside their 2s bounds.
+  barrier 4
+  cat >"$BATS_TEST_TMPDIR/bin/bd" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1" == show ]] && meet "bd-${PWD##*/}" && cat "$PWD/.beads/fake/$2.json"
+EOF
+  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "api user") printf 'simon\n' ;;
+  "pr list") meet "gh-${PWD##*/}" && printf '[]\n' ;;
+  *) exit 2 ;;
+esac
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/"*
+  for name in a b; do
+    repo "$name"
+    git -C "$HOME/Work/$name" remote add origin "git@github.com:o/$name.git"
+    jq -n --arg id "$name-1" '{id: $id, title: "Job \($id)", status: "in_progress"}' >"$HOME/Work/$name/.beads/fake/$name-1.json"
+    worktree "$name" feat
+    seq 1 3 >"$HOME/Work/$name.feat/notes.md"
+    git -C "$HOME/Work/$name.feat" add notes.md
+    record --arg p "$HOME/Work/$name.feat" --arg id "$name-1" '{path: $p, branch: "feat", issue: $id}'
+  done
+  printf '%s\n' "$HOME/Work/a" "$HOME/Work/b" >"$STATE/repos"
+
+  out="$(shep queue --json)" || fail "queue: $out"
+
+  jq -e '[.items[] | [.issue, .title, .state]] == [["a-1", "Job a-1", "review"], ["b-1", "Job b-1", "review"]]' <<<"$out" >/dev/null \
+    || fail "queue: $(jq -c '[.items[] | {issue, title, state, why}]' <<<"$out")"
+}
+
+@test "a staged item the queue cannot build is UNKNOWN, never an empty queue" {
+  local path
+  repo a
+  worktree a feat
+  path="$HOME/Work/a.feat"
+  seq 1 3 >"$path/notes.md"
+  git -C "$path" add notes.md
+  run bash -c 'set -euo pipefail; source "$ROOT/lib/common.sh"; for n in "${BERCAIL_LIBS[@]}"; do source "$ROOT/lib/$n.sh"; done
+    _shep_need_policy
+    _shep_queue_state() { printf "not json\n"; }
+    _shep_queue_json "$(jq -nc --arg m "$HOME/Work/a" "[{path: \$m, backend: \"gh\"}]")" \
+      "$(jq -nc --arg p "$1" "[{address: \"t1\", cwd: \$p, state: \"idle\", issue: \"a-1\"}]")" "{}"' _ "$path"
+  [[ "$status" -ne 0 ]] || fail "an unbuilt item read as: $output"
 }
 
 @test "slow or failed PR status is bounded UNKNOWN, never an invented empty queue" {

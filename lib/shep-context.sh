@@ -458,6 +458,22 @@ _shep_board_snapshot() {
 
 # --- review queue -------------------------------------------------------------------
 
+# Reads the workers on file descriptors FD..., in order, closing each, and
+# appends what they printed to the variable VAR. A worker is a process
+# substitution, not a file, so a timeout's kill leaves no result behind. Fails
+# when one did not end with ok: a worker that dies says nothing.
+_shep_workers_read() {
+  local var="$1" fd got rc=0
+  shift
+  for fd in "$@"; do
+    got="$(cat <&"$fd")"
+    exec {fd}<&-
+    [[ "$got" == ok || "$got" == *$'\n'ok ]] || rc=1
+    printf -v "$var" '%s%s' "${!var}" "${got%ok}"
+  done
+  return "$rc"
+}
+
 # Open PRs in the GitHub repo MAIN that wait on the person, as a JSON array: not
 # a draft, not approved, and either asking LOGIN for a review or opened from a
 # handoff's branch (BRANCHES, a JSON array). Lines leave lockfiles out. []
@@ -487,11 +503,9 @@ _shep_queue_prs() {
 # second try); without it, bercail job list reads them, so a
 # refresh lists a repo's trails once (with its pages), whatever their number
 # (Simon's budget). Only trails in review are shown, in parallel, as each read
-# takes about a second and the queue has six; process substitutions, not files,
-# so a timeout's kill leaves nothing behind. A worker ends with ok: one that dies
-# says nothing.
+# takes about a second and the queue has six (see _shep_workers_read).
 _shep_queue_trails() {
-  local main="$1" review="${2:-}" url project name trails n fd got out="" rc=0
+  local main="$1" review="${2:-}" url project name trails n fd out=""
   local -a fds=()
   url="$(git -C "$main" remote get-url origin 2>/dev/null)" || return 1
   [[ "$url" =~ ^entire://[^/]+/(et/[^/]+)/([^/]+)$ ]] || { printf '[]'; return 0; }
@@ -506,43 +520,46 @@ _shep_queue_trails() {
     exec {fd}< <(_shep_queue_trail "$main" "$project" "$name" "$n" && printf 'ok\n')
     fds+=("$fd")
   done
-  for fd in "${fds[@]}"; do
-    got="$(cat <&"$fd")"
-    exec {fd}<&-
-    [[ "$got" == ok || "$got" == *$'\n'ok ]] || rc=1
-    out+="${got%ok}"$'\n'
-  done
-  ((rc)) || jq -sc . <<<"$out" || rc=1
-  return "$rc"
+  _shep_workers_read out "${fds[@]}" && jq -sc . <<<"$out"
 }
 
-# Trail N's open changes in repo NAME, one queue item a line (see _shep_queue_trails).
+# Trail N's open changes in repo NAME, one queue item a line (see
+# _shep_queue_trails). Each change's findings are read at once.
 _shep_queue_trail() {
-  local main="$1" project="$2" name="$3" n="$4" show trail changes change counts
+  local main="$1" project="$2" name="$3" n="$4" show trail changes change fd out=""
+  local -a fds=()
   show="$(cd "$main" && _git_backend_bounded 4 entire trail show "$n" --project "$project" \
     --json </dev/null 2>/dev/null)" || return 1
   trail="$(jq -ce '{number, title}' <<<"$show" 2>/dev/null)" || return 1
   changes="$(jq -ce --arg name "$name" '.changes | if type == "array" then map(select(.repository == $name and .status == "open"))
     else error("no changes") end' <<<"$show" 2>/dev/null)" || return 1
   while IFS= read -r change; do
-    # Only the counts: a page of findings can be larger than an argument may be.
-    counts="$(cd "$main" && _git_backend_bounded 4 entire trail finding list --trail "$name/$(jq -r .number <<<"$change")" \
-      --project "$project" --json </dev/null 2>/dev/null \
-      | jq -ce '.counts | {open: .Open, high: .OpenHigh, medium: .OpenMedium, low: .OpenLow}
-          | if all(.[]; type == "number") then . else error("no finding counts") end' 2>/dev/null)" || return 1
-    jq -c --arg repo "$main" --arg name "$name" --argjson t "$trail" --argjson f "$counts" '
-      # Null is unknown, never mergeable (entire agent-help trail show).
-      def gates: .mergeability as $m
-        | if ($m.head_sha // "") == "" then {state: "unknown", text: "no gate state yet"}
-          else [$m.gates[]? | select(.blocking)] as $g
-          | [$g[] | select(.status == "failed" or .outcome == "failed") | .gate_key] as $failed
-          | if ($failed | length) > 0 then {state: "failed", text: "\($failed | join(", ")) failed"}
-            elif $m.mergeable == true then {state: "ready", text: "every blocking gate passed"}
-            else {state: "pending", text: "waiting on \([$g[] | select(.status | IN("passed", "skipped") | not) | .gate_key]
-                    | if length > 0 then join(", ") else "mergeability" end)"} end end;
-      {kind: "trail", repo: $repo, trail: $t.number, repository: $name, number, title: $t.title, url, branch,
-       state: "review", since: .updatedAt, lines: 0, findings: $f, gates: gates}' <<<"$change" || return 1
+    exec {fd}< <(_shep_queue_trail_change "$main" "$project" "$name" "$trail" "$change" </dev/null && printf 'ok\n')
+    fds+=("$fd")
   done < <(jq -c '.[]' <<<"$changes")
+  _shep_workers_read out "${fds[@]}" && printf '%s' "$out"
+}
+
+# One open CHANGE of trail TRAIL ({number, title}) in repo NAME, as a queue item.
+_shep_queue_trail_change() {
+  local main="$1" project="$2" name="$3" trail="$4" change="$5" counts
+  # Only the counts: a page of findings can be larger than an argument may be.
+  counts="$(cd "$main" && _git_backend_bounded 4 entire trail finding list --trail "$name/$(jq -r .number <<<"$change")" \
+    --project "$project" --json </dev/null 2>/dev/null \
+    | jq -ce '.counts | {open: .Open, high: .OpenHigh, medium: .OpenMedium, low: .OpenLow}
+        | if all(.[]; type == "number") then . else error("no finding counts") end' 2>/dev/null)" || return 1
+  jq -c --arg repo "$main" --arg name "$name" --argjson t "$trail" --argjson f "$counts" '
+    # Null is unknown, never mergeable (entire agent-help trail show).
+    def gates: .mergeability as $m
+      | if ($m.head_sha // "") == "" then {state: "unknown", text: "no gate state yet"}
+        else [$m.gates[]? | select(.blocking)] as $g
+        | [$g[] | select(.status == "failed" or .outcome == "failed") | .gate_key] as $failed
+        | if ($failed | length) > 0 then {state: "failed", text: "\($failed | join(", ")) failed"}
+          elif $m.mergeable == true then {state: "ready", text: "every blocking gate passed"}
+          else {state: "pending", text: "waiting on \([$g[] | select(.status | IN("passed", "skipped") | not) | .gate_key]
+                  | if length > 0 then join(", ") else "mergeability" end)"} end end;
+    {kind: "trail", repo: $repo, trail: $t.number, repository: $name, number, title: $t.title, url, branch,
+     state: "review", since: .updatedAt, lines: 0, findings: $f, gates: gates}' <<<"$change"
 }
 
 # The issue as bd prints it from MAIN, given at most 10 seconds; fails when the
@@ -628,6 +645,39 @@ _shep_live_spaces() {
     <<<"$spaces" 2>/dev/null
 }
 
+# One repo's staged worktrees as a JSON array of queue items. The candidates
+# come on stdin, a line each: path, issue, title, desk and space, \x1f apart.
+# They are read one after another: bd serves one read at a time in a repo.
+_shep_queue_staged() {
+  local main="$1" records="$2" live="$3" path issue title desk space change state since described items='[]'
+  # \x1f, not a tab: read would merge an empty title's two tabs into one.
+  while IFS=$'\x1f' read -r path issue title desk space; do
+    git -C "$path" diff --cached --quiet 2>/dev/null && continue
+    change="$(desc_change "$path" 2>/dev/null </dev/null)" || continue
+    jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || continue
+    if [[ -n "$live" ]] && ! jq -e --arg s "$space" --arg p "$path" '(.ids | index($s)) or (.paths | index($p))' <<<"$live" >/dev/null; then
+      # A title lookup must not hold up the snapshot for an already-classified row.
+      state='{"state":"stale","why":"no Herdr space"}'
+    else
+      state="$(_shep_queue_state "$main" "$issue" "$path" "$change" "$records" </dev/null)"
+    fi
+    since="$(_shep_staged_at "$path")" || since=""
+    # Only a change that waits on the person gets the check. It skips the beads-id
+    # rule: the queue reads no full beads list.
+    described=null
+    jq -e '.state | IN("cleanup", "superseded", "stale")' <<<"$state" >/dev/null \
+      || described="$(_shep_described "$path" skip-ids </dev/null)"
+    items="$(jq -c --arg repo "$main" --arg path "$path" --arg issue "$issue" --arg title "$title" --arg desk "$desk" \
+      --arg space "$space" --arg since "$since" --argjson change "$change" --argjson state "$state" --argjson described "$described" '
+      def opt: if . == "" then null else . end;
+      . + [{kind: "staged", repo: $repo, path: $path, issue: ($issue | opt),
+            title: (($title | opt) // $state.title), desk: ($desk | opt), space: ($space | opt),
+            since: (if $since == "" then null else ($since | tonumber | todate) end),
+            state: $state.state, why: $state.why, by: $state.by, change: $change, described: $described}]' <<<"$items")" || return 1
+  done
+  printf '%s\n' "$items"
+}
+
 # What waits on the person's review, as JSON: {schema, at, items, repos}. An
 # item is a worktree with staged changes whose desk is not working (done, idle,
 # blocked, or gone), or an open PR that waits on them. Each has a state (see
@@ -636,37 +686,20 @@ _shep_live_spaces() {
 # superseded or stale. Counted items come first, the longest
 # waiting first. repos has each repo's counted lines against its policy's
 # review_budget, for the repos with items.
+#
+# Each repo's staged worktrees, open PRs and trails are read at once (see
+# _shep_workers_read): each read can take seconds, and one after another they
+# outgrew the queue's cap (bercail-f6ux).
 _shep_queue_json() {
-  local repos="$1" desks="$2" records="$3" path issue title desk space main change state since described gh_repos branches prs trails login="" items='[]' live
-  local -A policies=()
+  local repos="$1" desks="$2" records="$3" path issue title desk space main review trails branches login="" live fd items="" policy rc=0
+  local -a order=() fds=()
+  local -A rows=()
   live="$(_shep_live_spaces)" || live=""
-  # \x1f, not a tab: read would merge an empty title's two tabs into one.
   while IFS=$'\x1f' read -r path issue title desk space; do
     main="$(_shep_main_of "$path")" || continue
     jq -e --arg m "$main" 'any(.[]; .path == $m)' <<<"$repos" >/dev/null || continue
-    git -C "$path" diff --cached --quiet 2>/dev/null && continue
-    [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
-    change="$(desc_change "$path" 2>/dev/null)" || continue
-    jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || continue
-    if [[ -n "$live" ]] && ! jq -e --arg s "$space" --arg p "$path" '(.ids | index($s)) or (.paths | index($p))' <<<"$live" >/dev/null; then
-      # A title lookup must not hold up the snapshot for an already-classified row.
-      state='{"state":"stale","why":"no Herdr space"}'
-    else
-      state="$(_shep_queue_state "$main" "$issue" "$path" "$change" "$records")"
-    fi
-    since="$(_shep_staged_at "$path")" || since=""
-    # Only a change that waits on the person gets the check. It skips the beads-id
-    # rule: the queue reads no full beads list.
-    described=null
-    jq -e '.state | IN("cleanup", "superseded", "stale")' <<<"$state" >/dev/null \
-      || described="$(_shep_described "$path" skip-ids)"
-    items="$(jq -c --arg repo "$main" --arg path "$path" --arg issue "$issue" --arg title "$title" --arg desk "$desk" \
-      --arg space "$space" --arg since "$since" --argjson change "$change" --argjson state "$state" --argjson described "$described" '
-      def opt: if . == "" then null else . end;
-      . + [{kind: "staged", repo: $repo, path: $path, issue: ($issue | opt),
-            title: (($title | opt) // $state.title), desk: ($desk | opt), space: ($space | opt),
-            since: (if $since == "" then null else ($since | tonumber | todate) end),
-            state: $state.state, why: $state.why, by: $state.by, change: $change, described: $described}]' <<<"$items")"
+    [[ -n "${rows[$main]:-}" ]] || order+=("$main")
+    rows[$main]+="$path"$'\x1f'"$issue"$'\x1f'"$title"$'\x1f'"$desk"$'\x1f'"$space"$'\n'
   done < <(jq -nr --argjson repos "$repos" --argjson desks "$desks" --argjson rec "$records" '
     def one(f): map(f | select(. != null and . != "")) | first // "";
     ([$repos[].issues // [] | .[] | {key: .id, value: .title}] | from_entries) as $titles
@@ -675,31 +708,35 @@ _shep_queue_json() {
     | ($all | group_by(.path)[] | select(all(.[]; .state != "working")))
     | one(.issue) as $issue
     | [.[0].path, $issue, (one(.title) | if . == "" then $titles[$issue] // "" else . end), one(.desk), one(.space)] | join("\u001f")')
-  gh_repos="$(jq -r '.[] | select(.backend == "gh") | .path' <<<"$repos")"
-  if [[ -n "$gh_repos" ]]; then
-    while IFS= read -r main; do
-      grep -q 'github\.com[:/]' <<<"$(git -C "$main" remote -v 2>/dev/null)" || continue
-      if [[ -z "$login" ]]; then
-        login="$(_git_backend_bounded 2 "${GH_BIN:-gh}" api user --jq .login </dev/null 2>/dev/null)" || return 1
-        [[ -n "$login" ]] || return 1
-      fi
-      [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
-      # A handoff's worktree is <main>.<branch>, gone or not.
-      branches="$(jq -c --arg m "$main" '[.[] | select(.branch and .path and .repo == $m) | .branch]' <<<"$records")"
-      prs="$(_shep_queue_prs "$main" "$login" "$branches")" || return 1
-      items="$(jq -c --argjson prs "$prs" '. + $prs' <<<"$items")"
-    done <<<"$gh_repos"
-  fi
+  for main in "${order[@]}"; do
+    exec {fd}< <(_shep_queue_staged "$main" "$records" "$live" <<<"${rows[$main]%$'\n'}" && printf 'ok\n')
+    fds+=("$fd")
+  done
   while IFS= read -r main; do
-    [[ -n "${policies[$main]:-}" ]] || policies[$main]="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policies[$main]=""
-    trails="$(_shep_queue_trails "$main" "$(jq -c --arg m "$main" '(first(.[] | select(.path == $m)) // {}) | .review' <<<"$repos")")" || return 1
+    review="$(jq -c --arg m "$main" '(first(.[] | select(.path == $m)) // {}) | .review' <<<"$repos")"
     # The desk that made the change, by its handoff's branch, lends its worktree and space.
-    items="$(jq -c --argjson trails "$trails" --argjson rec "$records" --arg m "$main" '. + [$trails[] | . as $i
-      | ([$rec[] | select(.repo == $m and .branch == $i.branch)] | first) as $r
-      | $i + (if $r then {path: $r.path, space: $r.space} else {} end)]' <<<"$items")"
+    exec {fd}< <(trails="$(_shep_queue_trails "$main" "$review" </dev/null)" \
+      && jq -c --argjson rec "$records" --arg m "$main" '[.[] | . as $i
+        | ([$rec[] | select(.repo == $m and .branch == $i.branch)] | first) as $r
+        | $i + (if $r then {path: $r.path, space: $r.space} else {} end)]' <<<"$trails" \
+      && printf 'ok\n')
+    fds+=("$fd")
   done < <(jq -r '.[] | select(.backend == "entire") | .path' <<<"$repos")
-  for main in "${!policies[@]}"; do
-    printf '%s\t%s\n' "$main" "${policies[$main]:-$POLICY_DEFAULTS}"
+  while IFS= read -r main; do
+    grep -q 'github\.com[:/]' <<<"$(git -C "$main" remote -v 2>/dev/null)" || continue
+    if [[ -z "$login" ]]; then
+      login="$(_git_backend_bounded 2 "${GH_BIN:-gh}" api user --jq .login </dev/null 2>/dev/null)" || login=""
+      [[ -n "$login" ]] || { rc=1; break; }
+    fi
+    # A handoff's worktree is <main>.<branch>, gone or not.
+    branches="$(jq -c --arg m "$main" '[.[] | select(.branch and .path and .repo == $m) | .branch]' <<<"$records")"
+    exec {fd}< <(_shep_queue_prs "$main" "$login" "$branches" </dev/null && printf 'ok\n')
+    fds+=("$fd")
+  done < <(jq -r '.[] | select(.backend == "gh") | .path' <<<"$repos")
+  _shep_workers_read items "${fds[@]}" && ((rc == 0)) && items="$(jq -sc 'add // []' <<<"$items")" || return 1
+  jq -r '[.[].repo] | unique[]' <<<"$items" | while IFS= read -r main; do
+    policy="$(policy_json "$main" 2>/dev/null | jq -c .policy)" || policy=""
+    printf '%s\t%s\n' "$main" "${policy:-$POLICY_DEFAULTS}"
   done | jq -nRc --argjson items "$items" --argjson defaults "$POLICY_DEFAULTS" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '
     ([inputs | split("\t") | {key: .[0], value: (.[1] | fromjson? // $defaults)}] | from_entries) as $p
     | ($items | map(.counts = (.state | IN("cleanup", "superseded", "stale") | not))
