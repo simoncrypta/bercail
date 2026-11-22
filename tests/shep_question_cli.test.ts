@@ -1146,6 +1146,7 @@ describe("an answer that approves a push", () => {
       "https://s3cret@example.invalid/app.git",
       "https://example.invalid/app.git?token=s3cret",
       "ssh://git:s3cret@example.invalid/app.git",
+      "entire://bot@aws-us-east-2.entire.io/et/team/app",
       "../origin.git",
       "/srv/app\u0007.git",
     ]) {
@@ -1155,6 +1156,8 @@ describe("an answer that approves a push", () => {
     expect(JSON.stringify(ok("json"))).not.toContain("s3cret");
     git("remote", "set-url", "origin", "git@example.invalid:team/app.git");
     expect(ask({ requestId: "ssh" }).push.url).toBe("git@example.invalid:team/app.git");
+    git("remote", "set-url", "origin", "entire://aws-us-east-2.entire.io/et/team/app");
+    expect(ask({ requestId: "entire" }).push.url).toBe("entire://aws-us-east-2.entire.io/et/team/app");
   });
 
   test("the person's pick of the approving choice approves exactly that push, once", () => {
@@ -1475,6 +1478,10 @@ test("a guard event is Shep's line from its fields alone, and a malformed one is
   );
   expect(eventLine({ ...ev, outcome: "changed", exit: undefined, log: undefined, why: "head changed" })).toBe(
     "- The trail merge of lesentiel/41 you handed off acts on something that changed since it was asked, so nothing ran; ask again only if it still matters (head changed). Tell the person in one line. [event guard:0123456789ab] (worker guard-ask-0123456789ab)",
+  );
+  // Any other command, by its words.
+  expect(eventLine({ ...ev, operation: "command", target: "entire trail link 41 --branch b" })).toBe(
+    "- The command entire trail link 41 --branch b you handed off ran on the person's Allow, exit 0; its output is in /state/bercail/guard-asks/0123456789ab.log. Tell the person in one line. [event guard:0123456789ab] (worker guard-ask-0123456789ab)",
   );
   for (const bad of [
     { ...ev, outcome: "merged" },

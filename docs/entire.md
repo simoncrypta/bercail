@@ -148,11 +148,15 @@ tokens.
 On top of the repo's policy, for every role:
 
 - **Read:** status, why, search, `checkpoint list|explain` (not
-  `--generate`), `trail show|list`, the findings list, and `agent-help`.
+  `--generate`), `trail show|list|help`, the findings list, `org`, `project`,
+  `cluster` and `service-account list`, `brain memories list`, and `agent-help`.
   Anyone may run these.
-- **No help or dry-run shortcut:** `--help` and `--dry-run` are not reads. A
-  flag takes the next word as its value, so `trail approve 3 -m --help`
-  approves. Use `entire agent-help` and `entire trail show`.
+- **Help:** a last `--help` with no flag before it is a read for entire's own
+  commands, Brain and Graph (`entire trail link --help`,
+  `entire brain remember --help`), when the words are bare, with no wrapper or
+  substitution. Another plugin is its own program, so its `--help` is not. Anywhere else, `--help` and
+  `--dry-run` are not reads: a flag takes the next word as its value, so
+  `trail approve 3 -m --help` approves.
 - **Publish:** `trail create`, `trail link`, `trail ci-pr`, `trail update-branch`
   and `checkpoint push` count as pushes. The policy's `push` decides, and the
   question names the command (`Allow this push by entire trail create?`).

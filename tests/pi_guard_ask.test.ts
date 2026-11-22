@@ -17,7 +17,15 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
-import guard, { changedFacts, guardOperation, markStart, pinOperation, runOf } from "../bstack/pi/extensions/guard.ts";
+import guard, {
+  argvText,
+  changedFacts,
+  guardOperation,
+  markStart,
+  opTarget,
+  pinOperation,
+  runOf,
+} from "../bstack/pi/extensions/guard.ts";
 
 let dir: string;
 let repo: string;
@@ -163,7 +171,31 @@ test.each([
   ["two cds", (r: string) => `cd / && cd ${r} && git push origin feature`],
   ["a substitution", (r: string) => `git -C ${r} push origin $(echo feature)`],
   ["a variable", (r: string) => `git -C ${r} push $REMOTE feature`],
-  ["quoting", (r: string) => `git -C ${r} push origin 'feature'`],
+  ["a variable in double quotes", (r: string) => `cd ${r} && entire brain remember "see $HOME" --json`],
+  ["a substitution in double quotes", (r: string) => `cd ${r} && entire brain remember "see \`id\`" --json`],
+  ["a backslash", (r: string) => `cd ${r} && entire brain remember it\\'s --json`],
+  ["an unclosed quote", (r: string) => `cd ${r} && entire brain remember 'see --json`],
+  ["a newline in quotes", (r: string) => `cd ${r} && entire brain remember 'one\ntwo' --json`],
+  ["a glob", (r: string) => `cd ${r} && entire brain remember *.md --json`],
+  ["a tilde", () => "entire brain remember x --path ~/notes"],
+  ["a brace expansion", (r: string) => `cd ${r} && entire brain remember {a,b} --json`],
+  ["a comment", (r: string) => `cd ${r} && entire trail link 41 # note`],
+  ["a background &", (r: string) => `cd ${r} && entire trail link 41 &`],
+  ["an ||", (r: string) => `cd ${r} && entire trail link 41 || true`],
+  ["a wrapper", (r: string) => `cd ${r} && timeout 60 entire trail link 41`],
+  ["a shell", (r: string) => `cd ${r} && bash -c 'entire trail link 41'`],
+  ["a shell by its path", (r: string) => `cd ${r} && /bin/sh -c 'entire trail merge 41'`],
+  ["a shell script", (r: string) => `cd ${r} && sh ./publish.sh`],
+  // bash's cd reads these otherwise than a path: a literal ~, HOME, an error, CDPATH.
+  ["a quoted ~ cd", () => "cd '~' && entire trail link 41"],
+  ["a cd --", () => "cd -- && entire trail link 41"],
+  ["an empty cd", () => "cd '' && entire trail link 41"],
+  ["a relative cd", () => "cd repo && entire trail link 41"],
+  // The guard's checks drop an empty word, which the worker would pass.
+  ["an empty argument", (r: string) => `cd ${r} && entire brain remember --path '' note`],
+  ["a lone surrogate", (r: string) => `cd ${r} && entire brain remember 'a\ud800b' --json`],
+  ["a bidi override", (r: string) => `cd ${r} && entire brain remember 'a\u202eb' --json`],
+  ["a zero-width space", (r: string) => `cd ${r} && entire brain remember 'a\u200bb' --json`],
   ["a redirect", (r: string) => `git -C ${r} push origin feature 2>/dev/null`],
   ["a flag", (r: string) => `git -C ${r} push -q origin feature`],
   ["an env prefix", (r: string) => `GIT_SSH_COMMAND=ssh git -C ${r} push origin feature`],
@@ -171,7 +203,14 @@ test.each([
   ["a URL for a remote", (r: string) => `git -C ${r} push /srv/other.git feature`],
   ["a cleanup flag", (r: string) => `bercail cleanup --force ${r}`],
   ["a trail merge flag", (r: string) => `cd ${r} && entire trail merge 41 --force`],
-  ["another command", (r: string) => `rm -rf ${r}`],
+  // entire trail merge takes no --change; bercail job merge does.
+  ["a trail merge --change", (r: string) => `cd ${r} && entire trail merge 41 --change app/7`],
+  ["a push by its path", (r: string) => `/usr/bin/git -C ${r} push -q origin feature`],
+  // What the guard asks about as a merge or a cleanup never becomes a plain command.
+  ["a trail merge after a selector", (r: string) => `cd ${r} && entire --context work trail merge 41`],
+  ["a trail merge with a flag inside its path", (r: string) => `cd ${r} && entire trail --branch feature merge`],
+  ["a cleanup after a flag", (r: string) => `bercail -q cleanup ${r}`],
+  ["a job merge after a flag", (r: string) => `bercail -q job merge trail:41 --repo ${r}`],
   ["a relative folder with no cwd", () => "git -C repo push origin feature"],
   ["a folder with ..", (r: string) => `git -C ${r}/../repo push origin feature`],
   ["a cd with ..", (r: string) => `cd ${r}/.. && entire trail merge 41`],
@@ -183,6 +222,52 @@ test.each([
   ["a job merge --repo with ..", (r: string) => `bercail job merge trail:41 --repo ${r}/../repo`],
 ])("%s is not one operation", (_name, command) => {
   expect(typeof guardOperation(command(repo), _name.includes("no cwd") ? undefined : "/", dir)).toBe("string");
+});
+
+test("any other one command is its words as written, quoted text and all, run in its folder's real path", async () => {
+  symlinkSync(repo, join(dir, "here"));
+  const text = 'never `rm -rf` | cat; a && b > c $(d) $HOME \\ "q" it\'s';
+  const argv = ["entire", "brain", "remember", text, "--path=docs/a b", "--json"];
+  // Each quote the shell takes away, single or double, and text next to a bare word.
+  const quoted = `entire brain remember '${text.replaceAll("'", "'\"'\"'")}' --path='docs/a b' "--json"`;
+  expect(op(`cd ${join(dir, "here")} && ${quoted}`)).toStrictEqual({
+    kind: "command",
+    dir: join(dir, "here"),
+    argv,
+  });
+  const facts = await pin(`cd ${join(dir, "here")} && ${quoted}`);
+  expect(facts).toStrictEqual({ kind: "command", dir: repo, argv });
+  expect(runOf(facts)).toStrictEqual({ argv, cwd: repo });
+  // Shown as the shell would read it back: the same words again.
+  expect(argvText(argv)).toBe(`entire brain remember '${text.replaceAll("'", `'"'"'`)}' '--path=docs/a b' --json`);
+  expect(argvText(["echo", "it's", "a b"])).toBe(`echo "it's" 'a b'`);
+  for (const words of [argv, ["echo", "it's", "a b"]]) expect(op(argvText(words), repo)).toMatchObject({ argv: words });
+  expect(op(`cd ${repo} && entire trail link 41 --branch feature --base main`)).toStrictEqual({
+    kind: "command",
+    dir: repo,
+    argv: ["entire", "trail", "link", "41", "--branch", "feature", "--base", "main"],
+  });
+  // Its folder moved under it: the card is stale.
+  rmSync(join(dir, "here"));
+  symlinkSync(dir, join(dir, "here"));
+  expect(changedFacts(facts, await pin(`cd ${join(dir, "here")} && ${quoted}`))).toStrictEqual(["dir changed"]);
+});
+
+test("a push to an entire:// remote pins its URL, and the card names the Entire project", async () => {
+  const url = "entire://aws-us-east-2.entire.io/et/lesentiel/lesentiel";
+  git("remote", "set-url", "origin", url);
+  const facts = await pin(`git -C ${repo} push origin feature`);
+  expect(facts).toMatchObject({ kind: "push", url });
+  expect(opTarget(facts)).toBe(`the Entire project et/lesentiel/lesentiel (${url}) refs/heads/feature`);
+  expect(runOf(facts).argv).toContain(url);
+  // Still no credential or query.
+  for (const bad of [
+    "entire://bot@aws-us-east-2.entire.io/et/a/b",
+    "entire://aws-us-east-2.entire.io/et/a/b?token=x",
+  ]) {
+    git("remote", "set-url", "origin", bad);
+    await expect(pin(`git -C ${repo} push origin feature`)).rejects.toThrow(/not one a card can show/);
+  }
 });
 
 test.each([
@@ -409,6 +494,38 @@ test("Shep's bercail job merge goes to a card as a trail merge; its supersede ru
     facts: { kind: "trail merge", change: "app/7", job: "trail:41" },
   });
   expect(await shep.bash(`bercail job supersede trail:41 --with trail:25 --repo ${repo}`)).toBeUndefined();
+  expect(shep.confirm).not.toHaveBeenCalled();
+});
+
+test("Shep's quoted Brain memory and its trail link go to cards as the words they run", async () => {
+  const shep = session("shep", (args) => {
+    markStart(args.at(-1)!, "started");
+    return { code: 0 };
+  });
+  const tickets = () => readdirSync(asks()).filter((n) => n.endsWith(".json"));
+  for (const [command, argv] of [
+    [
+      `cd ${repo} && entire brain remember "Run tests; never | pipe them" --json`,
+      ["entire", "brain", "remember", "Run tests; never | pipe them", "--json"],
+    ],
+    [
+      `cd ${repo} && entire trail link 41 --branch feature --base main`,
+      ["entire", "trail", "link", "41", "--branch", "feature", "--base", "main"],
+    ],
+  ] as const) {
+    const before = existsSync(asks()) ? tickets() : [];
+    const got = await shep.bash(command);
+    const [name] = tickets().filter((n) => !before.includes(n));
+    expect(got, command).toStrictEqual({
+      block: true,
+      reason: expect.stringContaining(`Handed off, not run: the person answers this command ${argvText([...argv])} on`),
+    });
+    expect(JSON.parse(readFileSync(join(asks(), name), "utf8"))).toMatchObject({
+      command,
+      op: { kind: "command", dir: repo, argv },
+      facts: { kind: "command", dir: repo, argv },
+    });
+  }
   expect(shep.confirm).not.toHaveBeenCalled();
 });
 

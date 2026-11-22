@@ -244,14 +244,14 @@ export function peeled(dir: string, oid: string, kind: "commit" | "tag"): string
   }
 }
 
-// The push URLs a card can show: an absolute path, ssh with no password, or http(s) or
-// git:// with no user. None holds a query, a fragment, a space or a control character.
+// The push URLs a card can show: an absolute path, ssh with no password, or http(s),
+// git:// or entire:// with no user. None holds a query, a fragment, a space or a control character.
 const showable = [
   /^\/[^\s?#]*$/,
   /^file:\/\/\/[^\s?#]*$/,
   /^[\w.-]+@[\w.-]+:[^\s?#]*$/,
   /^(ssh|git\+ssh|ssh\+git):\/\/([\w.-]+@)?[\w.-]+(:\d+)?\/[^\s?#]*$/,
-  /^(https?|git):\/\/[\w.-]+(:\d+)?\/[^\s?#@]*$/,
+  /^(https?|git|entire):\/\/[\w.-]+(:\d+)?\/[^\s?#@]*$/,
 ];
 
 // A remote's one push URL, as git push uses it (insteadOf and pushInsteadOf applied).

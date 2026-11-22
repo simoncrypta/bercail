@@ -371,7 +371,7 @@ function guard(value: QuestionSpec) {
   text(g.expires);
   if (
     !object(g.op) ||
-    !["cleanup", "trail merge", "push"].includes((g.op as { kind?: string }).kind as string) ||
+    !["cleanup", "trail merge", "push", "command"].includes((g.op as { kind?: string }).kind as string) ||
     !object(g.facts) ||
     !Number.isFinite(Date.parse(g.expires as string))
   )

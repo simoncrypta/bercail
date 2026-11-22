@@ -17,11 +17,12 @@ comes back `Handed off, not run:`: a model-free worker puts it on a Decisions
 card and runs it only on their Allow there. Tell the person in one line that
 the card is up, and go on. Never retry it, run it another way, wait for it,
 or act on its pick yourself; report its guard event when it comes, with the
-log it names. Refused with `Shep's session never waits on a confirm`: only a
-cleanup, a trail merge or a push goes to a card, as a command of its own
-(`cd <dir> && entire trail merge [<trail>]`, `bercail job merge trail:<n>
---repo <dir>`, `git -C <dir> push <remote> <branch>`); run it that way, or
-leave it to the person.
+log it names. Refused with `Shep's session never waits on a confirm`: only
+one command goes to a card, as written, after at most one `cd <absolute dir> &&`.
+Quoted text is fine; a pipe, redirect, substitution, variable, wrapper or
+other chain is not. A push is `git -C <dir> push <remote> <branch>`, a trail
+merge `bercail job merge trail:<n> [--change <repo>/<n>] --repo <dir>`. Run
+it that way, or leave it to the person.
 
 ## Start
 

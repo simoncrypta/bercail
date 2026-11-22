@@ -349,3 +349,88 @@ wait
   run bercail guard check <<<"$input"
   [[ "$output" == *'no longer pins: '* ]] || fail "gone: $output"
 }
+
+# Stand-in entire: one line for where it ran, then one per argument, as it got them.
+argv_entire() {
+  printf '#!/bin/sh\n[ "$1" = agent-help ] && { echo "{}"; exit 0; }\nprintf "entire %%s\\n" "$PWD" >>"$LOG"\nfor a in "$@"; do printf "arg[%%s]\\n" "$a" >>"$LOG"; done\n' \
+    >"$BATS_TEST_TMPDIR/bin/entire"
+  chmod +x "$BATS_TEST_TMPDIR/bin/entire"
+}
+
+@test "any other one command goes on the card as its words and runs as exactly that argv, once, with its quoted text literal" {
+  argv_entire
+  # Every shell metacharacter, inside the quotes: none of it may run.
+  text='never `touch pwned`; touch pwned | cat > out && $(touch pwned) "q"'
+  id="$(ticket "cd $REPO && entire brain remember '$text' --json")"
+  worker "$id"
+  token="$(card "$id")"
+  shown="entire brain remember '$text' --json"
+  notice "notify-send Bercail Decisions: allow command $shown?"
+  bercail shep question json | jq -e --arg t "$token" --arg s "$shown in $REPO, as these 5 words with no shell" \
+    '.questions[] | select("\(.id)@\(.revision)" == $t) | .kind == "guard" and (.brief | contains($s))' >/dev/null \
+    || fail "brief: $(bercail shep question json | jq -c '.questions[-1].brief')"
+  pick "$token" Allow >/dev/null
+  jq -e --arg s "$shown" '.outcome == "ran" and .exit == 0 and .operation == "command" and .target == $s' \
+    <<<"$(event "$id")" >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(grep -c '^entire ' "$LOG")" -eq 1 ]] || fail "ran $(grep -c '^entire ' "$LOG") times: $(cat "$LOG")"
+  [[ "$(grep -v '^notify-send' "$LOG")" == "entire $REPO
+arg[brain]
+arg[remember]
+arg[$text]
+arg[--json]" ]] || fail "argv: $(cat "$LOG")"
+  [[ -z "$(find "$BATS_TEST_TMPDIR" -name pwned -o -name out)" ]] || fail "a quoted metacharacter ran"
+  run bercail guard ask "$id"
+  [[ "$output" == *"not run: its Allow was already claimed"* && "$(grep -c '^entire ' "$LOG")" -eq 1 ]] || fail "rerun: $output"
+}
+
+@test "a command whose argument changed after its card runs nothing on an Allow" {
+  argv_entire
+  # Its ticket rewritten once the card is up, and before it: neither runs.
+  id="$(ticket "cd $REPO && entire trail link 41 --branch feature --base main")"
+  BERCAIL_GUARD_ASK_POLL_MS=200 worker "$id"
+  token="$(card "$id")"
+  bercail shep question json | jq -e --arg t "$token" '.questions[] | select("\(.id)@\(.revision)" == $t)
+    | .brief | contains("entire trail link 41 --branch feature --base main in ")' >/dev/null || fail "brief"
+  jq '.command |= sub("main$"; "other") | .op.argv[-1] = "other" | .facts.argv[-1] = "other"' "$ASKS/$id.json" >"$ASKS/$id.tmp"
+  mv "$ASKS/$id.tmp" "$ASKS/$id.json"
+  pick "$token" Allow >/dev/null
+  jq -e '.outcome == "changed" and .why == "its ticket changed since the card went up"' <<<"$(event "$id")" >/dev/null \
+    || fail "event: $(cat "$INBOX/guard-$id.json")"
+
+  id="$(ticket "cd $REPO && entire trail link 41 --branch feature --base main")"
+  jq --arg c "cd $REPO && entire trail link 41 --branch feature --base other" '.command = $c' "$ASKS/$id.json" >"$ASKS/$id.tmp"
+  mv "$ASKS/$id.tmp" "$ASKS/$id.json"
+  worker "$id"
+  pick "$(card "$id")" Allow >/dev/null
+  jq -e '.outcome == "changed" and (.why | test("no longer reads as the same operation"))' <<<"$(event "$id")" >/dev/null \
+    || fail "event: $(cat "$INBOX/guard-$id.json")"
+  ! grep -q '^entire ' "$LOG" || fail "ran: $(cat "$LOG")"
+}
+
+@test "a push to an entire:// remote goes on the card as the Entire project, and the worker sends to that URL" {
+  url=entire://aws-us-east-2.entire.io/et/acme/widgets
+  # git's remote helper for entire://: it logs how git called it, and sends nothing.
+  printf '#!/bin/sh\nprintf "git-remote-entire %%s\\n" "$*" >>"$LOG"\nexit 1\n' >"$BATS_TEST_TMPDIR/bin/git-remote-entire"
+  chmod +x "$BATS_TEST_TMPDIR/bin/git-remote-entire"
+  git -C "$REPO" remote set-url origin "$url"
+  id="$(ticket "git -C $REPO push origin feature")"
+  worker "$id"
+  token="$(card "$id")"
+  notice "notify-send Bercail Decisions: allow push of the Entire project et/acme/widgets ($url) refs/heads/feature?"
+  bercail shep question json | jq -e --arg t "$token" --arg u "$url" '.questions[] | select("\(.id)@\(.revision)" == $t)
+    | .brief | contains("to the Entire project et/acme/widgets (\($u)): ")' >/dev/null || fail "brief"
+  pick "$token" Allow >/dev/null
+  jq -e '.outcome == "ran" and .exit != 0' <<<"$(event "$id")" >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+  grep -qx "git-remote-entire $url $url" "$LOG" || fail "helper: $(cat "$LOG") $(cat "$ASKS/$id.log")"
+}
+
+@test "Shep's trail link runs on an Allow as its words, in the checkout its cd names" {
+  argv_entire
+  id="$(ticket "cd $REPO && entire trail link 41 --branch feature --base main")"
+  worker "$id"
+  pick "$(card "$id")" Allow >/dev/null
+  jq -e '.outcome == "ran" and .exit == 0 and .operation == "command"' <<<"$(event "$id")" >/dev/null \
+    || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(grep -v '^notify-send' "$LOG" | tr '\n' ' ')" == "entire $REPO arg[trail] arg[link] arg[41] arg[--branch] arg[feature] arg[--base] arg[main] " ]] \
+    || fail "argv: $(cat "$LOG")"
+}

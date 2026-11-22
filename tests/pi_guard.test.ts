@@ -1939,11 +1939,26 @@ for (const command of [
   "entire auth status",
   "entire agent-help trail",
   "entire repo view /gh/o/r",
+  "entire trail help",
+  "entire org list",
+  "entire brain memories list",
+  // A last --help with no flag before it: cobra prints help and runs nothing.
+  "entire trail --help",
+  "entire trail link --help",
+  "entire trail merge --help",
+  "entire trail link 32 --help",
+  "entire brain remember --help",
+  "entire-brain distill --help",
 ]) {
   test(`entire read: ${command}`, () => {
     for (const role of roleNames) allowed(command, at(role, policies.default));
   });
 }
+// Another plugin is its own program: its --help may run it.
+test("an entire plugin bercail does not know gets no --help read", () => {
+  asked("entire frob settings --help", at("shep", policies.default));
+  blocked("entire frob settings --help", at("judge", policies.default));
+});
 // Roles the policy table leaves out: the builder sibling, background Shep
 // (BERCAIL_ROLE=shep-bg, tests/shep.bats), and Shep with nobody at its screen.
 const offTable: Record<string, GuardInput> = Object.fromEntries(
@@ -1970,7 +1985,11 @@ for (const command of [
   "entire trail --branch feature merge",
   "entire trail merge --repo gh/o/r 1",
   "entire trail merge --dry-run",
-  "entire trail merge --help",
+  // --help that a flag before it may take as its value, or that a substitution or a wrapper changes.
+  "entire --context work trail merge --help",
+  'entire trail merge --help"$(printf =false)"',
+  "xargs entire trail merge --help",
+  "entire trail merge --help --json",
   "entire trail merge 3 -- --force",
   "export GIT_TERMINAL_PROMPT=0\nentire trail merge",
   "entire trail merge 3 2>&1",

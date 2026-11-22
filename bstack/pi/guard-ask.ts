@@ -7,6 +7,7 @@ import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  argvText,
   changedFacts,
   cleanEnv,
   decideLive,
@@ -15,12 +16,14 @@ import {
   markStart,
   onDisk,
   opTarget,
+  opWhat,
   pinOperation,
   policyFromJson,
   readOut,
   runOf,
   stateDir,
   ticketId,
+  urlText,
   type GuardFacts,
   type GuardInput,
   type GuardOp,
@@ -70,11 +73,13 @@ function report(ticket: GuardTicket, outcome: Outcome, extra: { exit?: number; w
 function brief(ticket: GuardTicket): string {
   const f = ticket.facts;
   const facts =
-    f.kind === "cleanup"
-      ? `bercail cleanup of ${f.worktree} (branch ${f.branch ?? "detached"}, HEAD ${f.head})`
-      : f.kind === "trail merge"
-        ? `${f.job ? `bercail job merge ${f.job} --change` : "entire trail merge"} ${f.change} in ${f.checkout}: trail ${f.trailId}, head ${f.head}, into ${f.base}${f.job ? `, then closes ${f.job} once no change is open` : ""}`
-        : `git push from ${f.dir} (git dir ${f.gitDir}) to ${f.url}: ${f.refspecs.join(", ")}`;
+    f.kind === "command"
+      ? `${argvText(f.argv)} in ${f.dir}, as these ${f.argv.length} words with no shell`
+      : f.kind === "cleanup"
+        ? `bercail cleanup of ${f.worktree} (branch ${f.branch ?? "detached"}, HEAD ${f.head})`
+        : f.kind === "trail merge"
+          ? `${f.job ? `bercail job merge ${f.job} --change` : "entire trail merge"} ${f.change} in ${f.checkout}: trail ${f.trailId}, head ${f.head}, into ${f.base}${f.job ? `, then closes ${f.job} once no change is open` : ""}`
+          : `git push from ${f.dir} (git dir ${f.gitDir}) to ${urlText(f.url)}: ${f.refspecs.join(", ")}`;
   return `Shep ran: ${ticket.command}. On Allow, its worker guard-ask-${ticket.id} runs ${facts}, once, and only if none of that has changed. The card expires at ${ticket.expires}, which counts as a Deny.`;
 }
 
@@ -209,7 +214,7 @@ async function handle(ticket: GuardTicket) {
   const token = `${card.id}@${card.revision}`;
   // The panel often starts hidden: a desktop notice says a card is up. Not awaited.
   try {
-    spawn("notify-send", ["Bercail", `Decisions: allow ${ticket.op.kind} of ${opTarget(ticket.facts)}?`], {
+    spawn("notify-send", ["Bercail", `Decisions: allow ${opWhat(ticket.facts)}?`], {
       stdio: "ignore",
       detached: true,
     })
@@ -247,6 +252,9 @@ async function handle(ticket: GuardTicket) {
   // Once claimed, never run again: a second worker, or a restart, stops here.
   const claim = question(["guard-claim", token, id]);
   if (!claim.accepted) return console.log(`not run: ${claim.reason}`);
+  // What the card showed is what runs: a ticket rewritten since then runs nothing.
+  if (JSON.stringify(JSON.parse(readFileSync(join(guardAsks(), `${id}.json`), "utf8"))) !== JSON.stringify(ticket))
+    return report(ticket, "changed", { why: "its ticket changed since the card went up" });
   const { decision } = await decideNow(ticket);
   if (decision.action === "block") return report(ticket, "refused", { why: decision.reason });
   const again = guardOperation(ticket.command, ticket.cwd, process.env.HOME);
@@ -263,7 +271,7 @@ async function handle(ticket: GuardTicket) {
 // A guard card's live check: what changed since its facts were pinned.
 async function check() {
   const { op, facts } = JSON.parse(readFileSync(0, "utf8"));
-  if (!["cleanup", "trail merge", "push"].includes(op?.kind) || op.kind !== facts?.kind)
+  if (!["cleanup", "trail merge", "push", "command"].includes(op?.kind) || op.kind !== facts?.kind)
     throw new Error("check reads {op, facts} of one guard operation on stdin");
   console.log(JSON.stringify({ reasons: await changed(op, facts) }));
 }

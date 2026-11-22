@@ -90,7 +90,7 @@ function decisionLine(ev: any): string | null {
 }
 
 const GUARD_WORKER = /^guard-ask-[0-9a-f]{12}$/;
-const GUARD_OPERATIONS = ["cleanup", "trail merge", "push"];
+const GUARD_OPERATIONS = ["cleanup", "trail merge", "push", "command"];
 // What the guard's worker says of each outcome. Nothing in it is an instruction to run it.
 const GUARD_OUTCOMES: Record<string, string> = {
   ran: "ran on the person's Allow",
@@ -124,7 +124,8 @@ function guardLine(ev: any): string | null {
   const exit = ev.outcome === "ran" ? `, exit ${ev.exit}` : "";
   const why = one(ev.why) ? ` (${one(ev.why)})` : "";
   const log = one(ev.log) ? `; its output is in ${one(ev.log)}` : "";
-  return `- The ${ev.operation} of ${target} you handed off ${said}${exit}${why}${log}. Tell the person in one line. [event ${eventId}] (worker ${worker})`;
+  const what = ev.operation === "command" ? `command ${target}` : `${ev.operation} of ${target}`;
+  return `- The ${what} you handed off ${said}${exit}${why}${log}. Tell the person in one line. [event ${eventId}] (worker ${worker})`;
 }
 
 // Only follower text and routing facts, never desk-authored titles or summaries.

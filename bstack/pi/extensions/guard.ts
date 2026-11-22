@@ -772,9 +772,25 @@ const gitHelpBuiltins = new Set([
 
 const staticArg = /^[\w./-]+$/;
 
+// entire's built-in commands (entire agent-help --json), and the Brain and Graph plugins.
+const entireCommands = new Set(
+  "activity agent agent-help api auth checkpoint cp checkpoints clean cluster configure disable dispatch doctor enable help labs login logout org plugin project recap repo search service-account session sessions status trail version why brain graph".split(
+    " ",
+  ),
+);
+
 function cliHelp(words: string[], graphiteAliases: readonly string[] | undefined): boolean {
-  if (words.length !== 3 || words[2] !== "--help") return false;
   const name = basename(words[0]);
+  // entire's own commands, Brain and Graph parse flags anywhere: a last --help with no flag
+  // before it, which could take it as a value, prints help. Another plugin is its own program.
+  if (/^entire(-brain|-graph)?$/.test(name))
+    return (
+      words.length > 2 &&
+      (name !== "entire" || entireCommands.has(words[1])) &&
+      words.at(-1) === "--help" &&
+      words.slice(1, -1).every((word) => !word.startsWith("-"))
+    );
+  if (words.length !== 3 || words[2] !== "--help") return false;
   if (name === "git") return gitHelpBuiltins.has(words[1]);
   // Graphite expands aliases before parsing help, even aliases named submit or merge.
   return (
@@ -1078,7 +1094,7 @@ const pluginKinds: [EntireKind, string, string][] = [
   [
     "read",
     "brain",
-    ". version agent-guide capabilities overview brief query search vsearch get multi-get recall status stats doctor verify path show review help inspect inspect.blame inspect.boundaries inspect.changes inspect.code inspect.context inspect.dead-code inspect.graph-schema inspect.impact inspect.query-graph inspect.regressions inspect.search-graph inspect.snippet inspect.tests inspect.trace-path entities entities.history entities.show memories memories.status memories.tree memories.global memories.vitality memories.map memories.storage memories.storage.status patterns patterns.status webhook webhook.status webhook.events docs docs.extract docs.formats config config.show config.path workspace workspace.list workspace.query workspace.search workspace.get workspace.vsearch workspace.inspect workspace.review memory memory.status memory.jobs",
+    ". version agent-guide capabilities overview brief query search vsearch get multi-get recall status stats doctor verify path show review help inspect inspect.blame inspect.boundaries inspect.changes inspect.code inspect.context inspect.dead-code inspect.graph-schema inspect.impact inspect.query-graph inspect.regressions inspect.search-graph inspect.snippet inspect.tests inspect.trace-path entities entities.history entities.show memories memories.list memories.status memories.tree memories.global memories.vitality memories.map memories.storage memories.storage.status patterns patterns.status webhook webhook.status webhook.events docs docs.extract docs.formats config config.show config.path workspace workspace.list workspace.query workspace.search workspace.get workspace.vsearch workspace.inspect workspace.review memory memory.status memory.jobs",
   ],
   [
     "refresh",
@@ -1175,6 +1191,7 @@ function entireKind(words: string[]): EntireKind | undefined {
     return "read";
   if (cmd === "auth" && sub === "status") return "read";
   if (cmd === "plugin") return among(sub, "list info search doctor") ? "read" : "person";
+  if (among(cmd, "cluster org project service-account") && sub === "list") return "read";
   if (among(cmd, "enable disable configure clean login logout auth cluster org project service-account"))
     return "person";
   if (cmd === "agent") return sub === "list" ? "read" : "person";
@@ -1196,7 +1213,7 @@ function entireKind(words: string[]): EntireKind | undefined {
     if (path.includes("approve")) return "approve";
     if (path.includes("merge")) return "merge";
     if (path.includes("finding") && path.includes("dismiss")) return "approve";
-    if (among(sub, "approvals list sessions show stack timeline watch")) return "read";
+    if (among(sub, "approvals list sessions show stack timeline watch help")) return "read";
     // --no-branch=false still links a branch.
     if (sub === "create" && words.some((w) => w === "--no-branch" || w === "--no-branch=true")) return "trail";
     if (among(sub, "create link ci-pr update-branch")) return "push";
@@ -2453,7 +2470,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       forge.words[0] === "entire" && !pluginCall(forge.words) ? entireValueReading(forge.words) : undefined;
     const readings = [valueReading, forge.words];
     const kinds = readings.map((reading) => reading && entireKind(reading));
-    if (kinds[1]) {
+    if (kinds[1] && !help) {
       kinds.forEach((kind, i) => {
         if (kind) decision = worse(decision, decideEntire(kind, forge.words, forge.dir, here, readings[i]));
       });
@@ -2758,29 +2775,99 @@ export type GuardOp =
   | { kind: "cleanup"; path: string }
   // job: a trail job's bercail job merge, which closes the trail once no change is open.
   | { kind: "trail merge"; dir: string; trail: string | null; job?: string }
-  | { kind: "push"; dir: string; remote: string; refspecs: string[] };
+  | { kind: "push"; dir: string; remote: string; refspecs: string[] }
+  // Any other one command, run as these words in dir with no shell.
+  | { kind: "command"; dir: string; argv: string[] };
 
 /** What it acts on, read from disk, git and entire: the worker runs on these alone. */
 export type GuardFacts =
   | { kind: "cleanup"; worktree: string; branch: string | null; head: string }
   | { kind: "trail merge"; checkout: string; trailId: string; change: string; head: string; base: string; job?: string }
-  | { kind: "push"; dir: string; gitDir: string; url: string; refspecs: string[] };
+  | { kind: "push"; dir: string; gitDir: string; url: string; refspecs: string[] }
+  | { kind: "command"; dir: string; argv: string[] };
 
-const opWord = (word: string) => plainWord.test(word) || hashRefspec.test(word);
+// The words of each command joined by &&, as bash passes them, when nothing in them
+// expands: bare words of plain characters (a hash refspec's ^{commit} too), and quoted
+// text, single or double, that holds no $, backtick or backslash in double quotes. A
+// control character, a glob, a ~, a redirect, a pipe, a ; or a & alone: undefined.
+function asWritten(command: string): string[][] | undefined {
+  // Nothing the card could hide or reorder: no control, format (bidi) or line separator, no lone surrogate.
+  if (!command.isWellFormed() || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(command)) return undefined;
+  const segments: string[][] = [[]];
+  let i = 0;
+  while (i < command.length) {
+    if (command[i] === " ") {
+      i++;
+      continue;
+    }
+    if (command.startsWith("&&", i) && (command[i + 2] ?? " ") === " ") {
+      segments.push([]);
+      i += 2;
+      continue;
+    }
+    let word = "";
+    let bare = "";
+    while (i < command.length && command[i] !== " ") {
+      const c = command[i];
+      if (c === "'" || c === '"') {
+        const end = command.indexOf(c, i + 1);
+        if (end < 0) return undefined;
+        const text = command.slice(i + 1, end);
+        if (c === '"' && /[$`\\]/.test(text)) return undefined;
+        word += text;
+        bare += "\0";
+        i = end + 1;
+        continue;
+      }
+      if (!/[\w./:@=^{}-]/.test(c)) return undefined;
+      word += c;
+      bare += c;
+      i++;
+    }
+    // Braces expand unless they are a hash refspec's, whole and unquoted.
+    if (/[{}^]/.test(bare) && (bare !== word || !hashRefspec.test(word))) return undefined;
+    segments.at(-1)!.push(word);
+  }
+  return segments.every((words) => words.length) ? segments : undefined;
+}
+
+// Programs that run their arguments as a script: the card would show the script, not what it runs.
+const interpreters = new Set(["bash", "sh", "dash", "zsh", "ksh", "fish", "eval", "source", "."]);
+
+// A word as the shell, and asWritten, read it back: bare when plain, else quoted.
+const shellWord = (word: string) =>
+  plainWord.test(word)
+    ? word
+    : !word.includes("'")
+      ? `'${word}'`
+      : !/[$`\\"]/.test(word)
+        ? `"${word}"`
+        : `'${word.replaceAll("'", `'"'"'`)}'`;
+export const argvText = (argv: string[]) => argv.map(shellWord).join(" ");
 
 // The one operation a command is, or why it is not one: the whole command is that
-// command, after at most one cd DIR &&, in plain words the shell reads as written.
+// command, after at most one cd DIR &&, in words the shell passes as written.
 export function guardOperation(command: string, cwd: string | undefined, home: string | undefined): GuardOp | string {
+  const written = asWritten(command);
   const segments = segmentsOf(command);
-  const plain = segments.every(
-    (s) => !s.subs.length && !s.docs.length && !s.unclosed && !s.quoted.some(Boolean) && s.words.every(opWord),
-  );
-  const flat = segments.flatMap((s, i) => (i ? [segments[i - 1].after, ...s.words] : s.words));
-  if (!plain || command.includes("\\") || command.trim().split(/ +/).join("\0") !== flat.join("\0"))
-    return "it is not one command in plain words (no quotes, variables, substitutions or redirects)";
+  // The guard decides on segmentsOf's words: they must be the ones the worker runs.
+  const same =
+    written?.length === segments.length &&
+    segments.every(
+      (s, i) =>
+        !s.subs.length &&
+        !s.docs.length &&
+        !s.unclosed &&
+        s.after === (i < segments.length - 1 ? "&&" : "") &&
+        JSON.stringify(s.words) === JSON.stringify(written[i]),
+    );
+  if (!same)
+    return "it is not one command as written (no pipes, redirects, substitutions, variables, globs, or chains but cd DIR && …)";
   let dir = cwd;
-  if (segments.length === 2 && segments[0].after === "&&" && segments[0].words[0] === "cd") {
-    if (segments[0].words.length !== 2) return "its cd names no one folder";
+  if (segments.length === 2 && segments[0].words[0] === "cd") {
+    // An absolute path, which bash's cd reads as the guard does: no ~, option, empty word or CDPATH.
+    if (segments[0].words.length !== 2 || !segments[0].words[1].startsWith("/"))
+      return "its cd names no one absolute folder";
     dir = cdTarget(segments[0].words, cwd, home);
   } else if (segments.length !== 1) return "it runs more than one command";
   const words = segments.at(-1)!.words;
@@ -2788,18 +2875,30 @@ export function guardOperation(command: string, cwd: string | undefined, home: s
   if ([...segments[0].words, ...words].some((word) => /(^|\/)\.\.(\/|$)/.test(word)))
     return "it names a folder with .., which a symlink can send elsewhere";
   if (dir === undefined || !isAbsolute(dir)) return "the guard cannot tell which folder it runs in";
-  if (basename(words[0]) === "bercail" && words[1] === "cleanup") {
-    if (words.length !== 3 || words[2].startsWith("-")) return "bercail cleanup takes the one worktree it retires";
+  // The guard's checks drop an empty word, so the argv they read would not be the one run.
+  if (words.includes("")) return "it has an empty argument";
+  // The worker runs the command itself: what an env prefix, a wrapper or a shell would run is not on the card.
+  if (commandWords(words).length !== words.length || interpreters.has(basename(words[0])))
+    return "it runs its command through an env prefix, a wrapper or a shell; run the command itself";
+  // What the guard reads as a cleanup or a trail merge, in any shape: only the pinned one is handed off.
+  const plain = plainWords(words);
+  const named = [basename(words[0]), ...words.slice(1)];
+  const merges = [named, entireValueReading(named)].some((reading) => reading && entireKind(reading) === "merge");
+  if (basename(words[0]) === "bercail" && plain[1] === "cleanup") {
+    if (words.length !== 3 || words[1] !== "cleanup" || words[2].startsWith("-"))
+      return "bercail cleanup takes the one worktree it retires";
     return { kind: "cleanup", path: placeIn(dir, words[2])! };
   }
-  if (words[0] === "entire" && words[1] === "trail" && words[2] === "merge") {
-    if (words.length > 4 || words[3]?.startsWith("-"))
-      return "a trail merge is handed off only as entire trail merge [<trail>]";
+  if (merges) {
+    if (words[1] !== "trail" || words[2] !== "merge" || words.length > 4 || words[3]?.startsWith("-"))
+      return "a trail merge is handed off only as entire trail merge [<trail>|<repo>/<n>], or bercail job merge trail:<n> [--change <repo>/<n>]";
     return { kind: "trail merge", dir, trail: words[3] ?? null };
   }
   // bercail job merge trail:<n> [--change <repo>/<n>] [--repo DIR]: the trail's change, pinned
   // as a trail merge's, that the worker merges and then closes the trail with.
-  if (basename(words[0]) === "bercail" && words[1] === "job" && words[2] === "merge") {
+  if (basename(words[0]) === "bercail" && plain[1] === "job" && plain[2] === "merge") {
+    if (words[1] !== "job" || words[2] !== "merge")
+      return "a trail job merge is handed off only as bercail job merge trail:<n> [--change <repo>/<n>] [--repo DIR]";
     const flags: Record<string, string> = {};
     for (let i = 4; i < words.length; i += 2) {
       if (!["--change", "--repo"].includes(words[i]) || !words[i + 1] || flags[words[i]] !== undefined)
@@ -2814,7 +2913,7 @@ export function guardOperation(command: string, cwd: string | undefined, home: s
     if (dir === undefined) return "its --repo names no one folder";
     return { kind: "trail merge", dir, trail: change ?? job[1], job: words[3] };
   }
-  if (words[0] === "git") {
+  if (basename(words[0]) === "git") {
     let i = 1;
     if (words[1] === "-C") {
       dir = words[2] ? placeIn(dir, words[2]) : undefined;
@@ -2827,7 +2926,7 @@ export function guardOperation(command: string, cwd: string | undefined, home: s
     if (!remoteName.test(remote)) return "it pushes to a URL, not a remote's name";
     return { kind: "push", dir, remote, refspecs };
   }
-  return "it is not a cleanup, a trail merge or a push";
+  return { kind: "command", dir, argv: words };
 }
 
 /** A read the pinning makes: its stdout without the newline that ends it, or a throw. */
@@ -2861,14 +2960,21 @@ export const readOut: Read = (command, args, cwd) =>
   );
 
 // The push URLs a card can show (shep/pi/question-target.ts showable): a path, ssh with
-// no password, or http(s) or git:// with no user, and none with a query or a space.
+// no password, or http(s), git:// or entire:// with no user, and none with a query or a space.
 const showableUrl = [
   /^\/[^\s?#]*$/,
   /^file:\/\/\/[^\s?#]*$/,
   /^[\w.-]+@[\w.-]+:[^\s?#]*$/,
   /^(ssh|git\+ssh|ssh\+git):\/\/([\w.-]+@)?[\w.-]+(:\d+)?\/[^\s?#]*$/,
-  /^(https?|git):\/\/[\w.-]+(:\d+)?\/[^\s?#@]*$/,
+  /^(https?|git|entire):\/\/[\w.-]+(:\d+)?\/[^\s?#@]*$/,
 ];
+
+// A push URL as the card names it: an entire:// remote as the Entire project it is.
+export function urlText(url: string): string {
+  const entire = /^entire:\/\/[^/]+\/(.+)$/.exec(url);
+  return entire ? `the Entire project ${entire[1]} (${url})` : url;
+}
+
 const headRef = /^refs\/heads\/[\w./-]+$/;
 const objectId = /^([0-9a-f]{40}|[0-9a-f]{64})$/;
 
@@ -2986,6 +3092,8 @@ async function pinTrail(read: Read, dir: string, trail: string | null, job?: str
 // The objects an operation acts on now. It throws when they cannot be pinned.
 export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<GuardFacts> {
   if (op.kind === "trail merge") return pinTrail(read, op.dir, op.trail, op.job);
+  // Its folder by its real path, so a symlink moved later cannot send it elsewhere.
+  if (op.kind === "command") return { kind: "command", dir: realpathSync(op.dir), argv: op.argv };
   if (op.kind === "cleanup") {
     const worktree = realpathSync(op.path);
     const git = (...args: string[]) => read("git", ["-C", worktree, ...args], worktree);
@@ -3011,6 +3119,7 @@ export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<G
 // to the pinned URL with no tags or submodules a config could add, each commit as
 // <hash>^{commit}, which no ref named like the hash can shadow.
 export function runOf(facts: GuardFacts): { argv: string[]; cwd: string } {
+  if (facts.kind === "command") return { argv: facts.argv, cwd: facts.dir };
   if (facts.kind === "cleanup")
     return { argv: [process.env.BERCAIL_BIN || "bercail", "cleanup", facts.worktree], cwd: "/" };
   if (facts.kind === "trail merge" && facts.job)
@@ -3114,7 +3223,7 @@ async function handOff(
 ): Promise<{ handed: boolean; reason: string }> {
   const refused = (why: string) => ({
     handed: false,
-    reason: `${asked} Shep's session never waits on a confirm, and this could not go to a Decisions card: ${why}. Run a cleanup, a trail merge or a push as a command of its own (cd DIR && entire trail merge [<trail>], bercail job merge trail:<n> --repo DIR, git -C DIR push REMOTE BRANCH), or leave it to the person.`,
+    reason: `${asked} Shep's session never waits on a confirm, and this could not go to a Decisions card: ${why}. Run it as one command of its own, as written, after at most one cd DIR && (a push as git -C DIR push REMOTE BRANCH, a trail merge as bercail job merge trail:<n> [--change <repo>/<n>] --repo DIR), or leave it to the person.`,
   });
   const op = guardOperation(command, input.cwd, input.home);
   if (typeof op === "string") return refused(op);
@@ -3172,16 +3281,21 @@ async function handOff(
   if (state !== "started") return refused(why);
   return {
     handed: true,
-    reason: `Handed off, not run: the person answers this ${op.kind} of ${opTarget(facts)} on a Decisions card, and the worker ${worker} runs it only on their Allow, within the hour. Tell the person in one line that the card is up. Do not retry it, wait for it or run it another way; your turn goes on. Its outcome comes back as a guard event; report it then.`,
+    reason: `Handed off, not run: the person answers this ${opWhat(facts)} on a Decisions card, and the worker ${worker} runs it only on their Allow, within the hour. Tell the person in one line that the card is up. Do not retry it, wait for it or run it another way; your turn goes on. Its outcome comes back as a guard event; report it then.`,
   };
 }
 
 // The operation in a few words, and what it acts on, for the card and the event.
 export function opTarget(facts: GuardFacts): string {
+  if (facts.kind === "command") return argvText(facts.argv);
   if (facts.kind === "cleanup") return facts.worktree;
   if (facts.kind === "trail merge") return facts.change;
-  return `${facts.url} ${facts.refspecs.map((spec) => spec.split(":")[1]).join(" ")}`;
+  return `${urlText(facts.url)} ${facts.refspecs.map((spec) => spec.split(":")[1]).join(" ")}`;
 }
+
+// "push of <target>", or "command <its words>".
+export const opWhat = (facts: GuardFacts) =>
+  facts.kind === "command" ? `command ${opTarget(facts)}` : `${facts.kind} of ${opTarget(facts)}`;
 
 const policySection = "bercail_git_policy";
 
