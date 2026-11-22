@@ -132,6 +132,17 @@ test("a trail wait reads the gates until they pass on the expected head, and nev
   expect(log()).toBe("trail show lesentiel/31 --json\n".repeat(3));
 });
 
+// bercail-0ymk: from a checkout of another project (bercail's, on GitHub), a
+// trail is named with its project, which goes to Entire as --project.
+test("a trail wait on another project's trail passes that project to entire", async () => {
+  const log = fakeEntire(show(HEAD, true, "passed"));
+  await wait({ kind: "trail", target: "et/lesentiel/44", head: HEAD });
+  await wait({ kind: "trail", target: "et/lesentiel/lesentiel/31", head: HEAD });
+  expect(log()).toBe(
+    "trail show 44 --project et/lesentiel --json\ntrail show lesentiel/31 --project et/lesentiel --json\n",
+  );
+});
+
 test("a trail wait stops when the head moves, even with the gates passing", async () => {
   const log = fakeEntire(show(HEAD, false, "pending"), show("0123456789abcdef", true, "passed"));
   await expect(wait({ kind: "trail", target: "32", head: HEAD })).rejects.toThrow(
@@ -166,9 +177,11 @@ test("a trail wait with no head, or a target that is not a trail, runs nothing",
     { kind: "trail", target: "32" },
     { kind: "trail", target: "32", head: "main" },
     { kind: "trail", target: "--force", head: HEAD },
+    { kind: "trail", target: "et/--project/44", head: HEAD },
+    { kind: "trail", target: "https://entire.com/et/lesentiel/-/trails/44", head: HEAD },
   ])
     await expect(start().tools.shep_wait.execute("call-1", args, undefined)).rejects.toThrow(
-      "a trail wait needs target <n> or <repo>/<n>, and head: the commit its gates must pass on",
+      "a trail wait needs target <n>, <repo>/<n>, or either after <forge>/<project>/ (et/lesentiel/44), and head: the commit its gates must pass on",
     );
   expect(log()).toBe("");
 });
