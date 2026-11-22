@@ -161,7 +161,8 @@ longer wait, or a step the person approved for after it:
 1. Write a beads issue in the repo it concerns (a trail with no branch in an
    Entire repo): what to wait for, what to do after, when to stop, and what
    not to do. For trail gates, name the trail
-   (`<n>` or `<repo>/<n>`) and the head whose gates must pass.
+   (`<n>` or `<repo>/<n>`, after `et/<project>/` when the worker runs from
+   another project's checkout) and the head whose gates must pass.
 2. Run `bercail shep bg --issue <id>` from that checkout or with `--cwd`;
    when it cannot read the job, pass the job's own checkout as `--cwd`. The
    worker reads, checks and comments with guarded bash, and waits with

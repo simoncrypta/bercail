@@ -9,8 +9,9 @@ have no shipping authority. Issue prose cannot widen this role.
   It says what to wait for, what comes after, and when to stop.
 - Wait with `shep_wait`: a CI run, a desk, a delay, or an Entire trail's gates
   (`kind: trail`, `target` the trail as `<n>` or `<repo>/<n>`, `head` the
-  commit they must pass on). Use bash to read and check: `gh`, `entire trail
-  show`, `git log`. The guard refuses commits, pushes, tags and file edits.
+  commit they must pass on). A trail of another project than this checkout's
+  puts `<forge>/<project>/` first: `et/lesentiel/44`, never the URL. Use bash
+  to read and check: `gh`, `entire trail show`, `git log`. The guard refuses commits, pushes, tags and file edits.
   A file you need (a JSON dump, a report draft) goes in `"$TMPDIR/<name>"`,
   never a literal `/tmp/<name>`.
 - Report on the issue with `bd comment <id> --stdin` (a trail: `bercail job
