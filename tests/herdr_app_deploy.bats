@@ -70,7 +70,7 @@ app_edits_then_update() {
   deploy_herdr_app >/dev/null
 }
 
-@test "deploy installs the layout and mod and merges only layout:bercail keys" {
+@test "deploy installs the layout and mod and merges bercail's keys into the person's" {
   fresh_install
   cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "layout not installed"
   cmp -s "$ROOT/bercail/mods/bercail-desk/main.js" "$APP/mods/bercail-desk/main.js" || fail "mod not installed"
@@ -225,11 +225,50 @@ app_edits_then_update() {
   grep -q 'missing  Herdr keys' <<<"$out" || fail "missing keys message: $out"
 }
 
-@test "a missing keys.json gets only the layout:bercail section" {
+@test "a missing keys.json gets the layout:bercail section and Herdr's copy and paste keys" {
   fresh_install
   rm -f "$APP/keys.json"
   deploy_herdr_app >/dev/null
-  jq -e 'keys == ["layout:bercail"]' "$APP/keys.json" >/dev/null || fail "new keys.json: $(cat "$APP/keys.json")"
+  jq -e 'keys == ["layout:bercail", "terminal"]
+      and .terminal == {"ctrl-shift-c": "terminal.copy", "ctrl-shift-v": "terminal.paste"}' "$APP/keys.json" >/dev/null \
+    || fail "new keys.json: $(cat "$APP/keys.json")"
+}
+
+# A keys.json from a bercail that shipped no terminal section, as on the client that
+# lost Ctrl+Shift+C/V. The person bound ctrl-shift-v and one other terminal key.
+@test "update adds the copy and paste keys to an existing keys.json and keeps the person's" {
+  local before
+  fresh_install
+  jq 'del(.terminal)' "$ROOT/bercail/keys.json" >"$BERCAIL_SHARE_DIR/herdr-app/keys.json"
+  jq '.terminal = {"ctrl-left": "send:x", "ctrl-shift-v": "my.paste"}' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
+  deploy_herdr_app >/dev/null 2>&1
+  jq -e '.terminal == {"ctrl-left": "send:x", "ctrl-shift-v": "my.paste", "ctrl-shift-c": "terminal.copy"}
+      and .global["ctrl-shift-t"] == "tab.new"' "$APP/keys.json" >/dev/null \
+    || fail "terminal keys merge: $(cat "$APP/keys.json")"
+  before="$(cat "$APP/keys.json")"
+  deploy_herdr_app >/dev/null 2>&1
+  [[ "$(cat "$APP/keys.json")" == "$before" ]] || fail "a second update must not change keys.json"
+
+  # Removed after bercail shipped it: stays removed, and so does a removed section.
+  jq 'del(.terminal["ctrl-shift-c"])' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
+  deploy_herdr_app >/dev/null 2>&1
+  jq -e '.terminal | has("ctrl-shift-c") | not' "$APP/keys.json" >/dev/null || fail "a removed key came back: $(cat "$APP/keys.json")"
+  jq 'del(.terminal)' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
+  deploy_herdr_app >/dev/null 2>&1
+  jq -e 'has("terminal") | not' "$APP/keys.json" >/dev/null || fail "a removed section came back: $(cat "$APP/keys.json")"
+}
+
+# The terminal section wins over every other one while a terminal has the keyboard,
+# so a copy or paste key there would take a chord the person bound elsewhere.
+@test "update adds no copy or paste key the person binds in another section" {
+  fresh_install
+  jq 'del(.terminal) | .global["ctrl-shift-c"] = "tab.new" | .["layout:bercail"]["ctrl-shift-v"] = "mine.paste"' "$APP/keys.json" >"$K" \
+    && mv "$K" "$APP/keys.json"
+  jq 'del(.terminal)' "$ROOT/bercail/keys.json" >"$BERCAIL_SHARE_DIR/herdr-app/keys.json"
+  deploy_herdr_app >/dev/null 2>&1
+  jq -e '(has("terminal") | not) and .global["ctrl-shift-c"] == "tab.new"
+      and .["layout:bercail"]["ctrl-shift-v"] == "mine.paste"' "$APP/keys.json" >/dev/null \
+    || fail "a key bound elsewhere was shadowed: $(cat "$APP/keys.json")"
 }
 
 @test "no Herdr app skips the step" {

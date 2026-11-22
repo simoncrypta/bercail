@@ -48,8 +48,9 @@ Second choice, the layout on its own, when the person says no:
   run in it.
 - Copy `layouts/bercail.json`, `mods/bercail-desk/`, `mods/bercail-shep/`,
   `mods/bercail-spaces/` and `mods/bercail-agents/` into
-  `~/.config/herdr-app/`, merge the `layout:bercail` section of `keys.json`
-  into `~/.config/herdr-app/keys.json`, run `herdr-app check` on each mod
+  `~/.config/herdr-app/`, merge the `layout:bercail` and `terminal` sections
+  of `keys.json` into `~/.config/herdr-app/keys.json` without replacing the
+  person's keys, run `herdr-app check` on each mod
   (`~/.config/herdr-app/mods/bercail-desk`, `.../bercail-shep`,
   `.../bercail-spaces`, `.../bercail-agents`), then switch with
   `ctrl-shift-l`.

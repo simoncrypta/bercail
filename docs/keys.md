@@ -59,4 +59,14 @@ The rest are the Herdr app's: `Ctrl+Shift+T`/`W` new/close tab, `Ctrl+Shift+O`/`
 
 Shep and the desks run Pi fullscreen, which holds the mouse: a plain drag selects in Pi, and Pi copies it on release (its `fullscreenCopyOnSelect`, on by default). bercail starts them with `PI_CLIPBOARD_OSC52=1`, so Pi sends that copy, and `Ctrl+X`'s, as OSC 52 as well as to its own machine's clipboard. The Herdr window showing it writes OSC 52 to its computer's clipboard while the app's `clipboard_write` is on (the default), so a window on a laptop, with bercail on [another machine](config.md#bercail-on-another-machine), gets it there. Pi skips OSC 52 for a copy over 75,000 bytes.
 
-Hold `Shift` while you drag to select with the Herdr app instead. It copies on release while `copy_on_select` is on (the default), and `Ctrl+Shift+C` copies the selection either way. `Ctrl+C` is not a copy key here: it goes to Pi, where a second quick press quits it.
+Hold `Shift` while you drag to select with the Herdr app instead. It copies on release while `copy_on_select` is on (the default), and `Ctrl+Shift+C` copies the selection either way; `Ctrl+Shift+V` pastes. `Ctrl+C` is not a copy key here: it goes to Pi, where a second quick press quits it. This copy is the Herdr window's, to its own computer's clipboard, apart from Pi's OSC 52 above.
+
+Herdr refreshes an untouched default `keys.json` when it updates, but adds no default keys to one that was edited or written by something else, so a file bercail started had no copy or paste. `bercail update` puts `"ctrl-shift-c": "terminal.copy"` and `"ctrl-shift-v": "terminal.paste"` in its `terminal` section, the same way as the `layout:bercail` keys: a value you set there stays, and a key or section you removed stays removed. It skips a key you bind in another section, since the `terminal` section would win over it. `bercail uninstall` leaves them, since they are Herdr's own defaults.
+
+On Omarchy, `Super+C` and `Super+V` send `Ctrl+Shift+C` and `Ctrl+Shift+V` only to a window tagged as a terminal; any other window gets `Ctrl+C` and `Ctrl+V`, and `Ctrl+C` goes to Pi. The Herdr app is not tagged by default, and bercail does not add the tag, so add this line to `~/.config/hypr/hyprland.lua` yourself:
+
+```lua
+o.window("herdr-app", { tag = "+terminal" })
+```
+
+Then, in Pi in a Herdr window, `Shift`+drag to select and press `Super+C` to copy to that computer's clipboard, a laptop with bercail on another machine included. A plain drag is Pi's own select and copy (above).

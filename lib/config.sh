@@ -243,41 +243,51 @@ deploy_herdr_app_layout() {
   rm -f "$new" "$merged"
 }
 
-# keys.json is the person's: only the layout:bercail section is bercail's, and in it
-# only the keys still as bercail last shipped them. The last shipped section is kept
-# to tell the two apart; with none kept, the section is the person's own.
+# keys.json is the person's, and Herdr adds no new default keys to one that was edited:
+# bercail owns only the keys it ships (layout:bercail, and the terminal section's copy
+# and paste) that are still as it last shipped them. The last shipped file is kept to tell the two
+# apart; with none kept, every section is the person's own.
 _herdr_app_shipped_keys() {
   printf '%s/herdr-app/keys.json' "$BERCAIL_SHARE_DIR"
 }
 
-# The section bercail ships now and the one it shipped last, compact, one per line.
+# The keys bercail ships now and the ones it shipped last, compact, one per line. With no
+# keys.json (never made, or set aside by Herdr's reset), nothing was shipped to it.
 _herdr_app_keys_sections() {
   local ours="$1" shipped
   shipped="$(_herdr_app_shipped_keys)"
-  jq -c --arg s "$HERDR_APP_KEYS_SECTION" '.[$s]' "$ours" || return 1
-  if [[ -f "$shipped" ]]; then
-    jq -c --arg s "$HERDR_APP_KEYS_SECTION" '.[$s] // {}' "$shipped" || return 1
+  jq -c . "$ours" || return 1
+  if [[ -f "$shipped" && -f "$HERDR_APP_CONFIG_DIR/keys.json" ]]; then
+    jq -c . "$shipped" || return 1
   else
     printf '{}\n'
   fi
 }
 
-# Merge bercail's section into keys.json (stdin), per key:
+# Merge each section bercail ships into keys.json (stdin), per key:
 # - still as bercail last shipped it: bercail's now (or gone, when bercail dropped it);
 # - changed or added by the person: theirs;
 # - removed by the person: stays removed, unless bercail binds it to something new.
+# A missing layout:bercail comes back whole. In the person's sections (terminal), bercail
+# adds no key another section binds: terminal wins over them all, so it would take it.
 _herdr_app_keys_merge() {
-  jq --arg s "$HERDR_APP_KEYS_SECTION" --argjson new "$1" --argjson old "$2" '
-    .[$s] as $mine
-    | if $mine == null then .[$s] = $new else
-        .[$s] = reduce (($new + $old + $mine) | keys_unsorted[]) as $k ({};
-          if ($mine | has($k)) then
-            if ($old | has($k)) and $mine[$k] == $old[$k] then
-              if ($new | has($k)) then .[$k] = $new[$k] else . end
-            else .[$k] = $mine[$k] end
-          elif ($new | has($k)) and (($old | has($k) | not) or $old[$k] != $new[$k]) then .[$k] = $new[$k]
-          else . end)
-      end'
+  jq --arg layout "$HERDR_APP_KEYS_SECTION" --argjson new "$1" --argjson old "$2" '
+    . as $file
+    | reduce ($new | keys_unsorted[]) as $s (.;
+      $new[$s] as $n | ($old[$s] // {}) as $o
+      | if $s == $layout and .[$s] == null then .[$s] = $n else
+          (.[$s] // {}) as $mine
+          | (if $s == $layout then [] else [$file | to_entries[] | select(.key != $s) | .value | objects | keys[]] end) as $taken
+          | (reduce (($n + $o + $mine) | keys_unsorted[]) as $k ({};
+              if ($mine | has($k)) then
+                if ($o | has($k)) and $mine[$k] == $o[$k] then
+                  if ($n | has($k)) then .[$k] = $n[$k] else . end
+                else .[$k] = $mine[$k] end
+              elif ($n | has($k)) and (($o | has($k) | not) or $o[$k] != $n[$k]) and ($taken | index($k)) == null then
+                .[$k] = $n[$k]
+              else . end)) as $merged
+          | if .[$s] == null and $merged == {} then . else .[$s] = $merged end
+        end)'
 }
 
 deploy_herdr_app_keys() {
@@ -292,16 +302,16 @@ deploy_herdr_app_keys() {
   if ! DRY_RUN=0 deploy_install_file "bercail/keys.json" "$ours" >/dev/null \
     || ! { read -r new && read -r old; } < <(_herdr_app_keys_sections "$ours") \
     || ! _herdr_app_keys_merge "$new" "$old" <"$base" >"$tmp"; then
-    warn "could not merge the $HERDR_APP_KEYS_SECTION keys into $keys; copy that section from bercail/keys.json"
+    warn "could not merge bercail's keys into $keys; copy its sections from bercail/keys.json"
     rm -f "$ours" "$tmp"
     [[ "$base" == "$keys" ]] || rm -f "$base"
     return 0
   fi
   [[ "$base" == "$keys" ]] || rm -f "$base"
   if [[ -f "$keys" ]] && jq -e --slurpfile new "$tmp" '. == $new[0]' "$keys" >/dev/null 2>&1; then
-    info "unchanged: $keys ($HERDR_APP_KEYS_SECTION)"
+    info "unchanged: $keys (bercail's keys)"
   else
-    info "install: $keys ($HERDR_APP_KEYS_SECTION section)"
+    info "install: $keys (bercail's keys)"
     [[ "$DRY_RUN" -eq 1 ]] || cp "$tmp" "$keys"
   fi
   [[ "$DRY_RUN" -eq 1 ]] || DRY_RUN=0 copy_file "$ours" "$(_herdr_app_shipped_keys)" >/dev/null

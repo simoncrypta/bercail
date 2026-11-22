@@ -298,7 +298,7 @@ Not yet: the worktrunk hook and `handoff-spawn --branch` open a new space only i
 
 ## Files bercail manages
 
-- `~/.config/herdr-app/layouts/bercail.json`, `mods/bercail-desk/`, `mods/bercail-shep/`, `mods/bercail-spaces/`, `mods/bercail-agents/` and `mods/bercail-review/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), and the `layout:bercail` section of `keys.json` (see [keys](keys.md)).
+- `~/.config/herdr-app/layouts/bercail.json`, `mods/bercail-desk/`, `mods/bercail-shep/`, `mods/bercail-spaces/`, `mods/bercail-agents/` and `mods/bercail-review/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), and in `keys.json` the `layout:bercail` section and the `terminal` section's copy and paste keys (see [keys](keys.md)).
 - `~/.config/bercail/` (`config.toml`, `shell/`, `config.toml.example`), and the marker block in your `~/.bashrc` or `~/.zshrc` that sources the shell helpers.
 - worktrunk hooks (`~/.config/worktrunk/config.toml`, `herdr-layout.sh`).
 - `~/.local/bin/{bercail,bercail-desk-agent}` (a mise or packslip install keeps its own `bercail`), and `~/.local/share/bercail/` (in it, `release/` is the release a curl install unpacked).

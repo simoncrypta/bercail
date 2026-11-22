@@ -17,5 +17,9 @@
     "ctrl-shift-q": "space.close",
     "ctrl-shift-h": "bercail-shep.toggle",
     "ctrl-space": "bercail-shep.goto"
+  },
+  "terminal": {
+    "ctrl-shift-c": "terminal.copy",
+    "ctrl-shift-v": "terminal.paste"
   }
 }
