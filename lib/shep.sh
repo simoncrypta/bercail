@@ -16,7 +16,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/scratch.sh"
 
 SHEP_SKILLS=(handoff desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--group ID] [--repo DIR] [--issue ID] | mistake group ID \"NAME\" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json [--all]] | question create|revise|reply|answer|withdraw|get|check|thread|panel|expire|discuss|closed|push-approval"
+SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--group ID] [--repo DIR] [--issue ID] | mistake group ID \"NAME\" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json [--all]] | question create|revise|reply|answer|withdraw|get|check|thread|panel|expire|waiting|discuss|closed|push-approval"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"

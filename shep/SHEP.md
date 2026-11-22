@@ -204,6 +204,11 @@ Every decision you ask goes through `shep_question` first, so it is a card on
 the Decisions panel, then in chat too. Ordinary chat is not a question and
 grants nothing.
 
+Never list pending decisions in your own words. A decision with no card is
+not one: ask it with `shep_question` first. What waits on the person comes
+from the ledger: the board's `Decisions:` block, and the same block that ends
+your reply on the person's screen, which you never see or write.
+
 - Give the repo checkout, topic, job (found as in A job, step 2), exact desk
   when there is one (null when the job's desk is gone), the event or entry it
   came from (never invented), prompt, choices, a `brief` (two to four lines:

@@ -82,6 +82,8 @@ async function body(run: string): Promise<void> {
   ])
     mkdirSync(p, { recursive: true });
   symlinkSync(PI, join(binp, "pi"));
+  // The question commands run on Node, installed with Pi.
+  symlinkSync(process.execPath, join(binp, "node"));
   const share = join(home, ".local/share/bercail/shep");
   copyFileSync(join(ROOT, "shep/SHEP.md"), join(share, "SHEP.md"));
   // `bercail shep run` loads the desk extension from the install (lib/shep.sh).
@@ -134,6 +136,7 @@ async function body(run: string): Promise<void> {
     PI_OFFLINE: "1",
     HERDR_APP_BIN: join(run, "no-herdr-app"),
     __MISE_BASH_ENV_LOADED: "1",
+    SHEP_PI_REQUESTS: join(run, "requests.jsonl"),
   });
   const shepDir = join(state, "bercail/shep");
   const sessions = join(shepDir, "pi-sessions");
@@ -151,6 +154,31 @@ async function body(run: string): Promise<void> {
     const r = spawnSync("bash", ["-c", script, "follower", ...args], { env, stdio: "inherit" });
     if (r.status !== 0) throw new Error(`notify_desk_changed ${args.join(" ")} exited ${r.status ?? r.signal}`);
   };
+
+  // A card waiting on the person, in the ledger before Shep starts.
+  const asked = spawnSync(join(ROOT, "bin/bercail"), ["shep", "question", "create"], {
+    env,
+    input: JSON.stringify({
+      requestId: "r1",
+      kind: "planning",
+      prompt: "Which desk first?",
+      options: ["auth", "search"],
+      origin: { event: "chat", session: "shep-1", entry: null },
+      repo: desk,
+      issue: null,
+      topic: "plan",
+      desk: null,
+      base: null,
+      action: null,
+    }),
+    encoding: "utf8",
+  });
+  if (asked.status !== 0) throw new Error(`question create exited ${asked.status}: ${asked.stderr}`);
+  const waitingEntries = () =>
+    entries(sessions)[1].filter((e) => e.type === "custom" && e.customType === "bercail-waiting") as {
+      data?: { text?: string };
+    }[];
+  const block = "Decisions:\n- app.login: Which desk first?";
 
   const isDir = (p: string) => existsSync(p) && statSync(p).isDirectory();
   let shep = await Term.start([join(ROOT, "bin/bercail"), "shep", "run"], {
@@ -177,6 +205,17 @@ async function body(run: string): Promise<void> {
     await waitFor("Shep's report on it", () => replies(sessions).some((r) => r.includes("Shep report: t9:finished:")))
   )
     pass("a finished desk reaches the running Pi Shep, which reports on it unasked");
+  // Once Shep settles, its reply ends with the ledger's block: in the session, on screen, not in a message.
+  if (await waitFor("the Decisions entry", () => waitingEntries().length > 0)) {
+    const text = waitingEntries()[0]!.data?.text;
+    if (text !== block) fail(`Decisions entry: ${JSON.stringify(text)}`);
+    else if (
+      await waitFor("the Decisions entry on Shep's screen", () =>
+        readFileSync(join(run, "term1.log"), "utf8").includes("Which desk first?"),
+      )
+    )
+      pass("Shep's settled reply ends with the ledger's Decisions block, shown on screen");
+  }
   const files = jsons(delivered);
   const rec = files.length ? JSON.parse(readFileSync(files[0]!, "utf8")) : {};
   if (!rec.delivered_at || !rec.delivered_session) fail(`delivered record: ${JSON.stringify(rec)}`);
@@ -197,6 +236,12 @@ async function body(run: string): Promise<void> {
     if (finished !== 1) fail(`duplicates delivered: ${finished}`);
     else pass("duplicates drop; a blocked desk is reported too");
   }
+  // The requests after the entry never carry it to the model.
+  const requests = readFileSync(join(run, "requests.jsonl"), "utf8").trim().split("\n");
+  if (requests.length < 2) fail(`model requests: ${requests.length}`);
+  else if (requests.some((r) => r.includes(JSON.stringify(block).slice(1, -1))))
+    fail("the Decisions entry reached a model request");
+  else pass("the Decisions entry is in the session file and in no model request");
 
   // Shep quits; a desk finishes meanwhile; the relaunch continues the same session
   // and gets the event that waited.

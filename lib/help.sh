@@ -44,6 +44,7 @@ Post-install CLI (bercail):
                 question create|revise|reply|answer|withdraw (JSON on stdin) | get TOKEN (one revision) |
                 check TOKEN | thread TOPIC |
                 panel (the Decisions panel's JSON) | expire (record due defaults; Shep's runtime runs it) |
+                waiting (the board's Decisions block: the cards and defaults waiting on you) |
                 discuss TOKEN (make or find its branch) | closed TOKEN OPENING |
                 push-approval DIR REMOTE REFSPEC... (the guard's: spends the answer that approves this push)
   job           A trail job in an Entire repo, trail:N (its trail number) wherever an issue id goes:

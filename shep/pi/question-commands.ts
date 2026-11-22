@@ -1,5 +1,6 @@
 // Transport labels are not human identity: even registered commands can be injected.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createHash } from "node:crypto";
 import { door, mergesIn, QuestionStore, projection, tokenOf } from "./questions.ts";
@@ -9,6 +10,10 @@ import { captureTarget, checkQuestion, mergeReversible, withTarget } from "./que
 const bareDecision = /^(?:yes|no|y|n|lgtm|[1-9]\d*)[.!]?$/i;
 // How often Shep's runtime looks for a reversible question past its deadline.
 export const EXPIRE_MS = 30000;
+// The TUI-only entry that ends Shep's reply with what waits on the person.
+const WAITING = "bercail-waiting";
+const WAITING_UNKNOWN =
+  "Decisions: UNKNOWN (bercail shep question waiting failed; the Decisions panel shows the cards)";
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const cut = (text: string) => {
   const chars = [...text];
@@ -66,6 +71,43 @@ export default function (pi: ExtensionAPI) {
     child.once("error", () => (running = false));
     child.once("exit", () => (running = false));
   };
+  // "Waiting on you" after a reply, from the ledger and never from the model: a TUI-only
+  // entry (Pi never sends one to the model) whenever its text differs from the branch's
+  // last one. The checks run in their own process, as expire's do. A result goes after the
+  // reply it was asked for, or nowhere once the leaf moved: a settle during a check asks
+  // again for its own reply, and a session that ended takes none.
+  let checking = false;
+  let queued: string | null = null;
+  let session = 0;
+  const refresh = (ctx: ExtensionContext) => {
+    const leaf = ctx.sessionManager.getLeafId();
+    if (checking) return void (queued = leaf);
+    checking = true;
+    const asked = session;
+    let out = "";
+    const child = spawn(process.env.BERCAIL_SHEP_BIN || "bercail", ["shep", "question", "waiting"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    child.stdout.on("data", (chunk) => (out += chunk));
+    child.on("error", () => {}); // close follows
+    child.once("close", (code) => {
+      checking = false;
+      if (asked !== session) return;
+      const here = ctx.sessionManager.getLeafId();
+      const text = code === 0 ? out.trim() : WAITING_UNKNOWN;
+      const last = ctx.sessionManager.getBranch().findLast((e) => e.type === "custom" && e.customType === WAITING);
+      if (here === leaf && text !== (last as { data?: { text?: string } } | undefined)?.data?.text)
+        pi.appendEntry(WAITING, { text });
+      const next = queued;
+      queued = null;
+      if (next !== null && next === here) refresh(ctx);
+    });
+  };
+  pi.registerEntryRenderer<{ text: string }>(
+    WAITING,
+    (entry, _options, theme) => new Text(theme.fg("dim", entry.data?.text ?? ""), 0, 0),
+  );
+  pi.on("agent_settled", (_event, ctx) => refresh(ctx));
   pi.on("session_start", () => {
     if (timer) clearInterval(timer);
     timer = setInterval(expire, EXPIRE_MS);
@@ -75,6 +117,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     if (timer) clearInterval(timer);
     timer = null;
+    session++;
+    queued = null;
   });
   pi.registerCommand("questions", {
     description: "List durable pending questions and exact reply targets",
