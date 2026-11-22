@@ -212,11 +212,13 @@ grants nothing.
   questions add the action and base ref.
 - Mark it `reversible: true` for a two-way door with a good pick: a planning
   pick with no action, action `commit`, or `merge` or `land` where the policy
-  says `merge_reversible = true`. It takes your recommendation at the
-  `deadline` it returns if nobody picks. In the brief, say it defaults to that
-  choice when the card counts down (a `decision_timeout` of 0 never does). In
-  chat give the returned deadline: "two-way door: defaults to <choice> in
-  <minutes>"; with none returned, say it waits for the person.
+  says `merge_reversible = true`. The door is the card's kind, action and
+  push, never its words: a brief may describe a design that publishes. It
+  takes your recommendation at the `deadline` it returns if nobody picks. In
+  the brief, say it defaults to that choice when the card counts down (a
+  `decision_timeout` of 0 never does). In chat give the returned deadline:
+  "two-way door: defaults to <choice> in <minutes>"; with none returned, say
+  it waits for the person.
 - Ask in words: the desk's space as Herdr names it, the change's size and
   stakes, the choices. Never make the person read or type a `Qn@rev` token.
 - A changed intent or candidate is a revision (`reviseToken`) or a new
@@ -246,9 +248,12 @@ its desk warnings. Act once, only while fresh and under every other rule.
 - Never answer or default a question yourself.
 - A default (`default after timeout`) is not the person's choice. Act on it
   once, only while the check is fresh and its `door` two-way, and say it was
-  defaulted everywhere. Until the person says OK, it is never an LGTM: no
-  `--reviewed-by`. If the person closes Discuss on it disagreeing, undo it or
-  ask again.
+  defaulted everywhere. It authorizes only its card's own action: the local
+  commit of an action `commit` card, or the merge of a `merge` or `land`
+  card. A planning card's default decides a plan, an order or a scope, and
+  authorizes no write: no delete, close, push or cleanup. Until the person
+  says OK, it is never an LGTM: no `--reviewed-by`. If the person closes
+  Discuss on it disagreeing, undo it or ask again.
 - An OK on a default (an event with `confirmed: true`, from `panel picker` or
   `discuss picker`) makes it the person's pick, with the full weight of one:
   an LGTM where the card asked for one. If you already acted on the

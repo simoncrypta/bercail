@@ -252,27 +252,19 @@ The ledger, not the transcript, owns question state. Shep reloads it before each
 
 A decision that can be walked back should not keep work waiting on you. Shep marks such a question `reversible`. It waits for you until its deadline, 30 minutes after it was asked by default (`[shep] decision_timeout` in [config](config.md), in minutes; `0` never defaults), then takes Shep's recommendation. Shep's brief on the card says it defaults to the recommendation when the card counts down, and in chat Shep gives the returned deadline; with none returned, it waits for you.
 
-A two-way door is cheap to walk back, so it may default; a one-way door always waits for you. The helper decides with this table (`door()` in `shep/pi/questions.ts`, one test per row) and refuses `reversible` on a one-way door. Only the actions `commit`, `merge` and `land` are in it; a planning pick has no action. The prompt, choices and brief can only make it stricter.
+A two-way door is cheap to walk back, so it may default; a one-way door always waits for you. The helper decides with this table (`door()` in `shep/pi/questions.ts`, one test per row) and refuses `reversible` on a one-way door. The door comes from what the card can do: its kind, its action, and whether it carries a push. Only the actions `commit`, `merge` and `land` are in it; a planning pick has no action. No word in the prompt, choices or brief changes the door, so a brief can describe a design that publishes.
 
-| Door | Row | For example |
-|------|-----|-------------|
+| Door | Row | When |
+|------|-----|------|
 | one-way | an LGTM | any review question: its answer is an LGTM, and a default never is one |
-| one-way | force push | `force push`, `--force`, `push -f` |
-| one-way | publishing to a forge | any push, `gt submit`, publish, a trail, a pull request |
-| one-way | an LGTM or approval | approve, `--reviewed-by` |
-| one-way | a release or tag | release, tag, ship |
-| one-way | a deletion | delete, remove, `rm`, `git clean`, reset, prune |
-| one-way | money | pay, buy, spend, a `$` |
-| one-way | an outward post | post, comment, email, announce, send, reply |
-| one-way | a device or deploy action | device, deploy |
+| one-way | a guard or land card | kind `guard` (a [guard card](#guard-asks)), and any kind but planning, review and action |
+| one-way | a push | a question with `push`: a default never approves a push |
 | one-way | an action no two-way row names | any action but `commit`, `merge` or `land`, and any action on a planning question |
-| one-way | a merge asked without action merge or land | merge or land in the words of a planning pick or a commit |
-| one-way | a commit asked without action commit | commit in the words of a planning pick, a merge or a land |
 | two-way or one-way | a merge or land | action `merge` or `land`: two-way only where the repo's policy says [`merge_reversible = true`](config.md#git-policy-per-repo), trusted |
 | two-way | a local commit | action `commit` |
 | two-way | a planning pick | no action: which desks to start, their order, a scope or approach, keeping or skipping a step that publishes nothing |
 
-bercail does not know whether a forge is public, so the word push makes a question one-way. Words can make a harmless choice one-way ("the release plan"), never the reverse.
+**A default authorizes only its card's own action:** the local commit on an action `commit` card, or the merge on an action `merge` or `land` card where the policy says `merge_reversible`. A planning card's default decides a plan, an order or a scope, and authorizes no write. "Delete the old branch?" asked as a planning pick can default, but its default does not let Shep run `git branch -D`. That rule is in Shep's prompt, not in the code. The guard and [push approval](#a-push-your-answer-approves) rules still apply, and a default never approves a push.
 
 The deadline is in the ledger. Shep's question extension runs `bercail shep question expire` at start and every 30 seconds, so at its next start it defaults the questions that are due, still fresh and still two-way. Each due question is checked live and the policy reread: one whose candidate changed keeps waiting for you, and a merge the policy no longer calls reversible waits with no countdown and can still be picked. Past the deadline of a door still two-way, the panel offers no pick. Shep checks again before acting on a default, and acts only while fresh and two-way.
 

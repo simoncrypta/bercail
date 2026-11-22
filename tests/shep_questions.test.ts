@@ -452,34 +452,34 @@ describe("durable targeted questions", () => {
     recommendation: { choice: "yes", why: "w" },
     target: { ...fields().target, action: act },
   });
+  // One-way words that once decided the door; now only the card's kind, action and push do.
+  const words = {
+    prompt: "Push it, tag it and post it?",
+    options: ["auth", "git push -f origin main"],
+    brief: "Approve, publish, then clean up the trail. Deploy for $12.",
+  };
+  // The planning card for docs/plans/one-pick-landing.md, refused three times for its words.
+  const plan = {
+    prompt: "Plan the one-pick landing now?",
+    options: ["Plan it now", "Later"],
+    recommendation: { choice: "Plan it now", why: "Shep spends turns on each landing" },
+    brief: "A land card's pick lets a worker commit, publish, link the trail and clean up the desk. Plan only.",
+  };
   test.each([
     ["two-way", "a planning pick", {}, false],
+    ["two-way", "a planning pick", plan, false],
+    ["two-way", "a planning pick", words, false],
     ["two-way", "a local commit", action("commit", "Commit the staged change?"), false],
+    ["two-way", "a local commit", { ...action("commit", "Commit it?"), brief: "Then push it to master." }, false],
     ["two-way", "a merge where the policy says merge_reversible", action("merge", "Merge it to master?"), true],
     ["two-way", "a merge where the policy says merge_reversible", action("land", "Land it on master?"), true],
     ["one-way", "a merge where the policy does not say merge_reversible", action("land", "Land it on master?"), false],
-    ["one-way", "a merge asked without action merge or land", { prompt: "Land it now?" }, true],
-    ["one-way", "a merge asked without action merge or land", action("commit", "Commit, then merge?"), true],
     ["one-way", "an LGTM", { ...action("review staged work", "Ready?"), kind: "review" }, true],
-    ["one-way", "an LGTM or approval", { prompt: "Approve the guard change?" }, true],
-    ["one-way", "force push", { prompt: "Force push it to master?" }, true],
-    ["one-way", "force push", { options: ["auth", "git push -f origin main"] }, true],
-    ["one-way", "publishing to a forge", { prompt: "Push it to master now?" }, true],
-    ["one-way", "publishing to a forge", { options: ["auth", "git push origin main extra-branch"] }, true],
-    ["one-way", "publishing to a forge", { options: ["auth", "gt submit"] }, true],
-    ["one-way", "publishing to a forge", { brief: "Auth first; then create the trail." }, true],
-    ["one-way", "a release or tag", { prompt: "Tag v0.18 tonight?" }, true],
-    ["one-way", "a deletion", { brief: "Search first removes the old worktree." }, true],
-    ["one-way", "money", { prompt: "Buy the domain for $12?" }, true],
-    ["one-way", "an outward post", { prompt: "Post the summary on the PR?" }, true],
-    ["one-way", "an outward post", { prompt: "Send the vendor our confirmation?" }, true],
-    ["one-way", "a device or deploy action", { prompt: "Deploy to the HA box?" }, true],
+    ["one-way", "an action no two-way row names", action("deploy", "Ready?"), true],
     ["one-way", "an action no two-way row names", action("git push -f origin main", "Land it?"), true],
-    ["one-way", "an action no two-way row names", action("git clean -fd", "Tidy the worktree?"), true],
     ["one-way", "an action no two-way row names", action("stage-only review", "Review it?"), true],
     ["one-way", "an action no two-way row names", { target: { ...fields().target, action: "commit" } }, true],
     ["one-way", "an action no two-way row names", { target: { ...fields().target, action: "land" } }, true],
-    ["one-way", "a commit asked without action commit", { prompt: "Commit it now?" }, true],
   ] as ["one-way" | "two-way", string, Partial<QuestionSpec>, boolean][])(
     "a %s door: %s (%j)",
     (way, row, extra, merges) => {
@@ -503,6 +503,18 @@ describe("durable targeted questions", () => {
       expect(store.create("q2", {}, () => plain)).not.toHaveProperty("deadline");
     },
   );
+
+  // Calm words, and a policy that would let a merge default: the kind or the push still decides.
+  const calm = { ...fields(), prompt: "Which desk starts first?", options: ["auth", "search"] };
+  const push = { approves: "auth", remote: "origin", refs: ["refs/heads/main"], url: "git@example.com:a/b.git" };
+  test.each([
+    ["a guard or land card", { ...calm, kind: "guard", target: { ...calm.target, action: null } }],
+    // The land card step 5 adds: its own kind, not action land.
+    ["a guard or land card", { ...calm, kind: "land", target: { ...calm.target, action: null } }],
+    ["a push", { ...calm, kind: "action", push, target: { ...calm.target, action: "merge" } }],
+  ] as [string, QuestionSpec][])("a card is one-way whatever its words say: %s", (row, spec) => {
+    expect(door(spec, () => true)).toMatchObject({ door: "one-way", row });
+  });
 
   test("a reversible question needs a recommendation, and a merge is one-way when the caller says nothing", () => {
     const { recommendation: _r, ...bare } = reversible();
