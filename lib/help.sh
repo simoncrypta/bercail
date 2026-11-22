@@ -40,10 +40,12 @@ Post-install CLI (bercail):
                 mistake list (the mistakes ledger, by group) |
                 diagram [FILE] (a Mermaid diagram without its click and link statements) |
                 questions [--json [--all]] (pending targeted questions; replies are unverified;
-                  --json: the pending cards and the defaults not yet OK'd; --all: the whole ledger) |
+                  --json: the pending cards and the defaults not yet OK'd, and the land cards
+                  still landing; --all: the whole ledger) |
                 question create|revise|reply|answer|withdraw (JSON on stdin) | get TOKEN (one revision) |
                 check TOKEN | thread TOPIC |
-                panel (the Decisions panel's JSON) | expire (record due defaults; Shep's runtime runs it) |
+                panel (the Decisions panel's JSON) | expire (record due defaults and sweep land
+                  chains; Shep's runtime runs it) |
                 waiting (the board's Decisions block: the cards and defaults waiting on you) |
                 discuss TOKEN (make or find its branch) | closed TOKEN OPENING |
                 push-approval DIR REMOTE REFSPEC... (the guard's: spends the answer that approves this push)
@@ -82,9 +84,13 @@ Post-install CLI (bercail):
   land          Shep's landing of a desk's branch: land WORKTREE [--reviewed-by NAME] runs
                 describe check, commits the staged tree with its text, and starts a
                 background wait for the commit's CI that ends in one land event in Shep's
-                inbox (ready, failed, moved or timeout). It never pushes; desks are refused
+                inbox (ready, failed, moved or timeout). It never pushes; desks are refused.
+                land ask WORKTREE puts up one land card where the repo's trusted policy says
+                push = "main", integrate = "direct" and names required_ci: the person's pick
+                commits, pushes, waits for CI, lands, cleans up, syncs main and closes the job
   guard         The guard's worker for an ask it handed from Shep's session to a Decisions card:
                 ask ID (only the guard starts it) | check (a guard card's live check, JSON stdin)
+                | decide (its decision on a command as Shep, JSON stdin; the land worker's veto)
   review-pr     Intent and decisions for a whole PR stack: review-pr <PR url-or-branch>
                 gathers every PR, with one detached sibling worktree and a Stack tab.
                 Cards run in parallel; thin PRs wait. enter: select PR, d: parent diff,

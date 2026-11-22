@@ -2677,12 +2677,16 @@ test("no role runs a land card's worker or its ledger steps, Shep included", () 
     "bercail shep question land-claim Q1@1",
     "bin/bercail shep question land-step Q1@1 ci",
     "echo '{}' | bercail shep question land-result",
+    "bercail shep question land-tell Q1@1",
     "node ~/.local/share/bercail/shep/pi/question-cli.ts land-claim Q1@1",
   ];
   for (const input of [shep, tui, headless, auto, judge, { ...tui, role: "builder" }, { ...headless, role: "shep-bg" }])
     for (const command of routes) blocked(command, input, /A land card is bercail's to put up, and its chain/);
   allowed("bercail land ~/Work/app.login", shep);
+  // Shep asks the card; its chain's own check only reads.
+  allowed("bercail land ask ~/Work/app.login", shep);
   allowed("bercail shep question check Q1@1", shep);
+  allowed("bercail shep question land-check Q1@1", shep);
 });
 
 test("only Shep sets where the person's todos go, and no role writes todo.json by hand", () => {

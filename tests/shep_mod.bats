@@ -615,6 +615,28 @@ eq(answers(), [], "opening the trail answers nothing");
 EOF
 }
 
+@test "a land card the person shipped shows how far its chain got, offers no choice, and counts as waiting on no one" {
+  mod_case <<'EOF'
+const land = (token, landing) => card(token, { kind: "land", options: ["Ship it", "Not yet"], status: "landing", landing });
+const view = { ...PANEL_VIEW, cards: [land("Q1@1", { step: null, detail: null, at: null }),
+  land("Q2@1", { step: "ci", detail: "waiting for CI (1 of 2 runs passed)", at: "2026-11-14T12:00:00Z" }), card("Q3@1")] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+els.length = 0;
+d.render(cx);
+const all = texts();
+for (const want of ["You shipped it. Picked; waiting for its worker to start.",
+  "You shipped it. Landing, at its ci step: waiting for CI (1 of 2 runs passed). Shep tells you how it ends."])
+  if (!all.includes(want)) fail(`missing "${want}" in ${JSON.stringify(all)}`);
+eq(cardWords(view.cards[1]).word, "landing", "its state");
+eq(answerable(view.cards[1]), false, "no pick on a landing card");
+eq(els.filter((e) => e.click).map((e) => e.id).filter((id) => /Q[12]@1/.test(id) && !id.includes("discuss")), [],
+  "no choice or answer button on a landing card");
+if (!all.some((x) => x.startsWith("1 waiting on you"))) fail(`a landing card counts as waiting: ${JSON.stringify(all)}`);
+EOF
+}
+
 @test "a push question's card names the choice that approves the push, its remote and its refs" {
   mod_case <<'EOF'
 const push = { approves: "Push it", remote: "origin", refs: ["refs/heads/master"], url: "git@example.invalid:team/app.git" };

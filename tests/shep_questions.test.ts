@@ -843,6 +843,8 @@ describe("durable targeted questions", () => {
   // A land card on one worktree, branch and job, and the person's pick on it.
   const pinned: NonNullable<QuestionSpec["land"]> = {
     url: "git@github.com:o/app.git",
+    ciRef: "refs/heads/bercail-land/login/0123456789ab",
+    policyTrust: null,
     github: "o/app",
     registered: true,
     clean: true,
@@ -899,7 +901,14 @@ describe("durable targeted questions", () => {
       ["other choices", {}, { options: ["Yes", "No"] }, /offers Ship it and Not yet only/],
       ["one joined choice", {}, { options: ["Ship it,Not yet"] }, /offers Ship it and Not yet only/],
       ["dirty", {}, land({ clean: false }), /nothing unstaged or untracked/],
-      ["unregistered", {}, land({ registered: false }), /a worktree git lists/],
+      ["unregistered", {}, land({ registered: false }), /a linked worktree git lists/],
+      [
+        "the trunk itself",
+        { branch: "refs/heads/master" },
+        land({ handoffBranch: "master" }),
+        /never the trunk itself/,
+      ],
+      ["a HEAD off the trunk", { head: "c".repeat(40) }, {}, /HEAD is the trunk's commit on the remote/],
       ["another handoff branch", {}, land({ handoffBranch: "other" }), /the one its job's handoff record names/],
       [
         "no handoff branch, on a branch named null",
@@ -918,8 +927,8 @@ describe("durable targeted questions", () => {
     for (const [id, target, extra, why] of refused) expect(() => landCard(id, target, extra), id).toThrow(why);
     const token = landCard(
       "lgtm",
-      {},
-      { ...land({ review: lgtm, reviewer: "Simon" }), options: ["LGTM, ship it", "Not yet"] },
+      { issue: "app-2", worktree: "/w/2", branch: "refs/heads/b2" },
+      { ...land({ review: lgtm, reviewer: "Simon", handoffBranch: "b2" }), options: ["LGTM, ship it", "Not yet"] },
     );
     expect(store.snapshot().questions.map(tokenOf)).toEqual(["Q1@1", token]);
   });
@@ -937,28 +946,66 @@ describe("durable targeted questions", () => {
     expect(ship(declined, "Not yet").accepted).toBe(true);
     expect(store.claimLand(declined)).toMatchObject({ accepted: false, reason: notShipped });
     ship(first);
+    // Shep's list shows the Not yet as a pick to act on, never the Ship it its worker acts on.
+    const listed = projection(store.snapshot());
+    expect(listed).toContain(`${declined} Land the login fix? -> Not yet`);
+    expect(listed).not.toContain(`${first} Land the login fix?`);
     expect(() => store.claimLand("Q1@2")).toThrow(/unknown question revision/);
     expect(store.claimLand(first)).toMatchObject({
       accepted: true,
       question: { landing: { claim: { at: expect.any(String) } } },
     });
     expect(new QuestionStore(state).claimLand(first).reason).toMatch(/^its chain was already claimed at /);
-    // Another card on the same worktree, branch or job waits for the running chain.
-    const others = [
-      landCard("worktree", { issue: "app-3", branch: "refs/heads/b3" }),
-      landCard("branch", { issue: "app-4", worktree: "/w/4" }),
-      landCard("job", { worktree: "/w/5", branch: "refs/heads/b5" }),
+  });
+
+  test("a second land card for the same worktree, branch or job is refused while one waits or lands", () => {
+    const first = landCard("first");
+    const others: [string, Partial<QuestionSpec["target"]>][] = [
+      ["worktree", { issue: "app-3", branch: "refs/heads/b3" }],
+      ["branch", { issue: "app-4", worktree: "/w/4" }],
+      ["job", { worktree: "/w/5", branch: "refs/heads/b5" }],
     ];
-    const elsewhere = landCard("other repo", { repo: "/canonical/other" });
-    for (const token of [...others, elsewhere]) ship(token);
-    for (const token of others)
-      expect(store.claimLand(token)).toMatchObject({
+    const refusedWhile = (what: string, n: number) => {
+      for (const [id, target] of others)
+        expect(() => landCard(`${id}-${n}`, target), `${id}, ${what}`).toThrow(
+          `Q1@1 is ${what} for the same worktree, branch or job`,
+        );
+    };
+    refusedWhile("pending", 1);
+    ship(first);
+    refusedWhile("landing", 2);
+    store.claimLand(first);
+    refusedWhile("landing", 3);
+    // Another repo's, and one asked once the chain ended.
+    landCard("other repo", { repo: "/canonical/other" });
+    store.landResult(first, { outcome: "changed", commit: null, warnings: [], log: "/state/land/Q1-1.log" });
+    expect(landCard("after", others[0]![1])).toBe("Q3@1");
+    // A declined card waits on no one.
+    ship("Q3@1", "Not yet");
+    expect(landCard("after decline", others[1]![1])).toBe("Q4@1");
+  });
+
+  test("a claim waits while another chain runs for the same worktree, branch or job, in a ledger that has two", () => {
+    const first = landCard("first");
+    const second = landCard("second", { issue: "app-2", worktree: "/w/2", branch: "refs/heads/b2" });
+    ship(first);
+    ship(second);
+    expect(store.claimLand(first).accepted).toBe(true);
+    // An older ledger, or one edited, can hold two such cards: the claim still refuses.
+    for (const key of ["worktree", "branch", "issue"] as const) {
+      const file = join(state, "questions.json");
+      const saved = JSON.parse(readFileSync(file, "utf8"));
+      const own = { issue: "app-2", worktree: "/w/2", branch: "refs/heads/b2" };
+      saved.questions[1].target = { ...saved.questions[0].target, ...own, [key]: saved.questions[0].target[key] };
+      saved.questions[1].land.handoffBranch = saved.questions[1].target.branch.slice("refs/heads/".length);
+      writeFileSync(file, JSON.stringify(saved));
+      expect(store.claimLand(second), key).toMatchObject({
         accepted: false,
         reason: "Q1@1's chain is running for the same worktree, branch or job",
       });
-    expect(store.claimLand(elsewhere).accepted).toBe(true);
+    }
     store.landResult(first, { outcome: "changed", commit: null, warnings: [], log: "/state/land/Q1-1.log" });
-    expect(store.claimLand(others[0]!).accepted).toBe(true);
+    expect(store.claimLand(second).accepted).toBe(true);
   });
 
   test("a start reservation is recorded once per attempt, before any claim, and grants nothing", () => {
@@ -977,7 +1024,7 @@ describe("durable targeted questions", () => {
     expect(store.landStep(token, "check").reason).toBe("its chain is not claimed");
     expect(store.claimLand(token).accepted).toBe(true);
     expect(store.reserveLand(token, 3).reason).toMatch(/^its chain was already claimed at /);
-    const declined = landCard("declined", { issue: "app-2" });
+    const declined = landCard("declined", { issue: "app-2", worktree: "/w/2", branch: "refs/heads/b2" });
     ship(declined, "Not yet");
     expect(store.reserveLand(declined, 1)).toMatchObject({ accepted: false, reason: notShipped });
     expect(store.snapshot().questions[0]!.landing!.starts).toHaveLength(2);
@@ -1030,7 +1077,10 @@ describe("durable targeted questions", () => {
     const cases: [string, (q: any[]) => void][] = [
       ["a chain on a declined card", (q) => ((q[0].answer.choice = "Not yet"), (q[0].landing = claimed))],
       ["a Discuss pick", (q) => (q[0].answer.source = "discuss picker")],
-      ["two running chains on one worktree", (q) => ((q[0].landing = claimed), (q[1].landing = claimed))],
+      [
+        "two running chains on one worktree",
+        (q) => ((q[1].target.worktree = q[0].target.worktree), (q[0].landing = claimed), (q[1].landing = claimed)),
+      ],
       ["an unknown first step", (q) => (q[0].landing = { ...claimed, steps: [{ step: "deploy", at }] })],
       [
         "landed before the trunk push",
@@ -1046,7 +1096,7 @@ describe("durable targeted questions", () => {
       rmSync(state, { recursive: true, force: true });
       for (const [id, target] of [
         ["one", {}],
-        ["two", { issue: "app-2", branch: "refs/heads/b2" }],
+        ["two", { issue: "app-2", worktree: "/w/2", branch: "refs/heads/b2" }],
       ] as const)
         ship(landCard(id, target));
       const file = join(state, "questions.json");
@@ -1056,6 +1106,26 @@ describe("durable targeted questions", () => {
       expect(() => new QuestionStore(state).snapshot(), name).toThrow(/corrupt questions\.json/);
     }
   });
+
+  test("simultaneous tells of one result write its land event once", async () => {
+    const token = landCard("one");
+    ship(token);
+    store.claimLand(token);
+    store.landResult(token, { outcome: "changed", commit: null, why: "stagedTree changed", warnings: [], log: "/l" });
+    // Each writer counts its own write: the inbox rename runs under the ledger's lock.
+    const workers = Array.from({ length: 4 }, () => start("land-tell", { token }));
+    await Promise.all(workers.map((p) => p.ready));
+    workers.forEach((p) => p.child.stdin!.end("go"));
+    const outputs = await Promise.all(workers.map((p) => p.done));
+    expect(outputs.filter((o) => o.trim().endsWith("true"))).toHaveLength(1);
+    expect(outputs.join("").match(/^wrote$/gm)).toHaveLength(1);
+    expect(readdirSync(join(state, "inbox"))).toEqual(["land-Q1-1.json"]);
+    expect(JSON.parse(readFileSync(join(state, "inbox", "land-Q1-1.json"), "utf8"))).toMatchObject({
+      event_id: "land:Q1@1",
+      outcome: "changed",
+      why: "stagedTree changed",
+    });
+  }, 15000);
 
   test("simultaneous reservations of one attempt, and simultaneous claims, each let exactly one through", async () => {
     const token = landCard("one");

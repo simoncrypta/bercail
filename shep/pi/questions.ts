@@ -51,6 +51,12 @@ export interface QuestionLand {
   /** origin's one push URL, and the GitHub repo it names. */
   url: string;
   github: string;
+  /** The new branch the chain pushes its commit to for CI, one per card: a retry after a
+   * stop never rewrites an earlier card's. Not on the remote when it was asked. */
+  ciRef: string;
+  /** The sha256 of the staged .bercail/policy.toml when the change edits it: the pick trusts
+   * exactly that file once its commit is on the trunk. Null when the policy is untouched. */
+  policyTrust: string | null;
   /** The worktree is one git lists, and nothing is unstaged, untracked or hidden from status
    * beside the staged tree: true when it was asked. */
   registered: boolean;
@@ -73,8 +79,9 @@ export interface QuestionLand {
 /** A land card's choices: no recommendation, no default, and the first lands it. */
 export const LAND_CHOICES = ["Ship it", "Not yet"];
 export const LGTM_LAND_CHOICES = ["LGTM, ship it", "Not yet"];
-/** The chain's steps, in order: the facts checked again, then each effect. */
-export const LAND_STEPS = ["check", "commit", "push", "ci", "trunk", "close", "cleanup", "sync"] as const;
+/** The chain's steps, in order: the facts checked again, then each effect. The job closes
+ * last, once its desk is retired and the main checkout synced. */
+export const LAND_STEPS = ["check", "commit", "push", "ci", "trunk", "cleanup", "sync", "close"] as const;
 export const LAND_OUTCOMES = [
   "changed",
   "refused",
@@ -98,6 +105,10 @@ export interface LandResult {
   /** The last step the ledger has, or null when the chain recorded none. */
   step: (typeof LAND_STEPS)[number] | null;
   commit: string | null;
+  /** Why it stopped, in the worker's words from facts: absent when it landed. */
+  why?: string;
+  /** The policy file's sha256 the chain trusted once its commit was on the trunk. */
+  trusted?: string;
   warnings: string[];
   log: string;
   at: string;
@@ -310,6 +321,8 @@ function land(value: QuestionSpec) {
   shape(l, [
     "url",
     "github",
+    "ciRef",
+    "policyTrust",
     "registered",
     "clean",
     "handoffBranch",
@@ -321,8 +334,12 @@ function land(value: QuestionSpec) {
     "reviewer",
   ]);
   for (const key of ["url", "github", "bercail"] as const) text(l[key]);
+  if (typeof l.ciRef !== "string" || !/^refs\/heads\/bercail-land\/[\w./-]+\/[0-9a-f]{12}$/.test(l.ciRef))
+    fail("a land card pushes for CI to a new branch of its own, refs/heads/bercail-land/<branch>/<id>");
+  if (l.policyTrust !== null && !/^[0-9a-f]{64}$/.test(l.policyTrust as string))
+    fail("a land card trusts a policy file by its sha256, or none");
   if (l.registered !== true || l.clean !== true)
-    fail("a land card is asked on a worktree git lists, with nothing unstaged or untracked");
+    fail("a land card is asked on a linked worktree git lists, with nothing unstaged or untracked");
   shape(l.description, ["tree", "message"]);
   shape(l.policy, ["file", "trusted", "hash"]);
   shape(l.review, ["required", "highStakes"]);
@@ -351,6 +368,9 @@ function land(value: QuestionSpec) {
     fail("a land card targets a branch's HEAD and staged tree, action land, on the trunk's commit");
   if (typeof l.handoffBranch !== "string" || `refs/heads/${l.handoffBranch}` !== t.branch)
     fail("a land card's branch is the one its job's handoff record names");
+  if (t.branch === `refs/heads/${t.baseRef}`) fail("a land card lands a desk's branch, never the trunk itself");
+  if (t.head !== t.base)
+    fail("a land card's HEAD is the trunk's commit on the remote, so its commit has that one parent");
   const choices = l.review.required ? LGTM_LAND_CHOICES : LAND_CHOICES;
   if (
     value.options.length !== choices.length ||
@@ -564,9 +584,9 @@ function question(value: unknown): asserts value is Question {
 }
 const when = (at: unknown) => typeof at === "string" && Number.isFinite(Date.parse(at));
 // The worker's terminal for a land card's revision: hc names are lowercase.
-const landTerminal = (q: Pick<Question, "id" | "revision">) => `land-${q.id.toLowerCase()}-${q.revision}`;
+export const landTerminal = (q: Pick<Question, "id" | "revision">) => `land-${q.id.toLowerCase()}-${q.revision}`;
 // The person's positive pick on a land card's panel: the only answer its chain acts on.
-const shipped = (q: Question) =>
+export const shipped = (q: Question) =>
   q.kind === "land" && q.status === "answered" && q.answer?.choice === q.options[0] && q.answer.source === PUSH_SOURCE;
 // Why the chain cannot go from its last step to `step`, or undefined: it starts with the
 // check, then stays on a step (a new detail) or moves to the next.
@@ -609,9 +629,12 @@ function landed(q: Question) {
     "warnings",
     "log",
     "at",
-    ...optional(r as unknown as Record<string, unknown>, ["told"]),
+    ...optional(r as unknown as Record<string, unknown>, ["told", "why", "trusted"]),
   ]);
   text(r.log);
+  if (r.why !== undefined) text(r.why);
+  if (r.trusted !== undefined && (r.outcome !== "landed" || r.trusted !== q.land!.policyTrust))
+    fail("a land result trusts only the card's policy file, once it landed");
   if (
     !LAND_OUTCOMES.includes(r.outcome) ||
     r.step !== (l.steps.at(-1)?.step ?? null) ||
@@ -668,7 +691,10 @@ function validate(value: unknown): asserts value is State {
 // A land chain that was claimed and has no result yet, and whether two such chains would
 // act on the same worktree, branch or job of one repo.
 const isRunning = (q: Question) => q.landing?.claim !== undefined && !q.landing.result;
-const overlaps = (a: Question, b: Question) =>
+// A land card that still waits on the person, or on its worker: a second one for the same
+// worktree, branch or job is not asked.
+const isOpenLand = (q: Question) => q.kind === "land" && (q.status === "pending" || (shipped(q) && !q.landing?.result));
+const overlaps = (a: Pick<Question, "target">, b: Pick<Question, "target">) =>
   a.target.repo === b.target.repo &&
   (["worktree", "branch", "issue"] as const).some((key) => a.target[key] === b.target[key]);
 // A trail's ID too: the same trail:<n> in another project is another job.
@@ -869,6 +895,11 @@ export class QuestionStore {
     return this.request(requestId, ["create", intent], (state) => {
       const fields = resolveSpec(intent);
       spec(fields);
+      const open = fields.kind === "land" && state.questions.find((o) => isOpenLand(o) && overlaps(o, fields));
+      if (open)
+        fail(
+          `${tokenOf(open)} is ${open.status === "pending" ? "pending" : "landing"} for the same worktree, branch or job`,
+        );
       const id = `Q${state.questions.reduce((max, q) => Math.max(max, Number(q.id.slice(1))), 0) + 1}`;
       const q = opened(fields, id, 1, merges);
       state.questions.push(q);
@@ -1132,7 +1163,10 @@ export class QuestionStore {
   }
 
   // The claimed chain's one result, at the last step the ledger has.
-  landResult(token: string, result: Pick<LandResult, "outcome" | "commit" | "warnings" | "log">): AnswerResult {
+  landResult(
+    token: string,
+    result: Pick<LandResult, "outcome" | "commit" | "why" | "trusted" | "warnings" | "log">,
+  ): AnswerResult {
     return this.landing(token, (_q, l) => {
       if (!l.claim) return "its chain is not claimed";
       if (l.result) return `its chain already ended: ${l.result.outcome}`;
@@ -1142,6 +1176,8 @@ export class QuestionStore {
         outcome: result.outcome,
         step: l.steps.at(-1)?.step ?? null,
         commit: result.commit,
+        ...(result.why === undefined ? {} : { why: result.why }),
+        ...(result.trusted === undefined ? {} : { trusted: result.trusted }),
         warnings: structuredClone(result.warnings),
         log: result.log,
         at: new Date().toISOString(),
@@ -1149,11 +1185,13 @@ export class QuestionStore {
     });
   }
 
-  // The result's land event is written: the caller wrote it, or found it there. Once.
-  landTold(token: string): AnswerResult {
-    return this.landing(token, (_q, l) => {
+  // The result's land event, written by `publish` under the ledger's lock (which finds it
+  // there after a crash, or writes it), then told: once, whoever else tries at the same time.
+  landTold(token: string, publish: (q: Question) => void = () => {}): AnswerResult {
+    return this.landing(token, (q, l) => {
       if (!l.result) return "its chain has no result";
       if (l.result.told) return "its result was already told";
+      publish(q);
       l.result.told = true;
     });
   }
@@ -1225,6 +1263,8 @@ export function projection(snapshot: QuestionSnapshot): string {
         (q) =>
           q.status === "answered" &&
           q.kind !== "guard" &&
+          // A land card's Ship it is its worker's to act on, and its result comes as a land event.
+          !shipped(q) &&
           (q.answer!.source !== DEFAULT_SOURCE || q.settled?.outcome === "ok"
             ? "picked"
             : q.settled

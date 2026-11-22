@@ -213,8 +213,8 @@ function decisionsChanged() {
 }
 const nextDecisions = () => new Promise((wake) => D.waiters.push(wake));
 // The cards that wait on the person's pick, and the defaults that wait on their OK or
-// Reverse. A reversed one waits on Shep.
-const waiting = () => (D.view?.cards ?? []).filter((c) => !c.defaulted);
+// Reverse. A reversed one waits on Shep, and a land card they shipped on its worker.
+const waiting = () => (D.view?.cards ?? []).filter((c) => !c.defaulted && !c.landing);
 const defaults = () => (D.view?.cards ?? []).filter((c) => c.defaulted && !c.reversed);
 // "2 waiting on you · 1 defaulted", or "" with neither.
 function counts(n, m) {
@@ -377,6 +377,14 @@ export function cardWords(card, all = spaces(), backend = S.backend) {
         : card.status === "stale"
           ? { word: "stale", why: `Changed since Shep asked: ${reasons.join(", ")}. Shep must ask again.` }
           : { word: "unknown", why: `Can't check it now: ${reasons.join("; ") || "no answer from bercail"}.` };
+  // A land card the person shipped: how far its chain got, step by step, until its one result.
+  if (card.landing)
+    Object.assign(state, {
+      word: "landing",
+      why: card.landing.step
+        ? `You shipped it. Landing, at its ${card.landing.step} step${card.landing.detail ? `: ${card.landing.detail}` : ""}. Shep tells you how it ends.`
+        : "You shipped it. Picked; waiting for its worker to start.",
+    });
   return {
     title: what.join(", "),
     ...state,
@@ -937,7 +945,7 @@ export default class BercailShep extends View {
       .when(Boolean(c.brief), (el) => el.child(div().text_color(t.muted).child(c.brief)))
       .when(Boolean(rec), (el) => el.child(div().text_color(t.dim).child(`Shep recommends ${rec.choice}: ${rec.why}`)))
       .when(Boolean(w.push), (el) => el.child(div().text_color(t.foreground).child(w.push)))
-      .when(c.options?.length > 0 && !c.reversed, (el) =>
+      .when(c.options?.length > 0 && !c.reversed && !c.landing, (el) =>
         el.child(h_flex().gap(6).flex_wrap().children(c.options.map(chip))),
       )
       .when(!c.options?.length, (el) => el.child(div().text_color(t.dim).child("No choices: answer Shep in chat.")))
@@ -978,7 +986,7 @@ export default class BercailShep extends View {
                 ),
               ),
           )
-          .when(c.options?.length > 0 && !c.defaulted, (el) =>
+          .when(c.options?.length > 0 && !c.defaulted && !c.landing, (el) =>
             el.child(
               button(
                 `decision-accept-${c.token}`,

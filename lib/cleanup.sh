@@ -18,9 +18,10 @@ _cleanup_herdr_helpers() {
 # Dies unless linked worktree $1 has nothing a removal would lose, nor anything
 # git worktree remove refuses: no uncommitted work, no commit that trunk or a
 # remote branch does not hold, no lock, no submodule, and evidence it can copy.
+# A commit whose patch trunk already holds (git cherry -) landed as another commit.
 _cleanup_check() {
-  local wt="$1" main="$2" common="$3" gd trunk changed n subs
-  local -a keep=(--remotes)
+  local wt="$1" main="$2" common="$3" gd trunk changed n subs up c out landed=""
+  local -a keep=(--remotes) ups=() held=()
   gd="$(git -C "$wt" rev-parse --absolute-git-dir)"
   [[ "$gd" != "$common" ]] || die "refusing to clean up $wt: it is the repo's main checkout"
   [[ ! -f "$gd/locked" ]] || die "refusing to clean up $wt: it is locked (git worktree unlock $wt first)"
@@ -30,10 +31,23 @@ _cleanup_check() {
     die "refusing to clean up $wt: it holds work nobody reviewed ($(wc -l <<<"$changed") changed files, see git -C $wt status); land it, or move it away, then clean up again"
   fi
   trunk="$(git_backend_trunk "$main")"
-  ! git -C "$wt" show-ref --verify --quiet "refs/heads/$trunk" || keep+=("refs/heads/$trunk")
-  n="$(git -C "$wt" rev-list --count HEAD --not "${keep[@]}")"
+  for up in "refs/heads/$trunk" "refs/remotes/origin/$trunk"; do
+    ! git -C "$wt" show-ref --verify --quiet "$up" || ups+=("$up")
+  done
+  [[ "${ups[0]:-}" != "refs/heads/$trunk" ]] || keep+=("refs/heads/$trunk")
+  for up in "${ups[@]}"; do
+    out="$(git -C "$wt" cherry "$up" HEAD)" || die "refusing to clean up $wt: git cherry $up HEAD failed; nothing was removed"
+    landed+=" $(sed -n 's/^- //p' <<<"$out" | tr '\n' ' ')"
+  done
+  out="$(git -C "$wt" rev-list HEAD --not "${keep[@]}")" \
+    || die "refusing to clean up $wt: git cannot list the commits only it holds; nothing was removed"
+  [[ -z "$out" ]] || mapfile -t held <<<"$out"
+  n=0
+  for c in "${held[@]}"; do [[ "$landed " == *" $c "* ]] || n=$((n + 1)); done
   [[ "$n" -eq 0 ]] \
     || die "refusing to clean up $wt: $n commits are on neither $trunk nor the remote (git -C $wt log HEAD --not ${keep[*]}); land or push them, then clean up again"
+  [[ "${#held[@]}" -eq 0 ]] \
+    || info "${#held[@]} commits are on $trunk as the same patch under another id (git cherry); they count as landed"
   # An uninitialized one (-) has no checkout to lose.
   subs="$(git -C "$wt" submodule status 2>&1)" \
     || die "refusing to clean up $wt: git cannot read its submodules ($subs); remove it by hand"

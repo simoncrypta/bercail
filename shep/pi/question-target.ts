@@ -435,15 +435,19 @@ export function landFacts(dir: string, issue: string) {
   const bin = isAbsolute(bercail())
     ? realpathSync(bercail())
     : fail("a land card reads through the bercail the CLI runs as: set BERCAIL_SHEP_BIN to its path");
-  const registered = git(worktree, "worktree", "list", "--porcelain")
+  // A linked worktree git lists: never the main checkout, which git lists first.
+  const listed = git(worktree, "worktree", "list", "--porcelain")
     .split("\n")
-    .some((line) => {
+    .filter((line) => line.startsWith("worktree "))
+    .map((line) => {
       try {
-        return line.startsWith("worktree ") && realpathSync(line.slice(9)) === worktree;
+        return realpathSync(line.slice(9));
       } catch {
-        return false;
+        return null;
       }
     });
+  const registered = listed.slice(1).includes(worktree);
+  const main = listed[0] ?? fail("git lists no main checkout");
   const trunk = trunkOf(worktree);
   const url = pushUrl(worktree, "origin");
   const github = githubOf(url);
@@ -453,7 +457,9 @@ export function landFacts(dir: string, issue: string) {
       .split("\n")
       .find((line) => line.endsWith(`\trefs/heads/${trunk}`))
       ?.split("\t")[0] ?? null;
-  const policy = policyOf(worktree, repo, bin);
+  // The repo's policy, as its main checkout has it: a desk that edits the file on its branch
+  // does not change the policy that lands it.
+  const policy = policyOf(main, repo, bin);
   const required: string[] = Array.isArray(policy.policy.required_ci) ? policy.policy.required_ci : [];
   const workflows =
     required.length && github
@@ -525,9 +531,27 @@ export function landFacts(dir: string, issue: string) {
   return { target, land, warnings, policy };
 }
 
+// The staged change to the repo's policy file, when there is one: the new file's sha256, as
+// bercail policy trust hashes it, and its diff against HEAD. Null when the file is the same,
+// or the change deletes it.
+export function policyChange(worktree: string): { sha256: string; diff: string } | null {
+  const file = ".bercail/policy.toml";
+  if (spawnSync("git", ["-C", worktree, "diff", "--cached", "--quiet", "--", file], { env: targetEnv() }).status === 0)
+    return null;
+  const blob = spawnSync("git", ["-C", worktree, "cat-file", "blob", `:${file}`], { env: targetEnv() });
+  if (blob.status !== 0) return null;
+  return {
+    sha256: createHash("sha256").update(blob.stdout).digest("hex"),
+    diff: git(worktree, "diff", "--cached", "--no-color", "--no-ext-diff", "--", file),
+  };
+}
+
 // A land card: every pinned fact read again and equal, its desk's space and session too.
-// No pass for one commit of the tree: the chain makes that commit itself.
-function checkLand(question: Question) {
+// No pass for one commit of the tree: the chain makes that commit itself. Its worker, once
+// it made that commit, names it: HEAD is then that one commit of the pinned tree on the
+// pinned HEAD, and nothing else may differ; once it pushed that commit to the trunk
+// (`landed`), the trunk's commit on the remote is that commit.
+export function checkLand(question: Question, commit?: string, landed = false) {
   const reasons: string[] = [];
   let current: QuestionTarget | null = null;
   let warnings: string[] = [];
@@ -537,10 +561,23 @@ function checkLand(question: Question) {
   try {
     const now = landFacts(question.target.worktree!, question.target.issue!);
     ({ target: current, warnings } = now);
-    for (const key of Object.keys(question.target) as (keyof QuestionTarget)[])
-      if (question.target[key] !== now.target[key]) reasons.push(`${key} changed`);
+    const own =
+      commit !== undefined &&
+      now.target.head === commit &&
+      committedOnce(question.target.worktree!, question.target.head!, commit, question.target.stagedTree);
+    if (commit !== undefined && !own) reasons.push(`HEAD is not the chain's commit ${commit}`);
+    const want = { ...question.target, ...(landed ? { base: commit! } : {}) };
+    for (const key of Object.keys(want) as (keyof QuestionTarget)[])
+      if (want[key] !== now.target[key] && !(key === "head" && own)) reasons.push(`${key} changed`);
+    // ciRef is the card's own name for its CI branch, and policyTrust follows from the
+    // pinned tree: neither is a fact read here.
     for (const key of Object.keys(question.land!) as (keyof QuestionLand)[])
-      if (JSON.stringify(question.land![key]) !== JSON.stringify(now.land[key])) reasons.push(`${key} changed`);
+      if (
+        key !== "ciRef" &&
+        key !== "policyTrust" &&
+        JSON.stringify(question.land![key]) !== JSON.stringify(now.land[key])
+      )
+        reasons.push(`${key} changed`);
     policy = { status: "checked", current: now.policy };
   } catch (error) {
     reasons.push(`target unavailable: ${(error as Error).message.split("\n")[0]}`);

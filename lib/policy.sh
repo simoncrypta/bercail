@@ -195,19 +195,26 @@ _policy_show() {
   ' <<<"$out"
 }
 
-_policy_trust() {
-  local dir="${1:-.}" out file main hash trust tmp
-  out="$(policy_json "$dir" 2>/dev/null)" || { _policy_err "$dir is not a git checkout"; return 1; }
-  file="$(jq -r .file <<<"$out")"
-  main="$(jq -r .repo <<<"$out")"
-  hash="$(jq -r .sha256 <<<"$out")"
-  [[ -n "$file" ]] || { _policy_err "$(jq -r .root <<<"$out")/$POLICY_FILE does not exist; nothing to trust"; return 1; }
+# Trust HASH as main checkout MAIN's policy FILE: what bercail policy trust records,
+# and what a land card's pick records for the policy file its change lands.
+policy_trust_hash() {
+  local main="$1" file="$2" hash="$3" trust tmp
   trust="$(policy_trust_file)"
   mkdir -p "$(dirname "$trust")"
   [[ -s "$trust" ]] || printf '{}\n' >"$trust"
   tmp="$(mktemp "$trust.XXXXXX")"
   jq --arg m "$main" --arg f "$file" --arg h "$hash" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '.[$m] = {file: $f, sha256: $h, trusted_at: $at}' "$trust" >"$tmp" && mv "$tmp" "$trust"
+}
+
+_policy_trust() {
+  local dir="${1:-.}" out file main hash
+  out="$(policy_json "$dir" 2>/dev/null)" || { _policy_err "$dir is not a git checkout"; return 1; }
+  file="$(jq -r .file <<<"$out")"
+  main="$(jq -r .repo <<<"$out")"
+  hash="$(jq -r .sha256 <<<"$out")"
+  [[ -n "$file" ]] || { _policy_err "$(jq -r .root <<<"$out")/$POLICY_FILE does not exist; nothing to trust"; return 1; }
+  policy_trust_hash "$main" "$file" "$hash"
   printf 'trusted %s for %s (sha256 %s)\n' "$file" "$main" "${hash:0:12}"
   printf 'agents now: %s\n' "$(policy_json "$dir" 2>/dev/null | jq -r .brief)"
   printf 'An edit to the file goes back to asking until you trust it again.\n'

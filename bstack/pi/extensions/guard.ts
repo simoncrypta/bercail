@@ -1483,7 +1483,7 @@ function runsLandWorker(words: string[]): boolean {
   const plain = plainWords(words);
   return (
     plain.some((word, i) => basename(word) === "bercail" && plain[i + 1] === "land" && plain[i + 2] === "run") ||
-    ["land-create", "land-claim", "land-step", "land-result"].some((op) => questionOp(words, op))
+    ["land-create", "land-claim", "land-step", "land-result", "land-tell"].some((op) => questionOp(words, op))
   );
 }
 

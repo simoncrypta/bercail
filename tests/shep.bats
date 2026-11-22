@@ -542,7 +542,7 @@ EOF
   jq -n '{requestId:"w", token:"Q2@1", reason:"moot"}' | shep question withdraw >/dev/null || fail "withdraw"
   run shep questions --json
   [[ "$status" == 0 ]] || fail "$output"
-  jq -e '(keys == ["pending"]) and ([.pending[] | "\(.id)@\(.revision)"] == ["Q1@1"])' <<<"$output" >/dev/null \
+  jq -e '(keys == ["landing", "pending"]) and .landing == [] and ([.pending[] | "\(.id)@\(.revision)"] == ["Q1@1"])' <<<"$output" >/dev/null \
     || fail "pending: $output"
   for all in "--json --all" "--all --json"; do
     # shellcheck disable=SC2086
@@ -592,7 +592,7 @@ EOF
   reset
   rm -rf "$SHARE"
   INSTALL_SRC="$ROOT" bash -c 'set -euo pipefail; for l in common config bstack shep; do source "$1/lib/$l.sh"; done; deploy_shep' _ "$ROOT" >/dev/null
-  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts; do
+  for rel in SHEP.md BACKGROUND.md pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts pi/land-chain.ts; do
     cmp -s "$ROOT/shep/$rel" "$SHARE/$rel" || fail "deploy did not install shep/$rel"
   done
 }

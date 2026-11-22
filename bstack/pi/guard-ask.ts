@@ -2,6 +2,7 @@
 // (docs/plans/shep-free-guard.md). No Pi and no model: no turn can rewrite what it runs.
 //   bercail guard ask <ticket>   put the card up, wait for the person, run it once on Allow
 //   bercail guard check          a guard card's live check: {op, facts} on stdin, {reasons} out
+//   bercail guard decide         the guard's decision on a command as Shep: {command, cwd} on stdin
 import { execFileSync, spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -99,7 +100,7 @@ const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
 // The guard's decision on Shep's command now, as role shep with the person asked out of
 // band, and its lookups made with the same reads the guard's are.
-async function decideNow(ticket: GuardTicket) {
+async function decideNow(ticket: Pick<GuardTicket, "command" | "cwd">) {
   const home = process.env.HOME;
   const config =
     process.env.BERCAIL_CONFIG ||
@@ -276,11 +277,39 @@ async function check() {
   console.log(JSON.stringify({ reasons: await changed(op, facts) }));
 }
 
+// What the guard decides on a command Shep would run, and the operation and facts it pins
+// to, for the land worker's veto before each effect (lib/land.sh). It reads; it runs nothing.
+async function decide() {
+  const { command, cwd } = JSON.parse(readFileSync(0, "utf8"));
+  if (typeof command !== "string" || typeof cwd !== "string" || !command || !cwd)
+    throw new Error("decide reads {command, cwd} on stdin");
+  const { decision } = await decideNow({ command, cwd });
+  const op = guardOperation(command, cwd, process.env.HOME);
+  let facts: GuardFacts | null = null;
+  let why: string | null = typeof op === "string" ? op : null;
+  if (typeof op !== "string")
+    try {
+      facts = await pinOperation(op);
+    } catch (error) {
+      why = (error as Error).message;
+    }
+  console.log(
+    JSON.stringify({
+      action: decision.action,
+      reason: "reason" in decision ? (decision.reason ?? null) : null,
+      op: typeof op === "string" ? null : op,
+      facts,
+      why,
+    }),
+  );
+}
+
 async function main() {
   const [cmd, ...args] = process.argv.slice(2);
   if (cmd === "ask" && args.length === 1) return ask(args[0]);
   if (cmd === "check" && !args.length) return check();
-  throw new Error("usage: bercail guard ask <ticket> | bercail guard check");
+  if (cmd === "decide" && !args.length) return decide();
+  throw new Error("usage: bercail guard ask <ticket> | bercail guard check | bercail guard decide");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

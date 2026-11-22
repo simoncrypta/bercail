@@ -280,6 +280,8 @@ test("a land card waits on the person like any card: listed, by its space, until
     },
     land: {
       url: "git@github.com:o/app.git",
+      ciRef: "refs/heads/bercail-land/login/0123456789ab",
+      policyTrust: null,
       github: "o/app",
       registered: true,
       clean: true,
@@ -297,7 +299,10 @@ test("a land card waits on the person like any card: listed, by its space, until
     "Decisions:\n- Login_App: Land the login fix?",
   );
   expect(await pick(state, "ship", token, "Ship it", "panel picker")).toMatchObject({ accepted: true });
-  expect(await decisions(new QuestionStore(state).snapshot(), state)).toBe("Decisions:\n- nothing");
+  // Its chain waits on no one: it is listed apart, with how far it got.
+  expect(await decisions(new QuestionStore(state).snapshot(), state)).toBe(
+    "Decisions:\n- nothing\nLanding:\n- app-1: Land the login fix? · picked; waiting for its worker",
+  );
 });
 
 test("a Herdr name that is slow to find, or a name cache that cannot be written, never hides a card", async () => {

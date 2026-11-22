@@ -24,6 +24,7 @@ import {
   isDue,
   PUSH_SOURCE,
   QuestionStore,
+  shipped,
   tokenOf,
   type AnswerResult,
   type Question,
@@ -31,6 +32,7 @@ import {
   type QuestionPush,
 } from "./questions.ts";
 import { approvedCommits, checkQuestion, peeled, pushConfigProblem, repoOf } from "./question-target.ts";
+import { startLand } from "./land-chain.ts";
 
 type Entry = { type: string; id: string; parentId: string | null; message?: any; [key: string]: unknown };
 export type Discussion = { session: string; cwd: string; source: string; forkedAt: string | null };
@@ -216,7 +218,11 @@ export async function pick(
   const result = store.answer(requestId, token, choice, source, check);
   // A guard card's pick is its worker's to act on, and the event names it.
   const guard = q.guard ? { guard: { worker: q.guard.worker } } : {};
-  if (result.accepted) decisionEvent(state, result.question, `${q.id}-${q.revision}`, { choice, by: source, ...guard });
+  // A land card's Ship it starts its worker, and Shep hears only the land event it ends
+  // with. A worker that does not start now is started by the sweep at Shep's next expire run.
+  if (result.accepted && shipped(result.question)) startLand(state, token);
+  else if (result.accepted)
+    decisionEvent(state, result.question, `${q.id}-${q.revision}`, { choice, by: source, ...guard });
   return result;
 }
 

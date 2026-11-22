@@ -37,6 +37,7 @@ function id(ev: any): string {
 function mapping(ev: any): string {
   if (ev.kind === "decision") return JSON.stringify(["decision", ev.question?.token]);
   if (ev.kind === "guard") return JSON.stringify(["guard", ev.event_id]);
+  if (ev.kind === "land" && ev.schema === LAND_SCHEMA) return JSON.stringify(["land", ev.event_id]);
   return JSON.stringify([
     ev.agent?.address,
     ev.space?.id,
@@ -128,11 +129,78 @@ function guardLine(ev: any): string | null {
   return `- The ${what} you handed off ${said}${exit}${why}${log}. Tell the person in one line. [event ${eventId}] (worker ${worker})`;
 }
 
+const LAND_SCHEMA = "bercail.land/v2";
+const LAND_STEPS = ["check", "commit", "push", "ci", "trunk", "close", "cleanup", "sync"];
+// What a stopped chain means, and what Shep does next. The job stays open, and nothing in it
+// is a command for the person: Shep and the desk do the rest.
+const LAND_STOPS: Record<string, string> = {
+  changed: "stopped before landing: something it was pinned to changed since the pick",
+  refused: "stopped before landing: the guard refused a step",
+  "ci-failed": "stopped before landing: a required CI workflow did not pass",
+  "ci-timeout": "stopped before landing: required CI gave no complete result within two hours",
+  behind: "stopped before landing: the trunk moved, so its commit is no longer on the trunk's tip",
+  "push-failed": "stopped before landing: a push failed",
+  unknown:
+    "stopped in a state the chain cannot vouch for: part of its last step may have happened, and nothing is retried",
+};
+const LAND_NEXT: Record<string, string> = {
+  changed: "Once the desk is ready again, ask a new land card",
+  refused: "Find out why from the log, then ask a new land card once it can run",
+  "ci-failed": "Send the desk the failed run to fix, then ask a new land card",
+  "ci-timeout": "Find out why CI did not finish, then ask a new land card",
+  behind: `Have the desk bring its staged change onto the trunk's new tip and run /validate, then ask a new land card`,
+  "push-failed": "Find out why from the log, then ask a new land card once the push can work",
+  unknown: "Read the log and the ledger's last step to see how far it got before you report",
+};
+
+// A land card's chain, from the land worker's fields only. A landed result may carry what
+// did not hold after the trunk push (close, cleanup, sync): Shep handles those itself.
+function landLine(ev: any): string | null {
+  const token = one(ev.question);
+  const eventId = one(ev.event_id);
+  const word = (v: unknown) => (typeof v === "string" && /^[\w./@:-]{1,200}$/.test(v) ? v : null);
+  const [repo, issue, branch, trunk] = [ev.repo, ev.issue, ev.branch, ev.trunk].map(word);
+  const commit = typeof ev.commit === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(ev.commit) ? ev.commit : null;
+  const said =
+    ev.outcome === "landed" ? "landed" : Object.hasOwn(LAND_STOPS, ev.outcome) ? LAND_STOPS[ev.outcome] : null;
+  if (
+    !token ||
+    !/^Q[1-9]\d*@[1-9]\d*$/.test(token) ||
+    eventId !== `land:${token}` ||
+    !repo ||
+    !issue ||
+    !branch ||
+    !trunk ||
+    !said ||
+    (ev.outcome === "landed" && !commit) ||
+    (ev.step !== null && !LAND_STEPS.includes(ev.step)) ||
+    !Array.isArray(ev.warnings) ||
+    !ev.warnings.every((w: unknown) => one(w))
+  )
+    return null;
+  const log = one(ev.log) ? `; its log is ${one(ev.log)}` : "";
+  if (ev.trusted != null && (ev.outcome !== "landed" || !/^[0-9a-f]{64}$/.test(ev.trusted))) return null;
+  if (ev.outcome === "landed") {
+    const trusted = ev.trusted
+      ? ` It now trusts ${repo}'s new .bercail/policy.toml (sha256 ${ev.trusted.slice(0, 12)}), as the card said.`
+      : "";
+    const left = ev.warnings.length
+      ? ` Not done after it landed: ${ev.warnings.map(one).join("; ")}. Handle that yourself or with the desk; never hand the person a command.`
+      : "";
+    return `- ${issue} landed on ${trunk} as ${commit!.slice(0, 12)} in ${repo} from the person's pick on ${token} (branch ${branch}).${trusted}${left} Tell the person in one line${log}. [event ${eventId}]`;
+  }
+  const why = one(ev.why) ? ` (${one(ev.why)})` : "";
+  const at = ev.step ? ` at its ${ev.step} step` : "";
+  const made = commit ? `, after it made ${commit.slice(0, 12)}` : "";
+  return `- ${issue}'s land card ${token} (branch ${branch} in ${repo}) ${said}${at}${made}${why}. The job stays open. ${LAND_NEXT[ev.outcome]}; never hand the person a command. Tell the person in one line${log}. [event ${eventId}]`;
+}
+
 // Only follower text and routing facts, never desk-authored titles or summaries.
 export function eventLine(ev: any): string | null {
   if (!ev || typeof ev !== "object" || ev.source !== "bercail") return null;
   if (ev.kind === "decision") return decisionLine(ev);
   if (ev.kind === "guard") return guardLine(ev);
+  if (ev.kind === "land" && ev.schema === LAND_SCHEMA) return landLine(ev);
   const reconstructed =
     ev.kind === "reconciliation" && typeof ev.notice_id === "string" && ev.notice_id.startsWith("notice:");
   // A land event is bercail land's CI wait: its text is written from facts only.

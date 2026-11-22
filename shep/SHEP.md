@@ -202,8 +202,9 @@ Report each event id once.
 ## Questions
 
 Every decision you ask goes through `shep_question` first, so it is a card on
-the Decisions panel, then in chat too. Ordinary chat is not a question and
-grants nothing.
+the Decisions panel, then in chat too; a landing on a one-card repo goes
+through `bercail land ask` instead (Shipping). Ordinary chat is not a question
+and grants nothing.
 
 Never list pending decisions in your own words. A decision with no card is
 not one: ask it with `shep_question` first. What waits on the person comes
@@ -348,6 +349,30 @@ and `--issue` when there is one, and say so in one line with its link:
 - Scratch files (a brief, a JSON dump, a log) go in `"$TMPDIR/<name>"` or a
   `mktemp` file, never a literal `/tmp/<name>`: `/tmp` holds RAM and keeps a
   file for days, and the guard warns.
+- One land card, where the repo takes one: its trusted policy says
+  `push = "main"`, `integrate = "direct"` and names `required_ci`, on git
+  backend `gh`. Once a desk finished, run `bercail land ask <worktree>`, and
+  nothing else for the landing. When it refuses for the desk (a stale
+  description, HEAD not on the trunk's tip, a merge of something else), send
+  the desk its reason for /validate. A desk that merged the trunk's tip into
+  its branch lands that merge's tree as one commit.
+  When it refuses for the repo, use the steps below. Otherwise tell the person
+  in one line that the land card is up, and whether it needs their LGTM (it
+  names the high-stakes paths). Their pick on the panel starts a worker that
+  commits the staged tree, pushes it to a CI branch of its own, waits for
+  `required_ci`, pushes that commit to the trunk, cleans up the desk and its
+  worktree, fast-forwards the main checkout, and then closes the job. Do none
+  of that yourself, ask no push or cleanup card for it, and never hand the
+  person a command: the result is one `land` event. On `landed`, report it in
+  one line. When a step after the trunk push did not hold, the job stays
+  open: finish that part yourself or with the desk, then close the job. A
+  change to `.bercail/policy.toml` lands with its trust: the card shows the
+  new file's hash, and the pick trusts it once it is on the trunk; never ask
+  the person to run `bercail policy trust` for it. On any other outcome the
+  job stays open too: do what
+  the event says (the desk fixes its change and validates again, then you ask
+  a new land card). Their Not yet comes as a decision; ask why only if Discuss
+  did not say.
 - To retire a landed worktree, run `bercail cleanup <worktree>` from outside
   its space. The guard hands it to a card for the person's Allow. Cleanup archives `.bercail/`,
   ends the desk and its siblings, removes the worktree and closes its space;
@@ -385,7 +410,8 @@ and `--issue` when there is one, and say so in one line with its link:
 - When `describe check --json` says `review: required`, tell the person why
   (the `high_stakes` paths it touches, or the policy's `review = "always"`)
   and its stakes, and wait for their LGTM before you commit or merge, even
-  straight-to-main and under a rule to merge without asking. Only the repo's
+  straight-to-main and under a rule to merge without asking. On a land card,
+  its "LGTM, ship it" is that LGTM. Only the repo's
   `review = "none"` waives it. It never holds other work.
 - With git backend `entire`, a trail is the PR. Merge it only when asked, with
   `bercail job merge trail:<n> --repo <checkout>` once `entire trail show` says

@@ -324,7 +324,7 @@ The CLI works without Pi or a mod:
 
 ```bash
 bercail shep questions              # bounded pending projection (up to 20)
-bercail shep questions --json       # what waits on you: pending cards and defaults not yet OK'd, under pending
+bercail shep questions --json       # what waits on you: pending cards and defaults not yet OK'd, under pending; land chains running, under landing
 bercail shep questions --json --all # full snapshot and retained revisions
 bercail shep question get Q42@3     # one revision, as the ledger keeps it (the guard's worker polls with it)
 bercail shep question check Q42@3   # recheck the candidate and current policy, with desk warnings (and a reversible one's door)
@@ -422,7 +422,31 @@ A few seconds remain between the worker's last check and the run, as with a dial
 
 ## Landing a change
 
-After review and your request to ship, Shep runs `bercail land <worktree>` with `--reviewed-by "<name>"` when your LGTM is required. Only Shep can run it, on a branch other than trunk, with a valid `/validate` description. It commits the staged tree with the `bercail describe commit` text, then starts a waiter and returns. Rerunning with the described tree already at HEAD makes no second commit. **Land does not push.** Shep pushes the named branch to origin so branch CI runs.
+### One land card
+
+In a repo whose trusted policy says `push = "main"`, `integrate = "direct"` and names the workflows that must pass in `required_ci` ([config](config.md)), on git backend `gh`, one pick lands a desk's change. Once the desk finished and its description checks out, Shep runs `bercail land ask <worktree>`. It refuses, with the fix, the main checkout or the trunk itself, a repo without that profile, a worktree with no beads issue in its handoff record, a merge of anything but the trunk's tip on origin or one with conflicts left, a description that does not check out, a HEAD that is not the trunk's commit on origin, and a second card for the same worktree, branch or job while one waits or lands. A desk that merged the trunk's tip into its branch gets its HEAD put on that tip with the merged tree still staged, so the merge's exact tree lands as one commit: the trunk takes no merge commit. Otherwise it puts up a land card through the question ledger, which pins the facts below (the ledger itself refuses a profile or a HEAD that do not fit), and prints one line for Shep.
+
+The card pins the linked worktree, its branch and HEAD, the staged tree with nothing unstaged or untracked, the description's tree and the hash of its commit text, the trunk and its commit on origin, origin's one push URL and the GitHub repo it names, the policy with its trust and a hash of its values, each `required_ci` workflow's GitHub ID, the installed `bercail` by its real path, whether review is required and the reviewer, the job and its desk, space and session, and a new branch of its own for CI, `bercail-land/<branch>/<id>`. Its brief writes out each effect with its target. Its choices are **Ship it** and **Not yet** (**LGTM, ship it** when review is required). It has no recommendation, no default and no expiry, and takes a pick only on the panel, never in Discuss.
+
+**Ship it** starts a model-free worker, `bercail land run <Qn@rev>`, in the hc terminal `land-<qn>-<rev>`; nothing else runs it, and the guard refuses it from every agent. It claims the pick once, then runs each effect in order; up to the cleanup, every pinned fact is read again before each one:
+
+1. **commit**: the staged tree with the description's text, as `git commit --cleanup=verbatim`. The commit is read back: another tree, parent or text (a hook changed it) stops at `unknown` with nothing pushed.
+2. **push**: that commit to its CI branch, a new branch on origin, so a retry after a stop never needs a force push.
+3. **ci**: every 30 seconds for up to two hours, until each `required_ci` workflow's latest push run on that branch and commit has passed. A red, skipped or neutral run stops at `ci-failed`; no complete result in time, or a run list as long as its limit, stops at `ci-timeout`.
+4. **trunk**: under a per-repo lock, with the trunk on origin still the pinned commit and CI still green on a second read, the same commit to the trunk with no force. A trunk that moved stops at `behind`.
+5. **cleanup**: `bercail cleanup` of the worktree, while it is still on its branch at that commit with its desk.
+6. **sync**: `git merge --ff-only` of the main checkout to that commit, when it is on the trunk, clean and behind it.
+7. **close**: `bd close` of the job, naming the commit, only when the cleanup and the sync held.
+
+A change that edits the repo's `.bercail/policy.toml` is one the person approves with the policy: the card pins the staged file's sha256 and shows it with the policy diff. Once that commit is on the trunk, after the sync, the worker trusts exactly that hash for the repo, as `bercail policy trust` would, and the landed result and event say so. A policy edited after the pick stops the chain at `changed`; a landed file of any other hash is not trusted, and the result says why. The card's profile and its pushes follow the repo's policy as the main checkout has it, never a desk's edit to it: the pushes run from the main checkout, which shares the worktree's objects.
+
+Before each push the worker asks the guard's own decision and pinning (`bercail guard decide`): it must say allow, with the card's URL and refspec, and for the cleanup the ask the card named. Any other answer stops the chain at `refused`. A cleanup, sync or close that does not hold is a warning on `landed`, that part is left as it was, and the job stays open for Shep to finish. A chain that stops before the trunk push never retries or replays a step; the job stays open, and Shep asks a new card once the desk is ready. Each effect's output goes to `~/.local/state/bercail/land/<Qn>-<rev>.log` (mode 600).
+
+The card shows how far the chain got until it ends, and Shep gets one `bercail.land/v2` event: the outcome (`landed`, `changed`, `refused`, `ci-failed`, `ci-timeout`, `behind`, `push-failed` or `unknown`), its last step, the commit, why it stopped, any warnings and the log. Shep's line is written from those fields only. **Not yet** is a decision event, as any pick is. `bercail shep question expire`, on Shep's timer, starts a worker again for a pick whose worker never started or died before its claim, records `unknown` for a claimed worker that is gone (never while hc cannot answer), and writes an event the worker could not.
+
+### Today's flow
+
+Every other repo lands this way. After review and your request to ship, Shep runs `bercail land <worktree>` with `--reviewed-by "<name>"` when your LGTM is required. Only Shep can run it, on a branch other than trunk, with a valid `/validate` description. It commits the staged tree with the `bercail describe commit` text, then starts a waiter and returns. Rerunning with the described tree already at HEAD makes no second commit. **Land does not push.** Shep pushes the named branch to origin so branch CI runs.
 
 The hc terminal `land-<12-character sha>` (`bercail.land=wait`, `bercail.land_head=<sha>`) runs `bercail land --wait <sha> <worktree>`. Every 30 seconds for up to two hours it checks `gh run list --commit <sha> --branch <branch> --event push`. It does not select workflows by name: if required CI runs only on PRs, an unrelated passing push workflow can give a false ready. Bercail's CI runs on every branch push.
 
@@ -433,7 +457,7 @@ Shep gets one `bercail.land/v1` inbox event (`kind: land`), with the status, com
 - `moved`: CI passed but the branch moved. The new head needs review and its own land.
 - `timeout`: no result in time. Report whether no push run was found or a run was still going; do not land.
 
-The guard refuses `bercail land run` and the question ledger's `land-create`, `land-claim`, `land-step` and `land-result` for every agent, Shep included. They belong to the land card that one Decisions pick will land a change from; nothing puts one up yet.
+The guard refuses `bercail land run` and the question ledger's `land-create`, `land-claim`, `land-step`, `land-result` and `land-tell` for every agent, Shep included: only `bercail land ask` puts up a land card, and only the person's pick starts its chain.
 
 ## Desk events
 

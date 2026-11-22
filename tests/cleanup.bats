@@ -195,6 +195,50 @@ assert_kept() {
   [[ ! -e "$wt" ]] || fail "the worktree is removed"
 }
 
+@test "cleanup takes a commit whose patch landed on trunk under another id, and still refuses one whose patch did not" {
+  local out wt
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  printf 'x\n' >"$wt/local.txt"
+  git -C "$wt" add local.txt
+  git -C "$wt" commit -qm "local only"
+  # The same patch replayed on a moved trunk and pushed there: another id (bercail-ao5i).
+  printf 'moved\n' >"$WORK/widgets/moved.txt"
+  git -C "$WORK/widgets" add moved.txt
+  git -C "$WORK/widgets" commit -qm moved
+  git -C "$WORK/widgets" cherry-pick "$(git -C "$wt" rev-parse HEAD)" >/dev/null
+  git -C "$WORK/widgets" push -q origin master
+  git -C "$WORK/widgets" reset -q --hard HEAD~2
+  git -C "$wt" cherry origin/master HEAD | grep -qx -- "- $(git -C "$wt" rev-parse HEAD)" || fail "the setup is not a landed patch"
+  printf 'y\n' >"$wt/other.txt"
+  git -C "$wt" add other.txt
+  git -C "$wt" commit -qm "not landed"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "a commit whose patch is nowhere is removed: $out"; fi
+  assert_has "$out" "1 commits are on neither master nor the remote" "only the unlanded commit counts"
+  assert_kept alpha "one patch not landed"
+  git -C "$wt" reset -q --hard HEAD~1
+  out="$("$BERCAIL" cleanup "$wt" 2>&1)" || fail "a landed patch is refused: $out"
+  assert_has "$out" "1 commits are on master as the same patch under another id (git cherry); they count as landed" \
+    "the report says why it counts"
+  [[ ! -e "$wt" ]] || fail "the worktree is removed"
+}
+
+@test "cleanup removes nothing when git cannot list the commits only the worktree holds" {
+  local out wt real
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  printf 'x\n' >"$wt/local.txt"
+  git -C "$wt" add local.txt
+  git -C "$wt" commit -qm "local only"
+  real="$(command -v git)"
+  printf '#!/bin/sh\nfor a; do [ "$a" = rev-list ] && { echo "fatal: bad object" >&2; exit 128; }; done\nexec %q "$@"\n' "$real" \
+    >"$FAKE_BIN/git"
+  chmod +x "$FAKE_BIN/git"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "cleanup went on without the list: $out"; fi
+  assert_has "$out" "git cannot list the commits only it holds; nothing was removed" "the refusal names the cause"
+  assert_kept alpha "rev-list failed"
+}
+
 @test "cleanup refuses initialized submodules, which git worktree remove would refuse after the desk ended" {
   local out wt
   desk_space alpha

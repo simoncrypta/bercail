@@ -921,8 +921,9 @@ test("pending lists only the pending cards and the defaults not yet OK'd or reve
   ok("answer", { requestId: "ok", token: "Q6@1", source: "panel picker", outcome: "ok" });
   ok("answer", { requestId: "r", token: "Q7@1", source: "panel picker", outcome: "reversed" });
 
-  const { pending, ...rest } = ok("pending");
+  const { pending, landing, ...rest } = ok("pending");
   expect(rest).toEqual({});
+  expect(landing).toEqual([]);
   expect(pending.map((q: any) => [`${q.id}@${q.revision}`, q.status, q.answer?.choice ?? null])).toEqual([
     ["Q1@1", "pending", null],
     ["Q5@1", "answered", "auth"],
@@ -1459,6 +1460,67 @@ describe("a guard card", () => {
   });
 });
 
+test("a land event is Shep's line from its fields alone, never a command for the person, and a malformed one is dropped", () => {
+  const sha = "76d6a4f91b2f77e82054244a440aed4280fc9f0b";
+  const ev = {
+    source: "bercail",
+    schema: "bercail.land/v2",
+    kind: "land",
+    sink: "shep",
+    event_id: "land:Q12@1",
+    question: "Q12@1",
+    repo: "bercail",
+    issue: "bercail-fq7y",
+    branch: "one-pick-landing",
+    trunk: "master",
+    commit: sha,
+    outcome: "landed",
+    step: "sync",
+    why: null,
+    warnings: [],
+    log: "/state/bercail/land/Q12-1.log",
+  };
+  expect(eventLine(ev)).toBe(
+    "- bercail-fq7y landed on master as 76d6a4f91b2f in bercail from the person's pick on Q12@1 (branch one-pick-landing). Tell the person in one line; its log is /state/bercail/land/Q12-1.log. [event land:Q12@1]",
+  );
+  expect(eventLine({ ...ev, trusted: "a".repeat(64) })).toContain(
+    "(branch one-pick-landing). It now trusts bercail's new .bercail/policy.toml (sha256 aaaaaaaaaaaa), as the card said. Tell the person",
+  );
+  expect(eventLine({ ...ev, warnings: ["the desk and its worktree stay: clean changed"] })).toContain(
+    "Not done after it landed: the desk and its worktree stay: clean changed. Handle that yourself or with the desk; never hand the person a command.",
+  );
+  expect(eventLine({ ...ev, outcome: "ci-failed", step: "ci", why: ".github/workflows/ci.yml failure" })).toBe(
+    "- bercail-fq7y's land card Q12@1 (branch one-pick-landing in bercail) stopped before landing: a required CI workflow did not pass at its ci step, after it made 76d6a4f91b2f (.github/workflows/ci.yml failure). The job stays open. Send the desk the failed run to fix, then ask a new land card; never hand the person a command. Tell the person in one line; its log is /state/bercail/land/Q12-1.log. [event land:Q12@1]",
+  );
+  expect(eventLine({ ...ev, outcome: "changed", step: "check", commit: null, why: "stagedTree changed" })).toMatch(
+    /stopped before landing: something it was pinned to changed since the pick at its check step \(stagedTree changed\)\. The job stays open\./,
+  );
+  // A mapping of its own: one land event is never taken for a desk's.
+  const inbox = join(dir, "inbox");
+  const delivered = join(dir, "delivered");
+  mkdirSync(inbox);
+  mkdirSync(delivered);
+  writeFileSync(join(inbox, "land-Q12-1.json"), JSON.stringify(ev));
+  expect(claim(inbox, delivered).map((t) => t.name)).toEqual(["land-Q12-1.json"]);
+  for (const bad of [
+    { ...ev, outcome: "merged" },
+    { ...ev, outcome: "constructor" },
+    { ...ev, event_id: "land:Q13@1" },
+    { ...ev, question: "Q12" },
+    { ...ev, commit: null },
+    { ...ev, commit: "nope" },
+    { ...ev, step: "deploy" },
+    { ...ev, issue: "rm -rf /; echo" },
+    { ...ev, branch: "" },
+    { ...ev, warnings: [" "] },
+    { ...ev, warnings: "none" },
+    { ...ev, schema: "bercail.land/v3" },
+    { ...ev, trusted: "nope" },
+    { ...ev, outcome: "changed", step: "check", trusted: "a".repeat(64) },
+  ])
+    expect(eventLine(bad), JSON.stringify(bad)).toBeNull();
+});
+
 test("a guard event is Shep's line from its fields alone, and a malformed one is dropped", () => {
   const ev = {
     source: "bercail",
@@ -1528,7 +1590,6 @@ describe("a land card", () => {
   const input = (extra: Record<string, unknown> = {}) => ({
     requestId: "land-1",
     prompt: "Land the login fix?",
-    brief: "Commits the staged tree, pushes it, waits for CI and lands it on master.",
     origin: { event: "finished:t9", session: "shep-session", entry: null },
     worktree: wt,
     issue: "app-1",
@@ -1560,7 +1621,7 @@ describe("a land card", () => {
     ]);
     json(join(dir, "land-policy.json"), {
       repo,
-      root: wt,
+      root: repo,
       sha256: "policy-one",
       trusted: true,
       policy: { push: "main", integrate: "direct", required_ci: [".github/workflows/ci.yml"] },
@@ -1593,7 +1654,7 @@ describe("a land card", () => {
       "bercail-1",
       [
         `case "$1 $2 $3 $4" in`,
-        `  "policy show --json ${wt}") /bin/cat '${dir}/land-policy.json' ;;`,
+        `  "policy show --json ${repo}") /bin/cat '${dir}/land-policy.json' ;;`,
         `  "describe check --json ${wt}") /bin/cat '${dir}/describe.json' ;;`,
         `  "describe commit ${wt} "|"describe commit --reviewed-by "*) test -f '${dir}/commit.txt' || exit 1; /bin/cat '${dir}/commit.txt'; test "$3" != --reviewed-by || printf 'Reviewed-by: %s\\n' "$4" ;;`,
         `  *) exit 2 ;;`,
@@ -1640,7 +1701,25 @@ describe("a land card", () => {
         reviewer: null,
       },
     });
+    // Its CI branch is its own, named from the request; the brief is each effect with its target.
+    const card = JSON.parse(created.stdout);
+    expect(card.land.ciRef).toMatch(/^refs\/heads\/bercail-land\/login\/[0-9a-f]{12}$/);
+    expect(card.brief).toBe(
+      [
+        `Commit tree ${wgit("write-tree").slice(0, 12)} on login (parent ${wgit("rev-parse", "HEAD").slice(0, 12)}, master on git@github.com:o/app.git).`,
+        `Push it to git@github.com:o/app.git as the new branch ${card.land.ciRef.slice("refs/heads/".length)}.`,
+        "Wait up to two hours for CI (.github/workflows/ci.yml) to pass on that commit.",
+        "Push the same commit to master there, with no force.",
+        `Clean up the desk t9 and its worktree ${wt}.`,
+        "Fast-forward the main checkout to it.",
+        "Close app-1 once those held.",
+        "If anything it was pinned to changes, it stops there and the job stays open.",
+      ].join(" "),
+    );
     expect(check()).toMatchObject({ status: "fresh", reasons: [], warnings: [] });
+    // One card at a time for a worktree, branch or job.
+    expect(create({ requestId: "land-again" }).stderr).toMatch(/Q1@1 is pending for the same worktree, branch or job/);
+    ok("withdraw", { requestId: "w1", token: "Q1@1", reason: "asked again" });
     // A change that needs the LGTM offers it, and pins the person's name in its commit text.
     edit("describe.json", (d) => (d.change = { review: "required", high_stakes: ["lib/land.sh"] }));
     const lgtm = JSON.parse(create({ requestId: "land-2" }).stdout);
@@ -1658,12 +1737,32 @@ describe("a land card", () => {
 
   test("refuses a dirty worktree, a job whose desk does not check out, and a job that is a trail", () => {
     writeFileSync(join(wt, "new"), "x\n");
-    expect(create().stderr).toMatch(/asked on a worktree git lists, with nothing unstaged or untracked/);
+    expect(create().stderr).toMatch(/asked on a linked worktree git lists, with nothing unstaged or untracked/);
     rmSync(join(wt, "new"));
     edit("issue.json", (jobs) => delete jobs[0].metadata.bercail_task.owner);
     expect(create().stderr).toMatch(/a land card binds to its desk: app-1's handoff record names no desk/);
     expect(create({ issue: "trail:4" }).stderr).toMatch(/a land card's job is a beads issue/);
+    edit("issue.json", (jobs) => (jobs[0].metadata.bercail_task.owner = { desk: "t9" }));
+    // The profile one pick lands is read from the policy the card pins, not trusted from its caller.
+    const profile =
+      /lands only where the trusted policy says push = "main", integrate = "direct" and names required_ci/;
+    for (const [change, undo] of [
+      [(p: any) => (p.policy.integrate = "pr"), (p: any) => (p.policy.integrate = "direct")],
+      [(p: any) => (p.policy.push = "branch"), (p: any) => (p.policy.push = "main")],
+      [(p: any) => (p.trusted = false), (p: any) => (p.trusted = true)],
+      [(p: any) => (p.policy.required_ci = []), (p: any) => (p.policy.required_ci = [".github/workflows/ci.yml"])],
+    ]) {
+      edit("land-policy.json", change);
+      expect(create().stderr).toMatch(profile);
+      edit("land-policy.json", undo);
+    }
+    // A HEAD that is not the trunk's commit on the remote.
+    const trunk = ogit("rev-parse", "master");
+    ogit("update-ref", "refs/heads/master", ogit("commit-tree", "-p", trunk, "-m", "moved", `${trunk}^{tree}`));
+    expect(create().stderr).toMatch(/a land card's HEAD is the trunk's commit on the remote/);
+    ogit("update-ref", "refs/heads/master", trunk);
     expect(ok("json").questions).toEqual([]);
+    expect(create().status).toBe(0);
   }, 60000);
 
   test("each pinned fact that changes makes it stale, and so does one commit of the tree", () => {

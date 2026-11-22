@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, resolve } from "node:path";
@@ -12,9 +13,21 @@ import {
   projection,
   tokenOf,
   type Question,
+  type QuestionLand,
   type QuestionSpec,
+  shipped,
 } from "./questions.ts";
-import { captureTarget, checkQuestion, landFacts, mergeReversible, repoOf, withTarget } from "./question-target.ts";
+import {
+  captureTarget,
+  checkLand,
+  checkQuestion,
+  landFacts,
+  mergeReversible,
+  policyChange,
+  repoOf,
+  withTarget,
+} from "./question-target.ts";
+import { sweepLand, tellLand } from "./land-chain.ts";
 import { approvePush, closed, discussionOf, expireDue, openDiscussion, pick, settle, unsettled } from "./discuss.ts";
 
 async function main() {
@@ -32,17 +45,32 @@ async function main() {
     return;
   }
   if (op === "json") result = store.snapshot();
-  // What waits on the person: `bercail shep questions --json`.
-  else if (op === "pending") result = { pending: store.snapshot().questions.filter(waiting) };
-  else if (op === "get") {
+  // What waits on the person, and the land chains still running: `bercail shep questions --json`.
+  else if (op === "pending") {
+    const all = store.snapshot().questions;
+    result = { pending: all.filter(waiting), landing: all.filter(landing) };
+  } else if (op === "get") {
     if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
       throw new Error("get requires an explicit Qn@revision token");
     result = store.snapshot().questions.find((q) => tokenOf(q) === args[0]);
     if (!result) throw new Error("unknown question revision");
   } else if (op === "panel") result = await panel(store, state);
-  // What Shep's runtime runs on its timer: records the defaults that are due.
-  else if (op === "expire") result = (await expireDue(state)).map(tokenOf);
-  else if (op === "thread") {
+  // What Shep's runtime runs on its timer: records the defaults that are due, then sweeps
+  // the land chains (a pick with no worker, a worker gone, a result not told).
+  else if (op === "expire") {
+    let failed: unknown = null;
+    const due = await expireDue(state).catch((error) => ((failed = error), []));
+    const land = (() => {
+      try {
+        return sweepLand(state);
+      } catch (error) {
+        failed ??= error;
+        return [];
+      }
+    })();
+    if (failed) throw failed;
+    result = [...due.map(tokenOf), ...land];
+  } else if (op === "thread") {
     if (args.length !== 1) throw new Error("thread requires a topic (or - to clear)");
     store.select(args[0] === "-" ? null : args[0]!);
     result = store.snapshot();
@@ -70,6 +98,22 @@ async function main() {
     if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
       throw new Error("land-claim requires a Qn@revision token");
     result = store.claimLand(args[0]!);
+  } else if (op === "land-check") {
+    // The land worker's check before an effect: every pinned fact, HEAD its own commit once
+    // it made one, and the trunk that commit once it pushed it (--landed).
+    const landed = args[2] === "--landed";
+    if (args.length < 1 || args.length > (landed ? 3 : 2) || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
+      throw new Error("land-check requires a Qn@revision token, then optionally the chain's commit and --landed");
+    if (args[1] !== undefined && !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(args[1]))
+      throw new Error("land-check takes the chain's full commit id");
+    const question = store.snapshot().questions.find((q) => tokenOf(q) === args[0]);
+    if (question?.kind !== "land") throw new Error("land-check requires a land card's token");
+    const { status, reasons, warnings } = checkLand(question, args[1], landed);
+    result = { status, reasons, warnings };
+  } else if (op === "land-tell") {
+    if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
+      throw new Error("land-tell requires a Qn@revision token");
+    result = tellLand(state, args[0]!);
   } else if (op === "land-step") {
     if (args.length < 2 || args.length > 3 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
       throw new Error("land-step requires a Qn@revision token and the step, then optionally what it says");
@@ -98,8 +142,8 @@ async function main() {
       // A land card, its facts pinned here from the worktree and its job. They are read
       // before the ledger's lock, which a remote read must not hold; a replay of the same
       // request still gets its receipt, and a failed read fails only a new one.
-      if (Object.keys(input).sort().join() !== "brief,issue,origin,prompt,requestId,worktree")
-        throw new Error("land-create fields must be requestId, prompt, brief, origin, worktree and issue");
+      if (Object.keys(input).sort().join() !== "issue,origin,prompt,requestId,worktree")
+        throw new Error("land-create fields must be requestId, prompt, origin, worktree and issue");
       let read: QuestionSpec | Error;
       try {
         read = landSpec(input);
@@ -111,8 +155,11 @@ async function main() {
         return read;
       });
     } else if (op === "land-result") {
-      if (Object.keys(input).sort().join() !== "commit,log,outcome,token,warnings")
-        throw new Error("land-result fields must be token, outcome, commit, warnings and log");
+      const keys = Object.keys(input).filter((key) => key !== "why" && key !== "trusted");
+      if (keys.sort().join() !== "commit,log,outcome,token,warnings")
+        throw new Error(
+          "land-result fields must be token, outcome, commit, warnings and log, and why when it stopped or trusted when it trusted the policy",
+        );
       const { token, ...outcome } = input;
       result = store.landResult(token, outcome);
     } else if (op === "withdraw") {
@@ -162,7 +209,7 @@ async function main() {
     }
   } else
     throw new Error(
-      "usage: question-cli.ts list | json | pending | get Qn@revision | waiting | panel | expire | create | revise | reply | answer | withdraw | guard-create | land-create | land-result | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | guard-claim Qn@revision TICKET | land-claim Qn@revision | land-step Qn@revision STEP [DETAIL]",
+      "usage: question-cli.ts list | json | pending | get Qn@revision | waiting | panel | expire | create | revise | reply | answer | withdraw | guard-create | land-create | land-result | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | guard-claim Qn@revision TICKET | land-claim Qn@revision | land-step Qn@revision STEP [DETAIL] | land-check Qn@revision [COMMIT [--landed]] | land-tell Qn@revision",
     );
   console.log(JSON.stringify(result));
 }
@@ -197,21 +244,61 @@ function guardSpec(input: Record<string, any>): QuestionSpec {
 
 // A pending card, or a default the person has not said OK to or reversed.
 const waiting = (q: Question) => q.status === "pending" || unsettled(q);
+// A land card the person shipped whose chain has no result yet: picked, or landing.
+const landing = (q: Question) => shipped(q) && !q.landing?.result;
 
 // A land card's spec: Ship it or Not yet on the facts read now, refused while its desk does
-// not check out. The store checks every fact is there.
+// not check out. Its CI branch is named from the request, so a replay names the same one.
+// The brief is each effect the pick allows, with its target, written from those facts. The
+// store checks every fact is there.
 function landSpec(input: Record<string, any>): QuestionSpec {
-  const { target, land, warnings } = landFacts(input.worktree, input.issue);
+  const { target, land: read, warnings, policy } = landFacts(input.worktree, input.issue);
   if (warnings.length) throw new Error(`a land card binds to its desk: ${warnings.join("; ")}`);
+  // The profile one pick lands, read from the policy this card pins, whose hash its checks compare.
+  const p = policy.policy;
+  if (!policy.trusted || p.push !== "main" || p.integrate !== "direct" || !p.required_ci?.length)
+    throw new Error(
+      'a land card lands only where the trusted policy says push = "main", integrate = "direct" and names required_ci',
+    );
+  const branch = (target.branch ?? "").replace(/^refs\/heads\//, "");
+  const id = createHash("sha256").update(String(input.requestId)).digest("hex").slice(0, 12);
+  const change = policyChange(target.worktree!);
+  const land = { ...read, ciRef: `refs/heads/bercail-land/${branch}/${id}`, policyTrust: change?.sha256 ?? null };
   return {
     kind: "land",
     prompt: input.prompt,
     options: land.review.required ? LGTM_LAND_CHOICES : LAND_CHOICES,
-    brief: input.brief,
+    brief: landBrief(target, land, change?.diff ?? null),
     origin: input.origin,
     target,
     land,
   };
+}
+
+// What a pick on the card allows, effect by effect, with each target, and the policy diff
+// it trusts.
+function landBrief(t: QuestionSpec["target"], l: QuestionLand, policyDiff: string | null): string {
+  const short = (sha: string | null) => (sha ?? "?").slice(0, 12);
+  const ci = l.ciRef.replace(/^refs\/heads\//, "");
+  const lines = [
+    `Commit tree ${short(t.stagedTree)} on ${(t.branch ?? "").replace(/^refs\/heads\//, "")} (parent ${short(t.head)}, ${t.baseRef} on ${l.url}).`,
+    `Push it to ${l.url} as the new branch ${ci}.`,
+    `Wait up to two hours for CI (${l.requiredCi.map((w) => w.path).join(", ")}) to pass on that commit.`,
+    `Push the same commit to ${t.baseRef} there, with no force.`,
+    `Clean up the desk ${t.desk} and its worktree ${t.worktree}.`,
+    `Fast-forward the main checkout to it.`,
+    `Close ${t.issue} once those held.`,
+  ];
+  if (l.review.required)
+    lines.push(
+      `It touches high-stakes paths (${l.review.highStakes.join(", ")}): the commit names ${l.reviewer} as Reviewed-by, as a record of this pick.`,
+    );
+  if (l.policyTrust)
+    lines.push(
+      `It changes the repo's .bercail/policy.toml: once its commit is on ${t.baseRef}, it trusts that file, sha256 ${l.policyTrust}, as bercail policy trust would.`,
+    );
+  lines.push("If anything it was pinned to changes, it stops there and the job stays open.");
+  return lines.join(" ") + (policyDiff ? `\n\nThe policy diff:\n${policyDiff}` : "");
 }
 
 // What the Decisions panel shows: each pending question with its brief, Shep's
@@ -221,10 +308,14 @@ function landSpec(input: Record<string, any>): QuestionSpec {
 async function panel(store: QuestionStore, state: string) {
   const bin = process.env.BERCAIL_SHEP_BIN || "bercail";
   const cards = [];
-  const shown = (q: Question) => waiting(q) || (q.status === "answered" && q.settled?.outcome === "reversed");
+  const shown = (q: Question) =>
+    waiting(q) || landing(q) || (q.status === "answered" && q.settled?.outcome === "reversed");
   for (const q of store.snapshot().questions.filter(shown)) {
-    // A default is checked too: the person's OK or Reverse on it needs it fresh.
-    const check = await checkQuestion(q);
+    // A default is checked too: the person's OK or Reverse on it needs it fresh. A land
+    // card whose chain runs is not: it shows how far it got, and takes no pick.
+    const check = landing(q)
+      ? { status: "landing", reasons: [] as string[], warnings: [] as string[], policy: undefined }
+      : await checkQuestion(q);
     let change = null;
     if (!q.answer && q.kind !== "planning" && q.kind !== "guard" && q.target.worktree) {
       // describe check exits 1 while the change has no description; its JSON still holds the size.
@@ -258,9 +349,17 @@ async function panel(store: QuestionStore, state: string) {
       reasons: check.reasons,
       warnings: check.warnings,
       change,
+      landing: landing(q) ? landingOf(q) : null,
     });
   }
   return { state, at: new Date().toISOString(), cards };
+}
+
+// How far a shipped land card's chain got: picked and waiting for its worker, or its
+// last step and what that step says.
+function landingOf(q: Question) {
+  const step = q.landing?.steps.at(-1);
+  return step ? { step: step.step, detail: step.detail ?? null, at: step.at } : { step: null, detail: null, at: null };
 }
 
 // How long a space's Herdr name is kept, so a settle runs no lookup for one it named.
@@ -361,6 +460,16 @@ export async function decisions(snapshot: { questions: Question[] }, state: stri
     lines.push(parts.join(" · "));
   }
   if (lines.length === 1) lines.push("- nothing");
+  // The chains the person started: they wait on no one, so they are listed apart.
+  const running = snapshot.questions.filter(landing);
+  if (running.length) {
+    lines.push("Landing:");
+    for (const q of running) {
+      const { step, detail } = landingOf(q);
+      const what = step ? `${step}${detail ? `: ${cut(detail, 80)}` : ""}` : "picked; waiting for its worker";
+      lines.push(`- ${cut(q.target.issue ?? q.target.topic, 64)}: ${cut(q.prompt, 100)} · ${what}`);
+    }
+  }
   return lines.join("\n");
 }
 
