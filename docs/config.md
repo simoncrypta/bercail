@@ -22,6 +22,9 @@ statechart = false                   # true: the statechart skill, with TLC and 
 [policy."~/Work/some-repo"]          # optional: your override of that repo's git policy
 push = "branch"
 
+[desk_secrets."~/Work/some-repo"]    # optional: a 1Password service account for that repo's desks
+op_service_account = "~/.config/bercail/secrets/some-repo-agents.op"   # a path, never the token
+
 [shep]                               # optional: Shep's compaction and dispatch
 compact_at = 250000                  # context tokens at which Pi compacts Shep
 keep_recent = 50000                  # recent tokens kept word for word
@@ -36,7 +39,7 @@ slots = 2                            # tests/run.sh and verify-bercail runs at o
 backend = ""                         # its name in `hc machine ls`; empty: this computer
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing, and TLC and Java when `statechart` is on. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles), and `statechart` in [statecharts](bstack.md#statecharts); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start, except `spawn_timeout`, read by each [task dispatch](shep.md#dispatch), and `decision_timeout` in [reversible questions](shep.md#reversible-questions), read by Shep at its next start and by each `bercail shep question`; `[tests] slots` in [test slots](development.md#test-slots), read by each test run; the old `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing, and TLC and Java when `statechart` is on. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles), and `statechart` in [statecharts](bstack.md#statecharts); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start, except `spawn_timeout`, read by each [task dispatch](shep.md#dispatch), and `decision_timeout` in [reversible questions](shep.md#reversible-questions), read by Shep at its next start and by each `bercail shep question`; `[tests] slots` in [test slots](development.md#test-slots), read by each test run; the old `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
 
 Those are all the keys bercail reads. `bercail doctor` names any other key in the file (`unknown  [shep] session (nothing reads it)`), a `[git]` value that is not a backend, and a line it cannot read; none of them counts as a failure. `bercail config get <section> <key>` prints one value as bercail reads it. The file is read as a subset of TOML: quoted and `"""` strings, `true` and `false`, whole numbers, and one-line arrays.
 
@@ -203,6 +206,30 @@ After preparation, keep the three gates separate:
 
 There are no self-trust flags, grants, credential/model calls, global skill
 writes, installs, deployment, commits, pushes, releases or approvals in init.
+
+## A desk secret per repo
+
+1Password's app approves `op` per terminal, for ten minutes, on the screen of the machine it runs on. Pi's bash tool has no terminal of its own, so every `op` call from a desk asks you again, and from a [laptop window](#bercail-on-another-machine) nobody can answer it. A repo can instead give its desks a read-only [service account](https://developer.1password.com/docs/service-accounts/) limited to one vault that holds only dev secrets, while your other secrets keep asking.
+
+```toml
+[desk_secrets."~/Work/some-repo"]    # the main checkout, as in [policy."<path>"]
+op_service_account = "~/.config/bercail/secrets/some-repo-agents.op"
+```
+
+```sh
+mkdir -m 700 ~/.config/bercail/secrets
+(umask 077 && wl-paste >~/.config/bercail/secrets/some-repo-agents.op)   # the token, copied from 1Password
+bercail doctor                                                             # ok  desk secret for ~/Work/some-repo: present, 0600, service account
+```
+
+- **The file.** It holds the token and nothing else. It must be a regular file you own, with no group or other access, in a folder you own with none either (0600 in a 0700 folder), outside every repo and worktree, and not empty. A file that fails it is not used, and the desk says why when it starts; `op` then asks the app as before. A name ending in `.cred` is a `systemd-creds encrypt --user - <file>.cred` credential, which bercail decrypts as you each time. That protects a backup or a stolen disk, not a process of yours.
+- **Who gets it.** A desk's lead, a builder sibling, autopilot, and a headless handoff whose folder is that main checkout or one of its worktrees. Shep, a background Shep, Discuss and the judge do not. The guard puts bstack's `op` shim (`~/.local/share/bercail/pi/op-shim/op`) first on PATH, with the file's path in `BERCAIL_OP_SERVICE_ACCOUNT`. Each time `op` runs, the shim reads the file and gives `OP_SERVICE_ACCOUNT_TOKEN` to op's own environment only. It runs `/usr/bin/op`, `/usr/local/bin/op` or `/opt/homebrew/bin/op`, never an `op` found on PATH, and only one you cannot write and whose folder you cannot write, so a script cannot put its own `op` in place and receive the token. On a Mac, Homebrew usually makes `/opt/homebrew/bin` (and on Intel, `/usr/local/bin`) yours, and then the shim refuses to run op from it; `bercail doctor` says so. `op` 2.42 hands its whole environment to `op run`'s command, so the shim removes the token there and in `op plugin run`; `op run` without `--` is refused. A Pi in another role started from a desk's shell drops the shim it inherited. bercail never puts the token in the desk's environment, a command line, a template, an `hc` label, the desk record, the screen, a log, or an Entire checkpoint. `/usr/bin/op` skips the shim and keeps the app's prompt, for what only you should read.
+- **What the guard blocks**, for every role in that repo, the judge's and Shep's included:
+  - a command or a `read`, `edit`, `write`, `grep`, `find` or `ls` call that names the file or its folder (`~/…`, `$HOME/…` and the full path all count), or `$BERCAIL_OP_SERVICE_ACCOUNT`, a `grep` call on a folder above it below HOME (`~/.config`), and any `systemd-creds decrypt`;
+  - `$OP_SERVICE_ACCOUNT_TOKEN` anywhere, `printenv` of it, a bare `env`, `printenv`, `set`, `export`, `declare` or `typeset` (they print the environment), and `/proc/*/environ`;
+  - `op item list`, `op vault list`, `op item get` with `--reveal` or as JSON, `op run --no-masking`, `op service-account …`, and `op read` or `op inject` that prints to the screen: not inside a `$( )`, with no `-o` file, or an `-o` inside the worktree, `/dev` or `/proc`. `pw="$(op read 'op://…')"; : "${pw:?op read failed}"` and `op read -o /tmp/k op://…` still work, and so does `>/dev/null`. Only op's own `--help`, before `--`, skips these checks.
+- **Known gaps.** A `grep -r` or `rg` in bash over a folder above the secret's, the `grep` tool on HOME itself, an `OP_FORMAT=json` exported in an earlier command, and `op document get` are not blocked.
+- **The limit.** This is a seatbelt. A desk runs as you and can read the file from a script the guard never sees. What contains a leak is the token itself: read-only, one vault of dev secrets and never a production one, an expiry, and revoking it in 1Password the moment you need to.
 
 ## Todos
 

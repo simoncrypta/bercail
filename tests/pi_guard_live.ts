@@ -2,11 +2,22 @@
 // with a warning in its result, follows a repo's trusted push policy (logged),
 // refuses the push again in a headless run once the repo is untrusted, and
 // refuses a judge's and a background Shep's commit. Warnings and refusals land
-// in guard-warnings.jsonl.
+// in guard-warnings.jsonl. A desk secret reaches op through the shim and nothing
+// else.
 // Usage: PI_GUARD_BIN=PI node tests/pi_guard_live.ts
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,7 +46,12 @@ delete env.BERCAIL_ROLE;
 delete env.HC_TERMINAL_ID;
 delete env.BERCAIL_CONFIG;
 
-function runPi(cwd: string, commands: string[], extra: NodeJS.ProcessEnv = {}) {
+function runPi(
+  cwd: string,
+  commands: string[],
+  extra: NodeJS.ProcessEnv = {},
+  guard = resolve(root, "bstack/pi/extensions/guard.ts"),
+) {
   const args = [
     "--offline",
     "--no-extensions",
@@ -47,7 +63,7 @@ function runPi(cwd: string, commands: string[], extra: NodeJS.ProcessEnv = {}) {
     "json",
     "-p",
     "-e",
-    resolve(root, "bstack/pi/extensions/guard.ts"),
+    guard,
     "-e",
     resolve(root, "tests/pi_guard_provider.ts"),
     "--model",
@@ -175,8 +191,79 @@ try {
   const kinds = lines("guard-warnings.jsonl").map((entry) => entry.kind);
   assert.deepEqual(kinds.slice(-4), ["warning", "refusal", "refusal", "refusal"], kinds.join(" "));
   console.log("PASS: real Pi refused a judge's commit and a background Shep's, and logged each");
+
+  // A desk secret: a dummy token in a 0600 file, and a fake op that says whether it got it.
+  const token = `ops_dummy-${process.pid}-${Date.now()}`;
+  const secrets = join(dir, "secrets");
+  mkdirSync(secrets, { mode: 0o700 });
+  writeFileSync(join(secrets, "ds-agents.op"), `${token}\n`, { mode: 0o600 });
+  const fakeBin = join(dir, "fake-bin");
+  mkdirSync(fakeBin);
+  writeFileSync(join(fakeBin, "op"), `#!/bin/sh\n[ "$OP_SERVICE_ACCOUNT_TOKEN" = "${token}" ] && echo op-got-token\n`);
+  // Where you cannot write it, as the shim requires of the real op.
+  chmodSync(join(fakeBin, "op"), 0o555);
+  chmodSync(fakeBin, 0o555);
+  const ds = join(dir, "ds-repo");
+  git(dir, "init", "-q", "-b", "main", ds);
+  mkdirSync(join(dir, "config/bercail"), { recursive: true });
+  writeFileSync(
+    join(dir, "config/bercail/config.toml"),
+    `[desk_secrets."${ds}"]\nop_service_account = "${join(secrets, "ds-agents.op")}"\n`,
+  );
+  // The guard finds the shim beside its own folder, and the shim runs op from fixed
+  // system paths: a scratch profile whose shim runs the fake op instead.
+  const profile = join(dir, "profile");
+  mkdirSync(join(profile, "extensions"), { recursive: true });
+  mkdirSync(join(profile, "op-shim"));
+  const guard = join(profile, "extensions/guard.ts");
+  copyFileSync(resolve(root, "bstack/pi/extensions/guard.ts"), guard);
+  const fixed = "for candidate in /usr/bin/op /usr/local/bin/op /opt/homebrew/bin/op; do";
+  const shim = readFileSync(resolve(root, "bstack/pi/op-shim/op"), "utf8");
+  assert.ok(shim.includes(fixed), "the shim no longer names where op is");
+  writeFileSync(join(profile, "op-shim/op"), shim.replace(fixed, `for candidate in ${join(fakeBin, "op")}; do`));
+  chmodSync(join(profile, "op-shim/op"), 0o755);
+  const withOp = { PATH: `${fakeBin}:${process.env.PATH}` };
+  // The guard does not read a script file: this sees the shell's whole environment.
+  writeFileSync(join(dir, "env-check.sh"), `env | grep -q '${token}' && echo env-has-token || echo env-clean\n`);
+  result = runPi(
+    ds,
+    [
+      "printf 'op-is=%s\\n' \"$(command -v op)\"; op whoami",
+      `sh ${join(dir, "env-check.sh")}`,
+      "env | wc -l",
+      `cat ${join(secrets, "ds-agents.op")}`,
+      "op item list",
+    ],
+    withOp,
+    guard,
+  );
+  const dsOut = `stdout: ${result.stdout}\nstderr: ${result.stderr}`;
+  assert.match(result.stdout, new RegExp(`op-is=${profile}/op-shim/op`), dsOut);
+  assert.match(result.stdout, /op-got-token/, dsOut);
+  assert.match(result.stdout, /env-clean/, dsOut);
+  assert.match(result.stdout, /printing the environment/, dsOut);
+  assert.match(result.stdout, /op shim alone/, dsOut);
+  assert.match(result.stdout, /listing the vault/, dsOut);
+  const sessions = (folder: string): string[] =>
+    readdirSync(folder, { withFileTypes: true }).flatMap((entry) =>
+      entry.isDirectory() ? sessions(join(folder, entry.name)) : [readFileSync(join(folder, entry.name), "utf8")],
+    );
+  for (const text of [result.stdout, result.stderr, ...sessions(join(dir, "agent"))])
+    assert.equal(text.includes(token), false, "the token reached Pi's output or its session files");
+  result = runPi(
+    ds,
+    ["printf 'op-is=%s\\n' \"$(command -v op)\"; op whoami || true"],
+    { ...withOp, BERCAIL_ROLE: "judge" },
+    guard,
+  );
+  assert.match(result.stdout, new RegExp(`op-is=${fakeBin}/op`), `stdout: ${result.stdout}`);
+  assert.doesNotMatch(result.stdout, /op-got-token/, `stdout: ${result.stdout}`);
+  console.log(
+    "PASS: real Pi in a repo with a desk secret: op got the token through the shim, the shell and session never did, and the judge had no shim",
+  );
 } catch (error) {
   console.error(`Artifacts: ${dir}`);
   throw error;
 }
+if (existsSync(join(dir, "fake-bin"))) chmodSync(join(dir, "fake-bin"), 0o755);
 rmSync(dir, { recursive: true, force: true });

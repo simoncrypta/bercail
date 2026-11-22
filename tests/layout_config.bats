@@ -169,7 +169,6 @@ EOF
   unknown  [policy."~/Work/a.b"] commit (nothing reads it)
   unknown  [policy."~/Work/a.b"] merge (nothing reads it)
   unknown  [policy] commit (nothing reads it)
-  unknown  [desk_secrets."~/Work/a.b"] op_service_account (nothing reads it)
   unknown  [desk_secrets."~/Work/a.b"] token (nothing reads it)' "$out" "doctor notes"
 }
 

@@ -361,6 +361,9 @@ _bstack_deploy_pi() {
   copy_file "$work/src/pi/extensions/review.ts" "$BSTACK_PI_DIR/extensions/review.ts"
   copy_file "$work/src/pi/$BSTACK_PI_EMPHASIS" "$BSTACK_PI_DIR/$BSTACK_PI_EMPHASIS"
   copy_file "$work/src/pi/extensions/pi-emphasis/LICENSE" "$BSTACK_PI_DIR/extensions/pi-emphasis/LICENSE"
+  # The guard puts it first on PATH in a repo with a desk secret (lib/desk-secret.sh).
+  copy_file "$work/src/pi/op-shim/op" "$BSTACK_PI_DIR/op-shim/op"
+  run chmod 755 "$BSTACK_PI_DIR/op-shim/op"
   # The desk's lead, as a JSON argv: bercail-desk-agent runs it with the
   # Anthropic env unset.
   _bstack_pi_argv "$(bstack_role_model lead)"

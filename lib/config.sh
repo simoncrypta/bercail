@@ -14,7 +14,7 @@ restart_update() {
   # The libs v0.14.0's list leaves out, which the new ones load. Fetched with its
   # own deploy_install_file, so a restart whose download fails still runs.
   lib="$(dirname "${BASH_SOURCE[0]}")"
-  for rel in skills/handoff/scripts/toml.sh skills/handoff/scripts/pi-log.sh lib/shep-context.sh lib/describe.sh lib/deps.json; do
+  for rel in skills/handoff/scripts/toml.sh skills/handoff/scripts/pi-log.sh lib/shep-context.sh lib/describe.sh lib/desk-secret.sh lib/deps.json; do
     deploy_install_file "$rel" "$lib/${rel##*/}" || warn "could not fetch $rel; run bercail update again"
   done
   [[ "${FORCE:-0}" -ne 1 ]] || args+=(--force)
@@ -85,7 +85,7 @@ statechart_enabled() {
 
 # Every key bercail reads in config.toml, one "section key" a line; the example
 # in docs/config.md shows the same ones. [git] takes a repo path as its key,
-# and each [policy."<repo>"] takes its own keys.
+# and each [policy."<repo>"] and [desk_secrets."<repo>"] takes its own keys.
 BERCAIL_CONFIG_KEYS='layout review
 layout auto_review
 bstack claude
@@ -112,7 +112,8 @@ policy pr_draft
 policy release
 policy agent_may_release
 policy merge_reversible
-policy rules'
+policy rules
+desk_secrets op_service_account'
 
 # bercail config get SECTION KEY: the value as bercail reads it. No output and
 # status 1 when it is not set.
@@ -147,8 +148,8 @@ doctor_config() {
         | "unknown  [git] \(.key | name) = \($v) (use gh, gt, origin, or entire)"
       else
         # A bare [policy] names no repo, so nothing reads its keys either.
-        (if .section == ["policy"] then ""
-         elif (.section | length) == 2 and .section[0] == "policy" then .section[0]
+        (if .section == ["policy"] or .section == ["desk_secrets"] then ""
+         elif (.section | length) == 2 and (.section[0] | IN("policy", "desk_secrets")) then .section[0]
          else .section | join(".") end) as $table
         | "\($table) \(.key)" as $name
         | select($known | index($name) | not)

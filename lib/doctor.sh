@@ -4,6 +4,8 @@
 
 # shellcheck source=lib/git-backend.sh
 source "$(dirname "${BASH_SOURCE[0]}")/git-backend.sh"
+# shellcheck source=lib/desk-secret.sh
+source "$(dirname "${BASH_SOURCE[0]}")/desk-secret.sh"
 
 doctor_omarchy_integration() {
   if [[ "$(detect_os)" != "linux" ]]; then

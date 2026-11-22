@@ -14,6 +14,8 @@
 source "$(dirname "${BASH_SOURCE[0]}")/git-backend.sh"
 # shellcheck source=lib/toml.sh
 source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
+# shellcheck source=lib/desk-secret.sh
+source "$(dirname "${BASH_SOURCE[0]}")/desk-secret.sh"
 
 POLICY_FILE=".bercail/policy.toml"
 
@@ -104,7 +106,7 @@ _policy_local() {
 # the file and whether it is trusted, each value with where it came from, and
 # the text agents get in their prompt.
 policy_json() {
-  local dir="${1:-.}" root main file="" hash="" trusted=false entire=false repo='{}' local_ trust
+  local dir="${1:-.}" root main file="" hash="" trusted=false entire=false repo='{}' local_ trust secret
   root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" \
     || { _policy_err "$dir is not a git checkout"; return 1; }
   root="$(_git_backend_realpath "$root")"
@@ -121,8 +123,10 @@ policy_json() {
   local_="$(_policy_local "$main")"
   # The guard blocks git push --all where Entire keeps shadow branches.
   git_backend_entire_capture "$root" && entire=true
+  # The guard's desk-secret rules and its op shim read it.
+  secret="$(desk_secret_json "$main")"
   jq -n --arg repo_path "$main" --arg root "$root" --arg file "$file" --arg hash "$hash" \
-    --argjson trusted "$trusted" --argjson entire "$entire" \
+    --argjson trusted "$trusted" --argjson entire "$entire" --argjson secret "$secret" \
     --argjson repo "$repo" --argjson local "$local_" --argjson defaults "$POLICY_DEFAULTS" '
     def looser($k; $v):
       ($k == "push" and $v != "ask") or ($k == "agent_may_release" and $v == true)
@@ -140,6 +144,7 @@ policy_json() {
     | {
         repo: $repo_path, root: $root, file: $file, sha256: $hash, trusted: $trusted,
         entire: $entire,
+        desk_secret: $secret,
         policy: $p,
         sources: ($rows | map({(.k): .from}) | add),
         untrusted: [$rows[] | select(.from | startswith("default:")) | .k],

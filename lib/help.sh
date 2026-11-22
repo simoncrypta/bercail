@@ -199,7 +199,10 @@ bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   needs a known, unmodified alias configuration with no override of that command.
   Wrappers, extra arguments and ambiguous forms keep the existing checks (docs/config.md).
   The guard also blocks op secret reads
-  piped into commands or used before an empty-value check, for every role.
+  piped into commands or used before an empty-value check, for every role. In a
+  repo with [desk_secrets."<repo>"], the lead, builder, autopilot and headless
+  runs get an op shim that hands op a service-account token from a private file,
+  and the guard keeps that file, the token and the vault's contents off screen.
   Only Shep writes to your todo lists (bercail todo add|done, basecamp writes) and
   sets where they go (bercail todo target add|rm, route); other roles may read them.
   No role writes todo.json by hand, or runs basecamp's login, logout or token commands.

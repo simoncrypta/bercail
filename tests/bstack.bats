@@ -363,6 +363,8 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   if head -1 "$p/agents/bstack-pr-review.md" | grep -q -- '^---$'; then
     fail "a brief has no frontmatter"
   fi
+  # The guard finds the op shim beside its own folder, and PATH needs it executable.
+  [[ -x "$p/op-shim/op" ]] || fail "executable op shim"
   jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
     and (index(["-e", "\($p)/extensions/review.ts"]) != null) and (index(["--tools", "read,grep,find,ls"]) != null)
     and (index(["--append-system-prompt", "\($p)/agents/bstack-pr-review.md"]) != null)
