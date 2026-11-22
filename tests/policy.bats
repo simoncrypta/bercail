@@ -319,3 +319,24 @@ review_policy() {
   [[ "$(field "$REPO" '[.sources.review, .sources.high_stakes, .sources.diff_budget] | join(" ")' 2>/dev/null)" == "default default default" ]] \
     || fail "bad values were used: $(policy show --json "$REPO" 2>/dev/null | jq -c .sources)"
 }
+
+@test "required_ci: a list of workflow files, empty by default, that counts only once trusted" {
+  local REPO WT out err
+  init_repo
+  [[ "$(field "$REPO" '.policy.required_ci | tojson')" == '[]' ]] || fail "default: $(policy show --json "$REPO" | jq -c .policy)"
+  review_policy 'required_ci = [".github/workflows/ci.yml", ".github/workflows/lint.yaml"]\n'
+  out="$(policy show --json "$REPO")"
+  jq -e '.policy.required_ci == [] and .untrusted == ["required_ci"]' <<<"$out" >/dev/null || fail "untrusted counted: $out"
+  policy trust "$REPO" >/dev/null
+  [[ "$(field "$REPO" '[.policy.required_ci[], .sources.required_ci] | join(" ")')" == ".github/workflows/ci.yml .github/workflows/lint.yaml repo" ]] \
+    || fail "trusted: $(policy show --json "$REPO" | jq -c .policy)"
+  for bad in '"ci.yml"' '[".github/workflows/ci.yml", ".github/workflows/ci.yml"]' '["ci.yml"]' \
+    '[".github/workflows/../x.yml"]' '[".github/workflows/ci.txt"]' '[7]'; do
+    review_policy "required_ci = $bad\n"
+    policy trust "$REPO" >/dev/null
+    err="$(policy show --json "$REPO" 2>&1 >/dev/null)"
+    [[ "$err" == *'required_ci = '*' is not allowed'* ]] || fail "$bad passed: $err"
+    [[ "$(field "$REPO" '[(.policy.required_ci | tojson), .sources.required_ci] | join(" ")' 2>/dev/null)" == "[] default" ]] \
+      || fail "$bad was used: $(policy show --json "$REPO" 2>/dev/null | jq -c .policy.required_ci)"
+  done
+}

@@ -434,6 +434,8 @@ Shep gets one `bercail.land/v1` inbox event (`kind: land`), with the status, com
 - `moved`: CI passed but the branch moved. The new head needs review and its own land.
 - `timeout`: no result in time. Report whether no push run was found or a run was still going; do not land.
 
+The guard refuses `bercail land run` and the question ledger's `land-create`, `land-claim`, `land-step` and `land-result` for every agent, Shep included. They belong to the land card that one Decisions pick will land a change from; nothing puts one up yet.
+
 ## Desk events
 
 Once Shep has started once (making `~/.local/state/bercail/shep/inbox/`), the follower writes each finished or blocked desk as one file there: the [`agent_status/v2` payload](#the-payload) with `sink: "shep"`, mode 600, named `<desk>_<kind>_<second>.<seq>.json` (no `.<seq>` without a sequence number).

@@ -185,6 +185,8 @@ const pushApprovalCommand =
   "Which Decisions answer approves a push is the guard's to check and spend. Push, and the guard checks.";
 const guardAskCommand =
   "A guard card and its worker are the guard's: it starts them when Shep runs a command it would ask about. Run the command, and the guard hands it off.";
+const landWorker =
+  "A land card is bercail's to put up, and its chain (bercail land run and the ledger's land steps) runs only on the person's pick on the panel. No agent runs them, Shep included.";
 const tmpWrite = (tmpdir: string) =>
   `This writes under /tmp, which holds RAM and keeps a file for days. Put scratch in $TMPDIR (${tmpdir}) or a mktemp -d folder instead: bercail removes it when you exit.`;
 
@@ -1459,6 +1461,15 @@ function isLand(words: string[]): boolean {
   return plain.some((word, i) => basename(word) === "bercail" && plain[i + 1] === "land");
 }
 
+// bercail land run, or the ledger's land steps: only the person's pick starts them.
+function runsLandWorker(words: string[]): boolean {
+  const plain = plainWords(words);
+  return (
+    plain.some((word, i) => basename(word) === "bercail" && plain[i + 1] === "land" && plain[i + 2] === "run") ||
+    ["land-create", "land-claim", "land-step", "land-result"].some((op) => questionOp(words, op))
+  );
+}
+
 // bercail guard ask, or the worker's file: only the guard starts it, on its own ticket.
 function runsGuardAsk(words: string[]): boolean {
   const plain = plainWords(words);
@@ -2475,6 +2486,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (writesTodo(words) && input.role !== "shep") decision = worse(decision, block(basecampWrite));
     if (setsTodoTarget(words) && input.role !== "shep") decision = worse(decision, block(todoTargets));
     if (isLand(words) && input.role !== "shep") decision = worse(decision, block(landCommand));
+    if (runsLandWorker(words)) decision = worse(decision, block(landWorker));
     decision = worse(decision, decideBasecamp(words, input.role));
     if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
     const targets = writeTargets(words, raw);
