@@ -228,6 +228,8 @@ People's discussion on Entire: entire trail comment list --trail 4" ]] || fail "
 ~/Work/app: ready, not started: trail:1
 ~/Work/app: 2 complete trails still open; close each with entire trail update N --status closed (bercail job list --repo ~/Work/app)
 Waiting on the person:
+- nothing
+Decisions:
 - nothing"
   [[ "$out" == "$want" ]] || fail "board: $(diff <(printf '%s\n' "$want") <(printf '%s\n' "$out"))"
   grep -q '^entire trail list --project et/proj --repo entire://entire.example/et/proj/app --status open --limit 100 --json$' "$LOG" \

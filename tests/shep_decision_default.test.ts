@@ -4,15 +4,20 @@
 // says it was not the person's pick.
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
-// The live check, as the test sets it: a default runs it before recording.
+// The live check, as the test sets it: a default runs it before recording. A topic in
+// `checks` gets its own.
 const check = vi.hoisted(() => ({ status: "fresh", reasons: [] as string[] }));
+const checks = vi.hoisted(() => ({}) as Record<string, { status: string; reasons: string[] }>);
 vi.mock("../shep/pi/question-target.ts", () => ({
-  checkQuestion: async () => ({ ...check, current: { head: null, stagedTree: null } }),
+  checkQuestion: async (q: { target: { topic: string } }) => ({
+    ...(checks[q.target.topic] ?? check),
+    current: { head: null, stagedTree: null },
+  }),
 }));
 // Every child Shep's runtime spawns, so a test can wait for each one to exit.
 const spawned = vi.hoisted(() => [] as ChildProcess[]);
@@ -27,6 +32,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 import { closed, expireDue, pick, settle } from "../shep/pi/discuss.ts";
 import { claim, eventLine } from "../shep/pi/inbox.ts";
+import { decisions } from "../shep/pi/question-cli.ts";
 import register, { EXPIRE_MS } from "../shep/pi/question-commands.ts";
 import { projection, QuestionStore, tokenOf, type QuestionSpec } from "../shep/pi/questions.ts";
 
@@ -39,6 +45,7 @@ beforeEach(() => {
   vi.stubEnv("BERCAIL_SHEP_STATE", state);
   check.status = "fresh";
   check.reasons = [];
+  for (const topic of Object.keys(checks)) delete checks[topic];
   spawned.length = 0;
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   vi.setSystemTime("2026-11-19T12:00:00.000Z");
@@ -49,21 +56,26 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const ask = (topic = "plan", reversible = true): string => {
+const ask = (
+  topic = "plan",
+  reversible = true,
+  prompt = "Which desk starts first?",
+  where: { issue?: string; space?: string } = {},
+): string => {
   const spec: QuestionSpec = {
     kind: "planning",
-    prompt: "Which desk starts first?",
+    prompt,
     options: ["auth", "search"],
     recommendation: { choice: "auth", why: "it unblocks search" },
     ...(reversible ? { reversible: true as const } : {}),
     origin: { event: "conversation:e1", session: "shep-1", entry: "e1" },
     target: {
       repo: "/r/.git",
-      issue: null,
+      issue: where.issue ?? null,
       topic,
       worktree: "/r",
       desk: null,
-      space: null,
+      space: where.space ?? null,
       session: null,
       action: null,
       head: null,
@@ -165,6 +177,154 @@ test("a crash between writing the event and marking it told sends nothing twice"
   expect(store.snapshot().questions[0]!.told).toBe(true);
 });
 
+test("the Decisions block lists each pending card, stale and unavailable ones too, and each default not yet OK'd, never a reversal", async () => {
+  const okd = ask("okd", true, "OK'd?");
+  const reversed = ask("reversed", true, "Reversed?");
+  const open = ask("open", true, "Defaulted?");
+  const plain = ask("plain", false, "No deadline?");
+  vi.setSystemTime("2026-11-19T12:30:00.000Z");
+  await expireDue(state);
+  await confirm(state, "ok", okd, "panel picker");
+  await settle(state, "rev", reversed, "reversed", "search", "panel picker");
+  vi.stubEnv("BERCAIL_SHEP_DECISION_TIMEOUT", "90");
+  const later = ask("later", true, "Counts down?");
+  vi.stubEnv("BERCAIL_SHEP_DECISION_TIMEOUT", undefined);
+  const stale = ask("stale", true, "Stale?");
+  const gone = ask("gone", false, "Gone?");
+  checks.stale = { status: "stale", reasons: ["head changed"] };
+  checks.gone = { status: "unavailable", reasons: ["target unavailable: Question target: worktree is gone"] };
+  const { questions } = new QuestionStore(state).snapshot();
+  expect(await decisions({ questions }, state)).toBe(
+    [
+      "Decisions:",
+      "- r: Defaulted? · defaulted to auth, waits for your OK or Reverse",
+      "- r: No deadline?",
+      "- r: Counts down? · two-way door: defaults to auth in 1 h 30 min",
+      "- r: Stale? · stale: head changed · two-way door: due in 30 min, but it waits for you while it is stale",
+      "- r: Gone? · unavailable: target unavailable: Question target: worktree is gone",
+    ].join("\n"),
+  );
+  // The last card answered or withdrawn: nothing waits.
+  const store = new QuestionStore(state);
+  await pick(state, "p-plain", plain, "auth", "panel picker");
+  await pick(state, "p-later", later, "auth", "panel picker");
+  for (const token of [open, stale, gone]) store.withdraw(`w-${token}`, token, "moot");
+  expect(await decisions(new QuestionStore(state).snapshot(), state)).toBe("Decisions:\n- nothing");
+});
+
+test("the Decisions block names a card by its desk's Herdr space, looked up once per while, else its job or folder", async () => {
+  // herdr-app ls knows sp1; hc made sp2 and labelled it; nobody knows sp3. Each logs its call.
+  const log = join(dir, "lookups");
+  const stand = (name: string, body: string) => {
+    writeFileSync(join(dir, name), `#!/bin/sh\nprintf '${name} %s\\n' "$*" >> '${log}'\n${body}\n`, { mode: 0o755 });
+    vi.stubEnv(name === "herdr-app" ? "HERDR_APP_BIN" : "HC_BIN", join(dir, name));
+  };
+  stand("herdr-app", `printf '%s\\n' '{"spaces":[{"id":"sp1","name":"Login_App"}]}'`);
+  stand(
+    "hc",
+    `case "$*" in\n"ls --json --label herdr.space=sp2") echo '{"terminals":[{"address":"t2"}]}' ;;\n` +
+      `"get t2 --json") echo '{"labels":{"bercail.space_name":"Export_App"}}' ;;\n*) echo '{"terminals":[]}' ;;\nesac`,
+  );
+  ask("login", false, "Login first?", { issue: "app-1", space: "sp1" });
+  ask("export", false, "Export first?", { issue: "app-2", space: "sp2" });
+  ask("closed", false, "Closed space?", { issue: "app-3", space: "sp3" });
+  ask("plain", false, "No space?");
+  const lookups = () => readFileSync(log, "utf8").trim().split("\n");
+  const block = [
+    "Decisions:",
+    "- Login_App: Login first?",
+    "- Export_App: Export first?",
+    "- app-3: Closed space?",
+    "- r: No space?",
+  ].join("\n");
+  expect(await decisions(new QuestionStore(state).snapshot(), state)).toBe(block);
+  const first = [
+    "herdr-app ls",
+    "hc ls --json --label herdr.space=sp2",
+    "hc get t2 --json",
+    "hc ls --json --label herdr.space=sp3",
+  ];
+  expect(lookups()).toEqual(first);
+  // The next settle, a space that is gone included, runs no lookup until the names are old.
+  vi.setSystemTime(Date.now() + 10 * 60000 - 1000);
+  expect(await decisions(new QuestionStore(state).snapshot(), state)).toBe(block);
+  expect(lookups()).toEqual(first);
+  vi.setSystemTime(Date.now() + 2000);
+  stand("herdr-app", `printf '%s\\n' '{"spaces":[{"id":"sp1","name":"Login-renamed_App"}]}'`);
+  expect(await decisions(new QuestionStore(state).snapshot(), state)).toContain("- Login-renamed_App: Login first?");
+  expect(lookups()).toHaveLength(first.length * 2);
+});
+
+test("a land card waits on the person like any card: listed, by its space, until it is picked", async () => {
+  writeFileSync(join(dir, "herdr-app"), `#!/bin/sh\necho '{"spaces":[{"id":"sp1","name":"Login_App"}]}'\n`, {
+    mode: 0o755,
+  });
+  vi.stubEnv("HERDR_APP_BIN", join(dir, "herdr-app"));
+  const spec: QuestionSpec = {
+    kind: "land",
+    prompt: "Land the login fix?",
+    options: ["Ship it", "Not yet"],
+    origin: { event: "land-1", session: "shep-1", entry: null },
+    target: {
+      repo: "/r/.git",
+      issue: "app-1",
+      topic: "land-app-1",
+      worktree: "/r.login",
+      desk: "t9",
+      space: "sp1",
+      session: "desk-session",
+      action: "land",
+      branch: "refs/heads/login",
+      head: "a".repeat(40),
+      stagedTree: "b".repeat(40),
+      base: "a".repeat(40),
+      baseRef: "master",
+    },
+    land: {
+      url: "git@github.com:o/app.git",
+      github: "o/app",
+      registered: true,
+      clean: true,
+      handoffBranch: "login",
+      description: { tree: "b".repeat(40), message: "d".repeat(64) },
+      policy: { file: "e".repeat(64), trusted: true, hash: "f".repeat(64) },
+      requiredCi: [{ path: ".github/workflows/ci.yml", id: 7 }],
+      bercail: "/opt/bercail/bin/bercail",
+      review: { required: false, highStakes: [] },
+      reviewer: null,
+    },
+  };
+  const token = tokenOf(new QuestionStore(state).create("land-1", spec, () => spec));
+  expect(await decisions(new QuestionStore(state).snapshot(), state)).toBe(
+    "Decisions:\n- Login_App: Land the login fix?",
+  );
+  expect(await pick(state, "ship", token, "Ship it", "panel picker")).toMatchObject({ accepted: true });
+  expect(await decisions(new QuestionStore(state).snapshot(), state)).toBe("Decisions:\n- nothing");
+});
+
+test("a Herdr name that is slow to find, or a name cache that cannot be written, never hides a card", async () => {
+  const log = join(dir, "lookups");
+  for (const name of ["herdr-app", "hc"]) {
+    writeFileSync(join(dir, name), `#!/bin/sh\nprintf '${name}\\n' >> '${log}'\ntrap '' TERM\nexec sleep 30\n`, {
+      mode: 0o755,
+    });
+    vi.stubEnv(name === "herdr-app" ? "HERDR_APP_BIN" : "HC_BIN", join(dir, name));
+  }
+  ask("login", false, "Login first?", { issue: "app-1", space: "sp1" });
+  const started = performance.now();
+  expect(await decisions(new QuestionStore(state).snapshot(), state)).toBe("Decisions:\n- app-1: Login first?");
+  // One budget for every lookup, well inside the board's 4 seconds, and nothing kept from it.
+  expect(performance.now() - started).toBeLessThan(3000);
+  expect(existsSync(join(state, "space-names.json"))).toBe(false);
+  await decisions(new QuestionStore(state).snapshot(), state);
+  expect(readFileSync(log, "utf8").split("herdr-app").length - 1).toBe(2);
+  // The window answers, but the cache cannot be written: the card is still named and listed.
+  writeFileSync(join(dir, "herdr-app"), `#!/bin/sh\necho '{"spaces":[{"id":"sp1","name":"Login_App"}]}'\n`);
+  mkdirSync(join(state, "space-names.json"));
+  expect(await decisions(new QuestionStore(state).snapshot(), state)).toBe("Decisions:\n- Login_App: Login first?");
+  expect(readdirSync(state).filter((f) => f.startsWith("space-names"))).toEqual(["space-names.json"]);
+});
+
 test("Shep's runtime runs the expiry in its own process at start and on its timer, never in a turn", async () => {
   // bercail shep question expire, as a stand-in that logs each run.
   const bin = join(dir, "bercail");
@@ -177,6 +337,7 @@ test("Shep's runtime runs the expiry in its own process at start and on its time
     on: (name: string, fn: (...args: any[]) => any) => (handlers[name] = fn),
     registerCommand: () => {},
     registerTool: () => {},
+    registerEntryRenderer: () => {},
     sendMessage: (m: unknown) => sent.push(m),
   } as any);
   // Wait for each run's exit, bounded only by the test's timeout: the runtime starts no second run

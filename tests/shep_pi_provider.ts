@@ -2,6 +2,7 @@
 // network that answers each turn with "Shep report:" and the event ids it was given.
 import { type AssistantMessage, createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { appendFileSync } from "node:fs";
 
 function textOf(message: any): string {
   const c = message?.content;
@@ -27,6 +28,9 @@ export default function (pi: ExtensionAPI) {
       },
     ],
     streamSimple(model, context) {
+      // What each request sent the model, one JSON line each, for the live proof to search.
+      if (process.env.SHEP_PI_REQUESTS)
+        appendFileSync(process.env.SHEP_PI_REQUESTS, JSON.stringify(context.messages) + "\n");
       const stream = createAssistantMessageEventStream();
       const last = context.messages[context.messages.length - 1];
       const ids = [...textOf(last).matchAll(/\[event ([^\]]+)\]/g)].map((m) => m[1]);

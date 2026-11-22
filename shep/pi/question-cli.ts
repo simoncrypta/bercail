@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
   door,
   GUARD_CHOICES,
@@ -25,6 +25,10 @@ async function main() {
   let result: unknown;
   if (op === "list") {
     console.log(projection(store.snapshot()));
+    return;
+  }
+  if (op === "waiting") {
+    console.log(await decisions(store.snapshot(), state));
     return;
   }
   if (op === "json") result = store.snapshot();
@@ -158,7 +162,7 @@ async function main() {
     }
   } else
     throw new Error(
-      "usage: question-cli.ts list | json | pending | get Qn@revision | panel | expire | create | revise | reply | answer | withdraw | guard-create | land-create | land-result | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | guard-claim Qn@revision TICKET | land-claim Qn@revision | land-step Qn@revision STEP [DETAIL]",
+      "usage: question-cli.ts list | json | pending | get Qn@revision | waiting | panel | expire | create | revise | reply | answer | withdraw | guard-create | land-create | land-result | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | guard-claim Qn@revision TICKET | land-claim Qn@revision | land-step Qn@revision STEP [DETAIL]",
     );
   console.log(JSON.stringify(result));
 }
@@ -257,6 +261,107 @@ async function panel(store: QuestionStore, state: string) {
     });
   }
   return { state, at: new Date().toISOString(), cards };
+}
+
+// How long a space's Herdr name is kept, so a settle runs no lookup for one it named.
+const SPACE_TTL_MS = 10 * 60000;
+// A name is optional: every lookup of one run shares this, and the cards print without it.
+const SPACE_LOOKUP_MS = 1500;
+
+// The Herdr names of spaces IDS, as notify reads them (notify_space_info in lib/notify.sh):
+// the window's, else the one bercail gave a space it made through hc. Kept, misses too,
+// in the state dir's space-names.json for SPACE_TTL_MS; one lookup serves every stale id.
+// A run cut short by SPACE_LOOKUP_MS keeps nothing, and a cache it cannot write is skipped.
+function spaceNames(state: string, ids: string[], now: number): Record<string, string | null> {
+  const file = join(state, "space-names.json");
+  let cache: Record<string, { name: string | null; at: number }> = {};
+  try {
+    cache = JSON.parse(readFileSync(file, "utf8"));
+  } catch {}
+  const due = [...new Set(ids)].filter((id) => !(now - (cache[id]?.at ?? -Infinity) < SPACE_TTL_MS));
+  if (due.length) {
+    const end = performance.now() + SPACE_LOOKUP_MS;
+    let cut = false;
+    const json = (bin: string, args: string[]) => {
+      const timeout = Math.floor(end - performance.now());
+      if (timeout <= 0) return void (cut = true);
+      const r = spawnSync(bin, args, { encoding: "utf8", timeout, killSignal: "SIGKILL" });
+      if ((r.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") cut = true;
+      try {
+        return JSON.parse(r.stdout);
+      } catch {
+        return null;
+      }
+    };
+    const hc = process.env.HC_BIN || "hc";
+    const spaces = json(process.env.HERDR_APP_BIN || "herdr-app", ["ls"])?.spaces;
+    const found: typeof cache = {};
+    for (const id of due) {
+      let name = Array.isArray(spaces) ? spaces.find((x) => x?.id === id)?.name : undefined;
+      if (typeof name !== "string" || !name) {
+        const shell = json(hc, ["ls", "--json", "--label", `herdr.space=${id}`])?.terminals?.[0]?.address;
+        name = shell ? json(hc, ["get", shell, "--json"])?.labels?.["bercail.space_name"] : undefined;
+      }
+      found[id] = { name: typeof name === "string" && name ? name : null, at: now };
+    }
+    if (cut) return Object.fromEntries(ids.map((id) => [id, (found[id] ?? cache[id])?.name ?? null]));
+    Object.assign(cache, found);
+    const tmp = `${file}.${process.pid}`;
+    try {
+      writeFileSync(tmp, JSON.stringify(cache) + "\n", { mode: 0o600 });
+      renameSync(tmp, file);
+    } catch {
+      rmSync(tmp, { force: true });
+    }
+  }
+  return Object.fromEntries(ids.map((id) => [id, cache[id]?.name ?? null]));
+}
+
+// "Waiting on you" for the board and Shep's reply, from the ledger alone: one line per
+// card that waits on the person, named by its desk's Herdr space (else its job or folder),
+// with its live check when not fresh and a two-way door's countdown.
+export async function decisions(snapshot: { questions: Question[] }, state: string) {
+  const now = Date.now();
+  const cut = (s: string, max: number) => {
+    // eslint-disable-next-line no-control-regex
+    const flat = s.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+    return flat.length > max ? flat.slice(0, max - 1) + "…" : flat;
+  };
+  const cards = snapshot.questions.filter(waiting);
+  const names = spaceNames(
+    state,
+    cards.flatMap((q) => (q.target.space ? [q.target.space] : [])),
+    now,
+  );
+  const lines = ["Decisions:"];
+  for (const q of cards) {
+    const check = await checkQuestion(q);
+    const folder = (q.target.worktree ?? "").split("/").filter(Boolean).pop();
+    const where = (q.target.space && names[q.target.space]) || q.target.issue || folder || q.target.topic;
+    const parts = [`- ${cut(where, 64)}: ${cut(q.prompt, 100)}`];
+    if (check.status !== "fresh")
+      parts.push(check.status + (check.reasons.length ? `: ${cut(check.reasons.join(", "), 80)}` : ""));
+    if (unsettled(q)) parts.push(`defaulted to ${cut(q.answer!.choice, 40)}, waits for your OK or Reverse`);
+    else if (q.deadline && door(q, () => mergesIn(check)).door === "two-way") {
+      // The panel's countdown (bercail-shep's countdown()): a card that is not fresh never defaults.
+      const ms = Date.parse(q.deadline) - now;
+      const min = Math.floor(ms / 60000);
+      const left =
+        min < 1
+          ? "under a minute"
+          : min < 60
+            ? `${min} min`
+            : `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ""}`;
+      parts.push(
+        check.status === "fresh"
+          ? `two-way door: defaults to ${cut(q.recommendation!.choice, 40)} ${ms > 0 ? `in ${left}` : "at Shep's next check"}`
+          : `two-way door: ${ms > 0 ? `due in ${left}, but` : "past its deadline;"} it waits for you while it is ${check.status}`,
+      );
+    }
+    lines.push(parts.join(" · "));
+  }
+  if (lines.length === 1) lines.push("- nothing");
+  return lines.join("\n");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

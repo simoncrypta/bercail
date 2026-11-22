@@ -40,6 +40,10 @@ EOF
 #!/usr/bin/env bash
 printf 'bd %s in %s\n' "$*" "$PWD" >>"$LOG"
 dir="$PWD/.beads/fake"
+# show ID waits, up to 30s, for the file that $dir/ID.wait names.
+if [[ "$1" == show && -e "$dir/$2.wait" ]]; then
+  for _ in $(seq 300); do [[ -e "$(cat "$dir/$2.wait")" ]] && break; sleep 0.1; done
+fi
 case "$1" in
   list) cat "$dir/list.json" 2>/dev/null || exit 1 ;;
   show) cat "$dir/$2.json" 2>/dev/null || exit 1 ;;
@@ -213,6 +217,7 @@ no report yet (0 comments; bd comments app-3)" ]] || fail "brief app-3: $out"
 
 @test "shep board: a line per job in each known repo, other repos, stray desks, and what waits on the person" {
   local out want
+  need node
   repo app
   repo docs
   repo tools
@@ -241,7 +246,9 @@ Waiting on the person:
 - app-1: Fix the login: desk t9 is blocked; bercail shep brief app-1 --repo '$HOME/Work/app' shows what it asks
 - app-2: Add the export, a title long enough that the board has to cut it shor…: desk t8 finished; read its report in bercail shep brief app-2 --repo '$HOME/Work/app', then review its staged changes in its space
 - app-6: Wait for CI: background Shep shep-bg-app-6 finished; report it from bercail shep brief app-6 --repo '$HOME/Work/app', then hc kill shep-bg-app-6
-- desk t6 (~/Work/tools) is blocked"
+- desk t6 (~/Work/tools) is blocked
+Decisions:
+- nothing"
   [[ "$out" == "$want" ]] || fail "board: $(diff <(printf '%s\n' "$want") <(printf '%s\n' "$out"))"
   rm "$HC_DATA"/t*.json
   printf '{"terminals":[]}\n' >"$HC_DATA/ls.json"
@@ -249,7 +256,44 @@ Waiting on the person:
   out="$(shep board)" || fail "quiet board: $out"
   [[ "$out" == "Other repos: ~/Work/app (1 open), ~/Work/docs (1 open), ~/Work/tools (no beads)
 Waiting on the person:
+- nothing
+Decisions:
 - nothing" ]] || fail "quiet board: $out"
+}
+
+@test "shep board lists the ledger's pending cards under Decisions, and nothing once they are answered" {
+  local out
+  need node
+  repo app
+  jq -n --arg repo "$HOME/Work/app" '{requestId:"r1", kind:"planning", prompt:"Which desk first?", options:["auth","search"],
+    origin:{event:"chat", session:"shep-1", entry:null}, repo:$repo, issue:null, topic:"plan", desk:null, base:null, action:null}' \
+    | shep question create >/dev/null || fail "no question"
+  out="$(shep board)" || fail "board: $out"
+  [[ "$out" == *$'\nDecisions:\n- app: Which desk first?' ]] || fail "the pending card is not on the board: $out"
+  jq -n '{requestId:"a1", token:"Q1@1", choice:"auth", source:"panel picker"}' | shep question answer >/dev/null
+  out="$(shep board)" || fail "board: $out"
+  [[ "$out" == *$'\nDecisions:\n- nothing' ]] || fail "an answered card is still on the board: $out"
+  # A card whose check waits for the queue's first read runs beside the board, so it is
+  # listed; one that outlasts its 4 seconds is UNKNOWN, and the rest of the board still prints.
+  jq -n '[{id: "app-1", title: "Fix the login", status: "in_progress", labels: []}]' >"$HOME/Work/app/.beads/fake/app-1.json"
+  jq -n --arg repo "$HOME/Work/app" '{requestId:"r2", kind:"planning", prompt:"Login first?", options:["yes","no"],
+    origin:{event:"chat", session:"shep-1", entry:null}, repo:$repo, issue:"app-1", topic:"login", desk:null, base:null, action:null}' \
+    | shep question create >/dev/null || fail "no issue question"
+  export HERDR_APP_BIN="$BATS_TEST_TMPDIR/bin/herdr-app"
+  printf '#!/bin/sh\n: >"%s/queue-read"\nprintf %s\n' "$BATS_TEST_TMPDIR" "'{\"spaces\":[]}'" >"$HERDR_APP_BIN"
+  chmod +x "$HERDR_APP_BIN"
+  printf '%s\n' "$BATS_TEST_TMPDIR/queue-read" >"$HOME/Work/app/.beads/fake/app-1.wait"
+  out="$(shep board)" || fail "board beside a waiting check: $out"
+  [[ "$out" == *$'\nDecisions:\n- app-1: Login first?' ]] || fail "the check did not run beside the board: $out"
+  printf '%s\n' "$BATS_TEST_TMPDIR/never" >"$HOME/Work/app/.beads/fake/app-1.wait"
+  out="$(shep board)" || fail "board with a slow check: $out"
+  [[ "$out" == *$'Waiting on the person:\n- nothing\nDecisions: UNKNOWN (the ledger could not be read, or its cards checked within 4s; the Decisions panel shows them)' ]] \
+    || fail "a slow check is not UNKNOWN beside the rest of the board: $out"
+  rm "$HOME/Work/app/.beads/fake/app-1.wait"
+  printf 'not json\n' >"$STATE/questions.json"
+  out="$(shep board)" || fail "board: $out"
+  [[ "$out" == *$'\nDecisions: UNKNOWN (the ledger could not be read, or its cards checked within 4s; the Decisions panel shows them)' ]] \
+    || fail "an unreadable ledger is not UNKNOWN: $out"
 }
 
 @test "shep brief and board show a desk's --model from its label, or its handoff when the desk is gone" {

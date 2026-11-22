@@ -391,7 +391,7 @@ EOF
   todo add "Create the tailnet login" --issue app-7 --repo "$HOME/Work/app" >/dev/null || fail "add"
   todo add "Plug in the Zigbee stick" --due 2026-11-20 >/dev/null || fail "add"
   out="$("$ROOT/bin/bercail" shep board)" || fail "board: $out"
-  [[ "$(sed -n '/^Waiting on the person:/,$p' <<<"$out")" == "Waiting on the person:
+  [[ "$(sed -n '/^Waiting on the person:/,/^Decisions/{/^Decisions/!p}' <<<"$out")" == "Waiting on the person:
 - todo: Plug in the Zigbee stick · due 2026-11-20 · open in home · https://3.basecamp.com/1/buckets/2/todos/901
 - todo for app-7: Create the tailnet login · open in lesentiel · https://3.basecamp.com/1/buckets/2/todos/900" ]] \
     || fail "board: $out"
@@ -407,7 +407,7 @@ EOF
   # One target that does not answer is one line; the others still show.
   printf 'Access denied' >"$BC_DATA/fail-10511639538"
   out="$("$ROOT/bin/bercail" shep board)" || fail "board with one failing target: $out"
-  [[ "$(sed -n '/^Waiting on the person:/,$p' <<<"$out")" == "Waiting on the person:
+  [[ "$(sed -n '/^Waiting on the person:/,/^Decisions/{/^Decisions/!p}' <<<"$out")" == "Waiting on the person:
 - todo: Plug in the Zigbee stick · due 2026-11-20 · open in home · https://3.basecamp.com/1/buckets/2/todos/901
 - todos in lesentiel: basecamp todos list failed: Access denied" ]] || fail "one failing: $out"
   # A list that is not one fails, instead of calling every todo done.
@@ -423,7 +423,7 @@ EOF
 @test "shep board says nothing of todos without a target" {
   local out
   out="$("$ROOT/bin/bercail" shep board)" || fail "board: $out"
-  [[ "$out" == "Waiting on the person:
+  [[ "${out%%$'\n'Decisions*}" == "Waiting on the person:
 - nothing" ]] || fail "board: $out"
   ! grep -q '^basecamp' "$LOG" || fail "basecamp ran: $(cat "$LOG")"
 }

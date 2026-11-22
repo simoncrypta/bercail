@@ -385,9 +385,12 @@ shep_board() {
 }
 
 _shep_board_snapshot() {
-  local repos desks records todos
+  local repos desks records todos fd decisions queue rc=0
   [[ $# -eq 0 ]] || { _shep_err "usage: bercail shep board"; return 1; }
   _shep_need_policy
+  # The cards waiting on the person, from the ledger, never from Shep's prose. Their live
+  # checks run beside the board's own reads, within 4 seconds, so they cost it no time.
+  exec {fd}< <(_git_backend_bounded 4 shep_question waiting 2>/dev/null && printf 'ok\n')
   repos="$(_shep_repos_json)" || return 1
   desks="$(_shep_desks_json)" || return 1
   records="$(_shep_records_json)" || return 1
@@ -444,7 +447,13 @@ _shep_board_snapshot() {
                 (.finished[] | "- todo\(tag): \(.title // "" | flat | cut(70)) · done in \($t.target); "
                   + (if .issue then "continue \(.issue), then " else "" end) + "bercail todo done \(.id)") end) ]
        | if length > 0 then .[] else "- nothing" end)'
-  _shep_queue_text "$(_shep_queue_json "$repos" "$desks" "$records")"
+  queue="$(_shep_queue_text "$(_shep_queue_json "$repos" "$desks" "$records")")" || rc=$?
+  decisions="$(cat <&"$fd")"
+  exec {fd}<&-
+  if [[ "$decisions" == *$'\n'ok ]]; then printf '%s\n' "${decisions%$'\n'ok}"
+  else printf 'Decisions: UNKNOWN (the ledger could not be read, or its cards checked within 4s; the Decisions panel shows them)\n'; fi
+  [[ -z "$queue" ]] || printf '%s\n' "$queue"
+  return "$rc"
 }
 
 # --- review queue -------------------------------------------------------------------

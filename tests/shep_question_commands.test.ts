@@ -1,8 +1,22 @@
-import { execFileSync } from "node:child_process";
+import { type ChildProcess, execFileSync } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
+// Every child the extension spawns, and those that closed, so a test can wait for one to end.
+const spawned = vi.hoisted(() => [] as ChildProcess[]);
+const closed = vi.hoisted(() => new Set<ChildProcess>());
+vi.mock("node:child_process", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:child_process")>();
+  const spawn = (...args: Parameters<typeof real.spawn>) => {
+    const child = real.spawn(...args);
+    spawned.push(child);
+    child.once("close", () => closed.add(child));
+    return child;
+  };
+  return { ...real, spawn };
+});
 import register from "../shep/pi/question-commands.ts";
 import { QuestionStore, type QuestionSpec } from "../shep/pi/questions.ts";
 
@@ -24,6 +38,8 @@ function fakePi() {
     },
     registerTool: (def: any) => tools.push(def),
     sendMessage: (message: any, options: any) => sent.push({ message, options }),
+    appendEntry: (_customType: string, _data: unknown) => {},
+    registerEntryRenderer: () => {},
   };
 }
 const fixtureGit = (...args: string[]) => {
@@ -311,5 +327,107 @@ describe("question text commands", () => {
     });
     expect(store.snapshot().questions[0]?.proposals.map((p) => p.accepted)).toEqual([true, false, false]);
     expect(store.snapshot().questions.at(-1)?.proposals).toEqual([]);
+  });
+
+  test("Shep's reply ends with the ledger's Decisions block, a TUI-only entry written only when its text changed", async () => {
+    // bercail shep question waiting, as a stand-in: it reads the block the test set, says
+    // so, waits while the hold file exists, then prints it, or fails while the fail file exists.
+    const [block, read, hold, failing] = ["block", "read", "hold", "fail"].map((f) => join(dir, f)) as [
+      string,
+      string,
+      string,
+      string,
+    ];
+    const bin = join(dir, "bercail");
+    writeFileSync(
+      bin,
+      `#!/bin/sh\n[ "$*" = "shep question waiting" ] || exit 0\nb=$(cat '${block}')\n: >'${read}'\n` +
+        `while [ -e '${hold}' ]; do sleep 0.01; done\n[ -e '${failing}' ] && exit 1\nprintf '%s\\n' "$b"\n`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv("BERCAIL_SHEP_BIN", bin);
+    // Pi's branches: a reply and an appended entry each become the branch's leaf.
+    const branches: Record<string, any[]> = { a: [], b: [] };
+    let current = "a";
+    let ids = 0;
+    const add = (entry: object) => branches[current]!.push({ id: `e${++ids}`, ...entry });
+    const on = (p: ReturnType<typeof fakePi>) =>
+      Object.assign(p, {
+        appendEntry: (customType: string, data: unknown) => add({ type: "custom", customType, data }),
+      });
+    on(pi);
+    const ctx = {
+      sessionManager: {
+        ...context.sessionManager,
+        getBranch: () => branches[current],
+        getLeafId: () => branches[current]!.at(-1)?.id ?? null,
+      },
+    };
+    const texts = (branch: string) => branches[branch]!.filter((e) => e.type === "custom").map((e) => e.data.text);
+    // Every check the extension started from `from` on has ended, one started on another's end too.
+    const checked = async (from: number) => {
+      for (let i = from; i < spawned.length; i++)
+        if (spawned[i]!.spawnargs.includes("waiting") && !closed.has(spawned[i]!)) await once(spawned[i]!, "close");
+    };
+    // Shep replies, and its run settles with the ledger's block as `text`.
+    const settle = async (text: string, p = pi) => {
+      writeFileSync(block, text);
+      add({ type: "message" });
+      const from = spawned.length;
+      p.handlers.agent_settled!({ type: "agent_settled", aborted: false }, ctx);
+      if (!existsSync(hold)) await checked(from);
+      else if (spawned.length > from) await vi.waitFor(() => expect(existsSync(read)).toBe(true));
+      rmSync(read, { force: true });
+      return from;
+    };
+    const card = "Decisions:\n- app-1: Merge? · two-way door: defaults to Merge in 30 min";
+    const countdown = card.replace("30 min", "29 min");
+    const stale = "Decisions:\n- app-1: Merge? · stale: head changed";
+    await settle(card);
+    await settle(card);
+    await settle(countdown);
+    await settle(stale);
+    expect(texts("a")).toEqual([card, countdown, stale]);
+    expect(branches.a!.at(-1)).toMatchObject({ type: "custom", customType: "bercail-waiting" });
+    // A reply during a check: the check asks again for it, and the first result goes nowhere.
+    writeFileSync(hold, "");
+    let from = await settle(card);
+    const added = `${stale}\n- app-2: Ship it?`;
+    await settle(added);
+    rmSync(hold);
+    await checked(from);
+    expect(texts("a")).toEqual([card, countdown, stale, added]);
+    // A check asked on branch a is not written on b, which /tree selected meanwhile.
+    writeFileSync(hold, "");
+    from = await settle("Decisions:\n- nothing");
+    current = "b";
+    rmSync(hold);
+    await checked(from);
+    expect([texts("a").length, texts("b")]).toEqual([4, []]);
+    // Each branch, and a restart's, is compared with its own last block.
+    await settle(added);
+    await settle(added);
+    expect(texts("b")).toEqual([added]);
+    const restarted = on(fakePi());
+    register(restarted as any);
+    await settle(added, restarted);
+    expect(texts("b")).toEqual([added]);
+    // A failed check says the block is unknown, once; a session that ended takes no result.
+    writeFileSync(failing, "");
+    await settle(added);
+    await settle(added);
+    expect(texts("b").slice(1)).toEqual([
+      "Decisions: UNKNOWN (bercail shep question waiting failed; the Decisions panel shows the cards)",
+    ]);
+    rmSync(failing);
+    writeFileSync(hold, "");
+    const ended = await settle("Decisions:\n- nothing");
+    pi.handlers.session_shutdown!({}, context);
+    rmSync(hold);
+    await checked(ended);
+    expect(texts("b")).toHaveLength(2);
+    // Nothing reaches the model: no message is sent.
+    expect([...pi.sent, ...restarted.sent]).toEqual([]);
+    restarted.handlers.session_shutdown!({}, context);
   });
 });
