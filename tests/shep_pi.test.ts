@@ -185,6 +185,7 @@ describe("recoverable inbox delivery uses persisted session evidence", () => {
   let send: ReturnType<typeof vi.fn>;
   let ui: { setStatus: ReturnType<typeof vi.fn>; notify: ReturnType<typeof vi.fn> };
   let ctx: any;
+  let idle: boolean;
   const runtimes: Record<string, (...args: any[]) => any>[] = [];
   const put = (name = "event.json", value: any = ev()) => writeFileSync(join(inbox, name), JSON.stringify(value));
   const record = () => JSON.parse(readFileSync(join(delivered, "event.json"), "utf8"));
@@ -238,9 +239,11 @@ describe("recoverable inbox delivery uses persisted session evidence", () => {
       vi.stubEnv(key, dir);
     vi.stubEnv("BERCAIL_SHEP_INBOX", inbox);
     ui = { setStatus: vi.fn(), notify: vi.fn() };
+    idle = true;
     ctx = {
       hasUI: true,
       ui,
+      isIdle: () => idle,
       sessionManager: {
         getSessionId: () => "ses-1",
         getSessionFile: () => file,
@@ -664,5 +667,119 @@ describe("recoverable inbox delivery uses persisted session evidence", () => {
     await tick();
     expect(send.mock.calls.map(([message]) => message.details)).toEqual([{ events: [ev().event_id], notices: [] }]);
     expect(readdirSync(delivered).filter((name) => name.startsWith("notice-"))).toEqual([]);
+  });
+
+  describe("a burst while Shep works reaches it as one message when its run settles", () => {
+    // An inbox write wakes the drain; it runs 200 ms later.
+    const arrive = async (name: string, value: any) => {
+      put(name, value);
+      await handlers.message_end({ message: { role: "user" } }, ctx);
+      await vi.advanceTimersByTimeAsync(200);
+    };
+    const stamped = (name: string) => JSON.parse(readFileSync(join(delivered, name), "utf8")).delivery_attempt;
+    const decision = (name: string, extra: object) => ({
+      source: "bercail",
+      kind: "decision",
+      event_id: `decision:${name}`,
+      question: { token: "Q4@2", prompt: "Which first?", topic: "plan" },
+      summary: null,
+      ...extra,
+    });
+
+    test("two events a second apart while busy arrive as one message after agent_settled, and both get receipts", async () => {
+      header();
+      await start();
+      idle = false;
+      await arrive("a.json", ev("finished", "t9:finished:1:2"));
+      await vi.advanceTimersByTimeAsync(800);
+      await arrive("b.json", ev("blocked", "t9:blocked:2:3"));
+      expect(send).not.toHaveBeenCalled();
+      expect(stamped("a.json")).toBeUndefined();
+      expect(stamped("b.json")).toBeUndefined();
+      idle = true;
+      await handlers.agent_settled({}, ctx);
+      expect(send.mock.calls.map(([message]) => message.details.events)).toEqual([
+        ["t9:finished:1:2", "t9:blocked:2:3"],
+      ]);
+      persist(["t9:finished:1:2", "t9:blocked:2:3"]);
+      await handlers.turn_end({}, ctx);
+      for (const name of ["a.json", "b.json"])
+        expect(JSON.parse(readFileSync(join(delivered, name), "utf8")).persisted_entry_id).toBe("entry-1");
+      await tick();
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    test("while idle, an event is sent 200 ms after it arrives", async () => {
+      header();
+      await start();
+      put();
+      await handlers.message_end({ message: { role: "user" } }, ctx);
+      await vi.advanceTimersByTimeAsync(199);
+      expect(send).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    test("a crash while an event is held replays it in the next runtime", async () => {
+      header();
+      await start();
+      idle = false;
+      await arrive("event.json", ev());
+      expect(send).not.toHaveBeenCalled();
+      expect(record().delivery_attempt).toBeUndefined();
+      await handlers.session_shutdown({}, ctx);
+      idle = true;
+      await start();
+      expect(send.mock.calls.map(([message]) => message.details.events)).toEqual([[ev().event_id]]);
+      expect(record().delivery_attempt.session_id).toBe("ses-1");
+    });
+
+    test("a conflicting claim that arrives while busy is still held after agent_settled", async () => {
+      header();
+      await start();
+      idle = false;
+      await arrive("event.json", ev());
+      await arrive("conflict.json", { ...ev(), space: { ...ev().space, id: "another-space" } });
+      idle = true;
+      await handlers.agent_settled({}, ctx);
+      expect(send).not.toHaveBeenCalled();
+      expect(record().delivery_error).toMatch(/conflicting routing/i);
+    });
+
+    test("a Reverse, a Discuss close and a guard outcome that arrive together all reach Shep", async () => {
+      header();
+      await start();
+      idle = false;
+      put("decision-Q4-2-reversed.json", decision("Q4-2-reversed", { choice: "B", by: "panel picker", reversed: "A" }));
+      put("decision-Q5-1-closed-1.json", {
+        ...decision("Q5-1-closed-1", { choice: null, by: "discuss closed" }),
+        question: { token: "Q5@1", prompt: "Ship?", topic: "land" },
+      });
+      await arrive("guard-0123456789ab.json", {
+        source: "bercail",
+        schema: "bercail.guard_ask/v1",
+        kind: "guard",
+        sink: "shep",
+        event_id: "guard:0123456789ab",
+        terminal: "guard-ask-0123456789ab",
+        operation: "push",
+        target: "master",
+        outcome: "denied",
+      });
+      expect(send).not.toHaveBeenCalled();
+      idle = true;
+      await handlers.agent_settled({}, ctx);
+      expect(send).toHaveBeenCalledTimes(1);
+      const [message] = send.mock.calls[0];
+      expect(message.details.events).toEqual([
+        "decision:Q4-2-reversed",
+        "decision:Q5-1-closed-1",
+        "guard:0123456789ab",
+      ]);
+      expect(message.content).toMatch(
+        /The push of master you handed off was denied .*\n.*\n.*reversed the default "A"/,
+      );
+      expect(message.content).toMatch(/closed Discuss without picking for Q5@1/);
+    });
   });
 });

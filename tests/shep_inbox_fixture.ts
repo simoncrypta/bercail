@@ -119,9 +119,11 @@ export default function (pi: ExtensionAPI) {
     if (!entries.some((entry) => entry.type === "custom_message" && entry.customType === TYPE)) return;
     await park("virgin", { file: ctx.sessionManager.getSessionFile(), disk: disk(ctx) });
   });
-  pi.on("message_end", (event, ctx) => {
+  pi.on("message_end", async (event, ctx) => {
     if (event.message.role !== "custom" || event.message.customType !== TYPE) return;
     phase("message-end", { disk: disk(ctx) });
+    // Sent and stamped, not yet appended to a session file that exists.
+    if (mode === "sent") await park("sent", { file: ctx.sessionManager.getSessionFile(), disk: disk(ctx) });
   });
   pi.on("turn_end", async (_event, ctx) => {
     if (mode !== "persisted") return;
