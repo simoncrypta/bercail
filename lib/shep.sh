@@ -16,7 +16,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/shep-context.sh"
 source "$(dirname "${BASH_SOURCE[0]}")/scratch.sh"
 
 SHEP_SKILLS=(handoff desk-restore how why unslop describe)
-SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--group ID] [--repo DIR] [--issue ID] | mistake group ID \"NAME\" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|expire|discuss|closed|push-approval"
+SHEP_USAGE="usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember \"RULE\" [--scope SCOPE] | forget N | list | mistake KEY \"WHAT\" [--group ID] [--repo DIR] [--issue ID] | mistake group ID \"NAME\" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json [--all]] | question create|revise|reply|answer|withdraw|get|check|thread|panel|expire|discuss|closed|push-approval"
 
 shep_state_dir() {
   printf '%s/bercail/shep' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -459,7 +459,14 @@ cmd_shep() {
     list) shift; shep_list "$@" ;;
     mistake) shift; shep_mistake "$@" ;;
     diagram) shift; shep_diagram "$@" ;;
-    questions) shift; if [[ "${1:-}" == --json ]]; then shep_question json; else shep_question list "$@"; fi ;;
+    # --json is what waits on the person; --json --all the whole ledger.
+    questions) shift
+      case "$#:${1:-}:${2:-}" in
+        1:--json:) shep_question pending ;;
+        2:--json:--all | 2:--all:--json) shep_question json ;;
+        0::) shep_question list ;;
+        *) _shep_err "usage: bercail shep questions [--json [--all]]"; return 1 ;;
+      esac ;;
     question) shift; shep_question "$@" ;;
     *) _shep_err "$SHEP_USAGE"; return 1 ;;
   esac

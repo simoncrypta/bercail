@@ -919,7 +919,7 @@ export function projection(snapshot: QuestionSnapshot): string {
   }
   lines.push(
     `${pending.length} pending; ${pending.length - lines.length + 1} omitted. Reply with /reply Qn@revision answer; bare replies never select a target.`,
-    "Shortened fields end in …; full targets and history: bercail shep questions --json.",
+    "Shortened fields end in …; full targets and history: bercail shep questions --json --all.",
   );
   // The answers, newest first: the record of an answer, whatever became of its event.
   // A default is never listed as the person's until they said OK to it; one they

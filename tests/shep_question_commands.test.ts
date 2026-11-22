@@ -194,6 +194,93 @@ describe("question text commands", () => {
     expect(store.snapshot().questions).toHaveLength(3);
   });
 
+  test("the tool's text is the token, door and check status without the policy, and details keep the whole record", async () => {
+    const repo = join(dir, "repo");
+    initRepo(repo);
+    // The repo's policy, as `bercail policy show --json` prints it, with a long rule.
+    const rule = "Desks stage and leave the commit to Shep. ".repeat(100);
+    const policy = join(dir, "policy.json");
+    writeFileSync(policy, JSON.stringify({ repo, root: repo, trusted: true, policy: { team_rules: rule } }));
+    writeFileSync(join(dir, "bercail"), `#!/bin/sh\n/bin/cat '${policy}'\n`, { mode: 0o755 });
+    vi.stubEnv("BERCAIL_SHEP_BIN", join(dir, "bercail"));
+    vi.stubEnv("XDG_STATE_HOME", dir);
+    const tool = pi.tools.find((tool) => tool.name === "shep_question");
+    // A desk with no session record is a warning that names it.
+    const desk = `t${"9".repeat(400)}`;
+    const out = await tool.execute(
+      "call-1",
+      {
+        requestId: "light",
+        kind: "planning",
+        prompt: "Which desk starts first?",
+        options: ["auth", "search"],
+        brief: "Auth unblocks search, and search is the bigger job. ".repeat(100),
+        recommendation: { choice: "auth", why: "it unblocks search" },
+        reversible: true,
+        repo,
+        issue: null,
+        topic: "light",
+        desk,
+        base: null,
+        action: null,
+        originEvent: "conversation:entry-1",
+      },
+      undefined,
+      undefined,
+      context,
+    );
+    const text = out.content[0].text;
+    expect(Buffer.byteLength(text)).toBeLessThan(1024);
+    expect(text).not.toContain("Desks stage");
+    expect(text).not.toContain("Auth unblocks");
+    const warning = `desk ${desk} has no desk session record`;
+    expect(JSON.parse(text)).toEqual({
+      token: "Q3@1",
+      status: "pending",
+      deadline: out.details.question.deadline,
+      door: "two-way",
+      check: { status: "fresh", reasons: [], warnings: [`${warning.slice(0, 299)}…`] },
+    });
+    expect(out.details.question.deadline).toEqual(expect.any(String));
+    expect(out.details.question.brief).toContain("Auth unblocks");
+    expect(out.details.check).toMatchObject({
+      warnings: [warning],
+      policy: { status: "checked", current: { policy: { team_rules: rule } } },
+    });
+  });
+
+  test("a replay reports the current revision, and a long reason is cut at whole characters", async () => {
+    // A checkout whose path is emoji, so its reason runs past 300 characters of two code units each.
+    const deepest = join(dir, ...Array(4).fill("\u{1F600}".repeat(60)));
+    const repo = join(deepest, "repo");
+    initRepo(repo);
+    vi.stubEnv("BERCAIL_SHEP_BIN", join(dir, "missing-policy-cli"));
+    const tool = pi.tools.find((tool) => tool.name === "shep_question");
+    const input = {
+      requestId: "replayed",
+      kind: "planning",
+      prompt: "Which approach?",
+      options: ["yes", "no"],
+      repo,
+      issue: null,
+      topic: "replayed",
+      desk: null,
+      base: null,
+      action: null,
+      originEvent: "conversation:original",
+    };
+    await tool.execute("call-1", input, undefined, undefined, context);
+    store.withdraw("w", "Q3@1", "moot");
+    rmSync(deepest, { recursive: true });
+    const replay = await tool.execute("call-2", input, undefined, undefined, context);
+    const text = JSON.parse(replay.content[0].text);
+    expect([text.status, replay.details.question.status]).toEqual(["withdrawn", "withdrawn"]);
+    const at = replay.details.check.reasons.findIndex((reason: string) => reason.startsWith("target unavailable"));
+    const full = [...replay.details.check.reasons[at]];
+    expect(full.length).toBeGreaterThan(300);
+    expect(text.check.reasons[at]).toBe(`${full.slice(0, 299).join("")}…`);
+  });
+
   test("duplicate transport commands persist one request without a second effect", async () => {
     await pi.commands.reply.handler("Q1@1 yes", context);
     await pi.commands.reply.handler("Q1@1 yes", context);
