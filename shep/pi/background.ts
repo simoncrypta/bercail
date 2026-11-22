@@ -83,7 +83,7 @@ export default function (pi: ExtensionAPI) {
     name: "shep_wait",
     label: "Wait",
     description:
-      "Wait for a CI run, a desk, an Entire trail's gates to pass on an expected head (target <n> or <repo>/<n>, head: the commit), or a delay (seconds). Report a bound timeout as incomplete.",
+      "Wait for a CI run, a desk, an Entire trail's gates to pass on an expected head (target <n> or <repo>/<n>, after <forge>/<project>/ for another project's trail such as et/lesentiel/44; head: the commit), or a delay (seconds). Report a bound timeout as incomplete.",
     parameters: Type.Object({
       kind: Type.Union([Type.Literal("ci"), Type.Literal("desk"), Type.Literal("trail"), Type.Literal("delay")]),
       target: Type.String(),
@@ -97,12 +97,18 @@ export default function (pi: ExtensionAPI) {
         return text(await call("hc", ["wait", args.target], 3600000, signal));
       if (args.kind === "trail") {
         const head = (args.head ?? "").toLowerCase();
-        if (!/^([a-z0-9._-]+\/)?[1-9][0-9]*$/i.test(args.target) || !/^[0-9a-f]{7,64}$/.test(head))
-          throw new Error("a trail wait needs target <n> or <repo>/<n>, and head: the commit its gates must pass on");
+        // Entire infers the project from the checkout's origin; a trail of another
+        // project (Lesentiel's, waited on from bercail's checkout) names its own.
+        const target = /^(?:((?:et|gh)\/[a-z0-9][a-z0-9._-]*)\/)?((?:[a-z0-9._-]+\/)?[1-9][0-9]*)$/i.exec(args.target);
+        if (!target || !/^[0-9a-f]{7,64}$/.test(head))
+          throw new Error(
+            "a trail wait needs target <n>, <repo>/<n>, or either after <forge>/<project>/ (et/lesentiel/44), and head: the commit its gates must pass on",
+          );
+        const project = target[1] ? ["--project", target[1]] : [];
         const end = Date.now() + 3600000;
         for (;;) {
           const gate = trailGate(
-            JSON.parse(await call("entire", ["trail", "show", args.target, "--json"], 30000, signal)),
+            JSON.parse(await call("entire", ["trail", "show", target[2], ...project, "--json"], 30000, signal)),
             head,
           );
           if (gate.state === "ready")
