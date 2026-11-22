@@ -22,6 +22,7 @@ const [ROOT, PI] = process.argv.slice(2).map((arg) => resolve(arg));
 const DEADLINE = 20000;
 const EVENT = "desk-1:finished:123";
 const SENTINEL = "desk-2:blocked:124";
+const BURST = "desk-3:finished:125";
 const run = mkdtempSync(join(tmpdir(), "shep-inbox-live."));
 const children = new Set<Rpc>();
 let failed = false;
@@ -226,36 +227,45 @@ async function crashCase(mode: string) {
     mkdirSync(join(base, "inbox"), { recursive: true });
     event(base);
   }
-  const busy = ["busy", "busy-control", "missing-session", "unreadable-session"].includes(mode);
-  const child = new Rpc(base, first, busy ? "busy" : mode);
+  const busy = ["busy", "busy-control"].includes(mode);
+  const sent = ["missing-session", "unreadable-session"].includes(mode);
+  const child = new Rpc(base, first, busy ? "busy" : sent ? "sent" : mode);
   if (mode !== "claim") {
     await child.phase(first, "ready");
-    if (busy) {
+    if (busy || sent) {
       await child.command("prompt", { message: "warmup" });
       await child.phase(first, "settled");
+    }
+    if (busy) {
       await child.command("prompt", { message: "HOLD" });
       await child.phase(first, "busy");
     }
     event(base);
+    if (mode === "busy-control") event(base, BURST, "burst.json");
   }
   let session: string | undefined;
   if (mode === "claim") {
     assert.deepEqual((await child.phase(first, "claimed")).ids, [EVENT]);
     unacked(base);
   } else if (busy) {
-    await until("delivery attempt while the provider is busy", () => {
+    const names = mode === "busy-control" ? ["event.json", "burst.json"] : ["event.json"];
+    await until("claims while the provider is busy", () => {
       child.healthy();
-      return receipt(base).delivery_attempt;
+      return names.every((name) => existsSync(join(base, "delivered", name)));
     });
-    // Custom follow-ups bypass Pi 1.5.2's public queue counter/events. The RPC
-    // barrier runs after drain's synchronous sendMessage/agent.followUp call;
-    // busy-control releases the same provider gate to prove actual consumption.
+    // The drain that claimed them runs to its end before Pi answers this RPC.
     const state = await child.command("get_state");
     assert.equal(state.isStreaming, true);
-    assert.equal(state.pendingMessageCount, 0, "public count excludes custom follow-ups");
+    for (const name of names) assert.equal(receipt(base, name).delivery_attempt, undefined, `${name} held, not sent`);
     session = state.sessionFile;
     assert.ok(existsSync(session!));
-    assert.equal(custom(base, EVENT).length, 0, "queued follow-up is not persisted");
+    assert.equal(custom(base, EVENT).length, 0, "a held event is not persisted");
+    unacked(base);
+  } else if (sent) {
+    const phase = await child.phase(first, "sent");
+    session = phase.file;
+    assert.equal(receipt(base).delivery_attempt.session_file_existed, true);
+    assert.ok(!phase.disk.some((entry: any) => entry.type === "custom_message"), "message_end precedes the append");
     unacked(base);
   } else if (mode === "virgin") {
     const phase = await child.phase(first, "virgin");
@@ -279,10 +289,30 @@ async function crashCase(mode: string) {
   }
   if (mode === "busy-control") {
     writeFileSync(join(first, "release-busy"), "go");
-    await settled(child, first, base, EVENT);
+    // HOLD's own run settles first; wait for the settle of the run the burst started.
+    await until("the burst's run settles", () => {
+      child.healthy();
+      const file = join(first, "settled.json");
+      return (
+        existsSync(file) &&
+        json(file).entries.some(
+          (entry: any) => entry.type === "custom_message" && entry.details?.events?.includes(EVENT),
+        )
+      );
+    });
+    for (const name of ["event.json", "burst.json"])
+      assert.ok(receipt(base, name).persisted_entry_id, `${name} receipt`);
     checkOnce(base, [first], EVENT);
+    checkOnce(base, [first], BURST);
+    assert.deepEqual(
+      jsonl(join(first, "requests.jsonl"))
+        .filter((request) => request.ids.length)
+        .map((request) => request.ids.sort()),
+      [[EVENT, BURST].sort()],
+      "both events reach the model in one request after the run settles",
+    );
     await child.kill();
-    console.log("PASS busy control: releasing the provider consumes the real queued custom follow-up");
+    console.log("PASS busy control: two events held while the provider is busy reach Shep as one message at settle");
     return;
   }
   await child.kill();

@@ -489,7 +489,9 @@ export default function (pi: ExtensionAPI) {
       prune(delivered, Date.now());
       reconcile(delivered, snapshot);
       const ready = records(delivered).filter((t) => !receipt(t.ev) && !t.ev.delivery_error && !pending.has(id(t.ev)));
-      if (!ready.length) return;
+      // While Shep's run goes, hold what is ready for one message at agent_settled,
+      // so a burst of picks costs one model call, not one each in the middle of other work.
+      if (!ready.length || !ctx.isIdle()) return;
       const sessionFile = ctx.sessionManager.getSessionFile();
       if (!sessionFile) {
         status("Inbox pending: no persistent session file available");
@@ -532,6 +534,10 @@ export default function (pi: ExtensionAPI) {
   };
   const later = () => {
     if (active && !soon) soon = setTimeout(drain, 200);
+  };
+  const settled = () => {
+    if (soon) clearTimeout(soon);
+    drain();
   };
 
   pi.on("session_start", async (_event, context) => {
@@ -585,6 +591,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_end", later);
   pi.on("context", verify);
   pi.on("turn_end", verify);
-  pi.on("agent_settled", verify);
+  pi.on("agent_settled", settled);
   pi.on("session_shutdown", stop);
 }

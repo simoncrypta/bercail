@@ -14,8 +14,9 @@ function item(v, i) {
   if (Object.values(v.unsaved).some((s) => s.includes(i))) return "on screen, not saved yet";
   if (Object.values(v.queue).some((q) => q.includes(i))) return "queued for Shep's turn";
   if (v.attempt[i] === 0) {
-    const mine = Object.keys(v.pc).some((p) => v.pc[p] !== "down" && v.sess[p] === v.claimer[i]);
-    return mine || v.claimer[i] === 0 ? "claimed, not sent yet" : "claimed by a Shep that crashed";
+    const mine = Object.keys(v.pc).filter((p) => v.pc[p] !== "down" && v.sess[p] === v.claimer[i]);
+    if (mine.some((p) => v.busy[p])) return "held while Shep works";
+    return mine.length || v.claimer[i] === 0 ? "claimed, not sent yet" : "claimed by a Shep that crashed";
   }
   return "sent, then lost in a crash";
 }
@@ -30,7 +31,13 @@ export const state = (v) => {
 
 export const step = (action, from, to) => {
   if (action === "Reconcile") return from.loc.N === to.loc.N ? "checks for gaps" : "makes a notice";
-  if (action === "Send" && JSON.stringify(from.queue) === JSON.stringify(to.queue)) return "nothing to send";
+  if (action === "Send" && JSON.stringify(from.queue) === JSON.stringify(to.queue)) {
+    const p = Object.keys(from.pc).find((k) => from.pc[k] === "reconciled");
+    const ready = Object.keys(from.loc).some(
+      (i) => from.loc[i] === "delivered" && !from.receipt[i] && !from.pending[p].includes(i),
+    );
+    return from.busy[p] && ready ? "holds for the turn" : "nothing to send";
+  }
   if (action === "PiShows") {
     const fresh = Object.keys(to.unsaved).some((s) => to.unsaved[s].length > from.unsaved[s].length);
     return fresh ? "you see it, unsaved" : "you see it, saved";
@@ -44,6 +51,7 @@ export const step = (action, from, to) => {
       ShepCrashes: "Shep crashes",
       Claim: "Shep claims it",
       Send: "Shep queues it",
+      ShepWorks: "Shep works",
       PiEndsTurn: "Shep replies",
     }[action] ?? action
   );

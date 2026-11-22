@@ -3,7 +3,9 @@
    consumer in Shep's Pi) and notify_shep_enqueue / notify_follow in
    lib/notify.sh (the follower that writes the inbox). From the spike in
    bercail-237.9, with the reconcile-race fix of bercail-237.12 as the code now
-   has it: a drain reads source-state.json before claim().
+   has it: a drain reads source-state.json before claim(). While Pi is in a
+   turn, a drain holds what is ready instead of queueing it, and the drain
+   after the turn sends it (bercail-fq7y.4: a burst of picks in one turn).
 
    One desk finish. The follower either writes its event E to inbox/ and then
    source-state.json (same hc line, in that order), or missed the change and
@@ -15,18 +17,21 @@
 
    Left out: prune after 30 days, malformed or conflicting files, two
    followers, deleted or corrupt session files (all "held" paths), decision
-   events, batching E and N into one message, Simon's own turns (followUp
-   waits for them; that is Pi's queue, not inbox.ts), and a labels lookup that
-   publishes done before its status event (bercail-237.14). verify() also runs
-   on Pi's context and agent_settled events; here it runs at claim and at turn
-   end, which only makes a receipt later.
+   events, batching E and N into one message, and a labels lookup that
+   publishes done before its status event (bercail-237.14). ShepWorks stands
+   for any turn no event started: Simon's prompt, or another job's chain. verify() also runs
+   on Pi's context events; here it runs at claim and at turn end, which only
+   makes a receipt later. Pi's agent_settled runs a drain; here that is the
+   next Claim, Reconcile and Send after the turn ends.
 
    Planted bugs, each off by default (tests/statechart/shep-inbox/bug-*.cfg):
    BugSourceAfterClaim, the race bercail-237.12 fixed; BugReadyClaimedOnly,
-   send only what this claim() moved; BugNoLock, no consumer lock. *)
+   send only what this claim() moved; BugNoLock, no consumer lock;
+   BugHeldPending, a hold that marks what it held as sent. *)
 EXTENDS Naturals, FiniteSets
 
-CONSTANTS Procs, MaxStarts, WithNotice, BugSourceAfterClaim, BugReadyClaimedOnly, BugNoLock
+CONSTANTS Procs, MaxStarts, WithNotice, BugSourceAfterClaim, BugReadyClaimedOnly, BugNoLock,
+          BugHeldPending
 
 Items == IF WithNotice THEN {"E", "N"} ELSE {"E"}
 Sessions == 1..MaxStarts
@@ -41,7 +46,8 @@ VARIABLES
   sess,       \* [Procs -> 0..MaxStarts]: this process's Pi session
   pending,    \* [Procs -> SUBSET Items]: inbox.ts's in-memory pending set
   queue,      \* [Procs -> SUBSET Items]: Pi's follow-up queue
-  busy,       \* [Procs -> BOOLEAN]: Pi is in the turn an event started
+  busy,       \* [Procs -> BOOLEAN]: Pi is in a turn: an event's, or Shep's other work
+  settling,   \* [Procs -> BOOLEAN]: a turn ended; its agent_settled drain has not run
   lock,       \* 0, or the process holding delivered/.consumer.lock
   starts,     \* Pi sessions started so far
   flushed,    \* [Sessions -> BOOLEAN]: Pi has written this session's JSONL
@@ -52,7 +58,7 @@ VARIABLES
   claimer,    \* [Items -> 0..MaxStarts]: the session whose claim() moved it
   seen        \* [Procs -> BOOLEAN]: source-state.json as this drain read it
 
-vars == <<follower, source, loc, attempt, receipt, pc, sess, pending, queue, busy,
+vars == <<follower, source, loc, attempt, receipt, pc, sess, pending, queue, busy, settling,
           lock, starts, flushed, saved, unsaved, shown, lost, claimer, seen>>
 
 Live(p) == pc[p] \notin {"down", "paused"}
@@ -63,7 +69,8 @@ Init ==
   /\ receipt = [i \in Items |-> FALSE]
   /\ pc = [p \in Procs |-> "down"] /\ sess = [p \in Procs |-> 0]
   /\ pending = [p \in Procs |-> {}] /\ queue = [p \in Procs |-> {}]
-  /\ busy = [p \in Procs |-> FALSE] /\ lock = 0 /\ starts = 0
+  /\ busy = [p \in Procs |-> FALSE] /\ settling = [p \in Procs |-> FALSE]
+  /\ lock = 0 /\ starts = 0
   /\ flushed = [s \in Sessions |-> FALSE]
   /\ saved = [s \in Sessions |-> {}] /\ unsaved = [s \in Sessions |-> {}]
   /\ shown = [i \in Items |-> 0] /\ lost = [i \in Items |-> 0]
@@ -73,21 +80,21 @@ Init ==
 FollowerWritesEvent ==
   /\ follower = "idle"
   /\ follower' = "accepted" /\ loc' = [loc EXCEPT !["E"] = "inbox"]
-  /\ UNCHANGED <<source, attempt, receipt, pc, sess, pending, queue, busy, lock, starts,
-                 flushed, saved, unsaved, shown, lost, claimer, seen>>
+  /\ UNCHANGED <<source, attempt, receipt, pc, sess, pending, queue, busy, settling, lock,
+                 starts, flushed, saved, unsaved, shown, lost, claimer, seen>>
 
 (* The desk finished while the follower was down: its next snapshot has no
    previous status, so no event, only the current source state. *)
 FollowerMissesEvent ==
   /\ WithNotice /\ follower = "idle" /\ follower' = "missed"
-  /\ UNCHANGED <<source, loc, attempt, receipt, pc, sess, pending, queue, busy, lock, starts,
-                 flushed, saved, unsaved, shown, lost, claimer, seen>>
+  /\ UNCHANGED <<source, loc, attempt, receipt, pc, sess, pending, queue, busy, settling,
+                 lock, starts, flushed, saved, unsaved, shown, lost, claimer, seen>>
 
 (* _notify_follow_source_write, at the end of the same hc line. *)
 FollowerWritesSource ==
   /\ WithNotice /\ follower # "idle" /\ ~source /\ source' = TRUE
-  /\ UNCHANGED <<follower, loc, attempt, receipt, pc, sess, pending, queue, busy, lock, starts,
-                 flushed, saved, unsaved, shown, lost, claimer, seen>>
+  /\ UNCHANGED <<follower, loc, attempt, receipt, pc, sess, pending, queue, busy, settling,
+                 lock, starts, flushed, saved, unsaved, shown, lost, claimer, seen>>
 
 (* session_start: a new Pi session, empty or with a conversation; flock
    --nonblock on delivered/.consumer.lock, else "Inbox paused". *)
@@ -100,8 +107,8 @@ ShepStarts(p) ==
        THEN /\ pc' = [pc EXCEPT ![p] = "idle"]
             /\ lock' = IF lock = 0 THEN p ELSE lock
        ELSE /\ pc' = [pc EXCEPT ![p] = "paused"] /\ lock' = lock
-  /\ UNCHANGED <<follower, source, loc, attempt, receipt, pending, queue, busy, saved, unsaved,
-                 shown, lost, claimer, seen>>
+  /\ UNCHANGED <<follower, source, loc, attempt, receipt, pending, queue, busy, settling, saved,
+                 unsaved, shown, lost, claimer, seen>>
 
 (* Kill at any point. Files stay; memory and Pi's queue go. The lock helper's
    stdin closes, so the kernel lock is released. Bounded: a crash needs a
@@ -111,7 +118,7 @@ ShepCrashes(p) ==
   /\ pc' = [pc EXCEPT ![p] = "down"]
   /\ lock' = IF lock = p THEN 0 ELSE lock
   /\ pending' = [pending EXCEPT ![p] = {}] /\ queue' = [queue EXCEPT ![p] = {}]
-  /\ busy' = [busy EXCEPT ![p] = FALSE]
+  /\ busy' = [busy EXCEPT ![p] = FALSE] /\ settling' = [settling EXCEPT ![p] = FALSE]
   /\ unsaved' = [unsaved EXCEPT ![sess[p]] = {}]
   /\ lost' = [i \in Items |-> IF i \in unsaved[sess[p]] THEN Cap(lost[i]) ELSE lost[i]]
   /\ UNCHANGED <<follower, source, loc, attempt, receipt, sess, starts, flushed, saved, shown,
@@ -134,8 +141,8 @@ Claim(p) ==
   /\ claimer' = [i \in Items |-> IF loc[i] = "inbox" THEN sess[p] ELSE claimer[i]]
   /\ seen' = [seen EXCEPT ![p] = source]
   /\ VerifyEffect(p)
-  /\ UNCHANGED <<follower, source, attempt, sess, queue, busy, lock, starts, flushed, saved,
-                 unsaved, shown, lost>>
+  /\ UNCHANGED <<follower, source, attempt, sess, queue, busy, settling, lock, starts, flushed,
+                 saved, unsaved, shown, lost>>
 
 (* reconcile(): a notice for a done desk whose mapping no delivered/ record has,
    from the source state the drain read before claim() (BugSourceAfterClaim:
@@ -145,20 +152,25 @@ Reconcile(p) ==
   /\ loc' = IF WithNotice /\ (IF BugSourceAfterClaim THEN source ELSE seen[p])
               /\ loc["N"] = "none" /\ loc["E"] # "delivered"
               THEN [loc EXCEPT !["N"] = "delivered"] ELSE loc
-  /\ UNCHANGED <<follower, source, attempt, receipt, sess, pending, queue, busy, lock, starts,
-                 flushed, saved, unsaved, shown, lost, claimer, seen>>
+  /\ UNCHANGED <<follower, source, attempt, receipt, sess, pending, queue, busy, settling, lock,
+                 starts, flushed, saved, unsaved, shown, lost, claimer, seen>>
 
 Ready(p) ==
   IF BugReadyClaimedOnly
     THEN {i \in Items : loc[i] = "delivered" /\ claimer[i] = sess[p] /\ ~receipt[i] /\ i \notin pending[p]}
     ELSE {i \in Items : loc[i] = "delivered" /\ ~receipt[i] /\ i \notin pending[p]}
 
-(* Stamp delivery_attempt durably, add to pending, pi.sendMessage(followUp). *)
+(* Stamp delivery_attempt durably, add to pending, pi.sendMessage(followUp).
+   While Pi is in a turn (ctx.isIdle() is false), hold: stamp, mark and queue
+   nothing, so the next drain finds the same items ready. *)
 Send(p) ==
   /\ pc[p] = "reconciled" /\ pc' = [pc EXCEPT ![p] = "idle"]
-  /\ attempt' = [i \in Items |-> IF i \in Ready(p) THEN sess[p] ELSE attempt[i]]
-  /\ pending' = [pending EXCEPT ![p] = pending[p] \cup Ready(p)]
-  /\ queue' = [queue EXCEPT ![p] = queue[p] \cup Ready(p)]
+  /\ LET sent == IF busy[p] THEN {} ELSE Ready(p)
+         marked == IF busy[p] /\ BugHeldPending THEN Ready(p) ELSE sent
+     IN /\ attempt' = [i \in Items |-> IF i \in sent THEN sess[p] ELSE attempt[i]]
+        /\ pending' = [pending EXCEPT ![p] = pending[p] \cup marked]
+        /\ queue' = [queue EXCEPT ![p] = queue[p] \cup sent]
+  /\ settling' = [settling EXCEPT ![p] = settling[p] /\ busy[p]]
   /\ UNCHANGED <<follower, source, loc, receipt, sess, busy, lock, starts, flushed, saved,
                  unsaved, shown, lost, claimer, seen>>
 
@@ -171,14 +183,14 @@ PiShows(p, i) ==
   /\ IF flushed[sess[p]]
        THEN saved' = [saved EXCEPT ![sess[p]] = @ \cup {i}] /\ UNCHANGED unsaved
        ELSE unsaved' = [unsaved EXCEPT ![sess[p]] = @ \cup {i}] /\ UNCHANGED saved
-  /\ UNCHANGED <<follower, source, loc, attempt, receipt, pc, sess, pending, lock, starts,
-                 flushed, lost, claimer, seen>>
+  /\ UNCHANGED <<follower, source, loc, attempt, receipt, pc, sess, pending, settling, lock,
+                 starts, flushed, lost, claimer, seen>>
 
 (* Shep replies; Pi writes the session (all of it, if it was empty). turn_end
-   runs verify(). *)
+   runs verify(); Pi is idle again, so the next drain sends what it held. *)
 PiEndsTurn(p) ==
   /\ Live(p) /\ pc[p] = "idle" /\ busy[p]
-  /\ busy' = [busy EXCEPT ![p] = FALSE]
+  /\ busy' = [busy EXCEPT ![p] = FALSE] /\ settling' = [settling EXCEPT ![p] = TRUE]
   /\ flushed' = [flushed EXCEPT ![sess[p]] = TRUE]
   /\ saved' = [saved EXCEPT ![sess[p]] = @ \cup unsaved[sess[p]]]
   /\ unsaved' = [unsaved EXCEPT ![sess[p]] = {}]
@@ -189,10 +201,19 @@ PiEndsTurn(p) ==
   /\ UNCHANGED <<follower, source, loc, attempt, pc, sess, queue, lock, starts, shown, lost,
                  claimer, seen>>
 
+(* Shep works on something else: a prompt, or another job's chain of tool
+   calls. Not while a turn's agent_settled drain is still to run: Pi runs it
+   in the handler, before anything new starts. *)
+ShepWorks(p) ==
+  /\ Live(p) /\ pc[p] = "idle" /\ ~busy[p] /\ ~settling[p]
+  /\ busy' = [busy EXCEPT ![p] = TRUE]
+  /\ UNCHANGED <<follower, source, loc, attempt, receipt, pc, sess, pending, queue, settling,
+                 lock, starts, flushed, saved, unsaved, shown, lost, claimer, seen>>
+
 Next ==
   \/ FollowerWritesEvent \/ FollowerMissesEvent \/ FollowerWritesSource
   \/ \E p \in Procs : ShepStarts(p) \/ ShepCrashes(p) \/ Claim(p) \/ Reconcile(p) \/ Send(p)
-                      \/ PiEndsTurn(p) \/ \E i \in Items : PiShows(p, i)
+                      \/ ShepWorks(p) \/ PiEndsTurn(p) \/ \E i \in Items : PiShows(p, i)
 
 Fairness ==
   /\ WF_vars(FollowerWritesSource)

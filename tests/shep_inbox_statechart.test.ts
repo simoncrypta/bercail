@@ -18,6 +18,10 @@
 // stamps an attempt. Both hang on the drain's first ctx.ui.setStatus call, at
 // the end of checkReceipts(): if inbox.ts stops making it, the replay fails.
 //
+// The fake Pi is busy from PiShows or ShepWorks to PiEndsTurn, and says so in
+// ctx.isIdle(). The drain Pi's agent_settled runs is the model's next Claim,
+// Reconcile and Send, so PiEndsTurn calls turn_end only.
+//
 // What inbox.ts decides is compared: where each event is, its delivery attempt
 // and receipt, what it queues in Pi, and whether it runs or pauses. The screen
 // and the session files are the fake Pi's, written as the model says. Only
@@ -95,6 +99,7 @@ type Rt = {
   handlers: Record<string, (...a: any[]) => any>;
   ctx: any;
   queue: string[];
+  busy: boolean;
   unsaved: string[];
   status: string[];
   hook?: () => void;
@@ -219,11 +224,15 @@ class World {
         const item = changed("shown")!;
         if (!rt.queue.includes(item)) throw new Error(`the model shows ${item}, which inbox.ts never queued`);
         rt.queue.splice(rt.queue.indexOf(item), 1);
+        rt.busy = true;
         this.shown[item]++;
         if (rt.flushed) appendFileSync(rt.file, `${JSON.stringify(this.entry(item))}\n`);
         else rt.unsaved.push(item);
         return;
       }
+      case "ShepWorks":
+        rt.busy = true;
+        return;
       case "PiEndsTurn": {
         const reply = { type: "message", id: `a-${++this.entries}`, message: { role: "assistant", content: [] } };
         if (!rt.flushed) {
@@ -232,6 +241,7 @@ class World {
         } else appendFileSync(rt.file, `${JSON.stringify(reply)}\n`);
         rt.flushed = true;
         rt.unsaved = [];
+        rt.busy = false;
         await rt.handlers.turn_end({ type: "turn_end" }, rt.ctx);
         return;
       }
@@ -254,6 +264,7 @@ class World {
       handlers: {},
       ctx: null,
       queue: [],
+      busy: false,
       unsaved: [],
       status: [],
       noFile: false,
@@ -263,6 +274,7 @@ class World {
     };
     rt.ctx = {
       hasUI: true,
+      isIdle: () => !rt.busy,
       ui: {
         setStatus: (_key: string, text?: string) => {
           if (text) rt.status.push(text);
