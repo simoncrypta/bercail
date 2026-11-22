@@ -2,8 +2,6 @@
 // extension runs as `bercail shep question expire`): the ledger takes Shep's
 // recommendation past the deadline, once, and Shep's inbox gets one decision event that
 // says it was not the person's pick.
-import type { ChildProcess } from "node:child_process";
-import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,13 +17,13 @@ vi.mock("../shep/pi/question-target.ts", () => ({
     current: { head: null, stagedTree: null },
   }),
 }));
-// Every child Shep's runtime spawns, so a test can wait for each one to exit.
-const spawned = vi.hoisted(() => [] as ChildProcess[]);
+// The exit of every child Shep's runtime spawns, listened for at spawn so none is missed.
+const spawned = vi.hoisted(() => [] as Promise<unknown>[]);
 vi.mock("node:child_process", async (importOriginal) => {
   const real = await importOriginal<typeof import("node:child_process")>();
   const spawn = (...args: Parameters<typeof real.spawn>) => {
     const child = real.spawn(...args);
-    spawned.push(child);
+    spawned.push(new Promise((exited) => child.once("exit", exited)));
     return child;
   };
   return { ...real, spawn };
@@ -345,11 +343,11 @@ test("Shep's runtime runs the expiry in its own process at start and on its time
   const runs = () => readFileSync(log, "utf8").trim().split("\n");
   handlers.session_start!({}, {});
   expect(spawned).toHaveLength(1);
-  await once(spawned[0]!, "exit");
+  await spawned[0];
   expect(runs()).toEqual(["shep question expire"]);
   await vi.advanceTimersByTimeAsync(EXPIRE_MS);
   expect(spawned).toHaveLength(2);
-  await once(spawned[1]!, "exit");
+  await spawned[1];
   expect(runs()).toEqual(["shep question expire", "shep question expire"]);
   expect(sent).toEqual([]);
   handlers.session_shutdown!({}, {});

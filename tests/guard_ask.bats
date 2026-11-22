@@ -88,13 +88,22 @@ event() {
   fail "no guard event for $1: $(cat "$BATS_TEST_TMPDIR"/worker-"$1".* 2>/dev/null)"
 }
 
+# The desktop notice $1, once the worker sent it: the worker does not wait for notify-send.
+notice() {
+  for _ in $(seq 150); do
+    grep -qF "$1" "$LOG" && return 0
+    sleep 0.1
+  done
+  fail "no notice: $(cat "$LOG")"
+}
+
 pushes() { git -C "$ORIGIN" reflog show --format=%H refs/heads/feature 2>/dev/null | wc -l; }
 
 @test "on the person's Allow the worker pushes the pinned commit to the pinned URL once, and a restart runs nothing" {
   id="$(ticket "git -C $REPO push origin feature")"
   worker "$id"
   token="$(card "$id")"
-  grep -q "notify-send Bercail Decisions: allow push of $ORIGIN refs/heads/feature?" "$LOG" || fail "no notice: $(cat "$LOG")"
+  notice "notify-send Bercail Decisions: allow push of $ORIGIN refs/heads/feature?"
   # Allow and Deny, no recommendation; the brief names every pinned fact.
   bercail shep question json | jq -e --arg t "$token" --arg o "$ORIGIN" '.questions[] | select("\(.id)@\(.revision)" == $t)
     | .kind == "guard" and .options == ["Allow", "Deny"] and (has("recommendation") | not)
@@ -154,14 +163,16 @@ pushes() { git -C "$ORIGIN" reflog show --format=%H refs/heads/feature 2>/dev/nu
 }
 
 @test "a pick after the card expired is refused and runs nothing" {
+  local clock="$BATS_TEST_TMPDIR/clock.mjs"
   id="$(ticket "git -C $REPO push origin feature")"
-  # It expires while the person looks at it.
-  later="$(date -u -d '+3 seconds' +%Y-%m-%dT%H:%M:%S.000Z)"
-  jq --arg e "$later" '.expires = $e' "$ASKS/$id.json" >"$ASKS/$id.tmp" && mv "$ASKS/$id.tmp" "$ASKS/$id.json"
-  BERCAIL_GUARD_ASK_POLL_MS=10000 worker "$id"
+  worker "$id"
   token="$(card "$id")"
-  sleep 3
-  pick "$token" Allow | jq -e '.accepted == false and (.reason | test("expired"))' >/dev/null || fail "late Allow taken"
+  # The person picks two hours on, past the card's hour; the worker's clock stays now.
+  printf 'const now = Date.now;\nDate.now = () => now() + 7200000;\n' >"$clock"
+  NODE_OPTIONS="--import=$clock" pick "$token" Allow | jq -e '.accepted == false and (.reason | test("expired"))' >/dev/null \
+    || fail "late Allow taken"
+  bercail shep question json | jq -e --arg t "$id" '.questions[] | select(.guard.ticket == $t) | .status == "pending"' \
+    >/dev/null || fail "the late Allow answered the card"
   [[ "$(pushes)" -eq 0 ]] || fail "pushed"
 }
 
