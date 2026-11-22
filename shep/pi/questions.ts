@@ -691,64 +691,28 @@ export const tokenOf = (q: Pick<Question, "id" | "revision">): string => `${q.id
 // The decision-timeout matrix: one-way and two-way doors. A two-way door is cheap to
 // walk back, so a reversible question there takes Shep's recommendation at its
 // deadline; a one-way door always waits for the person. docs/shep.md keeps the same
-// table. An action question's action is its effect, from a closed set: commit, or
-// merge/land; the helper captured its candidate. A planning pick has no action. The
-// prompt, choices and brief can only make it stricter: a one-way word there wins, and
-// so does a merge or commit word without that action. What no row names is one-way.
+// table. The door is what the card can do: its kind, its action from a closed set
+// (commit, or merge/land), and whether it carries a push. No word in its prompt,
+// choices or brief changes it. What no row names is one-way.
 export type Door = { door: "one-way" | "two-way"; row: string; hit: string };
-const ONE_WAY: [string, RegExp][] = [
-  ["force push", /\bforce[- ]?push\w*|--force\b|\bpush\b[^\n]*\s-f\b/i],
-  [
-    "publishing to a forge",
-    /\b(push|pushes|pushed|pushing|submit|submits|submitted|publish|publishes|published|publishing|trail|trails|pull request)\b/i,
-  ],
-  ["an LGTM or approval", /\b(lgtm|approve|approves|approved|approval|reviewed-by)\b/i],
-  ["a release or tag", /\b(release|releases|released|releasing|tag|tags|tagged|tagging|ship|ships|shipped)\b/i],
-  [
-    "a deletion",
-    /\b(delete|deletes|deleted|deleting|deletion|remove|removes|removed|removing|rm|clean|cleans|cleaned|destroy|destroys|destroyed|wipe|wipes|wiped|purge|purges|purged|reset|prune)\b/i,
-  ],
-  [
-    "money",
-    /[$€£]|\b(money|pay|pays|paid|paying|payment|purchase|purchases|purchased|buy|buys|bought|spend|spends|spent|spending|refund|invoice|billing|subscription)\b/i,
-  ],
-  [
-    "an outward post",
-    /\b(post|posts|posted|posting|tweet|tweets|email|emails|emailed|announce|announces|announced|comment|comments|commented|send|sends|sending|reply|replies)\b/i,
-  ],
-  ["a device or deploy action", /\b(device|devices|deploy|deploys|deployed|deploying|deployment)\b/i],
-];
-const MERGE = /\b(merge|merges|merged|merging|land|lands|landed|landing)\b/i;
-const COMMIT = /\b(commit|commits|committed|committing)\b/i;
-const ACTIONS = new Set(["commit", "merge", "land"]);
 // mergeReversible: whether the repo's trusted policy says merge_reversible = true;
 // asked only for a merge or land.
 export function door(
-  q: Pick<QuestionSpec, "kind" | "prompt" | "options" | "brief" | "target">,
+  q: Pick<QuestionSpec, "kind" | "prompt" | "push" | "target">,
   mergeReversible: () => boolean,
 ): Door {
   if (q.kind === "review") return { door: "one-way", row: "an LGTM", hit: "a review question" };
-  const words = [q.prompt, ...q.options, q.brief ?? ""].join("\n");
-  for (const [row, pattern] of ONE_WAY) {
-    const hit = pattern.exec(words);
-    if (hit) return { door: "one-way", row, hit: hit[0] };
-  }
+  if (q.kind !== "planning" && q.kind !== "action")
+    return { door: "one-way", row: "a guard or land card", hit: q.kind };
+  if (q.push) return { door: "one-way", row: "a push", hit: q.push.approves };
   const action = q.target.action;
-  if (action !== null && (q.kind !== "action" || !ACTIONS.has(action)))
-    return { door: "one-way", row: "an action no two-way row names", hit: action };
-  const merge = MERGE.exec(words)?.[0];
-  if (merge && action !== "merge" && action !== "land")
-    return { door: "one-way", row: "a merge asked without action merge or land", hit: merge };
-  const commit = COMMIT.exec(words)?.[0];
-  if (commit && action !== "commit")
-    return { door: "one-way", row: "a commit asked without action commit", hit: commit };
-  if (action === "merge" || action === "land")
+  if (q.kind === "planning" && action === null) return { door: "two-way", row: "a planning pick", hit: q.prompt };
+  if (q.kind === "action" && action === "commit") return { door: "two-way", row: "a local commit", hit: action };
+  if (q.kind === "action" && (action === "merge" || action === "land"))
     return mergeReversible()
       ? { door: "two-way", row: "a merge where the policy says merge_reversible", hit: action }
       : { door: "one-way", row: "a merge where the policy does not say merge_reversible", hit: action };
-  return action === "commit"
-    ? { door: "two-way", row: "a local commit", hit: action }
-    : { door: "two-way", row: "a planning pick", hit: q.prompt };
+  return { door: "one-way", row: "an action no two-way row names", hit: action ?? q.kind };
 }
 
 // merge_reversible as a live check read it: true only when it read a policy that says so.
@@ -1024,7 +988,9 @@ export class QuestionStore {
   // The deadline passed with no pick: the ledger, not Shep, records Shep's
   // recommendation as DEFAULT_SOURCE, once, and only when the live check the caller
   // ran just before found the question unchanged and, with the policy it read, still
-  // a two-way door. The caller checks a due question.
+  // a two-way door. The caller checks a due question. The default authorizes only the
+  // card's own action: a local commit, a merge the policy calls reversible, or on a
+  // planning card a plan, an order or a scope, and no write.
   expire(token: string, check: Check): AnswerResult {
     return this.locked((state) => {
       const q = this.find(state, token);
@@ -1245,7 +1211,7 @@ export function projection(snapshot: QuestionSnapshot): string {
   }
   lines.push(
     `${pending.length} pending; ${pending.length - lines.length + 1} omitted. Reply with /reply Qn@revision answer; bare replies never select a target.`,
-    "Shortened fields end in …; full targets and history: bercail shep questions --json.",
+    "Shortened fields end in …; full targets and history: bercail shep questions --json --all.",
   );
   // The answers, newest first: the record of an answer, whatever became of its event.
   // A default is never listed as the person's until they said OK to it; one they

@@ -28,7 +28,14 @@ async function main() {
     return;
   }
   if (op === "json") result = store.snapshot();
-  else if (op === "panel") result = await panel(store, state);
+  // What waits on the person: `bercail shep questions --json`.
+  else if (op === "pending") result = { pending: store.snapshot().questions.filter(waiting) };
+  else if (op === "get") {
+    if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
+      throw new Error("get requires an explicit Qn@revision token");
+    result = store.snapshot().questions.find((q) => tokenOf(q) === args[0]);
+    if (!result) throw new Error("unknown question revision");
+  } else if (op === "panel") result = await panel(store, state);
   // What Shep's runtime runs on its timer: records the defaults that are due.
   else if (op === "expire") result = (await expireDue(state)).map(tokenOf);
   else if (op === "thread") {
@@ -151,7 +158,7 @@ async function main() {
     }
   } else
     throw new Error(
-      "usage: question-cli.ts list | json | panel | expire | create | revise | reply | answer | withdraw | guard-create | land-create | land-result | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | guard-claim Qn@revision TICKET | land-claim Qn@revision | land-step Qn@revision STEP [DETAIL]",
+      "usage: question-cli.ts list | json | pending | get Qn@revision | panel | expire | create | revise | reply | answer | withdraw | guard-create | land-create | land-result | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | guard-claim Qn@revision TICKET | land-claim Qn@revision | land-step Qn@revision STEP [DETAIL]",
     );
   console.log(JSON.stringify(result));
 }
@@ -184,6 +191,9 @@ function guardSpec(input: Record<string, any>): QuestionSpec {
   };
 }
 
+// A pending card, or a default the person has not said OK to or reversed.
+const waiting = (q: Question) => q.status === "pending" || unsettled(q);
+
 // A land card's spec: Ship it or Not yet on the facts read now, refused while its desk does
 // not check out. The store checks every fact is there.
 function landSpec(input: Record<string, any>): QuestionSpec {
@@ -207,8 +217,7 @@ function landSpec(input: Record<string, any>): QuestionSpec {
 async function panel(store: QuestionStore, state: string) {
   const bin = process.env.BERCAIL_SHEP_BIN || "bercail";
   const cards = [];
-  const shown = (q: Question) =>
-    q.status === "pending" || unsettled(q) || (q.status === "answered" && q.settled?.outcome === "reversed");
+  const shown = (q: Question) => waiting(q) || (q.status === "answered" && q.settled?.outcome === "reversed");
   for (const q of store.snapshot().questions.filter(shown)) {
     // A default is checked too: the person's OK or Reverse on it needs it fresh.
     const check = await checkQuestion(q);

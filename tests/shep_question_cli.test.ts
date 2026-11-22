@@ -869,6 +869,88 @@ test("a reversed default stays on the panel as reversed until Shep withdraws it"
   expect(ok("json").questions[0]).toMatchObject({ status: "withdrawn", settled: { choice: "search" } });
 });
 
+test("pending lists only the pending cards and the defaults not yet OK'd or reversed", () => {
+  const plan = (topic: string, extra: Record<string, unknown> = {}) =>
+    ok(
+      "create",
+      spec({
+        requestId: topic,
+        topic,
+        kind: "planning",
+        prompt: `Which desk starts first for ${topic}?`,
+        options: ["auth", "search"],
+        recommendation: { choice: "auth", why: "it unblocks search" },
+        issue: null,
+        desk: null,
+        base: null,
+        action: null,
+        ...extra,
+      }),
+    );
+  plan("pending");
+  plan("picked");
+  plan("withdrawn");
+  plan("revised");
+  for (const topic of ["defaulted", "confirmed", "reversed"]) plan(topic, { reversible: true });
+  pick("p", "search", "Q2@1");
+  ok("withdraw", { requestId: "w", token: "Q3@1", reason: "moot" });
+  ok(
+    "revise",
+    spec({
+      requestId: "revise",
+      token: "Q4@1",
+      topic: "revised",
+      kind: "planning",
+      prompt: "Which desk starts first, now?",
+      options: ["auth", "search"],
+      issue: null,
+      desk: null,
+      base: null,
+      action: null,
+    }),
+  );
+  const file = join(env.BERCAIL_SHEP_STATE!, "questions.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  for (const q of ledger.questions.filter((q: any) => q.deadline)) {
+    q.createdAt = new Date(Date.now() - 3600000).toISOString();
+    q.deadline = new Date(Date.now() - 1800000).toISOString();
+  }
+  ledger.requests = [];
+  writeFileSync(file, JSON.stringify(ledger));
+  expect(ok("expire")).toEqual(["Q5@1", "Q6@1", "Q7@1"]);
+  ok("answer", { requestId: "ok", token: "Q6@1", source: "panel picker", outcome: "ok" });
+  ok("answer", { requestId: "r", token: "Q7@1", source: "panel picker", outcome: "reversed" });
+
+  const { pending, ...rest } = ok("pending");
+  expect(rest).toEqual({});
+  expect(pending.map((q: any) => [`${q.id}@${q.revision}`, q.status, q.answer?.choice ?? null])).toEqual([
+    ["Q1@1", "pending", null],
+    ["Q5@1", "answered", "auth"],
+    ["Q4@2", "pending", null],
+  ]);
+  expect(pending[0]).toEqual(ok("json").questions[0]);
+  expect(ok("json").questions).toHaveLength(8);
+});
+
+test("get prints the exact revision and refuses an unknown one", () => {
+  ok("create", spec());
+  ok("revise", spec({ requestId: "revise", token: "Q1@1", prompt: "Review this other candidate?" }));
+  const [first, second] = ok("json").questions;
+  expect(ok("get", undefined, ["Q1@1"])).toEqual(first);
+  expect(ok("get", undefined, ["Q1@2"])).toEqual(second);
+  expect(second).toMatchObject({ revision: 2, prompt: "Review this other candidate?", status: "pending" });
+  for (const [args, error] of [
+    [["Q1@3"], /unknown question revision/],
+    [["Q2@1"], /unknown question revision/],
+    [["Q1"], /explicit Qn@revision/],
+    [[], /explicit Qn@revision/],
+  ] as const) {
+    const result = call("get", undefined, [...args]);
+    expect([result.status, result.stdout]).toEqual([1, ""]);
+    expect(result.stderr).toMatch(error);
+  }
+});
+
 test("a commit is a two-way door; a merge is one only while the repo's policy says merge_reversible", () => {
   const act = (requestId: string, action: string, prompt: string) =>
     call(

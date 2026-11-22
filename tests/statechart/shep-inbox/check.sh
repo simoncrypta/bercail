@@ -19,6 +19,7 @@ expect=(
   "bug-source-after-claim:OneReportPerFinish"
   "bug-claimed-only:NeverLost"
   "bug-no-lock:OneConsumer SavedOnce ShownAgainOnlyAfterLostReply"
+  "bug-held-pending:NeverLost"
 )
 bad=0
 for pair in "${expect[@]}"; do

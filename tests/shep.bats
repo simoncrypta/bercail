@@ -350,7 +350,7 @@ EOF
 @test "the shep usage names every subcommand" {
   local out
   out="$(shep unknown </dev/null 2>&1)" && fail "an unknown subcommand passed"
-  [[ "$out" == 'bercail shep: usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json] | question create|revise|reply|answer|withdraw|check|thread|panel|expire|discuss|closed|push-approval' ]] \
+  [[ "$out" == 'bercail shep: usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json [--all]] | question create|revise|reply|answer|withdraw|get|check|thread|panel|expire|discuss|closed|push-approval' ]] \
     || fail "shep usage: $out"
 }
 
@@ -519,7 +519,7 @@ EOF
 
 @test "question commands use Shep's scratch state and never infer an answer" {
   need node
-  run shep questions --json
+  run shep questions --json --all
   [[ "$status" == 0 ]] || fail "question snapshot failed: $output"
   jq -e '.version == 1 and .questions == [] and .selected == null' <<<"$output" >/dev/null
   [[ -f "$STATE/questions.lock" ]] || fail "question state did not use XDG_STATE_HOME"
@@ -528,6 +528,32 @@ EOF
   run shep question check Q1@1
   [[ "$status" == 1 && "$output" == *'unknown question revision'* ]] || fail "$output"
   [[ ! -f "$STATE/questions.json" ]] || fail "a read created question authority"
+}
+
+@test "questions --json lists what waits on the person, and --all the whole ledger" {
+  local repo="$BATS_TEST_TMPDIR/repo" id all
+  need node
+  git init -q "$repo"
+  for id in kept moot; do
+    jq -n --arg repo "$repo" --arg id "$id" '{requestId:$id, kind:"planning", prompt:"Which desk first?",
+      options:["auth","search"], origin:{event:"chat", session:"shep-1", entry:null}, repo:$repo, issue:null,
+      topic:$id, desk:null, base:null, action:null}' | shep question create >/dev/null || fail "create $id"
+  done
+  jq -n '{requestId:"w", token:"Q2@1", reason:"moot"}' | shep question withdraw >/dev/null || fail "withdraw"
+  run shep questions --json
+  [[ "$status" == 0 ]] || fail "$output"
+  jq -e '(keys == ["pending"]) and ([.pending[] | "\(.id)@\(.revision)"] == ["Q1@1"])' <<<"$output" >/dev/null \
+    || fail "pending: $output"
+  for all in "--json --all" "--all --json"; do
+    # shellcheck disable=SC2086
+    run shep questions $all
+    jq -e '[.questions[] | .status] == ["pending", "withdrawn"]' <<<"$output" >/dev/null || fail "$all: $output"
+  done
+  # One word that holds both flags is not them, and a typo is no listing.
+  run shep questions "--json --all"
+  [[ "$status" == 1 && "$output" == *'usage: bercail shep questions [--json [--all]]'* ]] || fail "one word: $output"
+  run shep questions --json --typo
+  [[ "$status" == 1 && "$output" == *'usage: bercail shep questions [--json [--all]]'* ]] || fail "typo: $output"
 }
 
 @test "[shep] decision_timeout sets a reversible question's deadline, in the helper and in Shep's Pi" {

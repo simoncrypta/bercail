@@ -76,7 +76,7 @@ function decisionLine(ev: any): string | null {
       : ev.confirmed === true
         ? `The person said OK to the default "${one(ev.choice)}" in the ${by}: it is now their pick, as if they had picked it on the card (an LGTM only where the card asked for one); if you already acted on the default, keep that and do not do it again; if not, act on it once as their pick while question check is fresh`
         : by === DEFAULT_SOURCE
-          ? `Nobody picked by the deadline: the two-way door defaulted to your recommendation "${one(ev.choice)}" (default after timeout, not the person's choice; never an LGTM or reviewer; run question check before you act)`
+          ? `Nobody picked by the deadline: the two-way door defaulted to your recommendation "${one(ev.choice)}" (default after timeout, not the person's choice; never an LGTM or reviewer; it authorizes only the card's own action: action commit, the local commit; merge or land, that merge; a planning card, no write; run question check before you act)`
           : by
             ? `The person picked "${one(ev.choice)}" in the ${by}`
             : one(ev.defaulted)
@@ -489,7 +489,9 @@ export default function (pi: ExtensionAPI) {
       prune(delivered, Date.now());
       reconcile(delivered, snapshot);
       const ready = records(delivered).filter((t) => !receipt(t.ev) && !t.ev.delivery_error && !pending.has(id(t.ev)));
-      if (!ready.length) return;
+      // While Shep's run goes, hold what is ready for one message at agent_settled,
+      // so a burst of picks costs one model call, not one each in the middle of other work.
+      if (!ready.length || !ctx.isIdle()) return;
       const sessionFile = ctx.sessionManager.getSessionFile();
       if (!sessionFile) {
         status("Inbox pending: no persistent session file available");
@@ -532,6 +534,10 @@ export default function (pi: ExtensionAPI) {
   };
   const later = () => {
     if (active && !soon) soon = setTimeout(drain, 200);
+  };
+  const settled = () => {
+    if (soon) clearTimeout(soon);
+    drain();
   };
 
   pi.on("session_start", async (_event, context) => {
@@ -585,6 +591,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_end", later);
   pi.on("context", verify);
   pi.on("turn_end", verify);
-  pi.on("agent_settled", verify);
+  pi.on("agent_settled", settled);
   pi.on("session_shutdown", stop);
 }

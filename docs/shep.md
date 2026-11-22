@@ -244,6 +244,8 @@ A bare `yes`, `1` or `LGTM` answers nothing. A stale revision is rejected, a con
 
 `shep_question` binds a question to an explicit checkout and job, checked against the repo's beads, and never finds a job from a bare issue id. A repo is its git common directory, shared by its worktrees; another clone is a separate repo. The desk is optional: a named desk is checked against hc and its `desk-sessions` record, and only one that passes lends the question its space and session. A desk that is gone, has no record, sits in another folder, belongs to another job or has no verifiable Pi session is a **warning** on the card, as is a job question with no desk; the card still reaches the panel and can be answered. Invalid fields, an unknown issue, an unreadable checkout or a base ref that cannot be resolved stop the request. In an Entire repo the job can be a [trail](#trails-as-jobs), checked with `entire trail show <n>` instead of beads: a trail the repo's project lacks is refused, and the question keeps the trail's Entire ID and URL. An answer holds to the ID: the same number in another project is another job, which makes the card stale and which a revision cannot move to; a moved URL does not. Review and action questions record desk, space, session, worktree, action, branch, head, staged tree, and the base ref with what it resolved to; a planning question records no branch, head or tree, so commits leave it fresh unless it names a base that moves. An answer holds to the job, branch, staged tree and base, not the desk, and to HEAD only loosely: one commit of the approved tree on the asked HEAD and branch (a single parent, that tree) keeps it fresh, as does a base of HEAD or that branch moved by that commit. A changed intent or candidate is a new revision (a revision cannot change repo, job or topic). Withdrawing (`shep_question_withdraw`, with a reason) takes a question off the panel for good, and is not an answer. It applies to a pending question, and to a default you have not said OK to: one Shep found moot, or one you reversed, once Shep has handled it. The ledger keeps the default and your Reverse.
 
+Shep's model gets back only the token, status, deadline and door, and the live check's status, reasons and warnings, each cut to 300 characters. The whole question and check, policy included, stay in the tool result's details, which the session file keeps and the model does not see. `question get` prints the revision and `question check` the policy when Shep needs them.
+
 `bercail shep question check Q42@3` rechecks target and policy and always reports `authority: false`: fresh is not permission, and guard, shipping and desk-prompt authority stay separate. It re-reads the desk, branch and candidate live. A changed repo, job, branch, head (beyond that one commit), tree, base or action makes it **stale**; an unreadable target or policy makes it **unavailable**. Neither can reuse an answer. Desk problems are its `warnings`, never a reason to bind to a replacement terminal. Shep reports the warnings. It must recheck the target and policy through the usual safeguards before an authorized action: `check` runs nothing and does not close a race with a shipping command.
 
 The ledger, not the transcript, owns question state. Shep reloads it before each model run and in compaction or rollover, and stops deciding when it is unavailable. The store is `questions.json` under `$XDG_STATE_HOME/bercail/shep/` (`~/.local/state` by default).
@@ -252,27 +254,19 @@ The ledger, not the transcript, owns question state. Shep reloads it before each
 
 A decision that can be walked back should not keep work waiting on you. Shep marks such a question `reversible`. It waits for you until its deadline, 30 minutes after it was asked by default (`[shep] decision_timeout` in [config](config.md), in minutes; `0` never defaults), then takes Shep's recommendation. Shep's brief on the card says it defaults to the recommendation when the card counts down, and in chat Shep gives the returned deadline; with none returned, it waits for you.
 
-A two-way door is cheap to walk back, so it may default; a one-way door always waits for you. The helper decides with this table (`door()` in `shep/pi/questions.ts`, one test per row) and refuses `reversible` on a one-way door. Only the actions `commit`, `merge` and `land` are in it; a planning pick has no action. The prompt, choices and brief can only make it stricter.
+A two-way door is cheap to walk back, so it may default; a one-way door always waits for you. The helper decides with this table (`door()` in `shep/pi/questions.ts`, one test per row) and refuses `reversible` on a one-way door. The door comes from what the card can do: its kind, its action, and whether it carries a push. Only the actions `commit`, `merge` and `land` are in it; a planning pick has no action. No word in the prompt, choices or brief changes the door, so a brief can describe a design that publishes.
 
-| Door | Row | For example |
-|------|-----|-------------|
+| Door | Row | When |
+|------|-----|------|
 | one-way | an LGTM | any review question: its answer is an LGTM, and a default never is one |
-| one-way | force push | `force push`, `--force`, `push -f` |
-| one-way | publishing to a forge | any push, `gt submit`, publish, a trail, a pull request |
-| one-way | an LGTM or approval | approve, `--reviewed-by` |
-| one-way | a release or tag | release, tag, ship |
-| one-way | a deletion | delete, remove, `rm`, `git clean`, reset, prune |
-| one-way | money | pay, buy, spend, a `$` |
-| one-way | an outward post | post, comment, email, announce, send, reply |
-| one-way | a device or deploy action | device, deploy |
+| one-way | a guard or land card | kind `guard` (a [guard card](#guard-asks)), and any kind but planning, review and action |
+| one-way | a push | a question with `push`: a default never approves a push |
 | one-way | an action no two-way row names | any action but `commit`, `merge` or `land`, and any action on a planning question |
-| one-way | a merge asked without action merge or land | merge or land in the words of a planning pick or a commit |
-| one-way | a commit asked without action commit | commit in the words of a planning pick, a merge or a land |
 | two-way or one-way | a merge or land | action `merge` or `land`: two-way only where the repo's policy says [`merge_reversible = true`](config.md#git-policy-per-repo), trusted |
 | two-way | a local commit | action `commit` |
 | two-way | a planning pick | no action: which desks to start, their order, a scope or approach, keeping or skipping a step that publishes nothing |
 
-bercail does not know whether a forge is public, so the word push makes a question one-way. Words can make a harmless choice one-way ("the release plan"), never the reverse.
+**A default authorizes only its card's own action:** the local commit on an action `commit` card, or the merge on an action `merge` or `land` card where the policy says `merge_reversible`. A planning card's default decides a plan, an order or a scope, and authorizes no write. "Delete the old branch?" asked as a planning pick can default, but its default does not let Shep run `git branch -D`. That rule is in Shep's prompt, not in the code. The guard and [push approval](#a-push-your-answer-approves) rules still apply, and a default never approves a push.
 
 The deadline is in the ledger. Shep's question extension runs `bercail shep question expire` at start and every 30 seconds, so at its next start it defaults the questions that are due, still fresh and still two-way. Each due question is checked live and the policy reread: one whose candidate changed keeps waiting for you, and a merge the policy no longer calls reversible waits with no countdown and can still be picked. Past the deadline of a door still two-way, the panel offers no pick. Shep checks again before acting on a default, and acts only while fresh and two-way.
 
@@ -330,7 +324,9 @@ The CLI works without Pi or a mod:
 
 ```bash
 bercail shep questions              # bounded pending projection (up to 20)
-bercail shep questions --json       # full snapshot and retained revisions
+bercail shep questions --json       # what waits on you: pending cards and defaults not yet OK'd, under pending
+bercail shep questions --json --all # full snapshot and retained revisions
+bercail shep question get Q42@3     # one revision, as the ledger keeps it (the guard's worker polls with it)
 bercail shep question check Q42@3   # recheck the candidate and current policy, with desk warnings (and a reversible one's door)
 bercail shep question thread release-plan
 bercail shep question panel         # the panel's JSON: pending questions and the defaults not yet OK'd or withdrawn, each checked
@@ -440,7 +436,7 @@ The guard refuses `bercail land run` and the question ledger's `land-create`, `l
 
 Once Shep has started once (making `~/.local/state/bercail/shep/inbox/`), the follower writes each finished or blocked desk as one file there: the [`agent_status/v2` payload](#the-payload) with `sink: "shep"`, mode 600, named `<desk>_<kind>_<second>.<seq>.json` (no `.<seq>` without a sequence number).
 
-Shep's `inbox.ts` submits the waiting events as a custom message, starting a turn or queued behind the current one, each with its `text`, `event_id`, desk, space, repo, issue and checkout, but not the desk's result summary or title. It is a signal to check the desk and issue, never an instruction or an answer.
+Shep's `inbox.ts` submits the waiting events as one custom message, each with its `text`, `event_id`, desk, space, repo, issue and checkout, but not the desk's result summary or title. It is a signal to check the desk and issue, never an instruction or an answer. When Shep is idle, a file that lands wakes the inbox, which sends 200 ms later and starts a turn. While Shep's run is going, the inbox still claims each file as it lands but holds the message, and sends everything ready as one message when the run settles (`agent_settled`), desk events first and decisions after. So four picks in twelve seconds while Shep works become one message that starts one turn, not four messages in the middle of other work. A long run delays them until it ends.
 
 The same folder carries decision events, written when you [answer](#answering) a question or a [reversible one](#reversible-questions) defaults (`decision-Q<n>-<rev>.json`), when you say OK to a default or reverse it (`decision-Q<n>-<rev>-ok.json`, `decision-Q<n>-<rev>-reversed.json`), or when you close [Discuss](#discuss) without a pick (`decision-Q<n>-<rev>-closed-<opening>.json`). The file name follows from the event id (`decision:<name>`), so a retry is the same event. Shep checks each against its question state before acting.
 

@@ -109,7 +109,7 @@ test("a deadline missed while nothing ran fires at the next run, once, with one 
   mkdirSync(delivered);
   const [taken] = claim(join(state, "inbox"), delivered);
   expect(taken!.line).toBe(
-    '- Nobody picked by the deadline: the two-way door defaulted to your recommendation "auth" (default after timeout, not the person\'s choice; never an LGTM or reviewer; run question check before you act) for Q1@1 "Which desk starts first?" (topic plan). Nothing was discussed. [event decision:Q1-1]',
+    '- Nobody picked by the deadline: the two-way door defaulted to your recommendation "auth" (default after timeout, not the person\'s choice; never an LGTM or reviewer; it authorizes only the card\'s own action: action commit, the local commit; merge or land, that merge; a planning card, no write; run question check before you act) for Q1@1 "Which desk starts first?" (topic plan). Nothing was discussed. [event decision:Q1-1]',
   );
   expect(await expireDue(state)).toEqual([]);
   expect(inbox()).toEqual([]);
