@@ -188,6 +188,17 @@ handoff_worktree_of() {
   printf '%s' "$path"
 }
 
+# A partial creation's space $1 is closed: it is named, and hc shows no live
+# terminal in it. A failed lookup is not closed.
+handoff_space_closed() {
+  local label
+  [[ -n "$1" ]] || return 1
+  for label in herdr.space bercail.space; do
+    "${HC_BIN:-hc}" ls --json --label "$label=$1" 2>/dev/null \
+      | jq -e '(.terminals | type == "array") and all(.terminals[]; .state != "live")' >/dev/null || return 1
+  done
+}
+
 handoff_gh_catalog() {
   local dir
   dir="$(git -C "$1" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
@@ -453,7 +464,7 @@ handoff_spawn_main() {
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0
-  local base="" fresh="" model="" target="" fork_reason="" adopt_reason="" staged="" session="" lock="" prior path prior_main created=""
+  local base="" fresh="" model="" target="" fork_reason="" adopt_reason="" staged="" session="" lock="" prior path prior_main own created=""
   local existing=0 reuse=0 released="" role=""
 
   while [[ $# -gt 0 ]]; do
@@ -609,6 +620,15 @@ handoff_spawn_main() {
       [[ "$prior_main" == "$main" ]] || continue
       if jq -e --arg i "$issue" '.issue == $i' <<<"$prior" >/dev/null; then
         [[ -z "$adopt_reason" ]] || continue
+        # Dispatch finishing a partial creation in its own worktree: that spawn
+        # started no desk, and no desk can still come up in its closed space.
+        if [[ "${BERCAIL_TASK_RESERVED:-}" == 1 && "$reuse" -eq 1 ]] \
+          && jq -e --arg b "$branch" '.ok == false and .agent_started == false and (.desk // "") == "" and .branch == $b' <<<"$prior" >/dev/null \
+          && own="$(handoff_worktree_of "$main" "$branch")" \
+          && [[ "$(_git_backend_realpath "$path")" == "$(_git_backend_realpath "$own")" ]] \
+          && handoff_space_closed "$(jq -r '.space // empty' <<<"$prior")"; then
+          continue
+        fi
         handoff_die "original task already has a handoff: $prior; use bercail shep task dispatch, never a new preparation branch"
       fi
       [[ -n "$fork_reason" ]] || handoff_die "logical target already has a handoff: $prior; continue its issue, or pass --fork-reason on a separate exploration issue"

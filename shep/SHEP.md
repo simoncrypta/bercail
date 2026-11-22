@@ -66,7 +66,9 @@ When dispatch refuses:
 - No response: retry that request's own `requestId` and payload, never a new
   one.
 - `creation outcome UNKNOWN` or a spawn timeout: retry the creation's own
-  `requestId` and payload.
+  `requestId` and payload (the task record holds both). When it says the
+  partial creation's space is still open, tell the person what holds it and
+  ask them to close it, then retry.
   When that fails, give the person its `next`, or the error, and look up the
   original desk's handoff record, worktree and space for them.
 - A changed payload for a known `requestId`: send the original payload

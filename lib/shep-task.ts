@@ -148,6 +148,8 @@ function bd(repo: string, ...args: string[]): any {
   return out ? JSON.parse(out) : null;
 }
 const timedOut = (error: any) => error?.cause?.code === "ETIMEDOUT";
+// A handoffs.jsonl line of a spawn that ended partial, as handoff-spawn writes it.
+const failed = (r: any) => r.ok === false && r.agent_started === false && !r.desk;
 // Save a creation about to spawn. bd may record it and still run out of time;
 // no desk started, so it is recorded UNKNOWN, which a retry starts again.
 function reserve(repo: string, value: any, task: Task): void {
@@ -471,16 +473,21 @@ function findOwner(
     return null;
   }
   const owner = verify(repo, candidates[0], id, saved);
-  if (
-    handoffs.some(
-      (r) =>
-        (r.desk && r.desk !== owner.desk) ||
-        (r.session && r.session !== owner.session) ||
-        (r.space && r.space !== owner.space) ||
-        (r.branch && r.branch !== owner.branch) ||
-        realpathSync(r.path) !== owner.cwd,
+  const conflicts = (r: any, i: number) => {
+    if (
+      (r.desk && r.desk !== owner.desk) ||
+      (r.branch && r.branch !== owner.branch) ||
+      realpathSync(r.path) !== owner.cwd
     )
-  )
+      return true;
+    if (!(r.session && r.session !== owner.session) && !(r.space && r.space !== owner.space)) return false;
+    // A partial line's pinned session and space name nothing once a later spawn
+    // of the issue followed it and its space is closed; closed throws while open.
+    if (!failed(r) || !handoffs.slice(i + 1).some((l) => l.issue === r.issue)) return true;
+    closed(repo, [r]);
+    return false;
+  };
+  if (handoffs.some(conflicts))
     throw new Error(
       "original handoff mapping conflicts with the live session/space/branch; no adoption or replacement",
     );
@@ -515,13 +522,39 @@ function queue(repo: string, id: string, owner: Owner, request: Request): string
   return path;
 }
 
+// The issue's handoffs.jsonl lines when each is of a spawn that ended partial.
+// Null when there are none, or when one may have started a desk.
+function partial(history: any[], id: string): any[] | null {
+  const lines = history.filter((r) => r.issue === id);
+  return lines.length && lines.every(failed) ? lines : null;
+}
+// A desk may still come up in a partial creation's space (the space's own desk
+// starts by itself), so its outcome is settled only once that space is closed.
+function closed(repo: string, lines: any[]): void {
+  if (lines.some((r) => !r.space))
+    throw new Error("the partial creation recorded no space, so its desk may still come up; inspect it");
+  for (const space of new Set(lines.map((r) => r.space)))
+    for (const label of ["herdr.space", "bercail.space"]) {
+      const open = JSON.parse(run(bin("hc"), ["ls", "--json", "--label", `${label}=${space}`], repo)).terminals.find(
+        (t: any) => t.state === "live",
+      );
+      if (open)
+        throw new Error(
+          `space ${space} of the partial creation is still open (terminal ${open.address}); close it, then retry`,
+        );
+    }
+}
+
 // What a creation whose spawn ended without a desk left: no handoffs.jsonl line
-// for the issue (the spawn writes one when it finishes), no desk for it, and at
-// most the branch's clean worktree, where only idle shells run. Returns that
-// worktree, or null when there is none; throws why the outcome stays UNKNOWN.
+// for the issue (the spawn writes one when it finishes), or only the lines of a
+// spawn that ended partial in a space now closed, no desk for it, and at most the
+// branch's clean worktree, where only idle shells run. Returns that worktree, or
+// null when there is none; throws why the outcome stays UNKNOWN.
 function leftover(repo: string, id: string, branch: string, history: any[], prHead: string): string | null {
-  if (history.some((r) => r.issue === id))
+  const lines = history.filter((r) => r.issue === id);
+  if (lines.length && !partial(lines, id))
     throw new Error("handoffs.jsonl has a line for this issue, so the spawn finished; inspect what it says");
+  closed(repo, lines);
   const terminals = terminalsIn(repo);
   const desk = terminals.find((t) => t.labels?.["bercail.issue"] === id);
   if (desk) throw new Error(`terminal ${desk.address} is live for ${id}; inspect it`);
@@ -626,7 +659,7 @@ function create(repo: string, value: any, task: Task, opts: Spawn): any {
     creation.status = "unknown";
     creation.reason = String(error);
     creation.next =
-      "Retry this requestId: it finishes a creation that left no desk and no handoffs.jsonl line, else says what to inspect";
+      "Retry this requestId: it finishes an initial creation that left no desk (no handoffs.jsonl line, or a partial one whose space is closed), else says what to inspect";
     save(repo, value, task);
     throw error;
   }
@@ -788,37 +821,60 @@ function dispatch(op: string, input: any): any {
     const prior = task?.creation?.id === input.requestId ? task?.creation : undefined;
     if (prior) {
       if (!same(prior, request)) throw new Error("requestId payload changed; this is not a retry");
-      // The spawn of an UNKNOWN creation has ended. When it left no desk and
-      // no handoffs line, finish it in its clean worktree, or start it again.
+      // The spawn of an UNKNOWN creation has ended. When it ended partial and
+      // its desk came up after all, bind that desk. When it left no desk,
+      // finish it in its clean worktree, or start it again.
       if (prior.status === "unknown" && !task!.owner && !task!.adoptions?.some((a) => a.request === prior.id)) {
         const pr = target.startsWith("pr:") ? prFacts(repo, target) : null;
         const existing = !!pr && !pr.isCrossRepository && pr.headRefName === task!.branch;
-        let path: string | null;
+        let path: string | null = null;
+        let late: Owner | null = null;
         try {
-          // An autopilot desk starts only on the PR's own branch, on a retry too.
-          if (prior.stage === "autopilot" && !existing)
-            throw new Error(
-              `stage autopilot starts a desk only on ${target}'s own branch, and ${task!.branch} is not it`,
-            );
-          if (value.waiting?.length) throw new Error(blocked(value));
-          path = leftover(repo, value.id, task!.branch, history, existing ? pr!.headRefOid : "");
+          // A late desk binds only as the session and space the partial line pinned, in its checkout (findOwner).
+          const lines = partial(history, value.id);
+          if (lines) late = findOwner(repo, value.id, target, null, !!task!.forkReason, history);
+          if (late && (lines!.at(-1).session !== late.session || lines!.at(-1).space !== late.space))
+            throw new Error(`desk ${late.desk} is not the session and space the partial creation pinned; inspect it`);
+          if (!late) {
+            // An autopilot desk starts only on the PR's own branch, on a retry too.
+            if (prior.stage === "autopilot" && !existing)
+              throw new Error(
+                `stage autopilot starts a desk only on ${target}'s own branch, and ${task!.branch} is not it`,
+              );
+            if (value.waiting?.length) throw new Error(blocked(value));
+            path = leftover(repo, value.id, task!.branch, history, existing ? pr!.headRefOid : "");
+          }
         } catch (error) {
           const why = (error as Error).message;
           return { status: prior.status, owner: null, authority: false, retry: true, next: `Not finished: ${why}` };
         }
-        prior.status = "creating";
-        prior.next = path
-          ? `Finishing the partial creation in ${path}`
-          : "Starting the creation again: the last one left no worktree";
-        reserve(repo, value, task!);
-        const done = create(repo, value, task!, {
-          existing,
-          reuse: !!path,
-          released,
-          adoption: null,
-          forkReason: task!.forkReason,
-        });
-        return { ...done, retry: true };
+        if (!late) {
+          prior.status = "creating";
+          prior.next = path
+            ? `Finishing the partial creation in ${path}`
+            : "Starting the creation again: the last one left no worktree";
+          reserve(repo, value, task!);
+          const done = create(repo, value, task!, {
+            existing,
+            reuse: !!path,
+            released,
+            adoption: null,
+            forkReason: task!.forkReason,
+          });
+          return { ...done, retry: true };
+        }
+        prior.status = "started";
+        prior.next = `Desk ${late.desk} came up after its spawn ended partial; dispatch follow-ups to it as new requests`;
+        prior.result = {
+          path: late.cwd,
+          branch: late.branch,
+          space: late.space,
+          desk: late.desk,
+          session: late.session,
+        };
+        delete prior.reason;
+        task!.owner = late;
+        save(repo, value, task!);
       }
       // Once the desk started, its own session gets the creation's message.
       if (prior.status === "started" && !task!.owner) {
@@ -863,8 +919,11 @@ function dispatch(op: string, input: any): any {
     const before = owned(history, value.id, target, fork);
     const started = before.some((r) => r.desk && r.ok !== false && r.agent_started !== false);
     const adopting = !owner && (asked || !!task?.owner || started);
+    const unsettled = ["creating", "unknown"].includes(task?.creation?.status || "");
     if (!owner && !adopting && before.length)
-      throw new Error("original owner missing/stale; inspect the recorded checkout/space, no replacement was started");
+      throw new Error(
+        `original owner missing/stale; inspect the recorded checkout/space, no replacement was started${unsettled ? `. Its creation is UNKNOWN: retry request ${task!.creation!.id}` : ""}`,
+      );
     if (asked && owner)
       throw new Error(
         `live original owner ${owner.desk}; continue it with a normal dispatch, adoption is only for a gone owner`,
@@ -875,9 +934,12 @@ function dispatch(op: string, input: any): any {
       throw new Error(
         "branch differs from original task; continue the original checkout or fork to a separate issue with a reason",
       );
-    if (task && !owner && (!adopting || ["creating", "unknown"].includes(task.creation?.status || "")))
+    // A spawn that ended partial settles its creation once its space is closed: adoption may take its checkout.
+    const ended = adopting && task?.creation?.status === "unknown" ? partial(before, value.id) : null;
+    if (ended) closed(repo, ended);
+    if (task && !owner && (!adopting || (unsettled && !ended)))
       throw new Error(
-        "creation outcome UNKNOWN; retry its own requestId to finish a partial creation, or inspect the worktree/space facts; do not launch another",
+        `creation outcome UNKNOWN; retry its own requestId${task.creation ? ` (${task.creation.id})` : ""} to finish a partial creation, or inspect the worktree/space facts; do not launch another`,
       );
     const adoption = adopting ? adoptable(repo, value.id, target, task, history, input) : null;
     // A new desk waits for the trails a "Blocked by:" line names; a live or adopted one goes on.

@@ -1232,7 +1232,7 @@ if [[ "$1" == run ]]; then
   printf '%s\0' "$@" | jq -Rs 'split("\u0000") | .[:-1]' >"$DESK_ARGV"
 fi
 case "$1" in
-  ls) printf '{"terminals":[]}\n' ;;
+  ls) if [[ -n ${DESK_HC_LS:-} ]]; then cat "$DESK_HC_LS"; else printf '{"terminals":[]}\n'; fi ;;
   run) printf '{"address":"t9"}\n' ;;
   *) printf '{}\n' ;;
 esac
@@ -1463,6 +1463,17 @@ _desk_moved_origin() {
   out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --reuse-worktree 2>&1)" && fail "$out"
   [[ "$out" == *"has changes"* ]] || fail "$out"
   rm "$DESK_REPO.feat/new.txt"
+  mkdir -p "$DESK_STATE/bercail"
+  jq -nc --arg p "$existing" --arg i "$ISSUE" '{ok:false,agent_started:true,path:$p,branch:"feat",issue:$i,desk:"t130",space:"sp-old"}' >"$DESK_STATE/bercail/handoffs.jsonl"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --reuse-worktree 2>&1)" && fail "$out"
+  [[ "$out" == *"already has a handoff"* ]] || fail "a spawn that started a desk is not finished again: $out"
+  # The line of a spawn that ended partial names no desk and says no agent started.
+  jq -nc --arg p "$existing" --arg i "$ISSUE" '{ok:false,agent_started:false,path:$p,branch:"feat",issue:$i,space:"sp-old",session:"s-pinned"}' >"$DESK_STATE/bercail/handoffs.jsonl"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --branch other 2>&1)" && fail "$out"
+  [[ "$out" == *"already has a handoff"* ]] || fail "only a finish in the partial line's worktree goes past it: $out"
+  printf '{"terminals":[{"address":"t130","state":"live"}]}\n' >"$BATS_TEST_TMPDIR/live.json"
+  out="$(DESK_HC_LS="$BATS_TEST_TMPDIR/live.json" BERCAIL_TASK_RESERVED=1 _desk_spawn --reuse-worktree 2>&1)" && fail "$out"
+  [[ "$out" == *"already has a handoff"* ]] || fail "a desk may still come up in the open space: $out"
   out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --reuse-worktree 2>"$BATS_TEST_TMPDIR/reuse.err")" \
     || fail "reuse failed: $out $(cat "$BATS_TEST_TMPDIR/reuse.err")"
   jq -e --arg p "$existing" '.ok and .path == $p and .desk == "t9"' <<<"$out" >/dev/null || fail "$out"

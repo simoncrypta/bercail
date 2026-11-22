@@ -50,8 +50,10 @@ EOF
 #!/usr/bin/env bash
 printf 'hc %s\n' "$*" >>"$LOG"
 case "$1" in
- ls) shopt -s nullglob; files=("$TASK_DATA/"t*.hc)
-     if ((${#files[@]})); then jq -s '{terminals:.}' "${files[@]}"; else echo '{"terminals":[]}'; fi ;;
+ ls) shopt -s nullglob; files=("$TASK_DATA/"t*.hc) want='{}'
+     # --label K=V keeps the terminals carrying every such label, as hc does.
+     while (($#)); do [[ $1 != --label ]] || want="$(jq -c --arg kv "$2" '. + {($kv | split("=")[0]): ($kv | split("=")[1:] | join("="))}' <<<"$want")"; shift; done
+     if ((${#files[@]})); then jq -s --argjson want "$want" '{terminals: [.[] | select(.labels as $l | $want | to_entries | all(.value == $l[.key]))]}' "${files[@]}"; else echo '{"terminals":[]}'; fi ;;
  get) cat "$TASK_DATA/$2.hc" ;;
  *) exit 8 ;;
 esac
@@ -215,16 +217,28 @@ EOF
 # A first dispatch for a new bstack desk on branch $2 (fresh by default).
 create() { request "${1:-r1}" | jq --arg b "${2:-fresh}" '.branch=$b | .stage="bstack"'; }
 
-@test "a spawn that finished without a desk reserves the job; retry reports UNKNOWN instead of launching again" {
+@test "a spawn that ended partial reserves the job: while its space is open, a retry reports UNKNOWN and a new request launches nothing" {
   local out
-  partial_launch
-  out="$(create | task dispatch 2>&1)" && fail "$out"
-  [[ "$out" == *"partial visible creation"* ]]
-  out="$(create | task dispatch)" || fail "$out"
-  jq -e '.status == "unknown" and .authority == false and .retry and (.next | contains("handoffs.jsonl has a line"))' <<<"$out"
+  partial_then
+  out="$(create r1 fix | task dispatch 2>&1)" && fail "$out"
+  shell_in t30 "$REPO"
+  out="$(create r1 fix | task dispatch)" || fail "$out"
+  jq -e '.status == "unknown" and .authority == false and .retry and (.next | contains("space sp-new of the partial creation is still open"))' <<<"$out" || fail "$out"
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
   jq -e '.status == "in_progress" and .metadata.bercail_task.creation.status == "unknown"' "$TASK_DATA/app-1.json"
-  out="$(create r2 | task dispatch 2>&1)" && fail "$out"
+  # A line with no space cannot show that space closed.
+  rm "$TASK_DATA/t30.hc"
+  jq -c 'del(.space)' "$XDG_STATE_HOME/bercail/handoffs.jsonl" >"$BATS_TEST_TMPDIR/r"
+  mv "$BATS_TEST_TMPDIR/r" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(create r1 fix | task dispatch)" || fail "$out"
+  jq -e '.status == "unknown" and (.next | contains("recorded no space"))' <<<"$out" || fail "$out"
+  # A line that does not say its spawn started no agent may have started one.
+  jq -c 'del(.agent_started)' "$XDG_STATE_HOME/bercail/handoffs.jsonl" >"$BATS_TEST_TMPDIR/r"
+  mv "$BATS_TEST_TMPDIR/r" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(create r1 fix | task dispatch)" || fail "$out"
+  jq -e '.status == "unknown" and (.next | contains("handoffs.jsonl has a line"))' <<<"$out" || fail "$out"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
+  out="$(create r2 fix | task dispatch 2>&1)" && fail "$out"
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]] || fail "a new request launched again: $out"
 }
 
@@ -315,6 +329,114 @@ EOF
   out="$(create | task dispatch)" || fail "$out"
   jq -e '.status == "started" and .creation.desk == "t21"' <<<"$out"
   grep '^spawn ' "$LOG" | tail -1 | grep -q -- '--reuse-worktree' && fail "nothing was left to reuse: $(cat "$LOG")"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 2 ]]
+}
+
+# The first spawn ends partial the way handoff-spawn logs it: no desk, ok and
+# agent_started false, the fix checkout, space sp-new and the session it pinned
+# ($1, s-pinned by default). Later spawns run bin/finish.
+partial_then() {
+  rm -f "$TASK_DATA/"*.hc
+  : >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  export BERCAIL_HANDOFF_SPAWN="$BATS_TEST_TMPDIR/bin/spawn" TASK_MARK="$BATS_TEST_TMPDIR/partial-done" TASK_REPO="$REPO" TASK_PINNED="${1:-s-pinned}"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'EOF'
+#!/usr/bin/env bash
+[[ -f "$TASK_MARK" ]] && exec "$(dirname "$0")/finish" "$@"
+touch "$TASK_MARK"
+printf 'spawn %s\n' "$*" >>"$LOG"
+jq -nc --arg p "$TASK_REPO.fix" --arg s "$TASK_PINNED" '{ok:false,agent_started:false,path:$p,branch:"fix",issue:"app-1",space:"sp-new",session:$s,target:"pr:12",error:"partial visible creation; inspect these facts, do not relaunch"}' | tee -a "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+exit 1
+EOF
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+}
+
+@test "once a partial creation's space is closed, a retry of its id finishes it in its clean worktree, and the next binds that desk" {
+  local out
+  cp "$TASK_DATA/t9.hc" "$BATS_TEST_TMPDIR/original.hc"
+  partial_then
+  export TASK_ORIGINAL="$BATS_TEST_TMPDIR/original.hc"
+  cat >"$BATS_TEST_TMPDIR/bin/finish" <<'EOF'
+#!/usr/bin/env bash
+printf 'spawn %s\n' "$*" >>"$LOG"
+cp "$TASK_ORIGINAL" "$TASK_DATA/t9.hc"
+jq -nc --arg p "$TASK_REPO.fix" '{ok:true,agent_started:true,path:$p,branch:"fix",space:"sp1",desk:"t9",session:"s1",issue:"app-1",target:"pr:12"}' | tee -a "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/finish"
+  out="$(create r1 fix | task dispatch 2>&1)" && fail "$out"
+  out="$(create r1 fix | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .creation.desk == "t9" and .retry' <<<"$out" || fail "$out"
+  grep '^spawn ' "$LOG" | tail -1 | grep -q -- '--branch fix .*--reuse-worktree' || fail "$(cat "$LOG")"
+  # The partial line's pinned session and space name no desk: they do not conflict with the one that finished it.
+  out="$(create r1 fix | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t9" and .owner.session == "s1"' <<<"$out" || fail "$out"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 2 ]]
+}
+
+@test "a partial creation's desk that came up after all is bound by a retry of its id, only with the session its line names" {
+  local out
+  cp "$TASK_DATA/t9.hc" "$BATS_TEST_TMPDIR/original.hc"
+  partial_then s-other
+  out="$(create r1 fix | task dispatch 2>&1)" && fail "$out"
+  # t9, the space's desk, comes up after the spawn ended.
+  cp "$BATS_TEST_TMPDIR/original.hc" "$TASK_DATA/t9.hc"
+  jq -c '.space = "sp1"' "$XDG_STATE_HOME/bercail/handoffs.jsonl" >"$BATS_TEST_TMPDIR/r"
+  mv "$BATS_TEST_TMPDIR/r" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(create r1 fix | task dispatch)" || fail "$out"
+  jq -e '.status == "unknown" and (.next | contains("mapping conflicts"))' <<<"$out" || fail "another session is not the pinned one: $out"
+  jq -c 'del(.session)' "$XDG_STATE_HOME/bercail/handoffs.jsonl" >"$BATS_TEST_TMPDIR/r"
+  mv "$BATS_TEST_TMPDIR/r" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(create r1 fix | task dispatch)" || fail "$out"
+  jq -e '.status == "unknown" and (.next | contains("not the session and space the partial creation pinned"))' <<<"$out" || fail "no pinned session, no binding: $out"
+  jq -c '.session = "s1"' "$XDG_STATE_HOME/bercail/handoffs.jsonl" >"$BATS_TEST_TMPDIR/r"
+  mv "$BATS_TEST_TMPDIR/r" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(create r1 fix | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t9" and .owner.session == "s1" and .retry' <<<"$out" || fail "$out"
+  jq -e '.metadata.bercail_task | .owner.desk == "t9" and (.creation | .status == "started" and (has("reason") | not))' "$TASK_DATA/app-1.json"
+  [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json' | wc -l)" == 1 ]]
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
+}
+
+@test "a partial line's pinned session and space stop counting once a later spawn followed it and its space is closed, never its checkout" {
+  local out partial launched record="$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  partial="$(jq -nc --arg p "$REPO.fix" '{ok:false,agent_started:false,path:$p,branch:"fix",issue:"app-1",space:"sp-new",session:"s-old",target:"pr:12"}')"
+  launched="$(head -1 "$record" | jq -c '. + {ok:true,agent_started:true,session:"s1"}')"
+  printf '%s\n%s\n' "$partial" "$launched" >"$record"
+  out="$(request | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t9"' <<<"$out" || fail "$out"
+  shell_in t30 "$REPO"
+  out="$(request r2 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"space sp-new of the partial creation is still open"* ]] || fail "a desk may still come up there: $out"
+  rm "$TASK_DATA/t30.hc"
+  printf '%s\n%s\n' "$(jq -c '.branch = "other"' <<<"$partial")" "$launched" >"$record"
+  out="$(request r3 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"mapping conflicts"* ]] || fail "a partial line's branch still counts: $out"
+  # A second partial creation whose pinned desk came up, after the first one's space closed.
+  printf '%s\n%s\n' "$partial" "$(jq -c '.session = "s1" | .space = "sp1"' <<<"$partial")" >"$record"
+  out="$(request r4 | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t9"' <<<"$out" || fail "$out"
+  # The first one pinned another session in the space that desk holds.
+  printf '%s\n%s\n' "$(jq -c '.space = "sp1"' <<<"$partial")" "$(jq -c '.session = "s1" | .space = "sp1"' <<<"$partial")" >"$record"
+  out="$(request r5 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"space sp1 of the partial creation is still open (terminal t9)"* ]] || fail "$out"
+}
+
+@test "a new request with adoptReason adopts the checkout a partial creation left, once its space is closed" {
+  local out
+  orphan
+  mv "$BERCAIL_HANDOFF_SPAWN" "$BATS_TEST_TMPDIR/bin/finish"
+  partial_then
+  out="$(create r1 fix | task dispatch 2>&1)" && fail "$out"
+  shell_in t31 "$REPO"
+  out="$(adopt r2 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"space sp-new of the partial creation is still open"* ]] || fail "$out"
+  out="$(adopt r3 | jq 'del(.adoptReason)' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"original owner missing/stale"* && "$out" == *"retry request r1"* ]] || fail "no reason, no adoption: $out"
+  rm "$TASK_DATA/t31.hc"
+  out="$(adopt r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .creation.desk == "t10" and (.warning | startswith("Adopted: desk t9 exited"))' <<<"$out" || fail "$out"
+  grep '^spawn ' "$LOG" | tail -1 | grep -q -- '--adopt-reason desk t9 exited' || fail "$(cat "$LOG")"
+  out="$(create r1 fix | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"request r1 is retired"* ]] || fail "$out"
   [[ "$(grep -c '^spawn ' "$LOG")" == 2 ]]
 }
 
