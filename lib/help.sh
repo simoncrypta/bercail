@@ -107,6 +107,7 @@ Post-install CLI (bercail):
                 ~/Work/worktree-archives/<repo>/, ends its desk, removes the worktree,
                 closes its space, and keeps the branch. Refuses uncommitted work,
                 commits on neither trunk nor a remote branch, and submodules.
+                --check <worktree> makes the same refusals and changes nothing.
 EOF
 }
 

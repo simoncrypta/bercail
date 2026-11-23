@@ -1,6 +1,6 @@
 # routines
 
-A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, and [the scheduler](#the-scheduler) that runs each routine when it is due. `bercail routine run` runs one now, and `--dry-run` prints the event a run would send. The plan is bercail-2qig.
+A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, and the built-in [cleanup routine](#the-cleanup-routine). `bercail routine run` runs one now, and `--dry-run` prints the event a run would send. The plan is bercail-2qig.
 
 ## Declare one
 
@@ -12,7 +12,7 @@ command = ["~/bin/my-check", "--json"]   # your own query; ~/ is your home
 every = "1d"                             # or at = "07:30", a local time each day
 
 [routine.cleanup]
-run = "cleanup"                          # a built-in, lib/routine/<name>.sh (none ship yet)
+run = "cleanup"                          # a built-in, lib/routine/<name>.sh: see below
 at = "07:30"
 ```
 
@@ -46,7 +46,7 @@ A run fails when the query exits non-zero, prints anything that is not findings,
 | `bercail routine show <name>` | Its schedule and state, and its last 10 runs, newest first |
 | `bercail routine show <name> --run <id>` | What that run found, each finding marked new, changed or same |
 | `bercail routine run <name>` | Run it now. It prints one line: `emitted`, `skipped (quiet)`, `skipped (paused)`, `skipped (overlap)`, `skipped (load)` or `failed`, and a line when an [event](#the-event) waits. It exits 1 when the run failed, or when it could not write its run, its state or its [event](#the-event) |
-| `bercail routine run <name> --dry-run` | Run it under the same locks, and print the `bercail.routine/v1` event it would send, or its line when there is none. It writes no state, no run and no inbox file, so the next real run counts the same findings again |
+| `bercail routine run <name> --dry-run` | Run it under the same locks, and print the `bercail.routine/v1` event it would send, or its line when there is none. It writes no state, no run and no inbox file, so the next real run counts the same findings again. Its query runs with `BERCAIL_ROUTINE_DRY_RUN=1` (`0` on a real run), so a built-in keeps no state of its own either |
 | `bercail routine pause <name>` / `resume <name>` | Stop and restart it. `resume` also clears the failures in a row |
 | `bercail routine tick` | Start each routine that is due, once. [The loop](#the-scheduler) runs it every minute |
 | `bercail routine loop` | A tick every minute, for as long as it runs; one per machine |
@@ -133,4 +133,23 @@ These hold when a process dies or a write fails, not across a power loss.
 
 **What Shep reads.** `show --run` shows what a run found while it is among the last 10 emitted runs, and its line while it is among the last 100 runs. A quiet run keeps no findings. An event Shep reads after that finds them gone, and [SHEP.md](../shep/SHEP.md#routine-events) has it tell you the run expired.
 
-Shep's `inbox.ts` writes the event's line from those fields only, and quarantines a malformed one in `delivered/`, as it does [any other](shep.md#desk-events). SHEP.md says what Shep does next: it reads `show`, handles only the findings marked `new` or `changed`, rechecks each against live state, and turns each that still holds into a card, a todo, a beads issue, a dispatch after the person's pick, or a guarded command. A card that would remove, close or dispatch something never defaults. For a paused routine, Shep says why in one line and resumes it only once the cause is fixed, or when you ask.
+Shep's `inbox.ts` writes the event's line from those fields only, and quarantines a malformed one in `delivered/`, as it does [any other](shep.md#desk-events). SHEP.md says what Shep does next: it reads `show`, handles only the findings marked `new` or `changed`, rechecks each against live state, and turns each that still holds into a card, a todo, a beads issue, a dispatch after the person's pick, or a guarded command. A card Shep asks that would remove, close or dispatch something never defaults; a guard card follows the guard's rules. For a paused routine, Shep says why in one line and resumes it only once the cause is fixed, or when you ask.
+
+## The cleanup routine
+
+`run = "cleanup"` finds what should be retired or asked about, on the schedule you give it, such as `at = "07:30"`. It only reads: the handoff records, the desks and Discuss terminals in `hc`, bd or Entire for each job, the Herdr window's spaces, `bercail cleanup --check`, and the question ledger. Each finding's key says what it is, and [SHEP.md](../shep/SHEP.md#routine-events) says what Shep does with it, after your pick where one is needed:
+
+| Key | Found when |
+|-----|------------|
+| `cleanup:<worktree>` | The latest handoff on the worktree names a closed job (a closed issue, or a trail closed or merged), the worktree is still on that handoff's branch, every desk in it or in the space cleanup finds on it is done on that job, nothing is staged, and `bercail cleanup --check` passes. Shep runs `bercail cleanup`, which goes through the guard as any cleanup does |
+| `staged-closed:<worktree>` | The same, but changes are staged there, and no desk there is working, as the review queue counts it |
+| `done-desk:<desk>` | A desk is done or idle on an open job with nothing staged, in two runs on different days at least 20 hours apart. Shep asks: send it back, close the job, or leave it |
+| `bg-done:<terminal>` | A background Shep is done or idle and still live. A blocked one waits |
+| `space:<id>` | A space on this machine that a handoff opened on its worktree is still open, and that folder is gone while its parent is there. With no Herdr window on the machine, no space is read |
+| `card:<Qn@rev>` | A pending card asked over 3 days ago whose check is stale or unavailable, or a default nobody said OK to or reversed in 3 days |
+| `discuss:<terminal>` | A Discuss terminal is open on a card the ledger has as answered, superseded or withdrawn |
+| `thread:<topic>` | Shep's selected thread topic has no card waiting |
+
+A job bd or Entire cannot read is not closed, and gives no finding. A source that does not answer (`hc`, the window's list once it runs, the ledger, a card's live check, or what `cleanup --check` reads) fails the run: a run that left its findings out would drop their hashes, and the next one would send them again as new. Titles hold no state or time, so a finding stays `same` while it holds. A space found while the window was open is new again after a run with no window.
+
+`routines/<name>/seen-done.json` keeps when each desk was first seen done, and drops one seen working, gone, staged, or on another job, so its clock starts over. A dry run reads it and writes nothing.

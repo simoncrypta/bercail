@@ -1,6 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, realpathSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { Question, QuestionLand, QuestionPush, QuestionTarget } from "./questions.ts";
 
@@ -43,6 +44,31 @@ function run(command: string, args: string[], cwd: string, timeout = 5000): stri
   }).trim();
 }
 const git = (cwd: string, ...args: string[]) => run("git", args, cwd);
+// The staged tree, from a copy of the index into objects of its own: git write-tree
+// rewrites the index it reads and adds its tree to the repo, and a check only reads.
+function stagedTree(cwd: string): string {
+  const dir = mkdtempSync(join(tmpdir(), "bercail-index-"));
+  const path = (name: string) => git(cwd, "rev-parse", "--path-format=absolute", "--git-path", name);
+  try {
+    copyFileSync(path("index"), join(dir, "index"));
+    mkdirSync(join(dir, "objects"));
+    return execFileSync("git", ["write-tree"], {
+      cwd,
+      env: {
+        ...targetEnv(),
+        GIT_INDEX_FILE: join(dir, "index"),
+        GIT_OBJECT_DIRECTORY: join(dir, "objects"),
+        // One entry of a colon-separated list: quoted, as git reads a path with a colon.
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: JSON.stringify(path("objects")),
+      },
+      encoding: "utf8",
+      timeout: 5000,
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 const identity = (cwd: string) => realpathSync(git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"));
 // The checked-out branch as its full ref (a short name can be ambiguous), or null
 // when HEAD is detached.
@@ -191,7 +217,7 @@ function inspectTarget(input: TargetInput): { target: QuestionTarget; warnings: 
     // A planning question is about the plan, not a commit: new commits leave it fresh.
     branch: input.kind === "planning" ? null : branch(worktree),
     head: input.kind === "planning" ? null : commit(worktree, "HEAD"),
-    stagedTree: input.kind === "planning" ? null : git(worktree, "write-tree"),
+    stagedTree: input.kind === "planning" ? null : stagedTree(worktree),
     baseRef: input.base,
     base: input.base === null ? null : commit(worktree, input.base),
     action: input.action,
@@ -508,7 +534,7 @@ export function landFacts(dir: string, issue: string) {
     action: "land",
     branch: branch(worktree),
     head: commit(worktree, "HEAD"),
-    stagedTree: git(worktree, "write-tree"),
+    stagedTree: stagedTree(worktree),
     baseRef: trunk,
     base,
   };

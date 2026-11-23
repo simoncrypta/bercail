@@ -216,6 +216,15 @@ check "a dry run prints the event of a changed finding" \
   jq -e '.schema == "bercail.routine/v1" and .counts.changed == 1' "$evidence/routine-dry-run.out"
 step routine-list 0 "$bercail" routine list
 check "list shows its last outcome" grep -qE '^verify +every 1d +next .* skipped \(quiet\) +active$' "$evidence/routine-list.out"
+# The cleanup built-in, on a HOME with nothing to retire: quiet, and a dry run
+# keeps no state of its own. It reads the question ledger with Node, which
+# this HOME's PATH finds only by its own folder, and spaces with the Herdr
+# helpers, which this HOME has no layout for.
+printf '\n[routine.tidy]\nrun = "cleanup"\nat = "07:30"\n' >>"$XDG_CONFIG_HOME/bercail/config.toml"
+step routine-cleanup 0 env PATH="${real_node:+$(dirname "$real_node"):}$PATH" \
+  BERCAIL_HERDR_LAYOUT="$repo/config/worktrunk/herdr-layout.sh" "$bercail" routine run tidy --dry-run
+check "the cleanup routine finds nothing to retire here" out_has routine-cleanup "tidy: skipped (quiet), 0 found"
+check "its dry run writes no seen-done.json" test ! -e "$XDG_STATE_HOME/bercail/routines/tidy/seen-done.json"
 # The scheduler: a tick starts the routine that never ran, once; the one that
 # ran today waits. shep status says the loop is not running here, and start
 # asks hc for the bercail-routines terminal.

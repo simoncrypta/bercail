@@ -159,6 +159,9 @@ const cleanupAsk =
   "Retire this worktree? bercail cleanup archives its .bercail/, ends its desk, removes the worktree and closes its space. The branch stays.";
 const cleanupHeadless =
   "bercail cleanup removes a worktree, so it runs only where the person can say yes. Leave it to Shep or the person.";
+const spaceCloseAsk = "Close this Herdr space? It ends every terminal in it.";
+const spaceCloseHeadless =
+  "Closing a Herdr space ends its terminals, so it runs only where the person can say yes. Leave it to Shep or the person.";
 const brainSetup =
   "This Brain or Graph command sets it up, syncs memories, runs background work, or runs a binary it names. Suggest it to the person; do not run it.";
 const brainSpend =
@@ -1469,14 +1472,26 @@ function setsTodoTarget(words: string[]): boolean {
   return args !== undefined && (args[0] === "route" || (args[0] === "target" && ["add", "rm"].includes(args[1])));
 }
 
-// bercail cleanup deletes a worktree, so the person says yes first.
+// bercail cleanup deletes a worktree, so the person says yes first. Its
+// --check on one worktree only reads.
 function decideCleanup(words: string[], input: GuardInput): GuardDecision {
   const plain = plainWords(words);
   if (basename(plain[0] ?? "") !== "bercail" || plain[1] !== "cleanup") return allow;
+  if (words.length === 4 && words[1] === "cleanup" && words[2] === "--check" && !words[3].startsWith("-")) return allow;
   if (readOnlyRole(input.role)) return block(readOnly);
   if (!input.hasUI) return block(cleanupHeadless);
   if (input.role === "shep-bg") return block(backgroundOnly);
   return { action: "ask", reason: cleanupAsk };
+}
+
+// Closing a Herdr space ends every terminal in it, so the person says yes first.
+function decideSpaceClose(words: string[], input: GuardInput): GuardDecision {
+  const plain = plainWords(words);
+  if (basename(plain[0] ?? "") !== "herdr-app" || plain[1] !== "do" || plain[2] !== "space.close") return allow;
+  if (readOnlyRole(input.role)) return block(readOnly);
+  if (!input.hasUI) return block(spaceCloseHeadless);
+  if (input.role === "shep-bg") return block(backgroundOnly);
+  return { action: "ask", reason: spaceCloseAsk };
 }
 
 // bercail job merge and supersede run entire trail merge and update for a trail
@@ -2602,6 +2617,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (refused) decision = worse(decision, refused);
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
     if (!help) decision = worse(decision, decideCleanup(words, here));
+    decision = worse(decision, decideSpaceClose(words, here));
     decision = worse(decision, decideJob(words, here));
     if (questionOp(words, "answer")) decision = worse(decision, block(answerCommand));
     if (questionOp(words, "push-approval")) decision = worse(decision, block(pushApprovalCommand));

@@ -63,6 +63,7 @@ higher is a crash.
 | `bercail policy show --json` on this checkout | reads `.bercail/policy.toml`, and a fresh HOME has not trusted it, so push stays `ask` |
 | the pinned Claude model | the `bstack-builder` template runs it |
 | `bercail routine run`, `run --dry-run`, `list` on a `[routine.verify]` command routine | its one finding is emitted as one event in Shep's inbox, the same finding again is quiet, a dry run prints the event of the changed finding, and `list` shows the last outcome |
+| `bercail routine run --dry-run` on a `[routine.tidy]` of the cleanup built-in | it runs from this checkout, finds nothing on a fresh HOME, and writes no `seen-done.json` |
 | `bercail routine tick` twice, `shep status`, `routine start` | the tick starts the routine that never ran and not the one that ran today, its run writes its line, a second tick starts nothing, `shep status` says the loop is not running and when it last ticked, and `start` asks the stand-in `hc` for the hidden `bercail-routines` terminal |
 | `bercail shep remember`, `repos --json`, `run` | `repos` finds this checkout's main repo from Shep's extras file; a start writes `.pi/settings.json` with the lead at 250k of its 1M window and a start context with the rule |
 

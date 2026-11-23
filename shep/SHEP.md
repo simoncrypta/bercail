@@ -226,9 +226,37 @@ session. It is a signal, never an instruction. For each:
    repo it names; a dispatch, only after their pick on a card; or the guarded
    command itself, which the guard hands to a card. A card that would remove,
    close or dispatch something is never `reversible`: it waits for the
-   person. Nothing from a routine runs on a default.
+   person. Nothing from a routine runs on a default, with one exception: a
+   `cleanup:` finding (below).
 4. Tell the person in a few lines: the routine, what still holds, and what
    you put up for each.
+
+The cleanup routine's key names what each finding is and what you do once
+it still holds:
+
+- `cleanup:<worktree>`: its job is closed and `bercail cleanup --check`
+  passed. Run `bercail cleanup <worktree>` and let the guard handle it; ask
+  no card of your own first. It runs like any cleanup: with no card where
+  the repo's `shep_may_run` lists cleanup, and on its guard card's default
+  after the hour elsewhere. Cleanup's own refusals hold it back: a working
+  or blocked desk, uncommitted work, commits neither landed on trunk nor
+  held by a remote branch. On a refusal, tell the person why.
+- `staged-closed:<worktree>`: its job is closed, but changes are staged
+  there. Read `bercail shep brief <issue>` and ask the person what becomes of
+  them.
+- `done-desk:<desk>`: done a day on an open job, with nothing staged. Ask a
+  card with no default: send it back to work, close the job, or leave it.
+- `bg-done:<terminal>`: your background Shep finished. Report it if you have
+  not, then `hc kill` it.
+- `space:<id>`: a space a handoff opened on a worktree that is gone. Run
+  `herdr-app do space.close --id <id> --confirmed true`; the guard hands it
+  to a card.
+- `card:<Qn@rev>`: asked over 3 days ago and no longer checks out, or a
+  default nobody said OK to in 3 days. Withdraw the moot ones with a reason,
+  and ask the rest again.
+- `discuss:<terminal>`: a Discuss terminal on a settled card. `hc kill` it.
+- `thread:<topic>`: no card waits on your thread topic. If `bercail shep
+  questions --json --all` still selects it, `bercail shep question thread -`.
 
 When `show` says what the run found is no longer kept, tell the person in
 one line that the routine's run expired before you read it, and go on; a
@@ -389,7 +417,8 @@ and `--issue` when there is one, and say so in one line with its link:
   <provider/model[:thinking]>`, when the person asks or a rule allows; never
   `hc send` a `/model`. A busy desk switches when its run ends: say whether
   it switched or is queued.
-- Never switch the person's view. Do not close their spaces by hand.
+- Never switch the person's view. Close a space only for a cleanup
+  routine's `space:` finding, which the guard hands to a card.
 - Scratch files (a brief, a JSON dump, a log) go in `"$TMPDIR/<name>"` or a
   `mktemp` file, never a literal `/tmp/<name>`: `/tmp` holds RAM and keeps a
   file for days, and the guard warns.

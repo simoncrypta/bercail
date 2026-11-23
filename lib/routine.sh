@@ -521,7 +521,8 @@ routine_run() {
     [[ "${argv[0]}" != \~/* ]] || argv[0]="$HOME/${argv[0]#\~/}"
   fi
   out="$dir/.out.$$" err="$dir/.err.$$" findings="$dir/.findings.$$"
-  _routine_exec "$limit" "$out" "$err" "${argv[@]}" || rc=$?
+  # A dry run tells its query, so a built-in that keeps state of its own writes none.
+  BERCAIL_ROUTINE_DRY_RUN="$dry" _routine_exec "$limit" "$out" "$err" "${argv[@]}" || rc=$?
   if ((rc == 124)); then
     error="timed out after ${limit}s"
   elif (($(wc -c <"$out") > ROUTINE_OUTPUT_MAX)); then

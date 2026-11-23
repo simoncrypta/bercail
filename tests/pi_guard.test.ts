@@ -2665,6 +2665,32 @@ test("bercail cleanup asks the person in every role that can write, and nowhere 
   }
   for (const command of ["bercail help", "bercail review-pr close 7", "git worktree list", "echo bercail cleanup"])
     allowed(command, tui);
+  // --check on one worktree only reads; any other shape is still a cleanup.
+  for (const input of [tui, shep, headless, judge, { ...headless, role: "shep-bg" }])
+    allowed("bercail cleanup --check /work.feature", input);
+  for (const command of ["bercail cleanup --check /work.feature /other", "bercail cleanup /work.feature --check"])
+    assertEqual(decision(command, tui).action, "ask", command);
+});
+
+test("closing a Herdr space asks the person in every role that can write, and nowhere runs unasked", () => {
+  const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
+  const closes = [
+    "herdr-app do space.close --id sp-1 --confirmed true",
+    "/usr/bin/herdr-app do space.close --id sp-1",
+    "env HERDR=1 herdr-app do space.close --id sp-1",
+  ];
+  for (const command of closes) {
+    for (const input of [tui, shep, { ...tui, role: "builder" }]) {
+      const got = decision(command, input);
+      assertEqual(got.action, "ask", `${command} → ${JSON.stringify(got)}`);
+      assertMatch(got.reason ?? "", /ends every terminal in it/, command);
+    }
+    for (const input of [headless, auto]) blocked(command, input, /only where the person can say yes/);
+    blocked(command, { ...tui, role: "shep-bg" }, /background Shep waits and reports/);
+    blocked(command, judge, /read-only/);
+  }
+  for (const command of ["herdr-app ls", "herdr-app do space.focus --id sp-1", "echo herdr-app do space.close"])
+    allowed(command, tui);
 });
 
 test("reading lib/cleanup.sh or asking bercail cleanup for help runs with no card", () => {

@@ -4,7 +4,10 @@
 # the ignored .bercail/ evidence to the archive, ends the space's desk and its
 # siblings, removes the worktree and closes its Herdr space. The branch stays.
 # It refuses work nobody reviewed, and commits on neither trunk nor a remote
-# branch. The guard asks the person before it runs.
+# branch, and a terminal it would end that is working or blocked. The guard
+# asks the person before it runs. --check makes every refusal and changes
+# nothing: the cleanup routine reads it. Exit 1 is a refusal; 2, that it could
+# not read the Herdr app, hc or its helpers.
 
 # bercail's Herdr helpers, as the worktrunk hooks use them. False when absent.
 _cleanup_herdr_helpers() {
@@ -25,8 +28,9 @@ _cleanup_check() {
   gd="$(git -C "$wt" rev-parse --absolute-git-dir)"
   [[ "$gd" != "$common" ]] || die "refusing to clean up $wt: it is the repo's main checkout"
   [[ ! -f "$gd/locked" ]] || die "refusing to clean up $wt: it is locked (git worktree unlock $wt first)"
-  # Untracked files count: a new file nobody committed is work too.
-  changed="$(git -C "$wt" status --porcelain --untracked-files=all)"
+  # Untracked files count: a new file nobody committed is work too. No index
+  # refresh: --check changes nothing.
+  changed="$(GIT_OPTIONAL_LOCKS=0 git -C "$wt" status --porcelain --untracked-files=all)"
   if [[ -n "$changed" ]]; then
     die "refusing to clean up $wt: it holds work nobody reviewed ($(wc -l <<<"$changed") changed files, see git -C $wt status); land it, or move it away, then clean up again"
   fi
@@ -57,13 +61,31 @@ _cleanup_check() {
     || die "refusing to clean up $wt: its .bercail is a link, so the archive would hold only the link; copy what it points to by hand"
 }
 
+# The archive's folder for repo $1, ~/Work/worktree-archives/<repo>.
+_cleanup_archive_root() { printf '%s/Work/worktree-archives/%s' "$HOME" "$1"; }
+
+# Dies unless the archive's folder $2 could be made, outside worktree $1, as
+# _cleanup_archive makes it: its nearest folder that exists, by its real path.
+_cleanup_archive_check() {
+  local wt="$1" dir="$2" up="$2"
+  while [[ ! -e "$up" && ! -L "$up" ]]; do up="$(dirname "$up")"; done
+  [[ -d "$up" && -w "$up" && -x "$up" ]] || die "could not make the archive dir $dir; nothing was removed"
+  [[ "$(cd "$up" && pwd -P)${dir#"$up"}/" != "$wt/"* ]] || die "the archive dir $dir is inside $wt; nothing was removed"
+}
+
+# Dies with status 2: what cleanup needs to read did not answer.
+_cleanup_unread() {
+  printf 'error: %s\n' "$*" >&2
+  exit 2
+}
+
 # Copies $1/.bercail to a new dir under ~/Work/worktree-archives/<repo>/, links
 # as links. Prints the dir.
 _cleanup_archive() {
   local wt="$1" repo="$2" name dest
   name="$(basename "$wt")"
   name="${name#"$repo".}"
-  dest="$HOME/Work/worktree-archives/$repo/$(date -u +%Y%m%dT%H%M%SZ)-$name"
+  dest="$(_cleanup_archive_root "$repo")/$(date -u +%Y%m%dT%H%M%SZ)-$name"
   (umask 077 && mkdir -p "$(dirname "$dest")") \
     || die "could not make the archive dir $(dirname "$dest"); nothing was removed"
   # A link can put the archive inside the worktree, which takes the copy with it.
@@ -89,7 +111,8 @@ _cleanup_hc_ls() {
 
 # The checkout's space on this machine, from the window's list $2 (a space
 # another machine shows may sit on the same path), else from hc: the space of a
-# kept Shell or a desk there. Status 1 when two match.
+# kept Shell or a desk there. Status 5 (jq's error) when two match, 1 when hc
+# did not answer.
 _cleanup_space() {
   local wt="$1" ls="$2" list rows address cwd detail on=""
   if [[ -n "$ls" ]]; then
@@ -125,8 +148,9 @@ _cleanup_space_terminals() {
 }
 
 cmd_cleanup() {
-  local usage="usage: bercail cleanup <worktree>" wt main common repo branch dest="" ls="" space t out keep
+  local usage="usage: bercail cleanup [--check] <worktree>" wt main common repo branch dest="" ls="" space t out keep check=0 state
   local -a ends=() shells=()
+  [[ "${1:-}" != --check ]] || { check=1; shift; }
   [[ $# -eq 1 && "$1" != -* ]] || die "$usage"
   [[ -d "$1" ]] || die "$1 is not a directory; $usage"
   wt="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" \
@@ -141,15 +165,18 @@ cmd_cleanup() {
 
   # Every terminal it will end or close is known, and none is this one, before
   # anything changes. What it cannot see, it does not guess at.
-  _cleanup_herdr_helpers || die "no Herdr helpers (herdr-layout.sh); run bercail update; nothing was removed"
+  _cleanup_herdr_helpers || _cleanup_unread "no Herdr helpers (herdr-layout.sh); run bercail update; nothing was removed"
   if _wt_herdr_app_running; then
-    ls="$("$HERDR_APP" ls)" || die "herdr-app could not list its spaces; nothing was removed"
+    ls="$("$HERDR_APP" ls)" && jq -e '.spaces | type == "array"' <<<"$ls" >/dev/null 2>&1 \
+      || _cleanup_unread "herdr-app could not list its spaces; nothing was removed"
   fi
-  space="$(_cleanup_space "$wt" "$ls")" \
-    || die "could not tell which Herdr space is on $wt: neither the Herdr app nor hc answered in full, or two spaces match; nothing was removed"
+  space="$(_cleanup_space "$wt" "$ls")" || {
+    (($? == 5)) && die "refusing to clean up $wt: two Herdr spaces sit on it; close one, then clean up again"
+    _cleanup_unread "could not tell which Herdr space is on $wt: neither the Herdr app nor hc answered in full; nothing was removed"
+  }
   if [[ -n "$space" ]]; then
     out="$(_cleanup_space_terminals "$space" "$ls" | awk '!seen[$0]++')" \
-      || die "could not tell which terminals belong to space $space; nothing was removed"
+      || _cleanup_unread "could not tell which terminals belong to space $space; nothing was removed"
     [[ -z "$out" ]] || mapfile -t ends <<<"$out"
     if [[ -n "$ls" ]]; then
       # Closing the space ends the window's own terminals in it.
@@ -160,8 +187,20 @@ cmd_cleanup() {
       [[ "$t" != "${HC_TERMINAL_ID:-}" ]] \
         || die "refusing to clean up $wt from its own space ($t); run it from Shep or another shell"
     done
+    # A terminal still at work, or waiting on the person, is not done.
+    for t in "${ends[@]}" "${shells[@]}"; do
+      state="$("$HC" get "$t" --json | jq -er '.status.state // "none"')" \
+        || _cleanup_unread "hc could not read terminal $t; nothing was removed"
+      [[ "$state" != working && "$state" != blocked ]] \
+        || die "refusing to clean up $wt: terminal $t is $state; let it finish or end it, then clean up again"
+    done
   fi
 
+  [[ ! -d "$wt/.bercail" ]] || _cleanup_archive_check "$wt" "$(_cleanup_archive_root "$repo")"
+  if ((check)); then
+    info "cleanup would retire $wt: $([[ -d "$wt/.bercail" ]] && printf 'archive its .bercail/, ')${ends[*]:+end ${ends[*]}, }remove the worktree${branch:+ (branch $branch stays)}${space:+, close Herdr space $space}"
+    return 0
+  fi
   if [[ -d "$wt/.bercail" ]]; then
     dest="$(_cleanup_archive "$wt" "$repo")"
     info "archived .bercail/ to $dest/.bercail"

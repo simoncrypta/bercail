@@ -30,7 +30,7 @@ printf 'herdr-app %s\n' "$*" >>"$CALLS"
 st="$STATE/herdr.json"
 case "$1 ${2:-}" in
   "status ") echo '{"space":"sp-main"}' ;;
-  "ls ") cat "$st" ;;
+  "ls ") [[ -f "$STATE/blank-ls" ]] || cat "$st" ;;
   "do space.close")
     jq --arg id "$4" '(.spaces[] | select(.id == $id) | {name, folder}) as $s
       | .recent = [$s] + .recent | .spaces |= map(select(.id != $id))' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
@@ -309,7 +309,7 @@ assert_kept() {
       labels: {"herdr.space": "sp-other", "bercail.space_name": "Other"}}]' "$STATE/hc.json" >"$STATE/c.tmp" \
     && mv "$STATE/c.tmp" "$STATE/hc.json"
   if out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then fail "cleanup picks one of two spaces: $out"; fi
-  assert_has "$out" "two spaces match" "the refusal names the cause"
+  assert_has "$out" "two Herdr spaces sit on it" "the refusal names the cause"
   rm "$STATE/down"
   assert_kept alpha "two spaces"
 }
@@ -388,4 +388,116 @@ assert_kept() {
     "the desk, its builder, then the space's Shell end"
   assert_eq "s-sp-bravo d-bravo b-bravo" "$(jq -r '[.[].address] | join(" ")' "$STATE/hc.json")" "bravo's terminals stay"
   assert_has "$out" "closed Herdr space sp-alpha" "the report says the space closed"
+}
+
+# check_agrees WT WHY: cleanup --check refuses WT with cleanup's own reason, and
+# neither changes anything.
+check_agrees() {
+  local wt="$1" why="$2" check out
+  : >"$CALLS"
+  if check="$("$BERCAIL" cleanup --check "$wt" 2>&1)"; then fail "$why: --check passes what cleanup refuses: $check"; fi
+  if grep -q 'space.close\|^hc kill\|^hc rm' "$CALLS"; then fail "$why: --check ends or closes nothing"; fi
+  [[ ! -e "$ARCHIVE" ]] || fail "$why: --check archives nothing"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "$why: cleanup takes it: $out"; fi
+  assert_eq "$(grep '^error:' <<<"$out")" "$(grep '^error:' <<<"$check")" "$why: --check gives cleanup's reason"
+}
+
+@test "cleanup --check refuses each worktree cleanup refuses, with the same reason, and changes nothing" {
+  local wt
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  check_agrees "$WORK/widgets" "the main checkout"
+  printf 'more\n' >>"$wt/alpha.txt"
+  check_agrees "$wt" "a changed file"
+  git -C "$wt" add alpha.txt
+  check_agrees "$wt" "a staged file"
+  git -C "$wt" reset -q --hard
+  printf 'x\n' >"$wt/local.txt"
+  git -C "$wt" add local.txt
+  git -C "$wt" commit -qm "local only"
+  check_agrees "$wt" "an unpushed commit"
+  git -C "$wt" push -q origin alpha
+  git -C "$WORK/widgets" worktree lock "$wt"
+  check_agrees "$wt" "a locked worktree"
+  git -C "$WORK/widgets" worktree unlock "$wt"
+  HC_TERMINAL_ID=d-alpha check_agrees "$wt" "its own space"
+  printf 'not a dir\n' >"$HOME/Work/worktree-archives"
+  check_agrees "$wt" "an archive it cannot write"
+  rm "$HOME/Work/worktree-archives"
+  mkdir -p "$wt/.keep"
+  printf '.keep/\n' >>"$WORK/widgets/.git/info/exclude"
+  ln -s "$wt/.keep" "$HOME/Work/worktree-archives"
+  check_agrees "$wt" "an archive inside the worktree"
+  rm "$HOME/Work/worktree-archives"
+  HC_BLANK="ls --json --label bercail.space=sp-alpha" check_agrees "$wt" "a blank list of its terminals"
+  assert_kept alpha "every refusal"
+}
+
+@test "cleanup --check passes a worktree cleanup takes, says what it would do, and changes nothing" {
+  local out index before
+  desk_space alpha
+  : >"$CALLS"
+  out="$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" || fail "--check refuses a landed worktree: $out"
+  assert_has "$out" "cleanup would retire $WORK/widgets.alpha" "it names the worktree"
+  assert_has "$out" "end d-alpha b-alpha" "it names the terminals it would end"
+  assert_has "$out" "close Herdr space sp-alpha" "it names the space it would close"
+  assert_kept alpha "--check"
+  if grep -q 'space.close\|^hc kill\|^hc rm' "$CALLS"; then fail "--check ends or closes nothing"; fi
+  # A file touched since the index was written: git status would refresh the index.
+  touch -d '+1 hour' "$WORK/widgets.alpha/alpha.txt"
+  index="$(git -C "$WORK/widgets.alpha" rev-parse --path-format=absolute --git-path index)"
+  before="$(stat -c '%Y %s' "$index") $(sha256sum <"$index")"
+  "$BERCAIL" cleanup --check "$WORK/widgets.alpha" >/dev/null 2>&1 || fail "--check refuses a touched file"
+  assert_eq "$before" "$(stat -c '%Y %s' "$index") $(sha256sum <"$index")" "--check leaves the index as it was"
+  out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)" || fail "cleanup refuses what --check passed: $out"
+  [[ ! -e "$WORK/widgets.alpha" ]] || fail "cleanup takes it"
+}
+
+@test "cleanup refuses to end a terminal that is working or blocked, and --check says so" {
+  local out state
+  desk_space alpha
+  for state in working blocked; do
+    jq --arg s "$state" 'map(if .address == "b-alpha" then .status = {app: "pi", state: $s} else . end)' "$STATE/hc.json" \
+      >"$STATE/c.tmp" && mv "$STATE/c.tmp" "$STATE/hc.json"
+    check_agrees "$WORK/widgets.alpha" "a $state builder"
+    assert_has "$(grep '^error:' <<<"$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)")" "terminal b-alpha is $state" \
+      "the refusal names the terminal"
+  done
+  # The window's own terminal in the space closes with it.
+  jq 'map(if .address == "b-alpha" then .status = {app: "pi", state: "idle"}
+      elif .address == "s-sp-alpha" then .status = {app: "pi", state: "working"} else . end)' "$STATE/hc.json" \
+    >"$STATE/c.tmp" && mv "$STATE/c.tmp" "$STATE/hc.json"
+  check_agrees "$WORK/widgets.alpha" "a working terminal in the window's tab"
+  assert_kept alpha "a builder at work"
+  jq 'map(if .address == "s-sp-alpha" then .status = null else . end)' "$STATE/hc.json" >"$STATE/c.tmp" \
+    && mv "$STATE/c.tmp" "$STATE/hc.json"
+  out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)" || fail "an idle builder holds it back: $out"
+}
+
+@test "cleanup --check exits 1 on a refusal, and 2 when hc does not answer" {
+  local rc=0
+  desk_space alpha
+  printf 'more\n' >>"$WORK/widgets.alpha/alpha.txt"
+  "$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>/dev/null || rc=$?
+  assert_eq 1 "$rc" "a changed file is a refusal"
+  git -C "$WORK/widgets.alpha" checkout -q alpha.txt
+  rc=0
+  HC_BLANK="ls --json --label bercail.space=sp-alpha" "$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>/dev/null || rc=$?
+  assert_eq 2 "$rc" "a blank list of its terminals is not a refusal"
+  rc=0
+  : >"$STATE/blank-ls"
+  "$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>/dev/null || rc=$?
+  assert_eq 2 "$rc" "a window that lists nothing is not one with no spaces"
+  rm "$STATE/blank-ls"
+  jq --arg f "$WORK/widgets.alpha" '.spaces += [{id: "sp-two", name: "Two", folder: $f, machine: null, tabs: []}]' \
+    "$STATE/herdr.json" >"$STATE/h.tmp" && mv "$STATE/h.tmp" "$STATE/herdr.json"
+  rc=0
+  "$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>/dev/null || rc=$?
+  assert_eq 1 "$rc" "two spaces on the worktree is a refusal"
+}
+
+@test "cleanup --check takes one worktree, like cleanup" {
+  local out
+  if out="$("$BERCAIL" cleanup --check 2>&1)"; then fail "--check with no worktree passes: $out"; fi
+  assert_has "$out" "usage: bercail cleanup [--check] <worktree>" "the usage names --check"
 }

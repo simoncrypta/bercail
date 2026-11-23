@@ -391,7 +391,7 @@ Its labels are `bercail.role=agent`, `bercail.shep=bg`, `bercail.issue` and `ber
 
 Shep's session never waits on a guard question, so your next message and desk events never queue behind one. When a command Shep runs would make the guard ask you, the guard hands it to a model-free worker instead, and Shep's turn goes on. A push your [answer already approves](#a-push-your-answer-approves) still runs in Shep's session, before any of this. Desks, autopilot and headless runs keep their own rules.
 
-Any one command goes to a card: the command itself, after at most one `cd <absolute dir> &&`. Three operations are pinned to what they act on:
+Any one command goes to a card: the command itself, after at most one `cd <absolute dir> &&`. Closing a Herdr space (`herdr-app do space.close`) is one: it ends every terminal in the space. Three operations are pinned to what they act on:
 
 | Operation | Shep runs | Pinned when it asks | The worker runs |
 |-----------|-----------|---------------------|-----------------|
