@@ -261,15 +261,16 @@ _routine_findings() {
 _routine_hashed() {
   local file="$1" dir rc=0
   local -a parts
+  # Nothing to hash. Some splits (uutils, Ubuntu 26.04's) write an empty file for empty
+  # input, which would hash as a finding.
+  [[ "$(jq length "$file")" != 0 ]] || return 0
   dir="$(mktemp -d "$file.XXXXXX")" || return 1
   jq -cS '.[]' "$file" | split -l 1 -a 4 - "$dir/f." || rc=1
   parts=("$dir"/f.*)
-  : >"$dir/hashes"
-  if [[ -e "${parts[0]}" ]]; then
-    sha256sum "${parts[@]}" | cut -d' ' -f1 >"$dir/hashes" || rc=1
-  fi
-  ((rc == 0)) && jq -c --rawfile h "$dir/hashes" '[., ($h | split("\n") | map(select(. != "")))] | transpose | map(.[0] + {hash: .[1]})' \
-    "$file" >"$dir/hashed" && mv -f "$dir/hashed" "$file" || rc=1
+  ((rc == 0)) && sha256sum "${parts[@]}" | cut -d' ' -f1 >"$dir/hashes" || rc=1
+  ((rc == 0)) && jq -c --rawfile h "$dir/hashes" '($h | split("\n") | map(select(. != ""))) as $h
+    | if ($h | length) != length then error("\($h | length) hashes for \(length) findings") else . end
+    | to_entries | map(.value + {hash: $h[.key]})' "$file" >"$dir/hashed" && mv -f "$dir/hashed" "$file" || rc=1
   rm -rf "$dir"
   return "$rc"
 }

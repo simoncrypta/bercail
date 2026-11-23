@@ -102,6 +102,19 @@ hold() {
   [[ "$(jq -r .title "$STATE/argc/outputs/$id.jsonl")" == 2 ]] || fail "$(cat "$STATE/argc/outputs/$id.jsonl")"
 }
 
+@test "a run that finds nothing is quiet, also where split makes a file of empty input" {
+  declare_routine check
+  # uutils' split (Ubuntu 26.04, CI) writes one empty file for empty input.
+  real="$(command -v split)"
+  printf '#!/bin/sh\nin="$(cat)"\n[ -n "$in" ] || : >"${6}aaaa"\nprintf "%%s" "$in" | %s "$@"\n' "$real" >"$BATS_TEST_TMPDIR/bin/split"
+  chmod +x "$BATS_TEST_TMPDIR/bin/split"
+  out="$(routine run check)" || fail "$out"
+  [[ "$out" == "check: skipped (quiet), 0 found, nothing new or changed; run "* ]] || fail "$out"
+  findings check '{"key":"a","title":"A"}'
+  out="$(routine run check)" || fail "$out"
+  [[ "$out" == "check: emitted, 1 found (1 new, 0 changed); run "* ]] || fail "$out"
+}
+
 @test "a second run with the same findings is quiet: skipped, nothing new, no event" {
   declare_routine check
   findings check '{"key":"a","title":"A"}'
