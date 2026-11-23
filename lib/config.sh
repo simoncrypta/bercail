@@ -114,7 +114,11 @@ policy release
 policy agent_may_release
 policy merge_reversible
 policy rules
-desk_secrets op_service_account'
+desk_secrets op_service_account
+routine run
+routine command
+routine at
+routine every'
 
 # bercail config get SECTION KEY: the value as bercail reads it. No output and
 # status 1 when it is not set.
@@ -148,9 +152,9 @@ doctor_config() {
         | select($v | IN("gh", "gt", "origin", "entire") | not)
         | "unknown  [git] \(.key | name) = \($v) (use gh, gt, origin, or entire)"
       else
-        # A bare [policy] names no repo, so nothing reads its keys either.
-        (if .section == ["policy"] or .section == ["desk_secrets"] then ""
-         elif (.section | length) == 2 and (.section[0] | IN("policy", "desk_secrets")) then .section[0]
+        # A bare [policy] names no repo, nor a bare [routine] a routine, so nothing reads their keys.
+        (if .section | IN(["policy"], ["desk_secrets"], ["routine"]) then ""
+         elif (.section | length) == 2 and (.section[0] | IN("policy", "desk_secrets", "routine")) then .section[0]
          else .section | join(".") end) as $table
         | "\($table) \(.key)" as $name
         | select($known | index($name) | not)
