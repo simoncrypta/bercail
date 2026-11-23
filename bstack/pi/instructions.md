@@ -60,6 +60,14 @@ means one of these templates, started as a sibling terminal with `hc`:
 | judge | `bstack-judge` | A second opinion on the hardest design calls, prose, plans, and disagreements. It reviews; you decide, and say why when you go against it. Read-only. |
 | autopilot | `bstack-autopilot` | Drives an open PR to green. Pushes the PR branch, never merges. |
 
+The builder trial, through 2026-11-30: on a job whose planned change touches no
+`high_stakes` path (`bercail policy show`), start the builder from
+`bstack-builder-fable`, the same builder on Claude Fable. Unknown scope, a change
+to the policy file, or no such template: `bstack-builder`. Your final report on
+the issue then gets one line, `Trial: builder <model(s)>, stakes <low|high, from
+/validate>, judge rounds <n>, mistakes <n or none>`, so Opus and Fable builds can
+be compared. After that date, ignore this paragraph.
+
 Start one from your own terminal:
 
 ```sh

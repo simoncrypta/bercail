@@ -10,10 +10,11 @@ Everything lives under `[bstack]` in `~/.config/bercail/config.toml`:
 [bstack]
 # Empty: auto, the newest model of that plan. A Pi model id pins one.
 claude = ""
-gpt = "openai/gpt-6.2-sol"
+fable = ""
+gpt = "openai/gpt-6.2-astra"
 # Reasoning effort of auto models: low, medium, high (default), xhigh, max, none.
 effort = "xhigh"
-# A plan (claude, gpt) or a full model id.
+# A plan (claude, gpt), fable, or a full model id.
 lead = "claude"
 build = "claude"
 judge = "gpt"
@@ -24,7 +25,7 @@ each model as `auto` or `pinned`. A pin stays until you clear it, is used even
 when you are not signed in to its plan, and skips every new release;
 auto picks again on every update.
 
-The judge on `gpt` runs on Claude until you sign in to ChatGPT, so you can set
+The judge on `gpt` runs on Fable, then Opus, until you sign in to ChatGPT, so you can set
 it once and sign in later ([the roles](./02-the-bstack-agent.md#the-roles)).
 Every other role takes only Claude. Higher
 effort reasons longer and spends more of each plan; a model without the level
@@ -32,12 +33,14 @@ you ask for gets the next one down.
 
 ### Rate limits
 
-There is no fallback model. When a role hits a limit after Pi's own retries, it
-pauses until the limit resets and then goes on with the same request, on the
-same model. The desk shows the reset time and reports itself blocked; Esc stops
-waiting. The judge is the one exception: while GPT is limited, Claude stands in,
-so `/validate` still finishes, and the judge goes back to GPT once its limit
-lifts. If Claude is limited too, the judge pauses. [How it runs](../bstack.md#how-it-runs)
+When a role hits a limit after Pi's own retries, it pauses until the limit
+resets and then goes on with the same request, on the same model. The desk
+shows the reset time and reports itself blocked; Esc stops waiting. Claude
+Fable (the `fable` model) is the one stand-in: while GPT is limited, it judges,
+so `/validate` still finishes without spending Opus; and while a limit holds
+Opus alone, a role on Opus goes on with Fable. Each goes back to its own model
+once that limit lifts. A Claude plan window limits Fable too, so then the role
+pauses. [How it runs](../bstack.md#how-it-runs)
 has the details. A `fallback` key from an older release is ignored with a
 warning.
 
@@ -62,8 +65,8 @@ profile data and lists the providers found dead in the last day. See
   tags follow the repo's trusted [git policy](../config.md#git-policy-per-repo):
   what it allows goes through and is logged; the rest asks on a desk and is
   blocked in a headless run. Each agent gets that policy in its prompt.
-- **The rate-limit pause** above, and the judge's stand-in.
-- **review-pr's reviewer** (`pi/review.json`): the lead's model with only Pi's
+- **The rate-limit pause** above, and the Fable stand-in.
+- **review-pr's reviewer** (`pi/review.json`): the judge's model with only Pi's
   read tools, kept inside the review's stack dir.
 
 Pi's own settings and logins stay yours: bstack passes everything with flags

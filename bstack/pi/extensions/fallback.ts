@@ -217,7 +217,7 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  // The desk's status line is its session name: say when the judge's stand-in runs, until when
+  // The desk's status line is its session name: say when a stand-in runs, until when
   // the role is paused, and what is dead.
   const noteSession = (model: string, pausedUntil?: number) => {
     if (!process.env.HC_TERMINAL_ID) return;
@@ -448,27 +448,33 @@ export default function (pi: ExtensionAPI) {
       );
     }
 
-    // No role moves to another model but the judge: while its own model (GPT) is limited or dead,
-    // Claude Opus, the claude line deploy resolved, stands in so the review still finishes.
+    // Fable, the Claude plan's model with a limit of its own, stands in for two: the judge, while
+    // its own model (GPT) is limited or dead, so the review still finishes without Opus; and a role
+    // on Opus (the claude line deploy resolved), so a limit on Opus alone does not stop it. A plan
+    // window limits Fable too, so that role pauses. Without a fable line, and for every other role,
+    // the role stays on its own model.
     const judge = process.env.BERCAIL_ROLE === "judge";
-    const standIn = judge
-      ? (read("models") ?? "")
-          .split(/\r?\n/)
-          .find((line) => line.startsWith("claude="))
-          ?.slice(7)
+    const models = new Map<string, string>();
+    for (const line of (read("models") ?? "").split(/\r?\n/)) {
+      const [, spec, model] =
+        line
           .trim()
-          .replace(efforts, "") || undefined
-      : undefined;
+          .replace(efforts, "")
+          .match(/^(\w+)=(.+)$/) ?? [];
+      if (spec) models.set(spec, model);
+    }
+    const standIn = judge || (desk && desk.name === models.get("claude")) ? models.get("fable") : undefined;
+    const role = process.env.BERCAIL_ROLE || "lead";
     const skipped = [`${current}: ${blocked(current)}`];
     // The models whose only obstacle is a limit; the pause waits for the first to reset.
     const candidates: string[] = [];
-    for (const name of judge ? new Set([desk?.name, standIn]) : []) {
+    for (const name of standIn ? new Set([desk?.name, standIn]) : []) {
       if (!name || name === current) continue;
       const why = await unusable(name, ctx);
       if (ctx.signal?.aborted) return;
       const model = why ? undefined : find(ctx, name);
       if (model && (await switchTo(model))) {
-        const text = `${isDead ? "Dead model" : "Rate limit"}: ${current} is ${blocked(current)}; the judge switched ${current} → ${name}. Continuing the same request.`;
+        const text = `${isDead ? "Dead model" : "Rate limit"}: ${current} is ${blocked(current)}; the ${role} switched ${current} → ${name}. Continuing the same request.`;
         ctx.ui.setStatus("bercail-fallback", name === desk?.name ? undefined : `stand-in: ${name}`);
         ctx.ui.notify(text, "warning");
         noteSession(name);
@@ -506,7 +512,7 @@ export default function (pi: ExtensionAPI) {
           continue: false,
         };
       }
-      // Whichever reset first; the judge's own model when both have.
+      // Whichever reset first; the role's own model when both have.
       let to =
         [desk?.name, ...candidates].find((name) => name && candidates.includes(name) && !blocked(name)) ?? current;
       const model = to === current ? undefined : find(ctx, to);

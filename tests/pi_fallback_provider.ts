@@ -24,8 +24,15 @@ const pausing: Record<string, string> = {
   "bridge-metered": "fake-a",
   "judge-paused": "fake-b",
   "no-restore": "fake-b",
+  "opus-window": "fake-a",
+  "opus-plan-window": "fake-a",
+  "judge-no-fable": "fake-a",
 };
-const claims: Record<string, string> = { "model-window": "seven_day_opus", "judge-paused": "seven_day_opus" };
+const claims: Record<string, string> = {
+  "model-window": "seven_day_opus",
+  "judge-paused": "seven_day_opus",
+  "opus-window": "seven_day_opus",
+};
 let pausedUntil = 0;
 export default function (pi: ExtensionAPI) {
   let calls = 0;
@@ -125,7 +132,7 @@ export default function (pi: ExtensionAPI) {
             error = "429 rate_limit_error";
             status = 429;
           }
-          // judge-paused: GPT (fake-a) stays limited for ten more seconds; its Opus stand-in resets sooner.
+          // judge-paused: GPT (fake-a) stays limited for ten more seconds; its Fable stand-in resets sooner.
           if (first && scenario === "judge-paused") headers = { "retry-after": "10" };
           // passed-reset: Pi's three attempts are limited with a reset that has already passed.
           if (first && scenario === "passed-reset") {

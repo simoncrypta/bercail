@@ -1,6 +1,6 @@
 // Real Pi with offline providers, no subscriptions or API requests: for each
 // scenario, bstack's fallback extension pauses a limited role on its own model,
-// or moves the judge to its Opus stand-in, after Pi's own retries, keeps the
+// or moves the judge, or a role on Opus, to its Fable stand-in, after Pi's own retries, keeps the
 // desk's thinking level, and logs what it did.
 // Usage: PI_FALLBACK_BIN=PI node tests/pi_fallback_live.ts
 import assert from "node:assert/strict";
@@ -125,6 +125,9 @@ try {
     "role-paused",
     "judge-paused",
     "judge-stop",
+    "judge-no-fable",
+    "opus-window",
+    "opus-plan-window",
     "lead-dead",
     "lead-no-login",
     "safety-absent",
@@ -154,7 +157,7 @@ try {
     copyFileSync(join(root, "bstack/pi/extensions/fallback.ts"), join(dir, "profile/extensions/fallback.ts"));
     const helper = join(root, "bstack/pi/extensions/provider-error.ts");
     if (existsSync(helper)) copyFileSync(helper, join(dir, "profile/extensions/provider-error.ts"));
-    // The judge runs fake-a (its GPT) at high, with fake-b as its Opus stand-in; the stand-in's #low must not win.
+    // The judge runs fake-a (its GPT) at high, with fake-b as its Fable stand-in; the stand-in's #low must not win.
     const judge = [
       "429",
       "usage",
@@ -174,6 +177,7 @@ try {
       "dead-credits",
       "judge-paused",
       "judge-stop",
+      "judge-no-fable",
     ].includes(scenario);
     const twoTurns = ["new-user-reset", "restore", "no-restore", "dead-402", "dead-credits"].includes(scenario);
     const standIn = ["missing-auth", "judge-stop"].includes(scenario)
@@ -181,7 +185,16 @@ try {
       : ["bridge-missing-auth", "bridge-metered", "bridge-subscription", "bridge-oauth-token"].includes(scenario)
         ? "claude-bridge"
         : "fake-b";
-    writeFileSync(join(dir, "profile/models"), `claude=${standIn}/model#low\ngpt=fake-a/model\n`);
+    // The opus-* lead runs fake-a/model as its Opus, with fake-a/other as Fable on the same plan.
+    // Elsewhere the claude line is fake-c, no desk's model, so only the judge has a stand-in.
+    writeFileSync(
+      join(dir, "profile/models"),
+      scenario.startsWith("opus-")
+        ? "claude=fake-a/model#high\nfable=fake-a/other\ngpt=fake-c/model\n"
+        : scenario === "judge-no-fable"
+          ? "claude=fake-b/model#low\ngpt=fake-a/model\n"
+          : `claude=fake-c/model\nfable=${standIn}/model#low\ngpt=fake-a/model\n`,
+    );
     writeFileSync(
       join(dir, "agent/settings.json"),
       JSON.stringify({ retry: { enabled: true, maxRetries: 2, baseDelayMs: 5 }, compaction: { enabled: false } }),
@@ -305,6 +318,8 @@ try {
       "missing-auth",
       "bridge-missing-auth",
       "bridge-metered",
+      "opus-plan-window",
+      "judge-no-fable",
     ].includes(scenario);
     const noSwitch =
       paused ||
@@ -330,8 +345,13 @@ try {
     if (noSwitch) assert.equal(switches.length, 0, `${scenario}: must not switch`);
     else {
       assert.ok(switches.length > 0, `${scenario}: must switch; ${result.stderr}`);
-      const target = ["bridge-subscription", "bridge-oauth-token"].includes(scenario) ? "claude-bridge" : "fake-b";
+      const target = ["bridge-subscription", "bridge-oauth-token"].includes(scenario)
+        ? "claude-bridge"
+        : scenario === "opus-window"
+          ? "fake-a"
+          : "fake-b";
       assert.equal(switches[0].model, target, scenario);
+      if (scenario === "opus-window") assert.equal(switches[0].id, "other", "an Opus-only limit moves Opus to Fable");
       // Pi's setModel resets thinking to its default (medium); the desk's :high must stay, over the models file's #low and :medium.
       assert.deepEqual(
         [...new Set(requests.map((e) => e.reasoning))],
@@ -597,7 +617,7 @@ try {
       assert.deepEqual(
         switches.map((e) => e.model),
         ["fake-b"],
-        "the judge's Opus stand-in takes over",
+        "the judge's Fable stand-in takes over",
       );
       assert.equal(
         turn2.some((e) => e.provider === "fake-a"),
@@ -632,12 +652,29 @@ try {
       assert.equal(
         requests.some((e) => e.id === "other"),
         false,
-        "an Opus-only window pauses too: no other model on the plan",
+        "a role not on Opus pauses on a one-model window: no other model on the plan",
       );
     if (scenario === "passed-reset")
       assert.ok(
         pauses[0].data!.until! - requests[0].at < 5000,
         "a reset that has passed retries in a second, not as an unknown reset in 5 minutes",
+      );
+    if (scenario === "opus-window")
+      assert.ok(
+        notes.some((e) => /the lead switched fake-a\/model → fake-a\/other/.test(String(e.content))),
+        "the note names the lead's move to Fable",
+      );
+    if (scenario === "judge-no-fable")
+      assert.equal(
+        requests.some((e) => e.provider === "fake-b"),
+        false,
+        "no Fable: the judge waits for GPT rather than spend Opus",
+      );
+    if (scenario === "opus-plan-window")
+      assert.equal(
+        requests.some((e) => e.id === "other"),
+        false,
+        "a plan window limits Fable too: the lead on Opus pauses",
       );
     if (scenario === "role-paused")
       assert.equal(
@@ -649,12 +686,12 @@ try {
       assert.deepEqual(
         switches.map((e) => e.model),
         ["fake-b"],
-        "a GPT limit moves the judge to its Opus stand-in",
+        "a GPT limit moves the judge to its Fable stand-in",
       );
       assert.equal(pauses.length, 1, "an Opus limit after that pauses the judge");
       assert.match(pauses[0].data!.text!, /^Rate limit: fake-b\/model is limited until/);
       const after = requests.filter((e) => e.at >= pauses[0].data!.until!);
-      assert.ok(after.length > 0 && after.every((e) => e.provider === "fake-b"), "resumes on Opus, which reset first");
+      assert.ok(after.length > 0 && after.every((e) => e.provider === "fake-b"), "resumes on Fable, which reset first");
       assert.ok(
         session.some((e) => e.type === "model_change" && e.provider === "fake-b"),
         "the switch to the stand-in is persisted",

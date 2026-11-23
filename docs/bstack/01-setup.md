@@ -18,12 +18,14 @@ sign-ins that are still missing:
 | Claude (Pro or Max) | `claude auth login` in a terminal. The bridge runs Claude Code on your plan |
 | ChatGPT (Plus or Pro) | `/login openai` inside Pi, choose Sign in with ChatGPT |
 
-Claude does the work: the lead, the builder, Shep and autopilot all run on it.
-ChatGPT runs the judge, a second opinion from another provider; without it the
-judge runs on Claude too. Run `bercail update` after a new sign-in.
+Claude does the work: the lead, the builder, Shep and autopilot run on Opus,
+and background Shep on Fable, which has a limit of its own on the same plan.
+ChatGPT runs the judge, a second opinion from another provider, and review-pr's
+reviewer; without it both run on Fable. Run `bercail update` after a new sign-in.
 
 Setup does not ask about models. Each plan you are signed in to gets its newest
-model: the newest Claude Opus and the newest GPT Sol, each at `effort`
+model: the newest Claude Opus and Claude Fable, and the newest GPT Astra (Sol
+when there is no Astra), each at `effort`
 (default `high`). `bercail update` picks again, so a
 new release reaches bstack without you doing anything. To pin a model or change
 the effort, see [Make it yours](./08-make-it-yours.md).
