@@ -23,6 +23,9 @@ usage.
   measured on one desktop: keep bash for glue, and adopt neither dash nor
   QuickJS. Its pilot port of autopilot's `pr-state.sh` to TypeScript did not
   land and found no case for porting more.
+- [Mulroy's tools](mulroy-tools.md): research. From dmmulroy's dotfiles only
+  `GIT_EDITOR=true`; a staged switch from pi-claude-bridge to pi-claude-cli,
+  with rollback; web fetch and search options, their costs and guard rules.
 - [Worktree tool](worktree-tool.md): research. Keep worktrunk, and have a
   desk's spawn call it with `--no-hooks` and run each step itself. The worktree
   bugs on record are bercail's glue, not worktrunk's. Why plain `git worktree`,
