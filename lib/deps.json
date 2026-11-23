@@ -100,7 +100,7 @@
   },
   {
     "name": "java",
-    "source": "none",
+    "source": "temurin",
     "min": "11",
     "why": "TLC 1.7.4 runs on Java 11 or later.",
     "known": "25",
@@ -250,11 +250,11 @@
   },
   {
     "name": "workers-compatibility-date",
-    "source": "none",
+    "source": "workerd:package-lock.json",
     "min": null,
     "why": null,
     "known": "2026-07-01",
     "pinned_in": ["site/wrangler.jsonc:compatibility_date"],
-    "notes": "No feed: check https://developers.cloudflare.com/workers/configuration/compatibility-flags/ when wrangler moves."
+    "notes": "The date wrangler gives as the latest, the one in the version of the workerd it locks, so it moves when wrangler does. Read the flags it turns on (https://developers.cloudflare.com/workers/configuration/compatibility-flags/) before you move it."
   }
 ]

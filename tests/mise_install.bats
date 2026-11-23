@@ -87,6 +87,7 @@ install_jq_via_mise() {
   cat >"$case_dir/bin/mise" <<'EOF'
 #!/bin/sh
 printf '%s\n' "$*" >>"$MISE_CALL_LOG"
+printf '%s\n' "${MISE_MINIMUM_RELEASE_AGE-unset}" >>"$MISE_CALL_LOG.age"
 if [ "$1" = "use" ] && [ "$2" = "-g" ] && [ "$3" = "jq" ]; then
   printf '%s\n' '#!/bin/sh' 'exit 0' >"$HOME/.local/bin/jq"
   chmod +x "$HOME/.local/bin/jq"
@@ -142,6 +143,12 @@ marker_block() {
   install_jq_via_mise
   assert_eq "0" "$rc" "install_dep installs jq via mise"
   assert_contains "$(<"$case_dir/mise.log")" "use -g jq" "install_dep calls mise use -g jq"
+}
+
+@test "install_dep has mise take a release out today, past its 24-hour hold" {
+  install_jq_via_mise
+  assert_eq "0" "$rc" "install_dep installs jq via mise"
+  assert_eq "0s" "$(<"$case_dir/mise.log.age")" "mise use runs with MISE_MINIMUM_RELEASE_AGE=0s"
 }
 
 @test "mise-first install_dep skips omarchy pkg" {

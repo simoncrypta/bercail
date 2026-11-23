@@ -25,6 +25,7 @@ setup() {
   cat >"$BIN/mise" <<'SH'
 #!/bin/sh
 printf '%s\n' "$*" >>"$BATS_TEST_TMPDIR/mise.log"
+printf '%s %s\n' "${MISE_MINIMUM_RELEASE_AGE-unset}" "$*" >>"$BATS_TEST_TMPDIR/mise-age.log"
 root="$BATS_TEST_TMPDIR/mise-installs"
 case "$1" in
   install)
@@ -110,6 +111,14 @@ java_on_path() {
   grep -qx 'install --quiet java@temurin-25' "$BATS_TEST_TMPDIR/mise.log" || fail "no temurin install: $(cat "$BATS_TEST_TMPDIR/mise.log")"
   ! grep -q '^use' "$BATS_TEST_TMPDIR/mise.log" || fail "mise use changed the global tools"
   grep -qx "JAVA=$BATS_TEST_TMPDIR/mise-installs/temurin/bin/java" "$ENV_FILE" || fail "statechart.env: $(cat "$ENV_FILE")"
+}
+
+@test "the temurin install takes a release out today, past mise's 24-hour hold" {
+  libs
+  statechart_on
+  PATH="$BIN:$SYS" ensure_statechart_tools 2>/dev/null
+  grep -qx '0s install --quiet java@temurin-25' "$BATS_TEST_TMPDIR/mise-age.log" || fail "install: $(cat "$BATS_TEST_TMPDIR/mise-age.log")"
+  grep -qx '0s which java --tool java@temurin-25' "$BATS_TEST_TMPDIR/mise-age.log" || fail "which: $(cat "$BATS_TEST_TMPDIR/mise-age.log")"
 }
 
 @test "a failed TLC install keeps mise's error visible and does not write statechart.env" {

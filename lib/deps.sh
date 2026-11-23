@@ -55,7 +55,9 @@ mise_use_global() {
   if [[ "${DRY_RUN:-0}" -eq 1 ]]; then
     return 0
   fi
-  if run mise use -g "$spec"; then
+  # mise holds a release back 24 h by default (minimum_release_age); bercail's
+  # minimums can move the day one comes out, so it takes the newest.
+  if MISE_MINIMUM_RELEASE_AGE=0s run mise use -g "$spec"; then
     ensure_mise_shims
     hash -r 2>/dev/null || true
     return 0
@@ -448,9 +450,10 @@ _statechart_java() {
   fi
   has_mise || return 1
   info "installing via mise: $STATECHART_JAVA_SPEC (no java 11 or later on PATH)" >&2
-  run mise install --quiet "$STATECHART_JAVA_SPEC" >&2 || return 1
+  # Past mise's 24-hour hold, as in mise_use_global; which looks past it too, to find that build.
+  MISE_MINIMUM_RELEASE_AGE=0s run mise install --quiet "$STATECHART_JAVA_SPEC" >&2 || return 1
   [[ "$DRY_RUN" -eq 0 ]] || return 0
-  mise which java --tool "$STATECHART_JAVA_SPEC" 2>/dev/null
+  MISE_MINIMUM_RELEASE_AGE=0s mise which java --tool "$STATECHART_JAVA_SPEC" 2>/dev/null
 }
 
 # tla2tools.jar, through mise's http backend, which checks upstream's sha256.

@@ -24,7 +24,13 @@ packslip install github.com/simoncrypta/bercail      # packslip 1.5.1+
 bercail install
 ```
 
-mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` still installs the previous one. To take a newer release sooner, pin it: `mise use -g packslip:github.com/simoncrypta/bercail@<version>`.
+mise holds back each new release for its first 24 hours (`minimum_release_age`), so right after a release `mise use` and `mise up` still install the previous one. To take bercail's releases the day they come out, exclude it from the hold once:
+
+```bash
+mise settings add minimum_release_age_excludes packslip:github.com/simoncrypta/bercail
+```
+
+Or pin one release: `mise use -g packslip:github.com/simoncrypta/bercail@<version>`. The tools bercail installs through mise (worktrunk, tuicr, beads, pi, jq, fzf, and Java for the statechart skill) skip the hold: a minimum in `lib/deps.json` can move the day a release comes out.
 
 The first install trusts the repository's signer, and later installs must match it. `bercail install` runs the release's own `install.sh`. mise or packslip keeps the `bercail` command, so the installer does not copy a second one into `~/.local/bin`. Upgrade with `mise up` (or `packslip install` again), then `bercail update`.
 

@@ -189,13 +189,13 @@ assert_no_writes() {
   [[ -z "$(gh_calls "issue create")$(gh_calls "issue edit")" ]] || fail "only a close: $(cat "$STATE/gh.jsonl")"
 }
 
-@test "a release under a day old opens nothing yet" {
+@test "a release out a minute ago opens its issue on the first run that sees it" {
   manifest "$(entry tuicr github:agavra/tuicr 0.27.0)"
   # tuicr 0.28.0 came out 2026-10-26T08:14:24Z.
-  DEPS_TEST_NOW="$(date -u -d '2026-10-27T08:14:23Z' +%s)" track check
+  DEPS_TEST_NOW="$(date -u -d '2026-10-26T08:15:24Z' +%s)" track check
   [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
-  assert_no_writes "under a day"
-  [[ "$out" == *"tuicr: under a day old, waiting"* ]] || fail "$out"
+  [[ "$(arg "$(gh_calls "issue create")" --title)" == "deps: tuicr 0.28.0" ]] || fail "$out"
+  [[ "$out" == *"tuicr: opened an issue"* ]] || fail "$out"
 }
 
 @test "a prerelease opens nothing" {
@@ -244,13 +244,54 @@ assert_no_writes() {
   [[ "$(arg "$close" --comment)" == "Every lookup worked in https://github.test/o/r/actions/runs/42." ]] || fail "comment: $close"
 }
 
-@test "source none makes no lookup and is listed in the run summary" {
-  manifest "$(entry workers-compatibility-date none 2026-07-01)"
+@test "java is the newest Temurin feature release, dated by its first GA build" {
+  manifest "$(entry java temurin 25)"
+  track check
+  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
+  local create
+  create="$(gh_calls "issue create")"
+  [[ "$(arg "$create" --title)" == "deps: java 27" ]] || fail "title: $create"
+  [[ "$(arg "$create" --body)" == *"25 → **27**, released 2026-09-21."*"https://github.com/adoptium/temurin27-binaries/releases/tag/jdk-27%2B35"* ]] \
+    || fail "delta, date and link: $create"
+}
+
+@test "an Adoptium API that cannot be read fails java's row instead of skipping it" {
+  manifest "$(entry java temurin 25)"
+  FIX="$BATS_TEST_TMPDIR/no-fixtures" track check
+  [[ "$rc" -eq 1 ]] || fail "rc $rc: $out"
+  [[ "$out" == *"java: **failed:** temurin: curl: (22)"* ]] || fail "$out"
+  [[ -n "$(gh_calls "issue create" | jq -c 'select(index("deps: tracker failing"))')" ]] || fail "no tracker issue: $out"
+}
+
+@test "the Workers compatibility date is the one the locked workerd supports, read with no network" {
+  printf '{"packages": {"node_modules/workerd": {"version": "1.20261118.1"}}}\n' >"$REPO/package-lock.json"
+  manifest "$(entry workers-compatibility-date workerd:package-lock.json 2026-07-01)"
   track check
   [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
   [[ ! -e "$STATE/curl.jsonl" && -z "$(gh_calls "api repos")" ]] || fail "looked up: $(cat "$STATE"/*.jsonl)"
-  grep -qxF '| workers-compatibility-date | 2026-07-01 |  | no feed: check by hand |' "$STATE/summary.md" \
-    || fail "summary: $(cat "$STATE/summary.md")"
+  local create
+  create="$(gh_calls "issue create")"
+  [[ "$(arg "$create" --title)" == "deps: workers-compatibility-date 2026-11-18" ]] || fail "title: $create"
+  [[ "$(arg "$create" --body)" == *"2026-07-01 → **2026-11-18**"*"https://github.com/cloudflare/workerd/releases/tag/v1.20261118.1"* ]] \
+    || fail "delta and link: $create"
+}
+
+@test "a compatibility date at the locked workerd's is up to date" {
+  printf '{"packages": {"node_modules/workerd": {"version": "1.20261118.1"}}}\n' >"$REPO/package-lock.json"
+  manifest "$(entry workers-compatibility-date workerd:package-lock.json 2026-11-18)"
+  track check
+  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
+  assert_no_writes "up to date"
+  [[ "$out" == *"workers-compatibility-date: up to date"* ]] || fail "$out"
+}
+
+@test "a lockfile without workerd fails the compatibility date's row" {
+  printf '{"packages": {}}\n' >"$REPO/package-lock.json"
+  manifest "$(entry workers-compatibility-date workerd:package-lock.json 2026-07-01)"
+  track check
+  [[ "$rc" -eq 1 ]] || fail "rc $rc: $out"
+  [[ "$out" == *"workers-compatibility-date: **failed:** workerd:package-lock.json: package-lock.json locks no workerd"* ]] \
+    || fail "$out"
 }
 
 @test "an action's issue names the commit to pin it to" {
@@ -277,12 +318,10 @@ assert_no_writes() {
   [[ "$(jq -r 'index("--max-time") as $i | .[$i + 1]' "$STATE/curl.jsonl")" == 20 ]] || fail "bounded: $(cat "$STATE/curl.jsonl")"
 }
 
-@test "a Herdr release counts its age from latest.json's Last-Modified" {
+@test "a Herdr release is dated by latest.json's Last-Modified" {
   manifest "$(entry herdr-app herdr:app 0.1.14)"
   # latest.json for 0.1.15 was last modified Tue, 10 Nov 2026 19:24:23 GMT.
   DEPS_TEST_NOW="$(date -u -d '2026-11-10T20:24:23Z' +%s)" track check
-  assert_no_writes "an hour after Last-Modified"
-  track check
   [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
   local create
   create="$(gh_calls "issue create")"
@@ -481,6 +520,12 @@ assert_no_writes() {
   manifest "$(vendored 3dbd22ff12742fb28c9700b9760baa29ed41dc13 | jq -c '.paths = false')"
   track pins
   [[ "$rc" -eq 1 && "$out" == "::error file=lib/deps.json::every entry needs"* ]] || fail "paths not a list, rc $rc: $out"
+}
+
+@test "pins fails an entry with no feed" {
+  manifest "$(entry java none 25)"
+  track pins
+  [[ "$rc" -eq 1 && "$out" == "::error file=lib/deps.json::every entry needs"* ]] || fail "rc $rc: $out"
 }
 
 @test "a pin that disagrees with known fails pins and warns in check, naming the file and line" {

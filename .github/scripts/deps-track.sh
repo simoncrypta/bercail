@@ -13,9 +13,6 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MANIFEST="$ROOT/lib/deps.json"
-# A release under a day old may still be pulled or patched, and mise holds it
-# back that long (docs/install.md), so bercail could not install it yet.
-MIN_AGE=86400
 # GitHub turns a schedule off after 60 days without a push; this is the alarm.
 STALE_AFTER=$((3 * 86400))
 TRACKER_TITLE="deps: tracker failing"
@@ -35,9 +32,9 @@ norm() {
   printf '%s' "${1#"${1%%[0-9]*}"}"
 }
 
-# A release, not an rc, beta, nightly or build.
+# A release, not an rc, beta, nightly or build; or a date, as a Workers compatibility date is.
 stable() {
-  [[ "$1" =~ ^[0-9]+(\.[0-9]+)*$ ]]
+  [[ "$1" =~ ^[0-9]+(\.[0-9]+)*$|^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]
 }
 
 # Whether version $1 is newer than $2.
@@ -86,6 +83,26 @@ lookup_node() {
     'first(.[] | select(.version | startswith($m))) | {tag: .version, published: .date, url: "https://nodejs.org/en/blog/release/\(.version)"}'
 }
 
+# The newest Temurin GA feature release, dated by its first GA build.
+lookup_temurin() {
+  local api=https://api.adoptium.net/v3 major
+  major="$(fetch "$api/info/available_releases" | jq -er .most_recent_feature_release)" || return
+  fetch "$api/assets/feature_releases/$major/ga?image_type=jdk&page_size=1&sort_order=ASC" | jq --arg major "$major" \
+    'first(.[]) | {tag: $major, published: .timestamp, url: .release_link}'
+}
+
+# The compatibility date wrangler targets with the workerd in lockfile $1: the
+# date in its version (1.20261118.1 is 2026-11-18). No network.
+lookup_workerd() {
+  local version
+  version="$(jq -r '.packages["node_modules/workerd"].version // empty' "$ROOT/$1")" || return
+  [[ -n "$version" ]] || { printf '%s locks no workerd\n' "$1" >&2; return 1; }
+  [[ "$version" =~ ^1\.([0-9]{4})([0-9]{2})([0-9]{2})\.[0-9]+$ ]] \
+    || { printf 'workerd %s has no date in its version\n' "$version" >&2; return 1; }
+  jq -n --arg date "${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-${BASH_REMATCH[3]}" --arg v "$version" \
+    '{tag: $date, published: $date, url: "https://github.com/cloudflare/workerd/releases/tag/v\($v)"}'
+}
+
 lookup() {
   local source="$1"
   case "$source" in
@@ -93,6 +110,8 @@ lookup() {
     npm:*) lookup_npm "${source#npm:}" ;;
     herdr:app | herdr:core) lookup_herdr "${source#herdr:}" ;;
     node:*) lookup_node "${source#node:}" ;;
+    temurin) lookup_temurin ;;
+    workerd:*) lookup_workerd "${source#workerd:}" ;;
     *) printf 'unknown source %s\n' "$source" >&2; return 1 ;;
   esac
 }
@@ -163,14 +182,10 @@ EOF
 }
 
 # One tool: close its issue once known has caught up, and open or move it on
-# when a stable release newer than known is a day old.
+# as soon as a stable release newer than known is out.
 track() {
   local entry="$1" issues="$2" name source known rel tag version published number="" title="" have="" body sha=""
   name="$(jq -r .name <<<"$entry")" source="$(jq -r .source <<<"$entry")" known="$(jq -r .known <<<"$entry")"
-  if [[ "$source" == none ]]; then
-    row "$name" "$known" "" "no feed: check by hand"
-    return 0
-  fi
   if [[ "$source" == git:* ]]; then
     track_git "$entry" "$issues"
     return 0
@@ -195,10 +210,6 @@ track() {
   fi
   if ! newer "$version" "$known"; then
     row "$name" "$known" "$version" "up to date"
-    return 0
-  fi
-  if ((NOW - published < MIN_AGE)); then
-    row "$name" "$known" "$version" "under a day old, waiting"
     return 0
   fi
   if [[ -n "$number" && "$have" == "$version" ]]; then
@@ -338,12 +349,12 @@ check_pins() {
   local bad=0 name known ref file key lineno line found
   if ! jq -e 'type == "array" and all(.[]; (.name | type) == "string" and (.known | type) == "string"
       and (.pinned_in | type) == "array" and has("min") and has("why") and has("notes")
-      and (.source | test("^(github:|action:|git:)[^/]+/[^/]+$|^npm:.|^herdr:(app|core)$|^node:[0-9]+$|^none$"))
+      and (.source | test("^(github:|action:|git:)[^/]+/[^/]+$|^npm:.|^herdr:(app|core)$|^node:[0-9]+$|^temurin$|^workerd:."))
       and if (.source | startswith("git:")) then (.known | test("^[0-9a-f]{40}$"))
         and ((has("paths") | not) or (.paths | type == "array" and length > 0 and all(.[]; type == "string" and length > 0)))
       else has("paths") | not end)' \
     "$MANIFEST" >/dev/null; then
-    printf '::error file=lib/deps.json::every entry needs name, source (github:, action:, git:, npm:, herdr:app, herdr:core, node:<major> or none), min, why, known, pinned_in and notes; a git: entry knows a full commit, and only a git: entry may list paths, as git pathspecs\n'
+    printf '::error file=lib/deps.json::every entry needs name, source (github:, action:, git:, npm:, herdr:app, herdr:core, node:<major>, temurin or workerd:<lockfile>), min, why, known, pinned_in and notes; a git: entry knows a full commit, and only a git: entry may list paths, as git pathspecs\n'
     return 1
   fi
   while IFS=$'\t' read -r name known ref; do
