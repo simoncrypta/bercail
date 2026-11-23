@@ -173,12 +173,18 @@ export interface QuestionSettlement {
   /** Its decision event is written, so it is never written again. */
   told?: true;
 }
-/** Shep's: the question no longer applies. Not an answer. */
+/** Shep's: the question no longer applies. Not an answer. With a source, the person's
+ * Close on the panel, which Shep is told of. */
 export interface QuestionWithdrawal {
   requestId: string;
   reason: string;
   at: string;
+  source?: "panel picker";
+  /** A Close's decision event is written, so it is never written again. */
+  told?: true;
 }
+/** Why the person's Close withdrew a card. */
+export const CLOSE_REASON = "closed by the person on the panel";
 export interface AnswerResult {
   question: Question;
   accepted: boolean;
@@ -549,9 +555,17 @@ function question(value: unknown): asserts value is Question {
   if ((status === "withdrawn") !== (withdrawal !== undefined))
     fail("a withdrawn question needs its withdrawal, and only it");
   if (withdrawal !== undefined) {
-    shape(withdrawal, ["requestId", "reason", "at"]);
+    shape(withdrawal, [
+      "requestId",
+      "reason",
+      "at",
+      ...optional(withdrawal as Record<string, unknown>, ["source", "told"]),
+    ]);
     text(withdrawal.requestId);
     text(withdrawal.reason);
+    if (withdrawal.source !== undefined && withdrawal.source !== PUSH_SOURCE) fail("only the panel closes a card");
+    if (withdrawal.told !== undefined && (withdrawal.told !== true || withdrawal.source === undefined))
+      fail("told is true, and only on the person's Close");
     if (!Number.isFinite(Date.parse(withdrawal.at as string))) fail("invalid withdrawal time");
   }
   if (pushed !== undefined) {
@@ -956,10 +970,14 @@ export class QuestionStore {
   // Shep's: a pending question that no longer applies (its desk stopped, events made it
   // moot) leaves the panel and can never be answered. So does a default without the
   // person's OK: one Shep found moot, or a Reverse Shep has handled. It keeps the default
-  // and the Reverse, and records no answer and no event.
-  withdraw(requestId: string, token: string, reason: string): Question {
+  // and the Reverse, and records no answer. With a source it is the person's Close: any
+  // card that waits on them, whatever its live check says, but never a land card whose
+  // chain runs (shipped, so answered). The caller tells Shep of a Close.
+  withdraw(requestId: string, token: string, reason: string, source?: "panel picker"): Question {
     text(reason);
-    return this.request(requestId, ["withdraw", token, reason], (state) => {
+    if (source !== undefined && source !== PUSH_SOURCE) fail("only the panel closes a card for the person");
+    const payload = source === undefined ? ["withdraw", token, reason] : ["close", token, reason, source];
+    return this.request(requestId, payload, (state) => {
       const q = this.find(state, token);
       const open = q.status === "pending" || (q.answer?.source === DEFAULT_SOURCE && q.settled?.outcome !== "ok");
       if (!open || q.status === "withdrawn")
@@ -967,7 +985,7 @@ export class QuestionStore {
           `question is ${q.status}; only a pending question, or a default without the person's OK, can be withdrawn`,
         );
       q.status = "withdrawn";
-      q.withdrawal = { requestId, reason, at: new Date().toISOString() };
+      q.withdrawal = { requestId, reason, at: new Date().toISOString(), ...(source ? { source } : {}) };
       return q;
     });
   }
@@ -1216,9 +1234,14 @@ export class QuestionStore {
 
   // The decision event of its default, or of the person's OK or Reverse on it, is
   // written: the caller wrote it, or found it there.
-  told(token: string, which: "default" | "settled" = "default"): void {
+  told(token: string, which: "default" | "settled" | "closed" = "default"): void {
     this.locked((state) => {
       const q = this.find(state, token);
+      if (which === "closed") {
+        if (!q.withdrawal?.source) fail("only the person's Close is told");
+        q.withdrawal.told = true;
+        return;
+      }
       if (q.answer?.source !== DEFAULT_SOURCE || (which === "settled" && !q.settled)) fail("only a default is told");
       if (which === "settled") q.settled!.told = true;
       else q.told = true;

@@ -869,6 +869,74 @@ test("a reversed default stays on the panel as reversed until Shep withdraws it"
   expect(ok("json").questions[0]).toMatchObject({ status: "withdrawn", settled: { choice: "search" } });
 });
 
+// A commit card on the staged tree, defaulted: its deadline put an hour back, then expire.
+function defaultedCommit() {
+  writeFileSync(join(repo, "file"), "two\n");
+  git("add", "file");
+  ok(
+    "create",
+    spec({
+      kind: "action",
+      action: "commit",
+      prompt: "Commit the staged change?",
+      options: ["Commit it", "Not yet"],
+      recommendation: { choice: "Commit it", why: "tests pass" },
+      reversible: true,
+    }),
+  );
+  const file = join(env.BERCAIL_SHEP_STATE!, "questions.json");
+  const ledger = JSON.parse(readFileSync(file, "utf8"));
+  ledger.questions[0].createdAt = new Date(Date.now() - 3600000).toISOString();
+  ledger.questions[0].deadline = new Date(Date.now() - 1800000).toISOString();
+  ledger.requests = [];
+  writeFileSync(file, JSON.stringify(ledger));
+  expect(ok("expire")).toEqual(["Q1@1"]);
+}
+
+test("a defaulted commit card, after its own commit of the staged tree, accepts the person's OK", () => {
+  defaultedCommit();
+  git("commit", "-qm", "the default's commit");
+  expect(ok("panel").cards).toMatchObject([{ token: "Q1@1", status: "fresh", defaulted: { choice: "Commit it" } }]);
+  expect(ok("answer", { requestId: "ok", token: "Q1@1", source: "panel picker", outcome: "ok" })).toMatchObject({
+    accepted: true,
+    question: { settled: { outcome: "ok", head: git("rev-parse", "HEAD") } },
+  });
+  expect(ok("panel").cards).toEqual([]);
+});
+
+test("a defaulted commit card its action moved to another branch takes no OK, and the person's Close takes it off", () => {
+  defaultedCommit();
+  // The default's commit went on a stacked branch: more than one commit of the tree on the asked HEAD.
+  git("switch", "-qc", "stacked");
+  git("commit", "-qm", "the default's commit, stacked");
+  expect(ok("panel").cards).toMatchObject([{ token: "Q1@1", status: "stale", defaulted: { choice: "Commit it" } }]);
+  expect(ok("answer", { requestId: "ok", token: "Q1@1", source: "panel picker", outcome: "ok" })).toMatchObject({
+    accepted: false,
+    reason: expect.stringMatching(/^changed since it defaulted: branch changed/),
+  });
+  expect(
+    call("answer", { requestId: "x", token: "Q1@1", choice: "Not yet", source: "panel picker", outcome: "closed" })
+      .stderr,
+  ).toMatch(/answer fields must be/);
+  // The panel's result shape: accepted, as the panel reads it.
+  expect(ok("answer", { requestId: "x", token: "Q1@1", source: "panel picker", outcome: "closed" })).toMatchObject({
+    accepted: true,
+    question: {
+      status: "withdrawn",
+      answer: { source: "default after timeout" },
+      withdrawal: { reason: "closed by the person on the panel", source: "panel picker" },
+    },
+  });
+  expect(ok("panel").cards).toEqual([]);
+  expect(ok("pending").pending).toEqual([]);
+  expect(event("decision-Q1-1-closed.json")).toMatchObject({
+    choice: null,
+    by: "panel picker",
+    closed: "defaulted",
+    defaulted: "Commit it",
+  });
+});
+
 test("pending lists only the pending cards and the defaults not yet OK'd or reversed", () => {
   const plan = (topic: string, extra: Record<string, unknown> = {}) =>
     ok(
@@ -1424,6 +1492,16 @@ describe("a guard card", () => {
     expect(ok("guard-claim", undefined, ["Q1@1", ticket]).reason).toMatch(/already claimed/);
     // The questions Shep acts on once leave a guard card out.
     expect(call("list").stdout).not.toMatch(/Answered by the person's pick/);
+  });
+
+  test("the person's Close withdraws it for its worker to report, with no decision event of its own", () => {
+    card();
+    expect(ok("answer", { requestId: "c1", token: "Q1@1", source: "panel picker", outcome: "closed" })).toMatchObject({
+      accepted: true,
+      question: { status: "withdrawn", withdrawal: { source: "panel picker" } },
+    });
+    expect(events()).toEqual([]);
+    expect(ok("guard-claim", undefined, ["Q1@1", ticket])).toMatchObject({ accepted: false });
   });
 
   test("a card past its hour is stale and takes no pick, and a Deny is never claimed", () => {

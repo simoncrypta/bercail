@@ -26,7 +26,7 @@
 //   until the header's Decisions toggle shows it): Shep's pending questions as cards,
 //   each with Shep's brief and a picker, Shep's recommendation chosen to start with.
 //   A two-way door counts down to its deadline; one that defaulted stays until the person
-//   OKs it, or reverses it and Shep withdraws it.
+//   OKs it, or reverses it and Shep withdraws it. Close takes any card off but a landing one.
 // - "discuss": the bar of a Discuss dialog: a read-only Pi on a branch of the session
 //   the question came from (`bercail shep discuss`). props.token is the question.
 // - "modal": the bar of an agent's terminal opened over either view (bercail-agents
@@ -91,7 +91,8 @@ const DISCUSS = `${BERCAIL_PATH}; exec bercail shep discuss "$1"`;
 const CLOSED = `${BERCAIL_PATH}; exec bercail shep question closed "$1" "$2"`;
 const PANEL_ID = "shep-decisions";
 const DISCUSS_ROLE = "shep-discuss";
-const KEYS_HINT = "↑↓ card · ←→ or 1-9 choice · Enter answers · o OKs a default · r reverses it · d discusses";
+const KEYS_HINT =
+  "↑↓ card · ←→ or 1-9 choice · Enter answers · o OKs a default · r reverses it · x closes a card · d discusses";
 
 export function find(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -367,10 +368,10 @@ export function cardWords(card, all = spaces(), backend = S.backend) {
           word: "defaulted",
           why:
             card.status === "fresh"
-              ? `${took} OK keeps it as your pick; Reverse tells Shep to undo it.`
+              ? `${took} OK keeps it as your pick; Reverse tells Shep to undo it; Close leaves it Shep's default.`
               : card.status === "stale"
-                ? `${took} Changed since: ${reasons.join(", ")}. OK and Reverse need it unchanged; Shep must ask again.`
-                : `${took} Can't check it now: ${reasons.join("; ") || "no answer from bercail"}. OK and Reverse wait until it can.`,
+                ? `${took} Changed since: ${reasons.join(", ")}. Nothing to confirm: OK and Reverse need it unchanged. Close leaves it Shep's default.`
+                : `${took} Can't check it now: ${reasons.join("; ") || "no answer from bercail"}. OK and Reverse wait until it can; Close leaves it Shep's default.`,
         }
       : card.status === "fresh"
         ? { word: "open", why: null }
@@ -406,6 +407,9 @@ export const answerable = (card) =>
 // A default the person can OK or reverse: not yet, and the live check found nothing
 // changed since it defaulted.
 export const confirmable = (card) => Boolean(card.defaulted) && !card.reversed && card.status === "fresh";
+// A card the person can close: any but a land card whose chain runs, which a close would
+// only hide. Whatever its live check says, so none sits stuck.
+const closable = (card) => !card.landing;
 // A card whose choices the keys and clicks move: one to answer, or a default to reverse.
 const pickable = (card) => answerable(card) || confirmable(card);
 
@@ -879,6 +883,7 @@ export default class BercailShep extends View {
     else if (k === "enter" && c) this.accept(c, cx);
     else if (k === "o" && c) this.confirm(c, cx);
     else if (k === "r" && c) this.reverse(c, cx);
+    else if (k === "x" && c) this.closeCard(c, cx);
     else if (k === "d" && c) this.discuss(c, cx);
     else return;
     cx.stop_propagation();
@@ -967,6 +972,11 @@ export default class BercailShep extends View {
               this.discuss(c, cx),
             ),
           )
+          .when(closable(c), (el) =>
+            el.child(
+              button(`decision-close-${c.token}`, "Close", !this.busy.has(c.token), (_e, cx) => this.closeCard(c, cx)),
+            ),
+          )
           .when(Boolean(c.defaulted) && !c.reversed, (el) =>
             el
               .child(
@@ -1017,7 +1027,13 @@ export default class BercailShep extends View {
     if (confirmable(c)) this.record(c, { outcome: "reversed", ...(choice ? { choice } : {}) }, cx);
   }
 
-  // A pick or an OK: once per card at a time, recorded on the machine with the ledger.
+  // The person's Close: the card leaves the panel with no answer; a default stays Shep's.
+  closeCard(c, cx) {
+    if (closable(c)) this.record(c, { outcome: "closed" }, cx);
+  }
+
+  // A pick, an OK, a Reverse or a Close: once per card at a time, recorded on the machine
+  // with the ledger.
   record(c, fields, cx) {
     if (this.busy.has(c.token)) return;
     this.busy.add(c.token);

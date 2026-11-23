@@ -9,13 +9,13 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 
 // The live check, as the test sets it: a default runs it before recording. A topic in
 // `checks` gets its own.
-const check = vi.hoisted(() => ({ status: "fresh", reasons: [] as string[] }));
+const check = vi.hoisted(() => ({ status: "fresh", reasons: [] as string[], runs: 0 }));
 const checks = vi.hoisted(() => ({}) as Record<string, { status: string; reasons: string[] }>);
 vi.mock("../shep/pi/question-target.ts", () => ({
-  checkQuestion: async (q: { target: { topic: string } }) => ({
-    ...(checks[q.target.topic] ?? check),
-    current: { head: null, stagedTree: null },
-  }),
+  checkQuestion: async (q: { target: { topic: string } }) => {
+    check.runs++;
+    return { ...(checks[q.target.topic] ?? check), current: { head: null, stagedTree: null } };
+  },
 }));
 // The exit of every child Shep's runtime spawns, listened for at spawn so none is missed.
 const spawned = vi.hoisted(() => [] as Promise<unknown>[]);
@@ -28,7 +28,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   };
   return { ...real, spawn };
 });
-import { closed, expireDue, pick, settle } from "../shep/pi/discuss.ts";
+import { close, closed, expireDue, pick, settle } from "../shep/pi/discuss.ts";
 import { claim, eventLine } from "../shep/pi/inbox.ts";
 import { decisions } from "../shep/pi/question-cli.ts";
 import register, { EXPIRE_MS } from "../shep/pi/question-commands.ts";
@@ -518,6 +518,120 @@ test("the person's Reverse on a default names another choice or none, once, and 
   expect(projection(store.snapshot())).not.toContain("Q1@1 Which desk");
 });
 
+test("the person's Close takes any card that waits on them off the panel, once, with no check, and tells Shep what it was", async () => {
+  const pending = ask("pending", false, "Which desk is next?");
+  const defaulted = ask("defaulted", true, "Which desk starts first?");
+  const reversed = ask("reversed", true, "Which desk goes last?");
+  const kept = ask("kept", false, "Which desk stays?");
+  vi.setSystemTime("2026-11-19T12:30:00.000Z");
+  await expireDue(state);
+  await settle(state, "r-1", reversed, "reversed", "search", "panel picker");
+  // The default its own action moved checks stale: no OK, but a Close.
+  check.status = "stale";
+  check.reasons = ["branch changed", "head changed"];
+  expect(await confirm(state, "ok-stale", defaulted, "panel picker")).toMatchObject({ accepted: false });
+  vi.setSystemTime("2026-11-19T13:00:00.000Z");
+  const runs = check.runs;
+  for (const [id, token] of [
+    ["c-1", pending],
+    ["c-2", defaulted],
+    ["c-3", reversed],
+  ])
+    expect(close(state, id!, token!, "panel picker")).toMatchObject({
+      accepted: true,
+      question: { status: "withdrawn" },
+    });
+  // It holds to nothing the live check reads, so it runs none.
+  expect(check.runs).toBe(runs);
+  const [q1, q2, q3] = new QuestionStore(state).snapshot().questions;
+  expect(q1!.withdrawal).toEqual({
+    requestId: "c-1",
+    reason: "closed by the person on the panel",
+    source: "panel picker",
+    at: "2026-11-19T13:00:00.000Z",
+    told: true,
+  });
+  // Its record stays: the default, and the Reverse.
+  expect(q2!.answer).toMatchObject({ choice: "auth", source: "default after timeout" });
+  expect(q3!.settled).toMatchObject({ outcome: "reversed", choice: "search" });
+  const line = (name: string) => eventLine(event(name));
+  expect(event("decision-Q1-1-closed.json")).toMatchObject({ choice: null, by: "panel picker", closed: "pending" });
+  expect(line("decision-Q1-1-closed.json")).toBe(
+    '- The person closed the card without answering: no answer, so do not act on it; ask again only if it still matters for Q1@1 "Which desk is next?" (topic pending). [event decision:Q1-1-closed]',
+  );
+  expect(event("decision-Q2-1-closed.json")).toMatchObject({ closed: "defaulted", defaulted: "auth" });
+  expect(line("decision-Q2-1-closed.json")).toMatch(
+    /^- The person closed the card after it defaulted to "auth": the default stands under the default's rules, never their pick or an LGTM; keep what you did on it and never do it twice for Q2@1 /,
+  );
+  // A reversed card's Close adds nothing to do: its Reverse event says it, once.
+  expect(event("decision-Q3-1-closed.json")).toEqual(
+    expect.objectContaining({ closed: "reversed", defaulted: "auth" }),
+  );
+  expect(event("decision-Q3-1-closed.json")).not.toHaveProperty("to");
+  expect(line("decision-Q3-1-closed.json")).toMatch(
+    /^- The person closed the card after reversing the default "auth": their Reverse still stands, so if you have not undone what you did on the default, do it once, as its event says; nothing more\. The card is withdrawn, so do not withdraw it, and ask again rather than act on another choice for Q3@1 /,
+  );
+  expect(inbox().filter((f) => f.startsWith("decision-Q3-1"))).toEqual([
+    "decision-Q3-1-closed.json",
+    "decision-Q3-1-reversed.json",
+    "decision-Q3-1.json",
+  ]);
+  // Once: a retry is the same record; a second Close, an OK or a pick after it is refused.
+  expect(close(state, "c-1", pending, "panel picker")).toMatchObject({ accepted: true });
+  expect(() => close(state, "c-4", pending, "panel picker")).toThrow(/question is withdrawn/);
+  check.status = "fresh";
+  check.reasons = [];
+  expect(await confirm(state, "ok-1", defaulted, "panel picker")).toMatchObject({
+    accepted: false,
+    reason: "question is withdrawn",
+  });
+  expect(await pick(state, "p-1", pending, "auth", "panel picker")).toMatchObject({ accepted: false });
+  // Only the panel closes a card for the person.
+  expect(() => close(state, "c-5", kept, "discuss picker" as never)).toThrow(/only the panel closes a card/);
+  // Nothing closed waits on anyone, and Shep's list keeps none of them.
+  const block = await decisions(new QuestionStore(state).snapshot(), state);
+  expect(block).toContain("Which desk stays?");
+  expect(block).not.toMatch(/next\?|first\?|last\?/);
+  expect(projection(new QuestionStore(state).snapshot())).not.toMatch(/Q[123]@1/);
+});
+
+test("a Close whose event could not be written is sent at Shep's next expire run, once, whatever its Discuss says", async () => {
+  const token = ask();
+  // A Discuss branch Shep cannot read: a Close reads none.
+  mkdirSync(join(state, "discuss"), { recursive: true });
+  writeFileSync(join(state, "discuss", "bad.jsonl"), "not a session\n");
+  writeFileSync(
+    join(state, "discuss", "Q1-1.json"),
+    JSON.stringify({ session: join(state, "discuss", "bad.jsonl"), cwd: dir, source: "x", forkedAt: null }),
+  );
+  rmSync(join(state, "inbox"), { recursive: true, force: true });
+  writeFileSync(join(state, "inbox"), "not a folder");
+  expect(close(state, "c-1", token, "panel picker")).toMatchObject({ accepted: true });
+  const withdrawal = () => new QuestionStore(state).snapshot().questions[0]!.withdrawal;
+  expect(withdrawal()!.told).toBeUndefined();
+  rmSync(join(state, "inbox"));
+  await expireDue(state);
+  expect(inbox()).toEqual(["decision-Q1-1-closed.json"]);
+  expect(event("decision-Q1-1-closed.json").summary).toBeNull();
+  expect(withdrawal()!.told).toBe(true);
+  rmSync(join(state, "inbox", "decision-Q1-1-closed.json"));
+  await expireDue(state);
+  expect(inbox()).toEqual([]);
+});
+
+test("Shep's own withdraw tells nothing, and a Close event that is not the person's is dropped", async () => {
+  const token = ask();
+  new QuestionStore(state).withdraw("w-1", token, "its desk is gone");
+  expect(new QuestionStore(state).snapshot().questions[0]!.withdrawal).not.toHaveProperty("source");
+  await expireDue(state);
+  expect(inbox()).toEqual([]);
+  const base = { source: "bercail", kind: "decision", event_id: "decision:Q1-1-closed", question: { token: "Q1@1" } };
+  expect(eventLine({ ...base, choice: null, by: "default after timeout", closed: "pending" })).toBeNull();
+  expect(eventLine({ ...base, choice: "auth", by: "panel picker", closed: "pending" })).toBeNull();
+  expect(eventLine({ ...base, choice: null, by: "panel picker", closed: "landing" })).toBeNull();
+  expect(eventLine({ ...base, choice: null, by: "panel picker", closed: "defaulted" })).toBeNull();
+});
+
 test("Shep may withdraw a default the person has not answered, never one they said OK to", async () => {
   const token = ask();
   const confirmed = ask("other");
@@ -547,9 +661,11 @@ test("Shep's rules say what it does on an OK and on a Reverse, and the docs list
   );
   expect(rules).toContain("Undo what you did on the default, only what you took");
   expect(rules).toContain("Never withdraw it before you have handled it.");
+  expect(rules).toContain("A Close by the person (an event with `closed`)");
   const docs = readFileSync(new URL("../docs/shep.md", import.meta.url), "utf8");
   expect(docs).toContain("| o | OK a defaulted card: keep its default as your pick |");
   expect(docs).toContain("| r | Reverse a defaulted card, to the picked choice when it is not the default |");
+  expect(docs).toContain("| x | Close the card: off the panel, with no answer; a default stays Shep's |");
 });
 
 test("an OK or Reverse whose event could not be written is sent at Shep's next expire run, once", async () => {

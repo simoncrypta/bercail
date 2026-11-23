@@ -585,10 +585,10 @@ if (!all.some((x) => /^asked (2026-11-14 )?\d\d:\d\d$/.test(x)) || !all.some((x)
   fail(`no asked/checked times in ${JSON.stringify(all)}`);
 // Tokens are the ledger's keys, never something to read.
 if (all.some((x) => /Q\d+@\d+/.test(x))) fail(`a token is shown: ${all.filter((x) => /Q\d+@/.test(x))}`);
-// Only the fresh card's choices and answer click; a stale or unknown card discusses only.
+// Only the fresh card's choices and answer click; a stale or unknown card discusses or closes only.
 const buttons = els.filter((e) => e.click).map((e) => e.id);
-eq(buttons, ["decision-choice-Q1@1-0", "decision-choice-Q1@1-1", "decision-discuss-Q1@1", "decision-accept-Q1@1",
-  "decision-discuss-Q2@3", "decision-discuss-Q3@1"], "card buttons");
+eq(buttons, ["decision-choice-Q1@1-0", "decision-choice-Q1@1-1", "decision-discuss-Q1@1", "decision-close-Q1@1", "decision-accept-Q1@1",
+  "decision-discuss-Q2@3", "decision-close-Q2@3", "decision-discuss-Q3@1", "decision-close-Q3@1"], "card buttons");
 // A space Herdr no longer shows is said so.
 eq(cardWords(card("Q4@1"), []).title, "bercail.guard (its space is closed), 347 lines, high-stakes", "closed space");
 // A desk problem is a warning on a card that can still be answered.
@@ -743,13 +743,13 @@ eq(timers(render()), [
 ], "timers (none on the card with no deadline)");
 const all = texts();
 if (!all.includes("defaulted")) fail(`no defaulted word in ${JSON.stringify(all)}`);
-if (!all.some((x) => /^two-way door: nobody picked by (\d{4}-\d\d-\d\d )?\d\d:\d\d, so it took Shep's recommendation, auth\. OK keeps it as your pick; Reverse tells Shep to undo it\.$/.test(x)))
+if (!all.some((x) => /^two-way door: nobody picked by (\d{4}-\d\d-\d\d )?\d\d:\d\d, so it took Shep's recommendation, auth\. OK keeps it as your pick; Reverse tells Shep to undo it; Close leaves it Shep's default\.$/.test(x)))
   fail(`no defaulted line in ${JSON.stringify(all)}`);
-// Past its deadline a fresh card takes no pick: only Discuss is clickable.
-eq(els.filter((e) => e.click && e.id?.includes("Q3@1")).map((e) => e.id), ["decision-discuss-Q3@1"], "overdue card controls");
-// The defaulted card: its choices (to reverse to), Discuss, Reverse and OK, no answer button; counted apart from the 6 waiting on you.
+// Past its deadline a fresh card takes no pick: only Discuss and Close click.
+eq(els.filter((e) => e.click && e.id?.includes("Q3@1")).map((e) => e.id), ["decision-discuss-Q3@1", "decision-close-Q3@1"], "overdue card controls");
+// The defaulted card: its choices (to reverse to), Discuss, Close, Reverse and OK, no answer button; counted apart from the 6 waiting on you.
 eq(els.filter((e) => e.id?.includes("Q5@1") && e.id !== "decision-Q5@1").map((e) => e.id),
-  ["decision-choice-Q5@1-0", "decision-choice-Q5@1-1", "decision-discuss-Q5@1", "decision-reverse-Q5@1", "decision-ok-Q5@1"], "defaulted card controls");
+  ["decision-choice-Q5@1-0", "decision-choice-Q5@1-1", "decision-discuss-Q5@1", "decision-close-Q5@1", "decision-reverse-Q5@1", "decision-ok-Q5@1"], "defaulted card controls");
 if (!all.includes("OK auth")) fail(`no OK button: ${JSON.stringify(all)}`);
 if (!all.some((x) => x.startsWith("6 waiting on you · 1 defaulted · "))) fail(`panel count: ${JSON.stringify(all)}`);
 els.length = 0;
@@ -793,7 +793,7 @@ await tick();
 eq(answers(), [], "an OK on a stale default or a pending card");
 els.length = 0;
 d.render(cx);
-if (!texts().some((x) => x.endsWith("Changed since: new commits. OK and Reverse need it unchanged; Shep must ask again.")))
+if (!texts().some((x) => x.endsWith("Changed since: new commits. Nothing to confirm: OK and Reverse need it unchanged. Close leaves it Shep's default.")))
   fail(`stale default: ${JSON.stringify(texts())}`);
 if (els.find((e) => e.id === "decision-ok-Q2@1")?.click) fail("a stale default's OK must not click");
 // The OK button records the same as o.
@@ -848,11 +848,51 @@ const all = texts();
 if (!all.includes("reversed")) fail(`no reversed word: ${JSON.stringify(all)}`);
 if (!all.includes("You reversed its default, auth, to search. Shep undoes what it did on it; the card leaves once Shep has."))
   fail(`reversed line: ${JSON.stringify(all)}`);
-eq(els.filter((e) => e.id?.includes("Q3@1") && e.id !== "decision-Q3@1").map((e) => e.id), ["decision-discuss-Q3@1"], "reversed card controls");
+eq(els.filter((e) => e.id?.includes("Q3@1") && e.id !== "decision-Q3@1").map((e) => e.id), ["decision-discuss-Q3@1", "decision-close-Q3@1"], "reversed card controls");
 // The header counts the two defaults still waiting on you, not the reversed one.
 els.length = 0;
 h.render(cx);
 if (!texts().includes("Decisions 2 defaulted")) fail(`header: ${JSON.stringify(texts())}`);
+EOF
+}
+
+@test "x or Close takes any card off the panel, whatever its state, except a land card whose chain runs" {
+  mod_case <<'EOF'
+const plan = { kind: "action", prompt: "Commit it?", options: ["Commit it", "Not yet"], change: null,
+  recommendation: { choice: "Commit it", why: "tests pass" }, deadline: "2026-11-14T20:30:00.000Z" };
+const defaulted = { choice: "Commit it", at: "2026-11-14T20:31:00.000Z" };
+const view = { ...PANEL_VIEW, cards: [
+  card("Q1@1", { ...plan, defaulted, status: "stale", reasons: ["branch changed", "head changed"] }),
+  card("Q2@1", { ...plan, defaulted, status: "unavailable", reasons: ["policy unavailable; not checked"] }),
+  card("Q3@1", { ...plan, defaulted, reversed: { choice: null, at: "2026-11-14T20:40:00.000Z" } }),
+  card("Q4@1", { deadline: null, defaulted: null }),
+  card("Q5@1", { deadline: null, defaulted: null, status: "stale", reasons: ["head changed"] }),
+  card("Q6@1", { ...plan, defaulted }),
+  card("Q7@1", { kind: "land", deadline: null, defaulted: null, landing: { step: "ci", detail: null, at: null } }),
+] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+els.length = 0;
+d.render(cx);
+// The default its own commit moved says there is nothing to confirm, and Close is what clicks.
+if (!texts().some((x) => x.endsWith("Changed since: the branch, new commits. Nothing to confirm: OK and Reverse need it unchanged. Close leaves it Shep's default.")))
+  fail(`stale default: ${JSON.stringify(texts())}`);
+eq(els.filter((e) => e.click && e.id?.includes("Q1@1")).map((e) => e.id), ["decision-discuss-Q1@1", "decision-close-Q1@1"], "stale default controls");
+if (els.find((e) => e.id === "decision-close-Q7@1")) fail("a land card whose chain runs has no Close");
+// x on each card: all but the landing one are closed.
+press(d, "x", ...Array(6).fill(["down", "x"]).flat());
+await tick();
+eq(answers().map(({ requestId, ...a }) => a),
+  ["Q1@1", "Q2@1", "Q3@1", "Q4@1", "Q5@1", "Q6@1"].map((token) => ({ token, outcome: "closed", source: "panel picker" })),
+  "the closes");
+// The button records the same as x.
+globalThis.herdr.execs = [];
+els.length = 0;
+d.render(cx);
+els.find((e) => e.id === "decision-close-Q4@1").click(null, cx);
+await tick();
+eq(answers().map((a) => [a.token, a.outcome]), [["Q4@1", "closed"]], "the button's Close");
 EOF
 }
 
