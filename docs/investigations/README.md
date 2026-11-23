@@ -23,6 +23,10 @@ usage.
   measured on one desktop: keep bash for glue, and adopt neither dash nor
   QuickJS. Its pilot port of autopilot's `pr-state.sh` to TypeScript did not
   land and found no case for porting more.
+- [Worktree tool](worktree-tool.md): research. Keep worktrunk, and have a
+  desk's spawn call it with `--no-hooks` and run each step itself. The worktree
+  bugs on record are bercail's glue, not worktrunk's. Why plain `git worktree`,
+  Herdr's worktree mod, Entire, jj and the stack tools do not fit better.
 
 ## Reading the evidence
 

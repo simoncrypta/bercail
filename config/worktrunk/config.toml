@@ -1,9 +1,15 @@
 [pre-start]
 copy-ignored = "wt step copy-ignored"
 
+# The beads store and .bercail evidence belong to the main checkout. Their
+# contents, not the folders: before 0.81 a folder holding tracked files
+# (.beads/config.yaml, .bercail/policy.toml) is not excluded.
+[step.copy-ignored]
+exclude = [".beads/*", ".bercail/*"]
+
 [post-start]
 herdr = """
-S="{{ branch | capitalize }}_{{ repo | capitalize }}"
+S="{{ branch | sanitize | capitalize }}_{{ repo | capitalize }}"
 W="{{ worktree_path }}"
 
 source "$HOME/.config/worktrunk/herdr-layout.sh"
@@ -18,7 +24,7 @@ echo "  Desk: Ctrl+Shift+A agent, Ctrl+Shift+R review, Ctrl+Shift+S shell, Ctrl+
 
 [post-remove]
 herdr = """
-S="{{ branch | capitalize }}_{{ repo | capitalize }}"
+S="{{ branch | sanitize | capitalize }}_{{ repo | capitalize }}"
 source "$HOME/.config/worktrunk/herdr-layout.sh"
 wt_herdr_layout_close "$S" "{{ worktree_path }}"
 """

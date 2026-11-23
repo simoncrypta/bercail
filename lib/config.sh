@@ -495,16 +495,12 @@ migrate_bstack_switch() {
   info "removed enabled from [bstack] in $dest: nothing reads it"
 }
 
-# A kept worktrunk config's post-remove closed the space by label only, which
-# misses it once the checkout's branch changed. Pass the worktree path too.
-migrate_worktrunk_close_by_path() {
-  local dest="$WORKTRUNK_CONFIG_DIR/config.toml" tmp line
-  # shellcheck disable=SC2016 # the hook's own "$S", not ours
-  local old='wt_herdr_layout_close "$S"' new='wt_herdr_layout_close "$S" "{{ worktree_path }}"'
-  [[ -f "$dest" ]] || return 0
+# In kept worktrunk config $1, each line that is exactly $2 becomes $3; $4 says what changed.
+_migrate_worktrunk_line() {
+  local dest="$1" old="$2" new="$3" what="$4" tmp line
   grep -Fxq "$old" "$dest" || return 0
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    info "[dry-run] would migrate worktrunk post-remove to close by worktree path in $dest"
+    info "[dry-run] would migrate worktrunk $what in $dest"
     return 0
   fi
   tmp="$(mktemp)"
@@ -514,7 +510,59 @@ migrate_worktrunk_close_by_path() {
   # Written through, not moved over: the file may be a link into someone's dotfiles.
   cat "$tmp" >"$dest"
   rm -f "$tmp"
-  info "migrated worktrunk post-remove to close by worktree path in $dest"
+  info "migrated worktrunk $what in $dest"
+}
+
+# A kept worktrunk config's post-remove closed the space by label only, which
+# misses it once the checkout's branch changed. Pass the worktree path too.
+migrate_worktrunk_close_by_path() {
+  local dest="$WORKTRUNK_CONFIG_DIR/config.toml"
+  [[ -f "$dest" ]] || return 0
+  # shellcheck disable=SC2016 # the hook's own "$S", not ours
+  _migrate_worktrunk_line "$dest" 'wt_herdr_layout_close "$S"' 'wt_herdr_layout_close "$S" "{{ worktree_path }}"' \
+    "post-remove to close by worktree path"
+}
+
+# wt reads $1 as its user config with no parse error. wt 0.67 prints the error
+# and still exits 0, so the message counts too.
+_worktrunk_config_parses() {
+  local err
+  err="$(cd / && wt --config "$1" config show 2>&1 >/dev/null)" && ! grep -q 'failed to parse' <<<"$err"
+}
+
+# A kept config that runs bercail's hooks names spaces as
+# _wt_generate_session_name does (a slash in the branch is a dash), and keeps
+# the main checkout's beads store and .bercail evidence out of new worktrees.
+# A config without bercail's hooks is the person's own and stays as it is.
+migrate_worktrunk_names_and_copy() {
+  local dest="$WORKTRUNK_CONFIG_DIR/config.toml" tmp
+  local hint="add \".beads/*\" and \".bercail/*\" to [step.copy-ignored] exclude in $dest so new worktrees leave them out"
+  [[ -f "$dest" ]] && grep -Fq 'herdr-layout.sh' "$dest" || return 0
+  _migrate_worktrunk_line "$dest" 'S="{{ branch | capitalize }}_{{ repo | capitalize }}"' \
+    'S="{{ branch | sanitize | capitalize }}_{{ repo | capitalize }}"' "space names to sanitize the branch"
+  # A file that mentions copy-ignored beyond bercail's hook line may set it
+  # already; one that does not still gets the table only if wt reads the
+  # result, since a second table makes the file invalid and wt drops all of it.
+  if grep -F 'copy-ignored' "$dest" | grep -Fvxq 'copy-ignored = "wt step copy-ignored"'; then
+    grep -Fq '".beads/*"' "$dest" && grep -Fq '".bercail/*"' "$dest" || info "bercail left $dest as it is; $hint"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  { cat "$dest"; printf '\n# The beads store and .bercail evidence belong to the main checkout.\n[step.copy-ignored]\nexclude = [".beads/*", ".bercail/*"]\n'; } >"$tmp"
+  if ! _worktrunk_config_parses "$dest" || ! _worktrunk_config_parses "$tmp"; then
+    rm -f "$tmp"
+    info "bercail could not check that wt reads $dest with a new table, so it left it as it is; $hint"
+    return 0
+  fi
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    rm -f "$tmp"
+    info "[dry-run] would keep .beads/ and .bercail/ out of worktrunk's copy in $dest"
+    return 0
+  fi
+  # Written through, not moved over: the file may be a link into someone's dotfiles.
+  cat "$tmp" >"$dest"
+  rm -f "$tmp"
+  info "kept .beads/ and .bercail/ out of worktrunk's copy in $dest"
 }
 
 # [graphite] "<repo>" = true|false chose Graphite until v1; [git] names the
@@ -769,6 +817,7 @@ deploy_configs() {
   else
     info "keeping existing worktrunk config: $WORKTRUNK_CONFIG_DIR/config.toml"
     migrate_worktrunk_close_by_path
+    migrate_worktrunk_names_and_copy
   fi
 
   deploy_finalize_permissions

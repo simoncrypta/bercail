@@ -103,3 +103,64 @@ TOML
   grep -q "migrated worktrunk post-remove to close by worktree path" "$deploy_log" \
     || fail "update did not report the migration: $(cat "$deploy_log")"
 }
+
+# A wt whose config check reads FILE as valid, or as failing to parse when it
+# holds $1 (worktrunk's own TOML parser stands behind this in the live test).
+fake_wt_parses() {
+  printf '#!/bin/sh\n[ -z "%s" ] || ! grep -qF -- "%s" "$2" || { echo "User config @ $2 failed to parse, skipping" >&2; exit 1; }\n' "$1" "$1" \
+    >"$BATS_TEST_TMPDIR/bin/wt"
+  chmod +x "$BATS_TEST_TMPDIR/bin/wt"
+}
+
+@test "update names spaces with sanitize and keeps state out of the copy, in a kept bercail config only" {
+  fake_wt_parses ""
+  mkdir -p "$WORKTRUNK_CONFIG_DIR"
+  cat >"$WORKTRUNK_CONFIG_DIR/config.toml" <<'TOML'
+[pre-start]
+copy-ignored = "wt step copy-ignored"
+
+[post-start]
+herdr = """
+S="{{ branch | capitalize }}_{{ repo | capitalize }}"
+source "$HOME/.config/worktrunk/herdr-layout.sh"
+"""
+TOML
+
+  deploy_configs >"$deploy_log"
+  local cfg="$WORKTRUNK_CONFIG_DIR/config.toml" once
+  # shellcheck disable=SC2016 # the hook's own "$S"
+  grep -Fxq 'S="{{ branch | sanitize | capitalize }}_{{ repo | capitalize }}"' "$cfg" \
+    || fail "the space name should sanitize the branch: $(cat "$cfg")"
+  grep -Fxq '[step.copy-ignored]' "$cfg" && grep -Fxq 'exclude = [".beads/*", ".bercail/*"]' "$cfg" \
+    || fail "the copy should leave out the beads store and .bercail: $(cat "$cfg")"
+  grep -q "worktrunk" "$deploy_log" || fail "update did not report it: $(cat "$deploy_log")"
+  once="$(checksum "$cfg")"
+  deploy_configs >"$deploy_log"
+  assert_eq "$once" "$(checksum "$cfg")" "a second update must change nothing"
+}
+
+@test "update leaves a kept bercail config alone when it already mentions copy-ignored, however written" {
+  local form cfg="$WORKTRUNK_CONFIG_DIR/config.toml"
+  mkdir -p "$WORKTRUNK_CONFIG_DIR"
+  for form in '[step.copy-ignored]  # mine
+exclude = [".cache/"]' '[ step . "copy-ignored" ]
+exclude = [".cache/"]' "[step.'copy-ignored']
+exclude = [\".cache/\"]" '# copy-ignored.exclude is set in dotfiles' 'step.copy-ignored.exclude = [".cache/"]' '[step]
+copy-ignored = { exclude = [".cache/"] }'; do
+    printf '%s\n\n[post-start]\nherdr = """\nsource "$HOME/.config/worktrunk/herdr-layout.sh"\n"""\n' "$form" >"$cfg"
+    deploy_configs >"$deploy_log"
+    [[ "$(grep -c 'copy-ignored' "$cfg")" -eq 1 ]] || fail "a second copy-ignored setting makes the file invalid: $(cat "$cfg")"
+    grep -q 'add ".beads/\*" and ".bercail/\*"' "$deploy_log" || fail "say what to add: $(cat "$deploy_log")"
+  done
+}
+
+@test "update leaves a kept bercail config alone when wt could not read it with the new table" {
+  local cfg="$WORKTRUNK_CONFIG_DIR/config.toml" before
+  fake_wt_parses "[step.copy-ignored]"
+  mkdir -p "$WORKTRUNK_CONFIG_DIR"
+  printf 'step = {}\n\n[pre-start]\ncopy-ignored = "wt step copy-ignored"\n\n[post-start]\nherdr = """\nsource "$HOME/.config/worktrunk/herdr-layout.sh"\n"""\n' >"$cfg"
+  before="$(checksum "$cfg")"
+  deploy_configs >"$deploy_log"
+  assert_eq "$before" "$(checksum "$cfg")" "a table wt cannot read must not be appended"
+  grep -q 'could not check that wt reads' "$deploy_log" || fail "say why: $(cat "$deploy_log")"
+}

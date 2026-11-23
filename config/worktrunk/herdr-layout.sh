@@ -55,10 +55,12 @@ _wt_herdr_locked() {
   ) 9>"$lock"
 }
 
-# <Branch>_<Repo>, as worktrunk's post-start names the space. A sibling
-# <main>.<branch> folder names both (a review worktree there is detached).
-# Any other folder, a nested <repo>/<branch> layout among them, takes the repo
-# from its main checkout's folder, as notify's space.repo does, and the branch from git.
+# <Branch>_<Repo>, the name worktrunk's hooks give the space with
+# {{ branch | sanitize | capitalize }}_{{ repo | capitalize }}: a slash in the
+# branch is a dash, as in its folder. The repo is the main checkout's folder,
+# as notify's space.repo has it, and the branch is git's. A detached sibling
+# <main>.<name> (a review worktree) takes the name from its folder, and so does
+# a gone sibling, whose main git can no longer name.
 _wt_generate_session_name() {
   local worktree_path="$1"
   local worktree_name main repo_name branch
@@ -66,16 +68,21 @@ _wt_generate_session_name() {
   worktree_name=$(basename "$worktree_path")
   main="$(_wt_git_main_worktree "$worktree_path")"
   [[ -z "$main" ]] || main="$(basename "$main")"
+  repo_name="${main:-$worktree_name}"
+  branch="$(git -C "$worktree_path" branch --show-current 2>/dev/null | tr '/\\' '--')"
 
-  if [[ "$worktree_name" == *.* && ( -z "$main" || "$worktree_name" == "$main".* ) ]]; then
-    repo_name=$(echo "$worktree_name" | sed 's/\.[a-zA-Z0-9_-]*$//' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-    branch=$(echo "$worktree_name" | sed 's/^[^.]*\.//' | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-  else
-    repo_name=$(echo "${main:-$worktree_name}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-    branch=$(git -C "$worktree_path" branch --show-current 2>/dev/null | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+  if [[ -z "$branch" && -n "$main" && "$worktree_name" == "$main".* ]]; then
+    branch="${worktree_name#"$main".}"
+  elif [[ -z "$main" && "$worktree_name" == *.* ]]; then
+    repo_name="${worktree_name%%.*}" branch="${worktree_name#*.}"
   fi
 
-  echo "${branch}_${repo_name}"
+  printf '%s_%s\n' "$(_wt_capitalize "$branch")" "$(_wt_capitalize "$repo_name")"
+}
+
+# minijinja's capitalize: the first letter upper, the rest lower.
+_wt_capitalize() {
+  printf '%s' "$1" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}'
 }
 
 _wt_herdr_focused_space() {
@@ -254,7 +261,7 @@ _wt_herdr_start_desk() {
 }
 
 # The checkout's space, and its desk agent unless it has one.
-# WT_HERDR_NO_DESK=1 (handoff-spawn, which starts its own desk): the space only.
+# WT_HERDR_NO_DESK=1 (review, the main checkout's space): the space only.
 wt_herdr_layout_create() {
   _wt_herdr_reachable || {
     echo "Neither the Herdr app nor hc answers; start one and run: wt switch $(basename "$2")" >&2

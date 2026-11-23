@@ -296,7 +296,59 @@ handoff_checkout_existing() {
         || handoff_die "could not fast-forward $branch to origin/$branch"
     fi
   fi
-  WT_HERDR_NO_DESK=1 wt switch "$branch" --no-cd || handoff_die "wt switch $branch failed"
+  wt switch "$branch" --no-cd --no-hooks || handoff_die "wt switch $branch failed"
+}
+
+# Checkout $1's untracked files under .beads and .bercail, then its folders
+# there, deepest first, NUL-separated and relative to it.
+_handoff_state_paths() {
+  (cd "$1" && git ls-files -z --others -- .beads .bercail && find .beads .bercail -mindepth 1 -depth -type d -print0 2>/dev/null) || true
+}
+
+# What worktrunk's pre-start hooks gave a new checkout $2 of branch $3, run
+# here in order where the spawn sees each error, before any space or desk.
+# A project hook wt has not approved, which no spawn can approve, takes the
+# checkout back out, and the branch when $4 says the spawn made it, so the
+# refusal leaves nothing, as wt switch did. A wt without approvals list
+# --format=json cannot say, and its hook then fails after the checkout exists.
+# $5: {{ base }} as wt switch --create gives it, empty for an existing branch,
+# where it gives none.
+handoff_setup_worktree() {
+  local main="$1" sibling="$2" branch="$3" owned="$4" hook_base="$5" out made bwp path left=""
+  local -a vars=()
+  if out="$(wt -C "$sibling" config approvals list --format=json </dev/null 2>/dev/null)" \
+    && ! jq -e '[.commands[]? | select(.phase == "pre-start" and .approved == false)] | length == 0' <<<"$out" >/dev/null; then
+    made="$(git -C "$sibling" rev-parse --verify --quiet HEAD || true)"
+    if ! git -C "$main" worktree remove "$sibling" >&2; then
+      left="; $sibling and branch $branch stay"
+    elif [[ "$owned" -eq 1 ]] && ! git -C "$main" update-ref -d "refs/heads/$branch" ${made:+"$made"} >&2; then
+      left="; branch $branch stays"
+    fi
+    handoff_die "$branch's project pre-start hooks are not approved in wt, and a spawn cannot approve them${left:-; nothing was kept}. Run wt config approvals add in a checkout with those hooks, then retry"
+  fi
+  # The main checkout's beads store and .bercail evidence are not the desk's,
+  # whatever either checkout's config or ignore rules say: the untracked files
+  # and folders the copy adds under them are taken back out, and only those.
+  local -A had=()
+  while IFS= read -r -d '' path; do had["$path"]=1; done < <(_handoff_state_paths "$sibling")
+  wt -C "$sibling" step copy-ignored </dev/null >&2 \
+    || handoff_die "wt step copy-ignored into $sibling failed; no desk started"
+  while IFS= read -r -d '' path; do
+    [[ -z "${had["$path"]:-}" ]] || continue
+    if [[ -d "$sibling/$path" && ! -L "$sibling/$path" ]]; then
+      rmdir -- "$sibling/$path" 2>/dev/null || true
+    else
+      rm -f -- "$sibling/$path"
+    fi
+  done < <(_handoff_state_paths "$sibling")
+  # --var, not --base=: a template that does not name base would get the
+  # flag in {{ args }}, which wt switch leaves empty.
+  if [[ -n "$hook_base" ]]; then
+    vars=(--var "base=$hook_base")
+    if bwp="$(handoff_worktree_of "$main" "$hook_base")"; then vars+=(--var "base_worktree_path=$bwp"); fi
+  fi
+  wt -C "$sibling" hook pre-start --foreground project: "${vars[@]}" </dev/null >&2 \
+    || handoff_die "the project's pre-start hooks failed in $sibling; no desk started. Rerun them there: wt hook pre-start --foreground project:"
 }
 
 # The commit a new desk branch starts from: origin's trunk once fetched, when
@@ -316,21 +368,6 @@ handoff_fresh_base() {
   mine="$(git -C "$main" rev-parse --verify --quiet "refs/heads/$trunk^{commit}")" || mine=""
   [[ -z "$mine" ]] || git -C "$main" merge-base --is-ancestor "$mine" "$remote" || return 0
   printf '%s' "$remote"
-}
-
-handoff_sibling_path() {
-  local main="$1" branch="$2" path
-  path="$(git -C "$main" worktree list --porcelain 2>/dev/null | awk -v b="refs/heads/$branch" '
-    /^worktree / { p = substr($0, 10) }
-    /^branch / && $2 == b { print p; exit }
-  ')"
-  if [[ -n "$path" && -d "$path" ]]; then
-    printf '%s' "$path"
-    return 0
-  fi
-  path="${main}.${branch}"
-  [[ -d "$path" ]] || return 1
-  printf '%s' "$path"
 }
 
 # One line per --branch spawn: the spawn JSON, plus the record's version and when it was written.
@@ -464,7 +501,7 @@ handoff_spawn_main() {
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0
-  local base="" fresh="" model="" target="" fork_reason="" adopt_reason="" staged="" session="" lock="" prior path prior_main own created=""
+  local base="" fresh="" model="" target="" fork_reason="" adopt_reason="" staged="" session="" lock="" prior path prior_main own created="" owned=0
   local existing=0 reuse=0 released="" role=""
 
   while [[ $# -gt 0 ]]; do
@@ -652,10 +689,9 @@ handoff_spawn_main() {
   if [[ -n "$keep_space" ]]; then
     export WT_HERDR_KEEP_FOCUS="$keep_space"
   fi
-  # Before the desk's space, so the sidebar nests it under its repo from the start.
-  wt_herdr_main_space "$main" \
-    || echo "handoff-spawn: could not open a space on the main checkout $main; the desk's space shows top-level" >&2
-  # The post-start hook makes the space only: this starts the desk below.
+  # wt runs no hook here: the setup, then the spaces and desk below, are this spawn's.
+  # A branch that is not here yet is the spawn's, PR branches included: wt makes them.
+  git -C "$main" show-ref --verify --quiet "refs/heads/$branch" && owned=0 || owned=1
   if [[ -n "$adopt_reason" || "$reuse" -eq 1 ]]; then
     # The gone desk's checkout, or a partial creation's, as it is; the desk below finds or opens its space.
     sibling="$(handoff_worktree_of "$main" "$branch")" \
@@ -669,18 +705,26 @@ handoff_spawn_main() {
   elif [[ -n "$base" ]]; then
     git -C "$main" rev-parse --verify --quiet "$base^{commit}" >/dev/null \
       || handoff_die "--base $base is not a branch or commit in this repo"
-    WT_HERDR_NO_DESK=1 wt switch --create "$branch" --base "$base" --no-cd \
+    wt switch --create "$branch" --base "$base" --no-cd --no-hooks \
       || handoff_die "wt switch --create $branch --base $base failed"
   else
     # A dirty copy is a patch on the local trunk; it stays there.
     [[ "$dirty" == 1 ]] || fresh="$(handoff_fresh_base "$main")"
-    WT_HERDR_NO_DESK=1 wt switch --create "$branch" ${fresh:+--base "$fresh"} --no-cd \
+    wt switch --create "$branch" ${fresh:+--base "$fresh"} --no-cd --no-hooks \
       || handoff_die "wt switch --create $branch failed"
   fi
-  _wt_herdr_keep_user_focus "$keep_space"
-  [[ -n "$adopt_reason" || "$reuse" -eq 1 ]] || sibling="$(handoff_sibling_path "$main" "$branch")" \
-    || handoff_die "could not resolve sibling worktree for $branch"
+  [[ -n "$adopt_reason" || "$reuse" -eq 1 ]] || sibling="$(handoff_worktree_of "$main" "$branch")" \
+    || handoff_die "wt switch made no worktree for $branch"
   sibling="$(_git_backend_realpath "$sibling")"
+  if [[ -z "$adopt_reason" && "$reuse" -eq 0 && "$existing" -eq 1 ]]; then
+    handoff_setup_worktree "$main" "$sibling" "$branch" "$owned" ""
+  elif [[ -z "$adopt_reason" && "$reuse" -eq 0 ]]; then
+    handoff_setup_worktree "$main" "$sibling" "$branch" "$owned" \
+      "${base:-${fresh:-$(wt -C "$main" step eval '{{ default_branch }}' </dev/null 2>/dev/null)}}"
+  fi
+  # Before the desk's space, so the sidebar nests it under its repo from the start.
+  wt_herdr_main_space "$main" \
+    || echo "handoff-spawn: could not open a space on the main checkout $main; the desk's space shows top-level" >&2
 
   if [[ "$dirty" == 1 ]]; then
     if handoff_main_is_dirty "$main"; then

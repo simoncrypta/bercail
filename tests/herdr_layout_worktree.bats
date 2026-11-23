@@ -94,16 +94,21 @@ open_space() {
   [[ "$got" == "Feature_Main" ]] || fail "session name: expected Feature_Main got $got"
 }
 
-@test "sibling and nested worktree layouts both label Branch_Repo" {
+# Slashes become dashes, as worktrunk's sanitize makes the folder (Simon, Q380).
+@test "sibling and nested worktree layouts both label Branch_Repo, with a dotted or slashed branch" {
   local w="$BATS_TEST_TMPDIR/work" got
   git_init "$w/app"
   git -C "$w/app" worktree add -q -b feat/x "$w/app.feat-x"
+  git -C "$w/app" worktree add -q -b v0.18-fix "$w/app.v0.18-fix"
+  git -C "$w/app" worktree add -q -b topic "$w/app.custom-topic"
   git -C "$w/app" worktree add -q --detach "$w/app.review-12"
   git_init "$w/lesentiel/lesentiel"
   git -C "$w/lesentiel/lesentiel" worktree add -q -b explore-kvmd-api "$w/lesentiel/explore-kvmd-api"
   git -C "$w/lesentiel/lesentiel" worktree add -q -b v1.2 "$w/lesentiel/v1.2"
+  git -C "$w/lesentiel/lesentiel" worktree add -q -b ui/foldkit "$w/lesentiel/ui-foldkit"
   git -C "$w/lesentiel/lesentiel" worktree add -q --detach "$w/lesentiel/lesentiel.review-7"
-  for want in "app.feat-x Feat-x_App" "app.review-12 Review-12_App" \
+  for want in "app.feat-x Feat-x_App" "app.v0.18-fix V0.18-fix_App" "app.review-12 Review-12_App" "app.custom-topic Topic_App" \
+    "lesentiel/ui-foldkit Ui-foldkit_Lesentiel" \
     "lesentiel/explore-kvmd-api Explore-kvmd-api_Lesentiel" "lesentiel/v1.2 V1.2_Lesentiel" \
     "lesentiel/lesentiel.review-7 Review-7_Lesentiel"; do
     got="$(_wt_generate_session_name "$w/${want%% *}")"

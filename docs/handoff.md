@@ -75,14 +75,14 @@ cannot dispatch coding; Shep cannot bypass its original-owner dispatcher.
 For changing `handoff-spawn`; agents follow the [handoff skill](../skills/handoff/SKILL.md) and do not assemble these steps.
 
 1. A space on the main checkout, when no space sits there: one made on that folder (on any machine), or one whose first terminal is there now. It is a plain shell named as `wts` names it (`<Branch>_<Repo>`), with no desk, and the person's shown space stays. The bercail-spaces mod nests the desk's space under it. With no window here, see [No window on this machine](#no-window-on-this-machine).
-2. `wt switch --create <branch> --no-cd` (`--base` when given). worktrunk's post-start hook opens a Herdr app space on the sibling. `WT_HERDR_NO_DESK=1` keeps the hook from starting a desk, and `WT_HERDR_KEEP_FOCUS` brings the person's shown space back.
+2. `wt switch --create <branch> --no-cd --no-hooks` (`--base` when given), so no worktrunk hook runs and the space comes from step 6 alone. The path comes from `git worktree list`. Then the spawn runs what worktrunk's `pre-start` did, in order, before any space. First, a project `pre-start` hook that `wt config approvals list` shows unapproved in the new checkout stops the spawn. The spawn removes that checkout, and then the branch if it made it, and names whatever it could not remove. A wt with no JSON there (0.67) cannot say, and the hook fails later instead. Second, `wt step copy-ignored`. The spawn lists the untracked files and folders under `.beads/` and `.bercail/` before and after it, and removes the ones the copy added, whatever either checkout's config or ignore rules say. Third, `wt hook pre-start --foreground project:`, given `--var base=` and `--var base_worktree_path=` as `wt switch --create` sets them. `--base=` would also land in `{{ args }}`. A failure stops the spawn before any space or desk. Step 1 runs after this.
 3. The dirty copy, when the main checkout is dirty or `--dirty` is given, and not with `--clean`: `git -C main diff HEAD --binary | git -C sibling apply` (no `--index`), then `cp -a` of each `git ls-files --others --exclude-standard` path. The sibling's index stays empty.
 4. The branch is registered with the [git backend](#git-backend): `gt track`, or for a `--base` dependent `gh stack init`/`add` or `origin stack track --onto`.
 5. The `bd comment` on the issue: the worktree, stage and do not commit, the backend and its stack commands.
 6. The desk: `wt_herdr_handoff_agent` runs `hc run --bg --keep --outlive-parent` of `bercail-desk-agent --prompt <the one line>` under the space's first terminal, labelled `bercail.role=agent`, `bercail.space`, and the issue when known. It refuses a live desk in that space. A failed start keeps the worktree and reports partial facts.
 7. The spawn JSON on stdout, appended to `handoffs.jsonl`.
 
-Within the repository reservation, steps 1, 2 and 6 hold a lock per checkout (`flock` on `bercail-space-<hash>.lock` in `$XDG_RUNTIME_DIR`), so two spawns or hooks at once on one checkout make one space and one desk.
+Within the repository reservation, steps 1 and 6 hold a lock per checkout (`flock` on `bercail-space-<hash>.lock` in `$XDG_RUNTIME_DIR`), so two spawns or hooks at once on one checkout make one space and one desk.
 
 ### No window on this machine
 

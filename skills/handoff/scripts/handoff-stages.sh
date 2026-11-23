@@ -73,9 +73,10 @@ handoff_beads_dir() {
   printf '%s' "$out"
 }
 
-# wt step copy-ignored copies the gitignored Dolt store into a new worktree,
-# and bd then writes there instead of the main checkout. A redirect points bd
-# back. The copy stays; existing worktree databases are not removed.
+# wt step copy-ignored without bercail's exclude (a person's own worktrunk
+# config) copies the gitignored Dolt store into a new worktree, and bd then
+# writes there instead of the main checkout. A redirect points bd back. The
+# copy stays; existing worktree databases are not removed.
 handoff_share_main_beads() {
   local worktree="$1" main target current
   main="$(git_backend_main "$worktree" 2>/dev/null || true)"

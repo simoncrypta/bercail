@@ -135,8 +135,9 @@ working directory to `cwd` from `--info`. Flags only.
 - `--branch` needs bstack's Pi lead profile (`bercail update` writes it).
 ## The desk (`--branch`)
 
-`--branch` makes a sibling worktree (`wt switch --create`), opens a Herdr app
-space on it (worktrunk's post-start hook), and starts that space's desk agent:
+`--branch` makes a sibling worktree (`wt switch --create --no-hooks`), copies
+the main checkout's ignored files into it and runs the repo's own `pre-start`
+hooks, then opens a Herdr app space on it and starts that space's desk agent:
 an hc terminal running Pi's lead (an empty command, so `bercail-desk-agent`
 reads `lead.json`) with a one-line prompt pointing at the issue as its first message, labelled
 `bercail.role=agent`, `bercail.space=<space id>`, and, when known, `bercail.issue` and `bercail.issue_title`. The bercail layout shows

@@ -9,6 +9,8 @@ Worktrunk (`wt`) manages git worktrees. Here each checkout is a Herdr app space;
 
 This layout also uses `~/.config/worktrunk/herdr-layout.sh` and user hooks so `post-start` / `post-remove` open or close the Herdr app space of a sibling checkout. `post-remove` finds the space by the checkout's folder, so it still closes after the checkout switched branches. With no window on this machine, `post-start` makes the space through hc for any connected window to show (docs/handoff.md, "No window on this machine"), and `post-remove` leaves it.
 
+These hooks serve a person's `wt switch`. `handoff-spawn --branch` passes `--no-hooks` and runs the copy and the project's `pre-start` hooks itself, then makes the space and desk. Both name the space `<Branch>_<Repo>` with a slash in the branch as a dash (`Feat-x_Bercail`). The user config's `[step.copy-ignored] exclude` keeps the main checkout's `.beads/*` store and `.bercail/*` evidence out of a person's new worktree. The spawn drops them from a desk's whatever the config says.
+
 ## Useful commands
 
 ```bash

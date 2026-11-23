@@ -843,6 +843,7 @@ _spawn_branch() {
   mkdir -p "$home/.config/worktrunk"
   cat >"$bin/wt" <<'WT'
 #!/usr/bin/env bash
+[[ " $* " == *" switch "* ]] || { printf '{"commands":[]}\n'; exit 0; }
 branch="" base=HEAD
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -1183,10 +1184,31 @@ _desk_fixture() {
   cat >"$DESK_BIN/wt" <<'WT'
 #!/usr/bin/env bash
 printf 'wt %s\n' "$*" >>"$DESK_HERDR_LOG"
-branch="" create=0 base=HEAD
+# The spawn's setup calls, in a checkout: the approvals list ($DESK_APPROVALS,
+# else none), the copy (main's ignored folders, as a config without excludes
+# copies them), the default branch and the project's hooks.
+# $DESK_WT_FAIL=copy|hook fails one.
+if [[ "$1" == -C ]]; then
+  dir="$2"
+  shift 2
+  case "$*" in
+    "config approvals list --format=json")
+      if [[ -n ${DESK_APPROVALS:-} ]]; then cat "$DESK_APPROVALS"; else printf '{"state":"no_commands","commands":[]}\n'; fi ;;
+    "step copy-ignored")
+      [[ ${DESK_WT_FAIL:-} != copy ]] || exit 1
+      main="$(git -C "$dir" worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
+      (cd "$main" && git ls-files -z --others --ignored --exclude-standard | xargs -0 -r cp --parents -t "$dir") ;;
+    "step eval {{ default_branch }}") git -C "$dir" symbolic-ref --short HEAD ;;
+    "hook pre-start --foreground project:" | "hook pre-start --foreground project: --var base="*) [[ ${DESK_WT_FAIL:-} != hook ]] || exit 1 ;;
+    *) echo "fake wt: unexpected wt -C $dir $*" >&2; exit 99 ;;
+  esac
+  exit 0
+fi
+branch="" create=0 base=HEAD hooks=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --create) branch="$2" create=1; shift 2 ;;
+    --no-hooks) hooks=0; shift ;;
     --base) base="$2"; shift 2 ;;
     switch | --*) shift ;;
     *) branch="$1"; shift ;;
@@ -1199,7 +1221,8 @@ if [[ "$create" -eq 1 ]]; then
 else
   git -C "$main" worktree add -q "$main.$branch" "$branch"
 fi
-printf '%s' "$(cd "$main.$branch" && pwd -P)" >"$DESK_FOLDER"
+# Its post-start hook's space, as the app lists it; --no-hooks makes none.
+[[ "$hooks" -eq 0 ]] || printf '%s' "$(cd "$main.$branch" && pwd -P)" >"$DESK_FOLDER"
 WT
   cat >"$DESK_BIN/herdr-app" <<'HERDR'
 #!/usr/bin/env bash
@@ -1415,9 +1438,61 @@ _desk_moved_origin() {
   _desk_origin existing
   out="$(_desk_spawn --existing-branch 2>"$BATS_TEST_TMPDIR/existing.err")" \
     || fail "existing-branch spawn failed: $out $(cat "$BATS_TEST_TMPDIR/existing.err")"
-  grep -q '^wt switch feat --no-cd$' "$DESK_HERDR_LOG" || fail "wt switch, never --create: $(cat "$DESK_HERDR_LOG")"
+  grep -q '^wt switch feat --no-cd --no-hooks$' "$DESK_HERDR_LOG" || fail "wt switch, never --create: $(cat "$DESK_HERDR_LOG")"
+  grep -qxF "wt -C $(cd "$DESK_REPO.feat" && pwd -P) step copy-ignored" "$DESK_HERDR_LOG" \
+    || fail "a PR's new checkout gets the copy too: $(cat "$DESK_HERDR_LOG")"
+  grep -qxF "wt -C $(cd "$DESK_REPO.feat" && pwd -P) hook pre-start --foreground project:" "$DESK_HERDR_LOG" \
+    || fail "and the project's hooks, with no base, as wt switch gives none: $(cat "$DESK_HERDR_LOG")"
   [[ "$(git -C "$DESK_REPO.feat" rev-parse HEAD)" == "$PR_HEAD" ]] || fail "the desk starts at origin's head $PR_HEAD"
   jq -e '.ok and .branch == "feat" and .desk == "t9"' <<<"$out" >/dev/null || fail "$out"
+}
+
+@test "a --branch spawn skips wt's hooks, then copies, runs the project's pre-start and opens the space, in order" {
+  local out sib copy hook space trunk
+  _desk_fixture setup-order
+  trunk="$(git -C "$DESK_REPO" symbolic-ref --short HEAD)"
+  printf 'node_modules/\n.bercail/\n.beads/store/\n' >"$DESK_REPO/.gitignore"
+  git -C "$DESK_REPO" add .gitignore
+  git -C "$DESK_REPO" commit -qm ignores
+  mkdir -p "$DESK_REPO/node_modules" "$DESK_REPO/.bercail" "$DESK_REPO/.beads/store"
+  echo dep >"$DESK_REPO/node_modules/dep"
+  echo report >"$DESK_REPO/.bercail/report.md"
+  echo db >"$DESK_REPO/.beads/store/db"
+  out="$(_desk_spawn 2>"$BATS_TEST_TMPDIR/setup-order.err")" || fail "spawn failed: $out $(cat "$BATS_TEST_TMPDIR/setup-order.err")"
+  sib="$(cd "$DESK_REPO.feat" && pwd -P)"
+  grep -qx 'wt switch --create feat --no-cd --no-hooks' "$DESK_HERDR_LOG" \
+    || fail "the switch runs no hook, so no background space: $(cat "$DESK_HERDR_LOG")"
+  copy="$(grep -nxF "wt -C $sib step copy-ignored" "$DESK_HERDR_LOG" | cut -d: -f1 || true)"
+  hook="$(grep -nxF "wt -C $sib hook pre-start --foreground project: --var base=$trunk --var base_worktree_path=$DESK_REPO" "$DESK_HERDR_LOG" | cut -d: -f1 || true)"
+  space="$(grep -nF -- "herdr-app do space.new --name Feat_Setup-order --folder $sib" "$DESK_HERDR_LOG" | cut -d: -f1 || true)"
+  [[ -n "$copy" && -n "$hook" && -n "$space" && "$copy" -lt "$hook" && "$hook" -lt "$space" ]] \
+    || fail "copy, then the project's hooks with wt switch's base, then the space: $(cat "$DESK_HERDR_LOG")"
+  [[ -f "$sib/node_modules/dep" ]] || fail "the copy brings node_modules"
+  [[ ! -e "$sib/.bercail/report.md" && ! -e "$sib/.beads/store" ]] || fail "the main checkout's state stays out of the desk's checkout"
+  jq -e '.ok and .desk == "t9"' <<<"$out" >/dev/null || fail "$out"
+}
+
+@test "a --branch spawn refuses unapproved project pre-start hooks and keeps no worktree, branch or space" {
+  local out
+  _desk_fixture unapproved
+  export DESK_APPROVALS="$BATS_TEST_TMPDIR/unapproved.json"
+  printf '%s\n' '{"state":"approval_required","commands":[{"phase":"pre-start","name":"deps","template":"npm ci","approved":false}]}' >"$DESK_APPROVALS"
+  out="$(_desk_spawn 2>&1)" && fail "an unapproved hook must stop the spawn: $out"
+  [[ "$out" == *"wt config approvals add"* ]] || fail "name the fix: $out"
+  [[ ! -d "$DESK_REPO.feat" ]] || fail "no worktree"
+  ! git -C "$DESK_REPO" show-ref --verify --quiet refs/heads/feat || fail "no branch"
+  ! grep -q 'space.new' "$DESK_HERDR_LOG" || fail "no space: $(cat "$DESK_HERDR_LOG")"
+  ! grep -q '^run ' "$DESK_HC_LOG" || fail "no desk: $(cat "$DESK_HC_LOG")"
+}
+
+@test "a failed copy or project hook stops a --branch spawn before any space or desk" {
+  local out how
+  for how in copy hook; do
+    _desk_fixture "setup-fails-$how"
+    out="$(DESK_WT_FAIL="$how" _desk_spawn 2>&1)" && fail "a failed $how must stop the spawn: $out"
+    ! grep -q 'space.new' "$DESK_HERDR_LOG" || fail "$how: no space: $(cat "$DESK_HERDR_LOG")"
+    ! grep -q '^run ' "$DESK_HC_LOG" || fail "$how: no desk: $(cat "$DESK_HC_LOG")"
+  done
 }
 
 @test "--existing-branch refuses a local branch with commits origin lacks, or one already checked out" {
@@ -1435,7 +1510,7 @@ _desk_moved_origin() {
   [[ "$out" == *"already checked out at"* ]] || fail "$out"
   out="$(_desk_spawn --existing-branch --base master 2>&1)" && fail "$out"
   [[ "$out" == *"no --base"* ]] || fail "$out"
-  ! grep -q '^wt ' "$DESK_HERDR_LOG" || fail "no worktree after a refusal: $(cat "$DESK_HERDR_LOG")"
+  ! grep -q '^wt switch' "$DESK_HERDR_LOG" || fail "no worktree after a refusal: $(cat "$DESK_HERDR_LOG")"
 }
 
 @test "stage autopilot --branch starts an autopilot desk, only on an existing PR branch" {
@@ -1520,7 +1595,7 @@ _desk_moved_origin() {
   main="$(cd "$DESK_REPO" && pwd -P)"
   out="$(_desk_spawn 2>"$BATS_TEST_TMPDIR/mainspace.err")" \
     || fail "branch spawn failed: $out $(cat "$BATS_TEST_TMPDIR/mainspace.err")"
-  first="$(grep -m1 -E '^(herdr-app do space.new|wt )' "$DESK_HERDR_LOG")"
+  first="$(grep -m1 '^herdr-app do space.new' "$DESK_HERDR_LOG")"
   [[ "$first" == "herdr-app do space.new --name Trunk_Mainspace --folder $main --tab Shell" ]] \
     || fail "the main checkout's space comes before the desk's: $(cat "$DESK_HERDR_LOG")"
   [[ "$(grep -c '^run ' "$DESK_HC_LOG")" -eq 1 ]] && grep -q "^run .*--cwd $main.feat " "$DESK_HC_LOG" \

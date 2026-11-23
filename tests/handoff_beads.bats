@@ -81,12 +81,13 @@ comment_has() {
     || fail "missing comment [$needle] from $dir: $text"
 }
 
-# The worktree's bd reads and writes the main store, and keeps its copy.
+# The worktree's bd reads and writes the main store. A headless run's worktree
+# keeps the copy it had; a --branch spawn ($3 = branch) drops the copy it made.
 assert_shared() {
   local id="$1" marker="$2" got status
   got="$(beads_dir_of "$wt")"
   [[ "$got" == "$main/.beads" ]] || fail "bd context in $wt is $got, want $main/.beads"
-  [[ -d "$wt/.beads/embeddeddolt" ]] || fail "copied database should be left in place: $wt"
+  _assert_copy "${3:-}"
   (cd "$wt" && bd comments add "$id" "$marker" -q >/dev/null)
   (cd "$main" && bd comments "$id") | grep -q "$marker" \
     || fail "comment from $wt did not land in the main store"
@@ -118,7 +119,8 @@ STUB
     --stage bstack --issue "$id" --worktree "$wt" >/dev/null)
 }
 
-# wt switch --create with worktrunk's pre-start copy of the Dolt store, then a --branch spawn.
+# A --branch spawn whose wt step copy-ignored copies the Dolt store, as a config
+# without bercail's excludes does.
 spawn_branch() {
   local bin="$BATS_TEST_TMPDIR/desk-bin"
   mkdir -p "$HOME/.config/worktrunk" "$bin"
@@ -126,6 +128,12 @@ spawn_branch() {
   cat >"$bin/wt" <<'WT'
 #!/usr/bin/env bash
 set -euo pipefail
+main="$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
+case "$*" in
+  "-C "*" step copy-ignored") cp -a "$main/.beads/embeddeddolt" "$2/.beads/embeddeddolt"; exit 0 ;;
+  *" switch "* | switch*) ;;
+  *) printf '{"commands":[]}\n'; exit 0 ;;
+esac
 branch=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -134,10 +142,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 [[ -n "$branch" ]] || exit 1
-main="$(git worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
-dest="${main}.${branch}"
-git -C "$main" worktree add -q -b "$branch" "$dest"
-cp -a "$main/.beads/embeddeddolt" "$dest/.beads/embeddeddolt"
+git -C "$main" worktree add -q -b "$branch" "${main}.${branch}"
 WT
   cat >"$bin/herdr-app" <<'HERDR'
 #!/bin/sh
@@ -175,19 +180,29 @@ HELPER
 @test "--branch spawn: the worktree writes to the main checkout's beads store" {
   real_bd
   spawn_branch
-  assert_shared "$id" desk-marker
+  assert_shared "$id" desk-marker branch
   comment_has "$main" "$id" "desk agent pi"
 }
 
+# A headless run's worktree keeps its copied store; a --branch spawn's has none.
+_assert_copy() {
+  if [[ "$1" == branch ]]; then
+    [[ ! -e "$wt/.beads/embeddeddolt" ]] || fail "a --branch spawn drops the copied store: $wt"
+  else
+    [[ -d "$wt/.beads/embeddeddolt" ]] || fail "copied database should be left in place: $wt"
+  fi
+}
+
 # What bercail hands bd from the worktree, on the fake: the store it resolves
-# there is the main one, it keeps the copy, and it calls bd in the worktree
-# with no BEADS_DIR override.
+# there is the main one (through a redirect beside a copied store), and it
+# calls bd in the worktree with no BEADS_DIR override. $1 as for assert_shared.
 assert_handed_main_store() {
   local store calls
   store="$(cd "$main" && pwd -P)/.beads"
-  [[ "$(cat "$wt/.beads/redirect" 2>/dev/null)" == "$store" ]] \
+  [[ "$1" == branch ]] || [[ "$(cat "$wt/.beads/redirect" 2>/dev/null)" == "$store" ]] \
     || fail "redirect in $wt/.beads should hold $store: $(cat "$wt/.beads/redirect" 2>&1)"
-  [[ -d "$wt/.beads/embeddeddolt" ]] || fail "copied database should be left in place: $wt"
+  [[ "$(beads_dir_of "$wt")" == "$store" ]] || fail "bd in $wt resolves $(beads_dir_of "$wt"), want $store"
+  _assert_copy "${1:-}"
   calls="$(jq -c --arg wt "$(cd "$wt" && pwd -P)" 'select(.cwd == $wt)' "$BD_CALLS")"
   [[ -n "$calls" ]] || fail "no bd call ran in $wt: $(cat "$BD_CALLS")"
   jq -se 'all(.beads_dir == "")' <<<"$calls" >/dev/null || fail "BEADS_DIR passed to bd: $calls"
@@ -199,7 +214,7 @@ assert_handed_main_store() {
 @test "headless spawn: bd in the worktree gets the main store, the issue, and the comment" {
   fake_bd
   spawn_headless
-  assert_handed_main_store
+  assert_handed_main_store headless
   jq -e '.status == "ready"' "$wt/.bercail/handoff-result.json" >/dev/null \
     || fail "the issue should be found through the main store: $(cat "$wt/.bercail/handoff-result.json")"
   jq -se --arg id "$id" --arg wt "$(cd "$wt" && pwd -P)" 'any(.cwd == $wt and .argv == ["show", $id, "--json"])' "$BD_CALLS" >/dev/null \
@@ -211,7 +226,7 @@ assert_handed_main_store() {
 @test "--branch spawn: the handoff comment goes from the worktree to the main store" {
   fake_bd
   spawn_branch
-  assert_handed_main_store
+  assert_handed_main_store branch
   grep -F "$id" "$main/.beads/comments" | grep -q 'desk agent pi' \
     || fail "the handoff comment should land in the main store: $(cat "$main/.beads/comments" 2>&1)"
 }
