@@ -20,6 +20,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import {
   ANSWER_SOURCES,
+  CLOSE_REASON,
   DEFAULT_SOURCE,
   isDue,
   PUSH_SOURCE,
@@ -187,7 +188,8 @@ export function discussionSummary(state: string, q: Question): string | null {
 
 // One event in Shep's inbox per pick, and per close of a modal that picked nothing.
 // The file name is the event's id, so a retry rewrites it and Shep's inbox drops it.
-function decisionEvent(state: string, q: Question, name: string, fields: Record<string, unknown>) {
+// A panel Close reads no discussion: a transcript it cannot read must not hold it back.
+function decisionEvent(state: string, q: Question, name: string, fields: Record<string, unknown>, discussed = true) {
   const inbox = join(state, "inbox");
   mkdirSync(inbox, { recursive: true, mode: 0o700 });
   const ev = {
@@ -196,7 +198,7 @@ function decisionEvent(state: string, q: Question, name: string, fields: Record<
     event_id: `decision:${name}`,
     question: { token: tokenOf(q), prompt: q.prompt, topic: q.target.topic },
     at: new Date().toISOString(),
-    summary: discussionSummary(state, q),
+    summary: discussed ? discussionSummary(state, q) : null,
     ...fields,
   };
   save(join(inbox, `decision-${name}.json`), `${JSON.stringify(ev)}\n`);
@@ -269,6 +271,43 @@ function tell(state: string, store: QuestionStore, q: Question, which: "default"
           },
     );
   store.told(tokenOf(q), which);
+}
+
+// The person's Close on the panel: the card leaves it, whatever its live check says, so
+// none sits stuck (a default whose own action moved its target takes no OK). No check
+// runs: it holds to nothing. Then Shep's event, except on a guard card, whose worker
+// reports it. An event that cannot be written now is sent at Shep's next expire run.
+export function close(state: string, requestId: string, token: string, source: "panel picker"): AnswerResult {
+  const store = new QuestionStore(state);
+  store.withdraw(requestId, token, CLOSE_REASON, source);
+  // The ledger, not a replayed receipt, says whether Shep was told.
+  const now = store.snapshot().questions.find((x) => tokenOf(x) === token)!;
+  if (!now.withdrawal!.told)
+    try {
+      tellClosed(state, store, now);
+    } catch {}
+  return { question: store.snapshot().questions.find((x) => tokenOf(x) === token)!, accepted: true };
+}
+
+// What the card was when the person closed it, for Shep: pending, defaulted, or a
+// default they had reversed, whose Reverse event still says what Shep owes.
+function tellClosed(state: string, store: QuestionStore, q: Question) {
+  const name = `${q.id}-${q.revision}-closed`;
+  if (!q.guard && !["inbox", "delivered"].some((dir) => existsSync(join(state, dir, `decision-${name}.json`))))
+    decisionEvent(
+      state,
+      q,
+      name,
+      {
+        choice: null,
+        by: q.withdrawal!.source,
+        ...(q.answer?.source !== DEFAULT_SOURCE
+          ? { closed: "pending" }
+          : { closed: q.settled?.outcome === "reversed" ? "reversed" : "defaulted", defaulted: q.answer.choice }),
+      },
+      false,
+    );
+  store.told(tokenOf(q), "closed");
 }
 
 // A default the person has neither OK'd nor reversed: its card waits for them.
@@ -347,8 +386,8 @@ export async function approvePush(state: string, push: PushRequest): Promise<Pus
 // Each reversible question past its deadline with no pick: a live check, then the
 // store takes Shep's recommendation. Shep's runtime runs this (question-cli expire) at
 // start and on a timer, so a deadline missed while Shep was down fires at its next
-// start. A changed question waits. Then each default, and each OK or Reverse on one,
-// Shep was not told of: its event, then the ledger's `told`. A write that failed is
+// start. A changed question waits. Then each default, each OK or Reverse on one, and
+// each Close, Shep was not told of: its event, then the ledger's `told`. A write that failed is
 // retried at every run; one that was told never again.
 export async function expireDue(state: string): Promise<Question[]> {
   const store = new QuestionStore(state);
@@ -361,6 +400,12 @@ export async function expireDue(state: string): Promise<Question[]> {
   }
   let failed: unknown = null;
   for (const q of store.snapshot().questions) {
+    if (q.withdrawal?.source && !q.withdrawal.told)
+      try {
+        tellClosed(state, store, q);
+      } catch (error) {
+        failed ??= error;
+      }
     if (q.answer?.source !== DEFAULT_SOURCE) continue;
     for (const which of ["default", "settled"] as const) {
       if (which === "default" ? q.told : !q.settled || q.settled.told) continue;
@@ -481,7 +526,7 @@ export default function (pi: ExtensionAPI) {
       }
       if (q?.answer?.source === DEFAULT_SOURCE)
         return ctx.ui.notify(
-          `It defaulted to ${q.answer.choice}, and you already ${q.settled?.outcome === "ok" ? "said OK" : "reversed it"}.`,
+          `It defaulted to ${q.answer.choice}, and ${q.withdrawal ? (q.withdrawal.source ? "you closed it" : "Shep withdrew it") : `you already ${q.settled?.outcome === "ok" ? "said OK" : "reversed it"}`}.`,
           "info",
         );
       if (!q || !q.options.length) return ctx.ui.notify("This question has no choices to pick.", "warning");

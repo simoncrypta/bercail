@@ -28,7 +28,17 @@ import {
   withTarget,
 } from "./question-target.ts";
 import { sweepLand, tellLand } from "./land-chain.ts";
-import { approvePush, closed, discussionOf, expireDue, openDiscussion, pick, settle, unsettled } from "./discuss.ts";
+import {
+  approvePush,
+  close,
+  closed,
+  discussionOf,
+  expireDue,
+  openDiscussion,
+  pick,
+  settle,
+  unsettled,
+} from "./discuss.ts";
 
 async function main() {
   const state = process.env.BERCAIL_SHEP_STATE;
@@ -168,9 +178,12 @@ async function main() {
       result = store.withdraw(input.requestId, input.token, input.reason);
     } else if (op === "answer") {
       // A pick names its choice; the person's OK or Reverse on a default names its
-      // outcome, and a Reverse may name another choice.
+      // outcome, and a Reverse may name another choice. Their Close on any card is
+      // here too: like an answer, it is the person's, so the guard blocks it for agents.
       const keys = Object.keys(input).sort().join();
-      if (keys === "outcome,requestId,source,token" && ["ok", "reversed"].includes(input.outcome))
+      if (keys === "outcome,requestId,source,token" && input.outcome === "closed")
+        result = close(state, input.requestId, input.token, input.source);
+      else if (keys === "outcome,requestId,source,token" && ["ok", "reversed"].includes(input.outcome))
         result = await settle(state, input.requestId, input.token, input.outcome, null, input.source);
       else if (keys === "choice,outcome,requestId,source,token" && input.outcome === "reversed")
         result = await settle(state, input.requestId, input.token, "reversed", input.choice, input.source);
@@ -178,7 +191,7 @@ async function main() {
         result = await pick(state, input.requestId, input.token, input.choice, input.source);
       else
         throw new Error(
-          'answer fields must be requestId, token, choice and source, or requestId, token, source and outcome "ok" or "reversed" (a Reverse may add choice)',
+          'answer fields must be requestId, token, choice and source, or requestId, token, source and outcome "ok", "reversed" (which may add choice) or "closed"',
         );
     } else if (op === "reply") {
       if (Object.keys(input).sort().join() !== "answer,requestId,source,token")

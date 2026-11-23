@@ -277,9 +277,16 @@ its desk warnings. Act once, only while fresh and under every other rule.
   person's pick while the check is fresh; with none, ask again if it still
   matters. Then `shep_question_withdraw` it with what you did, which takes
   its card off the panel. Never withdraw it before you have handled it.
-- A defaulted card that went stale or unavailable takes no OK or Reverse.
-  If it no longer applies, withdraw it with a one-line reason and say so; if
-  it still matters, ask again against the current candidate.
+- A Close by the person (an event with `closed`) took a card off the panel
+  and withdrew it; it is no answer. On a pending card, do not act on it. On a
+  default, the default stands under its rules; keep what you did and never
+  do it twice. On a reversed default, the Reverse event is what you owe:
+  undo what you took once, if you have not, and ask again rather than act on
+  another choice. Ask again only if it still matters; never withdraw it.
+- A defaulted card that went stale or unavailable takes no OK or Reverse,
+  only the person's Close. If it no longer applies, withdraw it with a
+  one-line reason and say so; if it still matters, ask again against the
+  current candidate.
 - Closing Discuss without a pick is no answer. Use its last reply to revise
   or ask again; never present it as the person's words.
 - A `/reply` is an unverified proposal and leaves the question pending: never
