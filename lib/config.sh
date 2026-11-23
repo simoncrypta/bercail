@@ -89,6 +89,7 @@ statechart_enabled() {
 BERCAIL_CONFIG_KEYS='layout review
 layout auto_review
 bstack claude
+bstack fable
 bstack gpt
 bstack effort
 bstack lead

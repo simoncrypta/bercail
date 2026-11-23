@@ -31,19 +31,25 @@ template in `~/.config/herdr-core/templates/`.
 |------|----------|------|
 | lead | the desk | your ask; plans, routes, checks, reports |
 | build | `bstack-builder` | code from a precise brief |
+| build, on Fable | `bstack-builder-fable` | the same, in the builder trial on low-stakes jobs through 2026-11-30 |
 | judge | `bstack-judge` | a second opinion on hard design calls, prose, and the intent and description check at `/validate`; the lead decides |
 | autopilot | `bstack-autopilot` | an open PR to get green |
 
 By default the lead, the builder and autopilot run on Claude Opus, and the judge
 on GPT. The judge reviews from another provider; the lead, on Opus, makes the
-call. A role names a plan (`claude`, `gpt`) or a full Pi model id. The judge
-runs on Claude until you sign in to ChatGPT; every other role takes only
-Claude. A pinned model is used whether or not you are signed in to its plan.
+call. A role names a plan (`claude`, `gpt`), `fable`, or a full Pi model id.
+The judge runs on Fable, then Opus, until you sign in to ChatGPT; every other
+role takes only Claude. A pinned model is used whether or not you are signed in to its plan.
 With no sign-in at all, agents use Pi's default model.
 
-A rate limit never moves a role to another model: the role pauses until the
-limit resets, then goes on. The judge alone switches, to Claude, while GPT is
-limited ([how it runs](../bstack.md#how-it-runs)).
+A rate limit pauses a role until it resets, then the role goes on. Two move to
+Claude Fable instead: the judge while GPT is limited, and a role on Opus while a
+limit holds Opus alone ([how it runs](../bstack.md#how-it-runs)).
+
+Through 2026-11-30 the lead starts `bstack-builder-fable` on a job whose
+planned change touches no `high_stakes` path, and its report gets a `Trial:`
+line (builder model, stakes, judge rounds, mistakes). Shep adds the review
+outcome after you review it, so Opus and Fable builds can be compared.
 
 To run one desk's lead on another model, without changing the lead for every
 desk, hand it off with `--model` ([handoff](../handoff.md)). Only that desk's

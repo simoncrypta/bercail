@@ -178,7 +178,9 @@ bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   bercail bstack setup   install Pi and the Claude bridge (models are picked for you)
   bercail bstack status  what is logged in, each model (auto or pinned), each role
   Roles: lead (the bstack agent) and build (bstack-builder) on Claude Opus; judge
-  (bstack-judge) on GPT, which reviews while the lead decides. In Pi: /validate,
+  (bstack-judge) and review-pr's reviewer on GPT Astra, which review while the
+  lead decides; background Shep and the builder trial (bstack-builder-fable) on
+  Claude Fable. In Pi: /validate,
   /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
   pushes, never merges), /pr-review (bercail review-pr's read-only decisions
   pass), /statechart.
@@ -208,9 +210,9 @@ bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   sets where they go (bercail todo target add|rm, route); other roles may read them.
   No role writes todo.json by hand, or runs basecamp's login, logout or token commands.
   On a rate limit a role pauses until the limit resets, shown as blocked, then
-  goes on with the same request on the same model; Esc stops waiting. The judge
-  alone switches: Opus stands in while GPT is limited, and goes back to GPT once
-  it resets. A dead provider (402, no credits) or a missing Claude login stops
+  goes on with the same request on the same model; Esc stops waiting. Two
+  switch to Claude Fable instead and go back once their model resets: the judge
+  while GPT is limited, and a role on Opus while a limit holds Opus alone. A dead provider (402, no credits) or a missing Claude login stops
   the role with the fix. Safety blocks take precedence over quota hints: the
   unfinished role stays incomplete, with sanitized reason data and no switch or
   self-approval.
