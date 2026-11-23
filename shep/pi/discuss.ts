@@ -215,8 +215,13 @@ export async function pick(
 ): Promise<AnswerResult> {
   const store = new QuestionStore(state);
   const q = store.snapshot().questions.find((x) => tokenOf(x) === token) ?? fail("unknown question revision");
-  // Check outside the ledger transaction: it runs git and bercail policy show.
-  const check = await checkQuestion(q);
+  // Check outside the ledger transaction: it runs git and bercail policy show. A guard
+  // card's Deny on the panel takes none: it grants nothing, and a slow check must not let
+  // its deadline pass first.
+  const check =
+    q.guard && choice === "Deny" && source === PUSH_SOURCE
+      ? { status: "unchecked", reasons: [], current: null }
+      : await checkQuestion(q);
   const result = store.answer(requestId, token, choice, source, check);
   // A guard card's pick is its worker's to act on, and the event names it.
   const guard = q.guard ? { guard: { worker: q.guard.worker } } : {};

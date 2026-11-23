@@ -75,7 +75,7 @@ EOF
   cp "$ROOT/bercail/keys.json" "$BATS_TEST_TMPDIR/keys.json"
   cat >"$BATS_TEST_TMPDIR/prelude.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
-import Shep, { find, viewOf, stackPlan, focusPlan, withView, loadDecisions, cardWords, answerable } from "./bercail-shep.mjs";
+import Shep, { find, viewOf, stackPlan, focusPlan, withView, loadDecisions, cardWords, answerable, takes } from "./bercail-shep.mjs";
 import Spaces from "./bercail-spaces.mjs";
 import { els } from "./gpui.mjs";
 
@@ -767,6 +767,38 @@ bar.init({}, cx);
 els.length = 0;
 bar.render(cx);
 if (!texts().includes("read-only branch · it defaulted; /pick OKs or reverses it, closing tells Shep")) fail(`discuss bar: ${JSON.stringify(texts())}`);
+EOF
+}
+
+@test "a guard card's timer says whether nobody answering counts as an Allow or a Deny, and its Deny is offered whatever its check says" {
+  mod_case <<'EOF'
+const at = (min) => new Date(Date.now() + min * 60000).toISOString();
+const guard = { kind: "guard", options: ["Allow", "Deny"], recommendation: null, deadline: null, defaulted: null, change: null };
+eq([
+  cardWords({ ...card("Q1@1"), ...guard, guard: { expires: at(42.5), defaults: true } }, []).timer,
+  cardWords({ ...card("Q2@1"), ...guard, guard: { expires: at(42.5), defaults: false } }, []).timer,
+  cardWords({ ...card("Q3@1"), ...guard, guard: { expires: at(-1), defaults: true } }, []).timer,
+  cardWords({ ...card("Q4@1"), ...guard, guard: { expires: at(-1), defaults: false } }, []).timer,
+], [
+  "defaults to Allow in 42 min, if it still reads private or local",
+  "waits for you: a Deny in 42 min",
+  "past its deadline: it defaults to Allow if it still reads private or local",
+  "past its deadline: it counts as a Deny",
+], "guard timers");
+// Its Deny is taken whatever the live check says; its Allow only on a fresh card.
+const stale = { ...card("Q5@1"), ...guard, status: "stale", reasons: ["expired"], guard: { expires: at(-1), defaults: true } };
+eq([takes(stale, "Deny"), takes(stale, "Allow"), takes({ ...stale, status: "fresh", guard: { expires: at(9), defaults: true } }, "Allow")],
+  [true, false, true], "a guard card's Deny and Allow");
+// On the panel: Allow on the stale card records nothing, Deny is sent.
+setup({ terminals: [shep], exec: panelExec({ ...PANEL_VIEW, cards: [stale] }) });
+const d = copy("decisions");
+await tick();
+press(d, "1", "enter");
+await tick();
+eq(answers(), [], "Allow on a stale guard card");
+press(d, "2", "enter");
+await tick();
+eq(answers().map((a) => a.choice), ["Deny"], "Deny on a stale guard card");
 EOF
 }
 

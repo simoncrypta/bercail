@@ -146,14 +146,28 @@ function guardLine(ev: any): string | null {
     !GUARD_OPERATIONS.includes(ev.operation) ||
     !target ||
     !said ||
-    (ev.outcome === "ran") !== Number.isInteger(ev.exit)
+    (ev.outcome === "ran") !== Number.isInteger(ev.exit) ||
+    (ev.defaulted !== undefined && ev.defaulted !== true)
   )
     return null;
+  // Nobody answered, and the card defaulted to Allow at its deadline: never the person's Allow.
+  const how =
+    ev.defaulted !== true
+      ? said
+      : ev.outcome === "ran"
+        ? "ran by default at its deadline (nobody answered, and it still read private or local; not the person's Allow)"
+        : ev.outcome === "expired"
+          ? "defaulted to Allow at its deadline, but no longer read private or local right before the run; nothing ran"
+          : `defaulted to Allow at its deadline, as nobody answered, then ${said}`;
   const exit = ev.outcome === "ran" ? `, exit ${ev.exit}` : "";
   const why = one(ev.why) ? ` (${one(ev.why)})` : "";
   const log = one(ev.log) ? `; its output is in ${one(ev.log)}` : "";
   const what = ev.operation === "command" ? `command ${target}` : `${ev.operation} of ${target}`;
-  return `- The ${what} you handed off ${said}${exit}${why}${log}. Tell the person in one line. [event ${eventId}] (worker ${worker})`;
+  const tell =
+    ev.defaulted === true
+      ? "Tell the person in one line that it was defaulted, not picked"
+      : "Tell the person in one line";
+  return `- The ${what} you handed off ${how}${exit}${why}${log}. ${tell}. [event ${eventId}] (worker ${worker})`;
 }
 
 const ROUTINE_SCHEMA = "bercail.routine/v1";

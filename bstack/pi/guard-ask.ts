@@ -13,6 +13,7 @@ import {
   cleanEnv,
   decideLive,
   guardAsks,
+  guardDefault,
   guardOperation,
   markStart,
   onDisk,
@@ -25,6 +26,7 @@ import {
   stateDir,
   ticketId,
   urlText,
+  type GuardDefault,
   type GuardFacts,
   type GuardInput,
   type GuardOp,
@@ -34,6 +36,11 @@ import {
 const bin = () => process.env.BERCAIL_BIN || "bercail";
 const poll = () => Number(process.env.BERCAIL_GUARD_ASK_POLL_MS) || 3000;
 const runLimit = 3600 * 1000;
+// The longest a card that defaults may go unwatched before its deadline, or wait after it:
+// many polls. And the time a card must have left when it goes up to default (the
+// ledger's GUARD_WINDOW).
+const watchGap = 5 * 60 * 1000;
+const guardWindow = 50 * 60 * 1000;
 type Outcome = "ran" | "unknown" | "denied" | "expired" | "withdrawn" | "changed" | "refused" | "failed";
 
 // bercail shep question OP, its JSON input on stdin: the ledger's only door.
@@ -48,7 +55,12 @@ function question(args: string[], input?: unknown): any {
 }
 
 // The one guard event, written whole into Shep's inbox as bercail land writes its own.
-function report(ticket: GuardTicket, outcome: Outcome, extra: { exit?: number; why?: string; log?: string } = {}) {
+// defaulted: nobody answered, and the card's default to Allow was recorded at its deadline.
+function report(
+  ticket: GuardTicket,
+  outcome: Outcome,
+  extra: { exit?: number; why?: string; log?: string; defaulted?: true } = {},
+) {
   const inbox = join(stateDir(), "shep", "inbox");
   mkdirSync(inbox, { recursive: true, mode: 0o700 });
   const event = {
@@ -70,8 +82,20 @@ function report(ticket: GuardTicket, outcome: Outcome, extra: { exit?: number; w
   console.log(`${outcome}${extra.why ? `: ${extra.why}` : ""}`);
 }
 
-// What the card says: the operation and every fact it is pinned to, and when it expires.
-function brief(ticket: GuardTicket): string {
+// HH:MM of an ISO time on this machine's clock, as the panel shows it.
+function clock(iso: string): string {
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// What happens when nobody answers by the deadline, for the card and the notice.
+const atDeadline = (ticket: GuardTicket, cls: GuardDefault) =>
+  cls.defaults
+    ? `It defaults to Allow at ${clock(ticket.expires)}: nobody answering by then counts as an Allow, because ${cls.why}, if that still holds then.`
+    : `It waits for you: nobody answering by ${clock(ticket.expires)} counts as a Deny, because ${cls.why}.`;
+
+// What the card says: the operation and every fact it is pinned to, and its deadline.
+function brief(ticket: GuardTicket, cls: GuardDefault): string {
   const f = ticket.facts;
   const facts =
     f.kind === "command"
@@ -81,7 +105,7 @@ function brief(ticket: GuardTicket): string {
         : f.kind === "trail merge"
           ? `${f.job ? `bercail job merge ${f.job} --change` : "entire trail merge"} ${f.change} in ${f.checkout}: trail ${f.trailId}, head ${f.head}, into ${f.base}${f.job ? `, then closes ${f.job} once no change is open` : ""}`
           : `git push from ${f.dir} (git dir ${f.gitDir}) to ${urlText(f.url)}: ${f.refspecs.join(", ")}`;
-  return `Shep ran: ${ticket.command}. On Allow, its worker guard-ask-${ticket.id} runs ${facts}, once, and only if none of that has changed. The card expires at ${ticket.expires}, which counts as a Deny.`;
+  return `Shep ran: ${ticket.command}. On Allow, its worker guard-ask-${ticket.id} runs ${facts}, once, and only if none of that has changed. ${atDeadline(ticket, cls)}`;
 }
 
 // The facts the operation pins to now, and what changed, or why it no longer pins.
@@ -198,10 +222,17 @@ async function ask(id: string) {
 async function handle(ticket: GuardTicket) {
   const id = ticket.id;
   const worker = `guard-ask-${id}`;
+  // Whether nobody answering counts as an Allow: read before the card goes up, so the card
+  // says it. A card going up with less than most of its hour left waits for the person.
+  const read = await guardDefault(ticket.facts);
+  const cls: GuardDefault =
+    Date.parse(ticket.expires) - Date.now() < guardWindow
+      ? { defaults: false, why: "its card went up with less than most of its hour left" }
+      : read;
   const card = question(["guard-create"], {
     requestId: `guard-${id}`,
     prompt: ticket.reason,
-    brief: brief(ticket),
+    brief: brief(ticket, cls),
     origin: { event: `guard:${id}`, session: ticket.shep.session || "unknown", entry: null },
     dir: folderOf(ticket.facts),
     guard: {
@@ -210,12 +241,16 @@ async function handle(ticket: GuardTicket) {
       op: ticket.op,
       facts: ticket.facts,
       expires: ticket.expires,
+      ...(cls.defaults ? { defaults: { why: cls.why } } : {}),
     },
   });
+  // The card's own word on its default: a replayed create keeps the first one.
+  const said: string | undefined = card.guard?.defaults?.why;
   const token = `${card.id}@${card.revision}`;
   // The panel often starts hidden: a desktop notice says a card is up. Not awaited.
   try {
-    spawn("notify-send", ["Bercail", `Decisions: allow ${opWhat(ticket.facts)}?`], {
+    const when = said ? `It defaults to Allow at ${clock(ticket.expires)}.` : "It waits for you.";
+    spawn("notify-send", ["Bercail", `Decisions: allow ${opWhat(ticket.facts)}? ${when}`], {
       stdio: "ignore",
       detached: true,
     })
@@ -230,18 +265,46 @@ async function handle(ticket: GuardTicket) {
       return false;
     }
   };
+  // When the worker last saw the card pending before its deadline. A default needs it seen
+  // in the last minutes before its deadline and acted on in the first minutes after:
+  // a machine that slept through it gave the person no hour, or acts on a stale reading.
+  let seenAt = 0;
+  const watched = (now: number) =>
+    Date.parse(ticket.expires) - seenAt <= watchGap && now - Date.parse(ticket.expires) <= watchGap;
   for (;;) {
     const q = question(["get", token]);
+    const now = Date.now();
     if (q.status === "withdrawn") return report(ticket, "withdrawn", { why: q.withdrawal?.reason });
     if (q.status === "answered") {
       if (q.answer.choice !== "Allow") return report(ticket, "denied");
       break;
     }
     if (q.status !== "pending") return report(ticket, "failed", { why: `its card is ${q.status}` });
-    if (Date.parse(ticket.expires) <= Date.now()) {
-      if (withdraw("expired: nobody answered within the hour")) return report(ticket, "expired");
+    if (Date.parse(ticket.expires) <= now) {
+      // A card that said it defaults reads the class and the facts again: the same reading,
+      // nothing moved, and the ledger records the default unless the person's pick came first.
+      let why = "nobody answered within the hour";
+      const unwatched = "its card was not watched through its deadline (the machine slept, or the worker was late)";
+      if (said && !watched(now)) why = unwatched;
+      else if (said) {
+        const reading = await guardDefault(ticket.facts);
+        const moved = await changed(ticket.op, ticket.facts);
+        if (reading.defaults && reading.why === said && !moved.length) {
+          if (!watched(Date.now())) why = unwatched;
+          else {
+            const took = question(["guard-default", token, id], { why: reading.why });
+            if (took.accepted) break;
+            // The person's pick or Close came first: read the card again. A refusal of a
+            // card still pending never changes, so it expires as a Deny.
+            if (took.question?.status !== "pending") continue;
+            why = `nobody answered, and the ledger refused its default: ${took.reason}`;
+          }
+        } else why = `nobody answered, and at the deadline ${moved.length ? moved.join(", ") : reading.why}`;
+      }
+      if (withdraw(`expired: ${why}`)) return report(ticket, "expired", said ? { why } : {});
       continue;
     }
+    seenAt = now;
     const moved = await changed(ticket.op, ticket.facts);
     if (moved.length) {
       if (withdraw(`changed since it was asked: ${moved.join(", ")}`))
@@ -253,20 +316,38 @@ async function handle(ticket: GuardTicket) {
   // Once claimed, never run again: a second worker, or a restart, stops here.
   const claim = question(["guard-claim", token, id]);
   if (!claim.accepted) return console.log(`not run: ${claim.reason}`);
+  // What the claim took, the person's Allow or the card's default, decides the checks and the event.
+  const defaulted: { defaulted?: true } =
+    claim.question.answer.source === "guard default at expiry" ? { defaulted: true } : {};
   // What the card showed is what runs: a ticket rewritten since then runs nothing.
   if (JSON.stringify(JSON.parse(readFileSync(join(guardAsks(), `${id}.json`), "utf8"))) !== JSON.stringify(ticket))
-    return report(ticket, "changed", { why: "its ticket changed since the card went up" });
+    return report(ticket, "changed", { why: "its ticket changed since the card went up", ...defaulted });
   const { decision } = await decideNow(ticket);
-  if (decision.action === "block") return report(ticket, "refused", { why: decision.reason });
+  if (decision.action === "block") return report(ticket, "refused", { why: decision.reason, ...defaulted });
   const again = guardOperation(ticket.command, ticket.cwd, process.env.HOME);
   if (typeof again === "string" || JSON.stringify(again) !== JSON.stringify(ticket.op))
-    return report(ticket, "changed", { why: "the command no longer reads as the same operation" });
+    return report(ticket, "changed", { why: "the command no longer reads as the same operation", ...defaulted });
   const moved = await changed(ticket.op, ticket.facts);
-  if (moved.length) return report(ticket, "changed", { why: moved.join(", ") });
+  if (moved.length) return report(ticket, "changed", { why: moved.join(", "), ...defaulted });
+  // A default runs only while it still reads as the card said, right before the run, and
+  // soon after its deadline.
+  if (defaulted.defaulted) {
+    const reading = await guardDefault(ticket.facts);
+    if (!reading.defaults || reading.why !== said)
+      return report(ticket, "expired", {
+        why: `nobody answered, and right before the run ${reading.why}`,
+        ...defaulted,
+      });
+    if (Date.now() - Date.parse(ticket.expires) > 2 * watchGap)
+      return report(ticket, "expired", {
+        why: "nobody answered, and it came too long after its deadline",
+        ...defaulted,
+      });
+  }
   const log = join(guardAsks(), `${id}.log`);
   const ran = await run(ticket, log);
-  if (ran.exit === undefined) report(ticket, "unknown", { why: "killed before it finished", log });
-  else report(ticket, "ran", { exit: ran.exit, log });
+  if (ran.exit === undefined) report(ticket, "unknown", { why: "killed before it finished", log, ...defaulted });
+  else report(ticket, "ran", { exit: ran.exit, log, ...defaulted });
 }
 
 // A guard card's live check: what changed since its facts were pinned.

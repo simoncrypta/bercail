@@ -135,6 +135,29 @@ scratch_repo() {
   [[ "$(policy show --json "$REPO" 2>&1 >/dev/null)" == *'merge_reversible = "yes" is not allowed'* ]] || fail "a non-boolean passed"
 }
 
+@test "shep_may_run: what Shep runs with no card counts only once trusted or set locally, and only the three it knows" {
+  local REPO WT
+  init_repo
+  [[ "$(field "$REPO" '.policy.shep_may_run | length')" == 0 ]] || fail "unset is not empty"
+  mkdir -p "$REPO/.bercail"
+  printf 'shep_may_run = ["cleanup", "trail link", "trail merge"]\n' >"$REPO/.bercail/policy.toml"
+  [[ "$(field "$REPO" '.policy.shep_may_run | length')" == 0 ]] || fail "an untrusted list counted"
+  [[ "$(field "$REPO" '.untrusted | join(",")')" == shep_may_run ]] || fail "the untrusted list is not named"
+  policy trust "$REPO" >/dev/null
+  [[ "$(field "$REPO" '.policy.shep_may_run | join(",")')" == "cleanup,trail link,trail merge" ]] || fail "a trusted list did not count"
+  [[ "$(field "$REPO" '.prompt')" == *"Shep runs these here with no guard card while the repo reads private, and the guard warns: cleanup, trail link, trail merge."* ]] \
+    || fail "prompt: $(field "$REPO" '.prompt')"
+  policy untrust "$REPO" >/dev/null
+  printf '[policy."%s"]\nshep_may_run = ["trail link"]\n' "$REPO" >"$CONFIG"
+  [[ "$(field "$REPO" '[(.policy.shep_may_run | join(",")), .sources.shep_may_run] | join(" ")')" == "trail link local" ]] \
+    || fail "your own override needs no trust"
+  rm "$CONFIG"
+  for bad in '["deploy"]' '["cleanup", "cleanup"]' '"cleanup"'; do
+    printf 'shep_may_run = %s\n' "$bad" >"$REPO/.bercail/policy.toml"
+    [[ "$(policy show --json "$REPO" 2>&1 >/dev/null)" == *"shep_may_run = "*" is not allowed"* ]] || fail "$bad passed"
+  done
+}
+
 @test "an untrusted policy cannot loosen the guard" {
   local REPO WT out
   commit_policy

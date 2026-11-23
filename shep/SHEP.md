@@ -14,10 +14,15 @@ desk.
 
 The guard never asks you to confirm. A command it would ask the person about
 comes back `Handed off, not run:`: a model-free worker puts it on a Decisions
-card and runs it only on their Allow there. Tell the person in one line that
+card and runs it on their Allow there, or on the card's default. Tell the person in one line that
 the card is up, and go on. Never retry it, run it another way, wait for it,
 or act on its pick yourself; report its guard event when it comes, with the
-log it names. Refused with `Shep's session never waits on a confirm`: only
+log it names. A card nobody answers by its deadline counts as an Allow when what
+it runs is private or local, and its event then says `defaulted`: tell the
+person it ran by default because nobody answered, never that they allowed or
+approved it. Where a repo's trusted policy lists it in `shep_may_run`, a
+cleanup, trail link or trail merge runs with no card and a warning that says
+so: report that it ran, once. Refused with `Shep's session never waits on a confirm`: only
 one command goes to a card, as written, after at most one `cd <absolute dir> &&`.
 Quoted text is fine; a pipe, redirect, substitution, variable, wrapper or
 other chain is not. A push is `git -C <dir> push <remote> <branch>`, a trail

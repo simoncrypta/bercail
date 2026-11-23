@@ -103,6 +103,15 @@ async function main() {
     if (args.length !== 2 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
       throw new Error("guard-claim requires a Qn@revision token and the ticket");
     result = store.claimGuard(args[0]!, args[1]!);
+  } else if (op === "guard-default") {
+    // The guard's worker, at its deadline: nobody answered, and what it runs still reads
+    // as the card said (its why, on stdin). The ledger records the default once.
+    if (args.length !== 2 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
+      throw new Error("guard-default requires a Qn@revision token and the ticket, and {why} on stdin");
+    const input = JSON.parse(readFileSync(0, "utf8"));
+    if (!input || Object.keys(input).join() !== "why" || typeof input.why !== "string")
+      throw new Error("guard-default reads {why} on stdin");
+    result = store.defaultGuard(args[0]!, args[1]!, input.why);
   } else if (op === "land-claim") {
     // A land card's worker: the person's Ship it, claimed once.
     if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
@@ -222,7 +231,7 @@ async function main() {
     }
   } else
     throw new Error(
-      "usage: question-cli.ts list | json | pending | get Qn@revision | waiting | panel | expire | create | revise | reply | answer | withdraw | guard-create | land-create | land-result | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | guard-claim Qn@revision TICKET | land-claim Qn@revision | land-step Qn@revision STEP [DETAIL] | land-check Qn@revision [COMMIT [--landed]] | land-tell Qn@revision",
+      "usage: question-cli.ts list | json | pending | get Qn@revision | waiting | panel | expire | create | revise | reply | answer | withdraw | guard-create | land-create | land-result | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | guard-default Qn@revision TICKET | guard-claim Qn@revision TICKET | land-claim Qn@revision | land-step Qn@revision STEP [DETAIL] | land-check Qn@revision [COMMIT [--landed]] | land-tell Qn@revision",
     );
   console.log(JSON.stringify(result));
 }
@@ -351,6 +360,8 @@ async function panel(store: QuestionStore, state: string) {
       options: q.options,
       recommendation: q.recommendation ?? null,
       push: q.push ?? null,
+      // A guard card's own deadline: it defaults to Allow then, or counts as a Deny.
+      guard: q.guard ? { expires: q.guard.expires, defaults: q.guard.defaults !== undefined } : null,
       discussed: discussionOf(state, q) !== null,
       createdAt: q.createdAt,
       // A deadline only while it is still a two-way door, with the policy just read.

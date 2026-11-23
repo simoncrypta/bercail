@@ -123,9 +123,17 @@ export interface QuestionGuard {
   /** What Shep's command asked, and what it acts on, as the guard pinned them. */
   op: Record<string, unknown>;
   facts: Record<string, unknown>;
-  /** Past it, a pick is refused and the card counts as a Deny. */
+  /** Past it, a pick is refused: the card counts as a Deny, or as an Allow when it defaults. */
   expires: string;
+  /** The worker found what it runs private or local (guard.ts guardDefault), and the card says
+   * so: nobody answering by `expires` counts as an Allow, if it still reads `why` then. Absent
+   * on a card that waits for the person, and on cards asked before it was kept. */
+  defaults?: { why: string };
 }
+/** How long before its deadline a guard card must have gone up to default: most of its hour. */
+const GUARD_WINDOW = 50 * 60000;
+/** How long after its deadline a guard card may still default: its worker acts within minutes. */
+const GUARD_LATE = 10 * 60000;
 /** A guard card's only choices: no recommendation, and Deny is the safe one. */
 export const GUARD_CHOICES = ["Allow", "Deny"];
 export interface QuestionPush {
@@ -149,10 +157,14 @@ export const ANSWER_SOURCES = ["panel picker", "discuss picker"] as const;
 export const PUSH_SOURCE: (typeof ANSWER_SOURCES)[number] = "panel picker";
 /** The ledger's own answer: no pick by the deadline, so Shep's recommendation. Never the person's. */
 export const DEFAULT_SOURCE = "default after timeout";
+/** A guard card's own default: nobody answered by its deadline, and what it runs still read
+ * private or local. Its worker's to act on (guard-ask.ts matches these words); never the
+ * person's, and it takes no OK or Reverse. */
+export const GUARD_DEFAULT_SOURCE = "guard default at expiry";
 export interface QuestionAnswer {
   requestId: string;
   choice: string;
-  source: (typeof ANSWER_SOURCES)[number] | typeof DEFAULT_SOURCE;
+  source: (typeof ANSWER_SOURCES)[number] | typeof DEFAULT_SOURCE | typeof GUARD_DEFAULT_SOURCE;
   at: string;
   /** The candidate the live check saw when the person picked. */
   head: string | null;
@@ -388,10 +400,22 @@ function land(value: QuestionSpec) {
     fail(`a land card offers ${choices.join(" and ")} only, with no recommendation, default or push`);
 }
 const object = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value);
-// A guard card: Allow or Deny, nothing Shep recommends or a deadline takes, on one ticket.
+// A guard card: Allow or Deny, nothing Shep recommends, on one ticket. Its own deadline
+// is `expires`, where it counts as a Deny, or as an Allow when it says it defaults.
 function guard(value: QuestionSpec) {
   const g = value.guard;
-  shape(g, ["ticket", "worker", "op", "facts", "expires"]);
+  shape(g, [
+    "ticket",
+    "worker",
+    "op",
+    "facts",
+    "expires",
+    ...optional((g ?? {}) as Record<string, unknown>, ["defaults"]),
+  ]);
+  if (g.defaults !== undefined) {
+    shape(g.defaults, ["why"]);
+    text(g.defaults.why);
+  }
   if (typeof g.ticket !== "string" || !/^[0-9a-f]{12}$/.test(g.ticket) || g.worker !== `guard-ask-${g.ticket}`)
     fail("a guard card names its ticket and its worker, guard-ask-<ticket>");
   text(g.expires);
@@ -520,6 +544,10 @@ function question(value: unknown): asserts value is Question {
         Date.parse(answer.at as string) < Date.parse(deadline as string)
       )
         fail("a default is the recommendation, taken at or after the deadline");
+    } else if (answer.source === GUARD_DEFAULT_SOURCE) {
+      const g = fields.guard;
+      if (!g?.defaults || answer.choice !== "Allow" || !(Date.parse(answer.at as string) >= Date.parse(g.expires)))
+        fail("a guard default is an Allow on a card that said it defaults, taken at or after its deadline");
     } else if (!ANSWER_SOURCES.includes(answer.source as (typeof ANSWER_SOURCES)[number]))
       fail("unknown answer source");
     for (const key of ["head", "stagedTree"]) if (answer[key] !== null) text(answer[key]);
@@ -583,8 +611,12 @@ function question(value: unknown): asserts value is Question {
   }
   if (guardClaim !== undefined) {
     const a = answer as QuestionAnswer | undefined;
-    if (fields.kind !== "guard" || a?.choice !== "Allow" || a.source !== PUSH_SOURCE)
-      fail("only the person's Allow on a guard card is claimed by its worker");
+    if (
+      fields.kind !== "guard" ||
+      a?.choice !== "Allow" ||
+      (a.source !== PUSH_SOURCE && a.source !== GUARD_DEFAULT_SOURCE)
+    )
+      fail("only the person's Allow on a guard card, or its default, is claimed by its worker");
     shape(guardClaim, ["at"]);
     if (!Number.isFinite(Date.parse(guardClaim.at as string))) fail("invalid guard claim time");
   }
@@ -1004,8 +1036,10 @@ export class QuestionStore {
     text(choice);
     return this.request(requestId, ["answer", token, choice, source], (state) => {
       const q = this.find(state, token);
-      // A guard or land card: only the panel, which no agent can type into; a guard card
-      // only before it expires.
+      // A guard or land card: only the panel, which no agent can type into; a guard card's
+      // Allow only before it expires. Its Deny grants nothing, so it needs no live check
+      // and stands whenever the card is pending: a slow check never lets a default win.
+      const veto = q.guard !== undefined && choice === "Deny" && source === PUSH_SOURCE;
       const reason =
         q.status !== "pending"
           ? `question is ${q.status}`
@@ -1013,13 +1047,15 @@ export class QuestionStore {
             ? "not one of the question's choices"
             : (q.guard || q.land) && source !== PUSH_SOURCE
               ? `a ${q.kind} card is answered on the panel card only`
-              : q.guard && Date.parse(q.guard.expires) <= Date.now()
-                ? `it expired at ${q.guard.expires}, which counts as a Deny`
-                : check.status !== "fresh" || !check.current
-                  ? `changed since Shep asked: ${check.reasons.join(", ") || "not checked"}`
-                  : isDue(q) && door(q, () => mergesIn(check)).door === "two-way"
-                    ? `past its deadline: it takes Shep's recommendation, ${q.recommendation!.choice}`
-                    : undefined;
+              : veto
+                ? undefined
+                : q.guard && Date.parse(q.guard.expires) <= Date.now()
+                  ? `it expired at ${q.guard.expires}, which counts as ${q.guard.defaults ? "an Allow if it still reads private or local" : "a Deny"}`
+                  : check.status !== "fresh" || !check.current
+                    ? `changed since Shep asked: ${check.reasons.join(", ") || "not checked"}`
+                    : isDue(q) && door(q, () => mergesIn(check)).door === "two-way"
+                      ? `past its deadline: it takes Shep's recommendation, ${q.recommendation!.choice}`
+                      : undefined;
       if (reason) return { question: q, accepted: false, reason };
       q.status = "answered";
       q.answer = {
@@ -1027,8 +1063,8 @@ export class QuestionStore {
         choice,
         source,
         at: new Date().toISOString(),
-        head: check.current!.head,
-        stagedTree: check.current!.stagedTree,
+        head: check.current?.head ?? null,
+        stagedTree: check.current?.stagedTree ?? null,
       };
       return { question: q, accepted: true };
     });
@@ -1124,21 +1160,66 @@ export class QuestionStore {
     }, true);
   }
 
-  // A guard card's worker: the person's Allow on the panel, picked before the card expired,
-  // claimed once for this ticket. A second claim is refused, so the operation runs once.
-  claimGuard(token: string, ticket: string): AnswerResult {
+  // A guard card's worker, at its deadline: nobody answered, the card said it defaults, and
+  // the worker read the class again just before and found it unchanged (`why`, the reason
+  // the card gave). The ledger records the default, on a pending card only, so the
+  // person's pick, made first, stands; only on one that was up for most of its hour, and
+  // only in the first minutes after its deadline.
+  defaultGuard(token: string, ticket: string, why: string): AnswerResult {
     return this.locked((state) => {
       const q = this.find(state, token);
       const reason =
         q.guard?.ticket !== ticket
           ? "not this ticket's guard card"
+          : q.status !== "pending"
+            ? `question is ${q.status}`
+            : !q.guard.defaults
+              ? "it waits for the person: nobody answering counts as a Deny"
+              : q.guard.defaults.why !== why
+                ? `it no longer reads as it did when asked: ${why}`
+                : Date.now() < Date.parse(q.guard.expires)
+                  ? `not past its deadline, ${q.guard.expires}`
+                  : Date.parse(q.guard.expires) - Date.parse(q.createdAt) < GUARD_WINDOW
+                    ? "it went up too late to give the person most of its hour"
+                    : Date.now() - Date.parse(q.guard.expires) > GUARD_LATE
+                      ? "it is too long past its deadline: its reading is stale"
+                      : undefined;
+      if (reason) return { question: q, accepted: false, reason };
+      q.status = "answered";
+      q.answer = {
+        requestId: `default:${tokenOf(q)}`,
+        choice: "Allow",
+        source: GUARD_DEFAULT_SOURCE,
+        at: new Date().toISOString(),
+        head: null,
+        stagedTree: null,
+      };
+      return { question: q, accepted: true };
+    }, true);
+  }
+
+  // A guard card's worker: the person's Allow on the panel, picked before the card expired,
+  // or its default, recorded at or after it; claimed once for this ticket. A second claim is
+  // refused, so the operation runs once.
+  claimGuard(token: string, ticket: string): AnswerResult {
+    return this.locked((state) => {
+      const q = this.find(state, token);
+      const a = q.answer;
+      const defaulted = a?.source === GUARD_DEFAULT_SOURCE;
+      const reason =
+        q.guard?.ticket !== ticket
+          ? "not this ticket's guard card"
           : q.guardClaim
             ? `its Allow was already claimed at ${q.guardClaim.at}`
-            : q.status !== "answered" || q.answer?.choice !== "Allow" || q.answer.source !== PUSH_SOURCE
+            : q.status !== "answered" || a?.choice !== "Allow" || (a.source !== PUSH_SOURCE && !defaulted)
               ? "not the person's Allow on the panel"
-              : Date.parse(q.answer.at) >= Date.parse(q.guard.expires)
-                ? `picked after it expired at ${q.guard.expires}`
-                : undefined;
+              : defaulted
+                ? !q.guard.defaults || Date.parse(a.at) < Date.parse(q.guard.expires)
+                  ? "a default on a card that did not say it defaults, or before its deadline"
+                  : undefined
+                : Date.parse(a.at) >= Date.parse(q.guard.expires)
+                  ? `picked after it expired at ${q.guard.expires}`
+                  : undefined;
       if (reason) return { question: q, accepted: false, reason };
       q.guardClaim = { at: new Date().toISOString() };
       return { question: q, accepted: true };

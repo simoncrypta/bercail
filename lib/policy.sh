@@ -28,8 +28,9 @@ POLICY_FILE=".bercail/policy.toml"
 # hours of review. merge_reversible: whether a merge or land in this repo is a two-way
 # door, so Shep's question about it may default after the timeout (docs/shep.md).
 # required_ci: the workflow files whose push runs gate a landing from one pick; a
-# repo opts in by naming them.
-POLICY_DEFAULTS='{"push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"merge_reversible":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000,"required_ci":[]}'
+# repo opts in by naming them. shep_may_run: what Shep runs here with no guard card,
+# while the repo reads private: any of cleanup, trail link and trail merge (docs/shep.md).
+POLICY_DEFAULTS='{"push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"merge_reversible":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000,"required_ci":[],"shep_may_run":[]}'
 
 _policy_err() {
   printf 'bercail policy: %s\n' "$*" >&2
@@ -69,6 +70,8 @@ _policy_object() {
       elif $k == "diff_budget" or $k == "review_budget" then ($v | type) == "number" and $v >= 1 and $v == ($v | floor)
       elif $k == "required_ci" then ($v | type) == "array" and ($v | unique | length) == ($v | length)
         and all($v[]; type == "string" and test("^\\.github/workflows/[^/]+\\.ya?ml$"))
+      elif $k == "shep_may_run" then ($v | type) == "array" and ($v | unique | length) == ($v | length)
+        and all($v[]; IN("cleanup", "trail link", "trail merge"))
       else null end;
     (map(select(has("value")) | if .key == "high_stakes" then .value |= globs else . end | .ok = ok(.key; .value))) as $rows
     | ($rows | map(select(.ok == true) | {(.key): .value}) | add // {} | tojson),
@@ -131,7 +134,7 @@ policy_json() {
     def looser($k; $v):
       ($k == "push" and $v != "ask") or ($k == "agent_may_release" and $v == true)
       or ($k == "merge_reversible" and $v == true) or ($k == "review" and $v == "none") or (($k == "diff_budget" or $k == "review_budget") and $v > $defaults[$k])
-      or ($k == "required_ci" and $v != []);
+      or ($k == "required_ci" and $v != []) or ($k == "shep_may_run" and $v != []);
     ($defaults | keys_unsorted) as $keys
     | [ $keys[] as $k
         | if $local | has($k) then {k: $k, v: $local[$k], from: "local"}
@@ -164,6 +167,7 @@ policy_json() {
            else empty end),
           "- Release: " + (if $p.release != "" then $p.release + " " else "" end)
             + (if $p.agent_may_release then "Agents may tag and release." else "Agents do not tag or release unless the person asks; the guard asks first." end),
+          (if $p.shep_may_run != [] then "- Shep runs these here with no guard card while the repo reads private, and the guard warns: \($p.shep_may_run | join(", "))." else empty end),
           (if $p.rules != "" then "- Team rules:\n" + ($p.rules | sub("\n+$"; "") | split("\n") | map("  " + .) | join("\n")) else empty end),
           "Commit, push, open a PR, or release only when the person or your job asks for it; this policy says how. The guard checks recognized git, gt, gh, origin, and entire commands: force-push flags, + refspecs, --mirror, deleting main, --no-verify, PR merges (gh pr merge, gt merge, gh api writes to /pulls/N/merge), trail approvals (entire trail approve), and trail merges (entire trail merge) are blocked regardless of policy; Shep alone may merge a trail, and the guard asks the person first.",
           "The guard is a seatbelt, not a sandbox. Commands launched inside another program (python -c, a script file) are not seen; the same rules still apply."

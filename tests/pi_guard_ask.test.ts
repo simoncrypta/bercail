@@ -20,11 +20,14 @@ import { afterEach, beforeEach, expect, test, vi } from "vite-plus/test";
 import guard, {
   argvText,
   changedFacts,
+  guardDefault,
   guardOperation,
   markStart,
   opTarget,
   pinOperation,
   runOf,
+  type GuardFacts,
+  type Read,
 } from "../bstack/pi/extensions/guard.ts";
 
 let dir: string;
@@ -414,6 +417,217 @@ test("each pinned fact that moves is named: a -C destination, the push URL, the 
   expect(changedFacts(before, await pinOperation(merge))).toStrictEqual(["head changed"]);
 });
 
+// guardDefault's reads, answered from a table by their words; any other read fails, as one
+// that cannot reach its host. The policy says merge_reversible, and origin is $url.
+function world(url: string, extra: Record<string, string | Error> = {}): Read {
+  const table: Record<string, string | Error> = {
+    "bercail policy show --json /r": JSON.stringify({ policy: { merge_reversible: true }, entire: false }),
+    "git -C /r remote get-url --all origin": url,
+    "git -C /r remote get-url --push --all origin": url,
+    ...extra,
+  };
+  return async (command, args) => {
+    const got = table[[command.split("/").pop(), ...args].join(" ")];
+    if (got === undefined || got instanceof Error) throw got ?? new Error(`${command} ${args.join(" ")}: unreachable`);
+    return got;
+  };
+}
+const entireUrl = "entire://aws-us-east-2.entire.io/et/acme/app";
+const push = (url: string, ref = "refs/heads/feature"): GuardFacts => ({
+  kind: "push",
+  dir: "/r",
+  gitDir: "/r/.git",
+  url,
+  refspecs: [`${"a".repeat(40)}:${ref}`],
+});
+const merge: GuardFacts = {
+  kind: "trail merge",
+  checkout: "/r",
+  trailId: "01TRAIL",
+  change: "app/7",
+  head: "f".repeat(40),
+  base: "main",
+};
+const link = (...flags: string[]): GuardFacts => ({
+  kind: "command",
+  dir: "/r",
+  argv: ["entire", "trail", "link", "87", ...flags],
+});
+const viewed = (repo: string, isPrivate: unknown): Record<string, string> => ({
+  [`entire repo view ${entireUrl} --json`]: JSON.stringify({ repo, private: isPrivate, repoId: "01REPO" }),
+});
+const shown = (forge: string, project: string) => ({
+  "entire trail show app/7 --json": JSON.stringify({ id: "01TRAIL", project: { reference: { forge, project } } }),
+});
+const github = (visibility: string) => ({
+  "gh repo view github.com/acme/app --json visibility,id": JSON.stringify({ visibility, id: "R_1" }),
+});
+
+test.each([
+  ["a cleanup, always", { kind: "cleanup", worktree: "/w", branch: null, head: "a".repeat(40) }, world(""), true],
+  [
+    "a push to a private GitHub origin",
+    push("git@github.com:acme/app.git"),
+    world("git@github.com:acme/app.git", github("PRIVATE")),
+    true,
+  ],
+  [
+    "a push to its trunk, under merge_reversible",
+    push("git@github.com:acme/app.git", "refs/heads/main"),
+    world("git@github.com:acme/app.git", github("PRIVATE")),
+    true,
+  ],
+  ["a push to a private Entire origin", push(entireUrl), world(entireUrl, viewed("/et/acme/app", true)), true],
+  ["a push to an origin on this machine", push("/srv/app.git"), world("/srv/app.git"), true],
+  [
+    "a trail merge in its own private Entire repo",
+    merge,
+    world(entireUrl, { ...viewed("/et/acme/app", true), ...shown("et", "acme") }),
+    true,
+  ],
+  [
+    "a trail link of a named branch in a private Entire repo",
+    link("--branch", "b", "--base", "main"),
+    world(entireUrl, viewed("/et/acme/app", true)),
+    true,
+  ],
+  // Waits: public, unknown, unreadable, another repo, or no merge_reversible.
+  [
+    "a push to a public GitHub origin",
+    push("https://github.com/acme/app"),
+    world("https://github.com/acme/app", github("PUBLIC")),
+    false,
+  ],
+  [
+    "a push to an internal GitHub origin",
+    push("https://github.com/acme/app"),
+    world("https://github.com/acme/app", github("INTERNAL")),
+    false,
+  ],
+  [
+    "a push whose visibility gh cannot read",
+    push("https://github.com/acme/app"),
+    world("https://github.com/acme/app"),
+    false,
+  ],
+  ["a push to a public Entire origin", push(entireUrl), world(entireUrl, viewed("/et/acme/app", false)), false],
+  [
+    "a push where entire answers for another repo",
+    push(entireUrl),
+    world(entireUrl, viewed("/et/acme/other", true)),
+    false,
+  ],
+  ["a push to another host", push("https://gitlab.com/acme/app.git"), world("https://gitlab.com/acme/app.git"), false],
+  ["a push to a remote that is not origin", push("/srv/fork.git"), world("/srv/app.git"), false],
+  [
+    "a push where the policy does not say merge_reversible",
+    push("/srv/app.git"),
+    world("/srv/app.git", { "bercail policy show --json /r": JSON.stringify({ policy: { merge_reversible: false } }) }),
+    false,
+  ],
+  [
+    "a push whose policy cannot be read",
+    push("/srv/app.git"),
+    world("/srv/app.git", { "bercail policy show --json /r": new Error("no bercail") }),
+    false,
+  ],
+  [
+    "a trail merge of another repo's change",
+    merge,
+    world("entire://aws-us-east-2.entire.io/et/acme/web", { ...shown("et", "acme") }),
+    false,
+  ],
+  [
+    "a trail merge in a GitHub-backed repo",
+    merge,
+    world("git@github.com:acme/app.git", { ...github("PRIVATE"), ...shown("gh", "acme") }),
+    false,
+  ],
+  [
+    "a trail merge in a public Entire repo",
+    merge,
+    world(entireUrl, { ...viewed("/et/acme/app", false), ...shown("et", "acme") }),
+    false,
+  ],
+  ["a trail merge whose trail cannot be read", merge, world(entireUrl, viewed("/et/acme/app", true)), false],
+  ["a trail link of the current branch", link(), world(entireUrl, viewed("/et/acme/app", true)), false],
+  [
+    "a trail link that creates a branch",
+    link("--branch", "b", "--branch-action", "create"),
+    world(entireUrl, viewed("/et/acme/app", true)),
+    false,
+  ],
+  [
+    "a trail link to a path that is named entire",
+    { ...link("--branch", "b"), argv: ["/tmp/x/entire", "trail", "link", "87", "--branch", "b"] } as GuardFacts,
+    world(entireUrl, viewed("/et/acme/app", true)),
+    false,
+  ],
+  [
+    "a push to an origin that pushes elsewhere than it fetches",
+    push("/srv/app.git"),
+    world("/srv/app.git", { "git -C /r remote get-url --all origin": "/srv/fork.git" }),
+    false,
+  ],
+  [
+    "a push to an origin with two push URLs",
+    push("/srv/app.git"),
+    world("/srv/app.git", { "git -C /r remote get-url --push --all origin": "/srv/app.git\n/srv/fork.git" }),
+    false,
+  ],
+  [
+    "a push to Entire's mirror of a GitHub repo",
+    push("entire://aws-us-east-2.entire.io/gh/acme/app"),
+    world("entire://aws-us-east-2.entire.io/gh/acme/app", github("PRIVATE")),
+    false,
+  ],
+  [
+    "a push where entire names no repo ID",
+    push(entireUrl),
+    world(entireUrl, {
+      [`entire repo view ${entireUrl} --json`]: JSON.stringify({ repo: "/et/acme/app", private: true }),
+    }),
+    false,
+  ],
+  [
+    "a trail link to another repo",
+    link("--branch", "b", "--repo", "et/acme/web"),
+    world(entireUrl, viewed("/et/acme/app", true)),
+    false,
+  ],
+  [
+    "any other command",
+    { kind: "command", dir: "/r", argv: ["entire", "brain", "remember", "x"] },
+    world(entireUrl),
+    false,
+  ],
+] as const)("%s: defaults %s", async (_name, facts, read, defaults) => {
+  vi.stubEnv("ENTIRE_BIN", undefined);
+  const got = await guardDefault(facts as GuardFacts, read);
+  expect(got.defaults, got.why).toBe(defaults);
+  expect(got.why).toMatch(/\S/);
+});
+
+test("a push in an Entire repo whose hook sends checkpoints to another remote waits; one that keeps them, or sends them to origin, defaults", async () => {
+  const top = join(dir, "top");
+  mkdirSync(join(top, ".entire"), { recursive: true });
+  const facts: GuardFacts = { ...push("/srv/app.git"), dir: top } as GuardFacts;
+  const read = async (command: string, args: string[]) =>
+    command.endsWith("bercail")
+      ? JSON.stringify({ policy: { merge_reversible: true }, entire: true })
+      : args.includes("--all")
+        ? "/srv/app.git"
+        : Promise.reject(new Error("unreachable"));
+  const settings = (value: unknown, file = "settings.json") =>
+    writeFileSync(join(top, ".entire", file), JSON.stringify(value));
+  settings({ strategy_options: {} });
+  expect(await guardDefault(facts, read)).toMatchObject({ defaults: true });
+  settings({ strategy_options: { checkpoint_remote: { provider: "github", repo: "acme/transcripts" } } });
+  expect(await guardDefault(facts, read)).toMatchObject({ defaults: false, why: expect.stringMatching(/checkpoints/) });
+  settings({ strategy_options: { push_sessions: false } }, "settings.local.json");
+  expect(await guardDefault(facts, read)).toMatchObject({ defaults: true });
+});
+
 // The guard in Shep's session (BERCAIL_ROLE=shep) or a desk's: exec stands in for
 // bercail policy show, entire agent-help, push-approval and hc run; hc does what `hc` says.
 function session(role: string, hc: (args: string[]) => { code: number; stderr?: string } = () => ({ code: 1 })) {
@@ -431,14 +645,19 @@ function session(role: string, hc: (args: string[]) => { code: number; stderr?: 
   guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
   const ctx = { hasUI: true, cwd: repo, ui: { confirm }, sessionManager: { getSessionId: () => "shep-session" } };
   let calls = 0;
+  // The input Pi runs, as the last tool_call left it.
+  const ran = { command: "" };
   const bash = async (command: string) => {
     const id = `c${calls++}`;
     await handlers.message_end({ message: { role: "assistant", content: [{ type: "toolCall", id }] } }, ctx);
-    return (await handlers.tool_call({ toolName: "bash", toolCallId: id, input: { command } }, ctx)) as
+    const input = { command };
+    const result = (await handlers.tool_call({ toolName: "bash", toolCallId: id, input }, ctx)) as
       | { block: true; reason: string }
       | undefined;
+    ran.command = input.command;
+    return result;
   };
-  return { bash, confirm, exec };
+  return { bash, confirm, exec, ran };
 }
 let approve: string | null = null;
 const asks = () => join(dir, "state/bercail/guard-asks");
@@ -541,7 +760,7 @@ test("an ask handed off writes its ticket and starts its worker, which Shep is t
   const id = name.slice(0, -5);
   expect(got).toStrictEqual({
     block: true,
-    reason: `Handed off, not run: the person answers this push of ${origin} refs/heads/feature on a Decisions card, and the worker guard-ask-${id} runs it only on their Allow, within the hour. Tell the person in one line that the card is up. Do not retry it, wait for it or run it another way; your turn goes on. Its outcome comes back as a guard event; report it then.`,
+    reason: `Handed off, not run: the person answers this push of ${origin} refs/heads/feature on a Decisions card, and the worker guard-ask-${id} runs it only on their Allow within the hour, or, if nobody answers and the card says it defaults to Allow, at its deadline. Tell the person in one line that the card is up. Do not retry it, wait for it or run it another way; your turn goes on. Its outcome comes back as a guard event; report it then.`,
   });
   expect(argv).toStrictEqual([
     "run",
@@ -581,7 +800,11 @@ test("an ask handed off writes its ticket and starts its worker, which Shep is t
     block: true,
     reason: expect.stringMatching(/decides what bercail's guard lets through/),
   });
-  for (const command of [`bercail guard ask ${id}`, "bercail shep question guard-claim Q1@1 x"])
+  for (const command of [
+    `bercail guard ask ${id}`,
+    "bercail shep question guard-claim Q1@1 x",
+    "bercail shep question guard-default Q1@1 x",
+  ])
     expect(await shep.bash(command), command).toMatchObject({
       block: true,
       reason: expect.stringMatching(/the guard's/),
@@ -631,4 +854,109 @@ test("a push the person's answer approves runs in Shep's session with no handoff
   } finally {
     approve = null;
   }
+});
+
+test("a trail link defaults only with the entire the guard reads with, and its reading names the repo's ID and URL", async () => {
+  const read = world(entireUrl, viewed("/et/acme/app", true));
+  vi.stubEnv("ENTIRE_BIN", undefined);
+  expect(await guardDefault(link("--branch", "b"), read)).toStrictEqual({
+    defaults: true,
+    why: `it links a branch in the private Entire repo et/acme/app (01REPO, ${entireUrl})`,
+  });
+  vi.stubEnv("ENTIRE_BIN", "/opt/entire");
+  expect(await guardDefault(link("--branch", "b"), read)).toMatchObject({ defaults: false });
+});
+
+test("where its repo's trusted policy lists it in shep_may_run and reads private, Shep's link, merge and cleanup run with no card", async () => {
+  const url = "entire://aws-us-east-2.entire.io/et/acme/app";
+  git("remote", "set-url", "origin", url);
+  const worktree = join(dir, "repo.topic");
+  git("worktree", "add", "-q", worktree, "feature");
+  const bin = join(dir, "bin");
+  // bercail policy show and entire, as this repo's would answer; entire on PATH, as the link runs it.
+  let mayRun = ["cleanup", "trail link", "trail merge"];
+  let isPrivate = true;
+  const policy = () => JSON.stringify({ policy: { push: "branch", shep_may_run: mayRun }, entire: false });
+  writeFileSync(join(bin, "bercail"), `#!/bin/sh\ncat '${dir}/policy.json'\n`, { mode: 0o755 });
+  writeFileSync(
+    join(bin, "entire"),
+    `#!/bin/sh\n[ "$1" = repo ] && exec cat '${dir}/repo.json'\ncat '${dir}/trail.json'\n`,
+    { mode: 0o755 },
+  );
+  const world = () => {
+    writeFileSync(join(dir, "policy.json"), policy());
+    writeFileSync(
+      join(dir, "repo.json"),
+      JSON.stringify({ repo: "/et/acme/app", private: isPrivate, repoId: "01REPO" }),
+    );
+    writeFileSync(
+      join(dir, "trail.json"),
+      JSON.stringify({
+        id: "01TRAIL",
+        number: 41,
+        project: { reference: { forge: "et", project: "acme" } },
+        changes: [change(7)],
+      }),
+    );
+  };
+  world();
+  vi.stubEnv("BERCAIL_BIN", join(bin, "bercail"));
+  vi.stubEnv("ENTIRE_BIN", undefined);
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  // No git variable of Shep's own, which bash would read and the guard's reads drop.
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", undefined);
+  const shep = session("shep");
+  const commands = [
+    `cd ${repo} && entire trail link 41 --branch feature`,
+    `bercail job merge trail:41 --repo ${repo}`,
+    `bercail cleanup ${worktree}`,
+  ];
+  // What runs is the argv a card's worker would run, in its folder, never Shep's words, with
+  // the program by the path the guard's reads found it at.
+  const runs = [
+    `cd ${repo} && GIT_TERMINAL_PROMPT=0 ${join(bin, "entire")} trail link 41 --branch feature`,
+    `cd ${repo} && GIT_TERMINAL_PROMPT=0 ${join(bin, "bercail")} job merge trail:41 --change app/7 --repo ${repo}`,
+    `cd / && GIT_TERMINAL_PROMPT=0 ${join(bin, "bercail")} cleanup ${worktree}`,
+  ];
+  for (const [i, command] of commands.entries()) {
+    expect(await shep.bash(command), command).toBeUndefined();
+    expect(shep.ran.command).toBe(runs[i]);
+  }
+  // A path that is named bercail gets the same argv: the one the guard read with.
+  expect(await shep.bash(`/tmp/x/bercail cleanup ${worktree}`)).toBeUndefined();
+  expect(shep.ran.command).toBe(runs[2]);
+  expect(shep.exec.mock.calls.some(([cmd]) => cmd === "hc")).toBe(false);
+  expect(existsSync(asks())).toBe(false);
+  const log = readFileSync(join(dir, "state/bercail/guard-approvals.jsonl"), "utf8");
+  expect(log).toContain(
+    'lists \\"trail link\\" in shep_may_run, and it links a branch in the private Entire repo et/acme/app',
+  );
+  // Not listed, public, or a link with no --branch: each goes to a card.
+  for (const change of [() => (mayRun = ["cleanup"]), () => ((mayRun = ["trail link"]), (isPrivate = false))]) {
+    change();
+    world();
+    expect(await shep.bash(commands[0]), JSON.stringify(mayRun)).toMatchObject({ block: true });
+  }
+  mayRun = ["cleanup", "trail link", "trail merge"];
+  isPrivate = true;
+  world();
+  expect(await shep.bash(`cd ${repo} && entire trail link 41`)).toMatchObject({ block: true });
+  vi.stubEnv("GIT_CONFIG_GLOBAL", join(dir, "other.gitconfig"));
+  expect(await shep.bash(commands[0])).toMatchObject({ block: true });
+  vi.stubEnv("GIT_CONFIG_GLOBAL", undefined);
+  // A relative PATH folder could hold another entire for bash than for the guard's reads.
+  const path = process.env.PATH;
+  for (const unsafe of [`bin:${path}`, `:${path}`, `${path}::/usr/bin`]) {
+    vi.stubEnv("PATH", unsafe);
+    expect(await shep.bash(commands[0]), unsafe).toMatchObject({ block: true });
+  }
+  vi.stubEnv("PATH", path);
+  // The opt-in itself still holds.
+  expect(await shep.bash(commands[0])).toBeUndefined();
+  // A bare entire trail merge is not a trail job's merge, which checks the job and closes it.
+  expect(await shep.bash(`cd ${repo} && entire trail merge 41`)).toMatchObject({ block: true });
+  // A cleanup needs its repo private on its forge: an origin on this machine is not read so.
+  git("remote", "set-url", "origin", origin);
+  expect(await shep.bash(`bercail cleanup ${worktree}`)).toMatchObject({ block: true });
+  expect(shep.exec.mock.calls.filter(([cmd]) => cmd === "hc")).toHaveLength(9);
 });

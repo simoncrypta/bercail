@@ -1525,6 +1525,106 @@ describe("a guard card", () => {
     expect(ok("guard-claim", undefined, ["Q2@1", ticket]).reason).toBe("not the person's Allow on the panel");
   });
 
+  // bercail-mdfb: a card that said it defaults counts as an Allow at its deadline.
+  const defaulting = (minutes: number, why = "it pushes to the private GitHub repo acme/app") =>
+    card({
+      requestId: `guard-${minutes}-${Math.random()}`,
+      guard: {
+        ticket,
+        worker: `guard-ask-${ticket}`,
+        op: { kind: "push" },
+        facts: { kind: "push" },
+        expires: expires(minutes),
+        defaults: { why },
+      },
+    });
+  // The helper `minutes` on: a clock module moves Date for its process.
+  const later = (op: string, input: unknown, args: string[], minutes = 61) => {
+    const clock = join(dir, "clock.mjs");
+    writeFileSync(
+      clock,
+      "const Real = Date; const off = Number(process.env.CLOCK_MS);\n" +
+        "globalThis.Date = class extends Real { constructor(...a) { super(...(a.length ? a : [Real.now() + off])); } static now() { return Real.now() + off; } };\n",
+    );
+    const result = spawnSync(node, ["--import", clock, cli, op, ...args], {
+      env: { ...env, CLOCK_MS: String(minutes * 60000) },
+      cwd: dir,
+      encoding: "utf8",
+      input: JSON.stringify(input),
+    });
+    expect(result.stderr).toBe("");
+    return JSON.parse(result.stdout);
+  };
+  const why = "it pushes to the private GitHub repo acme/app";
+  const fallback = (token: string, said = why, minutes = 61) =>
+    later("guard-default", { why: said }, [token, ticket], minutes);
+
+  test("its worker records the default only past the deadline, on a pending card that said it defaults, as it said it", () => {
+    defaulting(60);
+    expect(fallback("Q1@1", why, 59)).toMatchObject({
+      accepted: false,
+      reason: expect.stringMatching(/^not past its deadline/),
+    });
+    card({
+      requestId: "waits",
+      guard: {
+        ticket,
+        worker: `guard-ask-${ticket}`,
+        op: { kind: "push" },
+        facts: { kind: "push" },
+        expires: expires(60),
+      },
+    });
+    expect(fallback("Q2@1").reason).toBe("it waits for the person: nobody answering counts as a Deny");
+    // A card that went up with less than most of its hour left never defaults.
+    defaulting(-1);
+    expect(fallback("Q3@1").reason).toBe("it went up too late to give the person most of its hour");
+    defaulting(60);
+    expect(fallback("Q4@1", "it pushes to the private GitHub repo acme/other").reason).toMatch(
+      /no longer reads as it did/,
+    );
+    expect(later("guard-default", { why }, ["Q4@1", "ffffffffffff"]).reason).toBe("not this ticket's guard card");
+    // Past its deadline the person's Allow is refused, and the card's default is not theirs.
+    expect(
+      later("answer", { requestId: "late", token: "Q4@1", choice: "Allow", source: "panel picker" }, []).reason,
+    ).toMatch(/expired at .*, which counts as an Allow if it still reads private or local/);
+    // Long after its deadline (a machine that slept), its reading is stale.
+    expect(fallback("Q4@1", why, 75).reason).toBe("it is too long past its deadline: its reading is stale");
+    expect(fallback("Q4@1")).toMatchObject({
+      accepted: true,
+      question: { status: "answered", answer: { choice: "Allow", source: "guard default at expiry" } },
+    });
+    expect(fallback("Q4@1").reason).toBe("question is answered");
+    // Its worker claims it once; no decision event, no OK or Reverse, and it leaves the panel.
+    expect(later("guard-claim", undefined, ["Q4@1", ticket])).toMatchObject({ accepted: true });
+    expect(later("guard-claim", undefined, ["Q4@1", ticket]).reason).toMatch(/already claimed/);
+    expect(events()).toEqual([]);
+    expect(ok("answer", { requestId: "ok1", token: "Q4@1", source: "panel picker", outcome: "ok" }).reason).toMatch(
+      /not defaulted/,
+    );
+    expect(ok("panel").cards.map((c: { token: string }) => c.token)).not.toContain("Q4@1");
+    expect(ok("pending").pending.map((q: { id: string }) => q.id)).not.toContain("Q4");
+  });
+
+  test("the person's Deny stands with no live check, even past the deadline, and no default replaces it", () => {
+    defaulting(60);
+    // Past its deadline, with a check that cannot finish: the Deny does not wait on it.
+    writeFileSync(join(dir, "bin/bercail"), "#!/bin/sh\nexit 3\n", { mode: 0o755 });
+    expect(
+      later("answer", { requestId: "no", token: "Q1@1", choice: "Deny", source: "panel picker" }, []),
+    ).toMatchObject({
+      accepted: true,
+      question: { answer: { choice: "Deny", source: "panel picker" } },
+    });
+    expect(fallback("Q1@1").reason).toBe("question is answered");
+    expect(ok("guard-claim", undefined, ["Q1@1", ticket]).reason).toBe("not the person's Allow on the panel");
+    // Its panel card says whether it defaults, and when.
+    defaulting(30);
+    expect(ok("panel").cards.find((c: { token: string }) => c.token === "Q2@1").guard).toMatchObject({
+      defaults: true,
+    });
+  });
+
   test("a push approval never spends a guard card's Allow", () => {
     execFileSync("git", ["init", "-q", "--bare", join(dir, "origin.git")], { env });
     git("remote", "add", "origin", join(dir, "origin.git"));
@@ -1623,7 +1723,25 @@ test("a guard event is Shep's line from its fields alone, and a malformed one is
   expect(eventLine({ ...ev, operation: "command", target: "entire trail link 41 --branch b" })).toBe(
     "- The command entire trail link 41 --branch b you handed off ran on the person's Allow, exit 0; its output is in /state/bercail/guard-asks/0123456789ab.log. Tell the person in one line. [event guard:0123456789ab] (worker guard-ask-0123456789ab)",
   );
+  // A default at the deadline says so, never as the person's Allow.
+  expect(eventLine({ ...ev, defaulted: true })).toBe(
+    "- The trail merge of lesentiel/41 you handed off ran by default at its deadline (nobody answered, and it still read private or local; not the person's Allow), exit 0; its output is in /state/bercail/guard-asks/0123456789ab.log. Tell the person in one line that it was defaulted, not picked. [event guard:0123456789ab] (worker guard-ask-0123456789ab)",
+  );
+  expect(
+    eventLine({
+      ...ev,
+      defaulted: true,
+      outcome: "expired",
+      exit: undefined,
+      log: undefined,
+      why: "nobody answered, and right before the run the Entire repo et/acme/app is public",
+    }),
+  ).toBe(
+    "- The trail merge of lesentiel/41 you handed off defaulted to Allow at its deadline, but no longer read private or local right before the run; nothing ran (nobody answered, and right before the run the Entire repo et/acme/app is public). Tell the person in one line that it was defaulted, not picked. [event guard:0123456789ab] (worker guard-ask-0123456789ab)",
+  );
   for (const bad of [
+    { ...ev, defaulted: "yes" },
+    { ...ev, defaulted: false },
     { ...ev, outcome: "merged" },
     { ...ev, operation: "rm -rf" },
     { ...ev, terminal: "t9" },

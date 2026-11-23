@@ -4,6 +4,8 @@
 import { execFile } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
+  accessSync,
+  constants as fsConstants,
   appendFileSync,
   linkSync,
   lstatSync,
@@ -2601,7 +2603,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     decision = worse(decision, decideJob(words, here));
     if (questionOp(words, "answer")) decision = worse(decision, block(answerCommand));
     if (questionOp(words, "push-approval")) decision = worse(decision, block(pushApprovalCommand));
-    if (questionOp(words, "guard-create") || questionOp(words, "guard-claim") || runsGuardAsk(words))
+    if (["guard-create", "guard-default", "guard-claim"].some((op) => questionOp(words, op)) || runsGuardAsk(words))
       decision = worse(decision, block(guardAskCommand));
     if (writesTodo(words) && input.role !== "shep") decision = worse(decision, block(basecampWrite));
     if (setsTodoTarget(words) && input.role !== "shep") decision = worse(decision, block(todoTargets));
@@ -3424,8 +3426,62 @@ async function handOff(
   if (state !== "started") return refused(why);
   return {
     handed: true,
-    reason: `Handed off, not run: the person answers this ${opWhat(facts)} on a Decisions card, and the worker ${worker} runs it only on their Allow, within the hour. Tell the person in one line that the card is up. Do not retry it, wait for it or run it another way; your turn goes on. Its outcome comes back as a guard event; report it then.`,
+    reason: `Handed off, not run: the person answers this ${opWhat(facts)} on a Decisions card, and the worker ${worker} runs it only on their Allow within the hour, or, if nobody answers and the card says it defaults to Allow, at its deadline. Tell the person in one line that the card is up. Do not retry it, wait for it or run it another way; your turn goes on. Its outcome comes back as a guard event; report it then.`,
   };
+}
+
+// What runs in place of Shep's command when it is one operation its repo lets Shep run
+// with no card (withoutCard), pinned as a card's would be: the argv a card's worker
+// would run (runOf), in its folder, never Shep's own words; and the warning it runs with.
+// Undefined, and it goes to a card, when Shep's environment holds a git variable the
+// pinning reads dropped (cleanEnv), so bash would read another repo or config.
+async function optedIn(command: string, input: GuardInput): Promise<{ command: string; why: string } | undefined> {
+  // Before any read: a PATH the reads and bash would search differently.
+  if (!absolutePath()) return undefined;
+  if (
+    Object.keys(process.env).some(
+      (key) => gitPlace.test(key) || gitConfigVar.test(key) || key.startsWith("GIT_ALTERNATE"),
+    )
+  )
+    return undefined;
+  const op = guardOperation(command, input.cwd, input.home);
+  if (typeof op === "string" || op.kind === "push") return undefined;
+  const facts = await pinOperation(op).catch(() => undefined);
+  if (!facts) return undefined;
+  const verdict = await withoutCard(facts);
+  if (!verdict.run) return undefined;
+  const { argv, cwd } = runOf(facts);
+  // The program by its real path, as the guard's reads found it on PATH: bash's own lookup
+  // could find another.
+  const program = executable(argv[0]);
+  if (!program) return undefined;
+  const run = `cd ${shellWord(cwd)} && GIT_TERMINAL_PROMPT=0 ${argvText([program, ...argv.slice(1)])}`;
+  return { command: run, why: `${verdict.why} It runs as: ${run}` };
+}
+
+// Every PATH folder absolute: an empty or relative one is the current folder, which
+// differs between the guard's reads and bash.
+const absolutePath = () => {
+  const dirs = (process.env.PATH ?? "").split(":");
+  return dirs.every((dir) => dir && isAbsolute(dir)) ? dirs : undefined;
+};
+
+// A program as execFile finds it, by its real path: an absolute path as it is, a bare
+// name in the first PATH folder that holds it. Undefined for a relative path, a PATH
+// with a folder that is not absolute, or a program that is not there.
+function executable(name: string): string | undefined {
+  if (name.includes("/") && !isAbsolute(name)) return undefined;
+  const dirs = name.includes("/") ? [dirname(name)] : absolutePath();
+  for (const dir of dirs ?? []) {
+    const path = join(dir, basename(name));
+    try {
+      if (statSync(path).isFile()) {
+        accessSync(path, fsConstants.X_OK);
+        return realpathSync(path);
+      }
+    } catch {}
+  }
+  return undefined;
 }
 
 // The operation in a few words, and what it acts on, for the card and the event.
@@ -3439,6 +3495,246 @@ export function opTarget(facts: GuardFacts): string {
 // "push of <target>", or "command <its words>".
 export const opWhat = (facts: GuardFacts) =>
   facts.kind === "command" ? `command ${opTarget(facts)}` : `${facts.kind} of ${opTarget(facts)}`;
+
+// An unanswered guard card counts as an Allow at its deadline only when what it runs
+// stays private or local (bercail-mdfb, docs/plans/guard-default-allow.md); anything
+// else waits for the person and counts as a Deny. Read from the remote, never the words.
+
+/** Whether a card nobody answered counts as an Allow at its deadline, and why. */
+export type GuardDefault = { defaults: boolean; why: string };
+
+const waits = (why: string): GuardDefault => ({ defaults: false, why });
+const repoPart = /^[\w.-]+$/;
+
+// A remote URL's repo: gh/<owner>/<repo> on github.com over ssh or https, or the
+// forge/project/repo an entire:// URL names. Undefined for a path or another host.
+function repoOfUrl(url: string): [string, string, string] | undefined {
+  const gh =
+    /^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(
+      url,
+    );
+  if (gh) return ["gh", gh[1], gh[2]];
+  const entire = /^entire:\/\/[\w.-]+(?::\d+)?\/(et|gh)\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(url);
+  return entire ? [entire[1], entire[2], entire[3]] : undefined;
+}
+
+// What the remote's own forge says of it: "the private ..." when it is private, else
+// why it waits. A GitHub repo by gh on github.com; an Entire-native one by entire, asked
+// with its clone URL, so the cluster that holds it answers. Only an exact PRIVATE, or
+// private: true for the repo asked, is private; a failed read or another answer waits.
+// What it says names the repo by its forge's ID and URL, so a repo replaced under the
+// same name, or another cluster's, reads otherwise.
+async function privateRepo(read: Read, url: string, dir: string): Promise<{ what: string } | { why: string }> {
+  const repo = repoOfUrl(url);
+  if (!repo) return { why: `the guard cannot tell whether ${urlText(url)} is private` };
+  const [forge, owner, name] = repo;
+  // Entire's mirror of a GitHub repo: GitHub's visibility says nothing of who reads Entire's copy.
+  if (forge === "gh" && url.startsWith("entire://"))
+    return { why: `${urlText(url)} mirrors a GitHub repo, so the guard cannot tell who sees it` };
+  try {
+    if (forge === "gh") {
+      const shown = JSON.parse(
+        await read("gh", ["repo", "view", `github.com/${owner}/${name}`, "--json", "visibility,id"], dir),
+      );
+      if (typeof shown?.id !== "string" || !shown.id) return { why: `gh named no repo ID for ${owner}/${name}` };
+      if (shown.visibility === "PRIVATE") return { what: `the private GitHub repo ${owner}/${name} (${shown.id})` };
+      return { why: `the GitHub repo ${owner}/${name} is ${String(shown.visibility ?? "unknown").toLowerCase()}` };
+    }
+    const shown = JSON.parse(await read(process.env.ENTIRE_BIN || "entire", ["repo", "view", url, "--json"], dir));
+    if (
+      shown?.repo === `/et/${owner}/${name}` &&
+      shown.private === true &&
+      typeof shown.repoId === "string" &&
+      shown.repoId
+    )
+      return { what: `the private Entire repo et/${owner}/${name} (${shown.repoId}, ${url})` };
+    return {
+      why: `the Entire repo et/${owner}/${name} is ${shown?.private === false ? "public" : "of unknown visibility"}`,
+    };
+  } catch (error) {
+    return {
+      why: `the guard could not read whether ${forge}/${owner}/${name} is private (${(error as Error).message})`,
+    };
+  }
+}
+
+// The checkout's origin: one URL that it fetches from and pushes to alike, a path by its
+// real path. A split or doubled origin, whose repo the policy may not speak for, throws.
+async function ownOrigin(read: Read, dir: string): Promise<string> {
+  const urls = async (...flags: string[]) =>
+    (await read("git", ["-C", dir, "remote", "get-url", ...flags, "--all", "origin"], dir)).split("\n").filter(Boolean);
+  const [fetch, push] = [await urls(), await urls("--push")];
+  if (fetch.length !== 1 || push.length !== 1 || fetch[0] !== push[0])
+    fail("origin is not one URL it both fetches from and pushes to");
+  return fetch[0].startsWith("/") && onDisk(fetch[0]) ? realpathSync(fetch[0]) : fetch[0];
+}
+
+// Where Entire's pre-push hook sends checkpoints (full agent transcripts) beside a push:
+// nowhere, origin, or elsewhere (lib/doctor.sh reads the same settings).
+function checkpointsGo(top: string): "nowhere" | "origin" | "elsewhere" {
+  let settings: Record<string, any> = {};
+  for (const file of ["settings.json", "settings.local.json"])
+    try {
+      const value = JSON.parse(readFileSync(join(top, ".entire", file), "utf8"));
+      settings = {
+        ...settings,
+        ...value,
+        strategy_options: { ...settings.strategy_options, ...value?.strategy_options },
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return "elsewhere";
+    }
+  const options = settings.strategy_options ?? {};
+  if (options.push_sessions === false) return "nowhere";
+  return options.checkpoint_remote === undefined ? "origin" : "elsewhere";
+}
+
+// entire trail link <P> --branch B [--base B] [--json]: a link of the branch it names, in
+// the checkout's origin's project. Any other flag (a create, a status, another repo), or
+// none naming the branch (the checkout's current one, which can move), waits.
+function plainLink(argv: string[]): boolean {
+  const [bin, trail, link, number, ...flags] = argv;
+  // The entire it runs is the one the guard reads with: no path, no other ENTIRE_BIN.
+  if (
+    bin !== "entire" ||
+    (process.env.ENTIRE_BIN ?? "entire") !== "entire" ||
+    trail !== "trail" ||
+    link !== "link" ||
+    !/^[1-9]\d{0,8}$/.test(number ?? "")
+  )
+    return false;
+  const seen = new Set<string>();
+  for (let i = 0; i < flags.length; i++) {
+    const flag = flags[i];
+    if (seen.has(flag)) return false;
+    seen.add(flag);
+    if (flag === "--json") continue;
+    if (
+      !["--branch", "--base"].includes(flag) ||
+      !/^[\w./-]+$/.test(flags[i + 1] ?? "") ||
+      flags[i + 1].startsWith("-")
+    )
+      return false;
+    i++;
+  }
+  return seen.has("--branch");
+}
+
+// What a repo's trusted policy and Entire settings say, as bercail policy show reads them.
+async function policyOf(
+  read: Read,
+  dir: string,
+): Promise<{ mergeReversible: boolean; entire: boolean; shepMayRun: string[] }> {
+  const shown = JSON.parse(await read(process.env.BERCAIL_BIN || "bercail", ["policy", "show", "--json", dir], dir));
+  const list = shown?.policy?.shep_may_run;
+  return {
+    mergeReversible: shown?.policy?.merge_reversible === true,
+    entire: shown?.entire === true,
+    shepMayRun: Array.isArray(list) ? list.filter((item: unknown) => typeof item === "string") : [],
+  };
+}
+
+// The repo an operation acts on, read private or local, in words that name it by its
+// forge's ID and URL; or why not. A cleanup's is its worktree's origin. A push goes to
+// the checkout's own origin, with Entire's checkpoints nowhere else. A trail's change, or
+// the trail a link names, is in the checkout's own Entire-native repo, whose project is
+// the trail's audience. It throws on a read that fails.
+async function privateTarget(
+  facts: GuardFacts,
+  read: Read,
+  dir: string,
+  entire: boolean,
+): Promise<{ what: string } | { why: string }> {
+  if (facts.kind === "cleanup") {
+    const seen = await privateRepo(read, await ownOrigin(read, dir), dir);
+    return "what" in seen ? { what: `a worktree of ${seen.what}` } : seen;
+  }
+  if (facts.kind === "push") {
+    // The policy read speaks for this repo's own remote, and Entire's hook pushes beside it.
+    if ((await ownOrigin(read, dir)) !== facts.url)
+      return { why: `it pushes to ${urlText(facts.url)}, not this repo's origin` };
+    if (entire && checkpointsGo(dir) === "elsewhere")
+      return { why: "Entire's pre-push hook would push checkpoints to another remote too" };
+    if (facts.url.startsWith("/")) return { what: `it pushes to the repo ${facts.url} on this machine` };
+    const seen = await privateRepo(read, facts.url, dir);
+    return "what" in seen ? { what: `it pushes to ${seen.what}` } : seen;
+  }
+  const origin = await ownOrigin(read, dir);
+  const repo = repoOfUrl(origin);
+  if (repo?.[0] !== "et" || !origin.startsWith("entire://"))
+    return { why: "its trail is not in an Entire-native repo, so the guard cannot tell who sees it" };
+  if (facts.kind === "trail merge") {
+    const shown = JSON.parse(
+      await read(process.env.ENTIRE_BIN || "entire", ["trail", "show", facts.change, "--json"], dir),
+    );
+    const ref = shown?.project?.reference;
+    if (
+      shown?.id !== facts.trailId ||
+      !repoPart.test(ref?.forge ?? "") ||
+      !repoPart.test(ref?.project ?? "") ||
+      `${ref.forge}/${ref.project}/${facts.change.split("/")[0]}` !== repo.join("/")
+    )
+      return { why: `${facts.change} is not a change in this checkout's own repo, whose policy is the one read` };
+  }
+  const seen = await privateRepo(read, origin, dir);
+  const what = facts.kind === "trail merge" ? `it merges ${facts.change}` : "it links a branch";
+  return "what" in seen ? { what: `${what} in ${seen.what}` } : seen;
+}
+
+// The folder whose repo's policy speaks for these facts.
+const factsDir = (facts: GuardFacts) =>
+  facts.kind === "trail merge" ? facts.checkout : facts.kind === "cleanup" ? facts.worktree : facts.dir;
+
+// Whether a card for these pinned facts defaults to Allow at its deadline. A cleanup is
+// local. A push, a trail merge or a trail link defaults only in a repo whose trusted
+// policy says merge_reversible = true, and only while its target reads private
+// (privateTarget). Each call reads afresh; it never throws, and anything it cannot read
+// waits. The why names the repo, so a card defaults only while it reads the same.
+export async function guardDefault(facts: GuardFacts, read: Read = readOut): Promise<GuardDefault> {
+  if (facts.kind === "cleanup")
+    return { defaults: true, why: "a cleanup is local: the worktree goes, and its branch stays" };
+  if (facts.kind === "command" && !plainLink(facts.argv))
+    return waits("the guard does not class this command as private or local");
+  const dir = factsDir(facts);
+  try {
+    const policy = await policyOf(read, dir);
+    if (!policy.mergeReversible) return waits("the repo's trusted policy does not say merge_reversible = true");
+    const seen = await privateTarget(facts, read, dir, policy.entire);
+    return "what" in seen ? { defaults: true, why: seen.what } : waits(seen.why);
+  } catch (error) {
+    return waits(`the guard could not read what it acts on (${(error as Error).message})`);
+  }
+}
+
+// The operation's name in shep_may_run: a cleanup, a trail job's merge, or a trail link.
+function mayRunName(facts: GuardFacts): string | undefined {
+  if (facts.kind === "cleanup") return facts.kind;
+  // A trail job's merge (bercail job merge), which checks the job and closes it: not a bare entire trail merge.
+  if (facts.kind === "trail merge" && facts.job) return facts.kind;
+  if (facts.kind === "command" && plainLink(facts.argv)) return "trail link";
+}
+
+// Whether Shep runs these pinned facts with no card: the repo's trusted policy lists the
+// operation in shep_may_run (Simon's opt-in, bercail-mdfb), and its target reads private.
+// The warning it runs with, or why it goes to a card. It never throws.
+export async function withoutCard(facts: GuardFacts, read: Read = readOut): Promise<{ run: boolean; why: string }> {
+  const name = mayRunName(facts);
+  if (!name) return { run: false, why: "shep_may_run names no such operation" };
+  const dir = factsDir(facts);
+  try {
+    const policy = await policyOf(read, dir);
+    if (!policy.shepMayRun.includes(name))
+      return { run: false, why: `the repo's trusted policy does not list "${name}" in shep_may_run` };
+    const seen = await privateTarget(facts, read, dir, policy.entire);
+    if (!("what" in seen)) return { run: false, why: seen.why };
+    return {
+      run: true,
+      why: `Allowed with no guard card: the repo's trusted policy lists "${name}" in shep_may_run, and ${seen.what}. Say in your report what it did.`,
+    };
+  } catch (error) {
+    return { run: false, why: `the guard could not read what it acts on (${(error as Error).message})` };
+  }
+}
 
 const policySection = "bercail_git_policy";
 
@@ -3547,12 +3843,21 @@ export default function (pi: ExtensionAPI) {
       if (token) decision = { action: "allow", warnings: [...(decision.warnings ?? []), pushApproved(token)] };
     }
     const logged = command ?? input.path ?? "";
-    // Shep never waits on a confirm: an ask goes to a worker, or is refused.
+    // Shep never waits on a confirm: an ask runs with no card where its repo opts in
+    // (shep_may_run), goes to a worker, or is refused. Only a call alone in its message runs
+    // that way, so nothing else Shep runs beside it moves what was read.
     if (decision.action === "ask" && guardInput.role === "shep") {
-      const session = (ctx as { sessionManager?: { getSessionId?: () => string } }).sessionManager?.getSessionId?.();
-      const handed = await handOff(pi, logged, guardInput, decision.reason, session || "unknown", ctx.signal);
-      logWarning(event.toolName, logged, handed.handed ? "handoff" : "refusal", [handed.reason], guardInput);
-      return { block: true, reason: handed.reason };
+      const direct = guardInput.alone && command !== undefined ? await optedIn(command, guardInput) : undefined;
+      if (direct) {
+        // Pi runs the mutated input: the pinned argv, not the words Shep wrote.
+        (event.input as { command: string }).command = direct.command;
+        decision = { action: "allow", approved: [direct.why], warnings: [direct.why] };
+      } else {
+        const session = (ctx as { sessionManager?: { getSessionId?: () => string } }).sessionManager?.getSessionId?.();
+        const handed = await handOff(pi, logged, guardInput, decision.reason, session || "unknown", ctx.signal);
+        logWarning(event.toolName, logged, handed.handed ? "handoff" : "refusal", [handed.reason], guardInput);
+        return { block: true, reason: handed.reason };
+      }
     }
     const refuse = (reason: string) => {
       logWarning(event.toolName, logged, "refusal", [reason], guardInput);

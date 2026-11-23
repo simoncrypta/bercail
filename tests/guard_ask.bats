@@ -434,3 +434,184 @@ arg[--json]" ]] || fail "argv: $(cat "$LOG")"
   [[ "$(grep -v '^notify-send' "$LOG" | tr '\n' ' ')" == "entire $REPO arg[trail] arg[link] arg[41] arg[--branch] arg[feature] arg[--base] arg[main] " ]] \
     || fail "argv: $(cat "$LOG")"
 }
+
+# bercail-mdfb: a card nobody answers counts as an Allow at its deadline when what it runs
+# is private or local. One case per step of tests/statechart/guard-card/GuardCard.tla.
+
+# A clock for every node process from here on: Date runs $CLOCK's milliseconds ahead.
+fake_clock() {
+  export CLOCK="$BATS_TEST_TMPDIR/clock"
+  printf 0 >"$CLOCK"
+  printf '%s\n' 'import { readFileSync } from "node:fs";' 'const Real = Date;' \
+    'const off = () => Number(readFileSync(process.env.CLOCK, "utf8") || 0);' \
+    'globalThis.Date = class extends Real { constructor(...a) { super(...(a.length ? a : [Real.now() + off()])); } static now() { return Real.now() + off(); } };' \
+    >"$BATS_TEST_TMPDIR/clock.mjs"
+  export NODE_OPTIONS="--import=$BATS_TEST_TMPDIR/clock.mjs"
+}
+# Moves the clock to $2 seconds before ticket $1's deadline ($2 below 0: past it).
+before() {
+  NODE_OPTIONS='' node -e 'const t = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(String(Date.parse(t.expires) - Date.now() - Number(process.argv[2]) * 1000))' "$ASKS/$1.json" "$2" >"$CLOCK.tmp"
+  mv "$CLOCK.tmp" "$CLOCK"
+}
+# The repo's trusted policy says merge_reversible = true (as the person's local config sets it).
+reversible() {
+  mkdir -p "$XDG_CONFIG_HOME/bercail"
+  printf '[policy."%s"]\nmerge_reversible = %s\n' "$REPO" "${1:-true}" >"$XDG_CONFIG_HOME/bercail/config.toml"
+}
+# Ticket $1's card, as the ledger has it.
+ledger() { bercail shep question json | jq -c --arg t "$1" '.questions[] | select(.guard.ticket == $t)'; }
+
+@test "a card nobody answers counts as an Allow at its deadline when it reads private or local: it runs once, and its event says it was defaulted" {
+  reversible
+  fake_clock
+  id="$(ticket "git -C $REPO push origin feature")"
+  worker "$id"
+  card "$id" >/dev/null
+  notice "notify-send Bercail Decisions: allow push of $ORIGIN refs/heads/feature? It defaults to Allow at "
+  ledger "$id" | jq -e --arg o "$ORIGIN" '.guard.defaults.why == "it pushes to the repo \($o) on this machine"
+    and (.brief | test("It defaults to Allow at [0-9]{2}:[0-9]{2}: nobody answering by then counts as an Allow, because it pushes to the repo "))' \
+    >/dev/null || fail "card: $(ledger "$id")"
+  before "$id" 5
+  ev="$(event "$id")"
+  jq -e '.outcome == "ran" and .exit == 0 and .defaulted == true' <<<"$ev" >/dev/null || fail "event: $ev"
+  ledger "$id" | jq -e '.status == "answered" and .answer.source == "guard default at expiry" and .answer.choice == "Allow"
+    and (.guardClaim | type == "object")' >/dev/null || fail "ledger: $(ledger "$id")"
+  [[ "$(pushes)" -eq 1 && "$(git -C "$ORIGIN" rev-parse refs/heads/feature)" == "$(git -C "$REPO" rev-parse feature)" ]] \
+    || fail "pushed $(pushes) times"
+}
+
+@test "a card that waits for you counts as a Deny at its deadline, even once it would read private" {
+  fake_clock
+  id="$(ticket "git -C $REPO push origin feature")"
+  worker "$id"
+  card "$id" >/dev/null
+  notice "It waits for you."
+  ledger "$id" | jq -e '(.guard | has("defaults") | not)
+    and (.brief | test("It waits for you: nobody answering by [0-9]{2}:[0-9]{2} counts as a Deny, because the repo.s trusted policy does not say merge_reversible = true"))' \
+    >/dev/null || fail "card: $(ledger "$id")"
+  reversible
+  before "$id" 5
+  jq -e '.outcome == "expired" and (has("defaulted") | not)' <<<"$(event "$id")" >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(pushes)" -eq 0 ]] || fail "pushed"
+}
+
+@test "a card that said it defaults counts as a Deny when, at its deadline, it no longer reads as it did" {
+  reversible
+  fake_clock
+  id="$(ticket "git -C $REPO push origin feature")"
+  worker "$id"
+  card "$id" >/dev/null
+  reversible false
+  before "$id" 5
+  jq -e '.outcome == "expired" and (.why | test("at the deadline the repo.s trusted policy does not say merge_reversible"))' \
+    <<<"$(event "$id")" >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+  ledger "$id" | jq -e '.status == "withdrawn"' >/dev/null || fail "ledger: $(ledger "$id")"
+  [[ "$(pushes)" -eq 0 ]] || fail "pushed"
+}
+
+@test "a default that no longer reads private or local right before the run runs nothing" {
+  reversible
+  # bercail as the worker runs it: once the default is recorded, the policy reads false.
+  printf '#!/bin/sh
+[ "$3" = guard-default ] && : >"$BATS_TEST_TMPDIR/defaulted"
+if [ "$1" = policy ] && [ -e "$BATS_TEST_TMPDIR/defaulted" ]; then
+  "$REAL" "$@" | jq -c ".policy.merge_reversible = false"
+  exit 0
+fi
+exec "$REAL" "$@"
+' >"$BATS_TEST_TMPDIR/bin/flips"
+  chmod +x "$BATS_TEST_TMPDIR/bin/flips"
+  fake_clock
+  id="$(ticket "git -C $REPO push origin feature")"
+  REAL="$ROOT/bin/bercail" BERCAIL_BIN="$BATS_TEST_TMPDIR/bin/flips" worker "$id"
+  card "$id" >/dev/null
+  before "$id" 5
+  jq -e '.outcome == "expired" and .defaulted == true and (.why | test("right before the run"))' <<<"$(event "$id")" \
+    >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(pushes)" -eq 0 ]] || fail "pushed"
+}
+
+@test "an origin whose visibility cannot be read waits, and the person's Deny on a card that defaults runs nothing" {
+  reversible
+  # gh cannot reach GitHub: unknown counts as public.
+  printf '#!/bin/sh\necho "gh: could not connect" >&2\nexit 1\n' >"$BATS_TEST_TMPDIR/bin/gh"
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+  git -C "$REPO" remote set-url origin git@github.com:acme/app.git
+  id="$(ticket "git -C $REPO push origin feature")"
+  worker "$id"
+  card "$id" >/dev/null
+  ledger "$id" | jq -e '(.guard | has("defaults") | not) and (.brief | test("could not read whether gh/acme/app is private"))' \
+    >/dev/null || fail "card: $(ledger "$id")"
+  pick "$(card "$id")" Deny >/dev/null
+  jq -e '.outcome == "denied"' <<<"$(event "$id")" >/dev/null || fail "event"
+
+  # gh says it is private: the card defaults, and the person's Deny still wins.
+  printf '#!/bin/sh\necho "{\\"visibility\\":\\"PRIVATE\\",\\"id\\":\\"R_1\\"}"\n' >"$BATS_TEST_TMPDIR/bin/gh"
+  id="$(ticket "git -C $REPO push origin feature")"
+  worker "$id"
+  token="$(card "$id")"
+  ledger "$id" | jq -e '.guard.defaults.why == "it pushes to the private GitHub repo acme/app (R_1)"' >/dev/null \
+    || fail "card: $(ledger "$id")"
+  pick "$token" Deny >/dev/null
+  jq -e '.outcome == "denied"' <<<"$(event "$id")" >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+}
+
+@test "a worker that dies before the deadline leaves its card to the person: nothing defaults" {
+  reversible
+  fake_clock
+  id="$(ticket "git -C $REPO push origin feature")"
+  worker "$id"
+  card "$id" >/dev/null
+  kill -9 "${WORKERS[-1]}"
+  before "$id" -5
+  sleep 2
+  ledger "$id" | jq -e '.status == "pending"' >/dev/null || fail "ledger: $(ledger "$id")"
+  [[ "$(pushes)" -eq 0 && ! -e "$INBOX/guard-$id.json" ]] || fail "ran"
+}
+
+@test "a card that went up late, or whose machine slept through its deadline, counts as a Deny though it reads private" {
+  reversible
+  fake_clock
+  id="$(ticket "git -C $REPO push origin feature")"
+  before "$id" -60
+  worker "$id"
+  jq -e '.outcome == "expired"' <<<"$(event "$id")" >/dev/null || fail "late: $(cat "$INBOX/guard-$id.json")"
+
+  # The machine sleeps through the deadline: no poll saw the card in its last minutes.
+  printf 0 >"$CLOCK"
+  id="$(ticket "git -C $REPO push origin feature")"
+  worker "$id"
+  card "$id" >/dev/null
+  before "$id" -600
+  jq -e '.outcome == "expired" and (.why | test("not watched through its deadline"))' <<<"$(event "$id")" >/dev/null \
+    || fail "slept: $(cat "$INBOX/guard-$id.json")"
+
+  # A poll in its last minutes, then the machine sleeps overnight: it acts on a stale reading.
+  printf 0 >"$CLOCK"
+  id="$(ticket "git -C $REPO push origin feature")"
+  worker "$id"
+  card "$id" >/dev/null
+  before "$id" 60
+  sleep 2.5
+  before "$id" -36000
+  jq -e '.outcome == "expired" and (.why | test("not watched through its deadline"))' <<<"$(event "$id")" >/dev/null \
+    || fail "overnight: $(cat "$INBOX/guard-$id.json")"
+
+  # A card that goes up with 40 minutes left says it waits, and expires as a Deny.
+  printf 0 >"$CLOCK"
+  id="$(ticket "git -C $REPO push origin feature")"
+  before "$id" 2400
+  worker "$id"
+  card "$id" >/dev/null
+  ledger "$id" | jq -e '(.guard | has("defaults") | not) and (.brief | test("less than most of its hour left"))' >/dev/null \
+    || fail "late card: $(ledger "$id")"
+  before "$id" 3
+  jq -e '.outcome == "expired"' <<<"$(event "$id")" >/dev/null || fail "late card: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(pushes)" -eq 0 ]] || fail "pushed"
+}
+
+@test "the guard card's statechart was last checked on the spec, configs and view as they are" {
+  cd "$ROOT/tests/statechart/guard-card"
+  sha256sum --quiet -c sha256sums || fail "stale: run tests/statechart/guard-card/check.sh"
+}

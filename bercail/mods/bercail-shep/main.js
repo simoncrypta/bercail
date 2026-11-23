@@ -319,6 +319,7 @@ function timeLeft(ms) {
 // next check takes the recommendation, unless the question changed since Shep asked.
 // Null for a question with no deadline. `word`: the card's state in words.
 function countdown(card, word) {
+  if (card.guard) return guardClock(card.guard);
   if (!card.deadline || card.defaulted) return null;
   const ms = Date.parse(card.deadline) - Date.now();
   const pick = card.recommendation?.choice;
@@ -327,6 +328,17 @@ function countdown(card, word) {
   return ms > 0
     ? `two-way door: defaults to ${pick} in ${timeLeft(ms)}`
     : `two-way door: defaults to ${pick} at Shep's next check`;
+}
+
+// A guard card's own deadline (bercail-mdfb): nobody answering by then counts as an Allow
+// when it runs something private or local, else as a Deny.
+function guardClock(guard) {
+  const ms = Date.parse(guard.expires) - Date.now();
+  if (guard.defaults)
+    return ms > 0
+      ? `defaults to Allow in ${timeLeft(ms)}, if it still reads private or local`
+      : "past its deadline: it defaults to Allow if it still reads private or local";
+  return ms > 0 ? `waits for you: a Deny in ${timeLeft(ms)}` : "past its deadline: it counts as a Deny";
 }
 
 // A card in words: where (the space as Herdr names it), what (size and stakes), its state,
@@ -410,8 +422,13 @@ export const confirmable = (card) => Boolean(card.defaulted) && !card.reversed &
 // A card the person can close: any but a land card whose chain runs, which a close would
 // only hide. Whatever its live check says, so none sits stuck.
 const closable = (card) => !card.landing;
+// A guard card's Deny grants nothing, so the ledger takes it with no live check while the
+// card waits (bercail-mdfb): stale, unknown or past its deadline, it is still offered.
+const vetoable = (card) => Boolean(card.guard) && card.options?.includes("Deny");
+// Whether the person's pick of `choice` on the card is recorded.
+export const takes = (card, choice) => answerable(card) || (vetoable(card) && choice === "Deny");
 // A card whose choices the keys and clicks move: one to answer, or a default to reverse.
-const pickable = (card) => answerable(card) || confirmable(card);
+const pickable = (card) => answerable(card) || confirmable(card) || vetoable(card);
 
 // The choice a card starts on: Shep's recommendation, else none (Enter waits for a pick).
 export function startChoice(card) {
@@ -1001,7 +1018,7 @@ export default class BercailShep extends View {
               button(
                 `decision-accept-${c.token}`,
                 this.busy.has(c.token) ? "Answering…" : at === null ? "Pick a choice" : `Answer ${c.options[at]}`,
-                can && at !== null,
+                can && at !== null && takes(c, c.options[at]),
                 (_e, cx) => this.accept(c, cx),
               ),
             ),
@@ -1012,7 +1029,7 @@ export default class BercailShep extends View {
   // The person's pick.
   accept(c, cx) {
     const at = this.choiceOf(c);
-    if (!answerable(c) || at === null) return;
+    if (at === null || !takes(c, c.options[at])) return;
     this.record(c, { choice: c.options[at] }, cx);
   }
 

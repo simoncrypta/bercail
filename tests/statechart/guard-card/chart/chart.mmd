@@ -1,0 +1,81 @@
+---
+title: "A guard card"
+---
+stateDiagram-v2
+  state "Legend" as legend {
+    lg0: wait
+    lg1: act
+    lg2: end
+  }
+  class lg0 blue
+  class lg1 orange
+  class lg2 teal
+  s0: asked
+  s1: asked, repo opts in
+  s2: card going up
+  s3: ran with no card
+  s4: defaults to Allow at HH:MM
+  s5: waits for you
+  s6: you allowed it
+  s7: you denied it
+  s8: you closed it
+  s9: denied: nothing ran
+  s10: deadline: class read again
+  s11: closed: nothing ran
+  s12: deadline: it waited
+  s13: changed: nothing ran
+  s14: expired: a Deny, nothing ran
+  s15: defaulted to Allow
+  s16: ran on your Allow
+  s17: ran by default
+  [*] --> s0
+  [*] --> s1
+  s0 --> s2: to a card
+  s1 --> s3: reads private
+  s2 --> s4: card up
+  s2 --> s5: card up
+  s4 --> s6: you Allow
+  s4 --> s7: you Deny
+  s4 --> s8: you Close
+  s5 --> s6: you Allow
+  s5 --> s7: you Deny
+  s5 --> s8: you Close
+  s7 --> s9: sees your Deny
+  s8 --> s11: sees it closed
+  s4 --> s10: deadline passes
+  s5 --> s12: deadline passes
+  s4 --> s13: sees it moved
+  s5 --> s13: sees it moved
+  s6 --> s10: stale read
+  s6 --> s12: stale read
+  s7 --> s10: stale read
+  s7 --> s12: stale read
+  s10 --> s14: withdraws: a Deny
+  s12 --> s14: withdraws: a Deny
+  s10 --> s6: you picked first
+  s12 --> s6: you picked first
+  s10 --> s7: you picked first
+  s12 --> s7: you picked first
+  s10 --> s8: you picked first
+  s10 --> s15: records default
+  s12 --> s8: you picked first
+  s6 --> s16: runs it once
+  s6 --> s13: last check fails
+  s15 --> s17: runs it once
+  s15 --> s13: last check fails
+  class s0 orange
+  class s1 orange
+  class s2 orange
+  class s3 teal
+  class s4 blue
+  class s5 blue
+  class s6 orange
+  class s7 orange
+  class s8 orange
+  class s9 teal
+  class s11 teal
+  class s13 teal
+  class s14 teal
+  class s15 orange
+  class s16 teal
+  class s17 teal
