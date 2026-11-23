@@ -126,6 +126,9 @@ cmd_doctor() {
   # shellcheck source=/dev/null
   source "$(find_lib_dir)/slots.sh"
   doctor_test_slots
+  # shellcheck source=/dev/null
+  source "$(find_lib_dir)/routine.sh"
+  doctor_routines || failures=1
   return "$failures"
 }
 
@@ -287,6 +290,12 @@ main() {
       BERCAIL_SELF="$(bercail_bin_dir)/bercail"
       export BERCAIL_SELF
       cmd_review_pr "$@"
+      ;;
+    routine)
+      load_libs
+      # shellcheck source=/dev/null
+      source "$(find_lib_dir)/routine.sh"
+      cmd_routine "$@"
       ;;
     cleanup)
       load_libs

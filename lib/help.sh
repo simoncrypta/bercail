@@ -9,7 +9,7 @@ Post-install CLI (bercail):
   help          This help
   install       Full install from the release mise or packslip unpacked;
                 --client MACHINE installs only the Herdr app half, for bercail on MACHINE
-  doctor        Check dependencies, integration, leftover scratch, /tmp use and test slots (and Entire, in a repo that uses it);
+  doctor        Check dependencies, integration, leftover scratch, /tmp use, test slots and routines (and Entire, in a repo that uses it);
                 on a client, the Herdr app half and that the backend runs this version
   bstack        bercail's Pi setup: status | setup
   scratch       Each agent's TMPDIR (~/.cache/bercail/scratch/<pid>, leased by .<pid>): sweep [--dry-run] [--days N]
@@ -98,6 +98,9 @@ Post-install CLI (bercail):
                 t: tuicr with [AI Agent] drafts. Then: run | card | ui | select | checkout |
                 rereview | open | dir. When done, review-pr close <PR url> removes the
                 worktree, the run dir, and the space.
+  routine       Your [routine.<name>] queries (docs/routines.md): list | show <name> [--run <id>] |
+                run <name> [--dry-run] (now, under its locks; --dry-run prints the event and writes nothing) |
+                pause <name> | resume <name>
   cleanup       Retire a finished worktree: cleanup <worktree> copies its .bercail/ to
                 ~/Work/worktree-archives/<repo>/, ends its desk, removes the worktree,
                 closes its space, and keeps the branch. Refuses uncommitted work,
@@ -218,7 +221,8 @@ bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   by this extension. The lead starts roles as hc siblings.
 
 Config:
-  ~/.config/bercail/config.toml               review, [bstack], [git], [policy."<repo>"], [tests] slots
+  ~/.config/bercail/config.toml               review, [bstack], [git], [policy."<repo>"], [tests] slots, [routine.<name>]
+  ~/.local/state/bercail/routines/            each routine's state, runs, outputs and locks
   ~/.local/state/bercail/policy-trust.json    repos whose git policy you trusted
   ~/.local/state/bercail/guard-approvals.jsonl  what the guard let through, and why
   ~/.local/state/bercail/guard-warnings.jsonl   what it warned about or refused (bercail doctor counts a week's)

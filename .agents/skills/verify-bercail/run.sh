@@ -197,6 +197,24 @@ check "Shep compacts the lead at 250k of its 1M window" \
   jq -e '.compaction.modelOverrides["claude-bridge/claude-opus-5-5"] == {keepRecentTokens: 50000, reserveTokens: 750000}' "$evidence/shep-settings.json"
 check "Shep's start context has the rule" grep -qF "[verify] verify: a standing rule" "$shep_state/context.md"
 
+# Routines: a command routine with one finding runs, then is quiet, and a dry
+# run prints its event once the finding changes.
+printf '#!/bin/sh\ncat "$1"\n' >"$box/bin/finds"
+chmod +x "$box/bin/finds"
+printf '{"key":"verify","title":"one finding"}' >"$box/finding"
+printf '\n[routine.verify]\ncommand = ["%s", "%s"]\nevery = "1d"\n' "$box/bin/finds" "$box/finding" \
+  >>"$XDG_CONFIG_HOME/bercail/config.toml"
+step routine-run 0 "$bercail" routine run verify
+check "a routine's new finding is emitted" out_has routine-run "verify: emitted, 1 found (1 new, 0 changed)"
+step routine-run-again 0 "$bercail" routine run verify
+check "the same finding again is quiet" out_has routine-run-again "verify: skipped (quiet)"
+printf '{"key":"verify","title":"one finding, changed"}' >"$box/finding"
+step routine-dry-run 0 "$bercail" routine run verify --dry-run
+check "a dry run prints the event of a changed finding" \
+  jq -e '.schema == "bercail.routine/v1" and .counts.changed == 1' "$evidence/routine-dry-run.out"
+step routine-list 0 "$bercail" routine list
+check "list shows its last outcome" grep -qE '^verify +every 1d +next .* skipped \(quiet\) +active$' "$evidence/routine-list.out"
+
 cp "$XDG_CONFIG_HOME/bercail/config.toml" "$evidence/config.toml"
 
 # --- result ---
