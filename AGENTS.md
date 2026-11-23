@@ -85,3 +85,8 @@ spend understanding it. Each value, and what enforces it here:
 - Improving the system over patching the output: a mistake seen twice gets a
   guardrail (a lint rule, a test, the guard, or a doctor check), not another fix
   by hand. Shep keeps the ledger (`bercail shep mistake`).
+
+<!-- entire-agent:begin -->
+Read .entire/agent-guide.md for this repository's workflow, source inspection, and verification guidance.
+@.entire/agent-guide.md
+<!-- entire-agent:end -->
