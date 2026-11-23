@@ -132,21 +132,34 @@ install_src_dir() {
   printf '%s' "$BERCAIL_RELEASE_DIR"
 }
 
+is_client_install() {
+  [[ "$(cat "$BERCAIL_INSTALL_MODE_FILE" 2>/dev/null)" == client ]]
+}
+
+# Where releases come from, for a curl install and for a client's clone alike;
+# never a clone's origin, which may be a fork.
+BERCAIL_UPSTREAM="https://github.com/simoncrypta/bercail"
+
+# The latest release's tag. github.com redirects /releases/latest to the tag:
+# no API token, no jq.
+latest_release_tag() {
+  local url ref
+  url="$(curl -fsSI -o /dev/null -w '%{redirect_url}' "$BERCAIL_UPSTREAM/releases/latest" 2>/dev/null)" || url=""
+  ref="${url##*/releases/tag/}"
+  [[ "$ref" == v* && "$ref" != */* ]] || return 1
+  printf '%s' "$ref"
+}
+
 # A curl install's files come from one commit, as one archive: BERCAIL_ARCHIVE_URL,
 # else BERCAIL_REF (a tag, branch, or sha), else the latest release. Never master
 # by default: master is unreleased trunk. Unpacks it over BERCAIL_RELEASE_DIR.
 fetch_release_tree() {
   local ref="${BERCAIL_REF:-}" url tmp
-  if [[ -z "${BERCAIL_ARCHIVE_URL:-}" && -z "$ref" ]]; then
-    # github.com redirects /releases/latest to the tag: no API token, no jq.
-    url="$(curl -fsSI -o /dev/null -w '%{redirect_url}' https://github.com/simoncrypta/bercail/releases/latest 2>/dev/null)" || url=""
-    ref="${url##*/releases/tag/}"
-    if [[ "$ref" != v* || "$ref" == */* ]]; then
-      warn "cannot find the latest bercail release on github.com; retry, or pick one with BERCAIL_REF=<tag>"
-      return 1
-    fi
+  if [[ -z "${BERCAIL_ARCHIVE_URL:-}" && -z "$ref" ]] && ! ref="$(latest_release_tag)"; then
+    warn "cannot find the latest bercail release on github.com; retry, or pick one with BERCAIL_REF=<tag>"
+    return 1
   fi
-  url="${BERCAIL_ARCHIVE_URL:-https://github.com/simoncrypta/bercail/archive/$ref.tar.gz}"
+  url="${BERCAIL_ARCHIVE_URL:-$BERCAIL_UPSTREAM/archive/$ref.tar.gz}"
   info "download: $url"
   ensure_dir "$BERCAIL_SHARE_DIR"
   # Beside the tree it replaces, so a failed download leaves that one whole.
@@ -167,4 +180,40 @@ fetch_release_tree() {
   fi
   rm -rf "$tmp/archive.tar.gz" "$BERCAIL_RELEASE_DIR"
   mv "$tmp" "$BERCAIL_RELEASE_DIR"
+}
+
+# A client's update copies its clone as it sits, so a clone left behind would
+# redeploy old files and report success. Go on only from a clean clone at the
+# release upstream names: the tag BERCAIL_REF, else the latest. BERCAIL_REF=HEAD
+# takes the clone as it sits.
+check_client_clone() {
+  local src="$1" ref="${BERCAIL_REF:-}" at status q changes=""
+  at="$(git -C "$src" describe --tags --always 2>/dev/null)"
+  # Untracked files deploy too, whatever status.showUntrackedFiles says.
+  status="$(git -C "$src" status --porcelain --untracked-files=normal 2>&1)" || status=failed
+  [[ -z "$status" ]] || changes=1
+  printf -v q '%q' "$src"
+  if [[ "$ref" == HEAD ]]; then
+    warn "deploying $src as it sits ($at${changes:+, with changes}): a dev build, not a release, and doctor sees only its version"
+    return 0
+  fi
+  if [[ -z "$ref" ]] && ! ref="$(latest_release_tag)"; then
+    warn "cannot find the latest bercail release on github.com to check $src against; nothing was updated. Retry, pin one with BERCAIL_REF=<tag>, or deploy the clone as it sits with BERCAIL_REF=HEAD"
+    return 1
+  fi
+  # The tag, never a branch of that name: a branch is unreleased code under a release's version.
+  if ! GIT_TERMINAL_PROMPT=0 git -C "$src" fetch --quiet --no-tags "$BERCAIL_UPSTREAM" "refs/tags/$ref" </dev/null; then
+    warn "cannot fetch the tag $ref from $BERCAIL_UPSTREAM into $src; nothing was updated. Retry, or deploy the clone as it sits with BERCAIL_REF=HEAD"
+    return 1
+  fi
+  if [[ "$(git -C "$src" rev-parse HEAD)" != "$(git -C "$src" rev-parse 'FETCH_HEAD^{commit}')" ]]; then
+    warn "$src is at $at, not bercail $ref; nothing was updated. Check out the release, then update again:
+  git -C $q fetch --no-tags $BERCAIL_UPSTREAM refs/tags/$ref && git -C $q switch --detach FETCH_HEAD
+or deploy the clone as it sits with BERCAIL_REF=HEAD bercail update"
+    return 1
+  fi
+  if [[ -n "$changes" ]]; then
+    warn "$src is on $ref but has changes (git -C $q status); nothing was updated. Commit or stash them, or deploy the clone as it sits with BERCAIL_REF=HEAD bercail update"
+    return 1
+  fi
 }

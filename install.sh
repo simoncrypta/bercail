@@ -101,7 +101,7 @@ main() {
   if [[ -n "$CLIENT_BACKEND" ]] || is_client_install; then
     install_client_dependencies
     deploy_client "$CLIENT_BACKEND"
-    show_client_summary
+    show_client_summary installed
     return
   fi
 

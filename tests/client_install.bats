@@ -3,6 +3,24 @@
 # whose bercail runs on MACHINE: the CLI, the layout, the mods, the keys and
 # [herdr] backend. Later updates stay that way, and doctor checks the backend.
 
+# This checkout's files, committed and tagged as this version's release: the
+# upstream each test clones. Built once; tests clone it, never change it.
+setup_file() {
+  load test_helper
+  local seed="$BATS_FILE_TMPDIR/seed" version
+  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+  version="$(sed -n 's/^BERCAIL_VERSION="\(.*\)"$/\1/p' "$ROOT/lib/common.sh")"
+  mkdir -p "$seed"
+  (cd "$ROOT" && git ls-files -co --exclude-standard \
+    | while IFS= read -r f; do [[ -e "$f" ]] && printf '%s\0' "$f"; done \
+    | tar --null -T - -cf -) | tar -x -C "$seed"
+  git -C "$seed" init -q -b master
+  git -C "$seed" add -A
+  git -C "$seed" -c user.email=test@example.com -c user.name=test commit -qm "release: v$version"
+  git -C "$seed" tag "v$version"
+  git clone -q --bare "$seed" "$BATS_FILE_TMPDIR/seed.git"
+}
+
 setup() {
   load test_helper
   isolate
@@ -41,6 +59,51 @@ client_install() {
   out="$(bash "$ROOT/install.sh" --yes --client box 2>&1)" || fail "install --client: $out"
 }
 
+# A client installed from a clone at $CLONE (~/Work/bercail), on the tag github.com names
+# as the latest release. $UP answers for github.com/simoncrypta/bercail, so the
+# clone's origin and the upstream update checks are the same repo until a test
+# says otherwise.
+clone_install() {
+  UP="$BATS_TEST_TMPDIR/upstream.git" CLONE="${CLONE:-$HOME/Work/bercail}"
+  VERSION="$(sed -n 's/^BERCAIL_VERSION="\(.*\)"$/\1/p' "$ROOT/lib/common.sh")"
+  git clone -q --bare "$BATS_FILE_TMPDIR/seed.git" "$UP"
+  export GIT_CONFIG_GLOBAL="$HOME/.gitconfig"
+  git config --global url."$UP".insteadOf https://github.com/simoncrypta/bercail
+  git config --global user.email test@example.com
+  git config --global user.name test
+  git clone -q https://github.com/simoncrypta/bercail "$CLONE"
+  git -C "$CLONE" switch -q --detach "v$VERSION"
+  printf 'v%s\n' "$VERSION" >"$BATS_TEST_TMPDIR/latest"
+  # github.com's /releases/latest redirect, to the tag in $BATS_TEST_TMPDIR/latest.
+  cat >"$B/curl" <<EOF
+#!/bin/sh
+case "\$*" in
+  *simoncrypta/bercail/releases/latest*)
+    [ -f "$BATS_TEST_TMPDIR/latest" ] || exit 22
+    printf 'https://github.com/simoncrypta/bercail/releases/tag/%s' "\$(cat "$BATS_TEST_TMPDIR/latest")" ;;
+  *) printf 'curl %s\n' "\$*" >>"$LOG"; exit 1 ;;
+esac
+EOF
+  chmod +x "$B/curl"
+  out="$(bash "$CLONE/install.sh" --yes --client box 2>&1)" || fail "install --client: $out"
+  # A line no deploy writes: still here after an update means nothing was redeployed.
+  printf '# not redeployed\n' >>"$HOME/.local/share/bercail/lib/common.sh"
+}
+
+# Upstream cuts release $1, a commit past the one the clone sits on.
+upstream_release() {
+  local work="$BATS_TEST_TMPDIR/up-work"
+  git clone -q "$UP" "$work"
+  git -C "$work" commit -q --allow-empty -m "release: $1"
+  git -C "$work" tag "$1"
+  git -C "$work" push -q origin HEAD:master "$1"
+  printf '%s\n' "$1" >"$BATS_TEST_TMPDIR/latest"
+}
+
+redeployed() {
+  ! grep -q '^# not redeployed$' "$HOME/.local/share/bercail/lib/common.sh"
+}
+
 # Only the Herdr app half and the CLI are here.
 expect_client_only() {
   local what
@@ -68,19 +131,98 @@ expect_client_only() {
 }
 
 @test "bercail update on a client stays client-only and keeps its backend" {
-  client_install
+  clone_install
   out="$("$HOME/.local/bin/bercail" update 2>&1)" || fail "update: $out"
-  grep -q 'bercail client installed' <<<"$out" || fail "not the client update: $out"
+  grep -q "bercail client updated (v$VERSION)" <<<"$out" || fail "not the client update: $out"
+  redeployed || fail "did not redeploy: $out"
   expect_client_only "update"
   grep -qx 'backend = "box"' "$CONFIG" || fail "backend lost: $(cat "$CONFIG")"
 }
 
 @test "bercail update gives a client's keys.json from an earlier bercail its copy and paste keys" {
-  client_install
+  clone_install
   jq 'del(.terminal)' "$APP/keys.json" >"$BATS_TEST_TMPDIR/k" && mv "$BATS_TEST_TMPDIR/k" "$APP/keys.json"
   jq 'del(.terminal)' "$ROOT/bercail/keys.json" >"$HOME/.local/share/bercail/herdr-app/keys.json"
   out="$("$HOME/.local/bin/bercail" update 2>&1)" || fail "update: $out"
   expect_client_only "update"
+}
+
+@test "update on a client refuses a clone behind the latest release, and names the checkout" {
+  clone_install
+  upstream_release v99.0.0
+  run "$HOME/.local/bin/bercail" update
+  [[ "$status" -ne 0 ]] || fail "updated a stale clone: $output"
+  ! redeployed || fail "redeployed the stale clone: $output"
+  grep -q "$CLONE is at v$VERSION, not bercail v99.0.0" <<<"$output" || fail "no reason: $output"
+  grep -qF "git -C $CLONE fetch --no-tags https://github.com/simoncrypta/bercail refs/tags/v99.0.0 && git -C $CLONE switch --detach FETCH_HEAD" <<<"$output" \
+    || fail "no checkout command: $output"
+}
+
+@test "update on a client deploys once the checkout it printed has run, from a path with a space" {
+  CLONE="$HOME/Work/my bercail"
+  clone_install
+  upstream_release v99.0.0
+  run "$HOME/.local/bin/bercail" update
+  [[ "$status" -ne 0 ]] || fail "updated a stale clone: $output"
+  checkout="$(sed -n 's/^  \(git -C .*\)$/\1/p' <<<"$output")"
+  [[ -n "$checkout" ]] || fail "no checkout command: $output"
+  eval "$checkout" || fail "the printed command failed: $checkout"
+  out="$("$HOME/.local/bin/bercail" update 2>&1)" || fail "update: $out"
+  redeployed || fail "did not redeploy: $out"
+}
+
+@test "update on a client checks the clone against upstream's tag, not a local one" {
+  clone_install
+  upstream_release v99.0.0
+  git -C "$CLONE" commit -q --allow-empty -m "not the release"
+  git -C "$CLONE" tag v99.0.0
+  run "$HOME/.local/bin/bercail" update
+  [[ "$status" -ne 0 ]] || fail "took the local tag: $output"
+  ! redeployed || fail "redeployed: $output"
+}
+
+@test "update on a client refuses a clone on the release with changes in it" {
+  clone_install
+  git -C "$CLONE" config status.showUntrackedFiles no
+  printf 'local\n' >"$CLONE/untracked.txt"
+  run "$HOME/.local/bin/bercail" update
+  [[ "$status" -ne 0 ]] || fail "updated a changed clone: $output"
+  ! redeployed || fail "redeployed: $output"
+  grep -q "$CLONE is on v$VERSION but has changes" <<<"$output" || fail "no reason: $output"
+}
+
+@test "update on a client that cannot find the latest release says so, and deploys nothing" {
+  clone_install
+  rm "$BATS_TEST_TMPDIR/latest"
+  run "$HOME/.local/bin/bercail" update
+  [[ "$status" -ne 0 ]] || fail "updated unchecked: $output"
+  ! redeployed || fail "redeployed: $output"
+  grep -q 'cannot find the latest bercail release on github.com' <<<"$output" || fail "no reason: $output"
+  grep -q 'BERCAIL_REF=HEAD' <<<"$output" || fail "no way through: $output"
+}
+
+@test "update on a client refuses a BERCAIL_REF that is no tag upstream, even a branch the clone sits on" {
+  clone_install
+  run env BERCAIL_REF=master "$HOME/.local/bin/bercail" update
+  [[ "$status" -ne 0 ]] || fail "updated: $output"
+  ! redeployed || fail "redeployed: $output"
+  grep -q 'cannot fetch the tag master from https://github.com/simoncrypta/bercail' <<<"$output" || fail "no reason: $output"
+}
+
+@test "BERCAIL_REF pins a client's clone to a release other than the latest" {
+  clone_install
+  upstream_release v99.0.0
+  out="$(BERCAIL_REF="v$VERSION" "$HOME/.local/bin/bercail" update 2>&1)" || fail "update: $out"
+  redeployed || fail "did not redeploy: $out"
+}
+
+@test "BERCAIL_REF=HEAD deploys a client's clone as it sits, as a dev build" {
+  clone_install
+  upstream_release v99.0.0
+  printf 'local\n' >"$CLONE/untracked.txt"
+  out="$(BERCAIL_REF=HEAD "$HOME/.local/bin/bercail" update 2>&1)" || fail "update: $out"
+  redeployed || fail "did not redeploy: $out"
+  grep -q "deploying $CLONE as it sits (v$VERSION, with changes): a dev build" <<<"$out" || fail "no warning: $out"
 }
 
 @test "a plain install over a client stays client-only" {
@@ -145,7 +287,25 @@ expect_client_only() {
   printf 'bercail v0.1.0\n' >"$BATS_TEST_TMPDIR/backend"
   run "$HOME/.local/bin/bercail" doctor
   [[ "$status" -ne 0 ]] || fail "passed: $output"
-  grep -q 'outdated  bercail on box is v0.1.0' <<<"$output" || fail "no mismatch: $output"
+  grep -q 'outdated  bercail on box is v0.1.0, this computer.s is v.* (run bercail update on box)' <<<"$output" \
+    || fail "no mismatch: $output"
+}
+
+@test "doctor on a client names no older side for a version it cannot order" {
+  client_install
+  printf 'bercail v%s-rc.1\n' "$(sed -n 's/^BERCAIL_VERSION="\(.*\)"$/\1/p' "$ROOT/lib/common.sh")" >"$BATS_TEST_TMPDIR/backend"
+  run "$HOME/.local/bin/bercail" doctor
+  [[ "$status" -ne 0 ]] || fail "passed: $output"
+  grep -q '(run bercail update on the older one)' <<<"$output" || fail "guessed a side: $output"
+}
+
+@test "doctor on a client behind its backend says to update here, and what update checks a clone against" {
+  clone_install
+  printf 'bercail v99.0.0\n' >"$BATS_TEST_TMPDIR/backend"
+  run "$HOME/.local/bin/bercail" doctor
+  [[ "$status" -ne 0 ]] || fail "passed: $output"
+  grep -qF "(run bercail update here: it checks $CLONE against the latest release and names the checkout)" <<<"$output" \
+    || fail "no advice: $output"
 }
 
 @test "doctor on a client names hc's error for a backend it cannot reach" {

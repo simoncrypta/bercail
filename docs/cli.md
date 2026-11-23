@@ -9,7 +9,7 @@ The `bercail` CLI, the shell helpers, and the skills your agents call by name. `
 | `bercail install` | Full install from the release mise or packslip unpacked |
 | `./install.sh` | Full install |
 | `./install.sh --yes` (`-y`) | Non-interactive |
-| `./install.sh --client <machine>` (`bercail install --client <machine>`) | Only the Herdr app half, for a laptop whose bercail runs on `<machine>` (its name in `hc machine ls`): the CLI, the layout, the mods, the keys and `[herdr] backend`. `update`, `dry-run` and `doctor` stay client-only after it; `reconfigure` refuses. See [install](install.md#a-laptop-with-bercail-on-another-machine) |
+| `./install.sh --client <machine>` (`bercail install --client <machine>`) | Only the Herdr app half, for a laptop whose bercail runs on `<machine>` (its name in `hc machine ls`): the CLI, the layout, the mods, the keys and `[herdr] backend`. `update`, `dry-run` and `doctor` stay client-only after it; `reconfigure` refuses. From a clone, `update` deploys only a clean checkout of the latest release (`BERCAIL_REF=<tag>` names another, `BERCAIL_REF=HEAD` takes it as it sits). See [install](install.md#a-laptop-with-bercail-on-another-machine) |
 | `./install.sh --help` | Installer help |
 | `bercail help` | This reference |
 | `bercail doctor` | Deps, Herdr layout, mod and keys, skills, each [desk secret](config.md#a-desk-secret-per-repo) (`present, 0600, service account`, never the token), each [todo target](config.md#todos) (whether its list answers, never the token), scratch folders that agent runs left behind, and who holds or waits for a [test slot](development.md#test-slots). On a client: the Herdr app, the layout, mods and keys, and that the backend answers with this bercail's version |

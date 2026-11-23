@@ -673,10 +673,6 @@ deploy_finalize_permissions() {
   find "${BERCAIL_SHARE_DIR}/lib" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 }
 
-is_client_install() {
-  [[ "$(cat "$BERCAIL_INSTALL_MODE_FILE" 2>/dev/null)" == client ]]
-}
-
 # A name hc machine ls shows, and nothing that would break the TOML string or the
 # box/<id> prefix the mods put on that machine's ids.
 valid_machine_name() {

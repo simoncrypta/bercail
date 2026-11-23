@@ -89,7 +89,15 @@ A Herdr window on a laptop can drive bercail on another machine (here `box`): Sh
 
 It records the mode in `~/.local/share/bercail/install-mode`. From then on, `bercail update`, `install.sh` without `--client`, and `bercail dry-run` stay client-only, `bercail doctor` checks only the above, and `bercail reconfigure` refuses (it belongs on `box`). `--client <other>` points the laptop at another machine. To make the laptop a full install, delete that file and `[herdr] backend` from `config.toml`, then install again.
 
-Update both together: `bercail update` on `box`, then on the laptop (after `git pull` or a checkout of the same tag, for a clone). The mods on the laptop call `box`'s bercail, so a version apart can break them; doctor says when the versions differ. Two clones of master both report master's version, so doctor cannot tell their commits apart: pull both.
+Update both together: `bercail update` on `box`, then on the laptop. The mods on the laptop call `box`'s bercail, so a version apart can break them; doctor says when the versions differ, and which one to update.
+
+On a laptop installed from a clone, `bercail update` first fetches the latest release's tag from github.com/simoncrypta/bercail (never the clone's `origin`, which may be a fork, and never `box`). It deploys only when the clone is checked out at that tag's commit with no changes. Otherwise it deploys nothing, exits 1, and prints the command that checks the release out:
+
+```bash
+git -C ~/Work/bercail fetch --no-tags https://github.com/simoncrypta/bercail refs/tags/v<version> && git -C ~/Work/bercail switch --detach FETCH_HEAD
+```
+
+`BERCAIL_REF=v<version> bercail update` checks the clone against that release instead, for a `box` that runs an older one; it takes a tag only. `BERCAIL_REF=HEAD bercail update` deploys the clone as it sits, with a warning that it is a dev build. Two clones of master both report master's version, so doctor cannot tell their commits apart. A laptop that ran a bercail older than this check still copies its clone as it sits: check the release out once with the command above, then run `bercail update`.
 
 **Why a clone, not a copy from `box`.** The laptop could copy bercail's files from `box` over `hc`, and always match it. Then `box` would choose the code the laptop runs: the mods are unrestricted code with the laptop's access to every machine it added. Today trust goes one way, the laptop runs things on `box` and nothing on `box` reaches the laptop; a copy from `box` would turn that around. A clone or a release comes from the same source `box` was installed from, and doctor catches a version apart.
 

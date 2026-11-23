@@ -145,7 +145,7 @@ cmd_install() {
 cmd_update() {
   if is_client_install; then
     deploy_client
-    show_client_summary
+    show_client_summary updated
     return
   fi
   deploy_configs
@@ -172,7 +172,8 @@ cmd_reconfigure() {
 
 # An update is the source tree's own bercail deploying itself, never this
 # installed copy running a newer tree's files. A curl install has no clone or
-# package to copy from: its tree is the release, downloaded here first.
+# package to copy from: its tree is the release, downloaded here first. A
+# client's clone is checked here, before its own (maybe older) update runs.
 update_from_tree() {
   local lib src
   lib="$(find_lib_dir)" || return 0
@@ -184,6 +185,8 @@ update_from_tree() {
   # -ef too: HOME behind a symlink makes the physical path differ.
   if [[ "$src" == "$BERCAIL_RELEASE_DIR" || "$src" -ef "$BERCAIL_RELEASE_DIR" ]]; then
     fetch_release_tree || exit 1
+  elif is_client_install && [[ -e "$src/.git" ]]; then
+    check_client_clone "$src" || exit 1
   fi
   [[ -f "$src/bin/bercail" ]] || return 0
   exec bash "$src/bin/bercail" update "$@"

@@ -369,7 +369,7 @@ doctor_entire() {
 # since the mods here speak to it. `bercail help` prints the version on its first
 # line in every release, so an older backend answers too.
 doctor_backend() {
-  local backend err out status=0 found message
+  local backend err out status=0 found message advice src
   # shellcheck source=lib/toml.sh
   source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
   backend="$(toml_value "$BERCAIL_USER_CONFIG" herdr backend "" 2>/dev/null || true)"
@@ -400,7 +400,18 @@ doctor_backend() {
   # A login shell there may print first; only a version reaches this terminal.
   found="$(sed -n 's/^bercail v\([0-9A-Za-z.+-]*\)$/\1/p' <<<"$out" | sed -n 1p)"
   if [[ "$found" != "$BERCAIL_VERSION" ]]; then
-    log "  outdated  bercail on $backend is v${found:-unknown}, this computer's is v${BERCAIL_VERSION} (bercail update on the older one)"
+    # Which side is older only when both are plain x.y.z: sort -V puts 1.0.0-rc after 1.0.0.
+    advice="run bercail update on the older one"
+    if [[ "$found.$BERCAIL_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+      if [[ "$(printf '%s\n' "$found" "$BERCAIL_VERSION" | sort -V | tail -n 1)" == "$BERCAIL_VERSION" ]]; then
+        advice="run bercail update on $backend"
+      else
+        advice="run bercail update here"
+        src="$(install_src_dir)"
+        [[ ! -e "$src/.git" ]] || advice+=": it checks $src against the latest release and names the checkout"
+      fi
+    fi
+    log "  outdated  bercail on $backend is v${found:-unknown}, this computer's is v${BERCAIL_VERSION} ($advice)"
     return 1
   fi
   log "  ok  backend $backend runs bercail v${found}"
