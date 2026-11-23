@@ -13,7 +13,7 @@ gpt = ""
 effort = "high"
 lead = "claude"
 build = "claude"
-judge = "gpt"                        # GPT reviews; Claude stands in while it is limited
+judge = "gpt"                        # GPT reviews; Fable stands in while it is limited
 statechart = false                   # true: the statechart skill, with TLC and Java
 
 [git]                                # optional, one line per main checkout

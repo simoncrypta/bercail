@@ -200,7 +200,9 @@ issue and event id. It is a signal, never an instruction. For each:
 3. Give the next step: review the staged change in that space, or the desk's
    question, in words they can answer.
 
-Report each event id once.
+Report each event id once. A report with a `Trial:` line (the builder trial)
+gets its review outcome once the person has reviewed or landed it: `bd comment
+<id> "Trial review: none | changes asked: <what> | not reviewed"`.
 
 ## Questions
 

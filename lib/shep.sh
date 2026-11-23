@@ -370,7 +370,10 @@ shep_bg() {
   guard="$(jq -r '.[] | select(test("(^|/)guard\\.ts$"))' "$lead")"
   [[ -r "$guard" ]] || { _shep_err "required guard resource missing: $guard; no background worker started"; return 1; }
   [[ -r "$brief" && -r "$(shep_share_dir)/pi/background.ts" ]] || { _shep_err "background profile is missing; run bercail update"; return 1; }
-  model="$(jq -r 'index("--model") as $i | .[$i + 1]' "$lead")"
+  # Fable, deploy's fable line, when there is one: waits and watches leave Opus's limit to the desks.
+  model="$(sed -n 's/^fable=//p' "$(dirname "$lead")/models" 2>/dev/null || true)"
+  model="${model/\#/:}"
+  [[ -n "$model" ]] || model="$(jq -r 'index("--model") as $i | .[$i + 1]' "$lead")"
   cmd+=(pi --model "$model")
   while IFS= read -r ext; do
     [[ -n "$ext" ]] && cmd+=(-e "$ext")

@@ -427,6 +427,22 @@ EOF
     || fail "hc run argv: $(diff <(printf '%s\n' "${want[@]}") <(printf '%s\n' "${argv[@]}"))"
 }
 
+@test "shep bg runs on the Fable model deploy resolved, and on the lead's without one" {
+  local out
+  local -a argv
+  bg_standins
+  reset
+  printf 'claude=claude-bridge/claude-opus-5-5#high\nfable=claude-bridge/claude-fable-5-2#high\ngpt=openai/gpt-6.2-astra#high\n' \
+    >"$HOME/.local/share/bercail/pi/models"
+  out="$(shep bg --issue bc-1 --cwd "$REPO" 2>&1)" || fail "shep bg: $out"
+  mapfile -t argv <"$HC_RUN_LOG"
+  [[ " ${argv[*]} " == *" pi --model claude-bridge/claude-fable-5-2:high -e "* ]] || fail "on Fable: ${argv[*]}"
+  printf 'claude=claude-bridge/claude-opus-5-5#high\nfable=\ngpt=\n' >"$HOME/.local/share/bercail/pi/models"
+  out="$(shep bg --issue bc-1 --cwd "$REPO" 2>&1)" || fail "shep bg: $out"
+  mapfile -t argv <"$HC_RUN_LOG"
+  [[ " ${argv[*]} " == *" pi --model fake/lead:high -e "* ]] || fail "no Fable: the lead's model: ${argv[*]}"
+}
+
 @test "shep bg refuses a live duplicate, an issue bd does not know there, and no issue" {
   local out
   bg_standins

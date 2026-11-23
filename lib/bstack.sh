@@ -46,11 +46,11 @@ _bstack_role_default() {
   esac
 }
 
-# The families a role is picked from at start, in order: the judge takes Claude
-# when ChatGPT is not connected, and every other role takes only Claude.
+# The families a role is picked from at start, in order: the judge takes Fable,
+# then Opus, when ChatGPT is not connected, and every other role takes only Claude.
 _bstack_role_order() {
   case "$1" in
-    judge) printf '%s\n' gpt claude ;;
+    judge) printf '%s\n' gpt fable claude ;;
     *) printf '%s\n' claude ;;
   esac
 }
@@ -69,14 +69,14 @@ bstack_warn_old_config() {
   done
 }
 
-# A family name (claude, gpt) resolves to that family's model: the one set in
-# config.toml (pinned), else bercail's pick from Pi's catalog when the login is
-# ready (auto). Anything else is a full Pi model id. Empty: the agent uses Pi's
+# A spec (claude, fable, gpt) resolves to its model: the one set in config.toml
+# (pinned), else bercail's pick from Pi's catalog when the login is ready
+# (auto). Anything else is a full Pi model id. Empty: the agent uses Pi's
 # default model.
 bstack_resolve_model() {
   local spec="$1" model
   case "$spec" in
-    claude|gpt) ;;
+    claude|fable|gpt) ;;
     *) printf '%s' "$spec"; return 0 ;;
   esac
   model="$(toml_value "$BERCAIL_USER_CONFIG" bstack "$spec")"
@@ -104,7 +104,7 @@ bstack_role_model() {
   spec="$(toml_value "$BERCAIL_USER_CONFIG" bstack "$role")"
   [[ -n "$spec" && "$spec" != grok ]] || spec="$(_bstack_role_default "$role")"
   case "$spec" in
-    claude|gpt) ;;
+    claude|fable|gpt) ;;
     *) printf '%s' "$spec"; return 0 ;;
   esac
   for family in "$spec" $(_bstack_role_order "$role"); do
@@ -226,7 +226,7 @@ _bstack_pi_claude_ready() {
 # The Pi providers behind a family, the one to log in to first.
 _bstack_pi_providers() {
   case "$1" in
-    claude) printf '%s\n' claude-bridge ;;
+    claude|fable) printf '%s\n' claude-bridge ;;
     gpt) printf '%s\n' openai openai-codex ;;
   esac
 }
@@ -254,16 +254,19 @@ _bstack_pi_load_models() {
   BSTACK_VARIANTS="$(awk 'NR > 1 && NF >= 5 { print $1 "/" $2, ($5 == "yes" ? "low,medium,high,xhigh,max" : "") }' <<<"$table")"
 }
 
-# The newest plain release of a family in the catalog on stdin, or nothing.
+# The newest plain release of a spec in the catalog on stdin, or nothing. GPT
+# takes astra, then sol, then a plain release.
 _bstack_pi_pick_model() {
   local list provider model=""
   list="$(cat)"
   case "$1" in
     claude) model="$(grep -E '^claude-bridge/claude-opus-[0-9]+(-[0-9]{1,2})?$' <<<"$list" | sort -V | tail -1)" ;;
+    fable) model="$(grep -E '^claude-bridge/claude-fable-[0-9]+(-[0-9]{1,2})?$' <<<"$list" | sort -V | tail -1)" ;;
     gpt)
       for provider in openai openai-codex; do
         grep -qxF "$provider" <<<"$BSTACK_CONNECTED" || continue
-        model="$(grep -E "^$provider/gpt-[0-9][0-9.]*-sol\$" <<<"$list" | sort -V | tail -1 | grep . \
+        model="$(grep -E "^$provider/gpt-[0-9][0-9.]*-astra\$" <<<"$list" | sort -V | tail -1 | grep . \
+          || grep -E "^$provider/gpt-[0-9][0-9.]*-sol\$" <<<"$list" | sort -V | tail -1 | grep . \
           || grep -E "^$provider/gpt-[0-9][0-9.]*\$" <<<"$list" | sort -V | tail -1)"
         [[ -z "$model" ]] || break
       done
@@ -296,7 +299,7 @@ _bstack_pi_argv() {
   fi
 }
 
-# bercail review-pr's reviewer, into BSTACK_PI_ARGV: the lead's model, the
+# bercail review-pr's reviewer, into BSTACK_PI_ARGV: the judge's model, the
 # read-only tools, and review.ts, which keeps it in the stack dir. No skills,
 # prompt templates, or context files: the pr-review rules and the description
 # standard are its whole brief. --no-approve: no project's .pi/ ever loads, so
@@ -348,7 +351,7 @@ bstack_guard_worker() {
 }
 
 _bstack_deploy_pi() {
-  local work="$1" rel name
+  local work="$1" rel name fable
   [[ ! -d "$BSTACK_PI_DIR" ]] || run rm -rf "$BSTACK_PI_DIR"
   for rel in "${BSTACK_PI_RENDERED[@]}"; do
     _bstack_render "$work/src/pi/$rel" "$work/pi-rendered"
@@ -369,7 +372,7 @@ _bstack_deploy_pi() {
   _bstack_pi_argv "$(bstack_role_model lead)"
   jq -n '$ARGS.positional' --args -- "${BSTACK_PI_ARGV[@]}" >"$work/lead.json"
   copy_file "$work/lead.json" "$BSTACK_PI_DIR/lead.json"
-  _bstack_pi_review_argv "$(bstack_role_model lead)"
+  _bstack_pi_review_argv "$(bstack_role_model judge)"
   jq -n '$ARGS.positional' --args -- "${BSTACK_PI_ARGV[@]}" >"$work/review.json"
   copy_file "$work/review.json" "$BSTACK_PI_DIR/review.json"
 
@@ -380,6 +383,14 @@ _bstack_deploy_pi() {
     "A second opinion from another provider, read-only. It reviews; the lead decides."
   _bstack_pi_template "$work" bstack-autopilot autopilot "$(bstack_role_model lead)" bstack-autopilot \
     "Drives an open PR to green. Pushes the PR branch, never merges."
+  # The builder trial's template, on Fable; with no Fable model it would run Pi's default.
+  fable="$(bstack_resolve_model fable)"
+  if [[ -n "$fable" ]]; then
+    _bstack_pi_template "$work" bstack-builder-fable builder "$fable" bstack-builder \
+      "The builder on Claude Fable, for the builder trial on low-stakes jobs."
+  else
+    _bstack_remove_ours "$BSTACK_PI_TEMPLATES/bstack-builder-fable.md"
+  fi
   for name in "${BSTACK_PI_RETIRED[@]}"; do
     _bstack_remove_ours "$BSTACK_PI_TEMPLATES/$name.md"
   done
@@ -390,7 +401,7 @@ _bstack_deploy_pi() {
 
 _bstack_pi_template_paths() {
   local name
-  for name in bstack-builder bstack-judge bstack-autopilot "${BSTACK_PI_RETIRED[@]}"; do
+  for name in bstack-builder bstack-judge bstack-autopilot bstack-builder-fable "${BSTACK_PI_RETIRED[@]}"; do
     printf '%s\n' "$BSTACK_PI_TEMPLATES/$name.md"
   done
 }
@@ -545,7 +556,7 @@ bstack_status() {
   else
     log "  Claude auth: no subscription login (claude auth login)"
   fi
-  log "  on a limit: a role pauses until it resets, then goes on with the same model; the judge has Claude stand in while GPT is limited"
+  log "  on a limit: a role on Opus moves to Fable while only Opus is limited; otherwise a role pauses until it resets, then goes on with the same model; the judge has Fable stand in while GPT is limited"
   log "  logins:"
   for family in "${BSTACK_FAMILIES[@]}"; do
     model="$(bstack_resolve_model "$family")"
@@ -557,6 +568,8 @@ bstack_status() {
       log "    --  $family  $(_bstack_family_label "$family")  log in: $(bstack_login_command "$family")"
     fi
   done
+  model="$(bstack_resolve_model fable)"
+  [[ -z "$model" ]] || log "    ok  fable  $(_bstack_pi_model_id "$model") ($(bstack_model_source fable)): background Shep, the builder trial, and the stand-in for Opus and the judge"
   log "  roles:"
   for role in "${BSTACK_ROLES[@]}"; do
     model="$(bstack_role_model "$role")"
@@ -564,7 +577,7 @@ bstack_status() {
     [[ -z "$model" ]] || _bstack_pi_known "$model" || note="  (not in pi --list-models)"
     log "    $role = $(_bstack_pi_model_id "${model:-(the default model in Pi)}")$note"
   done
-  log "  config: [bstack] in $BERCAIL_USER_CONFIG (auto picks the newest model; set claude/gpt to pin a Pi id)"
+  log "  config: [bstack] in $BERCAIL_USER_CONFIG (auto picks the newest model; set claude, fable or gpt to pin a Pi id)"
   bstack_warn_old_config
 }
 
@@ -688,11 +701,12 @@ _bstack_remove_ours() {
   run rm -f "$dest"
 }
 
-# family=model for each family, as deploy would render it now.
+# spec=model for each family and Fable, the Claude plan's second model with a
+# limit of its own, as deploy would render it now.
 _bstack_resolved_text() {
-  local family
-  for family in "${BSTACK_FAMILIES[@]}"; do
-    printf '%s=%s\n' "$family" "$(bstack_resolve_model "$family")"
+  local spec
+  for spec in claude fable gpt; do
+    printf '%s=%s\n' "$spec" "$(bstack_resolve_model "$spec")"
   done
 }
 

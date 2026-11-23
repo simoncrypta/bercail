@@ -61,8 +61,12 @@ claude-bridge claude-opus-4-5-20251101 200K     64K      yes       yes
 claude-bridge claude-opus-5            1M       128K     yes       yes
 claude-bridge claude-opus-5-5          1M       128K     yes       yes
 claude-bridge claude-sonnet-5-5        1M       128K     yes       yes
+claude-bridge claude-fable-5-1         1M       128K     yes       yes
+claude-bridge claude-fable-5-2         1M       128K     yes       yes
 openai     gpt-6-sol                   272K     128K     yes       yes
 openai     gpt-6.1-sol                 272K     128K     yes       yes
+openai     gpt-6-astra                 272K     128K     yes       yes
+openai     gpt-6.1-astra               272K     128K     yes       yes
 openai     gpt-6.1-terra               272K     128K     yes       yes
 openai-codex gpt-6.1                   272K     128K     yes       yes
 xai        grok-4.20-0309-reasoning    2M       30K      yes       yes
@@ -139,7 +143,7 @@ EOF
   local out
   out="$("$ROOT/bin/bercail" reconfigure 2>&1)" || fail "reconfigure: $out"
   [[ "$out" == *"the desk runs bstack's Pi lead  review=my-review"* ]] || fail "reconfigure: $out"
-  jq -e 'index(["--model", "openai/gpt-6.1-sol:high"]) != null and any(.[]; contains("extensions/guard.ts"))' \
+  jq -e 'index(["--model", "openai/gpt-6.1-astra:high"]) != null and any(.[]; contains("extensions/guard.ts"))' \
     "$(PI_DIR)/lead.json" >/dev/null || fail "the configured lead with the guard was not deployed"
   [[ -f "$HOME/.agents/skills/bstack/SKILL.md" && -L "$HOME/.pi/agent/skills/bstack" ]] || fail "reconfigure did not refresh the skills"
   grep -qx 'diff_watch_interval_ms = 1000' "$XDG_CONFIG_HOME/tuicr/config.toml" || fail "reconfigure did not prepare tuicr"
@@ -180,7 +184,7 @@ EOF
   fi
 }
 
-@test "roles resolve through families or full ids: build on Claude, the judge on GPT then Claude" {
+@test "roles resolve through families or full ids: build on Claude, the judge on GPT then Fable then Claude" {
   reset_home
   write_config <<'EOF'
 [bstack]
@@ -192,7 +196,12 @@ EOF
   assert_eq "openai/gpt-6.1-sol" "$(bstack_role_model judge)" "judge defaults to gpt"
   assert_eq "openai/gpt-6.2-astra#fast" "$(bstack_role_model lead)" "a full id is used as is"
   set_bstack gpt '""'
-  assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_role_model judge)" "no gpt model: the judge takes claude"
+  assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_role_model judge)" "no gpt or fable model: the judge takes claude"
+  set_bstack fable '"claude-bridge/claude-fable-5-2#high"'
+  assert_eq "claude-bridge/claude-fable-5-2#high" "$(bstack_role_model judge)" "no gpt model: the judge takes fable before claude"
+  set_bstack build '"fable"'
+  assert_eq "claude-bridge/claude-fable-5-2#high" "$(bstack_role_model build)" "a role set to fable runs on it"
+  set_bstack build '"claude"'
   set_bstack claude '""'
   set_bstack gpt '"openai/gpt-6.1-sol"'
   assert_eq "" "$(bstack_role_model build)" "no claude model: build has no other family, so Pi's default model"
@@ -212,7 +221,7 @@ EOF
   grep -q 'build = "grok" is ignored: build uses claude' "$err" || fail "build warning: $(cat "$err")"
   grep -q 'judge = "grok" is ignored: judge uses gpt' "$err" || fail "judge warning: $(cat "$err")"
   assert_eq "claude-bridge/claude-opus-5-5#high" "$(FAKE_PI_READY="claude-bridge openai xai" bstack_role_model build)" "build = grok takes build's default"
-  assert_eq "openai/gpt-6.1-sol#high" "$(FAKE_PI_READY="claude-bridge openai xai" bstack_role_model judge)" "judge = grok takes judge's default"
+  assert_eq "openai/gpt-6.1-astra#high" "$(FAKE_PI_READY="claude-bridge openai xai" bstack_role_model judge)" "judge = grok takes judge's default"
   [[ ! -e "$(PI_DIR)/fallback" ]] || fail "no fallback list is deployed"
   local out
   out="$(FAKE_PI_READY="claude-bridge openai xai" bstack_status 2>&1)"
@@ -288,17 +297,19 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   _bstack_install_pi >/dev/null
   bstack_load_state reload
   assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_resolve_model claude)" "newest plain opus"
-  assert_eq "openai/gpt-6.1-sol#high" "$(bstack_resolve_model gpt)" "newest sol"
+  assert_eq "openai/gpt-6.1-astra#high" "$(bstack_resolve_model gpt)" "newest astra, before sol"
+  assert_eq "claude-bridge/claude-fable-5-2#high" "$(bstack_resolve_model fable)" "newest fable"
   assert_eq "claude-bridge/claude-opus-5-5:high" "$(_bstack_pi_model_id "$(bstack_role_model lead)")" "#high maps to :high"
   assert_eq "claude-bridge/claude-opus-5-5#high" "$(bstack_role_model build)" "build defaults to claude"
-  assert_eq "openai/gpt-6.1-sol#high" "$(bstack_role_model judge)" "judge defaults to gpt"
+  assert_eq "openai/gpt-6.1-astra#high" "$(bstack_role_model judge)" "judge defaults to gpt"
 
   FAKE_PI_READY="claude-bridge openai-codex" bstack_load_state reload
   assert_eq "openai-codex/gpt-6.1#high" "$(FAKE_PI_READY="claude-bridge openai-codex" bstack_resolve_model gpt)" "openai-codex stands in for openai"
   FAKE_PI_READY="claude-bridge" bstack_load_state reload
-  assert_eq "claude-bridge/claude-opus-5-5#high" "$(FAKE_PI_READY="claude-bridge" bstack_role_model judge)" "no ChatGPT login: the judge resolves to Opus"
+  assert_eq "claude-bridge/claude-fable-5-2#high" "$(FAKE_PI_READY="claude-bridge" bstack_role_model judge)" "no ChatGPT login: the judge resolves to Fable"
   FAKE_PI_READY="openai" bstack_load_state reload
   assert_eq "" "$(FAKE_PI_READY="openai" bstack_role_model build)" "no Claude login: build takes no other family"
+  assert_eq "" "$(FAKE_PI_READY="openai" bstack_resolve_model fable)" "no Claude login: no Fable"
 
   FAKE_PI_READY="" bstack_load_state reload
   assert_eq "" "$(FAKE_PI_READY="" bstack_role_model lead)" "no login at all: Pi's default"
@@ -365,7 +376,7 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   fi
   # The guard finds the op shim beside its own folder, and PATH needs it executable.
   [[ -x "$p/op-shim/op" ]] || fail "executable op shim"
-  jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "claude-bridge/claude-opus-5-5:high"]
+  jq -e --arg p "$p" '.[0:3] == ["pi", "--model", "openai/gpt-6.1-astra:high"]
     and (index(["-e", "\($p)/extensions/review.ts"]) != null) and (index(["--tools", "read,grep,find,ls"]) != null)
     and (index(["--append-system-prompt", "\($p)/agents/bstack-pr-review.md"]) != null)
     and (index("--skill") == null) and (index("\($p)/extensions/guard.ts") == null)
@@ -391,21 +402,27 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     sed -n 5p "$t/$rel.md" | grep -qx -- '---' || fail "frontmatter holds only key: value in $rel"
   done
   grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=builder [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder: $(cat "$t/bstack-builder.md")"
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=judge [^ ]*bercail scratch run -- pi --model openai/gpt-6.1-sol:high ' "$t/bstack-judge.md" || fail "judge"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=judge [^ ]*bercail scratch run -- pi --model openai/gpt-6.1-astra:high ' "$t/bstack-judge.md" || fail "judge"
   grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=autopilot [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-autopilot.md" || fail "autopilot"
   grep -q 'bstack-builder.md' "$t/bstack-builder.md" || fail "builder brief"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=builder [^ ]*bercail scratch run -- pi --model claude-bridge/claude-fable-5-2:high .*agents/bstack-builder.md' \
+    "$t/bstack-builder-fable.md" || fail "the trial's builder runs the builder brief on Fable: $(cat "$t/bstack-builder-fable.md")"
 
   assert_eq 'mine' "$(jq -r .defaultModel "$HOME/.pi/agent/settings.json")" "unrelated settings preserved"
   jq -e '.packages == ["npm:pi-claude-bridge@0.13.0"]' "$HOME/.pi/agent/settings.json" >/dev/null || fail "bridge installed"
   assert_eq '{"token":"secret"}' "$(cat "$HOME/.pi/agent/auth.json")" "auth.json untouched"
 
-  assert_eq "$(printf 'claude=claude-bridge/claude-opus-5-5#high\ngpt=openai/gpt-6.1-sol#high')" "$(<"$p/models")" "resolved models, no xAI"
-  # A family that lost its login: the judge moves to Claude.
+  assert_eq "$(printf 'claude=claude-bridge/claude-opus-5-5#high\nfable=claude-bridge/claude-fable-5-2#high\ngpt=openai/gpt-6.1-astra#high')" "$(<"$p/models")" "resolved models, no xAI"
+  # A family that lost its login: the judge moves to Fable.
   mkdir -p "$p/extensions/bercail-guard"
   printf 'old guard\n' >"$p/extensions/bercail-guard/index.ts"
   FAKE_PI_READY="claude-bridge" deploy_bstack >/dev/null 2>&1
   [[ ! -d "$p/extensions/bercail-guard" ]] || fail "update removes the old managed guard"
-  grep -q 'BERCAIL_ROLE=judge [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-judge.md" || fail "judge falls through to Claude"
+  grep -q 'BERCAIL_ROLE=judge [^ ]*bercail scratch run -- pi --model claude-bridge/claude-fable-5-2:high ' "$t/bstack-judge.md" || fail "judge falls through to Fable"
+  jq -e '.[0:3] == ["pi", "--model", "claude-bridge/claude-fable-5-2:high"]' "$p/review.json" >/dev/null \
+    || fail "review-pr's reviewer follows the judge: $(cat "$p/review.json")"
+  FAKE_PI_READY="openai" deploy_bstack >/dev/null 2>&1
+  [[ ! -e "$t/bstack-builder-fable.md" ]] || fail "no Fable model: no trial builder on Pi's default model"
   unset FAKE_PI_READY
 }
 
@@ -449,6 +466,8 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
       "claude-bridge/claude-opus-5": {keepRecentTokens: 30000, reserveTokens: 40000},
       "claude-bridge/claude-opus-5-5": {reserveTokens: 750000},
       "claude-bridge/claude-sonnet-5-5": {reserveTokens: 40000},
+      "claude-bridge/claude-fable-5-1": {reserveTokens: 40000},
+      "claude-bridge/claude-fable-5-2": {reserveTokens: 40000},
       "xai/grok-4.7": {reserveTokens: 1000}}}' "$HOME/.pi/agent/settings.json" >/dev/null \
     || fail "settings: $(cat "$HOME/.pi/agent/settings.json")"
 
@@ -611,12 +630,13 @@ EOF
   out="$(bstack_status)"
   grep -q 'lead = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "lead: $out"
   grep -q 'build = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "build: $out"
-  grep -q 'judge = claude-bridge/claude-opus-5-5:high' <<<"$out" || fail "judge on Opus until ChatGPT is connected: $out"
+  grep -q 'judge = claude-bridge/claude-fable-5-2:high' <<<"$out" || fail "judge on Fable until ChatGPT is connected: $out"
+  grep -q 'fable  claude-bridge/claude-fable-5-2:high (auto)' <<<"$out" || fail "status names the Fable model: $out"
   grep -q 'gpt.*/login openai' <<<"$out" || fail "missing login hint: $out"
   if grep -qi 'xai\|grok' <<<"$out"; then fail "status lists no xAI, even with an xai login: $out"; fi
   out="$(FAKE_PI_READY="claude-bridge openai" bstack_status)"
-  grep -q 'judge = openai/gpt-6.1-sol:high' <<<"$out" || fail "judge on GPT: $out"
-  grep -q 'on a limit: a role pauses until it resets' <<<"$out" || fail "status says what a limit does: $out"
+  grep -q 'judge = openai/gpt-6.1-astra:high' <<<"$out" || fail "judge on GPT: $out"
+  grep -q 'on a limit: a role on Opus moves to Fable while only Opus is limited' <<<"$out" || fail "status says what a limit does: $out"
   out="$(doctor_bstack)" || fail "doctor ok: $out"
   grep -q 'ok  bstack (lead=claude-bridge/claude-opus-5-5:high)' <<<"$out" || fail "doctor: $out"
   grep -q "ok  pi-emphasis $(jq -r '.[] | select(.name == "pi-emphasis") | .known[0:12]' "$ROOT/lib/deps.json") " <<<"$out" \
