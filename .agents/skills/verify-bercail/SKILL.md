@@ -62,7 +62,7 @@ higher is a crash.
 | `bercail describe template` on this checkout | the command loads and finds no PR template here |
 | `bercail policy show --json` on this checkout | reads `.bercail/policy.toml`, and a fresh HOME has not trusted it, so push stays `ask` |
 | the pinned Claude model | the `bstack-builder` template runs it |
-| `bercail routine run`, `run --dry-run`, `list` on a `[routine.verify]` command routine | its one finding is emitted, the same finding again is quiet, a dry run prints the event of the changed finding, and `list` shows the last outcome |
+| `bercail routine run`, `run --dry-run`, `list` on a `[routine.verify]` command routine | its one finding is emitted as one event in Shep's inbox, the same finding again is quiet, a dry run prints the event of the changed finding, and `list` shows the last outcome |
 | `bercail shep remember`, `repos --json`, `run` | `repos` finds this checkout's main repo from Shep's extras file; a start writes `.pi/settings.json` with the lead at 250k of its 1M window and a start context with the rule |
 
 ## Evidence

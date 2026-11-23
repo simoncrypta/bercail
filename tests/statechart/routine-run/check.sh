@@ -19,6 +19,8 @@ expect=(
   "bug-NoCap:AtMostCap"
   "bug-StaleWrite:PauseSticks"
   "bug-LockInChild:LockOnlyWhileRunning"
+  "bug-TakeOutFirst:NoLostEvent"
+  "bug-NoDedup:OneMessagePerEvent"
 )
 bad=0
 for pair in "${expect[@]}"; do

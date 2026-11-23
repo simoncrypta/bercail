@@ -6,8 +6,9 @@
 # state and its locks; tests/statechart/routine-run/RoutineRun.tla models them.
 #
 # routines/<name>/ in the state dir holds state.json (next due, failures in a
-# row, paused, the hash sent per key), runs.jsonl (a line per run), outputs/
-# (what each run found) and lock, which flock -n holds while a run lasts.
+# row, paused, the hash sent per key, and the outbox: events for Shep not yet
+# in its inbox), runs.jsonl (a line per run), outputs/ (what each emitted run
+# found) and lock, which flock -n holds while a run lasts.
 # routines/.slots/slot.N are the 2 slots: at most 2 routines run at once.
 # Every write to state.json and runs.jsonl is under state.lock, and the end of
 # a run reads state.json again there, so a pause made meanwhile holds.
@@ -44,7 +45,7 @@ routine_entries() {
         ({}; .[$r.section[1]][$r.key] = ($r.value // $r.raw))
     | to_entries[]
     | .key as $name | .value as $v
-    | [ if ($name | test("^[A-Za-z0-9][A-Za-z0-9_-]*$") | not) then "a name is letters, digits, - and _"
+    | [ if ($name | test("^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$") | not) then "a name is letters, digits, - and _, at most 64 of them"
         else
           (if $v | has("run") and has("command") then "run and command are both set"
            elif ($v | has("run") or has("command")) | not then "no run or command"
@@ -117,14 +118,16 @@ _routine_stamp() { TZ=UTC printf '%(%Y%m%dT%H%M%SZ)T' "$1"; }
 _routine_iso() { TZ=UTC printf '%(%Y-%m-%dT%H:%M:%SZ)T' "$1"; }
 _routine_local() { printf '%(%Y-%m-%d %H:%M)T' "$1"; }
 
-# state.json, with what a routine that never ran has.
+# state.json, with what a routine that never ran has. One that cannot be read
+# is an error: writing over it would lose what was sent and the events waiting.
 routine_state() {
   local file
   file="$(routine_dir)/$1/state.json"
-  if [[ -f "$file" ]]; then
-    jq -c '{next_due: null, failures: 0, paused: false, sent: {}} + .' "$file"
+  if [[ -e "$file" ]]; then
+    jq -ce '{next_due: null, failures: 0, paused: false, sent: {}, outbox: []} + .' "$file" 2>/dev/null \
+      || { printf 'error: routine %s: cannot read %s; fix it, or move it aside to start the routine over\n' "$1" "$file" >&2; return 1; }
   else
-    printf '{"next_due":null,"failures":0,"paused":false,"sent":{}}'
+    printf '{"next_due":null,"failures":0,"paused":false,"sent":{},"outbox":[]}'
   fi
 }
 
@@ -146,10 +149,11 @@ _routine_with_state() {
   return "$rc"
 }
 
-# Under the state lock: write state.json as JSON.
+# Under the state lock: write state.json, a JSON object.
 _routine_put_state() {
   local file tmp
   file="$(routine_dir)/$1/state.json"
+  jq -e 'type == "object"' <<<"$2" >/dev/null 2>&1 || return 1
   tmp="$(mktemp "$file.XXXXXX")" || return 1
   printf '%s\n' "$2" >"$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
 }
@@ -174,17 +178,24 @@ _routine_put_run() {
 
 _routine_set_paused() {
   local state
-  state="$(routine_state "$1" | jq -c --argjson p "$2" '.paused = $p | if $p then . else .failures = 0 end')"
-  _routine_put_state "$1" "$state"
+  state="$(routine_state "$1")" || return 1
+  _routine_put_state "$1" "$(jq -c --argjson p "$2" '.paused = $p | if $p then . else .failures = 0 end' <<<"$state")"
 }
 
-# A run that went no further than its locks: logged, nothing else.
+# A run that went no further than its locks: logged, and the outbox flushed.
+# DUE is the slot it was for, or its start.
 _routine_skip() {
-  local name="$1" dry="$2" id="$3" start="$4" reason="$5" line
+  local name="$1" dry="$2" id="$3" start="$4" reason="$5" due="$6" line
   [[ "$dry" == 1 ]] && return 0
-  line="$(jq -nc --arg id "$id" --arg t "$(_routine_iso "$start")" --arg r "$reason" \
-    '{id: $id, due: $t, start: $t, end: $t, outcome: "skipped", reason: $r, counts: null, event: null, error: null}')"
-  _routine_with_state "$name" _routine_put_run "$name" "$line"
+  line="$(jq -nc --arg id "$id" --arg t "$(_routine_iso "$start")" --arg d "$(_routine_iso "$due")" --arg r "$reason" \
+    '{id: $id, due: $d, start: $t, end: $t, outcome: "skipped", reason: $r, counts: null, event: null, error: null}')"
+  _routine_with_state "$name" _routine_skipped "$name" "$line" \
+    || { printf 'error: routine %s: could not write its run in %s\n' "$name" "$(routine_dir)/$name" >&2; return 1; }
+}
+
+_routine_skipped() {
+  _routine_put_run "$1" "$2" || return 1
+  _routine_flush "$1" || _routine_flush_failed=1
 }
 
 # Stop process group PID: TERM, then KILL what is left after 2 seconds.
@@ -275,51 +286,103 @@ _routine_hashed() {
   return "$rc"
 }
 
+# Under the state lock: write the events in state.json's outbox into Shep's
+# inbox, each whole (tmp, then mv) as <event id>.json, then take them out. An
+# id already queued or delivered was written by a flush that stopped before
+# taking it out, so it is not written twice. Before Shep's first start there is
+# no inbox, and they wait. Why they wait goes in $_routine_waiting; status 1
+# when a write failed.
+_routine_flush() {
+  local name="$1" inbox state event id file tmp n=0 total
+  state="$(routine_state "$name")" || { _routine_waiting="was not sent: its state.json cannot be read"; return 1; }
+  total="$(jq '.outbox | length' <<<"$state")" || return 1
+  ((total > 0)) || return 0
+  inbox="$(shep_inbox_dir)"
+  if [[ -z "$inbox" ]]; then
+    _routine_waiting="no Shep inbox in $(shep_state_dir) yet; start Shep once (bercail shep) and the next run sends it"
+    return 0
+  fi
+  while IFS= read -r event; do
+    id="$(jq -r .event_id <<<"$event")" && [[ "$id" =~ ^routine:[A-Za-z0-9_-]+:[0-9TZ-]+$ ]] || break
+    file="$inbox/${id//:/_}.json"
+    if [[ ! -e "$file" && ! -e "$inbox/../delivered/${file##*/}" ]]; then
+      tmp="$(umask 077 && mktemp "$inbox/.event.XXXXXX" 2>/dev/null)" || break
+      printf '%s\n' "$event" >"$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; break; }
+    fi
+    n=$((n + 1))
+  done < <(jq -c '.outbox[]' <<<"$state")
+  if ((n > 0)) && ! _routine_put_state "$name" "$(jq -c --argjson n "$n" '.outbox |= .[$n:]' <<<"$state")"; then
+    _routine_waiting="is in Shep's inbox, but could not be taken out of state.json; the next run finds it there and does not send it again"
+    return 1
+  fi
+  ((n < total)) || return 0
+  _routine_waiting="could not be written to Shep's inbox $inbox; it waits in state.json, and the next run sends it"
+  return 1
+}
+
 # The state lock's half of a run's end: from state.json as it is now, the
 # outcome, the state to write, the run's line, what it found and the event, as
 # one JSON object in $_routine_result. FINDINGS is their file, or empty for a
-# failed run. Unless DRY is 1 it writes what it found, then the run's line,
-# then state.json, so a write that fails can repeat an event but never loses
-# one; status 1 when one failed.
+# failed run. Unless DRY is 1 it writes what an emitted run found, the run's
+# line, then state.json with the event in its outbox: that one rename counts
+# the findings sent and keeps their event, so a failed write or a crash loses
+# neither. Then it flushes the outbox. Status 1 when the state was not
+# written; a flush that failed sets $_routine_flush_failed.
 _routine_finish() {
   local name="$1" dry="$2" ctx="$3" findings="$4" error="$5" dir state
   local -a found=(--argjson f '[null]')
   [[ -z "$findings" ]] || found=(--slurpfile f "$findings")
   dir="$(routine_dir)/$name"
-  state="$(routine_state "$name")"
+  state="$(routine_state "$name")" || return 1
   _routine_result="$(jq -c --argjson c "$ctx" "${found[@]}" --arg err "$error" '
     . as $s | $f[0] as $f
     | {id: $c.id, due: $c.due, start: $c.start, end: $c.end} as $run
-    | if $f == null then
+    | "routine:\($c.name):\($c.slot_stamp // $c.id)" as $eid
+    # Its fields only: no finding text or error, which the query wrote.
+    | def event($o; $counts): {source: "bercail", schema: "bercail.routine/v1", kind: "routine", sink: "shep",
+        at: $c.end, event_id: $eid, routine: $c.name, run: $c.id, outcome: $o, counts: $counts,
+        show: "bercail routine show \($c.name) --run \($c.id)"};
+    if $f == null then
         ($s.failures + 1) as $n
+        | (($s.paused | not) and $n >= 3) as $now
         | {state: ($s + {failures: $n, paused: ($s.paused or $n >= 3), next_due: $c.next_due}),
-           run: ($run + {outcome: "failed", reason: null, counts: null, event: null, error: $err}),
-           paused_now: (($s.paused | not) and $n >= 3), findings: null, event: null}
+           run: ($run + {outcome: "failed", reason: null, counts: null, event: (if $now then $eid else null end), error: $err}),
+           paused_now: $now, findings: null, event: (if $now then event("paused"; null) else null end)}
       else
         ($f | map(. + {status: ($s.sent[.key] as $h
           | if $h == null then "new" elif $h == .hash then "same" else "changed" end)})) as $a
         | {found: ($a | length), new: ([$a[] | select(.status == "new")] | length),
            changed: ([$a[] | select(.status == "changed")] | length)} as $counts
         | (if $counts.new + $counts.changed > 0 then "emitted" else "skipped" end) as $o
-        | "routine:\($c.name):\($c.due_stamp)" as $eid
         | {state: ($s + {failures: 0, next_due: $c.next_due, sent: ($a | map({(.key): .hash}) | add // {})}),
            run: ($run + {outcome: $o, reason: (if $o == "skipped" then "quiet" else null end), counts: $counts,
                          event: (if $o == "emitted" then $eid else null end), error: null}),
            paused_now: false,
            findings: ($a | map(del(.hash))),
-           event: (if $o == "emitted" then
-             {source: "bercail", schema: "bercail.routine/v1", kind: "routine", sink: "shep", at: $c.end,
-              event_id: $eid, routine: $c.name, run: $c.id, outcome: $o, counts: $counts,
-              text: "Routine \($c.name): \($counts.new) new and \($counts.changed) changed of \($counts.found) found. Read them with bercail routine show \($c.name) --run \($c.id)."}
-             else null end)}
-      end' <<<"$state")"
+           event: (if $o == "emitted" then event($o; $counts) else null end)}
+      end
+    | if .event then .state.outbox += [.event] else . end
+    | if $c.slot then .state.slot = $c.slot else . end' <<<"$state")" || return 1
+  [[ -n "$_routine_result" ]] || return 1
   [[ "$dry" == 1 ]] && return 0
-  if [[ -n "$findings" ]]; then
+  if jq -e '.run.outcome == "emitted"' <<<"$_routine_result" >/dev/null; then
     mkdir -p "$dir/outputs" && jq -c '.findings[]' <<<"$_routine_result" >"$dir/outputs/$(jq -r .run.id <<<"$_routine_result").jsonl" \
       || return 1
   fi
   _routine_put_run "$name" "$(jq -c .run <<<"$_routine_result")" || return 1
-  _routine_put_state "$name" "$(jq -c .state <<<"$_routine_result")"
+  _routine_put_state "$name" "$(jq -c .state <<<"$_routine_result")" || return 1
+  _routine_flush "$name" || _routine_flush_failed=1
+}
+
+# After a run: why an event waits for Shep's inbox, if one does. Status 1 when
+# writing it failed.
+_routine_tell_waiting() {
+  [[ -n "$_routine_waiting" ]] || return 0
+  if [[ -n "$_routine_flush_failed" ]]; then
+    printf 'error: routine %s: its event %s\n' "$1" "$_routine_waiting" >&2
+    return 1
+  fi
+  log "$1: its event waits: $_routine_waiting"
 }
 
 # A run's line in words: "emitted, 2 found (1 new, 0 changed)".
@@ -331,10 +394,15 @@ _routine_said() {
 }
 
 # bercail routine run NAME [--dry-run]: run it now, under the same locks and
-# limits as a scheduled run. Status 1 when it failed.
+# limits as a scheduled run. SLOT is the due time (epoch seconds) a scheduled
+# run is for: it names the event, and a slot that ran already is skipped
+# (done), so a retried tick sends nothing twice. Status 1 when it failed, or
+# when it could not read or write its state or its event.
 routine_run() {
-  local name="$1" dry="${2:-0}" entry dir start id lfd="" sfd="" n slots out err rc=0 error="" findings
+  local name="$1" dry="${2:-0}" slot="${3:-}" entry dir start id micro="${EPOCHREALTIME:-}" state
+  local lfd="" sfd="" n slots out err rc=0 error="" findings
   local limit="${BERCAIL_ROUTINE_TIMEOUT:-600}" end ctx tail result line wrote=1 _routine_result
+  local _routine_waiting="" _routine_flush_failed=""
   local -a argv
   entry="$(routine_entry "$name" --valid)"
   command -v flock >/dev/null 2>&1 \
@@ -343,13 +411,15 @@ routine_run() {
   dir="$(routine_dir)/$name"
   mkdir -p "$dir"
   printf -v start '%(%s)T' -1
-  id="$(_routine_stamp "$start")-$$"
+  # The pid, and with bash 5 the microseconds: two runs from one shell differ.
+  id="$(_routine_stamp "$start")-$$${micro: -6}"
 
   exec {lfd}>"$dir/lock"
   if ! flock -n "$lfd"; then
     exec {lfd}>&-
-    _routine_skip "$name" "$dry" "$id" "$start" overlap
+    _routine_skip "$name" "$dry" "$id" "$start" overlap "${slot:-$start}" || return 1
     log "$name: skipped (overlap): a run of it is still going"
+    _routine_tell_waiting "$name" || return 1
     return 0
   fi
   slots="$(routine_dir)/.slots"
@@ -362,16 +432,26 @@ routine_run() {
   done
   if [[ -z "$sfd" ]]; then
     exec {lfd}>&-
-    _routine_skip "$name" "$dry" "$id" "$start" load
+    _routine_skip "$name" "$dry" "$id" "$start" load "${slot:-$start}" || return 1
     log "$name: skipped (load): $ROUTINE_SLOTS routines are running"
+    _routine_tell_waiting "$name" || return 1
     return 0
   fi
   # Let in only now, holding both locks: a pause that returned before this
   # stops the run.
-  if [[ "$(routine_state "$name" | jq -r .paused)" == true ]]; then
+  state="$(routine_state "$name")" || { exec {sfd}>&- {lfd}>&-; return 1; }
+  if [[ "$(jq -r .paused <<<"$state")" == true ]]; then
     exec {sfd}>&- {lfd}>&-
-    _routine_skip "$name" "$dry" "$id" "$start" paused
+    _routine_skip "$name" "$dry" "$id" "$start" paused "${slot:-$start}" || return 1
     log "$name: skipped (paused); bercail routine resume $name"
+    _routine_tell_waiting "$name" || return 1
+    return 0
+  fi
+  if [[ -n "$slot" ]] && jq -e --argjson s "$slot" '(.slot // 0) >= $s' <<<"$state" >/dev/null; then
+    exec {sfd}>&- {lfd}>&-
+    _routine_skip "$name" "$dry" "$id" "$start" "done" "${slot:-$start}" || return 1
+    log "$name: skipped (done): its $(_routine_local "$slot") run is done"
+    _routine_tell_waiting "$name" || return 1
     return 0
   fi
 
@@ -397,9 +477,11 @@ routine_run() {
   fi
   [[ -z "$error" ]] || findings=""
   printf -v end '%(%s)T' -1
-  ctx="$(jq -nc --arg name "$name" --arg id "$id" --arg due "$(_routine_iso "$start")" --arg ds "$(_routine_stamp "$start")" \
-    --arg start "$(_routine_iso "$start")" --arg end "$(_routine_iso "$end")" --argjson next "$(_routine_next_due "$entry" "$start")" \
-    '{name: $name, id: $id, due: $due, due_stamp: $ds, start: $start, end: $end, next_due: $next}')"
+  ctx="$(jq -nc --arg name "$name" --arg id "$id" --arg start "$(_routine_iso "$start")" --arg end "$(_routine_iso "$end")" \
+    --arg due "$(_routine_iso "${slot:-$start}")" --arg slot "$slot" --arg ss "${slot:+$(_routine_stamp "$slot")}" \
+    --argjson next "$(_routine_next_due "$entry" "$start")" \
+    '{name: $name, id: $id, due: $due, start: $start, end: $end, next_due: $next,
+      slot: (if $slot == "" then null else ($slot | tonumber) end), slot_stamp: (if $ss == "" then null else $ss end)}')"
   if [[ "$dry" == 1 ]]; then
     _routine_finish "$name" 1 "$ctx" "$findings" "$error" || wrote=0
   else
@@ -420,6 +502,7 @@ routine_run() {
   fi
   [[ "$(jq -r .paused_now <<<"$result")" != true || "$dry" == 1 ]] \
     || log "$name: failed 3 times in a row and is paused; bercail routine resume $name"
+  _routine_tell_waiting "$name" || return 1
   [[ -z "$error" ]]
 }
 
@@ -472,17 +555,22 @@ routine_show() {
     done < <(tail -n 10 "$file" | jq -c -s 'reverse[]')
     return 0
   fi
-  [[ "$run" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]] && [[ -f "$file" ]] \
-    && line="$(jq -c --arg id "$run" 'select(.id == $id)' "$file" | tail -n 1)" && [[ -n "$line" ]] \
-    || die "no run $run in $name's last runs; bercail routine show $name lists them"
-  log "run $run: $(_routine_said "$line")"
+  [[ "$run" =~ ^[0-9]{8}T[0-9]{6}Z-[0-9]+$ ]] || die "no run $run; bercail routine show $name lists the last runs"
   output="$(routine_dir)/$name/outputs/$run.jsonl"
+  line=""
+  [[ ! -f "$file" ]] || line="$(jq -c --arg id "$run" 'select(.id == $id)' "$file" | tail -n 1)"
+  [[ -n "$line" || -f "$output" ]] || die "no run $run in $name's last runs; bercail routine show $name lists them"
+  if [[ -n "$line" ]]; then
+    log "run $run: $(_routine_said "$line")"
+  else
+    log "run $run: emitted (its line is no longer kept)"
+  fi
   if [[ -f "$output" ]]; then
     jq -r '"  \(.status + "        " | .[:8]) \(.key)  \(.title)",
       ([.detail, ([.repo, .issue] | map(select(. != null)) | if length > 0 then "(\(join(", ")))" else empty end)]
        | map(select(. != null)) | if length > 0 then "           " + join(" ") else empty end)' "$output"
-  elif jq -e '.counts != null' <<<"$line" >/dev/null; then
-    log "  (what it found is no longer kept: only the last $ROUTINE_KEEP_OUTPUTS runs' are)"
+  elif jq -e '.outcome == "emitted"' <<<"${line:-null}" >/dev/null; then
+    log "  (what it found is no longer kept: only the last $ROUTINE_KEEP_OUTPUTS emitted runs' findings are)"
   fi
 }
 

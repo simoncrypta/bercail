@@ -470,6 +470,8 @@ Shep's `inbox.ts` submits the waiting events as one custom message, each with it
 
 The same folder carries decision events, written when you [answer](#answering) a question or a [reversible one](#reversible-questions) defaults (`decision-Q<n>-<rev>.json`), when you say OK to a default or reverse it (`decision-Q<n>-<rev>-ok.json`, `decision-Q<n>-<rev>-reversed.json`), or when you close [Discuss](#discuss) without a pick (`decision-Q<n>-<rev>-closed-<opening>.json`). The file name follows from the event id (`decision:<name>`), so a retry is the same event. Shep checks each against its question state before acting.
 
+A [routine](routines.md#the-event) run that found something new or changed, or that just paused, writes one `bercail.routine/v1` event there (`routine_<name>_<run id or slot>.json`). Its line names the routine, its counts and the `bercail routine show` command for the run, never what the query found.
+
 ### Claims and persistence
 
 Moving a file to `delivered/` claims it; only a complete matching entry in the session's JSONL acknowledges it, recorded as `persisted_entry_id`, `persisted_session`, `persisted_session_file` and `persisted_at`. Pi 1.5.2 returns from `sendMessage()` before the append, so the extension checks disk on later hooks and polls, never trusting memory.

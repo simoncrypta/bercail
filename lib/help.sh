@@ -99,7 +99,8 @@ Post-install CLI (bercail):
                 rereview | open | dir. When done, review-pr close <PR url> removes the
                 worktree, the run dir, and the space.
   routine       Your [routine.<name>] queries (docs/routines.md): list | show <name> [--run <id>] |
-                run <name> [--dry-run] (now, under its locks; --dry-run prints the event and writes nothing) |
+                run <name> [--dry-run] (now, under its locks; new findings or a pause send Shep one event;
+                --dry-run prints the event and writes nothing) |
                 pause <name> | resume <name>
   cleanup       Retire a finished worktree: cleanup <worktree> copies its .bercail/ to
                 ~/Work/worktree-archives/<repo>/, ends its desk, removes the worktree,

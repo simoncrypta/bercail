@@ -1,6 +1,6 @@
 # routines
 
-A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. This page covers the runner, its state and its locks. Nothing schedules a routine yet, and no run writes to Shep's inbox: `bercail routine run` runs one now, and `--dry-run` prints the event a run will send. The plan is bercail-2qig.
+A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, and the event. Nothing schedules a routine yet: `bercail routine run` runs one now, and `--dry-run` prints the event a run would send. The plan is bercail-2qig.
 
 ## Declare one
 
@@ -18,7 +18,7 @@ at = "07:30"
 
 - Each routine has one of `run` (a built-in's name) or `command` (an argv, not a shell line).
 - Each has one of `at = "HH:MM"` (a daily local slot) or `every = "<n>h"` or `"<n>d"` (at least `1h`).
-- A name is letters, digits, `-` and `_`.
+- A name is letters, digits, `-` and `_`, at most 64 of them.
 
 `bercail doctor` names a bad entry, such as `invalid  routine nowhen: no at or every`, and a key nothing reads. Neither counts as a failure. `bercail routine list` names a bad entry too, and `bercail routine run` refuses one.
 
@@ -45,7 +45,7 @@ A run fails when the query exits non-zero, prints anything that is not findings,
 | `bercail routine list` | Each routine's schedule, when it is next due, its last outcome, and whether it is paused |
 | `bercail routine show <name>` | Its schedule and state, and its last 10 runs, newest first |
 | `bercail routine show <name> --run <id>` | What that run found, each finding marked new, changed or same |
-| `bercail routine run <name>` | Run it now. It prints one line: `emitted`, `skipped (quiet)`, `skipped (paused)`, `skipped (overlap)`, `skipped (load)` or `failed`. It exits 1 only when the run failed |
+| `bercail routine run <name>` | Run it now. It prints one line: `emitted`, `skipped (quiet)`, `skipped (paused)`, `skipped (overlap)`, `skipped (load)` or `failed`, and a line when an [event](#the-event) waits. It exits 1 when the run failed, or when it could not write its run, its state or its [event](#the-event) |
 | `bercail routine run <name> --dry-run` | Run it under the same locks, and print the `bercail.routine/v1` event it would send, or its line when there is none. It writes no state, no run and no inbox file, so the next real run counts the same findings again |
 | `bercail routine pause <name>` / `resume <name>` | Stop and restart it. `resume` also clears the failures in a row |
 
@@ -54,6 +54,7 @@ A run comes to one of these outcomes, as in the [statechart](../tests/statechart
 - **Skipped (paused):** the routine was paused when the run had taken its locks. Its query does not run.
 - **Skipped (overlap):** another run of it holds its lock.
 - **Skipped (load):** 2 routines are already running.
+- **Skipped (done):** a scheduled run's slot ran already.
 - **Emitted:** the query found something new or changed.
 - **Skipped (quiet):** nothing was new or changed.
 - **Failed:** see above.
@@ -64,14 +65,41 @@ Once a pause returns, no run starts its query until you resume. A run whose quer
 
 Everything is under `~/.local/state/bercail/routines/`:
 
-- `<name>/state.json`: when it is next due, the failures in a row, whether it is paused, and the hash counted per key.
+- `<name>/state.json`: when it is next due, the failures in a row, whether it is paused, the hash counted per key, the last slot a scheduled run was for, and the outbox: [events](#the-event) not yet in Shep's inbox.
 - `<name>/runs.jsonl`: a line per run with its `id`, `due`, `start`, `end`, `outcome`, `reason` for a skip, `counts` (found, new, changed), `event` id and `error`. The last 100 runs are kept.
-- `<name>/outputs/<id>.jsonl`: what a run found. The last 10 are kept.
+- `<name>/outputs/<id>.jsonl`: what an emitted run found. The last 10 are kept.
 - `<name>/lock`, `.slots/slot.1` and `.slot.2`: what `flock -n` holds while a run lasts. One run per routine at a time, and at most 2 routines at once, by hand too. The query runs without those locks open, so a process it leaves behind cannot keep them.
-- `<name>/state.lock`: held for the short read and write of `state.json` and `runs.jsonl`. The end of a run reads `state.json` again under it, so it never undoes a pause made meanwhile. It writes the run's line before `state.json`: when a write fails, `run` says so and exits 1, and the next run counts the same findings again rather than losing them.
+- `<name>/state.lock`: held for the short read and write of `state.json` and `runs.jsonl`. The end of a run reads `state.json` again under it, so it never undoes a pause made meanwhile. It writes the run's line before `state.json`: when a write fails, `run` says so and exits 1, and the next run counts the same findings again rather than losing them (see [the event](#the-event)).
 
 Without `flock` (macOS has none by default), `bercail routine run` refuses and says how to install it, and with a routine declared, `bercail doctor` fails. A routine never runs unlocked.
 
-The event id is `routine:<name>:<due slot>`. For a run by hand, the due slot is its start.
+## The event
 
-`tests/statechart/routine-run/` models a run and its locks in TLA+. Its `check.sh` checks every config with tla-ts, including four planted bugs, and `tests/routine.bats` has a case for each of the model's steps on the code; it does not walk the checker's graph. `BERCAIL_ROUTINE_TIMEOUT` (seconds) replaces the 10 minutes, for tests.
+A run sends Shep one `bercail.routine/v1` event when it emitted, and when its failure was the third in a row and paused the routine. Any other run sends nothing. Its file goes into Shep's inbox, `~/.local/state/bercail/shep/inbox/`, mode 600, named after its id:
+
+```json
+{"source":"bercail","schema":"bercail.routine/v1","kind":"routine","sink":"shep","at":"2026-11-23T07:30:04Z",
+ "event_id":"routine:cleanup:20261123T073000Z-4127","routine":"cleanup","run":"20261123T073000Z-4127",
+ "outcome":"emitted","counts":{"found":5,"new":2,"changed":1},
+ "show":"bercail routine show cleanup --run 20261123T073000Z-4127"}
+```
+
+- `outcome` is `emitted`, with its `counts`, or `paused`, with `counts: null`.
+- `event_id` is `routine:<name>:<run id>` for a run by hand. A scheduled run (the scheduler, next) is for a due slot, and its id is `routine:<name>:<slot>`, such as `routine:cleanup:20261123T073000Z`.
+- `show` is the command that shows what the run found, or why it failed.
+- No finding text and no error text: those are the query's words. Shep reads them with `show`, as data.
+
+**When a run stops partway.** A run writes what it found, its run line, then `state.json`. That one rename counts the findings as sent, records the slot a scheduled run was for, and puts the event in the routine's outbox, a list in `state.json`. Then the run writes each event in the outbox into Shep's inbox and takes it out of the outbox.
+
+- A run that stops before the rename has counted nothing: the next run queries again and sends what it finds then, and a retried slot runs again.
+- A run that stops after it leaves the event in the outbox, and the next run of that routine sends it, skipped or not. A retried slot is skipped as `done`, whatever its query would find then.
+- An id already in the inbox or in its `delivered/` folder is not written again. `delivered/` keeps a file 30 days after Shep's session saved it. So an event that reached the inbox, but stopped before it was taken out of the outbox, may be sent again when its next flush comes after that.
+- A `state.json` that cannot be read stops the run, and nothing writes over it.
+
+These hold when a process dies or a write fails, not across a power loss.
+
+**Before Shep's first start** there is no inbox. The run counts its findings and pauses on a third failure as always, its event waits in the outbox, and it says so: `its event waits: no Shep inbox … yet; start Shep once (bercail shep)`. The next run after Shep's first start sends what waited. When the inbox is there but the write fails, the event waits the same way, and `run` exits 1.
+
+**What Shep reads.** `show --run` shows what a run found while it is among the last 10 emitted runs, and its line while it is among the last 100 runs. A quiet run keeps no findings. An event Shep reads after that finds them gone, and [SHEP.md](../shep/SHEP.md#routine-events) has it tell you the run expired.
+
+Shep's `inbox.ts` writes the event's line from those fields only, and quarantines a malformed one in `delivered/`, as it does [any other](shep.md#desk-events). SHEP.md says what Shep does next: it reads `show`, handles only the findings marked `new` or `changed`, rechecks each against live state, and turns each that still holds into a card, a todo, a beads issue, a dispatch after the person's pick, or a guarded command. A card that would remove, close or dispatch something never defaults. For a paused routine, Shep says why in one line and resumes it only once the cause is fixed, or when you ask.

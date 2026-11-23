@@ -37,6 +37,7 @@ function id(ev: any): string {
 function mapping(ev: any): string {
   if (ev.kind === "decision") return JSON.stringify(["decision", ev.question?.token]);
   if (ev.kind === "guard") return JSON.stringify(["guard", ev.event_id]);
+  if (ev.kind === "routine") return JSON.stringify(["routine", ev.event_id]);
   if (ev.kind === "land" && ev.schema === LAND_SCHEMA) return JSON.stringify(["land", ev.event_id]);
   return JSON.stringify([
     ev.agent?.address,
@@ -155,6 +156,55 @@ function guardLine(ev: any): string | null {
   return `- The ${what} you handed off ${said}${exit}${why}${log}. Tell the person in one line. [event ${eventId}] (worker ${worker})`;
 }
 
+const ROUTINE_SCHEMA = "bercail.routine/v1";
+// A UTC time as the runner writes it, compact (20261123T073000Z) or not, that is a real one.
+function utc(v: unknown, compact: boolean): boolean {
+  const m =
+    typeof v === "string" &&
+    (compact ? /^(\d{4})(\d\d)(\d\d)T(\d\d)(\d\d)(\d\d)Z$/ : /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)Z$/).exec(v);
+  if (!m) return false;
+  const [y, mo, d, h, mi, se] = m.slice(1).map(Number);
+  const t = new Date(Date.UTC(y, mo - 1, d, h, mi, se));
+  return (
+    t.getUTCMonth() === mo - 1 &&
+    t.getUTCDate() === d &&
+    t.getUTCHours() === h &&
+    t.getUTCMinutes() === mi &&
+    t.getUTCSeconds() === se
+  );
+}
+
+// A routine run (lib/routine.sh), from its fields only: what the query found stays in
+// bercail routine show, and SHEP.md says what Shep does with it.
+function routineLine(ev: any): string | null {
+  const name =
+    typeof ev.routine === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(ev.routine) ? ev.routine : null;
+  const run = typeof ev.run === "string" && /^\d{8}T\d{6}Z-[1-9]\d*$/.test(ev.run) ? ev.run : null;
+  // A run by hand is named by its run, a scheduled one by its due slot.
+  const named = name && typeof ev.event_id === "string" && ev.event_id.startsWith(`routine:${name}:`);
+  const slot = named ? ev.event_id.slice(`routine:${name}:`.length) : null;
+  const c = ev.counts;
+  const count = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0;
+  if (
+    ev.schema !== ROUTINE_SCHEMA ||
+    ev.kind !== "routine" ||
+    ev.sink !== "shep" ||
+    !utc(ev.at, false) ||
+    !name ||
+    !run ||
+    !utc(run.slice(0, 16), true) ||
+    (slot !== run && !utc(slot, true)) ||
+    ev.show !== `bercail routine show ${name} --run ${run}` ||
+    (ev.outcome === "emitted"
+      ? !c || ![c.found, c.new, c.changed].every(count) || c.new + c.changed < 1 || c.new + c.changed > c.found
+      : ev.outcome !== "paused" || c !== null)
+  )
+    return null;
+  return ev.outcome === "emitted"
+    ? `- Routine ${name} found ${c.new} new and ${c.changed} changed of ${c.found}; see ${ev.show}. [event ${ev.event_id}]`
+    : `- Routine ${name} failed 3 times in a row and is paused; see ${ev.show}. [event ${ev.event_id}]`;
+}
+
 const LAND_SCHEMA = "bercail.land/v2";
 const LAND_STEPS = ["check", "commit", "push", "ci", "trunk", "close", "cleanup", "sync"];
 // What a stopped chain means, and what Shep does next. The job stays open, and nothing in it
@@ -224,6 +274,7 @@ function landLine(ev: any): string | null {
 // Only follower text and routing facts, never desk-authored titles or summaries.
 export function eventLine(ev: any): string | null {
   if (!ev || typeof ev !== "object" || ev.source !== "bercail") return null;
+  if (ev.kind === "routine" || ev.schema === ROUTINE_SCHEMA) return routineLine(ev);
   if (ev.kind === "decision") return decisionLine(ev);
   if (ev.kind === "guard") return guardLine(ev);
   if (ev.kind === "land" && ev.schema === LAND_SCHEMA) return landLine(ev);

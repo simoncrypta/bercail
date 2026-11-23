@@ -1,8 +1,8 @@
 # RoutineRun
 
-TLC reached 298 states and 1176 steps. The chart draws 7 states and 15 arrows.
-The chart does not draw 592 steps that stay in one chart state.
-The view hides 256 steps, so the chart does not draw them.
+TLC reached 323 states and 1218 steps. The chart draws 8 states and 14 arrows.
+The chart does not draw 628 steps that stay in one chart state.
+The view hides 277 steps, so the chart does not draw them.
 
 ## Rules that hold
-OneRunPerRoutine, AtMostCap, OneEventPerChange, PauseSticks, ThreeFailuresPause, LockOnlyWhileRunning, NoDeadlock, EveryRunEnds
+OneRunPerRoutine, AtMostCap, OneEventPerChange, PauseSticks, ThreeFailuresPause, LockOnlyWhileRunning, NoLostEvent, OneMessagePerEvent, NoDeadlock, EveryRunEnds

@@ -8,6 +8,7 @@ export const state = (v) => {
   if (pc === "idle") return v.paused.a ? "Paused" : "Scheduled";
   if (pc === "due" || pc === "locked") return "Due";
   if (pc === "running") return "Running";
+  if (pc === "flushing") return "Sending";
   return outcome[pc];
 };
 
@@ -18,8 +19,9 @@ export const step = (action, from, to) => {
   if (action === "QueryEnds") return to.pc[1] === "emitted" ? "new findings" : "nothing new";
   if (action === "Finish") {
     if (from.pc[1] === "failed" && to.paused.a && !from.paused.a) return "3rd failure";
-    return from.pc[1] === "emitted" ? "event, run logged" : "run logged";
+    return from.pc[1] === "emitted" ? "event in outbox" : "run logged";
   }
+  if (action === "Flushed") return to.outbox.a.length > 0 ? "waits for Shep" : "outbox sent";
   return (
     {
       Start: "it comes due",
@@ -30,6 +32,9 @@ export const step = (action, from, to) => {
       QueryFails: "fails or times out",
       YouPause: "you pause it",
       YouResume: "you resume it",
+      Send: "into Shep's inbox",
+      TakeOut: "out of the outbox",
+      ShepStarts: "Shep starts",
     }[action] ?? action
   );
 };

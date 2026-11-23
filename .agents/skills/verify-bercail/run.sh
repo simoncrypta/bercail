@@ -206,6 +206,8 @@ printf '\n[routine.verify]\ncommand = ["%s", "%s"]\nevery = "1d"\n' "$box/bin/fi
   >>"$XDG_CONFIG_HOME/bercail/config.toml"
 step routine-run 0 "$bercail" routine run verify
 check "a routine's new finding is emitted" out_has routine-run "verify: emitted, 1 found (1 new, 0 changed)"
+check "the emitted run left one event in Shep's inbox" \
+  jq -se 'length == 1 and .[0].schema == "bercail.routine/v1" and .[0].outcome == "emitted"' "$shep_state"/inbox/routine_verify_*.json
 step routine-run-again 0 "$bercail" routine run verify
 check "the same finding again is quiet" out_has routine-run-again "verify: skipped (quiet)"
 printf '{"key":"verify","title":"one finding, changed"}' >"$box/finding"
