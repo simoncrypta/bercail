@@ -122,8 +122,18 @@ case "\$1" in
       jq -cs --arg k "\$key" --arg v "\$val" \
         '{terminals: [.[] | select(.labels[\$k] == \$v) | {address, state}]}' "$TERMS"/*.json
     else
-      jq -cs '{terminals: [.[] | {address, state}]}' "$TERMS"/*.json
+      jq -cs '{terminals: [.[] | {address, name, state}]}' "$TERMS"/*.json
     fi
+    ;;
+  run)
+    if [[ -f "$BATS_TEST_TMPDIR/hc-run-fails" ]]; then
+      n="\$(cat "$BATS_TEST_TMPDIR/hc-run-fails")"
+      if [[ "\$n" != 0 ]]; then
+        printf '%s' "\$((n - 1))" >"$BATS_TEST_TMPDIR/hc-run-fails"
+        exit 1
+      fi
+    fi
+    printf '%s\n' "\$*" >>"$BATS_TEST_TMPDIR/hc-runs"
     ;;
   get)
     [[ ! -f "$BATS_TEST_TMPDIR/hc-down" ]] || exit 1
@@ -554,6 +564,52 @@ EOF
   [[ ! -e "$BATS_TEST_TMPDIR/notified" ]] || fail "nothing came back, nothing to say"
 }
 
+@test "--boot starts the routine loop once, on the backend when one is set" {
+  local runs="$BATS_TEST_TMPDIR/hc-runs" loops
+  loops() { cat "$runs" 2>/dev/null | grep -c -- '--name bercail-routines --label bercail.role=routines bash -lc ' || true; }
+  reset_pass
+  ensure_core_socket
+  terminal t1 "$running"
+  (cmd_desk restore --boot) >/dev/null
+  expect "$(loops)" 1 "the boot starts the loop"
+  grep -q -- '^run --bg --no-parent --no-notify --rm --name bercail-routines ' "$runs" || fail "$(cat "$runs")"
+  (cmd_desk restore --boot) >/dev/null
+  expect "$(loops)" 1 "a second run in one boot starts none"
+  # A later boot, with the loop already live: none.
+  rm -f "$MARKER" "$runs"
+  terminal t9 "$(jq -c '.name = "bercail-routines"' <<<"$running")"
+  (cmd_desk restore --boot) >/dev/null
+  expect "$(loops)" 0 "the loop is live"
+  # With a backend, the one here does not count, and it starts there.
+  rm -f "$MARKER"
+  mkdir -p "$XDG_CONFIG_HOME/bercail"
+  printf '[herdr]\nbackend = "box"\n' >"$XDG_CONFIG_HOME/bercail/config.toml"
+  (cmd_desk restore --boot) >/dev/null
+  expect "$(loops)" 1 "the boot starts box's loop"
+  grep -q -- '^run --bg --no-parent --no-notify --rm --on box --name bercail-routines ' "$runs" || fail "$(cat "$runs")"
+}
+
+@test "a routine loop that does not start is retried, and until it starts the boot is not done" {
+  local out
+  reset_pass
+  ensure_core_socket
+  terminal t1 "$bare"; put_record t1 ses_loop 60
+  printf 1 >"$BATS_TEST_TMPDIR/hc-run-fails"
+  out="$(cmd_desk restore --boot 2>&1)" || fail "one failed start is retried: $out"
+  grep -q -- '--name bercail-routines ' "$BATS_TEST_TMPDIR/hc-runs" || fail "no loop: $out"
+  [[ -e "$MARKER" ]] || fail "the boot is done once the loop started"
+  rm -f "$MARKER" "$BATS_TEST_TMPDIR/hc-runs"
+  printf 99 >"$BATS_TEST_TMPDIR/hc-run-fails"
+  DESK_RESTORE_RECOVERY_WAIT=0
+  if out="$(cmd_desk restore --boot 2>&1)"; then fail "no loop, but the boot passed: $out"; fi
+  [[ "$out" == *"could not start the routine loop; bercail routine start starts it"* ]] || fail "$out"
+  [[ ! -e "$MARKER" ]] || fail "a boot without its loop must not mark done"
+  DESK_RESTORE_RECOVERY_WAIT=120
+  rm -f "$BATS_TEST_TMPDIR/hc-run-fails"
+  (cmd_desk restore --boot) >/dev/null || fail "the next attempt starts it"
+  [[ -e "$MARKER" ]] || fail "marked once the loop started"
+}
+
 @test "two boots at once type into each desk once" {
   local boot_a boot_b
   # The parent shell must not still hold the restore lock, or both boots inherit it.
@@ -605,16 +661,17 @@ EOF
   [[ ! -e "$SENT" ]] || fail "a timeout typed: $(cat "$SENT")"
 }
 
-@test "hc send failure does not mark the boot done" {
+@test "hc send failure does not mark the boot done, and the routine loop starts anyway" {
   ensure_core_socket
   rm -f "$MARKER" "$SENT"
   reset_pass
   terminal t1 "$bare"; put_record t1 ses_send_boot 60
   touch "$BATS_TEST_TMPDIR/hc-send-fail"
   DESK_RESTORE_RECOVERY_WAIT=0
-  if cmd_desk restore --boot >/dev/null 2>&1; then fail "boot send failure should fail"; fi
+  if out="$(cmd_desk restore --boot 2>&1)"; then fail "boot send failure should fail: $out $(cat "$BATS_TEST_TMPDIR/hc-runs" "$SENT" 2>&1)"; fi
   DESK_RESTORE_RECOVERY_WAIT=120
   [[ ! -e "$MARKER" ]] || fail "a send failure must not mark done"
+  grep -q -- '--name bercail-routines ' "$BATS_TEST_TMPDIR/hc-runs" 2>/dev/null || fail "a stuck desk kept the loop from starting"
 }
 
 @test "no journal falls back to a time that leaves old desks alone" {

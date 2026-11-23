@@ -22,7 +22,7 @@
 //
 // Across machines: a desk in a space on another machine runs there (hc run --on), its
 // labels naming that machine's ids, and git and gh for a space run on its machine. The
-// notifier runs on the backend ([herdr] backend in config.toml), or here without one.
+// notifier and the routine loop run on the backend ([herdr] backend in config.toml), or here without one.
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import {
@@ -236,11 +236,14 @@ export function stepAgent(order, list, current, space, dir) {
     : ([...all].reverse().find((a) => rank.get(a.space) <= here) ?? all[all.length - 1]);
 }
 
-// The desk follower (`bercail notify run`), which feeds Shep's inbox: one hidden
-// hc terminal, kept running here so it lives as long as herdr-core, window open or not.
-const NOTIFIER = "bercail-notify";
-const NOTIFIER_PATH = 'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"';
-const NOTIFIER_RUN = `${NOTIFIER_PATH}; exec bercail notify run`;
+// Hidden hc terminals kept running here, so they live as long as herdr-core, window
+// open or not: the desk follower (`bercail notify run`), which feeds Shep's inbox, and
+// the routines' scheduler (`bercail routine loop`, docs/routines.md).
+const BERCAIL_PATH = 'command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"';
+const KEPT = [
+  { name: "bercail-notify", role: "notify", run: `${BERCAIL_PATH}; exec bercail notify run` },
+  { name: "bercail-routines", role: "routines", run: `${BERCAIL_PATH}; exec bercail routine loop` },
+];
 
 function shellOf(space) {
   const first = space?.tabs?.[0];
@@ -259,7 +262,7 @@ export default class BercailDesk extends View {
     this.lastPane = null; // the pane the keyboard was last in, to come back from the desk
     this.git = {}; // [machine, folder] -> { at, git: { repo, linked } | null }
     this.hadDesk = new Set(); // space ids that had a desk or got one started: no auto-start again
-    this.backend = null; // [herdr] backend: where the notifier runs
+    this.backend = null; // [herdr] backend: where the notifier and the routine loop run
     this.loaded = (async () => {
       try {
         const text = await readTextFile(home() + CONFIG);
@@ -291,14 +294,14 @@ export default class BercailDesk extends View {
     cx.spawn(async () => {
       await this.loaded;
       try {
-        const r = await exec("bash", ["-lc", `${NOTIFIER_PATH}; command -v bercail`], { on: this.backend });
+        const r = await exec("bash", ["-lc", `${BERCAIL_PATH}; command -v bercail`], { on: this.backend });
         this.hasBercail = r.code === 0;
       } catch {
         this.hasBercail = false;
       }
-      this.ensureNotifier();
+      this.ensureKept();
     });
-    cx.timer.every(60000, () => this.ensureNotifier());
+    cx.timer.every(60000, () => this.ensureKept());
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
@@ -535,25 +538,27 @@ export default class BercailDesk extends View {
 
   // With a backend, the one there counts and a new one starts there: it follows the
   // desks where they run, whichever window is open.
-  ensureNotifier() {
+  ensureKept() {
     if (!this.hasBercail) return;
-    const here = (t) => !this.backend || machineOf(t.address) === this.backend;
-    if (terminals().some((t) => t.name === NOTIFIER && t.state === "live" && here(t))) return;
-    exec("hc", [
-      "run",
-      "--bg",
-      "--no-parent",
-      "--no-notify",
-      "--rm",
-      ...(this.backend ? ["--on", this.backend] : []),
-      "--name",
-      NOTIFIER,
-      "--label",
-      "bercail.role=notify",
-      "bash",
-      "-lc",
-      NOTIFIER_RUN,
-    ]).catch(() => {});
+    const here = (t) => machineOf(t.address) === (this.backend ?? null);
+    for (const { name, role, run } of KEPT) {
+      if (terminals().some((t) => t.name === name && t.state === "live" && here(t))) continue;
+      exec("hc", [
+        "run",
+        "--bg",
+        "--no-parent",
+        "--no-notify",
+        "--rm",
+        ...(this.backend ? ["--on", this.backend] : []),
+        "--name",
+        name,
+        "--label",
+        `bercail.role=${role}`,
+        "bash",
+        "-lc",
+        run,
+      ]).catch(() => {});
+    }
   }
 
   // Runs on every render: Herdr re-renders on any live change.

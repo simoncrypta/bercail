@@ -488,7 +488,7 @@ The follower keeps `source-state.json` beside the inbox: current desk mappings w
 
 ### Proving it arrived
 
-`bercail shep status` lists queued files, claims awaiting persistence (uncertain ones included), persisted notices and quarantined malformed files, and the last receipt. In the session a notice is a `custom_message` with `customType: "bercail-desk-event"`, which is not Shep's reply or your reading it.
+`bercail shep status` lists queued files, claims awaiting persistence (uncertain ones included), persisted notices and quarantined malformed files, the last receipt, and whether the [routine loop](routines.md#the-scheduler) runs and when it last ticked. In the session a notice is a `custom_message` with `customType: "bercail-desk-event"`, which is not Shep's reply or your reading it.
 
 ### The follower
 

@@ -61,6 +61,14 @@ in_one_shell() {
     source "$ROOT/lib/routine.sh"; eval "$1"' _ "$1"
 }
 
+# clock EPOCH: date +%s says EPOCH from now on; a scheduled run is not let
+# in before its slot.
+clock() {
+  printf '#!/bin/sh\n[ "$1" = "+%%s" ] && echo %s || exec %s "$@"\n' "$1" "$(PATH=/usr/bin:/bin command -v date)" \
+    >"$BATS_TEST_TMPDIR/bin/date"
+  chmod +x "$BATS_TEST_TMPDIR/bin/date"
+}
+
 runs() { cat "$STATE/$1/runs.jsonl"; }
 last_run() { tail -n 1 "$STATE/$1/runs.jsonl"; }
 state() { jq -c "$2" "$STATE/$1/state.json"; }
@@ -208,6 +216,7 @@ hold() {
 
 @test "a scheduled run is named by its slot, and a slot that ran is skipped as done, whatever the query finds then" {
   declare_routine check
+  clock 1795000000
   findings check '{"key":"a","title":"A"}'
   in_one_shell 'routine_run check 0 1795000000' >/dev/null
   [[ "$(inbox_files)" == "$INBOX/routine_check_20261118T110640Z.json" ]] || fail "$(inbox_files)"
@@ -219,12 +228,16 @@ hold() {
   [[ "$out" == "check: skipped (done): its $(printf '%(%Y-%m-%d %H:%M)T' 1795000000) run is done" ]] || fail "$out"
   [[ "$(last_run check | jq -r '.reason, .due')" == $'done\n2026-11-18T11:06:40Z' ]] || fail "$(last_run check)"
   [[ "$(ran check)" == 1 && "$(inbox_files | wc -l)" == 1 && "$(state check '.sent | keys')" == '["a"]' ]] || fail "$(inbox_files)"
-  in_one_shell 'routine_run check 0 1795003600' >/dev/null
-  [[ "$(inbox_files | wc -l)" == 2 && "$(state check .slot)" == 1795003600 ]] || fail "the next slot: $(inbox_files)"
+  # Once the clock reaches its next due time, that slot runs.
+  next="$(state check .next_due)"
+  clock "$next"
+  in_one_shell "routine_run check 0 $next" >/dev/null
+  [[ "$(inbox_files | wc -l)" == 2 && "$(state check .slot)" == "$next" ]] || fail "the next slot: $(inbox_files)"
 }
 
 @test "a slot whose state was not written runs again and sends one event, for what it finds then" {
   declare_routine check
+  clock 1795000000
   findings check '{"key":"a","title":"A"}'
   printf '#!/bin/sh\ncase "$*" in *state.json) exit 1 ;; esac\nexec /usr/bin/mv "$@"\n' >"$BATS_TEST_TMPDIR/bin/mv"
   chmod +x "$BATS_TEST_TMPDIR/bin/mv"
@@ -232,6 +245,8 @@ hold() {
   rm "$BATS_TEST_TMPDIR/bin/mv"
   [[ "$status" -eq 1 && -z "$(inbox_files)" ]] || fail "$output $(inbox_files)"
   findings check '{"key":"b","title":"B"}'
+  # The slot is tried again once 15 minutes have gone by.
+  clock $((1795000000 + 900))
   in_one_shell 'routine_run check 0 1795000000' >/dev/null
   [[ "$(inbox_files)" == "$INBOX/routine_check_20261118T110640Z.json" ]] || fail "$(inbox_files)"
   grep -qx '  new      b  B' <<<"$(routine show check --run "$(jq -r .run "$(inbox_files)")")"
@@ -717,6 +732,10 @@ EOF
   source "$ROOT/lib/config.sh"
   # shellcheck source=/dev/null
   source "$ROOT/lib/routine.sh"
+  # The loop runs: only the entries are under test.
+  mkdir -p "$STATE"
+  exec {loop}>>"$STATE/.loop.lock"
+  flock -n "$loop"
   out="$(doctor_config; doctor_routines)" || fail "a bad routine is not a failure: $out"
   grep -qx '  invalid  routine both: run and command are both set' <<<"$out" || fail "$out"
   grep -qx '  invalid  routine nowhen: no at or every' <<<"$out" || fail "$out"

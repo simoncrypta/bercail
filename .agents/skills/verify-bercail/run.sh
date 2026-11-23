@@ -69,7 +69,7 @@ printf '%s\n' "$*" >>"$HC_CALLS"
 case "$1" in
   ls) printf '{"terminals":[{"address":"t1","state":"live"}]}\n' ;;
   get) printf '%s\n' '{"state":"live","reason":null,"reported":false,"pid":7,"argv":["/usr/bin/bash"],"foreground":{"name":"bash","pid":7},"labels":{"bercail.role":"agent","bercail.space":"sp1"},"records":[]}' ;;
-  send) exit 0 ;;
+  send | run) exit 0 ;;
   *) exit 1 ;;
 esac
 HC
@@ -216,6 +216,28 @@ check "a dry run prints the event of a changed finding" \
   jq -e '.schema == "bercail.routine/v1" and .counts.changed == 1' "$evidence/routine-dry-run.out"
 step routine-list 0 "$bercail" routine list
 check "list shows its last outcome" grep -qE '^verify +every 1d +next .* skipped \(quiet\) +active$' "$evidence/routine-list.out"
+# The scheduler: a tick starts the routine that never ran, once; the one that
+# ran today waits. shep status says the loop is not running here, and start
+# asks hc for the bercail-routines terminal.
+printf '\n[routine.verify-tick]\ncommand = ["%s", "%s"]\nevery = "1d"\n' "$box/bin/finds" "$box/finding" \
+  >>"$XDG_CONFIG_HOME/bercail/config.toml"
+step routine-tick 0 env BERCAIL_ROUTINE_BOOT_WAIT=0 "$bercail" routine tick
+check "a tick starts the routine that never ran, and only it" \
+  grep -qx 'verify-tick: started its .* run' "$evidence/routine-tick.out"
+for _ in $(seq 100); do
+  [[ -s "$XDG_STATE_HOME/bercail/routines/verify-tick/runs.jsonl" ]] && break
+  sleep 0.1
+done
+check "the started run wrote its line" \
+  jq -se 'length == 1 and .[0].outcome == "emitted"' "$XDG_STATE_HOME/bercail/routines/verify-tick/runs.jsonl"
+step routine-tick-again 0 env BERCAIL_ROUTINE_BOOT_WAIT=0 "$bercail" routine tick
+check "a second tick starts nothing" absent "$evidence/routine-tick-again.out" 'started'
+step shep-status 0 "$bercail" shep status
+check "shep status says the loop is not running and when it last ticked" \
+  grep -qE '^routine loop: not running \(last tick [0-9-]+ [0-9:]+\)' "$evidence/shep-status.out"
+step routine-start 0 "$bercail" routine start
+check "start asks hc for the hidden bercail-routines terminal" \
+  grep -q '^run --bg --no-parent --no-notify --rm --name bercail-routines --label bercail.role=routines ' "$HC_CALLS"
 
 cp "$XDG_CONFIG_HOME/bercail/config.toml" "$evidence/config.toml"
 

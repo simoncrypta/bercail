@@ -155,6 +155,9 @@ cmd_update() {
   deploy_omarchy_integration
   install_shell_integration || true
   notify_restart_follower
+  # shellcheck source=/dev/null
+  source "$(find_lib_dir)/routine.sh"
+  routine_restart_loop
   show_summary
 }
 

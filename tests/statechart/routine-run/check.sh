@@ -15,12 +15,16 @@ trap 'rm -rf "$tmp"' EXIT
 expect=(
   "chart:holds"
   "full:holds"
+  "schedule:holds"
   "bug-NoLock:OneRunPerRoutine OneEventPerChange"
   "bug-NoCap:AtMostCap"
   "bug-StaleWrite:PauseSticks"
   "bug-LockInChild:LockOnlyWhileRunning"
   "bug-TakeOutFirst:NoLostEvent"
   "bug-NoDedup:OneMessagePerEvent"
+  "bug-StaleSlot:OneRunPerSlot"
+  "bug-NoProgress:NextAfterLast"
+  "bug-Early:NotBeforeSlot"
 )
 bad=0
 for pair in "${expect[@]}"; do

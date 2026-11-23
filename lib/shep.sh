@@ -275,6 +275,9 @@ shep_status() {
     "$((queued))" "$pending" "$uncertain" "$persisted"
   [[ -z "$last" ]] || printf 'last persisted: %s at %s\n' "${last#*$'\t'}" "${last%%$'\t'*}"
   printf 'quarantined: %s\nPersistence is not handled, action-completed, or read by the person.\n' "$((quarantined))"
+  # shellcheck source=lib/routine.sh
+  declare -F routine_loop_status >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/routine.sh"
+  routine_loop_status || true
   shep_bg_list
   return 0
 }

@@ -25,6 +25,11 @@ export const step = (action, from, to) => {
   return (
     {
       Start: "it comes due",
+      TickStart: "a tick starts it",
+      TickFirstDue: "first due now",
+      SkipDone: "slot met already",
+      ClockStepsOn: "clock moves on",
+      ClockStepsBack: "clock goes back",
       SkipPaused: "it is paused",
       SkipOverlap: "already running",
       SkipLoad: "no free slot",

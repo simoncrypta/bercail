@@ -8,8 +8,11 @@
 # routines/<name>/ in the state dir holds state.json (next due, failures in a
 # row, paused, the hash sent per key, and the outbox: events for Shep not yet
 # in its inbox), runs.jsonl (a line per run), outputs/ (what each emitted run
-# found) and lock, which flock -n holds while a run lasts.
+# found), lock, which flock -n holds while a run lasts, and tried.json: the
+# slot a scheduled run last let its query run for, and when.
 # routines/.slots/slot.N are the 2 slots: at most 2 routines run at once.
+# The scheduler, bercail routine loop, holds routines/.loop.lock while it
+# runs, and each tick writes routines/tick.json: when it last ticked.
 # Every write to state.json and runs.jsonl is under state.lock, and the end of
 # a run reads state.json again there, so a pause made meanwhile holds.
 
@@ -20,6 +23,17 @@ ROUTINE_SLOTS=2
 ROUTINE_OUTPUT_MAX=65536
 ROUTINE_KEEP_RUNS=100
 ROUTINE_KEEP_OUTPUTS=10
+# A tick a minute. A slot whose run could not write its state is tried again
+# after 15 minutes, not every tick.
+ROUTINE_TICK=60
+ROUTINE_RETRY=900
+ROUTINE_LOOP=bercail-routines
+# As the desk mod starts it: hc's login shell may not have bercail on PATH.
+# shellcheck disable=SC2016 # expanded by that shell
+ROUTINE_LOOP_RUN='command -v bercail >/dev/null || PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"; exec bercail routine loop'
+
+# The wall clock, in epoch seconds. date, so a test can stand in for it.
+_routine_now() { date +%s; }
 
 routine_dir() {
   printf '%s/bercail/routines' "${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -149,13 +163,17 @@ _routine_with_state() {
   return "$rc"
 }
 
-# Under the state lock: write state.json, a JSON object.
-_routine_put_state() {
-  local file tmp
-  file="$(routine_dir)/$1/state.json"
+# Write FILE whole (tmp, then mv) with JSON, an object.
+_routine_write() {
+  local tmp
   jq -e 'type == "object"' <<<"$2" >/dev/null 2>&1 || return 1
-  tmp="$(mktemp "$file.XXXXXX")" || return 1
-  printf '%s\n' "$2" >"$tmp" && mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
+  tmp="$(mktemp "$1.XXXXXX")" || return 1
+  printf '%s\n' "$2" >"$tmp" && mv -f "$tmp" "$1" || { rm -f "$tmp"; return 1; }
+}
+
+# Under the state lock: write state.json.
+_routine_put_state() {
+  _routine_write "$(routine_dir)/$1/state.json" "$2"
 }
 
 # Under the state lock: add a run's line, and keep the last 100 runs and the
@@ -328,13 +346,21 @@ _routine_flush() {
 # the findings sent and keeps their event, so a failed write or a crash loses
 # neither. Then it flushes the outbox. Status 1 when the state was not
 # written; a flush that failed sets $_routine_flush_failed.
+# The same rename writes the highest slot met, as slot: a scheduled run's, or
+# the next_due a run by hand found due when it started. next_due comes after
+# both that slot and the run's start, so no slot runs twice and a clock that
+# went back strands nothing (RoutineRun.tla's OneRunPerSlot, NextAfterLast).
 _routine_finish() {
-  local name="$1" dry="$2" ctx="$3" findings="$4" error="$5" dir state
+  local name="$1" dry="$2" ctx="$3" findings="$4" error="$5" dir state top start next
   local -a found=(--argjson f '[null]')
   [[ -z "$findings" ]] || found=(--slurpfile f "$findings")
   dir="$(routine_dir)/$name"
   state="$(routine_state "$name")" || return 1
-  _routine_result="$(jq -c --argjson c "$ctx" "${found[@]}" --arg err "$error" '
+  start="$(jq -r .start_s <<<"$ctx")"
+  top="$(jq -r --argjson c "$ctx" '[.slot // 0, $c.slot // 0,
+    (if .next_due != null and .next_due <= $c.start_s then .next_due else 0 end)] | max' <<<"$state")" || return 1
+  next="$(_routine_next_due "$(jq -c .entry <<<"$ctx")" $((top > start ? top : start)))"
+  _routine_result="$(jq -c --argjson c "$ctx" "${found[@]}" --arg err "$error" --argjson top "$top" --argjson next "$next" '
     . as $s | $f[0] as $f
     | {id: $c.id, due: $c.due, start: $c.start, end: $c.end} as $run
     | "routine:\($c.name):\($c.slot_stamp // $c.id)" as $eid
@@ -345,7 +371,7 @@ _routine_finish() {
     if $f == null then
         ($s.failures + 1) as $n
         | (($s.paused | not) and $n >= 3) as $now
-        | {state: ($s + {failures: $n, paused: ($s.paused or $n >= 3), next_due: $c.next_due}),
+        | {state: ($s + {failures: $n, paused: ($s.paused or $n >= 3), next_due: $next}),
            run: ($run + {outcome: "failed", reason: null, counts: null, event: (if $now then $eid else null end), error: $err}),
            paused_now: $now, findings: null, event: (if $now then event("paused"; null) else null end)}
       else
@@ -354,7 +380,7 @@ _routine_finish() {
         | {found: ($a | length), new: ([$a[] | select(.status == "new")] | length),
            changed: ([$a[] | select(.status == "changed")] | length)} as $counts
         | (if $counts.new + $counts.changed > 0 then "emitted" else "skipped" end) as $o
-        | {state: ($s + {failures: 0, next_due: $c.next_due, sent: ($a | map({(.key): .hash}) | add // {})}),
+        | {state: ($s + {failures: 0, next_due: $next, sent: ($a | map({(.key): .hash}) | add // {})}),
            run: ($run + {outcome: $o, reason: (if $o == "skipped" then "quiet" else null end), counts: $counts,
                          event: (if $o == "emitted" then $eid else null end), error: null}),
            paused_now: false,
@@ -362,7 +388,7 @@ _routine_finish() {
            event: (if $o == "emitted" then event($o; $counts) else null end)}
       end
     | if .event then .state.outbox += [.event] else . end
-    | if $c.slot then .state.slot = $c.slot else . end' <<<"$state")" || return 1
+    | if $top > 0 then .state.slot = $top else . end' <<<"$state")" || return 1
   [[ -n "$_routine_result" ]] || return 1
   [[ "$dry" == 1 ]] && return 0
   if jq -e '.run.outcome == "emitted"' <<<"$_routine_result" >/dev/null; then
@@ -395,9 +421,12 @@ _routine_said() {
 
 # bercail routine run NAME [--dry-run]: run it now, under the same locks and
 # limits as a scheduled run. SLOT is the due time (epoch seconds) a scheduled
-# run is for: it names the event, and a slot that ran already is skipped
-# (done), so a retried tick sends nothing twice. Status 1 when it failed, or
-# when it could not read or write its state or its event.
+# run is for: it names the event, and it runs only while it is still
+# next_due; otherwise it is skipped (done), so a retried or stale tick sends
+# nothing twice. It is skipped (early) when its slot is after its start, and
+# (tried) when a run of that slot ran its query under 15 minutes ago and
+# could not write its state. Status 1 when it failed, or when it could not
+# read or write its state or its event.
 routine_run() {
   local name="$1" dry="${2:-0}" slot="${3:-}" entry dir start id micro="${EPOCHREALTIME:-}" state
   local lfd="" sfd="" n slots out err rc=0 error="" findings
@@ -410,7 +439,7 @@ routine_run() {
   [[ "$limit" =~ ^[1-9][0-9]*$ ]] || die "BERCAIL_ROUTINE_TIMEOUT must be whole seconds above 0, not $limit"
   dir="$(routine_dir)/$name"
   mkdir -p "$dir"
-  printf -v start '%(%s)T' -1
+  start="$(_routine_now)"
   # The pid, and with bash 5 the microseconds: two runs from one shell differ.
   id="$(_routine_stamp "$start")-$$${micro: -6}"
 
@@ -438,7 +467,9 @@ routine_run() {
     return 0
   fi
   # Let in only now, holding both locks: a pause that returned before this
-  # stops the run.
+  # stops the run. Its start is the clock now: the checks below, its try and
+  # its next due time all go by it.
+  start="$(_routine_now)"
   state="$(routine_state "$name")" || { exec {sfd}>&- {lfd}>&-; return 1; }
   if [[ "$(jq -r .paused <<<"$state")" == true ]]; then
     exec {sfd}>&- {lfd}>&-
@@ -447,12 +478,40 @@ routine_run() {
     _routine_tell_waiting "$name" || return 1
     return 0
   fi
-  if [[ -n "$slot" ]] && jq -e --argjson s "$slot" '(.slot // 0) >= $s' <<<"$state" >/dev/null; then
+  # A scheduled run is for next_due as it is now: a run that met that slot
+  # meanwhile, by hand too, moved it on.
+  if [[ -n "$slot" ]] && ! jq -e --argjson s "$slot" '.next_due == null or .next_due == $s' <<<"$state" >/dev/null; then
     exec {sfd}>&- {lfd}>&-
     _routine_skip "$name" "$dry" "$id" "$start" "done" "${slot:-$start}" || return 1
     log "$name: skipped (done): its $(_routine_local "$slot") run is done"
     _routine_tell_waiting "$name" || return 1
     return 0
+  fi
+  # The clock went back since the tick chose it: the slot stays due, for a
+  # query that runs in its window.
+  if [[ -n "$slot" ]] && ((slot > start)); then
+    exec {sfd}>&- {lfd}>&-
+    _routine_skip "$name" "$dry" "$id" "$start" early "$slot" || return 1
+    log "$name: skipped (early): its $(_routine_local "$slot") run is not due by this clock, $(_routine_local "$start")"
+    _routine_tell_waiting "$name" || return 1
+    return 0
+  fi
+  # A run of this slot whose query ran under 15 minutes ago could not write
+  # its state: wait, without moving its stamp. Else stamp it: unless that is
+  # written, the query does not run.
+  if [[ -n "$slot" && "$dry" != 1 ]]; then
+    if _routine_tried "$dir/tried.json" "$slot" "$start"; then
+      exec {sfd}>&- {lfd}>&-
+      _routine_skip "$name" "$dry" "$id" "$start" tried "$slot" || return 1
+      log "$name: skipped (tried): its $(_routine_local "$slot") run ran its query under 15 minutes ago"
+      _routine_tell_waiting "$name" || return 1
+      return 0
+    fi
+    if ! _routine_write "$dir/tried.json" "$(jq -nc --argjson s "$slot" --argjson t "$start" '{due: $s, at: $t}')"; then
+      exec {sfd}>&- {lfd}>&-
+      printf 'error: routine %s: cannot write %s, so its query does not run\n' "$name" "$dir/tried.json" >&2
+      return 1
+    fi
   fi
 
   if jq -e '.run' <<<"$entry" >/dev/null; then
@@ -476,11 +535,11 @@ routine_run() {
     error="could not hash what it found"
   fi
   [[ -z "$error" ]] || findings=""
-  printf -v end '%(%s)T' -1
+  end="$(_routine_now)"
   ctx="$(jq -nc --arg name "$name" --arg id "$id" --arg start "$(_routine_iso "$start")" --arg end "$(_routine_iso "$end")" \
     --arg due "$(_routine_iso "${slot:-$start}")" --arg slot "$slot" --arg ss "${slot:+$(_routine_stamp "$slot")}" \
-    --argjson next "$(_routine_next_due "$entry" "$start")" \
-    '{name: $name, id: $id, due: $due, start: $start, end: $end, next_due: $next,
+    --argjson start_s "$start" --argjson entry "$entry" \
+    '{name: $name, id: $id, due: $due, start: $start, end: $end, start_s: $start_s, entry: $entry,
       slot: (if $slot == "" then null else ($slot | tonumber) end), slot_stamp: (if $ss == "" then null else $ss end)}')"
   if [[ "$dry" == 1 ]]; then
     _routine_finish "$name" 1 "$ctx" "$findings" "$error" || wrote=0
@@ -520,7 +579,7 @@ routine_list() {
   entries="$(routine_entries)"
   [[ -n "$entries" ]] || { log "No routines. Declare one as [routine.<name>] in $BERCAIL_USER_CONFIG (docs/routines.md)."; return 0; }
   width="$(jq -s 'map(.name | length) | max' <<<"$entries")"
-  printf -v now '%(%s)T' -1
+  now="$(_routine_now)"
   while IFS= read -r entry; do
     name="$(jq -r .name <<<"$entry")"
     if jq -e '.errors != []' <<<"$entry" >/dev/null; then
@@ -579,9 +638,247 @@ routine_pause() {
   _routine_with_state "$1" _routine_set_paused "$1" "$2"
 }
 
+# --- the scheduler -------------------------------------------------------------
+
+# Seconds since this machine booted, or nothing when it cannot tell.
+_routine_uptime() {
+  local up rest boot
+  if [[ -r /proc/uptime ]]; then
+    read -r up rest </proc/uptime && printf '%s' "${up%.*}"
+  elif boot="$(sysctl -n kern.boottime 2>/dev/null)" && [[ "$boot" =~ sec\ =\ ([0-9]+) ]]; then
+    printf '%s' $(($(_routine_now) - BASH_REMATCH[1]))
+  fi
+  return 0
+}
+
+# Whether tried.json FILE says SLOT's query ran under 15 minutes before NOW.
+# One stamped after NOW is from before the clock went back: it is over.
+_routine_tried() {
+  jq -e --argjson due "$2" --argjson now "$3" --argjson retry "$ROUTINE_RETRY" \
+    '.due == $due and .at <= $now and $now - .at < $retry' "$1" >/dev/null 2>&1
+}
+
+# Whether nothing holds lock FILE: a routine's run, a slot, or the loop.
+_routine_unheld() { [[ ! -e "$1" ]] || flock -n "$1" true; }
+
+_routine_free_slots() {
+  local n free=0
+  for ((n = 1; n <= ROUTINE_SLOTS; n++)); do
+    ! _routine_unheld "$(routine_dir)/.slots/slot.$n" || free=$((free + 1))
+  done
+  printf '%s' "$free"
+}
+
+# Under the state lock: a routine that never ran is first due at DUE.
+_routine_first_due() {
+  local state
+  state="$(routine_state "$1")" || return 1
+  jq -e '.next_due == null' <<<"$state" >/dev/null || return 0
+  _routine_put_state "$1" "$(jq -c --argjson d "$2" '.next_due = $d' <<<"$state")"
+}
+
+# Run NAME for SLOT in the background, in a process group of its own: a loop
+# stopped or restarted (bercail update) leaves it to finish. It holds none of
+# the scheduler's locks. What it prints goes to loop.log; its line to runs.jsonl.
+_routine_launch() {
+  local name="$1" slot="$2" log
+  log="$(routine_dir)/loop.log"
+  set -m
+  (
+    [[ -z "${_routine_tick_fd:-}" ]] || exec {_routine_tick_fd}>&-
+    printf '%s %s: its %s run\n' "$(_routine_local "$(_routine_now)")" "$name" "$(_routine_local "$slot")"
+    routine_run "$name" 0 "$slot"
+  ) </dev/null >>"$log" 2>&1 &
+  set +m
+}
+
+# bercail routine tick: start each routine that is due. It reads the wall
+# clock against next_due, never a sleep's length, which stops counting while
+# the machine sleeps. An overdue routine runs once, for its first missed slot.
+# One paused, still running, or tried for the same slot under 15 minutes ago
+# waits, and so does one with no free slot, with no run line. Within 5
+# minutes of a boot it starts nothing. A paused routine's waiting event goes
+# to Shep here too: no run of it comes to send it. The tick decides outside
+# the routine's locks; the run it starts checks again under them.
+routine_tick() {
+  local dir _routine_tick_fd wait="${BERCAIL_ROUTINE_BOOT_WAIT:-300}" rc=0
+  command -v flock >/dev/null 2>&1 \
+    || die "no flock here, and a routine never runs unlocked; install it (util-linux on Linux, brew install flock on macOS)"
+  [[ "$wait" =~ ^[0-9]+$ ]] || die "BERCAIL_ROUTINE_BOOT_WAIT must be whole seconds, not $wait"
+  dir="$(routine_dir)"
+  mkdir -p "$dir"
+  exec {_routine_tick_fd}>>"$dir/.tick.lock"
+  if ! flock -n "$_routine_tick_fd"; then
+    exec {_routine_tick_fd}>&-
+    log "a tick is running already"
+    return 0
+  fi
+  _routine_tick_locked "$dir" "$wait" || rc=$?
+  exec {_routine_tick_fd}>&-
+  return "$rc"
+}
+
+_routine_tick_locked() {
+  local dir="$1" wait="$2" now up entry name state due free _routine_waiting
+  now="$(_routine_now)"
+  if ! _routine_write "$dir/tick.json" "{\"at\":$now}"; then
+    printf 'error: cannot write %s, so no routine starts; check that folder\n' "$dir/tick.json" >&2
+    return 1
+  fi
+  if [[ -f "$dir/loop.log" ]] && (($(wc -l <"$dir/loop.log") > 2000)); then
+    tail -n 1000 "$dir/loop.log" >"$dir/loop.log.tmp" && mv -f "$dir/loop.log.tmp" "$dir/loop.log"
+  fi
+  up="$(_routine_uptime)"
+  if [[ -n "$up" ]] && ((up < wait)); then
+    log "booted $((up / 60)) min ago: no routine starts until $((wait / 60)) min after a boot"
+    return 0
+  fi
+  free="$(_routine_free_slots)"
+  while IFS= read -r entry; do
+    name="$(jq -r .name <<<"$entry")"
+    state="$(routine_state "$name")" || continue
+    if jq -e '.outbox != []' <<<"$state" >/dev/null; then
+      _routine_waiting=""
+      _routine_with_state "$name" _routine_flush "$name" \
+        || printf 'error: routine %s: its event %s\n' "$name" "${_routine_waiting:-could not be sent}" >&2
+    fi
+    ! jq -e .paused <<<"$state" >/dev/null || continue
+    due="$(jq -r '.next_due // empty' <<<"$state")"
+    # One that never ran: an every routine is due now, an at one at its next
+    # slot. Written first, so a retry or a second tick is for the same slot.
+    if [[ -z "$due" ]]; then
+      jq -e .at <<<"$entry" >/dev/null && due="$(_routine_next_due "$entry" "$now")" || due="$now"
+      if ! _routine_with_state "$name" _routine_first_due "$name" "$due"; then
+        printf 'error: routine %s: cannot write when it is first due in %s\n' "$name" "$dir/$name" >&2
+        continue
+      fi
+      state="$(routine_state "$name")" || continue
+      due="$(jq -r .next_due <<<"$state")"
+    fi
+    ((due <= now)) || continue
+    _routine_unheld "$dir/$name/lock" || continue
+    # A run whose query ran for this slot, but that could not write its state,
+    # left next_due as it was. The run checks again under its lock; this keeps
+    # a tick quiet meanwhile.
+    ! _routine_tried "$dir/$name/tried.json" "$due" "$now" || continue
+    ((free > 0)) || continue
+    _routine_launch "$name" "$due"
+    free=$((free - 1))
+    log "$name: started its $(_routine_local "$due") run"
+  done < <(routine_entries | jq -c 'select(.errors == [])')
+}
+
+# bercail routine loop: a tick a minute, for as long as it runs. One per
+# machine: a second one refuses while the first holds .loop.lock.
+routine_loop() {
+  local dir _routine_loop_fd
+  command -v flock >/dev/null 2>&1 \
+    || die "no flock here, and a routine never runs unlocked; install it (util-linux on Linux, brew install flock on macOS)"
+  dir="$(routine_dir)"
+  mkdir -p "$dir"
+  exec {_routine_loop_fd}>>"$dir/.loop.lock"
+  flock -n "$_routine_loop_fd" \
+    || die "a routine loop is already running on this machine; bercail shep status says when it last ticked"
+  log "routine loop: a tick every ${ROUTINE_TICK}s; what the runs print goes to $dir/loop.log"
+  # Only the loop holds its lock: not a tick, a run or a sleep left behind.
+  # The tick is a job of its own: a subshell in a || list would run it, and
+  # the runs it starts, with set -e off.
+  while :; do
+    (routine_tick) {_routine_loop_fd}>&- &
+    wait "$!" || true
+    sleep "$ROUTINE_TICK" {_routine_loop_fd}>&-
+  done
+}
+
+# The loop in one line: running or not, and when it last ticked. Status 1
+# when it is not running.
+routine_loop_status() {
+  local dir at last
+  dir="$(routine_dir)"
+  at="$(jq -r '.at // empty' "$dir/tick.json" 2>/dev/null || true)"
+  [[ -n "$at" ]] && last="last tick $(_routine_local "$at")" || last="never ticked"
+  if command -v flock >/dev/null 2>&1 && ! _routine_unheld "$dir/.loop.lock"; then
+    log "routine loop: running, $last"
+    return 0
+  fi
+  log "routine loop: not running ($last); the desk mod starts it while Herdr is open, or run bercail routine start"
+  return 1
+}
+
+# For Shep's board: one line when a routine failed or is paused, else nothing.
+routine_board_line() {
+  local entry name state n
+  local -a parts=()
+  while IFS= read -r entry; do
+    name="$(jq -r .name <<<"$entry")"
+    if ! state="$(routine_state "$name" 2>/dev/null)"; then
+      parts+=("$name's state cannot be read (bercail routine show $name)")
+      continue
+    fi
+    n="$(jq -r .failures <<<"$state")"
+    if jq -e .paused <<<"$state" >/dev/null; then
+      if ((n > 0)); then
+        parts+=("$name is paused after $n failures in a row (bercail routine resume $name once it is fixed)")
+      else
+        parts+=("$name is paused (bercail routine resume $name)")
+      fi
+    elif ((n > 0)); then
+      parts+=("$name failed $n time$( ((n == 1)) || printf s) in a row (bercail routine show $name)")
+    fi
+  done < <(routine_entries | jq -c 'select(.errors == [])')
+  ((${#parts[@]})) || return 0
+  printf 'Routines: %s' "${parts[0]}"
+  for ((n = 1; n < ${#parts[@]}; n++)); do printf '; %s' "${parts[n]}"; done
+  printf '\n'
+}
+
+_routine_backend() { toml_value "$BERCAIL_USER_CONFIG" herdr backend "" 2>/dev/null || true; }
+
+# The address of the loop's live terminal on MACHINE ("" for this one), or
+# status 1.
+_routine_loop_address() {
+  "${HC_BIN:-hc}" ls --json 2>/dev/null </dev/null | jq -er --arg n "$ROUTINE_LOOP" --arg m "$1" '
+    [.terminals[]? | select(.name == $n and .state == "live"
+      and (if $m == "" then (.address | contains("/") | not) else (.address | startswith($m + "/")) end))
+    ][0].address // empty' 2>/dev/null
+}
+
+# bercail routine start: the loop as the hidden hc terminal bercail-routines,
+# on [herdr] backend when set, unless one is live there. The desk mod does
+# the same every minute; the boot path and an update call this.
+routine_start_loop() {
+  local backend
+  local -a on=()
+  backend="$(_routine_backend)"
+  [[ -z "$backend" ]] || on=(--on "$backend")
+  ! _routine_loop_address "$backend" >/dev/null || return 0
+  "${HC_BIN:-hc}" run --bg --no-parent --no-notify --rm "${on[@]}" --name "$ROUTINE_LOOP" \
+    --label bercail.role=routines bash -lc "$ROUTINE_LOOP_RUN" </dev/null >/dev/null
+}
+
+# A live loop keeps running the bercail it started with. After an update, end
+# it and start the new one; the runs it started keep going. None live: none
+# starts, as with the notify follower.
+routine_restart_loop() {
+  local backend address i
+  backend="$(_routine_backend)"
+  address="$(_routine_loop_address "$backend")" || return 0
+  "${HC_BIN:-hc}" kill "$address" >/dev/null 2>&1 </dev/null || true
+  for ((i = 0; i < 25; i++)); do
+    _routine_loop_address "$backend" >/dev/null || break
+    sleep 0.2
+  done
+  if _routine_loop_address "$backend" >/dev/null || ! routine_start_loop; then
+    printf 'could not restart the routine loop; run: hc kill %s, then bercail routine start\n' "$address" >&2
+  else
+    printf 'restarted the routine loop (hc terminal %s)\n' "$ROUTINE_LOOP"
+  fi
+  return 0
+}
+
 cmd_routine() {
   local sub="${1:-}" name="${2:-}"
-  local usage="usage: bercail routine list | show <name> [--run <id>] | run <name> [--dry-run] | pause <name> | resume <name>"
+  local usage="usage: bercail routine list | show <name> [--run <id>] | run <name> [--dry-run] | pause <name> | resume <name> | tick | loop | start"
   case "$sub" in
     list) [[ $# -eq 1 ]] || die "$usage"; routine_list ;;
     show)
@@ -596,6 +893,9 @@ cmd_routine() {
       ;;
     pause) [[ $# -eq 2 ]] || die "$usage"; routine_pause "$name" true; log "$name: paused" ;;
     resume) [[ $# -eq 2 ]] || die "$usage"; routine_pause "$name" false; log "$name: resumed" ;;
+    tick) [[ $# -eq 1 ]] || die "$usage"; routine_tick ;;
+    loop) [[ $# -eq 1 ]] || die "$usage"; routine_loop ;;
+    start) [[ $# -eq 1 ]] || die "$usage"; routine_start_loop; log "the routine loop runs as hc terminal $ROUTINE_LOOP" ;;
     *) die "$usage" ;;
   esac
 }
@@ -603,13 +903,19 @@ cmd_routine() {
 # doctor: each routine, and what is wrong with a bad one. Without flock no
 # routine can run, so that fails; a bad entry is named, not a failure.
 doctor_routines() {
-  local entries entry failures=0
+  local entries entry line failures=0
   entries="$(routine_entries)"
   [[ -n "$entries" ]] || return 0
   log ""
   log "Routines ([routine.<name>] in $BERCAIL_USER_CONFIG):"
   if ! command -v flock >/dev/null 2>&1; then
     log "  missing  flock: no routine runs without it; install it (util-linux on Linux, brew install flock on macOS)"
+    failures=1
+  fi
+  if line="$(routine_loop_status)"; then
+    log "  ok  $line"
+  else
+    log "  missing  $line"
     failures=1
   fi
   while IFS= read -r entry; do

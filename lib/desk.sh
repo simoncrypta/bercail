@@ -324,7 +324,9 @@ _desk_restore() {
 # the marker means "done since this boot". The lock is taken before the marker
 # check, and the marker is written only after a completed pass. A failure leaves
 # it unset so a later attempt can retry. Waits for the core rather than start it
-# (any hc command would): that happens when the person opens Herdr.
+# (any hc command would): that happens when the person opens Herdr. Then it
+# starts the routine loop, so routines run with no window open; the marker
+# waits for that too. A later attempt types only into desks still at a bare shell.
 _desk_restore_boot() {
   local rc=0
   [[ -n "${XDG_RUNTIME_DIR:-}" ]] || die "bercail desk restore --boot needs XDG_RUNTIME_DIR"
@@ -335,24 +337,35 @@ _desk_restore_boot() {
 }
 
 _desk_restore_boot_locked() {
-  local marker deadline desks
+  local marker deadline desks restored=0 started=0
   marker="$XDG_RUNTIME_DIR/bercail-desk-restore.done"
   [[ ! -e "$marker" ]] || return 0
   until [[ -S "$XDG_RUNTIME_DIR/herdr-core/${HC_SESSION:-default}.sock" ]]; do
     sleep "${DESK_RESTORE_POLL:-5}"
   done
+  # shellcheck source=lib/routine.sh
+  declare -F routine_start_loop >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/routine.sh"
+  # Two duties, each tried until it is done: a stuck desk does not keep the
+  # routines from running, nor the loop the desks from coming back.
   deadline=$((SECONDS + DESK_RESTORE_RECOVERY_WAIT))
   while :; do
-    if _desk_restore; then
-      touch "$marker"
+    if ((!restored)) && _desk_restore; then
+      restored=1
       if ((DESK_RESUMED > 0)) && command -v notify-send >/dev/null 2>&1; then
         desks="desks"
         ((DESK_RESUMED > 1)) || desks="desk"
         notify-send "Bercail" "$DESK_RESUMED $desks came back" || true
       fi
+    fi
+    ((started)) || ! routine_start_loop 9>&- || started=1
+    if ((restored && started)); then
+      touch "$marker"
       return 0
     fi
-    ((SECONDS < deadline)) || return 1
+    if ((SECONDS >= deadline)); then
+      ((started)) || warn "could not start the routine loop; bercail routine start starts it"
+      return 1
+    fi
     sleep "${DESK_RESTORE_POLL:-5}"
   done
 }

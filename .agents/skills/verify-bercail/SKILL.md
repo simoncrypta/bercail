@@ -39,7 +39,7 @@ The live proofs (`tests/run.sh --live`) are not part of it.
 `HC_*` variables, writes a `config.toml` with one pinned model,
 and runs `bercail reconfigure` to deploy into that HOME.
 
-Two stand-ins. `hc` answers for one live desk at a bare shell and logs every
+Two stand-ins. `hc` answers for one live desk at a bare shell, accepts `run`, and logs every
 call; the real `hc` would start or reach a Herdr core. `pi` reports the real
 Pi's version, a catalog with one Claude model and no login, and installs
 nothing, so the deploy fetches no bridge from npm.
@@ -63,6 +63,7 @@ higher is a crash.
 | `bercail policy show --json` on this checkout | reads `.bercail/policy.toml`, and a fresh HOME has not trusted it, so push stays `ask` |
 | the pinned Claude model | the `bstack-builder` template runs it |
 | `bercail routine run`, `run --dry-run`, `list` on a `[routine.verify]` command routine | its one finding is emitted as one event in Shep's inbox, the same finding again is quiet, a dry run prints the event of the changed finding, and `list` shows the last outcome |
+| `bercail routine tick` twice, `shep status`, `routine start` | the tick starts the routine that never ran and not the one that ran today, its run writes its line, a second tick starts nothing, `shep status` says the loop is not running and when it last ticked, and `start` asks the stand-in `hc` for the hidden `bercail-routines` terminal |
 | `bercail shep remember`, `repos --json`, `run` | `repos` finds this checkout's main repo from Shep's extras file; a start writes `.pi/settings.json` with the lead at 250k of its 1M window and a start context with the rule |
 
 ## Evidence

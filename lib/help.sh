@@ -101,7 +101,8 @@ Post-install CLI (bercail):
   routine       Your [routine.<name>] queries (docs/routines.md): list | show <name> [--run <id>] |
                 run <name> [--dry-run] (now, under its locks; new findings or a pause send Shep one event;
                 --dry-run prints the event and writes nothing) |
-                pause <name> | resume <name>
+                pause <name> | resume <name> | tick (start each one that is due) |
+                loop (a tick a minute; the hidden terminal bercail-routines runs it) | start (that terminal)
   cleanup       Retire a finished worktree: cleanup <worktree> copies its .bercail/ to
                 ~/Work/worktree-archives/<repo>/, ends its desk, removes the worktree,
                 closes its space, and keeps the branch. Refuses uncommitted work,

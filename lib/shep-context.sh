@@ -447,6 +447,9 @@ _shep_board_snapshot() {
                 (.finished[] | "- todo\(tag): \(.title // "" | flat | cut(70)) · done in \($t.target); "
                   + (if .issue then "continue \(.issue), then " else "" end) + "bercail todo done \(.id)") end) ]
        | if length > 0 then .[] else "- nothing" end)'
+  # shellcheck source=lib/routine.sh
+  declare -F routine_board_line >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/routine.sh"
+  routine_board_line
   queue="$(_shep_queue_text "$(_shep_queue_json "$repos" "$desks" "$records")")" || rc=$?
   decisions="$(cat <&"$fd")"
   exec {fd}<&-

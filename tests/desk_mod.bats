@@ -583,17 +583,18 @@ expect(JSON.stringify(calls("tab.new")), JSON.stringify([["tab.new", { space: "b
 EOF
 }
 
-@test "with a backend, the notifier is kept running there, not here" {
+@test "the notifier and the routine loop are each kept running once, here or on the backend" {
   mod_case <<'EOF'
-// [herdr] backend = "box": bercail is looked for on box, a notifier on this computer
-// does not count, and the one started is box's. One live on box is left alone.
+// Without a backend, one of each starts here, as bercail.role=notify and =routines,
+// and none while one is live here. With [herdr] backend = "box", bercail is looked for on
+// box, a terminal on this computer does not count, and the ones started are box's.
 const ran = [];
-const start = async (terminals) => {
+const start = async (terminals, config = '[layout]\nreview = "tuicr"\n') => {
   ran.length = 0;
   globalThis.herdr = {
     layout: structuredClone(shipped), calls: [], spaces: [], focused: null, terminals,
     props: { role: "header" },
-    files: { "/nonexistent/.config/bercail/config.toml": '[layout]\nreview = "tuicr"\n\n[herdr]\nbackend = "box"\n' },
+    files: { "/nonexistent/.config/bercail/config.toml": config },
     exec: (cmd, args, opts) => { ran.push([cmd, ...args, opts?.on ?? null]); return { code: 0, stdout: "", stderr: "" }; },
   };
   const d = new Desk();
@@ -601,12 +602,30 @@ const start = async (terminals) => {
   d.init({}, cx);
   for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
 };
-await start([{ address: "t8", name: "bercail-notify", state: "live", labels: {} }]);
+const started = () => ran.filter(([c]) => c === "hc").map((a) => ({
+  name: a[a.indexOf("--name") + 1], label: a[a.indexOf("--label") + 1],
+  on: a.includes("--on") ? a[a.indexOf("--on") + 1] : null, run: a.at(-2) }));
+const live = (machine) => ["bercail-notify", "bercail-routines"].map((name, i) =>
+  ({ address: `${machine ? machine + "/" : ""}t${8 + i}`, name, state: "live" }));
+const box = '[layout]\nreview = "tuicr"\n\n[herdr]\nbackend = "box"\n';
+
+await start([]);
+expect(JSON.stringify(started().map(({ name, label, on }) => [name, label, on])),
+  JSON.stringify([["bercail-notify", "bercail.role=notify", null], ["bercail-routines", "bercail.role=routines", null]]), "one of each, here");
+if (!started()[1].run.endsWith("; exec bercail routine loop")) fail(`the loop's command: ${started()[1].run}`);
+await start(live(null));
+if (started().length) fail(`both are live: ${JSON.stringify(ran)}`);
+// Without a backend, another machine's do not count.
+await start(live("box"));
+expect(JSON.stringify(started().map(({ name, on }) => [name, on])),
+  JSON.stringify([["bercail-notify", null], ["bercail-routines", null]]), "box's do not count here");
+
+await start(live(null), box);
 expect(ran[0]?.at(-1), "box", "bercail is looked for on box");
-const hc = ran.filter(([c]) => c === "hc");
-if (hc.length !== 1 || hc[0][hc[0].indexOf("--on") + 1] !== "box") fail(`the notifier must start on box: ${JSON.stringify(ran)}`);
-await start([{ address: "box/t8", name: "bercail-notify", state: "live", labels: {} }]);
-if (ran.some(([c]) => c === "hc")) fail(`box's notifier is live: ${JSON.stringify(ran)}`);
+expect(JSON.stringify(started().map(({ name, on }) => [name, on])),
+  JSON.stringify([["bercail-notify", "box"], ["bercail-routines", "box"]]), "both start on box");
+await start(live("box"), box);
+if (started().length) fail(`box's are live: ${JSON.stringify(ran)}`);
 EOF
 }
 
