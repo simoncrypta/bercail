@@ -2667,6 +2667,21 @@ test("bercail cleanup asks the person in every role that can write, and nowhere 
     allowed(command, tui);
 });
 
+test("reading lib/cleanup.sh or asking bercail cleanup for help runs with no card", () => {
+  const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
+  const reads = [
+    "cat lib/cleanup.sh; sed -n 1,80p bin/bercail",
+    "grep cleanup lib/*.sh",
+    "sed -n 1,40p lib/cleanup.sh",
+    "bercail cleanup --help",
+    "bin/bercail cleanup --help",
+  ];
+  for (const command of reads) for (const input of [tui, shep, { ...tui, role: "lead" }]) allowed(command, input);
+  // Help in any other shape is still read as a cleanup.
+  for (const command of ["bercail cleanup --help /work.feature", "bash -c 'bercail cleanup --help'"])
+    assertEqual(decision(command, tui).action, "ask", command);
+});
+
 test("only Shep runs bercail land; every other role is refused", () => {
   const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
   const lands = [

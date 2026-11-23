@@ -807,6 +807,8 @@ function cliHelp(words: string[], graphiteAliases: readonly string[] | undefined
     );
   if (words.length !== 3 || words[2] !== "--help") return false;
   if (name === "git") return gitHelpBuiltins.has(words[1]);
+  // bercail cleanup --help fails its argument check with the usage line and changes nothing.
+  if (name === "bercail") return words[1] === "cleanup";
   // Graphite expands aliases before parsing help, even aliases named submit or merge.
   return (
     name === "gt" &&
@@ -2599,7 +2601,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     const refused = sync ? noChange(input.role) : undefined;
     if (refused) decision = worse(decision, refused);
     if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
-    decision = worse(decision, decideCleanup(words, here));
+    if (!help) decision = worse(decision, decideCleanup(words, here));
     decision = worse(decision, decideJob(words, here));
     if (questionOp(words, "answer")) decision = worse(decision, block(answerCommand));
     if (questionOp(words, "push-approval")) decision = worse(decision, block(pushApprovalCommand));
