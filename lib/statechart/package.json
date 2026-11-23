@@ -1,0 +1,8 @@
+{
+  "name": "bercail-statechart",
+  "private": true,
+  "description": "tla-ts, the model checker the statechart skill runs. bercail installs it from this lockfile with npm ci when [bstack] statechart = true (lib/deps.sh).",
+  "dependencies": {
+    "tla-ts": "0.0.10"
+  }
+}

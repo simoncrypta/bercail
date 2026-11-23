@@ -244,25 +244,6 @@ assert_no_writes() {
   [[ "$(arg "$close" --comment)" == "Every lookup worked in https://github.test/o/r/actions/runs/42." ]] || fail "comment: $close"
 }
 
-@test "java is the newest Temurin feature release, dated by its first GA build" {
-  manifest "$(entry java temurin 25)"
-  track check
-  [[ "$rc" -eq 0 ]] || fail "rc $rc: $out"
-  local create
-  create="$(gh_calls "issue create")"
-  [[ "$(arg "$create" --title)" == "deps: java 27" ]] || fail "title: $create"
-  [[ "$(arg "$create" --body)" == *"25 → **27**, released 2026-09-21."*"https://github.com/adoptium/temurin27-binaries/releases/tag/jdk-27%2B35"* ]] \
-    || fail "delta, date and link: $create"
-}
-
-@test "an Adoptium API that cannot be read fails java's row instead of skipping it" {
-  manifest "$(entry java temurin 25)"
-  FIX="$BATS_TEST_TMPDIR/no-fixtures" track check
-  [[ "$rc" -eq 1 ]] || fail "rc $rc: $out"
-  [[ "$out" == *"java: **failed:** temurin: curl: (22)"* ]] || fail "$out"
-  [[ -n "$(gh_calls "issue create" | jq -c 'select(index("deps: tracker failing"))')" ]] || fail "no tracker issue: $out"
-}
-
 @test "the Workers compatibility date is the one the locked workerd supports, read with no network" {
   printf '{"packages": {"node_modules/workerd": {"version": "1.20261118.1"}}}\n' >"$REPO/package-lock.json"
   manifest "$(entry workers-compatibility-date workerd:package-lock.json 2026-07-01)"

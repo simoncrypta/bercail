@@ -83,14 +83,6 @@ lookup_node() {
     'first(.[] | select(.version | startswith($m))) | {tag: .version, published: .date, url: "https://nodejs.org/en/blog/release/\(.version)"}'
 }
 
-# The newest Temurin GA feature release, dated by its first GA build.
-lookup_temurin() {
-  local api=https://api.adoptium.net/v3 major
-  major="$(fetch "$api/info/available_releases" | jq -er .most_recent_feature_release)" || return
-  fetch "$api/assets/feature_releases/$major/ga?image_type=jdk&page_size=1&sort_order=ASC" | jq --arg major "$major" \
-    'first(.[]) | {tag: $major, published: .timestamp, url: .release_link}'
-}
-
 # The compatibility date wrangler targets with the workerd in lockfile $1: the
 # date in its version (1.20261118.1 is 2026-11-18). No network.
 lookup_workerd() {
@@ -110,7 +102,6 @@ lookup() {
     npm:*) lookup_npm "${source#npm:}" ;;
     herdr:app | herdr:core) lookup_herdr "${source#herdr:}" ;;
     node:*) lookup_node "${source#node:}" ;;
-    temurin) lookup_temurin ;;
     workerd:*) lookup_workerd "${source#workerd:}" ;;
     *) printf 'unknown source %s\n' "$source" >&2; return 1 ;;
   esac
@@ -349,12 +340,12 @@ check_pins() {
   local bad=0 name known ref file key lineno line found
   if ! jq -e 'type == "array" and all(.[]; (.name | type) == "string" and (.known | type) == "string"
       and (.pinned_in | type) == "array" and has("min") and has("why") and has("notes")
-      and (.source | test("^(github:|action:|git:)[^/]+/[^/]+$|^npm:.|^herdr:(app|core)$|^node:[0-9]+$|^temurin$|^workerd:."))
+      and (.source | test("^(github:|action:|git:)[^/]+/[^/]+$|^npm:.|^herdr:(app|core)$|^node:[0-9]+$|^workerd:."))
       and if (.source | startswith("git:")) then (.known | test("^[0-9a-f]{40}$"))
         and ((has("paths") | not) or (.paths | type == "array" and length > 0 and all(.[]; type == "string" and length > 0)))
       else has("paths") | not end)' \
     "$MANIFEST" >/dev/null; then
-    printf '::error file=lib/deps.json::every entry needs name, source (github:, action:, git:, npm:, herdr:app, herdr:core, node:<major>, temurin or workerd:<lockfile>), min, why, known, pinned_in and notes; a git: entry knows a full commit, and only a git: entry may list paths, as git pathspecs\n'
+    printf '::error file=lib/deps.json::every entry needs name, source (github:, action:, git:, npm:, herdr:app, herdr:core, node:<major> or workerd:<lockfile>), min, why, known, pinned_in and notes; a git: entry knows a full commit, and only a git: entry may list paths, as git pathspecs\n'
     return 1
   fi
   while IFS=$'\t' read -r name known ref; do

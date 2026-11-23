@@ -58,15 +58,38 @@ each step ending in something you can check.
 
 1. Name the data shape first: the types, the state, who reads and writes it.
 2. A change to a lifecycle, retry or resume, lock or lease, queue, recovery, or
-   concurrent writers: model it with the `statechart` skill when you have it
-   (`[bstack] statechart = true`), and get the owner's yes on its chart before
-   you build.
+   concurrent writers: draw the flow as a chart (below) in your plan and your
+   report, and get the owner's yes on it before you build. Model-check it
+   with the `statechart` skill as well when the owner or the issue asks, when
+   the repo already keeps a spec for that flow (rerun its `check.sh` and
+   replay; never write a second model), or when correctness depends on event
+   order or recovery and a failure could lose or duplicate durable work,
+   break ownership or isolation, or do something irreversible. A `high_stakes`
+   path is a reason to ask that last question, not a yes. Say in the plan
+   which applied, or why none did. When a check is needed and you have no
+   `statechart` skill (`[bstack] statechart` is off) or it cannot run the
+   spec, report the check as blocked and ask the owner to turn it on or waive
+   it: a hand-drawn chart is not a check.
 3. Settle the interface from the caller's side before the inside. On a hard
    design fork, ask `bstack-judge`, or sketch two versions and compare.
 4. Build it in small steps that each end green (`bstack-builder`, with a brief per step).
    New behavior gets tests that follow the `unit-testing` skill.
 5. Drive the real path the user takes: the CLI, the app, the endpoint.
 6. Finish with `/validate`.
+
+### Charts
+
+A stateful flow you plan, change or explain gets a Mermaid chart in Pi's
+chat, and in the plan or report on the issue:
+
+- `stateDiagram-v2`, `direction TB`, 20 states or fewer, one region, edge
+  labels under 20 characters, no classes, colours or Legend.
+- Under it, every arrow in words (`Idle -> Running: start`), with the
+  `file:line` that makes it when it is current code.
+- Keep current code and the proposal in separate charts, and say "drawn by
+  hand, not model-checked" unless the statechart skill made it.
+- A model check's `chart.pi.md` takes the place of yours only when it draws
+  the flow. A bug path, a text-only result or no chart leaves yours in place.
 
 ## refactor
 

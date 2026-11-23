@@ -33,7 +33,7 @@ BERCAIL_RETIRED_SKILL_FILES=(
 )
 
 # The skills to deploy and give bstack's agents. statechart only when [bstack]
-# statechart = true, which also installs its TLC and Java.
+# statechart = true, which also installs its tla-ts.
 _skill_ids() {
   printf '%s\n' "${BERCAIL_SKILL_IDS[@]}"
   if statechart_enabled; then

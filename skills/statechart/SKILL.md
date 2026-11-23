@@ -1,6 +1,6 @@
 ---
 name: statechart
-description: "Check a TLA+ model of a stateful change (a lifecycle, retry or resume, lock or lease, queue, recovery, or concurrent writers) with TLC, show the owner a Mermaid statechart in Pi's chat, and replay every step on the real code. The report gives the shortest path to each state that breaks a rule. Use for /statechart, or when bstack's lead names it for such a change. Not for prose, config or one-line fixes."
+description: "Check a TLA+ model of a stateful change (a lifecycle, retry or resume, lock or lease, queue, recovery, or concurrent writers) with tla-ts, show the owner a Mermaid statechart in Pi's chat, and replay every step on the real code. The report gives the shortest path to each state that breaks a rule. Use for /statechart, or when bstack's feature playbook calls for a model check. Not for prose, config or one-line fixes."
 ---
 
 # Statechart
@@ -10,6 +10,11 @@ UPSTREAM.md). The chart shows how a system moves between states, in the words of
 person who reads it. That person, the owner, decides whether the behavior is right.
 A model is a hand copy of the code, so it drifts: every model here comes with a
 replay of its steps on the real code.
+
+bstack's lead draws every stateful change as a chart by hand first (the feature
+playbook in the bstack skill says when a model check is needed on top). The
+chart this skill makes takes the place of that one only when it draws the flow:
+a bug path, a text-only result or no chart leaves the hand-drawn one in place.
 
 ## Run
 
@@ -27,11 +32,15 @@ Exit 0: every rule holds. 1: a rule breaks. 2: an error. It writes `report.md`,
 `tlc.out`, and when there is a chart, `chart.mmd` and, for Pi's chat,
 `chart.pi.md`.
 
-It needs TLC and Java, which bercail installs when `[bstack] statechart = true`,
-and it never installs them itself. When they are missing it exits 2 with the fix;
-tell the person and stop. Each run stops after `STATECHART_TIMEOUT` seconds (600)
-and exits 2: make the constants smaller or add a CONSTRAINT rather than raise it.
-It needs `timeout` from GNU coreutils for that bound, and exits 2 without it.
+The checker is tla-ts, a TLA+ model checker in TypeScript: the command runs
+upstream's code, written for TLC, on tla-ts as TLC 1.7.4 (so "TLC" below means
+whichever engine ran). bercail installs it when `[bstack] statechart = true`, and
+the command never installs it. When it is missing it exits 2 with the fix; tell
+the person and stop. When tla-ts cannot run a spec (TlaUnsupportedError: reals,
+`\AA`, a Java override), say the check is blocked; do not drop the rule.
+Each run stops after `STATECHART_TIMEOUT` seconds (600) and exits 2: make the
+constants smaller or add a CONSTRAINT rather than raise it. It needs `timeout`
+from GNU coreutils for that bound, and exits 2 without it.
 
 Run only specs and views you or the owner wrote, from a trusted checkout. The view
 module is JavaScript that the command executes, and a spec can make TLC run for a
@@ -126,14 +135,17 @@ that run the code carry the rest.
 Post the chart and the report on the beads issue (`bd comment <id>`) for the
 owner's intent check before code, and again at /validate. One line for each bug:
 the rule, the owner's sentence for it, and the path as the report numbers it. Say
-what the model leaves out, the command that makes the files again, and the TLC
-version. A chart from a run older than the spec, the config, the view or the code
-it models is stale. Say so, and never show a green chart after a failed run.
+what the model leaves out, the command that makes the files again, and the
+engine and version that ran: the first line of `tlc.out` (`TLC2 Version 0.0.10
+(rev: tla-ts)` is tla-ts 0.0.10). A chart from a run older than the spec, the
+config, the view or the code it models is stale. Say so, and never show a green
+chart after a failed run.
 
 ## What changed from upstream
 
 Pi and bstack instead of Cursor: no `disable-model-invocation`, a bstack trigger,
-artifacts under `.bercail/statechart/`, no first-run install and a time bound
+artifacts under `.bercail/statechart/`, tla-ts instead of TLC and Java through a
+`java` shim (`tla-ts-java`), no first-run install and a time bound
 (`statechart-bstack`), no native Windows command, `chart.pi.md` for Pi's terminal
 Mermaid instead of Pele, the trust rule for PR reviews, the graph and the replay on
 real code, fairness and planted-bug advice from the Shep inbox spike

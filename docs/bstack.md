@@ -85,22 +85,30 @@ without that signal.
 
 ## Statecharts
 
-The `statechart` skill models a stateful change in TLA+ (a lifecycle, retry or resume, lock or lease, queue, recovery, or concurrent writers), checks it with [TLC](https://github.com/tlaplus/tlaplus), shows the owner a Mermaid chart in Pi's chat, and replays the model's steps on the real code. It is pstack's [statechart skill](https://github.com/cursor/plugins/tree/main/pstack/skills/statechart), vendored at a pinned commit (`skills/statechart/UPSTREAM.md`), with bstack's wrapper around it. The feature playbook calls it for such a change, and `/statechart <target>` runs it by hand.
+The `statechart` skill models a stateful change in TLA+ (a lifecycle, retry or resume, lock or lease, queue, recovery, or concurrent writers), checks it with [tla-ts](https://github.com/aidenybai/tla-ts), a TLA+ model checker in TypeScript that runs TLC's command line, shows the owner a Mermaid chart in Pi's chat, and replays the model's steps on the real code. It is pstack's [statechart skill](https://github.com/cursor/plugins/tree/main/pstack/skills/statechart), vendored at a pinned commit (`skills/statechart/UPSTREAM.md`), with bstack's wrapper around it. The feature playbook calls it for such a change when the change needs a model check (below), and `/statechart <target>` runs it by hand.
 
-It is off until you turn it on, because it needs Java:
+It is off until you turn it on, because it installs tla-ts (about 36 MB) from npm:
 
 ```toml
 [bstack]
 statechart = true
 ```
 
-Then `bercail reconfigure` (or the next `bercail update`) installs tla2tools 1.7.4 through mise, which checks the jar's sha256, uses the `java` on PATH when it is 11 or later and otherwise installs `java@temurin-25` through mise without making it your global java, writes both paths to `~/.local/share/bercail/statechart.env`, and gives every bstack agent the skill. `bercail doctor` checks the two paths. With the key off, nothing is installed, the skill is not deployed, and `/statechart` says how to turn it on. Turning it off removes the skill and `statechart.env`. What mise installed stays until `mise uninstall`, and `mise prune` removes it while the key is on, since no mise config names it: `bercail doctor` then says it is missing, and `bercail reconfigure` puts it back. A `statechart` skill of your own in `~/.agents/skills` (pstack's) is never written over or removed: bercail warns and leaves it.
+Then `bercail reconfigure` (or the next `bercail update`) installs tla-ts into `~/.local/share/bercail/statechart/` with `npm ci --ignore-scripts` from bercail's lockfile (`lib/statechart/`), which pins every package by its sha512, writes its CLI's path to `~/.local/share/bercail/statechart.env`, and gives every bstack agent the skill. It needs `node` and `npm` (Node.js 22.18 or later) and no Java. Once that lockfile is installed, a reconfigure runs no npm. `bercail doctor` checks tla-ts and node. With the key off, nothing is installed, the skill is not deployed, and `/statechart` says how to turn it on. Turning it off removes the skill, tla-ts and `statechart.env`. The TLC and Java that bercail installed through mise before tla-ts stay until you remove them with `mise uninstall`. A `statechart` skill of your own in `~/.agents/skills` (pstack's) is never written over or removed: bercail warns and leaves it.
 
-The skill's command, `~/.agents/skills/statechart/scripts/statechart-bstack`, never installs anything: without TLC and Java it exits 2 with the fix. `TLA2TOOLS` and `JAVA` in the environment win over `statechart.env`. Each run stops after `STATECHART_TIMEOUT` seconds (600), through GNU coreutils' `timeout` (`brew install coreutils` on macOS): without it the command exits 2. The view module that labels the chart is JavaScript the command runs, so a review never runs a PR's spec or view.
+The skill's command, `~/.agents/skills/statechart/scripts/statechart-bstack`, never installs anything: without tla-ts it exits 2 with the fix. It runs upstream's command, which calls `java -cp tla2tools.jar`, with a `java` shim that runs tla-ts so that it prints what TLC 1.7.4 prints (`-Dtla-ts.tlc=1.7.4`), so upstream's files stay as they are. `TLA_TS` in the environment wins over `statechart.env`. `TLA2TOOLS` and `JAVA` set together run TLC instead, for a reference run; one without the other exits 2. Each run stops after `STATECHART_TIMEOUT` seconds (600), through GNU coreutils' `timeout` (`brew install coreutils` on macOS): without it the command exits 2. The view module that labels the chart is JavaScript the command runs, so a review never runs a PR's spec or view.
 
 What reaches chat is `chart.pi.md`: the chart, then the states that break a rule and every arrow in words. A chart has 20 states or fewer. Over that, the owner gets the bug's path as text (see [Shep's diagrams](shep.md#diagrams-in-chat)).
 
-bercail's own spec is Shep's inbox, in `tests/statechart/shep-inbox/`: the model, a config for the chart, the configs with planted bugs, and `check.sh`, which runs them all and rewrites the chart and the graph that `tests/shep_inbox_statechart.test.ts` replays on `shep/pi/inbox.ts` on every test run (see [development](development.md#statecharts)).
+### Chart first, check when it matters
+
+Every lead draws a stateful change as a Mermaid chart, with no tools: the feature playbook (`skills/bstack/SKILL.md`) has the rules. The full check (model, report, replay) runs when the owner or the issue asks, when the flow already has a spec the repo keeps, or when correctness depends on event order or recovery and a failure could lose or duplicate durable work, break ownership or isolation, or do something irreversible. A `high_stakes` path is a reason to ask that last question, not a trigger. When a check is needed and the key is off, the lead says the check is blocked and asks to turn it on or waive it.
+
+### Cross-checking tla-ts against TLC
+
+tla-ts is young. `tests/statechart/cross-check.sh [spec-dir...]` runs every config of each spec on tla-ts and on TLC 1.7.4. It fails when the exit code, `report.md`, the charts or a replay config's graph differ, or when either engine gives anything but holds (0) or breaks (1). It installs the tla-ts that `lib/statechart`'s lockfile pins, with npm, and needs `JAVA` and `TLA2TOOLS` (the 1.7.4 jar, checked by its sha256), so only the machine that runs it needs Java. Run it on a tla-ts bump, on a change to `statechart-bstack` or its shim, and on a new spec that is the proof for a risky change.
+
+bercail's own spec is Shep's inbox, in `tests/statechart/shep-inbox/`: the model, a config for the chart, the configs with planted bugs, and `check.sh`, which runs them all and rewrites the chart and the graph that `tests/shep_inbox_statechart.test.ts` replays on `shep/pi/inbox.ts` on every test run. CI runs `check.sh` on tla-ts on every push and fails when it writes anything other than what the repo keeps (see [development](development.md#statecharts)).
 
 ## Where to find what
 

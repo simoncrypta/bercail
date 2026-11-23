@@ -1,7 +1,8 @@
-// bstack: TLC's whole state graph for a config, as JSON, so a test can replay
-// every shortest path on the real code (the paths come from TLC, not from a
-// second model). Usage: graph.ts SPEC.tla CONFIG.cfg OUT.json. Needs TLA2TOOLS
-// and JAVA; statechart-bstack sets them and bounds the run.
+// bstack: the checker's whole state graph for a config, as JSON, so a test can
+// replay every shortest path on the real code (the paths come from the checker,
+// not from a second model). Usage: graph.ts SPEC.tla CONFIG.cfg OUT.json. Needs
+// TLA2TOOLS and JAVA; statechart-bstack sets them (tla-ts's shim, or TLC) and
+// bounds the run.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";

@@ -56,8 +56,8 @@ effort = "high"
 lead = "claude"
 build = "claude"
 judge = "gpt"
-# true: the statechart skill, with the TLC and Java it needs (installed on the
-# next bercail reconfigure or update). It checks TLA+ models of stateful changes.
+# true: the statechart skill, with the tla-ts it needs (installed with npm on
+# the next bercail reconfigure or update). It checks TLA+ models of stateful changes.
 statechart = false
 EOF
 }
@@ -75,7 +75,7 @@ read_layout_review() {
   printf '%s' "$review"
 }
 
-# [bstack] statechart = true: the statechart skill and its TLC and Java.
+# [bstack] statechart = true: the statechart skill and its tla-ts.
 statechart_enabled() {
   [[ -r "$BERCAIL_USER_CONFIG" ]] || return 1
   # shellcheck source=lib/toml.sh

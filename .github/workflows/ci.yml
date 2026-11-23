@@ -70,6 +70,15 @@ jobs:
       # ships it; fail here if that changes.
       - name: GNU parallel
         run: command -v parallel
+      # tla-ts, from bercail's lockfile as lib/deps.sh installs it, for the test
+      # that runs the Shep inbox's check.sh (tests/statechart.bats). No Java.
+      - name: tla-ts
+        run: |
+          d="$RUNNER_TEMP/statechart"
+          mkdir -p "$d"
+          cp lib/statechart/package.json lib/statechart/package-lock.json "$d/"
+          npm ci --prefix "$d" --ignore-scripts --omit=dev --no-audit --no-fund --no-update-notifier
+          echo "TLA_TS=$d/node_modules/tla-ts/dist/cli.js" >>"$GITHUB_ENV"
       # The bats unit suite, then the TypeScript unit tests (vp test). The runner
       # holds one run, so it takes every core rather than a slot's share; a
       # runner with a bercail config of its own keeps its [tests] slots.

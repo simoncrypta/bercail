@@ -1,9 +1,12 @@
 #!/bin/sh
 # bstack's entry to upstream's statechart: never an install, and a time bound.
 #   statechart-bstack SPEC.tla [--config F] [--view F] [--out DIR]   check and chart
-#   statechart-bstack graph SPEC.tla CONFIG.cfg OUT.json             TLC's state graph
-# bercail installs TLC and Java when [bstack] statechart = true and writes their
-# paths to statechart.env; TLA2TOOLS and JAVA in the environment win over it.
+#   statechart-bstack graph SPEC.tla CONFIG.cfg OUT.json             the state graph
+# Upstream's command runs java -cp tla2tools.jar; here java is tla-ts, through
+# the tla-ts-java shim beside this file. bercail installs tla-ts when [bstack]
+# statechart = true and writes its CLI's path to statechart.env; TLA_TS in the
+# environment wins over it. TLA2TOOLS and JAVA set together run TLC instead, for
+# a reference run (tests/statechart/cross-check.sh in bercail).
 set -eu
 here=$(dirname "$(readlink -f "$0")")
 env_file="$HOME/.local/share/bercail/statechart.env"
@@ -14,16 +17,29 @@ from_env_file() {
   sed -n "s/^$1=//p" "$env_file" | tail -n 1
 }
 
-TLA2TOOLS="${TLA2TOOLS:-$(from_env_file TLA2TOOLS)}"
-JAVA="${JAVA:-$(from_env_file JAVA)}"
-if [ -z "$TLA2TOOLS" ] || [ -z "$JAVA" ] || [ ! -r "$TLA2TOOLS" ] || [ ! -x "$JAVA" ]; then
-  cat >&2 <<EOF
-statechart: TLC and Java are not set up, and this command never installs them.
+# One engine or the other, never half of each.
+if [ -n "${TLA2TOOLS:-}" ] || [ -n "${JAVA:-}" ]; then
+  if [ -z "${TLA2TOOLS:-}" ] || [ -z "${JAVA:-}" ] || [ ! -r "$TLA2TOOLS" ] || [ ! -x "$JAVA" ]; then
+    echo "statechart: TLC runs only with both TLA2TOOLS (tla2tools.jar 1.7.4) and JAVA (java 11 or later). Fix: set both, or neither for tla-ts." >&2
+    exit 2
+  fi
+  # Absolute: upstream runs java from a temp folder.
+  TLA2TOOLS=$(readlink -f "$TLA2TOOLS") JAVA=$(readlink -f "$JAVA")
+else
+  TLA_TS="${TLA_TS:-$(from_env_file TLA_TS)}"
+  if [ -z "$TLA_TS" ] || [ ! -r "$TLA_TS" ]; then
+    cat >&2 <<EOF
+statechart: tla-ts is not set up, and this command never installs it.
 Fix: set statechart = true under [bstack] in ~/.config/bercail/config.toml, then run
 bercail reconfigure (bercail doctor says what is missing when it is already on). Or set
-TLA2TOOLS to tla2tools.jar 1.7.4 and JAVA to java 11 or later.
+TLA_TS to tla-ts's dist/cli.js.
 EOF
-  exit 2
+    exit 2
+  fi
+  TLA_TS=$(readlink -f "$TLA_TS")
+  # tla-ts reads no jar, but upstream passes TLA2TOOLS to java as the class path.
+  JAVA="$here/tla-ts-java" TLA2TOOLS="$TLA_TS"
+  export TLA_TS
 fi
 export TLA2TOOLS JAVA
 

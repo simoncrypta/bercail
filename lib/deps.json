@@ -90,22 +90,13 @@
     "notes": "An Entire plugin (entire plugin upgrade graph)."
   },
   {
-    "name": "tla2tools",
-    "source": "github:tlaplus/tlaplus",
+    "name": "tla-ts",
+    "source": "npm:tla-ts",
     "min": null,
     "why": null,
-    "known": "1.7.4",
-    "pinned_in": ["lib/deps.sh:STATECHART_TLC_SPEC", "skills/statechart/scripts/run.ts:http:tla2tools"],
-    "notes": "TLC, for the statechart skill; installed only with [bstack] statechart = true, through mise's http backend with the jar's sha256. Both pins carry the sha256: move it with the version, and run tests/statechart/shep-inbox/check.sh."
-  },
-  {
-    "name": "java",
-    "source": "temurin",
-    "min": "11",
-    "why": "TLC 1.7.4 runs on Java 11 or later.",
-    "known": "25",
-    "pinned_in": ["lib/deps.sh"],
-    "notes": "Only with [bstack] statechart = true: any java of 11 or later on PATH, else mise installs java@temurin-25 (STATECHART_JAVA_SPEC in lib/deps.sh), never as the global java."
+    "known": "0.0.10",
+    "pinned_in": ["lib/statechart/package.json:\"tla-ts\""],
+    "notes": "The statechart skill's model checker; installed only with [bstack] statechart = true, by npm ci from lib/statechart's lockfile. Bump package.json and the lockfile together (npm install --package-lock-only --ignore-scripts in lib/statechart), then run tests/statechart/cross-check.sh against TLC 1.7.4 on bercail's specs and any others you keep: a bump lands only when every config is the same on both."
   },
   {
     "name": "pstack-statechart",

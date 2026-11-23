@@ -1,0 +1,6 @@
+#!/bin/sh
+# bstack: tla-ts in place of java, for upstream's `java -cp tla2tools.jar tlc2.TLC`
+# and `tla2sany.xml.XMLExporter`; statechart-bstack sets it as JAVA. tla-ts takes
+# that command line, and with -Dtla-ts.tlc=1.7.4 it prints what TLC 1.7.4 prints,
+# which is what upstream's frontends read. TLA_TS is tla-ts's dist/cli.js.
+exec node "$TLA_TS" -Dtla-ts.tlc=1.7.4 "$@"

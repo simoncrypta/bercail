@@ -182,9 +182,9 @@ bstack (Pi, bring your own Claude and ChatGPT subscriptions):
   /handoff, /bstack-setup, /how, /why, /unslop, /autopilot (a PR to green;
   pushes, never merges), /pr-review (bercail review-pr's read-only decisions
   pass), /statechart.
-  Settings: [bstack] in config.toml. statechart = true installs TLC (and Java
-  when there is no java 11 or later) and the statechart skill: TLA+ models of
-  stateful changes, checked with TLC and replayed on the real code.
+  Settings: [bstack] in config.toml. statechart = true installs tla-ts (npm)
+  and the statechart skill: TLA+ models of stateful changes, checked with
+  tla-ts and replayed on the real code.
   Pi >=1.5.1 with pi-claude-bridge@0.13.0. Claude uses claude auth login; GPT
   uses /login openai in pi. bercail update renders
   ~/.local/share/bercail/pi/ and herdr-core templates, and sets a 40k compaction
@@ -237,8 +237,9 @@ Config:
   ~/.agents/skills/desk-restore/              put a desk with no record back by hand
   ~/.agents/skills/unit-testing/              F.I.R.S.T. rules for writing and reviewing tests
   ~/.agents/skills/describe/                  the change description standard: PR body or commit message
-  ~/.agents/skills/statechart/                TLA+ statecharts with TLC ([bstack] statechart = true)
-  ~/.local/share/bercail/statechart.env       where TLC and java are, for the statechart skill
+  ~/.agents/skills/statechart/                TLA+ statecharts with tla-ts ([bstack] statechart = true)
+  ~/.local/share/bercail/statechart/          tla-ts, from bercail's lockfile
+  ~/.local/share/bercail/statechart.env       where tla-ts is, for the statechart skill
   ~/.local/state/bercail/desk-sessions/       which session runs in which desk
   ~/.cache/bercail/scratch/                   each agent run's TMPDIR, removed when it ends
   ~/.local/share/bercail/pi/                  bstack's Pi profile
