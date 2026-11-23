@@ -143,6 +143,28 @@ _project_hook() {
   [[ -f "$sib/.beads/config.yaml" && -f "$sib/.bercail/policy.toml" ]] || fail "a tracked file went with it"
 }
 
+@test "live: spawn setup passes in a repo with no project hook while the shipped user hook is configured" {
+  local sib out
+  (cd "$REPO" && wt switch --create feat --no-cd --no-hooks </dev/null >/dev/null 2>&1) || fail "wt switch failed"
+  sib="$(handoff_worktree_of "$REPO" feat)"
+  # wt fails project: here, where it finds a user pre-start hook and no project one.
+  out="$(handoff_setup_worktree "$REPO" "$sib" feat 1 master 2>&1)" || fail "setup failed: $out"
+  [[ -f "$sib/node_modules/a/f" ]] || fail "node_modules was not copied"
+}
+
+@test "live: spawn setup runs the approved project hook of an ignored config the copy brings" {
+  local sib
+  mkdir -p "$REPO/.config"
+  echo .config/ >>"$REPO/.git/info/exclude"
+  printf '[pre-start]\nmark = "touch PROJECT_RAN"\n' >"$REPO/.config/wt.toml"
+  wt -C "$REPO" config approvals add --yes </dev/null >/dev/null 2>&1 || fail "approvals add failed"
+  (cd "$REPO" && wt switch --create feat --no-cd --no-hooks </dev/null >/dev/null 2>&1) || fail "wt switch failed"
+  sib="$(handoff_worktree_of "$REPO" feat)"
+  [[ ! -e "$sib/.config/wt.toml" ]] || fail "the config must come with the copy alone"
+  handoff_setup_worktree "$REPO" "$sib" feat 1 master >/dev/null 2>&1 || fail "setup failed"
+  [[ -f "$sib/PROJECT_RAN" ]] || fail "the copied config's hook did not run"
+}
+
 @test "live: spawn setup gives the project hook what wt switch --create gives it" {
   local native replay
   _project_hook

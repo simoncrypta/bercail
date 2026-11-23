@@ -312,9 +312,10 @@ _handoff_state_paths() {
 # refusal leaves nothing, as wt switch did. A wt without approvals list
 # --format=json cannot say, and its hook then fails after the checkout exists.
 # $5: {{ base }} as wt switch --create gives it, empty for an existing branch,
-# where it gives none.
+# where it gives none. A checkout with no project pre-start hook runs none:
+# wt fails a project: run that finds nothing to run.
 handoff_setup_worktree() {
-  local main="$1" sibling="$2" branch="$3" owned="$4" hook_base="$5" out made bwp path left=""
+  local main="$1" sibling="$2" branch="$3" owned="$4" hook_base="$5" out made bwp path left="" rerun
   local -a vars=()
   if out="$(wt -C "$sibling" config approvals list --format=json </dev/null 2>/dev/null)" \
     && ! jq -e '[.commands[]? | select(.phase == "pre-start" and .approved == false)] | length == 0' <<<"$out" >/dev/null; then
@@ -332,7 +333,7 @@ handoff_setup_worktree() {
   local -A had=()
   while IFS= read -r -d '' path; do had["$path"]=1; done < <(_handoff_state_paths "$sibling")
   wt -C "$sibling" step copy-ignored </dev/null >&2 \
-    || handoff_die "wt step copy-ignored into $sibling failed; no desk started"
+    || handoff_die "wt step copy-ignored into $sibling failed; no desk started. Rerun it: wt -C $(printf '%q' "$sibling") step copy-ignored"
   while IFS= read -r -d '' path; do
     [[ -z "${had["$path"]:-}" ]] || continue
     if [[ -d "$sibling/$path" && ! -L "$sibling/$path" ]]; then
@@ -341,14 +342,20 @@ handoff_setup_worktree() {
       rm -f -- "$sibling/$path"
     fi
   done < <(_handoff_state_paths "$sibling")
+  # After the copy, which can bring an ignored .config/wt.toml with hooks.
+  if out="$(wt -C "$sibling" config approvals list --format=json </dev/null 2>/dev/null)" \
+    && ! jq -e 'any(.commands[]?; .phase == "pre-start")' <<<"$out" >/dev/null 2>&1; then
+    return 0
+  fi
   # --var, not --base=: a template that does not name base would get the
   # flag in {{ args }}, which wt switch leaves empty.
   if [[ -n "$hook_base" ]]; then
     vars=(--var "base=$hook_base")
     if bwp="$(handoff_worktree_of "$main" "$hook_base")"; then vars+=(--var "base_worktree_path=$bwp"); fi
   fi
+  rerun="$(printf '%q ' wt -C "$sibling" hook pre-start --foreground project: "${vars[@]}")"
   wt -C "$sibling" hook pre-start --foreground project: "${vars[@]}" </dev/null >&2 \
-    || handoff_die "the project's pre-start hooks failed in $sibling; no desk started. Rerun them there: wt hook pre-start --foreground project:"
+    || handoff_die "the project's pre-start hooks failed in $sibling; no desk started. Rerun them: ${rerun% }"
 }
 
 # The commit a new desk branch starts from: origin's trunk once fetched, when

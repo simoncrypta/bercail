@@ -1186,7 +1186,8 @@ _desk_fixture() {
 printf 'wt %s\n' "$*" >>"$DESK_HERDR_LOG"
 # The spawn's setup calls, in a checkout: the approvals list ($DESK_APPROVALS,
 # else none), the copy (main's ignored folders, as a config without excludes
-# copies them), the default branch and the project's hooks.
+# copies them), the default branch and the project's hooks, which fail, as wt
+# 0.82's do, when the approvals list no project pre-start hook.
 # $DESK_WT_FAIL=copy|hook fails one.
 if [[ "$1" == -C ]]; then
   dir="$2"
@@ -1199,7 +1200,10 @@ if [[ "$1" == -C ]]; then
       main="$(git -C "$dir" worktree list --porcelain | awk '/^worktree / { print substr($0, 10); exit }')"
       (cd "$main" && git ls-files -z --others --ignored --exclude-standard | xargs -0 -r cp --parents -t "$dir") ;;
     "step eval {{ default_branch }}") git -C "$dir" symbolic-ref --short HEAD ;;
-    "hook pre-start --foreground project:" | "hook pre-start --foreground project: --var base="*) [[ ${DESK_WT_FAIL:-} != hook ]] || exit 1 ;;
+    "hook pre-start --foreground project:" | "hook pre-start --foreground project: --var base="*)
+      [[ -n ${DESK_APPROVALS:-} ]] && jq -e 'any(.commands[]; .phase == "pre-start")' "$DESK_APPROVALS" >/dev/null \
+        || { echo "✗ No project pre-start hooks configured" >&2; exit 1; }
+      [[ ${DESK_WT_FAIL:-} != hook ]] || { echo "deps: npm ci exited 1" >&2; exit 1; } ;;
     *) echo "fake wt: unexpected wt -C $dir $*" >&2; exit 99 ;;
   esac
   exit 0
@@ -1267,6 +1271,12 @@ HC
   export DESK_ARGV="$BATS_TEST_TMPDIR/$name-hc.argv"
   export DESK_HERDR_LOG="$BATS_TEST_TMPDIR/$name-herdr.log" DESK_SHOWN="$BATS_TEST_TMPDIR/$name-shown"
   : >"$DESK_HC_LOG"
+}
+
+# The repo has one approved project pre-start hook, as wt's approvals list it.
+_desk_project_hook() {
+  export DESK_APPROVALS="$BATS_TEST_TMPDIR/approved.json"
+  printf '%s\n' '{"state":"approved","commands":[{"phase":"pre-start","name":"deps","template":"npm ci","approved":true}]}' >"$DESK_APPROVALS"
 }
 
 # handoff-spawn --branch feat --stage bstack --issue $ISSUE --clean, plus $@.
@@ -1436,6 +1446,7 @@ _desk_moved_origin() {
   local out
   _desk_fixture existing
   _desk_origin existing
+  _desk_project_hook
   out="$(_desk_spawn --existing-branch 2>"$BATS_TEST_TMPDIR/existing.err")" \
     || fail "existing-branch spawn failed: $out $(cat "$BATS_TEST_TMPDIR/existing.err")"
   grep -q '^wt switch feat --no-cd --no-hooks$' "$DESK_HERDR_LOG" || fail "wt switch, never --create: $(cat "$DESK_HERDR_LOG")"
@@ -1450,6 +1461,7 @@ _desk_moved_origin() {
 @test "a --branch spawn skips wt's hooks, then copies, runs the project's pre-start and opens the space, in order" {
   local out sib copy hook space trunk
   _desk_fixture setup-order
+  _desk_project_hook
   trunk="$(git -C "$DESK_REPO" symbolic-ref --short HEAD)"
   printf 'node_modules/\n.bercail/\n.beads/store/\n' >"$DESK_REPO/.gitignore"
   git -C "$DESK_REPO" add .gitignore
@@ -1472,6 +1484,15 @@ _desk_moved_origin() {
   jq -e '.ok and .desk == "t9"' <<<"$out" >/dev/null || fail "$out"
 }
 
+@test "a --branch spawn in a repo with no project pre-start hooks starts the desk and runs none" {
+  local out
+  _desk_fixture no-project-hooks
+  out="$(_desk_spawn 2>"$BATS_TEST_TMPDIR/no-project-hooks.err")" \
+    || fail "spawn failed: $out $(cat "$BATS_TEST_TMPDIR/no-project-hooks.err")"
+  ! grep -q 'hook pre-start' "$DESK_HERDR_LOG" || fail "no project hook to run: $(cat "$DESK_HERDR_LOG")"
+  jq -e '.ok and .agent_started and .desk == "t9"' <<<"$out" >/dev/null || fail "$out"
+}
+
 @test "a --branch spawn refuses unapproved project pre-start hooks and keeps no worktree, branch or space" {
   local out
   _desk_fixture unapproved
@@ -1489,10 +1510,27 @@ _desk_moved_origin() {
   local out how
   for how in copy hook; do
     _desk_fixture "setup-fails-$how"
+    _desk_project_hook
     out="$(DESK_WT_FAIL="$how" _desk_spawn 2>&1)" && fail "a failed $how must stop the spawn: $out"
     ! grep -q 'space.new' "$DESK_HERDR_LOG" || fail "$how: no space: $(cat "$DESK_HERDR_LOG")"
     ! grep -q '^run ' "$DESK_HC_LOG" || fail "$how: no desk: $(cat "$DESK_HC_LOG")"
   done
+}
+
+@test "a failed copy or project hook shows its error and the exact command that reruns it" {
+  local out sib trunk
+  _desk_fixture rerun-copy
+  out="$(DESK_WT_FAIL=copy _desk_spawn 2>&1)" && fail "a failed copy must stop the spawn: $out"
+  sib="$(cd "$DESK_REPO.feat" && pwd -P)"
+  [[ "$out" == *"Rerun it: wt -C $sib step copy-ignored"* ]] || fail "name the copy's rerun: $out"
+  _desk_fixture rerun-hook
+  _desk_project_hook
+  trunk="$(git -C "$DESK_REPO" symbolic-ref --short HEAD)"
+  out="$(DESK_WT_FAIL=hook _desk_spawn 2>&1)" && fail "a failed hook must stop the spawn: $out"
+  sib="$(cd "$DESK_REPO.feat" && pwd -P)"
+  [[ "$out" == *"deps: npm ci exited 1"* ]] || fail "the hook's own error shows: $out"
+  [[ "$out" == *"Rerun them: wt -C $sib hook pre-start --foreground project: --var base=$trunk --var base_worktree_path=$DESK_REPO"* ]] \
+    || fail "name the project hooks' rerun, with wt switch's vars: $out"
 }
 
 @test "--existing-branch refuses a local branch with commits origin lacks, or one already checked out" {
