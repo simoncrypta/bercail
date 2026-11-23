@@ -19,6 +19,8 @@ if (mode === "crash-write") {
 if (mode === "crash-before" || mode === "crash-after") {
   const rename = fs.renameSync;
   fs.renameSync = (...args: Parameters<typeof fs.renameSync>) => {
+    // The commit boundary is the rename onto the ledger, not the backups' shift before it.
+    if (!String(args[1]).endsWith("/questions.json")) return rename(...args);
     if (mode === "crash-after") rename(...args);
     fs.writeSync(1, "commit-boundary\n");
     process.kill(process.pid, "SIGSTOP");

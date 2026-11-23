@@ -304,9 +304,11 @@ terminal. When the helper refuses:
 - A one-way door marked `reversible`: ask without it.
 - A wrong kind, field or checkout, or an issue not in that repo: fix the
   input.
-- A store locked by another writer: retry after a few seconds. A corrupt
-  one: stop deciding and ask the person to restore it; never write it
-  yourself.
+- A store locked by another writer: retry after a few seconds. A refused
+  one (corrupt, or this process cannot validate it): stop deciding, never
+  write it yourself, and run `bercail shep questions --json --all >/dev/null`.
+  If that reads it, ask the person to restart you. If not, give them the
+  error and point to docs/shep.md's recovery; do not pick a backup for them.
 - A revise or withdraw on a closed question: reload. Ask a new question only
   if the decision is still needed.
 

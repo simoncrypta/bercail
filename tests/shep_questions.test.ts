@@ -1,17 +1,19 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vite-plus/test";
 import { door, QuestionStore, projection, tokenOf, type QuestionSpec } from "../shep/pi/questions.ts";
 
@@ -148,7 +150,9 @@ describe("durable targeted questions", () => {
         accepted: true,
       },
     ]);
-    expect(() => store.create("forged", { ...fields(), trusted: true } as any, resolveSpec)).toThrow(/invalid fields/);
+    expect(() => store.create("forged", { ...fields(), trusted: true } as any, resolveSpec)).toThrow(
+      /trusted: unexpected field/,
+    );
     expect(new QuestionStore(state).snapshot().questions[0].status).toBe("pending");
   });
 
@@ -372,6 +376,160 @@ describe("durable targeted questions", () => {
     expect(() => store.snapshot()).toThrow(/corrupt/);
     expect(() => store.create("q", fields(), resolveSpec)).toThrow(/corrupt/);
     expect(readFileSync(join(state, "questions.json"), "utf8")).toBe(raw);
+  });
+
+  test("a corrupt ledger's error names the record and the field that failed", () => {
+    const q = store.create("q", fields(), resolveSpec);
+    store.propose("r", tokenOf(q), "yes", "text");
+    store.answer("pick", tokenOf(q), "yes", "panel picker", {
+      status: "fresh",
+      reasons: [],
+      current: { head: "a".repeat(40), stagedTree: "b".repeat(40) },
+    });
+    const file = join(state, "questions.json");
+    const good = JSON.parse(readFileSync(file, "utf8"));
+    const refused = (edit: (ledger: any) => void) => {
+      const ledger = structuredClone(good);
+      edit(ledger);
+      const raw = JSON.stringify(ledger);
+      writeFileSync(file, raw);
+      expect(() => store.create("next", fields("next"), resolveSpec)).toThrow(/not overwritten$/);
+      expect(readFileSync(file, "utf8")).toBe(raw);
+      try {
+        store.snapshot();
+      } catch (error) {
+        return (error as Error).message.replace(/^Question store: /, "");
+      }
+    };
+    expect(refused((l) => (l.questions[0].surprise = 1))).toBe(
+      "corrupt questions.json at Q1@1 (questions[0].surprise): unexpected field; not overwritten",
+    );
+    // Only the answer's receipt, deep in its result: the question record itself is sound.
+    expect(refused((l) => (l.requests.at(-1).result.question.answer.extra = true))).toBe(
+      "corrupt questions.json at request pick (requests[2].result.question.answer.extra): unexpected field; not overwritten",
+    );
+    expect(refused((l) => (l.requests.at(-1).result.accepted = "yes"))).toBe(
+      "corrupt questions.json at request pick (requests[2].result.accepted): not a boolean; not overwritten",
+    );
+    expect(refused((l) => (l.questions[0].prompt = 5))).toBe(
+      "corrupt questions.json at Q1@1 (questions[0].prompt): expected nonempty text; not overwritten",
+    );
+    expect(refused((l) => delete l.questions[0].answer.at)).toBe(
+      "corrupt questions.json at Q1@1 (questions[0].answer.at): missing field; not overwritten",
+    );
+    expect(refused((l) => (l.questions[0].createdAt = "not a date"))).toBe(
+      "corrupt questions.json at Q1@1 (questions[0].createdAt): invalid time; not overwritten",
+    );
+    expect(refused((l) => (l.questions[0].proposals = null))).toBe(
+      "corrupt questions.json at Q1@1 (questions[0].proposals): not a list; not overwritten",
+    );
+    expect(refused((l) => (l.version = 2))).toBe("corrupt questions.json at version: unknown version; not overwritten");
+    expect(refused((l) => (l.questions[0].target = "x"))).toBe(
+      "corrupt questions.json at Q1@1 (questions[0].target): not an object; not overwritten",
+    );
+    expect(refused((l) => (l.questions[0] = null))).toBe(
+      "corrupt questions.json at questions[0]: not an object; not overwritten",
+    );
+    expect(refused((l) => (l.questions[0].id = "Q0"))).toBe(
+      "corrupt questions.json at questions[0].id: invalid question id; not overwritten",
+    );
+    expect(refused((l) => l.requests.push(l.requests[0]))).toBe(
+      "corrupt questions.json at request q (requests[3]): duplicate request id; not overwritten",
+    );
+    // Node's own JSON.parse message quotes the file's first bytes: the store's never does.
+    writeFileSync(file, "sensitive content near the first byte");
+    expect(() => store.snapshot()).toThrow(
+      /^Question store: corrupt questions\.json: not valid JSON; not overwritten$/,
+    );
+  });
+
+  test("a process whose questions.ts changed since it loaded says to restart it, not that the ledger is corrupt", () => {
+    // An old module that does not know guard.defaults, as before 4df4756, and a ledger the real one wrote.
+    const real = readFileSync(fileURLToPath(new URL("../shep/pi/questions.ts", import.meta.url)), "utf8");
+    const old = real.replace('["defaults"]', "[]");
+    expect(old).not.toBe(real);
+    const copy = join(dir, "code", "questions.ts");
+    mkdirSync(join(dir, "code"));
+    writeFileSync(copy, old);
+    const ticket = "0123456789ab";
+    store.create(
+      "guard",
+      {
+        ...fields("guard", "guard"),
+        options: ["Allow", "Deny"],
+        guard: {
+          ticket,
+          worker: `guard-ask-${ticket}`,
+          op: { kind: "push" },
+          facts: {},
+          expires: "2026-11-14T13:00:00.000Z",
+          defaults: { why: "a private remote" },
+        },
+      },
+      resolveSpec,
+    );
+    const raw = readFileSync(join(state, "questions.json"), "utf8");
+    const script = `
+      import { writeFileSync } from "node:fs";
+      const { QuestionStore } = await import(${JSON.stringify(pathToFileURL(copy).href)});
+      const store = new QuestionStore(process.argv[1]);
+      const read = () => { try { store.snapshot(); return "read"; } catch (error) { return error.message; } };
+      const before = read();
+      writeFileSync(${JSON.stringify(copy)}, ${JSON.stringify(real)});
+      const after = read();
+      // Bytes no reader can parse are not a reason to restart.
+      const ledger = process.argv[1] + "/questions.json";
+      writeFileSync(ledger, "{");
+      const torn = read();
+      writeFileSync(ledger, ${JSON.stringify(raw)});
+      console.log(JSON.stringify([before, after, torn]));`;
+    const run = spawnSync(process.execPath, ["--input-type=module", "-e", script, state], { encoding: "utf8" });
+    expect(run.stderr).toBe("");
+    const [before, after, torn] = JSON.parse(run.stdout);
+    expect(torn).toBe("Question store: corrupt questions.json: not valid JSON; not overwritten");
+    expect(before).toBe(
+      "Question store: corrupt questions.json at Q1@1 (questions[0].guard.defaults): unexpected field; not overwritten",
+    );
+    expect(after).toBe(
+      `Question store: this process cannot validate questions.json at Q1@1 (questions[0].guard.defaults): unexpected field, and ${copy} changed since this process loaded it: restart it and retry before considering a repair; not overwritten`,
+    );
+    expect(new QuestionStore(state).snapshot().questions[0].guard?.defaults).toEqual({ why: "a private remote" });
+    expect(readFileSync(join(state, "questions.json"), "utf8")).toBe(raw);
+  });
+
+  test("each write keeps the three states before it, and a refused read keeps none", () => {
+    const file = join(state, "questions.json");
+    const kept = (n: number) => join(state, `questions.json.${n}`);
+    store.create("a", fields("a"), resolveSpec);
+    expect(existsSync(kept(1))).toBe(false);
+    const states = [readFileSync(file, "utf8")];
+    for (const topic of ["b", "c", "d", "e"]) {
+      store.create(topic, fields(topic), resolveSpec);
+      states.push(readFileSync(file, "utf8"));
+    }
+    expect([1, 2, 3].map((n) => readFileSync(kept(n), "utf8"))).toEqual([states[3], states[2], states[1]]);
+    expect(existsSync(kept(4))).toBe(false);
+    for (const n of [1, 2, 3]) expect(statSync(kept(n)).mode & 0o777).toBe(0o600);
+    writeFileSync(file, "{");
+    expect(() => store.create("f", fields("f"), resolveSpec)).toThrow(/corrupt/);
+    expect([1, 2, 3].map((n) => readFileSync(kept(n), "utf8"))).toEqual([states[3], states[2], states[1]]);
+  });
+
+  test.each([
+    ["after its link: .1 is the primary's own inode", true],
+    ["before its link: .1 is missing", false],
+  ])("a write retried after one that stopped mid-rotation, %s, keeps the three states before it", (_, linked) => {
+    const file = join(state, "questions.json");
+    const kept = (n: number) => join(state, `questions.json.${n}`);
+    for (const topic of ["a", "b", "c", "d"]) store.create(topic, fields(topic), resolveSpec);
+    const before = readFileSync(file, "utf8");
+    const older = [readFileSync(kept(1), "utf8"), readFileSync(kept(2), "utf8")];
+    renameSync(kept(2), kept(3));
+    renameSync(kept(1), kept(2));
+    if (linked) linkSync(file, kept(1));
+    store.create("e", fields("e"), resolveSpec);
+    expect([1, 2, 3].map((n) => readFileSync(kept(n), "utf8"))).toEqual([before, ...older]);
+    expect(statSync(kept(1)).ino).not.toBe(statSync(file).ino);
   });
 
   test("a forged verified proposal in the persisted file fails closed", () => {
@@ -919,7 +1077,12 @@ describe("durable targeted questions", () => {
       ["no desk", { desk: null, space: null, session: null }, {}, /expected nonempty text/],
       ["commit action", { action: "commit" }, {}, /action land/],
       ["no ci", {}, land({ requiredCi: [] }), /required_ci/],
-      ["no ci id", {}, land({ requiredCi: [{ path: ".github/workflows/ci.yml", id: null }] }), /has no GitHub ID/],
+      [
+        "no ci id",
+        {},
+        land({ requiredCi: [{ path: ".github/workflows/ci.yml", id: null }] }),
+        /requiredCi\[0\]\.id: a required_ci workflow needs its GitHub ID/,
+      ],
       ["lgtm, no reviewer", {}, { ...land({ review: lgtm }), options: ["LGTM, ship it", "Not yet"] }, /nonempty/],
       ["lgtm, plain choices", {}, land({ review: lgtm, reviewer: "Simon" }), /offers LGTM, ship it and Not yet/],
       ["reviewer, no review", {}, land({ reviewer: "Simon" }), /reviewer only when review is required/],

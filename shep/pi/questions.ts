@@ -1,7 +1,19 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  closeSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { isAbsolute, join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 export interface QuestionTarget {
   repo: string;
   issue: string | null;
@@ -248,23 +260,35 @@ type Receipt = { requestId: string; payload: string; result: Question | Proposal
 const STATUSES = ["pending", "answered", "superseded", "withdrawn"];
 type State = QuestionSnapshot & { requests: Receipt[] };
 
-function fail(message: string): never {
-  throw new Error(`Question store: ${message}`);
+// Why a check failed, and where: a field's path in a spec, or in the ledger the record
+// and its path.
+class Invalid extends Error {
+  readonly why: string;
+  readonly where: string;
+  constructor(why: string, where = "") {
+    super(`Question store: ${where ? `${where}: ` : ""}${why}`);
+    this.why = why;
+    this.where = where;
+  }
 }
-function text(value: unknown): asserts value is string {
-  if (typeof value !== "string" || !value.trim()) fail("expected nonempty text");
+function fail(why: string, where = ""): never {
+  throw new Invalid(why, where);
 }
-function shape(value: unknown, keys: string[]): asserts value is Record<string, unknown> {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    Array.isArray(value) ||
-    Object.keys(value).sort().join() !== [...keys].sort().join()
-  )
-    fail("invalid fields");
+const field = (at: string, key: string) => (at ? `${at}.${key}` : key);
+function text(value: unknown, at = ""): asserts value is string {
+  if (typeof value !== "string" || !value.trim()) fail("expected nonempty text", at);
 }
+function shape(value: unknown, keys: string[], at = ""): asserts value is Record<string, unknown> {
+  if (!object(value)) fail("not an object", at);
+  const extra = Object.keys(value as object).find((key) => !keys.includes(key));
+  if (extra !== undefined) fail("unexpected field", field(at, extra));
+  const missing = keys.find((key) => !(key in (value as object)));
+  if (missing !== undefined) fail("missing field", field(at, missing));
+}
+const object = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value);
 // Keys an older ledger may lack: present with a value, or absent.
-const optional = (value: Record<string, unknown>, keys: string[]) => keys.filter((key) => value[key] !== undefined);
+const optional = (value: unknown, keys: string[]) =>
+  object(value) ? keys.filter((key) => (value as Record<string, unknown>)[key] !== undefined) : [];
 function spec(value: unknown): asserts value is QuestionSpec {
   const v = value as Record<string, unknown>;
   shape(value, [
@@ -275,21 +299,21 @@ function spec(value: unknown): asserts value is QuestionSpec {
     "target",
     ...optional(v ?? {}, ["brief", "recommendation", "reversible", "push", "guard", "land"]),
   ]);
-  if (!["planning", "review", "action", "guard", "land"].includes(value.kind as string)) fail("invalid kind");
-  text(value.prompt);
-  if (!Array.isArray(value.options)) fail("invalid options");
-  value.options.forEach(text);
-  if (value.brief !== undefined) text(value.brief);
+  if (!["planning", "review", "action", "guard", "land"].includes(value.kind as string)) fail("invalid kind", "kind");
+  text(value.prompt, "prompt");
+  if (!Array.isArray(value.options)) fail("invalid options", "options");
+  value.options.forEach((option, i) => text(option, `options[${i}]`));
+  if (value.brief !== undefined) text(value.brief, "brief");
   if (value.recommendation !== undefined) {
-    shape(value.recommendation, ["choice", "why"]);
-    text(value.recommendation.why);
+    shape(value.recommendation, ["choice", "why"], "recommendation");
+    text(value.recommendation.why, "recommendation.why");
     if (!value.options.includes(value.recommendation.choice)) fail("recommendation must be one of the options");
   }
   if (value.reversible !== undefined && value.reversible !== true) fail("reversible is true or absent");
-  shape(value.origin, ["event", "session", "entry"]);
-  text(value.origin.event);
-  text(value.origin.session);
-  if (value.origin.entry !== null) text(value.origin.entry);
+  shape(value.origin, ["event", "session", "entry"], "origin");
+  text(value.origin.event, "origin.event");
+  text(value.origin.session, "origin.session");
+  if (value.origin.entry !== null) text(value.origin.entry, "origin.entry");
   const keys = [
     "repo",
     "issue",
@@ -304,10 +328,10 @@ function spec(value: unknown): asserts value is QuestionSpec {
     "base",
     "baseRef",
   ];
-  shape(value.target, [...keys, ...optional(value.target as Record<string, unknown>, ["branch", "trailId", "url"])]);
-  if (value.target.branch != null) text(value.target.branch);
-  if (value.target.trailId !== undefined) text(value.target.trailId);
-  if (value.target.url !== undefined) text(value.target.url);
+  shape(value.target, [...keys, ...optional(value.target, ["branch", "trailId", "url"])], "target");
+  if (value.target.branch != null) text(value.target.branch, "target.branch");
+  if (value.target.trailId !== undefined) text(value.target.trailId, "target.trailId");
+  if (value.target.url !== undefined) text(value.target.url, "target.url");
   // The desk is optional for every kind but land: a question binds to its repo and issue.
   // A guard card binds to its pinned facts instead.
   const desk = ["desk", "space", "session"];
@@ -319,16 +343,16 @@ function spec(value: unknown): asserts value is QuestionSpec {
       key === "repo" ||
       key === "topic"
     )
-      text(value.target[key]);
+      text(value.target[key], `target.${key}`);
   const repo = value.target.repo as string;
   if (!isAbsolute(repo) || normalize(repo) !== repo)
     fail("repo must be a canonical absolute identity path supplied by the caller");
   if (value.target.worktree !== null && !isAbsolute(value.target.worktree as string)) fail("worktree must be absolute");
   if (value.push !== undefined) push(value as unknown as QuestionSpec);
   if ((value.kind === "guard") !== (value.guard !== undefined)) fail("a guard card, and only it, has its guard");
-  if (value.guard !== undefined) guard(value as unknown as QuestionSpec);
+  if (value.guard !== undefined) located(undefined, "guard", () => guard(value as unknown as QuestionSpec));
   if ((value.kind === "land") !== (value.land !== undefined)) fail("a land card, and only it, has its land facts");
-  if (value.land !== undefined) land(value as unknown as QuestionSpec);
+  if (value.land !== undefined) located(undefined, "land", () => land(value as unknown as QuestionSpec));
 }
 const sha = (value: unknown) => typeof value === "string" && /^[0-9a-f]{40}([0-9a-f]{24})?$/.test(value);
 // A land card: the commit's facts pinned whole, its CI gate named, and Ship it or Not yet
@@ -351,18 +375,18 @@ function land(value: QuestionSpec) {
     "review",
     "reviewer",
   ]);
-  for (const key of ["url", "github", "bercail"] as const) text(l[key]);
+  for (const key of ["url", "github", "bercail"] as const) text(l[key], key);
   if (typeof l.ciRef !== "string" || !/^refs\/heads\/bercail-land\/[\w./-]+\/[0-9a-f]{12}$/.test(l.ciRef))
     fail("a land card pushes for CI to a new branch of its own, refs/heads/bercail-land/<branch>/<id>");
   if (l.policyTrust !== null && !/^[0-9a-f]{64}$/.test(l.policyTrust as string))
     fail("a land card trusts a policy file by its sha256, or none");
   if (l.registered !== true || l.clean !== true)
     fail("a land card is asked on a linked worktree git lists, with nothing unstaged or untracked");
-  shape(l.description, ["tree", "message"]);
-  shape(l.policy, ["file", "trusted", "hash"]);
-  shape(l.review, ["required", "highStakes"]);
-  text(l.policy.file);
-  text(l.policy.hash);
+  shape(l.description, ["tree", "message"], "description");
+  shape(l.policy, ["file", "trusted", "hash"], "policy");
+  shape(l.review, ["required", "highStakes"], "review");
+  text(l.policy.file, "policy.file");
+  text(l.policy.hash, "policy.hash");
   if (
     typeof l.policy.trusted !== "boolean" ||
     !sha(l.description.tree) ||
@@ -372,15 +396,15 @@ function land(value: QuestionSpec) {
     !Array.isArray(l.review.highStakes)
   )
     fail("a land card pins its tree, description, policy, bercail and review");
-  l.review.highStakes.forEach(text);
+  l.review.highStakes.forEach((path, i) => text(path, `review.highStakes[${i}]`));
   if (!Array.isArray(l.requiredCi) || !l.requiredCi.length)
     fail("a land card waits for the policy's required_ci: name each workflow and its ID");
-  for (const run of l.requiredCi) {
-    shape(run, ["path", "id"]);
-    text(run.path);
-    if (!Number.isSafeInteger(run.id)) fail(`required_ci workflow ${run.path} has no GitHub ID`);
+  for (const [i, run] of l.requiredCi.entries()) {
+    shape(run, ["path", "id"], `requiredCi[${i}]`);
+    text(run.path, `requiredCi[${i}].path`);
+    if (!Number.isSafeInteger(run.id)) fail("a required_ci workflow needs its GitHub ID", `requiredCi[${i}].id`);
   }
-  if (l.review.required) text(l.reviewer);
+  if (l.review.required) text(l.reviewer, "reviewer");
   else if (l.reviewer !== null) fail("a land card names a reviewer only when review is required");
   if (t.action !== "land" || !sha(t.head) || !sha(t.stagedTree) || !sha(t.base) || !t.branch?.startsWith("refs/heads/"))
     fail("a land card targets a branch's HEAD and staged tree, action land, on the trunk's commit");
@@ -399,7 +423,6 @@ function land(value: QuestionSpec) {
   )
     fail(`a land card offers ${choices.join(" and ")} only, with no recommendation, default or push`);
 }
-const object = (value: unknown) => value !== null && typeof value === "object" && !Array.isArray(value);
 // A guard card: Allow or Deny, nothing Shep recommends, on one ticket. Its own deadline
 // is `expires`, where it counts as a Deny, or as an Allow when it says it defaults.
 function guard(value: QuestionSpec) {
@@ -413,12 +436,12 @@ function guard(value: QuestionSpec) {
     ...optional((g ?? {}) as Record<string, unknown>, ["defaults"]),
   ]);
   if (g.defaults !== undefined) {
-    shape(g.defaults, ["why"]);
-    text(g.defaults.why);
+    shape(g.defaults, ["why"], "defaults");
+    text(g.defaults.why, "defaults.why");
   }
   if (typeof g.ticket !== "string" || !/^[0-9a-f]{12}$/.test(g.ticket) || g.worker !== `guard-ask-${g.ticket}`)
     fail("a guard card names its ticket and its worker, guard-ask-<ticket>");
-  text(g.expires);
+  text(g.expires, "expires");
   if (
     !object(g.op) ||
     !["cleanup", "trail merge", "push", "command"].includes((g.op as { kind?: string }).kind as string) ||
@@ -435,13 +458,13 @@ const refName = /^refs\/(heads|tags)\/[\w./-]+$/;
 // default, with a tag only on a release question.
 function push(value: QuestionSpec) {
   const p = value.push;
-  shape(p, ["approves", "remote", "refs", "url"]);
+  shape(p, ["approves", "remote", "refs", "url"], "push");
   if (!value.options.includes(p.approves as string)) fail("push.approves must be one of the options");
   if (value.kind === "planning") fail("a planning question binds to no commit, so it cannot approve a push");
   if (value.reversible) fail("a push is a one-way door: ask it without reversible");
-  text(p.remote);
+  text(p.remote, "push.remote");
   if (!/^[A-Za-z0-9][\w.-]*$/.test(p.remote as string)) fail("push.remote must be the remote's name");
-  text(p.url);
+  text(p.url, "push.url");
   if (!Array.isArray(p.refs) || !p.refs.length || new Set(p.refs).size !== p.refs.length)
     fail("push.refs must list each ref once");
   for (const ref of p.refs as unknown[])
@@ -489,41 +512,26 @@ function question(value: unknown): asserts value is Question {
     ...fields
   } = value;
   spec(fields);
-  if (
-    typeof id !== "string" ||
-    !/^Q[1-9]\d*$/.test(id) ||
-    !Number.isSafeInteger(Number(id.slice(1))) ||
-    !Number.isSafeInteger(revision) ||
-    (revision as number) < 1
-  )
-    fail("invalid question revision");
-  if (!STATUSES.includes(status as string)) fail("invalid status");
-  text(createdAt);
-  if (!Number.isFinite(Date.parse(createdAt)) || !Array.isArray(proposals)) fail("invalid question history");
+  if (!goodId(id)) fail("invalid question id", "id");
+  if (!goodRevision(revision)) fail("invalid question revision", "revision");
+  if (!STATUSES.includes(status as string)) fail("invalid status", "status");
+  text(createdAt, "createdAt");
+  if (!Number.isFinite(Date.parse(createdAt))) fail("invalid time", "createdAt");
+  if (!Array.isArray(proposals)) fail("not a list", "proposals");
   if (deadline !== undefined) {
-    text(deadline);
+    text(deadline, "deadline");
     if (!fields.reversible || !fields.recommendation || !(Date.parse(deadline) > Date.parse(createdAt)))
       fail("only a reversible question with a recommendation has a deadline, after it was asked");
   }
   if (told !== undefined && (told !== true || (answer as QuestionAnswer | undefined)?.source !== DEFAULT_SOURCE))
     fail("only a default is told");
-  for (const p of proposals) {
-    shape(p, [
-      "requestId",
-      "answer",
-      "source",
-      "at",
-      "verified",
-      "accepted",
-      ...(p?.reason === undefined ? [] : ["reason"]),
-    ]);
-    text(p.requestId);
-    text(p.answer);
-    text(p.source);
-    text(p.at);
-    if (p.verified !== false || typeof p.accepted !== "boolean" || !Number.isFinite(Date.parse(p.at)))
-      fail("invalid unverified proposal");
-    if (!p.accepted) text(p.reason);
+  for (const [i, p] of proposals.entries()) {
+    const at = `proposals[${i}]`;
+    shape(p, ["requestId", "answer", "source", "at", "verified", "accepted", ...optional(p, ["reason"])], at);
+    for (const key of ["requestId", "answer", "source", "at"]) text(p[key], `${at}.${key}`);
+    if (p.verified !== false || typeof p.accepted !== "boolean" || !Number.isFinite(Date.parse(p.at as string)))
+      fail("invalid unverified proposal", at);
+    if (!p.accepted) text(p.reason, `${at}.reason`);
   }
   // A default Shep withdrew (moot, or its reversal handled) keeps its record.
   const kept =
@@ -533,9 +541,9 @@ function question(value: unknown): asserts value is Question {
   if (status === "answered" ? answer === undefined : answer !== undefined && !kept)
     fail("an answered question needs its answer, and only it");
   if (answer !== undefined) {
-    shape(answer, ["requestId", "choice", "source", "at", "head", "stagedTree"]);
-    text(answer.requestId);
-    text(answer.at);
+    shape(answer, ["requestId", "choice", "source", "at", "head", "stagedTree"], "answer");
+    text(answer.requestId, "answer.requestId");
+    text(answer.at, "answer.at");
     if (!fields.options.includes(answer.choice as string)) fail("answer is not one of the options");
     if (answer.source === DEFAULT_SOURCE) {
       if (
@@ -550,23 +558,18 @@ function question(value: unknown): asserts value is Question {
         fail("a guard default is an Allow on a card that said it defaults, taken at or after its deadline");
     } else if (!ANSWER_SOURCES.includes(answer.source as (typeof ANSWER_SOURCES)[number]))
       fail("unknown answer source");
-    for (const key of ["head", "stagedTree"]) if (answer[key] !== null) text(answer[key]);
+    for (const key of ["head", "stagedTree"]) if (answer[key] !== null) text(answer[key], `answer.${key}`);
     if (!Number.isFinite(Date.parse(answer.at as string))) fail("invalid answer time");
   }
   if (settled !== undefined) {
     const a = answer as QuestionAnswer | undefined;
     if (a?.source !== DEFAULT_SOURCE) fail("only a default is settled");
-    shape(settled, [
-      "requestId",
-      "outcome",
-      "choice",
-      "source",
-      "at",
-      "head",
-      "stagedTree",
-      ...optional(settled as Record<string, unknown>, ["told"]),
-    ]);
-    text(settled.requestId);
+    shape(
+      settled,
+      ["requestId", "outcome", "choice", "source", "at", "head", "stagedTree", ...optional(settled, ["told"])],
+      "settled",
+    );
+    text(settled.requestId, "settled.requestId");
     if (settled.told !== undefined && settled.told !== true) fail("told is true or absent");
     if (
       settled.outcome === "ok"
@@ -577,20 +580,15 @@ function question(value: unknown): asserts value is Question {
     )
       fail("an OK keeps the default's choice; a Reverse names another choice or none");
     if (!ANSWER_SOURCES.includes(settled.source as (typeof ANSWER_SOURCES)[number])) fail("unknown answer source");
-    for (const key of ["head", "stagedTree"]) if (settled[key] !== null) text(settled[key]);
+    for (const key of ["head", "stagedTree"]) if (settled[key] !== null) text(settled[key], `settled.${key}`);
     if (!(Date.parse(settled.at as string) >= Date.parse(a.at))) fail("invalid settlement time");
   }
   if ((status === "withdrawn") !== (withdrawal !== undefined))
     fail("a withdrawn question needs its withdrawal, and only it");
   if (withdrawal !== undefined) {
-    shape(withdrawal, [
-      "requestId",
-      "reason",
-      "at",
-      ...optional(withdrawal as Record<string, unknown>, ["source", "told"]),
-    ]);
-    text(withdrawal.requestId);
-    text(withdrawal.reason);
+    shape(withdrawal, ["requestId", "reason", "at", ...optional(withdrawal, ["source", "told"])], "withdrawal");
+    text(withdrawal.requestId, "withdrawal.requestId");
+    text(withdrawal.reason, "withdrawal.reason");
     if (withdrawal.source !== undefined && withdrawal.source !== PUSH_SOURCE) fail("only the panel closes a card");
     if (withdrawal.told !== undefined && (withdrawal.told !== true || withdrawal.source === undefined))
       fail("told is true, and only on the person's Close");
@@ -600,7 +598,7 @@ function question(value: unknown): asserts value is Question {
     const a = answer as QuestionAnswer | undefined;
     if (!fields.push || !a || a.choice !== fields.push.approves)
       fail("only the person's approving answer is claimed by a push");
-    shape(pushed, ["at", "remote", "refspecs"]);
+    shape(pushed, ["at", "remote", "refspecs"], "pushed");
     const refs = Array.isArray(pushed.refspecs) ? pushed.refspecs.map((spec) => String(spec).split(":")[1]) : [];
     if (
       !Number.isFinite(Date.parse(pushed.at as string)) ||
@@ -617,7 +615,7 @@ function question(value: unknown): asserts value is Question {
       (a.source !== PUSH_SOURCE && a.source !== GUARD_DEFAULT_SOURCE)
     )
       fail("only the person's Allow on a guard card, or its default, is claimed by its worker");
-    shape(guardClaim, ["at"]);
+    shape(guardClaim, ["at"], "guardClaim");
     if (!Number.isFinite(Date.parse(guardClaim.at as string))) fail("invalid guard claim time");
   }
   if (fields.kind === "land" && answer !== undefined && answer.source !== PUSH_SOURCE)
@@ -625,9 +623,12 @@ function question(value: unknown): asserts value is Question {
   if (landing !== undefined) {
     if (!shipped(value as unknown as Question))
       fail("only the person's Ship it on a land card's panel starts its chain");
-    landed(value as unknown as Question);
+    located(undefined, "landing", () => landed(value as unknown as Question));
   }
 }
+const goodId = (id: unknown): id is string =>
+  typeof id === "string" && /^Q[1-9]\d*$/.test(id) && Number.isSafeInteger(Number(id.slice(1)));
+const goodRevision = (revision: unknown) => Number.isSafeInteger(revision) && (revision as number) >= 1;
 const when = (at: unknown) => typeof at === "string" && Number.isFinite(Date.parse(at));
 // The worker's terminal for a land card's revision: hc names are lowercase.
 export const landTerminal = (q: Pick<Question, "id" | "revision">) => `land-${q.id.toLowerCase()}-${q.revision}`;
@@ -652,33 +653,29 @@ function landed(q: Question) {
   const l = q.landing!;
   shape(l, ["starts", "steps", ...optional(l as unknown as Record<string, unknown>, ["claim", "result"])]);
   if (!Array.isArray(l.starts) || !Array.isArray(l.steps)) fail("invalid land chain");
-  for (const start of l.starts) {
-    shape(start, ["terminal", "at"]);
+  for (const [i, start] of l.starts.entries()) {
+    shape(start, ["terminal", "at"], `starts[${i}]`);
     if (start.terminal !== landTerminal(q) || !when(start.at)) fail("a land start names the card's terminal and when");
   }
   if (l.claim !== undefined) {
-    shape(l.claim, ["at"]);
+    shape(l.claim, ["at"], "claim");
     if (!when(l.claim.at)) fail("invalid land claim time");
   }
   if (!l.claim && (l.steps.length || l.result)) fail("a land chain is claimed before any step or result");
   l.steps.forEach((s, i) => {
-    shape(s, ["step", "at", ...optional(s as unknown as Record<string, unknown>, ["detail"])]);
+    shape(s, ["step", "at", ...optional(s, ["detail"])], `steps[${i}]`);
     if (advance(l.steps[i - 1]?.step, s.step) || !when(s.at)) fail("land steps are known steps, one after another");
-    if (s.detail !== undefined) text(s.detail);
+    if (s.detail !== undefined) text(s.detail, `steps[${i}].detail`);
   });
   const r = l.result;
   if (r === undefined) return;
-  shape(r, [
-    "outcome",
-    "step",
-    "commit",
-    "warnings",
-    "log",
-    "at",
-    ...optional(r as unknown as Record<string, unknown>, ["told", "why", "trusted"]),
-  ]);
-  text(r.log);
-  if (r.why !== undefined) text(r.why);
+  shape(
+    r,
+    ["outcome", "step", "commit", "warnings", "log", "at", ...optional(r, ["told", "why", "trusted"])],
+    "result",
+  );
+  text(r.log, "result.log");
+  if (r.why !== undefined) text(r.why, "result.why");
   if (r.trusted !== undefined && (r.outcome !== "landed" || r.trusted !== q.land!.policyTrust))
     fail("a land result trusts only the card's policy file, once it landed");
   if (
@@ -691,47 +688,69 @@ function landed(q: Question) {
     (r.told !== undefined && r.told !== true)
   )
     fail("a land result is a known outcome at the last step, landed only past the trunk push with its commit");
-  r.warnings.forEach(text);
+  r.warnings.forEach((warning, i) => text(warning, `result.warnings[${i}]`));
 }
+// Runs one record's check: a failure names the record, once it has a name, and the field's
+// path from the ledger's top.
+function located(name: string | undefined, at: string, check: () => void) {
+  try {
+    check();
+  } catch (error) {
+    if (!(error instanceof Invalid)) throw error;
+    const path = error.where ? `${at}.${error.where}` : at;
+    fail(error.why, name ? `${name} (${path})` : path);
+  }
+}
+const named = (q: unknown) =>
+  object(q) && goodId((q as Question).id) && goodRevision((q as Question).revision)
+    ? tokenOf(q as Question)
+    : undefined;
 function validate(value: unknown): asserts value is State {
   shape(value, ["version", "questions", "selected", "requests"]);
-  if (value.version !== 1 || !Array.isArray(value.questions) || !Array.isArray(value.requests))
-    fail("invalid state version or history");
-  if (value.selected !== null) text(value.selected);
+  if (value.version !== 1) fail("unknown version", "version");
+  if (!Array.isArray(value.questions)) fail("not a list", "questions");
+  if (!Array.isArray(value.requests)) fail("not a list", "requests");
+  if (value.selected !== null) text(value.selected, "selected");
   const latest = new Map<string, Question>();
-  for (const q of value.questions) {
-    question(q);
+  for (const [i, q] of value.questions.entries()) {
+    const at = `questions[${i}]`;
+    located(named(q), at, () => question(q));
     const previous = latest.get(q.id);
     if (
       q.revision !== (previous?.revision ?? 0) + 1 ||
       (previous && (previous.status !== "superseded" || !sameScope(previous, q)))
     )
-      fail("invalid revision history");
+      fail("invalid revision history", `${tokenOf(q)} (${at})`);
     latest.set(q.id, q);
   }
-  if ([...latest.values()].some((q) => q.status === "superseded")) fail("missing current revision");
+  const current = [...latest.values()].find((q) => q.status === "superseded");
+  if (current) fail("missing current revision", `${tokenOf(current)} (questions[${value.questions.indexOf(current)}])`);
   const running = value.questions.filter(isRunning);
-  if (running.some((q, i) => running.slice(i + 1).some((o) => overlaps(q, o))))
-    fail("two land chains run for the same worktree, branch or job");
+  for (const [i, q] of running.entries()) {
+    const other = running.slice(i + 1).find((o) => overlaps(q, o));
+    if (other) fail("two land chains run for the same worktree, branch or job", `${tokenOf(q)} and ${tokenOf(other)}`);
+  }
   if (value.selected !== null && !value.questions.some((q) => q.target.topic === value.selected))
-    fail("unknown selected topic");
+    fail("unknown selected topic", "selected");
   const ids = new Set<string>();
-  for (const r of value.requests) {
-    shape(r, ["requestId", "payload", "result"]);
-    text(r.requestId);
-    text(r.payload);
-    if (ids.has(r.requestId)) fail("duplicate request id");
-    ids.add(r.requestId);
-    if (r.result && typeof r.result === "object" && "question" in r.result) {
-      const result = r.result as ProposalResult;
-      // An answer receipt has no duplicate flag; a reply receipt has one.
-      const keys = ["question", "accepted", ...optional(result as never, ["duplicate", "reason"])];
-      shape(result, keys);
-      question(result.question);
-      if (typeof result.accepted !== "boolean" || !["undefined", "boolean"].includes(typeof result.duplicate))
-        fail("invalid reply receipt");
-      if (!result.accepted) text(result.reason);
-    } else question(r.result);
+  for (const [i, r] of value.requests.entries()) {
+    const at = `requests[${i}]`;
+    shape(r, ["requestId", "payload", "result"], at);
+    text(r.requestId, `${at}.requestId`);
+    located(`request ${r.requestId}`, at, () => {
+      text(r.payload, "payload");
+      if (ids.has(r.requestId as string)) fail("duplicate request id");
+      ids.add(r.requestId as string);
+      if (object(r.result) && "question" in (r.result as object)) {
+        const result = r.result as ProposalResult;
+        // An answer receipt has no duplicate flag; a reply receipt has one.
+        shape(result, ["question", "accepted", ...optional(result, ["duplicate", "reason"])], "result");
+        located(undefined, "result.question", () => question(result.question));
+        if (typeof result.accepted !== "boolean") fail("not a boolean", "result.accepted");
+        if (!["undefined", "boolean"].includes(typeof result.duplicate)) fail("not a boolean", "result.duplicate");
+        if (!result.accepted) text(result.reason, "result.reason");
+      } else located(undefined, "result", () => question(r.result));
+    });
   }
 }
 // A land chain that was claimed and has no result yet, and whether two such chains would
@@ -837,6 +856,63 @@ type Check = {
   policy?: { status: string; current?: unknown };
 };
 
+// This module's source and its sha256 when it loaded, if it could be read. A deploy that
+// replaced it since makes a ledger this process refuses a reason to restart it first.
+const hash = (path: string) => createHash("sha256").update(readFileSync(path)).digest("hex");
+const loaded = (() => {
+  try {
+    const path = fileURLToPath(import.meta.url);
+    return { path, hash: hash(path) };
+  } catch {
+    return undefined;
+  }
+})();
+const changed = () => {
+  if (!loaded) return false;
+  try {
+    return hash(loaded.path) !== loaded.hash;
+  } catch {
+    return true;
+  }
+};
+// A ledger this process will not read. It never echoes the file: Node's JSON.parse error quotes it.
+function refuse(error: unknown, parsed: boolean): never {
+  const why = !parsed ? "not valid JSON" : error instanceof Invalid ? error.why : "not a valid ledger";
+  const at = error instanceof Invalid && error.where ? ` at ${error.where}` : "";
+  if (parsed && changed())
+    fail(
+      `this process cannot validate questions.json${at}: ${why}, and ${loaded!.path} changed since this process loaded it: restart it and retry before considering a repair; not overwritten`,
+    );
+  fail(`corrupt questions.json${at}: ${why}; not overwritten`);
+}
+// Keeps the primary, before a write replaces it, as questions.json.1, and the older ones as
+// .2 and .3: a hard link, not a copy. A .1 that already is the primary was kept by a write
+// that stopped before it replaced it, so the retry keeps nothing new; a missing .1 was
+// shifted by one that stopped before the link, or never kept, so the older ones stay.
+function keep(primary: string) {
+  const now = statSync(primary, { bigint: true });
+  const slot = (n: number) => `${primary}.${n}`;
+  const absent = (error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  };
+  let one;
+  try {
+    one = statSync(slot(1), { bigint: true });
+  } catch (error) {
+    absent(error);
+  }
+  if (one && one.dev === now.dev && one.ino === now.ino) return;
+  if (one) {
+    try {
+      renameSync(slot(2), slot(3));
+    } catch (error) {
+      absent(error);
+    }
+    renameSync(slot(1), slot(2));
+  }
+  linkSync(primary, slot(1));
+}
+
 // The caller supplies repo identity; this store never probes or changes a checkout.
 export class QuestionStore {
   private readonly dir: string;
@@ -853,19 +929,21 @@ export class QuestionStore {
       const acquired = spawnSync("flock", ["-x", "-w", "10", "3"], { stdio: ["ignore", "pipe", "pipe", lock] });
       if (acquired.error || acquired.status !== 0)
         fail("cannot acquire lock; install flock or retry when the writer finishes");
+      const primary = join(this.dir, "questions.json");
       let state: State;
-      let raw: string;
+      let raw: string | undefined;
       try {
-        raw = readFileSync(join(this.dir, "questions.json"), "utf8");
+        raw = readFileSync(primary, "utf8");
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        raw = JSON.stringify({ version: 1, questions: [], selected: null, requests: [] });
       }
+      let parsed = false;
       try {
-        state = JSON.parse(raw);
+        state = raw === undefined ? { version: 1, questions: [], selected: null, requests: [] } : JSON.parse(raw);
+        parsed = true;
         validate(state);
-      } catch {
-        fail("corrupt questions.json; restore it before continuing (not overwritten)");
+      } catch (error) {
+        refuse(error, parsed);
       }
       const result = run(state);
       if (write) {
@@ -879,7 +957,8 @@ export class QuestionStore {
           } finally {
             closeSync(fd);
           }
-          renameSync(temp, join(this.dir, "questions.json"));
+          if (raw !== undefined) keep(primary);
+          renameSync(temp, primary);
           const fdDir = openSync(this.dir, "r");
           try {
             fsyncSync(fdDir);
