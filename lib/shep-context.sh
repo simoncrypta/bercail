@@ -139,29 +139,41 @@ _shep_open_trails() {
 # Known repos as a JSON array: path, git backend, policy (trusted, untrusted,
 # none), open issue count (null without beads or trails), where bercail saw the
 # repo, and the open issues themselves for the board: beads issues, and in an
-# Entire repo its open trails (complete: the trails left to close).
+# Entire repo its open trails (complete: the trails left to close). DESKS, the
+# live desks as JSON, saves a second scan. The repos are read at once: a bd
+# list or a trail list takes up to seconds, and one after another they outgrew
+# the board's cap (bercail-tzx7).
 _shep_repos_json() {
-  local main from backend policy issues beads trails
+  local main from fd out=""
+  local -a fds=()
   while IFS=$'\t' read -r main from; do
-    backend="$(git_backend "$main" 2>/dev/null)" || backend=""
-    policy="$(policy_json "$main" 2>/dev/null \
-      | jq -r 'if .file == "" then "none" elif .trusted then "trusted" else "untrusted" end' 2>/dev/null)" || policy=""
-    beads=false
-    [[ ! -d "$main/.beads" ]] || beads=true
-    issues="$(_shep_open_issues "$main")" || issues=null
-    trails=null
-    [[ "$backend" != entire ]] || trails="$(_shep_open_trails "$main")" || trails=false
-    jq -nc --arg path "$main" --arg from "$from" --arg backend "$backend" --arg policy "$policy" --argjson issues "$issues" --argjson beads "$beads" \
-      --argjson trails "$trails" '
-      # A source that failed makes the whole list UNKNOWN, never a shorter one.
-      (if $trails == false or ($beads and $issues == null) or ($issues == null and $trails == null) then null
-       else ($issues // []) + ($trails.issues // []) end) as $all
-      | {path: $path, backend: (if $backend == "" then null else $backend end),
-       policy: (if $policy == "" then null else $policy end),
-       open: (if $all == null then null else ($all | length) end), from: ($from | split(",")), issues: $all, beads:$beads,
-       entire: ($backend == "entire"), complete: (if ($trails | type) == "object" then $trails.complete else null end),
-       review: (if ($trails | type) == "object" then $trails.review elif $trails == false then false else null end)}'
-  done < <(_shep_repo_list) | jq -sc .
+    exec {fd}< <(_shep_repo_json "$main" "$from" && printf 'ok\n')
+    fds+=("$fd")
+  done < <(_shep_repo_list "$@")
+  _shep_workers_read out "${fds[@]}" && jq -sc . <<<"$out"
+}
+
+# One repo of _shep_repos_json, from its main checkout MAIN and the sources FROM.
+_shep_repo_json() {
+  local main="$1" from="$2" backend policy issues beads trails
+  backend="$(git_backend "$main" 2>/dev/null)" || backend=""
+  policy="$(policy_json "$main" 2>/dev/null \
+    | jq -r 'if .file == "" then "none" elif .trusted then "trusted" else "untrusted" end' 2>/dev/null)" || policy=""
+  beads=false
+  [[ ! -d "$main/.beads" ]] || beads=true
+  issues="$(_shep_open_issues "$main")" || issues=null
+  trails=null
+  [[ "$backend" != entire ]] || trails="$(_shep_open_trails "$main")" || trails=false
+  jq -nc --arg path "$main" --arg from "$from" --arg backend "$backend" --arg policy "$policy" --argjson issues "$issues" --argjson beads "$beads" \
+    --argjson trails "$trails" '
+    # A source that failed makes the whole list UNKNOWN, never a shorter one.
+    (if $trails == false or ($beads and $issues == null) or ($issues == null and $trails == null) then null
+     else ($issues // []) + ($trails.issues // []) end) as $all
+    | {path: $path, backend: (if $backend == "" then null else $backend end),
+     policy: (if $policy == "" then null else $policy end),
+     open: (if $all == null then null else ($all | length) end), from: ($from | split(",")), issues: $all, beads:$beads,
+     entire: ($backend == "entire"), complete: (if ($trails | type) == "object" then $trails.complete else null end),
+     review: (if ($trails | type) == "object" then $trails.review elif $trails == false then false else null end)}'
 }
 
 # jq helpers for paths and titles, shared by the views below.
@@ -200,22 +212,30 @@ shep_repos() {
 
 # Live desks and background Sheps: address, name, cwd, state (working, done,
 # blocked, idle), and the issue, title, space and model (handoff --model) on
-# their labels. Fails when hc does not answer.
+# their labels. Fails when hc does not answer. The desks are read at once: one
+# after another, 18 of them took 2 seconds of the board's 10 (bercail-tzx7).
 _shep_desks_json() {
-  local get="${1:-_shep_hc}" addr detail main rows snapshot
+  local get="${1:-_shep_hc}" addr rows fd snapshot=""
+  local -a fds=()
   _shep_need_policy
   rows="$(_shep_hc ls --json --label bercail.role=agent)" || return 1
   jq -e '.terminals | type == "array"' <<<"$rows" >/dev/null || return 1
-  snapshot="$(
-    while IFS= read -r addr; do
-      detail="$("$get" get "$addr" --json 2>/dev/null </dev/null)" || exit 1
-      main="$(_shep_main_of "$(jq -r '.cwd // ""' <<<"$detail")")" || main=""
-      jq -c --arg repo "$main" '{address, name, cwd, repo:$repo, state: (.status.state // "unknown"),
-        issue: .labels["bercail.issue"], title: .labels["bercail.issue_title"], space: .labels["bercail.space"],
-        model: .labels["bercail.model"], bg: (.labels["bercail.shep"] == "bg")}' <<<"$detail"
-    done < <(jq -r '.terminals[] | select(.state == "live") | .address' <<<"$rows")
-  )" || return 1
+  while IFS= read -r addr; do
+    exec {fd}< <(_shep_desk_json "$get" "$addr" && printf 'ok\n')
+    fds+=("$fd")
+  done < <(jq -r '.terminals[] | select(.state == "live") | .address' <<<"$rows")
+  _shep_workers_read snapshot "${fds[@]}" || return 1
   jq -sc '[.[] | select(.address)]' <<<"$snapshot"
+}
+
+# One desk of _shep_desks_json: desk ADDR, read with GET.
+_shep_desk_json() {
+  local detail main
+  detail="$("$1" get "$2" --json 2>/dev/null </dev/null)" || return 1
+  main="$(_shep_main_of "$(jq -r '.cwd // ""' <<<"$detail")")" || main=""
+  jq -c --arg repo "$main" '{address, name, cwd, repo:$repo, state: (.status.state // "unknown"),
+    issue: .labels["bercail.issue"], title: .labels["bercail.issue_title"], space: .labels["bercail.space"],
+    model: .labels["bercail.model"], bg: (.labels["bercail.shep"] == "bg")}' <<<"$detail"
 }
 
 # A per-repo projection for status only. Dispatch checks every live candidate;
@@ -391,8 +411,8 @@ _shep_board_snapshot() {
   # The cards waiting on the person, from the ledger, never from Shep's prose. Their live
   # checks run beside the board's own reads, within 4 seconds, so they cost it no time.
   exec {fd}< <(_git_backend_bounded 4 shep_question waiting 2>/dev/null && printf 'ok\n')
-  repos="$(_shep_repos_json)" || return 1
   desks="$(_shep_desks_json)" || return 1
+  repos="$(_shep_repos_json "$desks")" || return 1
   records="$(_shep_records_json)" || return 1
   # shellcheck source=lib/todo.sh
   declare -F todo_board_json >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/todo.sh"
@@ -566,13 +586,24 @@ _shep_queue_trail_change() {
      state: "review", since: .updatedAt, lines: 0, findings: $f, gates: gates}' <<<"$change"
 }
 
-# The issue as bd prints it from MAIN, given at most 10 seconds; fails when the
-# repo has no beads or bd does not answer.
-_shep_queue_issue() {
-  local raw
-  [[ -d "$1/.beads" ]] || return 1
-  raw="$(cd "$1" && _shep_bd show "$2" --json </dev/null 2>/dev/null)" || return 1
-  jq -ce 'if type == "array" then .[0] else . end | select(type == "object" and .id)' <<<"$raw" 2>/dev/null
+# The issues IDS... as bd lists them from MAIN, as one JSON object by id, from
+# one bd call: bd show takes up to a few seconds per issue, and the queue had
+# six (bercail-tzx7). {} when the repo has no beads or bd does not answer.
+_shep_queue_issues() {
+  local main="$1" ids raw issues id one
+  shift
+  [[ $# -gt 0 && -d "$main/.beads" ]] || { printf '{}'; return 0; }
+  ids="$(IFS=,; printf '%s' "$*")"
+  raw="$(cd "$main" && _shep_bd list --all --json --limit 0 --brief --id "$ids" </dev/null 2>/dev/null)" \
+    && issues="$(jq -ce '[.[] | select(type == "object" and .id) | {key: .id, value: .}] | from_entries' <<<"$raw" 2>/dev/null)" \
+    || { printf '{}'; return 0; }
+  # list --id matches whole ids; bd show also takes a unique short one (bercail-tzx).
+  for id in "$@"; do
+    jq -e --arg id "$id" 'has($id)' <<<"$issues" >/dev/null && continue
+    one="$(_shep_bd_issue "$main" "$id")" || continue
+    issues="$(jq -c --arg id "$id" --argjson one "$one" '.[$id] = $one' <<<"$issues")"
+  done
+  printf '%s\n' "$issues"
 }
 
 # A folder's checkout, resolved: two spellings of one worktree compare equal.
@@ -608,12 +639,12 @@ _shep_described() {
 # unknown one may want it too: change.review says);
 # superseded when bd supersede or bd duplicate names a replacement, or the
 # issue's latest handoff went to another worktree that is still there; cleanup
-# when the issue is closed; unknown when bd cannot say. Parent and child links
-# are not read: a child does not say it replaces its parent.
+# when the issue is closed; unknown when bd cannot say (BD, the issue as bd
+# lists it, is null). Parent and child links are not read: a child does not
+# say it replaces its parent.
 _shep_queue_state() {
-  local main="$1" issue="$2" path="$3" change="$4" records="$5" bd=null moved="" latest top
+  local main="$1" issue="$2" path="$3" change="$4" records="$5" bd="${6:-null}" moved="" latest top
   if [[ -n "$issue" ]]; then
-    bd="$(_shep_queue_issue "$main" "$issue")" || bd=null
     latest="$(jq -r --arg id "$issue" --arg repo "$main" '.[($repo + "\u001f" + $id)].path // empty' <<<"$records")"
     if [[ -n "$latest" ]] && top="$(_shep_top "$path")" && latest="$(_shep_top "$latest")" && [[ "$latest" != "$top" ]]; then
       moved="$latest"
@@ -651,19 +682,33 @@ _shep_live_spaces() {
 
 # One repo's staged worktrees as a JSON array of queue items. The candidates
 # come on stdin, a line each: path, issue, title, desk and space, \x1f apart.
-# They are read one after another: bd serves one read at a time in a repo.
+# Their issues are read from bd in one call, before the worktrees are measured.
 _shep_queue_staged() {
-  local main="$1" records="$2" live="$3" path issue title desk space change state since described items='[]'
+  local main="$1" records="$2" live="$3" row path issue title desk space stale change state since described items='[]' issues
+  local -a measure=() ids=()
   # \x1f, not a tab: read would merge an empty title's two tabs into one.
-  while IFS=$'\x1f' read -r path issue title desk space; do
+  while IFS= read -r row; do
+    IFS=$'\x1f' read -r path issue _ _ space <<<"$row"
     git -C "$path" diff --cached --quiet 2>/dev/null && continue
+    stale=""
+    if [[ -n "$live" ]] && ! jq -e --arg s "$space" --arg p "$path" '(.ids | index($s)) or (.paths | index($p))' <<<"$live" >/dev/null; then
+      stale=1
+    elif [[ -n "$issue" ]]; then
+      ids+=("$issue")
+    fi
+    measure+=("$stale"$'\x1f'"$row")
+  done
+  issues="$(_shep_queue_issues "$main" "${ids[@]}")"
+  for row in "${measure[@]}"; do
+    IFS=$'\x1f' read -r stale path issue title desk space <<<"$row"
     change="$(desc_change "$path" 2>/dev/null </dev/null)" || continue
     jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || continue
-    if [[ -n "$live" ]] && ! jq -e --arg s "$space" --arg p "$path" '(.ids | index($s)) or (.paths | index($p))' <<<"$live" >/dev/null; then
+    if [[ -n "$stale" ]]; then
       # A title lookup must not hold up the snapshot for an already-classified row.
       state='{"state":"stale","why":"no Herdr space"}'
     else
-      state="$(_shep_queue_state "$main" "$issue" "$path" "$change" "$records" </dev/null)"
+      state="$(_shep_queue_state "$main" "$issue" "$path" "$change" "$records" \
+        "$(jq -c --arg id "$issue" '.[$id] // null' <<<"$issues")" </dev/null)"
     fi
     since="$(_shep_staged_at "$path")" || since=""
     # Only a change that waits on the person gets the check. It skips the beads-id

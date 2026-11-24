@@ -35,7 +35,8 @@ case "$1" in
   *) exit 2 ;;
 esac
 EOF
-  # bd answers from the repo it runs in: .beads/fake/{list,<id>,<id>.comments}.json.
+  # bd answers from the repo it runs in: .beads/fake/{list,<id>,<id>.comments}.json;
+  # list --id A,B lists A and B from their <id>.json, and leaves out one it has not.
   cat >"$BATS_TEST_TMPDIR/bin/bd" <<'EOF'
 #!/usr/bin/env bash
 printf 'bd %s in %s\n' "$*" "$PWD" >>"$LOG"
@@ -44,8 +45,11 @@ dir="$PWD/.beads/fake"
 if [[ "$1" == show && -e "$dir/$2.wait" ]]; then
   for _ in $(seq 300); do [[ -e "$(cat "$dir/$2.wait")" ]] && break; sleep 0.1; done
 fi
+ids="$(printf '%s\n' "$@" | sed -n '/^--id$/{n;p;}')"
 case "$1" in
-  list) cat "$dir/list.json" 2>/dev/null || exit 1 ;;
+  list) if [[ -n "$ids" ]]; then
+          for id in ${ids//,/ }; do cat "$dir/$id.json" 2>/dev/null; done | jq -s '[.[] | if type == "array" then .[] else . end]'
+        else cat "$dir/list.json" 2>/dev/null || exit 1; fi ;;
   show) cat "$dir/$2.json" 2>/dev/null || exit 1 ;;
   comments) cat "$dir/$2.comments.json" 2>/dev/null || printf '[]\n' ;;
   *) exit 2 ;;
@@ -293,6 +297,53 @@ GH
   [[ "$out" == *"desk t9 blocked · branch login"* ]] || fail "brief: $out"
   out="$(shep queue --json 2>&1)" || fail "queue: $out"
   jq -e '[.items[] | {kind, number, branch}] == [{kind: "pr", number: 7, branch: "login"}]' <<<"$out" >/dev/null || fail "queue: $out"
+}
+
+@test "shep board and queue fit their 10s and 6s caps with 450 handoff records, 18 desks and 6 staged jobs" {
+  local name n out start
+  need node
+  # This machine's shape on 2026-11-24 (bercail-tzx7), with the stand-ins as slow as
+  # its sources: hc get 0.1s a desk, bd list 0.5s, bd show 1s an issue.
+  mv "$BATS_TEST_TMPDIR/bin/bd" "$BATS_TEST_TMPDIR/bin/bd.fake"
+  mv "$BATS_TEST_TMPDIR/bin/hc" "$BATS_TEST_TMPDIR/bin/hc.fake"
+  cat >"$BATS_TEST_TMPDIR/bin/bd" <<'EOF'
+#!/usr/bin/env bash
+case "$1" in list) sleep 0.5 ;; show) sleep 1 ;; esac
+exec bd.fake "$@"
+EOF
+  cat >"$BATS_TEST_TMPDIR/bin/hc" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1" != get ]] || sleep 0.1
+exec hc.fake "$@"
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/"*
+  for name in a b c d; do
+    repo "$name"
+    printf '%s\n' "$HOME/Work/$name" >>"$STATE/repos"
+    jq -nc --arg w "$HOME/Work/$name" --arg n "$name" \
+      'range(111) | {path: "\($w).gone\(.)", branch: "gone\(.)", issue: "\($n)-old-\(.)", desk: "t-old"}' >>"$RECORDS"
+  done
+  issues a 'a-1|Job 1|in_progress' 'a-2|Job 2|in_progress' 'a-3|Job 3|in_progress' 'a-4|Job 4|in_progress' \
+    'a-5|Job 5|in_progress' 'a-6|Job 6|in_progress'
+  for name in b c d; do issues "$name" "$name-1|Backlog|open"; done
+  for n in {1..6}; do
+    jq -n --arg id "a-$n" '{id: $id, title: "Job \($id)", status: "in_progress"}' >"$HOME/Work/a/.beads/fake/a-$n.json"
+    worktree a "job$n"
+    seq 1 3 >"$HOME/Work/a.job$n/notes.md"
+    git -C "$HOME/Work/a.job$n" add notes.md
+    record --arg p "$HOME/Work/a.job$n" --arg b "job$n" --arg id "a-$n" '{path: $p, branch: $b, issue: $id, desk: "t-a-\($b)"}'
+    desk "t-a-job$n" "$HOME/Work/a.job$n" "done" "$(jq -nc --arg id "a-$n" '{"bercail.issue": $id}')"
+  done
+  for n in {1..12}; do desk "t-idle-$n" "$HOME/Work/b" idle; done
+  [[ "$(wc -l <"$RECORDS")" -eq 450 ]] || fail "fixture has $(wc -l <"$RECORDS") records"
+
+  start=$SECONDS
+  out="$(shep board 2>&1)" || fail "board past its cap after $((SECONDS - start))s: $out"
+  [[ "$out" == *"~/Work/a: 6 jobs"* && "$out" == *"Review queue: 18 lines in 6 changes"* ]] || fail "board: $out"
+  [[ "$out" != *"bd does not answer"* ]] || fail "a bd read ran out of time: $out"
+  start=$SECONDS
+  out="$(unset BERCAIL_SHEP_QUEUE_WAIT; shep queue --json)" || fail "queue past its cap after $((SECONDS - start))s: $out"
+  jq -e '[.items[] | .state] == [range(6) | "review"]' <<<"$out" >/dev/null || fail "queue: $out"
 }
 
 @test "shep board lists the ledger's pending cards under Decisions, and nothing once they are answered" {
@@ -669,11 +720,11 @@ stage_at() {
   touch -d "@$2" "$(git -C "$1" rev-parse --path-format=absolute --git-path index)"
 }
 
-# bd show's answer for web-$1: STATUS, and a dependency of TYPE on web-$4.
+# bd list's row for web-$1: STATUS, and a dependency of TYPE on web-$4.
 bd_issue() {
   jq -n --arg id "web-$1" --arg s "$2" --arg t "${3:-}" --arg to "web-${4:-}" \
     '{id: $id, title: "Job \($id)", status: $s,
-      dependencies: (if $t == "" then null else [{id: $to, title: "new", status: "open", dependency_type: $t}] end)}' \
+      dependencies: (if $t == "" then null else [{issue_id: $id, depends_on_id: $to, type: $t}] end)}' \
     >"$HOME/Work/web/.beads/fake/web-$1.json"
 }
 
@@ -754,6 +805,31 @@ bd_issue() {
     || fail "queue text: $out"
 }
 
+@test "shep queue: a job recorded by a short id, which bd show resolves and bd list --id leaves out, keeps its state" {
+  local out
+  repo web
+  printf '%s\n' "$HOME/Work/web" >"$STATE/repos"
+  staged one 10 1700000000
+  staged two 20 1700000100
+  record --arg p "$HOME/Work/web.one" '{path: $p, branch: "one", issue: "web-1", desk: "t1"}'
+  record --arg p "$HOME/Work/web.two" '{path: $p, branch: "two", issue: "web-2", desk: "t2"}'
+  # As bd does: list --id matches whole ids, show also a unique short one.
+  cat >"$BATS_TEST_TMPDIR/bin/bd" <<'EOF'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "list "*) jq -n '[{id: "web-1", title: "Job web-1", status: "in_progress"}]' ;;
+  "show web-2") jq -n '[{id: "web-2abc", title: "Job web-2abc", status: "closed",
+    dependencies: [{id: "web-5", dependency_type: "supersedes"}]}]' ;;
+  *) exit 1 ;;
+esac
+EOF
+
+  out="$(shep queue --json)" || fail "queue --json: $out"
+
+  jq -e '[.items[] | [.issue, .state, .by]] == [["web-1", "review", null], ["web-2", "superseded", "web-5"]]' <<<"$out" >/dev/null \
+    || fail "queue: $(jq -c '[.items[] | {issue, state, why}]' <<<"$out")"
+}
+
 @test "shep queue: a closed issue with staged work is unknown custody, never an automatic cleanup candidate" {
   local out
   repo web
@@ -830,7 +906,7 @@ spaces_fixture() {
   jq -e '[.items[].issue] == [range(1; 15) | "web-\(.)"]
     and all(.items[]; .state == "stale" and .counts == false)
     and .repos[0].changes == 0' <<<"$out"
-  if grep -q '^bd show ' "$LOG"; then fail "queue queried Beads for stale rows: $(grep '^bd show ' "$LOG")"; fi
+  if grep -q '^bd ' "$LOG"; then fail "queue queried Beads for stale rows: $(grep '^bd ' "$LOG")"; fi
 }
 
 @test "shep queue: with no Herdr window answering, a worktree is not called stale" {
@@ -1198,11 +1274,11 @@ EOF
 
 @test "the global queue reads each repo's staged work and open PRs at once, not one repo after another" {
   local name out
-  # bd show and gh pr list meet in each of two repos, inside their 2s bounds.
+  # bd list and gh pr list meet in each of two repos, inside their 2s bounds.
   barrier 4
   cat >"$BATS_TEST_TMPDIR/bin/bd" <<'EOF'
 #!/usr/bin/env bash
-[[ "$1" == show ]] && meet "bd-${PWD##*/}" && cat "$PWD/.beads/fake/$2.json"
+[[ "$1" == list ]] && meet "bd-${PWD##*/}" && jq -s . "$PWD/.beads/fake/"*.json
 EOF
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'EOF'
 #!/usr/bin/env bash
