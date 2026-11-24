@@ -261,6 +261,40 @@ Decisions:
 - nothing" ]] || fail "quiet board: $out"
 }
 
+@test "shep board, brief and queue read a handoff record set larger than one argument may be" {
+  local out pad
+  need node
+  repo app
+  worktree app login
+  git -C "$HOME/Work/app" remote add origin git@github.com:o/app.git
+  issues app 'app-1|Fix the login|in_progress'
+  jq -n '{id:"app-1",title:"Fix the login",status:"in_progress"}' >"$HOME/Work/app/.beads/fake/app-1.json"
+  record --arg p "$HOME/Work/app.login" '{path: $p, branch: "login", issue: "app-1", desk: "t9"}'
+  # Linux caps one argument at 32 pages (128 KiB): 700 gone handoffs with 200-character
+  # branches are past it, in the records and in the queue's list of their branches.
+  pad="$(printf '%200s' '' | tr ' ' x)"
+  jq -nc --arg w "$HOME/Work/app" --arg pad "$pad" \
+    'range(700) | "\(.)-\($pad)" as $b | {path: "\($w).\($b)", branch: $b, issue: "app-old-\(.)", desk: "t5"}' >>"$RECORDS"
+  jq -n '[{number: 7, title: "Login PR", url: "u7", isDraft: false, reviewDecision: "", headRefName: "login", reviewRequests: [], files: []}]' \
+    >"$HC_DATA/prs.json"
+  cat >"$BATS_TEST_TMPDIR/bin/gh" <<'GH'
+#!/usr/bin/env bash
+case "$1 $2" in
+  "api user") printf 'simon\n' ;;
+  "pr list") cat "$HC_DATA/prs.json" ;;
+  *) exit 2 ;;
+esac
+GH
+  chmod +x "$BATS_TEST_TMPDIR/bin/gh"
+  desk t9 "$HOME/Work/app.login" blocked '{"bercail.issue": "app-1"}'
+  out="$(shep board 2>&1)" || fail "board: $out"
+  [[ "$out" == *"- app-1: Fix the login [in_progress] · desk t9 blocked · login"* ]] || fail "board: $out"
+  out="$(shep brief app-1 2>&1)" || fail "brief: $out"
+  [[ "$out" == *"desk t9 blocked · branch login"* ]] || fail "brief: $out"
+  out="$(shep queue --json 2>&1)" || fail "queue: $out"
+  jq -e '[.items[] | {kind, number, branch}] == [{kind: "pr", number: 7, branch: "login"}]' <<<"$out" >/dev/null || fail "queue: $out"
+}
+
 @test "shep board lists the ledger's pending cards under Decisions, and nothing once they are answered" {
   local out
   need node

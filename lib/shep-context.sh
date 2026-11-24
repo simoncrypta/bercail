@@ -292,7 +292,7 @@ shep_brief() {
     main="$(_shep_main_of "$repo")" || { _shep_err "$repo is not a git checkout"; return 1; }
     repo="$main"
   else
-    hints="$(jq -nc --arg id "$issue" --argjson ds "$desks" --argjson rs "$records" '[($ds[] | select(.issue == $id) | .repo), ($rs[] | select(.issue == $id) | .repo)] | map(select(. != "" and . != null)) | unique')"
+    hints="$(printf '%s\n' "$desks" "$records" | jq -nc --arg id "$issue" 'input as $ds | input as $rs | [($ds[] | select(.issue == $id) | .repo), ($rs[] | select(.issue == $id) | .repo)] | map(select(. != "" and . != null)) | unique')"
     [[ "$(jq length <<<"$hints")" -lt 2 ]] || { _shep_err "$issue exists in more than one repo; pass --repo explicitly"; return 1; }
     repo="$(jq -r '.[0] // ""' <<<"$hints")"
   fi
@@ -397,13 +397,14 @@ _shep_board_snapshot() {
   # shellcheck source=lib/todo.sh
   declare -F todo_board_json >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/todo.sh"
   todos="$(todo_board_json)"
-  jq -nr --arg home "$HOME" --argjson repos "$repos" --argjson desks "$desks" --argjson rec "$records" \
-    --argjson todos "$todos" "$SHEP_JQ_DEFS"'
+  # On stdin, not in argv: Linux caps one argument at 32 pages (128 KiB), and the records outgrow it.
+  printf '%s\n' "$repos" "$desks" "$records" "$todos" | jq -nr --arg home "$HOME" "$SHEP_JQ_DEFS"'
     def who($d): if $d.bg then "background Shep \($d.name // $d.address)" else "desk \($d.address)" end;
     def head($j): "\($j.id): \($j.title // "" | flat | cut(70))";
     # With the repo: another repo may have an issue, a desk or a handoff with that id.
     def brief($j): "bercail shep brief \($j.id) --repo \($j.repo | @sh)";
-    ($desks | map(select(.issue)) | map({key: (.repo + "\u001f" + .issue), value: .}) | from_entries) as $live
+    input as $repos | input as $desks | input as $rec | input as $todos
+    | ($desks | map(select(.issue)) | map({key: (.repo + "\u001f" + .issue), value: .}) | from_entries) as $live
     | [ $repos[] | . as $r | ($r.issues // [])[] | . as $i | ($rec[($r.path + "\u001f" + $i.id)]) as $h | ($live[($r.path + "\u001f" + $i.id)]) as $d
         | select($d or $i.status == "in_progress" or $i.status == "blocked")
         | {repo: $r.path, id: $i.id, title: $i.title, status: $i.status, phase: $i.phase, waiting: $i.waiting, desk: $d, rec: $h} ] as $jobs
@@ -487,13 +488,13 @@ _shep_queue_prs() {
   raw="$(cd "$main" && _git_backend_bounded 2 "${GH_BIN:-gh}" pr list --state open --limit 100 \
     --json number,title,url,isDraft,reviewDecision,headRefName,reviewRequests,files,createdAt </dev/null 2>/dev/null)" \
     || return 1
-  jq -c --arg repo "$main" --arg login "$login" --argjson branches "$branches" --arg locks "$DESC_LOCKFILES" '
-    ($locks | split(" ")) as $l
+  printf '%s\n' "$raw" "$branches" | jq -c --arg repo "$main" --arg login "$login" --arg locks "$DESC_LOCKFILES" '
+    ($locks | split(" ")) as $l | input as $branches
     | [.[]? | select((.isDraft | not) and .reviewDecision != "APPROVED"
         and (([.reviewRequests[]?.login] | index($login)) or (.headRefName | IN($branches[]))))
       | {kind: "pr", repo: $repo, number, title, url, branch: .headRefName, state: "review", since: .createdAt,
          lines: ([.files[]? | select(.path | split("/") | last | IN($l[]) | not) | .additions + .deletions] | add // 0)}]' \
-    <<<"$raw" 2>/dev/null
+    2>/dev/null
 }
 
 # An Entire repo's trail changes in review, as a JSON array: the open changes
@@ -703,9 +704,10 @@ _shep_queue_json() {
     jq -e --arg m "$main" 'any(.[]; .path == $m)' <<<"$repos" >/dev/null || continue
     [[ -n "${rows[$main]:-}" ]] || order+=("$main")
     rows[$main]+="$path"$'\x1f'"$issue"$'\x1f'"$title"$'\x1f'"$desk"$'\x1f'"$space"$'\n'
-  done < <(jq -nr --argjson repos "$repos" --argjson desks "$desks" --argjson rec "$records" '
+  done < <(printf '%s\n' "$repos" "$desks" "$records" | jq -nr '
     def one(f): map(f | select(. != null and . != "")) | first // "";
-    ([$repos[].issues // [] | .[] | {key: .id, value: .title}] | from_entries) as $titles
+    input as $repos | input as $desks | input as $rec
+    | ([$repos[].issues // [] | .[] | {key: .id, value: .title}] | from_entries) as $titles
     | ([$desks[] | select(.bg | not) | select(.cwd) | {path: .cwd, issue, title, desk: .address, space, state}]
        + [$rec | to_entries[] | select(.value.path) | {path: .value.path, issue: .value.issue, title: null, desk: .value.desk, space: .value.space, state: "gone"}]) as $all
     | ($all | group_by(.path)[] | select(all(.[]; .state != "working")))
@@ -719,9 +721,9 @@ _shep_queue_json() {
     review="$(jq -c --arg m "$main" '(first(.[] | select(.path == $m)) // {}) | .review' <<<"$repos")"
     # The desk that made the change, by its handoff's branch, lends its worktree and space.
     exec {fd}< <(trails="$(_shep_queue_trails "$main" "$review" </dev/null)" \
-      && jq -c --argjson rec "$records" --arg m "$main" '[.[] | . as $i
+      && printf '%s\n' "$trails" "$records" | jq -c --arg m "$main" 'input as $rec | [.[] | . as $i
         | ([$rec[] | select(.repo == $m and .branch == $i.branch)] | first) as $r
-        | $i + (if $r then {path: $r.path, space: $r.space} else {} end)]' <<<"$trails" \
+        | $i + (if $r then {path: $r.path, space: $r.space} else {} end)]' \
       && printf 'ok\n')
     fds+=("$fd")
   done < <(jq -r '.[] | select(.backend == "entire") | .path' <<<"$repos")
