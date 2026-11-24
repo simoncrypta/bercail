@@ -29,8 +29,9 @@ _land_err() {
 }
 
 # Commit the described tree, unless HEAD already is it (a land rerun after its
-# commit), then start the wait on that commit. Not on a trunk that moved past
-# HEAD: the trunk takes no merge, so that commit could not land as it is.
+# commit), then start the wait on that commit. Where the policy integrates
+# straight to the trunk, not once it moved past HEAD: the trunk takes no merge,
+# so that commit could not land as it is. A PR's merge is the forge's to check.
 land_run() {
   local dir="$1" reviewer="$2" root branch trunk msg sha described name backend moved
   local hc="${HC_BIN:-hc}"
@@ -43,8 +44,10 @@ land_run() {
   msg="$(_desc_print commit "$root" "$reviewer")" || return 1
   # Read again after the print, whose check only warns of it, so a move seen
   # there or since is refused here.
-  moved="$(_desc_base_moved "$root")"
-  [[ -z "$moved" ]] || { _land_err "refusing to commit: $moved; send that to the desk; no commit was made"; return 1; }
+  if [[ "$(_desc_style "$root")" == commit ]]; then
+    moved="$(_desc_base_moved "$root")"
+    [[ -z "$moved" ]] || { _land_err "refusing to commit: $moved; send that to the desk; no commit was made"; return 1; }
+  fi
   # Before the commit: an interrupted backend probe (130) commits nothing.
   backend="$(git_backend "$root")" || return $?
   if git -C "$root" diff --cached --quiet; then

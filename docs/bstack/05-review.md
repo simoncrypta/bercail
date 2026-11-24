@@ -68,7 +68,8 @@ The check warns when the base moved: when origin's default branch, as last
 fetched, or the local one has commits HEAD is not on. Bring the branch onto it
 (rebase, restack a stack, or merge it into a pushed PR branch) and rerun
 /validate, since doing that at merge would make the description stale. The
-check never fetches. `bercail land` refuses such a change before it commits.
+check never fetches. Where the policy says `integrate = "direct"`, `bercail land`
+refuses such a change before it commits; a PR branch keeps the warning.
 
 The check also weighs the change for you. It warns when the change is over the
 policy's `diff_budget` (400 lines by default, lockfiles and generated files

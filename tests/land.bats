@@ -67,6 +67,13 @@ runs() {
   done | jq -s . >"$RUNS"
 }
 
+# A committed policy that integrates straight to the trunk, where land refuses a moved base.
+direct() {
+  mkdir -p .bercail
+  printf 'integrate = "direct"\n' >.bercail/policy.toml
+  git add -f .bercail/policy.toml && git commit -qm policy
+}
+
 # The one event in Shep's inbox.
 event() {
   local files=("$INBOX"/*.json)
@@ -186,7 +193,8 @@ event() {
   [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
 }
 
-@test "a trunk that moved past the change is refused before any commit, with /validate on the new base for the desk" {
+@test "where the policy integrates direct, a trunk that moved past the change is refused before any commit, with /validate on the new base for the desk" {
+  direct
   # The local trunk, then origin's as last fetched, one commit past the branch.
   base="$(git rev-parse HEAD)"
   for ref in refs/heads/main refs/remotes/origin/main; do
@@ -203,7 +211,8 @@ event() {
   done
 }
 
-@test "a trunk that moves while land reads it is refused, not only warned of" {
+@test "where the policy integrates direct, a trunk that moves while land reads it is refused, not only warned of" {
+  direct
   described
   head="$(git rev-parse HEAD)"
   # git: after the first count of the trunk's commits HEAD is not on, the trunk moves.
@@ -226,7 +235,8 @@ GIT
   [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
 }
 
-@test "a rerun after the commit is refused once the trunk moved past it, and starts no wait" {
+@test "where the policy integrates direct, a rerun after the commit is refused once the trunk moved past it, and starts no wait" {
+  direct
   described
   runs CI:completed:success
   land "$REPO" >/dev/null || fail "first land"
@@ -238,6 +248,26 @@ GIT
   [[ "$output" == *"the base moved: main has 1 commit(s)"* ]] || fail "$output"
   [ "$(git rev-parse HEAD)" = "$head" ] || fail "a commit was made"
   [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "a PR branch whose trunk moved is committed with a warning and waited on: the PR's merge checks it" {
+  base="$(git rev-parse HEAD)"
+  # No policy (the default), then integrate = "pr".
+  for policy in "" 'integrate = "pr"'; do
+    mkdir -p .bercail
+    printf '%s\n' "$policy" >.bercail/policy.toml
+    described
+    runs CI:completed:success
+    git update-ref refs/heads/main "$(git commit-tree -p "$base" -m later "$(git rev-parse "$base^{tree}")")"
+    run land "$REPO"
+    [ "$status" -eq 0 ] || fail "${policy:-default}: refused: $output"
+    [[ "$output" == *"warn: the base moved: main has 1 commit(s)"* ]] || fail "${policy:-default}: no warning: $output"
+    [ "$(git rev-parse HEAD^)" = "$base" ] || fail "${policy:-default}: no commit was made"
+    grep -q '^hc run' "$LOG" || fail "${policy:-default}: no wait started: $(cat "$LOG")"
+    git reset -q --hard "$base"
+    git update-ref refs/heads/main "$base"
+    : >"$LOG"
+  done
 }
 
 @test "a described change on the trunk itself is refused: it has no branch CI to wait for" {
