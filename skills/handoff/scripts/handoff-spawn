@@ -674,10 +674,15 @@ handoff_spawn_main() {
 
   # Serialize before any space/worktree creation. A stale lock is an explicit
   # recovery decision, never a reason to start another agent on retry.
+  # The lock is a file made with O_EXCL (noclobber), which fails while the path
+  # exists, file or dispatch's folder. Not mkdir(1): uutils' (Ubuntu 26.04)
+  # returns 0 when the folder appears during its call, so two spawns held it.
+  # The trap names the path: a set -e exit runs it outside this function.
   if [[ "${BERCAIL_TASK_RESERVED:-}" != 1 ]]; then
     lock="$(git -C "$main" rev-parse --path-format=absolute --git-common-dir)/bercail-task.lock"
-    mkdir "$lock" 2>/dev/null || handoff_die "visible dispatch lock held: $lock; inspect the previous spawn before retrying"
-    trap 'rmdir "$lock" 2>/dev/null || true' EXIT
+    (set -C && : >"$lock") 2>/dev/null || handoff_die "visible dispatch lock held: $lock; inspect the previous spawn before retrying"
+    # shellcheck disable=SC2064
+    trap "rm -f $(printf '%q' "$lock")" EXIT
   fi
   # A trail is its own target, and only a trail's.
   if handoff_is_trail "$issue"; then
@@ -864,7 +869,7 @@ handoff_spawn_main() {
   [[ -z "$adopt_reason" ]] || json="$(jq -c --arg r "$adopt_reason" '. + {adoptReason:$r}' <<<"$json")"
   handoff_remember "$json"
   printf '%s\n' "$json"
-  [[ -z "$lock" ]] || rmdir "$lock"
+  [[ -z "$lock" ]] || rm -f "$lock"
   trap - EXIT
   [[ "$(jq -r .ok <<<"$json")" == true ]]
 }

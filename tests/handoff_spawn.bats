@@ -1711,23 +1711,57 @@ _desk_headless() {
   fi
 }
 
-@test "with no window, concurrent duplicate branch requests create only one visible owner" {
+@test "with no window, a duplicate branch request during a spawn is refused by the lock, whatever mkdir returns" {
   need flock
   _desk_headless twice
-  export HC_RUN_DELAY=0.3
-  local a b
+  local a out rc=0 gate="$BATS_TEST_TMPDIR/gate"
+  # uutils' mkdir (Ubuntu 26.04's) returns 0 when the folder appears during its
+  # call. This one always does, so the race CI lost once is every run here.
+  printf '#!/usr/bin/env bash\ncommand -p mkdir "$@" 2>/dev/null || [[ -d "${!#}" ]]\n' >"$DESK_BIN/mkdir"
+  # The first spawn's desk waits for $gate (30s at most), lock held; any later desk goes on.
+  mv "$DESK_BIN/hc" "$DESK_BIN/hc-core"
+  cat >"$DESK_BIN/hc" <<'HC'
+#!/usr/bin/env bash
+if [[ "$1" == run && " $* " == *" bercail.role=agent "* ]] && (set -C && : >"$GATE.in") 2>/dev/null; then
+  for ((i = 0; i < 600; i++)); do [[ ! -e "$GATE" ]] || break; sleep 0.05; done
+fi
+exec "${0%/*}/hc-core" "$@"
+HC
+  chmod +x "$DESK_BIN/mkdir" "$DESK_BIN/hc"
+  export GATE="$gate"
   _desk_spawn >"$BATS_TEST_TMPDIR/twice-1.out" 2>&1 &
   a=$!
-  _desk_spawn --branch other >"$BATS_TEST_TMPDIR/twice-2.out" 2>&1 &
-  b=$!
+  wait_for "[[ -e $gate.in ]]" || fail "the first spawn never reached its desk: $(cat "$BATS_TEST_TMPDIR/twice-1.out")"
+  out="$(_desk_spawn --branch other 2>&1)" || rc=$?
+  : >"$gate"
   # Not a bare wait: with BATS_TEST_TIMEOUT set, bats's watchdog is a child too.
-  wait "$a" || true
-  wait "$b" || true
+  wait "$a" || fail "the first spawn failed: $(cat "$BATS_TEST_TMPDIR/twice-1.out")"
+  [[ "$rc" -ne 0 && "$out" == *"visible dispatch lock held"* ]] || fail "the lock did not stop the duplicate: $out"
   jq -e --arg m "$(cd "$DESK_REPO" && pwd -P)" '[.[] | select(.labels["herdr.space"] != null and .cwd == $m)] | length == 1' \
     "$HC_STATE" >/dev/null || fail "one Shell space on the main checkout: $(cat "$HC_STATE")"
   [[ "$(jq '[.[] | select(.labels["bercail.role"] == "agent")] | length' "$HC_STATE")" -eq 1 ]] \
-    || fail "one task, one owner: $(cat "$HC_STATE") $(cat "$BATS_TEST_TMPDIR"/twice-*.out)"
-  grep -Eq 'lock held|original task already has' "$BATS_TEST_TMPDIR"/twice-*.out || fail "duplicate was not explicitly stopped"
+    || fail "one task, one owner: $(cat "$HC_STATE")"
+  [[ "$(wc -l <"$DESK_STATE/bercail/handoffs.jsonl")" -eq 1 ]] || fail "one handoff line: $(cat "$DESK_STATE/bercail/handoffs.jsonl")"
+  [[ ! -e "$DESK_REPO/.git/bercail-task.lock" ]] || fail "the first spawn kept its lock"
+}
+
+@test "a spawn that set -e stops after it took the lock still releases it" {
+  local out
+  _desk_fixture stale
+  # A helper that fails as it is sourced: an exit by set -e, not handoff_die.
+  echo false >>"$DESK_HOME/.config/worktrunk/herdr-layout.sh"
+  out="$(_desk_spawn 2>&1)" && fail "the spawn went on: $out"
+  [[ ! -e "$DESK_REPO/.git/bercail-task.lock" ]] || fail "the lock stayed, so every later spawn is refused: $out"
+  [[ "$out" != *"unbound variable"* ]] || fail "$out"
+}
+
+@test "a raw spawn is refused while dispatch holds the repo's lock folder, and leaves it" {
+  local out
+  _desk_fixture dispatching
+  mkdir "$DESK_REPO/.git/bercail-task.lock"
+  out="$(_desk_spawn 2>&1)" && fail "the spawn went on: $out"
+  [[ "$out" == *"visible dispatch lock held"* ]] || fail "$out"
+  [[ -d "$DESK_REPO/.git/bercail-task.lock" ]] || fail "the spawn removed dispatch's lock"
 }
 
 # A Pi whose --list-models knows claude-bridge/fable and logs its argv.
