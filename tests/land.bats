@@ -186,6 +186,60 @@ event() {
   [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
 }
 
+@test "a trunk that moved past the change is refused before any commit, with /validate on the new base for the desk" {
+  # The local trunk, then origin's as last fetched, one commit past the branch.
+  base="$(git rev-parse HEAD)"
+  for ref in refs/heads/main refs/remotes/origin/main; do
+    described
+    git update-ref "$ref" "$(git commit-tree -p "$base" -m later "$(git rev-parse "$base^{tree}")")"
+    run land "$REPO"
+    [ "$status" -ne 0 ] || fail "$ref: landed on a moved base: $output"
+    [[ "$output" == *"the base moved: ${ref#refs/*/} has 1 commit(s)"*"rerun /validate"*"no commit was made"* ]] || fail "$ref: $output"
+    [ "$(git rev-parse HEAD)" = "$base" ] || fail "$ref: a commit was made"
+    ! git diff --cached --quiet || fail "$ref: the staged change is gone"
+    [ ! -s "$LOG" ] || fail "$ref: hc or gh ran: $(cat "$LOG")"
+    git update-ref "$ref" "$base"
+    git reset -q --hard
+  done
+}
+
+@test "a trunk that moves while land reads it is refused, not only warned of" {
+  described
+  head="$(git rev-parse HEAD)"
+  # git: after the first count of the trunk's commits HEAD is not on, the trunk moves.
+  cat >"$BATS_TEST_TMPDIR/bin/git" <<'GIT'
+#!/usr/bin/env bash
+/usr/bin/git "$@"
+rc=$?
+if [[ "$*" == *"rev-list --count HEAD..refs/heads/main" && ! -e "$BATS_TEST_TMPDIR/moved" ]]; then
+  : >"$BATS_TEST_TMPDIR/moved"
+  /usr/bin/git update-ref refs/heads/main "$(/usr/bin/git commit-tree -p main -m later "$(/usr/bin/git rev-parse 'main^{tree}')")"
+fi
+exit "$rc"
+GIT
+  chmod +x "$BATS_TEST_TMPDIR/bin/git"
+  run land "$REPO"
+  [ -e "$BATS_TEST_TMPDIR/moved" ] || fail "the trunk never moved: $output"
+  [ "$status" -ne 0 ] || fail "landed on a trunk that moved: $output"
+  [[ "$output" == *"refusing to commit: the base moved: main has 1 commit(s)"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "a commit was made"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "a rerun after the commit is refused once the trunk moved past it, and starts no wait" {
+  described
+  runs CI:completed:success
+  land "$REPO" >/dev/null || fail "first land"
+  head="$(git rev-parse HEAD)"
+  : >"$LOG"
+  git update-ref refs/heads/main "$(git commit-tree -p main -m later "$(git rev-parse 'main^{tree}')")"
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "rerun on a moved base: $output"
+  [[ "$output" == *"the base moved: main has 1 commit(s)"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "a commit was made"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
 @test "a described change on the trunk itself is refused: it has no branch CI to wait for" {
   git checkout -q main
   described

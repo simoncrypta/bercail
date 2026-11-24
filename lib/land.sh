@@ -29,9 +29,10 @@ _land_err() {
 }
 
 # Commit the described tree, unless HEAD already is it (a land rerun after its
-# commit), then start the wait on that commit.
+# commit), then start the wait on that commit. Not on a trunk that moved past
+# HEAD: the trunk takes no merge, so that commit could not land as it is.
 land_run() {
-  local dir="$1" reviewer="$2" root branch trunk msg sha described name backend
+  local dir="$1" reviewer="$2" root branch trunk msg sha described name backend moved
   local hc="${HC_BIN:-hc}"
   root="$(_desc_root "$dir")" || return 1
   branch="$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null)" \
@@ -40,6 +41,10 @@ land_run() {
   [[ "$branch" != "$trunk" ]] \
     || { _land_err "$root is on $trunk itself: land a desk's branch, so its CI runs before $trunk"; return 1; }
   msg="$(_desc_print commit "$root" "$reviewer")" || return 1
+  # Read again after the print, whose check only warns of it, so a move seen
+  # there or since is refused here.
+  moved="$(_desc_base_moved "$root")"
+  [[ -z "$moved" ]] || { _land_err "refusing to commit: $moved; send that to the desk; no commit was made"; return 1; }
   # Before the commit: an interrupted backend probe (130) commits nothing.
   backend="$(git_backend "$root")" || return $?
   if git -C "$root" diff --cached --quiet; then
