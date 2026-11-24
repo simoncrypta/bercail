@@ -860,21 +860,24 @@ test("a heredoc body is data, but a command substitution in it runs", () => {
 });
 
 // A test cannot stop a loop in its own process, so this one runs the guard in a
-// child node killed after 5 seconds: a hang fails the case instead of the run.
-function decideInChild(command: string, input: GuardInput): Decision {
+// child node killed after 4 seconds: a hang fails the case instead of the run.
+// One child decides every case, a line each, so the next case after the last
+// line is the one that hung.
+function decideInChild(cases: [string, GuardInput][]): Decision[] {
   const guardUrl = new URL("../bstack/pi/extensions/guard.ts", import.meta.url).href;
-  const script = `import { readFileSync } from "node:fs";
+  const script = `import { readFileSync, writeSync } from "node:fs";
     const { decideBash } = await import(${JSON.stringify(guardUrl)});
-    const { command, input } = JSON.parse(readFileSync(0, "utf8"));
-    process.stdout.write(JSON.stringify(decideBash(command, input)));`;
+    for (const [command, input] of JSON.parse(readFileSync(0, "utf8")))
+      writeSync(1, JSON.stringify(decideBash(command, input)) + "\\n");`;
   const run = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
-    input: JSON.stringify({ command, input }),
+    input: JSON.stringify(cases),
     encoding: "utf8",
-    timeout: 5000,
+    timeout: 4000,
   });
-  assertEqual(run.signal, null, `${command} hung the guard`);
+  const got = run.stdout.split("\n").filter(Boolean);
+  assertEqual(run.signal, null, `${cases[got.length]?.[0]} hung the guard`);
   assertEqual(run.status, 0, run.stderr);
-  return JSON.parse(run.stdout);
+  return got.map((line) => JSON.parse(line));
 }
 
 test("a $( or backtick the tokenizer can't close is blocked when it names a refused command, and does not hang", () => {
@@ -890,31 +893,37 @@ test("a $( or backtick the tokenizer can't close is blocked when it names a refu
     "x=$(echo \\'; git push origin --delete main)",
     "x=$(echo \\'; bercail policy trust)",
   ];
-  for (const command of unclosed) {
-    const got = decideInChild(command, auto);
-    assertEqual(got.action, "block", `${command} → ${JSON.stringify(got)}`);
-    assertMatch(got.reason ?? "", /Write the body to a file/);
-  }
-  allowed("id=$(bd create --body-file - <<'EOF'\nit is here\nEOF\n); echo $id", headless);
   // Nothing in the text the guard refuses or asks about: it runs, with a warning.
-  for (const command of [
+  const unchecked = [
     "id=$(bd create --body-file - <<'EOF'\nit's here\nEOF\n); echo $id",
     "x=$(cat <<'EOF'\nDon't stop\nEOF\n); echo `date",
-  ]) {
-    const got = decideInChild(command, auto);
-    assertEqual(got.action, "allow", `${command} → ${JSON.stringify(got)}`);
-    assertMatch((got.warnings ?? []).join("\n"), /did not check the rest of this command/, command);
-  }
+  ];
   // A protected file's name, op or basecamp in the text keeps it refused, quoted or not.
-  for (const command of [
+  const refused = [
     "x=$(echo \\'; bercail shep question 'answer' 1 a)",
     'x=$(echo \\\'; bercail policy "trust")',
     "x=$(echo \\'; g\\it status)",
     "x=$(echo \\'; echo y > config.toml)",
     "x=$(echo \\'; op read op://v/i/p)",
     "x=$(echo \\'; basecamp todos create x)",
-  ])
-    assertEqual(decideInChild(command, headless).action, "block", command);
+  ];
+  const got = decideInChild([
+    ...unclosed.map((command): [string, GuardInput] => [command, auto]),
+    ...unchecked.map((command): [string, GuardInput] => [command, auto]),
+    ...refused.map((command): [string, GuardInput] => [command, headless]),
+  ]);
+  for (const command of unclosed) {
+    const decision = got.shift();
+    assertEqual(decision?.action, "block", `${command} → ${JSON.stringify(decision)}`);
+    assertMatch(decision?.reason ?? "", /Write the body to a file/);
+  }
+  for (const command of unchecked) {
+    const decision = got.shift();
+    assertEqual(decision?.action, "allow", `${command} → ${JSON.stringify(decision)}`);
+    assertMatch((decision?.warnings ?? []).join("\n"), /did not check the rest of this command/, command);
+  }
+  for (const command of refused) assertEqual(got.shift()?.action, "block", command);
+  allowed("id=$(bd create --body-file - <<'EOF'\nit is here\nEOF\n); echo $id", headless);
 });
 
 test("edit and write are blocked for read-only roles only", () => {
