@@ -47,7 +47,7 @@ If no checkout is found, bercail clones to `~/Work/<repo>` (or `~/Work/<owner>-<
 
 GitHub CLI reads time out after 60 seconds. Repo cloning and native-stack checkout get five minutes. A timed-out command and its children are stopped rather than holding the review open indefinitely.
 
-If a process is killed during lock recovery, an empty `*.lock.reap` directory can remain and block retries. After confirming no gather, pass or open process is using that stack, remove that empty directory with `rmdir`. Do not remove a live process's lock.
+If a process is killed during lock recovery, an empty `*.lock.reap` file can remain and block retries. After confirming no gather, pass or open process is using that stack, remove that empty file with `rm` (a folder an older bercail left, with `rmdir`). Do not remove a live process's lock.
 
 Bercail refuses to reuse an unmarked sibling, or switch a review worktree that has edits or is no longer detached. An interruption between worktree creation and writing its marker can leave an unmarked sibling. Inspect it and remove it with `git worktree remove <path>` before retrying. Do not force removal of user changes.
 

@@ -74,15 +74,17 @@ _review_lock() {
   local lock="$1.lock"
   # Every acquisition participates, including fresh owners. Otherwise a
   # recoverer could unlink an owner that acquired between its check and rm.
-  mkdir "$lock.reap" 2>/dev/null || return 1
+  # The reap is a file made with O_EXCL (noclobber), not mkdir(1): uutils'
+  # (Ubuntu 26.04) returns 0 when the folder appears during its call.
+  (set -C && : >"$lock.reap") 2>/dev/null || return 1
   if _review_locked "$1"; then
-    rmdir "$lock.reap"
+    rm -f "$lock.reap"
     return 1
   fi
   rm -f "$lock"
   local rc=0
   ln -s "${BASHPID:-$$}" "$lock" 2>/dev/null || rc=$?
-  rmdir "$lock.reap"
+  rm -f "$lock.reap"
   return "$rc"
 }
 
@@ -109,7 +111,7 @@ _review_passes_live() {
   local lock
   for lock in "$1"/pr-*/*/pass.lock "$1"/pr-*/*/pass.lock.reap; do
     # pass.lock is a symlink to a pid, so -e (follows the link) is false.
-    [[ -L "$lock" || -d "$lock" ]] || continue
+    [[ -L "$lock" || -e "$lock" ]] || continue
     [[ "$lock" == *.reap ]] && return 0
     _review_locked "${lock%.lock}" && return 0
   done

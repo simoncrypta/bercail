@@ -777,10 +777,10 @@ JS
 
   # A fresh acquisition must not bypass a recoverer between its stale-owner
   # check and link replacement, even when no lock link exists at that instant.
-  mkdir "$dir/pass.lock.reap"
+  : >"$dir/pass.lock.reap"
   assert_has "$("$BERCAIL" review-pr run --stack "$REVIEWS/stack-7" 2>&1 || true)" "already running" "fresh acquisitions respect recovery"
   [[ ! -L "$dir/pass.lock" ]] || fail "fresh acquisition bypassed recovery"
-  rmdir "$dir/pass.lock.reap"
+  rm "$dir/pass.lock.reap"
 
   # Many callers reclaiming one dead lock must still start only one pass.
   ln -s 999999 "$dir/pass.lock"
@@ -801,6 +801,35 @@ JS
     if wait_exit "$pid" "a stale-lock contender"; then winners=$((winners + 1)); fi
   done
   assert_eq 1 "$winners" "only one stale-lock contender ran"
+}
+
+@test "a taker in a lock's recovery keeps a second out, whatever mkdir returns" {
+  local lock="$BATS_TEST_TMPDIR/pass" gate="$BATS_TEST_TMPDIR/gate" first rc=0
+  # uutils' mkdir (Ubuntu 26.04's) returns 0 when the folder appears during its
+  # call. This one always does, so the race is lost every run here.
+  printf '#!/usr/bin/env bash\ncommand -p mkdir "$@" 2>/dev/null || [[ -d "${!#}" ]]\n' >"$FAKE_BIN/mkdir"
+  # The first readlink, the first taker's owner check inside recovery, waits for $gate.
+  cat >"$FAKE_BIN/readlink" <<'SH'
+#!/usr/bin/env bash
+if (set -C && : >"$GATE.in") 2>/dev/null; then
+  for ((i = 0; i < 600; i++)); do [[ ! -e "$GATE" ]] || break; sleep 0.05; done
+fi
+command -p readlink "$@"
+SH
+  chmod +x "$FAKE_BIN/mkdir" "$FAKE_BIN/readlink"
+  export GATE="$gate"
+  # setup ran mkdir before the stand-in existed; forget where bash found it.
+  hash -r
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/review.sh"
+  _review_lock "$lock" &
+  first=$!
+  wait_for "$gate.in"
+  _review_lock "$lock" || rc=$?
+  : >"$gate"
+  [[ "$rc" -ne 0 ]] || fail "a second taker got the lock during the first one's recovery"
+  wait_exit "$first" "the first taker" || fail "the first taker did not get the lock"
+  assert_eq "$first" "$(command -p readlink "$lock.lock")" "the first taker holds the lock"
 }
 
 # --- a Herdr space: Review-<n>_<Repo>, its desk, a Stack tab -----------------------
