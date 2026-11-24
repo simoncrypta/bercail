@@ -14,6 +14,12 @@
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# A GIT_DIR or GIT_CONFIG from the shell that started the run would send
+# fixtures' writes to the repo it names, and git must not look above the temp
+# dir bats runs in for one. setup_suite does both too, but bats reads each test
+# file before it runs (bercail-m94t).
+unset "${!GIT_@}"
+export GIT_CEILING_DIRECTORIES="${TMPDIR:-/tmp}"
 bats=node_modules/.bin/bats vp=node_modules/.bin/vp
 for tool in "$bats" "$vp"; do
   [[ -x "$tool" ]] || { printf 'tests/run.sh: %s is missing; run npm ci\n' "${tool##*/}" >&2; exit 1; }

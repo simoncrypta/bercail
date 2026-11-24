@@ -13,8 +13,7 @@ isolate() {
   export XDG_DATA_HOME="$HOME/.local/share" XDG_CACHE_HOME="$HOME/.cache"
   export XDG_RUNTIME_DIR="$BATS_TEST_TMPDIR/run" TMPDIR="$BATS_TEST_TMPDIR/tmp"
   # Pi's agent dir follows HOME only when this is unset; set, it is the real one.
-  # Git's would send every fixture repo's commits to the real repo.
-  unset PI_CODING_AGENT_DIR GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
+  unset PI_CODING_AGENT_DIR
   # What a sweep takes as /tmp: never the real one.
   export BERCAIL_TMP_ROOT="$BATS_TEST_TMPDIR/system-tmp"
   mkdir -p "$HOME" "$TMPDIR" "$BERCAIL_TMP_ROOT"
@@ -32,7 +31,9 @@ isolate() {
     >"$BATS_TEST_TMPDIR/bin/node"
   chmod +x "$BATS_TEST_TMPDIR/bin/node"
   # Last, once the watchdog's pid is kept: a failure here must not wait it out.
-  escaped_to_mise
+  escaped_to_mise && escaped_to_git || return
+  # Nor may git look above the run for a repo (tests/setup_suite.bash).
+  export GIT_CEILING_DIRECTORIES="${BATS_RUN_TMPDIR%/*}"
 }
 
 fail() {
@@ -56,6 +57,16 @@ escaped_to_mise() {
         ;;
     esac
   done
+}
+
+# tests/run.sh and setup_suite drop every GIT_* variable; this fails a test
+# whose suite or file setup brought one back. A test sets its own
+# (GIT_CONFIG_GLOBAL, ...) after isolate.
+escaped_to_git() {
+  local vars
+  vars="$(compgen -e | grep -E '^GIT_' | grep -vx GIT_CEILING_DIRECTORIES | paste -sd ' ' || true)"
+  [[ -z "$vars" ]] ||
+    fail "$vars set before isolate: git in a fixture would write to the repo or config it names; unset it (tests/setup_suite.bash)" || return
 }
 
 # A repo at DIR with one commit.

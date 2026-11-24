@@ -76,3 +76,19 @@ meet_file() {
   [[ "$status" -ne 0 ]] || fail "a failed teardown_suite passed the run: $output"
   grep -qx '2 tests, 0 failures, 0 skipped' <<<"$output" || fail "wrong total: $output"
 }
+
+# bats reads each test file before setup_suite runs, so a GIT_DIR from the
+# shell, or a repo above the temp dir, would reach a file's top-level code and
+# the git it runs (bercail-m94t).
+@test "run.sh starts bats with no GIT_* variable and no repo above it, before any setup runs" {
+  local repo="$BATS_TEST_TMPDIR/real"
+  git init -q "$repo"
+  mkdir "$repo/tmp"
+  printf '%s\n' 'load test_helper' 'compgen -e | grep -E "^GIT_" | grep -vx GIT_CEILING_DIRECTORIES >>"$MEET/seen" || true' \
+    'git -C "$BATS_RUN_TMPDIR" rev-parse --show-toplevel >>"$MEET/seen" 2>/dev/null || true' \
+    'setup() { isolate; }' '@test "top level" { :; }' >"$tree/tests/top.bats"
+  run env PATH="$BATS_TEST_TMPDIR/path" TMPDIR="$repo/tmp" GIT_DIR="$repo/.git" GIT_CONFIG_GLOBAL="$BATS_TEST_TMPDIR/gitconfig" \
+    bash "$tree/tests/run.sh" tests/top.bats
+  [[ "$status" -eq 0 ]] || fail "status $status: $output"
+  [[ ! -s "$MEET/seen" ]] || fail "the test file saw: $(cat "$MEET/seen")"
+}

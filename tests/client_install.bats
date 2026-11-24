@@ -8,7 +8,6 @@
 setup_file() {
   load test_helper
   local seed="$BATS_FILE_TMPDIR/seed" version
-  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
   version="$(sed -n 's/^BERCAIL_VERSION="\(.*\)"$/\1/p' "$ROOT/lib/common.sh")"
   mkdir -p "$seed"
   (cd "$ROOT" && git ls-files -co --exclude-standard \

@@ -9,7 +9,6 @@ setup() {
   export GIT_CONFIG_GLOBAL="$BATS_TEST_TMPDIR/gitconfig" GIT_CONFIG_NOSYSTEM=1
   local variable
   for variable in $(compgen -v | grep -E '^(HC|HERDR|BERCAIL|BEADS|BD|HANDOFF)_|^BASH_ENV$'); do unset "$variable"; done
-  unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR
   git config --global user.name test
   git config --global user.email test@example.com
   git config --global init.defaultBranch main

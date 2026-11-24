@@ -32,6 +32,11 @@ from a test and fails the check. A line naming any other path is another desk's
 spawn during the run and passes. Every added line goes to `handoffs-added.jsonl`.
 The live proofs (`tests/run.sh --live`) are not part of it.
 
+Run it from the checkout you are proving, or a `git clone --no-local` of it
+with the diff applied. Not a `cp -a`: a worktree's `.git` is a pointer to the
+real repo. Not with `GIT_DIR` pointed at another checkout: the suite drops
+every `GIT_*` variable it inherits, but what you run beside it does not.
+
 ## Launch
 
 `run.sh` makes a temp directory and points `HOME`, the `XDG_*` dirs and

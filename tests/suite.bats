@@ -152,3 +152,120 @@ FIXTURE
   grep -q 'BASH_ENV is set (/home/me/.bash_env)' <<<"$out" || fail "the failure does not name BASH_ENV: $out"
   grep -qx 'ok 4 clean' <<<"$out" || fail "the suite's own PATH failed the check: $out"
 }
+
+# A judge once ran the suite with GIT_DIR at a desk's worktree: fixtures moved
+# its branch, set user.name=test in its config and left 34 branches (bercail-m94t).
+# A repo outside the run, with one commit, and a fingerprint of its .git.
+real_repo() {
+  REAL="$BATS_TEST_TMPDIR/real"
+  git init -q -b main "$REAL"
+  git -C "$REAL" -c user.name=me -c user.email=me@example.com commit -q --allow-empty -m start
+}
+real_git_state() {
+  (cd "$REAL/.git" && find . -type f -print0 | sort -z | xargs -0 sha256sum)
+}
+
+# Fixture work a test does in its own temp dir, the kind that leaked: it fails
+# unless its config write and commit land in its own repo, and a folder outside
+# any repo stays outside one.
+fixture_git='set -e
+git init -q "$1/repo"
+git -C "$1/repo" config user.name fixture
+[ "$(git config -f "$1/repo/.git/config" user.name)" = fixture ]
+git -C "$1/repo" -c user.email=test@example.com commit -q --allow-empty -m fixture
+git -C "$1/repo" branch fixture
+mkdir "$1/plain"
+if git -C "$1/plain" rev-parse --git-dir >/dev/null 2>&1; then exit 1; fi'
+
+bats_fixture() {
+  local dir="$BATS_TEST_TMPDIR/nested"
+  mkdir -p "$dir"
+  printf '%s\n' "$fixture_git" >"$dir/fixture.sh"
+  cat >"$dir/fixture.bats" <<FIXTURE
+setup_file() {
+  mkdir -p "\$BATS_FILE_TMPDIR/seed"
+  bash "$dir/fixture.sh" "\$BATS_FILE_TMPDIR/seed"
+}
+setup() {
+  load "$ROOT/tests/test_helper"
+  isolate
+}
+@test "fixture" {
+  bash "$dir/fixture.sh" "\$BATS_TEST_TMPDIR"
+}
+FIXTURE
+  printf '%s' "$dir/fixture.bats"
+}
+
+@test "a bats run started with GIT_* naming a repo leaves that repo alone" {
+  local fixture before out rc=0
+  real_repo
+  fixture="$(bats_fixture)"
+  before="$(real_git_state)"
+  out="$(GIT_DIR="$REAL/.git" GIT_WORK_TREE="$REAL" GIT_INDEX_FILE="$REAL/.git/index" \
+    GIT_OBJECT_DIRECTORY="$REAL/.git/objects" GIT_COMMON_DIR="$REAL/.git" GIT_CONFIG="$REAL/.git/config" \
+    "$ROOT/node_modules/.bin/bats" --setup-suite-file "$ROOT/tests/setup_suite.bash" "$fixture" 2>&1)" || rc=$?
+  [[ "$(real_git_state)" == "$before" ]] || fail "the run wrote to the repo GIT_DIR named: $(git -C "$REAL" branch -a) $(git -C "$REAL" config --list --local)"
+  [[ "$rc" -eq 0 ]] && grep -qx 'ok 1 fixture' <<<"$out" || fail "the fixture's git did not work in its own repo: $out"
+}
+
+@test "a bats run whose temp root is inside a repo never finds that repo" {
+  local fixture before out rc=0
+  real_repo
+  fixture="$(bats_fixture)"
+  mkdir "$REAL/tmp"
+  before="$(real_git_state)"
+  out="$(TMPDIR="$REAL/tmp" "$ROOT/node_modules/.bin/bats" --setup-suite-file "$ROOT/tests/setup_suite.bash" "$fixture" 2>&1)" || rc=$?
+  [[ "$(real_git_state)" == "$before" ]] || fail "the run wrote to the repo above its temp root: $(git -C "$REAL" config --list --local)"
+  [[ "$rc" -eq 0 ]] && grep -qx 'ok 1 fixture' <<<"$out" || fail "a fixture found the repo above its temp root: $out"
+}
+
+@test "a test fails when a GIT_* variable reaches it before isolate" {
+  local dir="$BATS_TEST_TMPDIR/nested" out
+  mkdir -p "$dir"
+  cat >"$dir/escape.bats" <<FIXTURE
+setup() {
+  load "$ROOT/tests/test_helper"
+  [[ "\$BATS_TEST_DESCRIPTION" != git_dir ]] || export GIT_DIR="$BATS_TEST_TMPDIR/real/.git"
+  isolate
+}
+@test "git_dir" { :; }
+@test "clean" { :; }
+FIXTURE
+  out="$("$ROOT/node_modules/.bin/bats" "$dir/escape.bats" 2>&1)" && fail "every escape passed: $out"
+  grep -qx 'not ok 1 git_dir' <<<"$out" || fail "a GIT_DIR passed: $out"
+  grep -q 'GIT_DIR set before isolate' <<<"$out" || fail "the failure does not name GIT_DIR: $out"
+  grep -qx 'ok 2 clean' <<<"$out" || fail "the suite's own git setup failed the check: $out"
+}
+
+# The same fixture work from a Vitest file, under tests/setup.ts.
+vitest_fixture() {
+  local dir="$BATS_TEST_TMPDIR/vitest"
+  mkdir -p "$dir"
+  printf '%s\n' "$fixture_git" >"$dir/fixture.sh"
+  printf 'export default { test: { include: ["*.test.ts"], setupFiles: [%s], globals: true } };\n' \
+    "\"$ROOT/tests/setup.ts\"" >"$dir/vitest.config.mjs"
+  cat >"$dir/fixture.test.ts" <<FIXTURE
+import { execFileSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+test("fixture", () => {
+  execFileSync("bash", ["$dir/fixture.sh", mkdtempSync(join(tmpdir(), "fixture-"))], { stdio: "pipe" });
+});
+FIXTURE
+  printf '%s' "$dir"
+}
+
+@test "a Vitest run started with GIT_DIR at a repo, or from inside one, leaves it alone" {
+  need node
+  local dir before out rc=0
+  real_repo
+  dir="$(vitest_fixture)"
+  mkdir "$REAL/tmp"
+  before="$(real_git_state)"
+  out="$(cd "$ROOT" && GIT_DIR="$REAL/.git" GIT_WORK_TREE="$REAL" TMPDIR="$REAL/tmp" \
+    node_modules/.bin/vp test --run --root "$dir" --config "$dir/vitest.config.mjs" 2>&1)" || rc=$?
+  [[ "$(real_git_state)" == "$before" ]] || fail "the run wrote to the real repo: $(git -C "$REAL" branch -a) $(git -C "$REAL" config --list --local)"
+  [[ "$rc" -eq 0 ]] && grep -q '1 passed' <<<"$out" || fail "the fixture's git did not work in its own repo: $out"
+}

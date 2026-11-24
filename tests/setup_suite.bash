@@ -13,10 +13,15 @@ setup_suite() {
   unset BASH_ENV OPENCODE_CONFIG_DIR HYPRLAND_INSTANCE_SIGNATURE
   # The same clock zone and collation on every machine.
   export TZ=UTC LC_ALL=C.UTF-8
+  # The desk's variables, and every GIT_* one: a GIT_DIR, GIT_OBJECT_DIRECTORY
+  # or GIT_CONFIG from the shell that started the run sends fixtures' writes to
+  # the repo it names (bercail-m94t). Nor may git look above the dir the run's
+  # temp root is in: a ceiling stops git only below it.
   local var
   while IFS= read -r var; do
     unset "$var"
-  done < <(compgen -e | grep -E '^(HC|HERDR|BERCAIL|BEADS|BD|HANDOFF)_')
+  done < <(compgen -e | grep -E '^(HC|HERDR|BERCAIL|BEADS|BD|HANDOFF|GIT)_')
+  export GIT_CEILING_DIRECTORIES="${BATS_RUN_TMPDIR%/*}"
 
   # These act on the live desktop whatever HOME is (omarchy restart xcompose
   # restarts the running fcitx5). Shadow the ones installed here with a stub
