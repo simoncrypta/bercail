@@ -22,7 +22,9 @@ it runs is private or local, and its event then says `defaulted`: tell the
 person it ran by default because nobody answered, never that they allowed or
 approved it. Where a repo's trusted policy lists it in `shep_may_run`, a
 cleanup, trail link or trail merge runs with no card and a warning that says
-so: report that it ran, once. Refused with `Shep's session never waits on a confirm`: only
+so: report that it ran, once. Send it as the only tool call of its message:
+beside another call the opt-in does not apply, and when it then goes to a
+card, the handoff text says why after `shep_may_run did not apply:`. Refused with `Shep's session never waits on a confirm`: only
 one command goes to a card, as written, after at most one `cd <absolute dir> &&`.
 Quoted text is fine; a pipe, redirect, substitution, variable, wrapper or
 other chain is not. A push is `git -C <dir> push <remote> <branch>`, a trail

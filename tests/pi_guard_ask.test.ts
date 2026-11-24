@@ -647,9 +647,15 @@ function session(role: string, hc: (args: string[]) => { code: number; stderr?: 
   let calls = 0;
   // The input Pi runs, as the last tool_call left it.
   const ran = { command: "" };
-  const bash = async (command: string) => {
+  // Pi ends the assistant message, then checks its calls. ended: false checks a call with no
+  // message_end. siblings: the message's other calls.
+  const bash = async (command: string, { ended = true, siblings = 0 } = {}) => {
     const id = `c${calls++}`;
-    await handlers.message_end({ message: { role: "assistant", content: [{ type: "toolCall", id }] } }, ctx);
+    const content = [id, ...Array.from({ length: siblings }, (_, i) => `${id}-${i}`)].map((call) => ({
+      type: "toolCall",
+      id: call,
+    }));
+    if (ended) await handlers.message_end({ message: { role: "assistant", content } }, ctx);
     const input = { command };
     const result = (await handlers.tool_call({ toolName: "bash", toolCallId: id, input }, ctx)) as
       | { block: true; reason: string }
@@ -931,24 +937,31 @@ test("where its repo's trusted policy lists it in shep_may_run and reads private
   expect(log).toContain(
     'lists \\"trail link\\" in shep_may_run, and it links a branch in the private Entire repo et/acme/app',
   );
-  // Not listed, public, or a link with no --branch: each goes to a card.
-  for (const change of [() => (mayRun = ["cleanup"]), () => ((mayRun = ["trail link"]), (isPrivate = false))]) {
+  // Not listed, public, or a link with no --branch: each goes to a card, which says why.
+  const missed = (why: string) => ({
+    block: true,
+    reason: expect.stringContaining(`shep_may_run did not apply: ${why}`),
+  });
+  for (const [change, why] of [
+    [() => (mayRun = ["cleanup"]), `the trusted policy that ${repo} reads does not list "trail link" in shep_may_run`],
+    [() => ((mayRun = ["trail link"]), (isPrivate = false)), "the Entire repo et/acme/app is public"],
+  ] as const) {
     change();
     world();
-    expect(await shep.bash(commands[0]), JSON.stringify(mayRun)).toMatchObject({ block: true });
+    expect(await shep.bash(commands[0]), JSON.stringify(mayRun)).toMatchObject(missed(why));
   }
   mayRun = ["cleanup", "trail link", "trail merge"];
   isPrivate = true;
   world();
-  expect(await shep.bash(`cd ${repo} && entire trail link 41`)).toMatchObject({ block: true });
+  expect(await shep.bash(`cd ${repo} && entire trail link 41`)).toMatchObject(missed("its trail link is only"));
   vi.stubEnv("GIT_CONFIG_GLOBAL", join(dir, "other.gitconfig"));
-  expect(await shep.bash(commands[0])).toMatchObject({ block: true });
+  expect(await shep.bash(commands[0])).toMatchObject(missed("Shep's environment sets GIT_CONFIG_GLOBAL"));
   vi.stubEnv("GIT_CONFIG_GLOBAL", undefined);
   // A relative PATH folder could hold another entire for bash than for the guard's reads.
   const path = process.env.PATH;
   for (const unsafe of [`bin:${path}`, `:${path}`, `${path}::/usr/bin`]) {
     vi.stubEnv("PATH", unsafe);
-    expect(await shep.bash(commands[0]), unsafe).toMatchObject({ block: true });
+    expect(await shep.bash(commands[0]), unsafe).toMatchObject(missed("Shep's PATH has a folder that is not absolute"));
   }
   vi.stubEnv("PATH", path);
   // The opt-in itself still holds.
@@ -957,6 +970,121 @@ test("where its repo's trusted policy lists it in shep_may_run and reads private
   expect(await shep.bash(`cd ${repo} && entire trail merge 41`)).toMatchObject({ block: true });
   // A cleanup needs its repo private on its forge: an origin on this machine is not read so.
   git("remote", "set-url", "origin", origin);
-  expect(await shep.bash(`bercail cleanup ${worktree}`)).toMatchObject({ block: true });
+  expect(await shep.bash(`bercail cleanup ${worktree}`)).toMatchObject(missed("the guard cannot tell whether"));
   expect(shep.exec.mock.calls.filter(([cmd]) => cmd === "hc")).toHaveLength(9);
+});
+
+// bercail-c2ij: Shep's links in Lesentiel went to cards with no word of why. The issue's
+// command and origin, with Lesentiel's shep_may_run; push = ask is the push rule here, so
+// only the opt-in can skip the card.
+function lesentiel(policyOf: (folder: string) => unknown) {
+  const url = "entire://aws-us-east-2.entire.io/et/lesentiel/lesentiel";
+  git("remote", "set-url", "origin", url);
+  git("branch", "glkvm-takeover-results");
+  const bin = join(dir, "bin");
+  const policies = join(dir, "policies");
+  mkdirSync(policies);
+  writeFileSync(join(bin, "bercail"), `#!/bin/sh\ncat "${policies}/$(printf %s "$4" | tr / _)"\n`, { mode: 0o755 });
+  const world = (...folders: string[]) => {
+    for (const folder of folders)
+      writeFileSync(join(policies, folder.replaceAll("/", "_")), JSON.stringify(policyOf(folder)));
+  };
+  writeFileSync(
+    join(bin, "entire"),
+    `#!/bin/sh\n[ "$1 $2 $3" = "repo view ${url}" ] && echo '{"repo":"/et/lesentiel/lesentiel","private":true,"repoId":"01M7BX"}'\n`,
+    { mode: 0o755 },
+  );
+  vi.stubEnv("BERCAIL_BIN", join(bin, "bercail"));
+  vi.stubEnv("ENTIRE_BIN", undefined);
+  vi.stubEnv("PATH", `${bin}:${process.env.PATH}`);
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", undefined);
+  // hc starts the card's worker, which says it started.
+  const shep = session("shep", (args) => {
+    markStart(args.at(-1)!, "started");
+    return { code: 0 };
+  });
+  return { bin, shep, world };
+}
+const handedOff = (why: string) => ({
+  block: true,
+  reason: expect.stringMatching(
+    new RegExp(
+      `^Handed off, not run: .* shep_may_run did not apply: ${why.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.$`,
+    ),
+  ),
+});
+const handoffLog = () =>
+  readFileSync(join(dir, "state/bercail/guard-warnings.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line))
+    .filter((entry) => entry.kind === "handoff")
+    .map((entry) => entry.reasons.join(" "));
+
+test("a lone shep_may_run link skips the card; a link beside another call, or not listed, goes to one that says why", async () => {
+  let mayRun = ["cleanup", "trail link", "trail merge"];
+  const { bin, shep, world } = lesentiel(() => ({ policy: { shep_may_run: mayRun }, entire: true }));
+  world(repo);
+  const command = `cd ${repo} && entire trail link 109 --branch glkvm-takeover-results`;
+  expect(await shep.bash(command)).toBeUndefined();
+  expect(shep.ran.command).toBe(
+    `cd ${repo} && GIT_TERMINAL_PROMPT=0 ${join(bin, "entire")} trail link 109 --branch glkvm-takeover-results`,
+  );
+  const why = "it was one of 2 tool calls in its message, which Pi runs together; send it alone";
+  expect(await shep.bash(command, { siblings: 1 })).toMatchObject(handedOff(why));
+  // A call Pi checks with no message_end before it cannot be told alone.
+  const unseen = "the guard saw no end of the message that holds this tool call";
+  expect(await shep.bash(command, { ended: false })).toMatchObject(handedOff(unseen));
+  mayRun = ["cleanup"];
+  world(repo);
+  const unlisted = `the trusted policy that ${repo} reads does not list "trail link" in shep_may_run`;
+  expect(await shep.bash(command)).toMatchObject(handedOff(unlisted));
+  // An ask that shep_may_run cannot name says nothing of it.
+  expect((await shep.bash(`git -C ${repo} push origin feature`))?.reason).toMatch(
+    /^Handed off, not run: (?!.*shep_may_run)/,
+  );
+  const log = handoffLog();
+  expect(log).toHaveLength(4);
+  expect(log.slice(0, 3).map((line) => line.split("shep_may_run did not apply: ")[1])).toStrictEqual(
+    [why, unseen, unlisted].map((reason) => `${reason}.`),
+  );
+});
+
+// The 02:26 cleanup: runner-real-gateway's branch held Lesentiel's policy from before
+// shep_may_run, and a cleanup reads its worktree's own policy.
+test("a cleanup whose worktree's policy lists no cleanup goes to a card that names the folder it read", async () => {
+  const worktree = join(dir, "runner-real-gateway");
+  git("worktree", "add", "-q", worktree, "feature");
+  const { shep, world } = lesentiel((folder) => ({
+    policy: folder === worktree ? {} : { shep_may_run: ["cleanup", "trail link", "trail merge"] },
+    entire: true,
+  }));
+  world(repo, worktree);
+  const why = `the trusted policy that ${worktree} reads does not list "cleanup" in shep_may_run`;
+  expect(await shep.bash(`bercail cleanup ${worktree}`)).toMatchObject(handedOff(why));
+  expect(handoffLog()).toStrictEqual([expect.stringContaining(`shep_may_run did not apply: ${why}.`)]);
+});
+
+// A miss's reason reads an origin URL and helpers' output; a token in either is not shown.
+test("a cleanup's miss reason names no credential from its origin or a read's error, in the reply or the log", async () => {
+  const secret = "sentinel-c2ij-token";
+  const worktree = join(dir, "runner-real-gateway");
+  git("worktree", "add", "-q", worktree, "feature");
+  const { bin, shep, world } = lesentiel(() => ({ policy: { shep_may_run: ["cleanup"] }, entire: true }));
+  world(repo, worktree);
+  git("remote", "set-url", "origin", `https://x-token:${secret}@example.invalid/acme/app.git`);
+  const first = await shep.bash(`bercail cleanup ${worktree}`);
+  expect(first).toMatchObject(handedOff("the guard cannot tell whether this origin is private"));
+  // bercail policy show fails quoting a token, then prints a token where its JSON should be.
+  const policyShow = (script: string) => writeFileSync(join(bin, "bercail"), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+  policyShow(`echo "fatal: Authorization: Bearer ${secret}" >&2\nexit 3`);
+  const second = await shep.bash(`bercail cleanup ${worktree}`);
+  expect(second).toMatchObject(handedOff("the guard could not read what it acts on (bercail failed with exit 3)"));
+  policyShow(`echo "token=${secret}"`);
+  const third = await shep.bash(`bercail cleanup ${worktree}`);
+  expect(third).toMatchObject(
+    handedOff("the guard could not read what it acts on (a read gave output that is not the JSON it expects)"),
+  );
+  const log = readFileSync(join(dir, "state/bercail/guard-warnings.jsonl"), "utf8");
+  for (const text of [first?.reason, second?.reason, third?.reason, log]) expect(text).not.toContain(secret);
 });

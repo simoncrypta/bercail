@@ -2122,6 +2122,48 @@ for (const command of [
     }
   });
 }
+// bercail-23ek: Shep in Lesentiel's main checkout (on main, push = branch) links a desk's
+// pushed branch to its trail. The link pushes the branch it names, not the checkout's.
+test("a trail link of a named branch follows the push rule for that branch, with the trail warning for Shep", () => {
+  const link = "entire trail link 109 --branch glkvm-takeover-results";
+  for (const command of [link, `cd /work && ${link} --json`]) {
+    const got = decision(command, at("shep", policies.branch, "main"));
+    assertEqual(got.action, "allow", `${command} → ${JSON.stringify(got)}`);
+    assertDeepEqual(got.approved, ["/work: push = branch (repo)"]);
+    assertMatch((got.warnings ?? []).join("\n"), /wrote a trail on entire\.com/);
+    allowed(command, at("desk", policies.branch, "main"));
+  }
+  // The main branch, or no branch named (the checkout's own, main here), asks as a push to main.
+  for (const command of ["entire trail link 109 --branch main", "entire trail link 109"])
+    asked(command, at("shep", policies.branch, "main"));
+  // Another repo or login, or words bash may pass otherwise: read as before, as the checkout's own branch.
+  for (const command of [
+    ...["--repo gh/acme/other", "--repo=gh/acme/other", "-R gh/acme/other", "--project et/other", "--context work"].map(
+      (flag) => `${link} ${flag}`,
+    ),
+    "entire trail link 109 --branch=glkvm-takeover-results",
+    "entire trail link 109 --branch ma$(echo in)",
+    "entire trail link 109 --branch $BRANCH",
+    "entire trail link 109 --branch 'feature'",
+    "entire trail link 109 --branch feature --branch main",
+    "entire trail link 109 --branch feature --branch-action create",
+    // A prefix or wrapper the guard reads past can change the folder or the argv.
+    `env -C /other ${link}`,
+    `env --chdir=/other ${link}`,
+    `GIT_DIR=/other/.git ${link}`,
+    `sudo ${link}`,
+    `/tmp/x/${link}`,
+    `env -C /other bash -c '${link}'`,
+    `bash -c '${link}'`,
+  ])
+    asked(command, at("shep", policies.branch, "main"));
+  // Autopilot pushes only its own pull request's branch: a named one in another repo is not that.
+  asked(`${link} --repo gh/acme/other`, { ...at("autopilot", policies.branch, "main"), hasUI: true });
+  blocked(`${link} --repo gh/acme/other`, at("autopilot", policies.branch, "main"));
+  // The push rule still decides: push = ask asks.
+  asked(link, at("shep", policies.default, "main"));
+});
+
 test("entire trail writes are like gh pr edit; unknown commands ask", () => {
   for (const command of [
     "entire trail update --body x",

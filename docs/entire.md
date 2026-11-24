@@ -159,7 +159,13 @@ On top of the repo's policy, for every role:
   `trail approve 3 -m --help` approves.
 - **Publish:** `trail create`, `trail link`, `trail ci-pr`, `trail update-branch`
   and `checkpoint push` count as pushes. The policy's `push` decides, and the
-  question names the command (`Allow this push by entire trail create?`).
+  question names the command (`Allow this push by entire trail create?`). A
+  link written as `entire trail link <n> --branch <b> [--base <b>] [--json]`,
+  as `entire` itself in plain words, with no wrapper, in a checkout the guard
+  can place, is decided as a push of
+  `<b>`, not of the checkout's current branch: under `push = "branch"` a link
+  of a desk's branch from the main checkout runs, and Shep's runs with the
+  trail warning. Any other shape, and autopilot's link, is decided as before.
 - **Intent-only trail:** `trail create --no-branch` pushes no branch. Shep's
   runs with a warning. A desk's follows the policy's `push`, and where that
   asks, the question is `Create a trail on entire.com?`; a headless run is

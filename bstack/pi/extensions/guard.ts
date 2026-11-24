@@ -1254,13 +1254,15 @@ function decideTrailMerge(words: string[], input: GuardInput): GuardDecision {
   return { action: "ask", reason: "Merge this Entire trail into its base? Say yes only if you asked Shep to." };
 }
 
-// reading: the words as this kind was read from them, for agent-help's list.
+// reading: the words as this kind was read from them, for agent-help's list. literal:
+// entire itself, in the folder the guard reads, with the words bash passes as written.
 function decideEntire(
   kind: EntireKind,
   words: string[],
   dir: string | undefined,
   input: GuardInput,
   reading = words,
+  literal = false,
 ): GuardDecision {
   if (kind === "read") return allow;
   if (kind === "approve") return block(entireMerge);
@@ -1272,7 +1274,17 @@ function decideEntire(
   // Memories go through Shep and the person, as standing rules do.
   if (kind === "remember") return input.role === "shep" ? allow : block(brainRemember);
   if (readOnlyRole(input.role)) return block(readOnly);
-  if (kind === "push") return decidePush([], dir, input, `entire ${entirePath(reading).slice(0, 2).join(" ")}`);
+  if (kind === "push") {
+    const verb = entirePath(reading).slice(0, 2).join(" ");
+    // A plain link is decided as a push of the branch it names (bercail-23ek); else as a bare
+    // push, of the current one. Only in plain words, in a checkout the guard can place
+    // (forgeCall drops a --repo and the folder with it), and where the repo's policy decides:
+    // autopilot's rule is its own pull request's branch.
+    const own = verb === "trail link" && literal && dir !== undefined && input.role !== "autopilot";
+    const branch = own ? linkedBranch(reading) : undefined;
+    const decision = decidePush(branch ? ["origin", branch] : [], dir, input, `entire ${verb}`);
+    return branch && input.role === "shep" && decision.action === "allow" ? worse(decision, warn(shepTrail)) : decision;
+  }
   if (kind === "trail") return decideTrailWrite(entirePath(reading)[1] === "create", dir, input);
   if (kind === "write" || kind === "refresh") return allow;
   if (!input.hasUI) return entireListedRead(reading, input);
@@ -2598,10 +2610,14 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     const valueReading =
       forge.words[0] === "entire" && !pluginCall(forge.words) ? entireValueReading(forge.words) : undefined;
     const readings = [valueReading, forge.words];
+    // entire itself, as Shep wrote it: no substitution, no shell it runs in, and no prefix or
+    // wrapper (env -C, sudo, …) that commandWords dropped and that could change its folder or argv.
+    const literal =
+      depth === 0 && staticArgs && !segment.subs.length && raw[0] === "entire" && words.length === raw.length;
     const kinds = readings.map((reading) => reading && entireKind(reading));
     if (kinds[1] && !help) {
       kinds.forEach((kind, i) => {
-        if (kind) decision = worse(decision, decideEntire(kind, forge.words, forge.dir, here, readings[i]));
+        if (kind) decision = worse(decision, decideEntire(kind, forge.words, forge.dir, here, readings[i], literal));
       });
       // It runs them in --repo, which forgeCall left out of forge.dir.
       for (const script of pluginScripts(forge.words))
@@ -3125,10 +3141,25 @@ export const readOut: Read = (command, args, cwd) =>
         // Only the newline: a URL that ends in a space is another URL.
         if (!error) return done(stdout.replace(/\n+$/, ""));
         const why = (stderr || error.message).trim().split("\n")[0];
-        failed(Object.assign(new Error(`${command} ${args.slice(0, 3).join(" ")}: ${why}`), { code: error.code }));
+        failed(
+          Object.assign(new Error(`${command} ${args.slice(0, 3).join(" ")}: ${why}`), {
+            code: error.code,
+            program: basename(command),
+          }),
+        );
       },
     ),
   );
+
+// A failed read in the guard's own words: the program and its exit code or errno, never
+// its output, which may quote a token or a config file.
+function readFailure(error: unknown): string {
+  const { program, code } = error as { program?: string; code?: unknown };
+  const errno = typeof code === "string" && /^E[A-Z]+$/.test(code) ? ` (${code})` : "";
+  const how = typeof code === "number" ? ` with exit ${code}` : errno;
+  if (program) return `${program} failed${how}`;
+  return error instanceof SyntaxError ? "a read gave output that is not the JSON it expects" : "a read failed";
+}
 
 // The push URLs a card can show (shep/pi/question-target.ts showable): a path, ssh with
 // no password, or http(s), git:// or entire:// with no user, and none with a query or a space.
@@ -3391,10 +3422,13 @@ async function handOff(
   asked: string,
   session: string,
   signal: AbortSignal | undefined,
+  missed?: string,
 ): Promise<{ handed: boolean; reason: string }> {
+  // Why its repo's shep_may_run did not let it run with no card, so the next miss shows.
+  const note = missed ? ` shep_may_run did not apply: ${missed.replace(/\.$/, "")}.` : "";
   const refused = (why: string) => ({
     handed: false,
-    reason: `${asked} Shep's session never waits on a confirm, and this could not go to a Decisions card: ${why}. Run it as one command of its own, as written, after at most one cd DIR && (a push as git -C DIR push REMOTE BRANCH, a trail merge as bercail job merge trail:<n> [--change <repo>/<n>] --repo DIR), or leave it to the person.`,
+    reason: `${asked} Shep's session never waits on a confirm, and this could not go to a Decisions card: ${why}. Run it as one command of its own, as written, after at most one cd DIR && (a push as git -C DIR push REMOTE BRANCH, a trail merge as bercail job merge trail:<n> [--change <repo>/<n>] --repo DIR), or leave it to the person.${note}`,
   });
   const op = guardOperation(command, input.cwd, input.home);
   if (typeof op === "string") return refused(op);
@@ -3452,38 +3486,55 @@ async function handOff(
   if (state !== "started") return refused(why);
   return {
     handed: true,
-    reason: `Handed off, not run: the person answers this ${opWhat(facts)} on a Decisions card, and the worker ${worker} runs it only on their Allow within the hour, or, if nobody answers and the card says it defaults to Allow, at its deadline. Tell the person in one line that the card is up. Do not retry it, wait for it or run it another way; your turn goes on. Its outcome comes back as a guard event; report it then.`,
+    reason: `Handed off, not run: the person answers this ${opWhat(facts)} on a Decisions card, and the worker ${worker} runs it only on their Allow within the hour, or, if nobody answers and the card says it defaults to Allow, at its deadline. Tell the person in one line that the card is up. Do not retry it, wait for it or run it another way; your turn goes on. Its outcome comes back as a guard event; report it then.${note}`,
   };
 }
 
 // What runs in place of Shep's command when it is one operation its repo lets Shep run
 // with no card (withoutCard), pinned as a card's would be: the argv a card's worker
 // would run (runOf), in its folder, never Shep's own words; and the warning it runs with.
-// Undefined, and it goes to a card, when Shep's environment holds a git variable the
-// pinning reads dropped (cleanEnv), so bash would read another repo or config.
-async function optedIn(command: string, input: GuardInput): Promise<{ command: string; why: string } | undefined> {
-  // Before any read: a PATH the reads and bash would search differently.
-  if (!absolutePath()) return undefined;
-  if (
-    Object.keys(process.env).some(
-      (key) => gitPlace.test(key) || gitConfigVar.test(key) || key.startsWith("GIT_ALTERNATE"),
-    )
-  )
-    return undefined;
+// Missed, and it goes to a card that says why, when it is not alone in its message
+// (notAlone), or Shep's environment holds a git variable the pinning reads dropped
+// (cleanEnv), so bash would read another repo or config. Undefined when it is no
+// operation shep_may_run could name.
+async function optedIn(
+  command: string,
+  input: GuardInput,
+  notAlone: string | undefined,
+): Promise<{ command: string; why: string } | { missed: string } | undefined> {
   const op = guardOperation(command, input.cwd, input.home);
-  if (typeof op === "string" || op.kind === "push") return undefined;
-  const facts = await pinOperation(op).catch(() => undefined);
-  if (!facts) return undefined;
+  if (typeof op === "string" || !mayRunOp(op)) return undefined;
+  if (notAlone) return { missed: notAlone };
+  // Before any read: a PATH the reads and bash would search differently.
+  if (!absolutePath()) return { missed: "Shep's PATH has a folder that is not absolute" };
+  const git = Object.keys(process.env).find(
+    (key) => gitPlace.test(key) || gitConfigVar.test(key) || key.startsWith("GIT_ALTERNATE"),
+  );
+  if (git) return { missed: `Shep's environment sets ${git}, which bash would read and the guard's reads drop` };
+  let facts: GuardFacts;
+  try {
+    facts = await pinOperation(op);
+  } catch {
+    // handOff pins it again, and says why if that fails too.
+    return { missed: "the guard could not pin what it acts on" };
+  }
   const verdict = await withoutCard(facts);
-  if (!verdict.run) return undefined;
+  if (!verdict.run) return { missed: verdict.why };
   const { argv, cwd } = runOf(facts);
   // The program by its real path, as the guard's reads found it on PATH: bash's own lookup
   // could find another.
   const program = executable(argv[0]);
-  if (!program) return undefined;
+  if (!program) return { missed: `the guard found no ${argv[0]} to run on Shep's PATH` };
   const run = `cd ${shellWord(cwd)} && GIT_TERMINAL_PROMPT=0 ${argvText([program, ...argv.slice(1)])}`;
   return { command: run, why: `${verdict.why} It runs as: ${run}` };
 }
+
+// An operation shep_may_run could name, read from Shep's words: a cleanup, a trail job's
+// merge, or an entire trail link of any shape (withoutCard says which shape it takes).
+const mayRunOp = (op: GuardOp) =>
+  op.kind === "cleanup" ||
+  (op.kind === "trail merge" && op.job !== undefined) ||
+  (op.kind === "command" && op.argv[1] === "trail" && op.argv[2] === "link" && basename(op.argv[0]) === "entire");
 
 // Every PATH folder absolute: an empty or relative one is the current folder, which
 // differs between the guard's reads and bash.
@@ -3552,7 +3603,11 @@ function repoOfUrl(url: string): [string, string, string] | undefined {
 // same name, or another cluster's, reads otherwise.
 async function privateRepo(read: Read, url: string, dir: string): Promise<{ what: string } | { why: string }> {
   const repo = repoOfUrl(url);
-  if (!repo) return { why: `the guard cannot tell whether ${urlText(url)} is private` };
+  // A URL a card could not show may hold a credential: it is not named.
+  if (!repo)
+    return {
+      why: `the guard cannot tell whether ${showableUrl.some((shape) => shape.test(url)) ? urlText(url) : "this origin"} is private`,
+    };
   const [forge, owner, name] = repo;
   // Entire's mirror of a GitHub repo: GitHub's visibility says nothing of who reads Entire's copy.
   if (forge === "gh" && url.startsWith("entire://"))
@@ -3579,7 +3634,7 @@ async function privateRepo(read: Read, url: string, dir: string): Promise<{ what
     };
   } catch (error) {
     return {
-      why: `the guard could not read whether ${forge}/${owner}/${name} is private (${(error as Error).message})`,
+      why: `the guard could not read whether ${forge}/${owner}/${name} is private (${readFailure(error)})`,
     };
   }
 }
@@ -3619,31 +3674,29 @@ function checkpointsGo(top: string): "nowhere" | "origin" | "elsewhere" {
 // the checkout's origin's project. Any other flag (a create, a status, another repo), or
 // none naming the branch (the checkout's current one, which can move), waits.
 function plainLink(argv: string[]): boolean {
-  const [bin, trail, link, number, ...flags] = argv;
   // The entire it runs is the one the guard reads with: no path, no other ENTIRE_BIN.
-  if (
-    bin !== "entire" ||
-    (process.env.ENTIRE_BIN ?? "entire") !== "entire" ||
-    trail !== "trail" ||
-    link !== "link" ||
-    !/^[1-9]\d{0,8}$/.test(number ?? "")
-  )
-    return false;
-  const seen = new Set<string>();
+  return argv[0] === "entire" && (process.env.ENTIRE_BIN ?? "entire") === "entire" && linkedBranch(argv) !== undefined;
+}
+
+// The branch a plain link (above) names, whatever runs it; undefined for any other shape.
+function linkedBranch(words: string[]): string | undefined {
+  const [, trail, link, number, ...flags] = words;
+  if (trail !== "trail" || link !== "link" || !/^[1-9]\d{0,8}$/.test(number ?? "")) return undefined;
+  const values = new Map<string, string>();
   for (let i = 0; i < flags.length; i++) {
     const flag = flags[i];
-    if (seen.has(flag)) return false;
-    seen.add(flag);
+    if (values.has(flag)) return undefined;
+    values.set(flag, "");
     if (flag === "--json") continue;
     if (
       !["--branch", "--base"].includes(flag) ||
       !/^[\w./-]+$/.test(flags[i + 1] ?? "") ||
       flags[i + 1].startsWith("-")
     )
-      return false;
-    i++;
+      return undefined;
+    values.set(flag, flags[++i]);
   }
-  return seen.has("--branch");
+  return values.get("--branch");
 }
 
 // What a repo's trusted policy and Entire settings say, as bercail policy show reads them.
@@ -3745,12 +3798,17 @@ function mayRunName(facts: GuardFacts): string | undefined {
 // The warning it runs with, or why it goes to a card. It never throws.
 export async function withoutCard(facts: GuardFacts, read: Read = readOut): Promise<{ run: boolean; why: string }> {
   const name = mayRunName(facts);
+  if (!name && facts.kind === "command" && facts.argv[1] === "trail" && facts.argv[2] === "link")
+    return {
+      run: false,
+      why: "its trail link is only entire trail link <n> --branch <branch> [--base <branch>] [--json], run as entire with no ENTIRE_BIN",
+    };
   if (!name) return { run: false, why: "shep_may_run names no such operation" };
   const dir = factsDir(facts);
   try {
     const policy = await policyOf(read, dir);
     if (!policy.shepMayRun.includes(name))
-      return { run: false, why: `the repo's trusted policy does not list "${name}" in shep_may_run` };
+      return { run: false, why: `the trusted policy that ${dir} reads does not list "${name}" in shep_may_run` };
     const seen = await privateTarget(facts, read, dir, policy.entire);
     if (!("what" in seen)) return { run: false, why: seen.why };
     return {
@@ -3758,11 +3816,36 @@ export async function withoutCard(facts: GuardFacts, read: Read = readOut): Prom
       why: `Allowed with no guard card: the repo's trusted policy lists "${name}" in shep_may_run, and ${seen.what}. Say in your report what it did.`,
     };
   } catch (error) {
-    return { run: false, why: `the guard could not read what it acts on (${(error as Error).message})` };
+    return { run: false, why: `the guard could not read what it acts on (${readFailure(error)})` };
   }
 }
 
 const policySection = "bercail_git_policy";
+
+const toolCallsOf = (message: { content?: unknown } | undefined): { id: string }[] =>
+  Array.isArray(message?.content)
+    ? message.content.filter((part: { type?: string; id?: unknown }) => part?.type === "toolCall")
+    : [];
+
+// Why a tool call is not alone in its assistant message, or undefined when it is: not a
+// call another tool made, and no GIT_DIR of Shep's own, which bash would inherit and the
+// guard's reads drop, nor GIT_CONFIG, which only git config reads, so what the guard reads
+// is what runs. Its message's calls are counted at message_end, which Pi awaits before
+// it checks any of them; a call it checks without one goes to a card.
+function whyNotAlone(
+  event: { toolCallId: string; parentToolCallId?: string },
+  counts: Map<string, number>,
+): string | undefined {
+  if (event.parentToolCallId) return "another tool made the call";
+  const git = Object.keys(process.env).find((key) => gitPlace.test(key) || key === "GIT_CONFIG");
+  if (git) return `Shep's environment sets ${git}, which bash would read and the guard's reads drop`;
+  const count = counts.get(event.toolCallId);
+  counts.delete(event.toolCallId);
+  if (count === undefined) return "the guard saw no end of the message that holds this tool call";
+  return count === 1
+    ? undefined
+    : `it was one of ${count} tool calls in its message, which Pi runs together; send it alone`;
+}
 
 export default function (pi: ExtensionAPI) {
   const home = process.env.HOME;
@@ -3816,20 +3899,21 @@ export default function (pi: ExtensionAPI) {
   // entire agent-help's read-only lists, read once a session; warnings by tool call.
   const entireHelp: Record<string, string[]> = {};
   const warned = new Map<string, string[]>();
-  // Tool calls that were the only one in their assistant message: Pi checks every call of
-  // a message before it runs any, then runs them together.
-  const alone = new Set<string>();
+  // How many tool calls the last assistant message held, by call ID: Pi checks every call
+  // of a message before it runs any, then runs them together.
+  const counts = new Map<string, number>();
   pi.on("message_end", async (event) => {
     const { message } = event as { message: { role?: string; content?: unknown } };
-    const calls = Array.isArray(message.content)
-      ? message.content.filter((part: { type?: string; id?: string }) => part?.type === "toolCall")
-      : [];
-    if (message.role === "assistant" && calls.length === 1) alone.add(calls[0].id);
+    if (message.role !== "assistant") return;
+    counts.clear();
+    const calls = toolCallsOf(message);
+    for (const call of calls) counts.set(call.id, calls.length);
   });
 
   pi.on("tool_call", async (event, ctx) => {
     const input = event.input as { command?: string; path?: string };
     const command = event.toolName === "bash" ? String(input.command ?? "") : undefined;
+    const notAlone = whyNotAlone(event, counts);
     const json = await startJson(ctx.cwd);
     let guardInput: GuardInput = {
       role: process.env.BERCAIL_ROLE ?? "",
@@ -3847,13 +3931,7 @@ export default function (pi: ExtensionAPI) {
         exists: onDisk,
       },
       tmpdir: process.env.TMPDIR && resolve(process.env.TMPDIR) !== "/tmp" ? process.env.TMPDIR : undefined,
-      // Not a call another tool made. No GIT_DIR of Shep's own, which bash would inherit and
-      // the helper drops, nor GIT_CONFIG, which only git config reads, so the helper's
-      // checks read what git push will.
-      alone:
-        alone.delete(event.toolCallId) &&
-        !(event as { parentToolCallId?: string }).parentToolCallId &&
-        !Object.keys(process.env).some((key) => gitPlace.test(key) || key === "GIT_CONFIG"),
+      alone: notAlone === undefined,
     };
     const live = await decideLive(event.toolName, command, guardInput, input.path, {
       branch: (dir) => branchAt(pi, dir, ctx.signal),
@@ -3873,14 +3951,16 @@ export default function (pi: ExtensionAPI) {
     // (shep_may_run), goes to a worker, or is refused. Only a call alone in its message runs
     // that way, so nothing else Shep runs beside it moves what was read.
     if (decision.action === "ask" && guardInput.role === "shep") {
-      const direct = guardInput.alone && command !== undefined ? await optedIn(command, guardInput) : undefined;
+      const opted = command === undefined ? undefined : await optedIn(command, guardInput, notAlone);
+      const direct = opted && "command" in opted ? opted : undefined;
       if (direct) {
         // Pi runs the mutated input: the pinned argv, not the words Shep wrote.
         (event.input as { command: string }).command = direct.command;
         decision = { action: "allow", approved: [direct.why], warnings: [direct.why] };
       } else {
         const session = (ctx as { sessionManager?: { getSessionId?: () => string } }).sessionManager?.getSessionId?.();
-        const handed = await handOff(pi, logged, guardInput, decision.reason, session || "unknown", ctx.signal);
+        const missed = opted && "missed" in opted ? opted.missed : undefined;
+        const handed = await handOff(pi, logged, guardInput, decision.reason, session || "unknown", ctx.signal, missed);
         logWarning(event.toolName, logged, handed.handed ? "handoff" : "refusal", [handed.reason], guardInput);
         return { block: true, reason: handed.reason };
       }
