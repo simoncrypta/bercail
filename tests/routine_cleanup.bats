@@ -38,11 +38,11 @@ case "$1" in
 esac
 SH
   # bd answers show from the main checkout of the repo it runs in: .beads/fake/<id>.json,
-  # after running .beads/fake/<id>.hook when there is one.
+  # after running .beads/fake/<id>.hook when there is one. A hook that fails is bd's status.
   cat >"$BATS_TEST_TMPDIR/bin/bd" <<'SH'
 #!/usr/bin/env bash
 main="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
-[[ "$1" != show || ! -f "$main/.beads/fake/$2.hook" ]] || bash "$main/.beads/fake/$2.hook"
+[[ "$1" != show || ! -f "$main/.beads/fake/$2.hook" ]] || bash "$main/.beads/fake/$2.hook" || exit
 [[ "$1" == show ]] && cat "$main/.beads/fake/$2.json" 2>/dev/null
 SH
   # The Herdr app: a window runs while $HERDR exists, and ls prints it.
@@ -357,6 +357,26 @@ ledger() {
   if out="$(HC_FAIL="ls --json --label bercail.space=sp-alpha" query 2>&1)"; then fail "a --check that could not read hc is quiet: $out"; fi
   [[ "$out" == *"error: cleanup --check $WORK/widgets.alpha could not read what it needs: could not tell which terminals"* ]] \
     || fail "the run names what --check could not read: $out"
+}
+
+@test "the cleanup routine waits out a slow bd, and fails a run whose bd lookup is killed, so the next good run sends nothing again" {
+  local out rc
+  worktree alpha w-1
+  job w-1 closed
+  # bd under load: 5 seconds a show, past the bound of Shep's other reads.
+  printf 'sleep 5\n' >"$MAIN/.beads/fake/w-1.hook"
+  out="$("$ROOT/bin/bercail" routine run cleanup)" || fail "run: $out"
+  [[ "$out" == *"emitted, 1 found (1 new, 0 changed)"* ]] || fail "a slow bd still finds the closed job: $out"
+  # Out of time (the bound's 124), or killed: the job is unknown, not open.
+  for rc in 124 137; do
+    printf 'exit %s\n' "$rc" >"$MAIN/.beads/fake/w-1.hook"
+    if out="$("$ROOT/bin/bercail" routine run cleanup)"; then fail "a run whose lookup was cut short is quiet: $out"; fi
+    [[ "$out" == *"failed: exit 1: error: the lookup of w-1 in $MAIN was killed or ran out of time (status $rc)"* ]] \
+      || fail "the run names the lookup: $out"
+  done
+  rm "$MAIN/.beads/fake/w-1.hook"
+  out="$("$ROOT/bin/bercail" routine run cleanup)" || fail "run: $out"
+  [[ "$out" == *"skipped (quiet), 1 found, nothing new or changed"* ]] || fail "the finding is not sent again: $out"
 }
 
 @test "the cleanup routine checks an old review card without touching its worktree's index or objects" {

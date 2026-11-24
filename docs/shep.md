@@ -118,7 +118,7 @@ What Shep needs for good sits in files bercail keeps, outside its session, so a 
 
 ### Known repos
 
-bercail works the repos out each time from `config.toml`'s `[git]` and `[policy."<path>"]` keys, trusted policies, handoff records (a gone worktree gives its main checkout from its `<main>.<branch>` name), live desks' folders, and `~/.local/state/bercail/shep/repos` (one path per line, `#` for comments) for a repo it has not seen. Each becomes its main checkout; a folder that is no longer a checkout drops out. `bercail shep repos [--json]` prints each with its git backend, [policy](config.md#git-policy-per-repo) (`policy trusted`, `policy untrusted`, `no policy`), open issues (`no beads` without a `.beads`, `UNKNOWN` when `bd` fails or is slow), and where it was seen.
+bercail works the repos out each time from `config.toml`'s `[git]` and `[policy."<path>"]` keys, trusted policies, handoff records (a gone worktree gives its main checkout from its `<main>.<branch>` name), live desks' folders, and `~/.local/state/bercail/shep/repos` (one path per line, `#` for comments) for a repo it has not seen. Each becomes its main checkout; a folder that is no longer a checkout drops out. `bercail shep repos [--json]` prints each with its git backend, [policy](config.md#git-policy-per-repo) (`policy trusted`, `policy untrusted`, `no policy`), open issues (`no beads` without a `.beads`, `UNKNOWN` when `bd` fails or takes over 4 seconds), and where it was seen.
 
 ### Briefs and the board
 

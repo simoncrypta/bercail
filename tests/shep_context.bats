@@ -152,6 +152,18 @@ EOF
 ~/Work/c  gh  no policy         no beads  (extras)" ]] || fail "repos: $out"
 }
 
+@test "shep repos counts the open issues of a bd that takes 3 seconds, as one under load does" {
+  local out
+  repo a
+  issues a 'a-1|One|open'
+  printf '%s\n' "$HOME/Work/a" >"$STATE/repos"
+  mv "$BATS_TEST_TMPDIR/bin/bd" "$BATS_TEST_TMPDIR/bin/bd-now"
+  printf '#!/usr/bin/env bash\nsleep 3\nexec bd-now "$@"\n' >"$BATS_TEST_TMPDIR/bin/bd"
+  chmod +x "$BATS_TEST_TMPDIR/bin/bd"
+  out="$(shep repos --json)" || fail "repos: $out"
+  jq -e '[.[].open] == [1]' <<<"$out" >/dev/null || fail "a slow bd is not UNKNOWN: $out"
+}
+
 # Repo app with a desk worktree for app-1, its issue, three comments, and a
 # blocked desk t9 whose screen holds the question.
 brief_fixture() {

@@ -28,6 +28,10 @@ SHEP_BRIEF_BUDGET=1500
 
 _shep_hc() { _git_backend_bounded 2 "${HC_BIN:-hc}" "$@" 2>/dev/null </dev/null; }
 
+# Seconds a bd call gets. A caller with time to spare gives more: bd takes a
+# second alone and three or more under load (bercail-xtdl).
+SHEP_BD_WAIT=2
+
 # An explicit checkout wins over inherited store/git addressing.
 _shep_bd() {
   local key
@@ -36,7 +40,7 @@ _shep_bd() {
   while IFS= read -r key; do
     [[ "$key" =~ ^(BD_|BEADS_|GIT_) ]] && clean+=(-u "$key")
   done < <(compgen -e)
-  _git_backend_bounded 2 env "${clean[@]}" bd "$@"
+  _git_backend_bounded "$SHEP_BD_WAIT" env "${clean[@]}" bd "$@"
 }
 
 # A trail job, trail:N (lib/jobs.ts), wherever a beads id goes in an Entire repo.
@@ -109,11 +113,12 @@ _shep_repo_list() {
 }
 
 # The repo's issues that are not closed, as [{id, title, status, labels}].
-# Fails when it has no beads, or bd does not answer within 10 seconds.
+# Fails when it has no beads, or bd does not answer within 4 of the board's 10
+# seconds.
 _shep_open_issues() {
   local main="$1" raw
   [[ -d "$main/.beads" ]] || return 1
-  raw="$(cd "$main" && _shep_bd list --all --json --limit 0 </dev/null 2>/dev/null)" || return 1
+  raw="$(cd "$main" && SHEP_BD_WAIT=4 _shep_bd list --all --json --limit 0 </dev/null 2>/dev/null)" || return 1
   jq -c '[(if type == "array" then .[] else empty end) | select(.status != "closed")
     | {id, title, status, labels: (.labels // [])}]' <<<"$raw" 2>/dev/null
 }
@@ -275,10 +280,11 @@ _shep_main_of() {
   git_backend_main "$path" 2>/dev/null
 }
 
-# The issue as bd prints it from DIR, one JSON object.
+# The issue as bd prints it from DIR, one JSON object. On failure, bd's
+# status: 124 when it ran out of time.
 _shep_bd_issue() {
   local raw
-  raw="$(cd "$1" && _shep_bd show "$2" --json 2>/dev/null </dev/null)" || return 1
+  raw="$(cd "$1" && _shep_bd show "$2" --json 2>/dev/null </dev/null)" || return
   jq -ce 'if type == "array" then .[0] else . end | select(type == "object" and .id)' <<<"$raw" 2>/dev/null
 }
 

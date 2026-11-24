@@ -28,6 +28,10 @@ source "$lib/cleanup.sh"
 # seen so: a day apart, a 23-hour day too. A card waiting over 3 days is old.
 SEEN_GAP=$((20 * 3600))
 CARD_AGE=$((3 * 86400))
+# Nobody waits on a routine: bd gets well past the 3 seconds or more a call
+# takes under load (bercail-xtdl).
+# shellcheck disable=SC2034 # read by _shep_bd
+SHEP_BD_WAIT=10
 
 name="${1:?usage: cleanup.sh <routine name>}"
 now="$(_routine_now)"
@@ -49,17 +53,21 @@ _top() { [[ -n "$1" ]] && (cd "$1" && cd "$(git rev-parse --show-toplevel)" && p
 
 # The job ID in repo MAIN as "closed|open<TAB>title" in $job, or status 1
 # when it cannot be read: an unread job is not closed. A trail merged is
-# closed too. Read once a run.
+# closed too. A lookup killed or out of time fails the run: that job
+# may be closed, and a run without its findings would send them again as new.
+# Read once a run.
 declare -A jobs=()
 _job() {
-  local main="$1" id="$2" raw
+  local main="$1" id="$2" raw rc=0
   job=""
   if [[ ! -v "jobs[$main/$id]" ]]; then
     if _shep_is_trail "$id"; then
-      raw="$(_shep_job show "$id" --repo "$main" --json 2>/dev/null </dev/null)" || raw=""
+      raw="$(_shep_job show "$id" --repo "$main" --json 2>/dev/null </dev/null)" || rc=$?
     else
-      raw="$(_shep_bd_issue "$main" "$id")" || raw=""
+      raw="$(_shep_bd_issue "$main" "$id")" || rc=$?
     fi
+    ((rc != 124 && rc < 128)) || _source_failed "the lookup of $id in $main was killed or ran out of time (status $rc)"
+    ((rc == 0)) || raw=""
     jobs[$main/$id]="$(jq -r 'select(.status) | [if .status == "closed" or .phase == "complete" then "closed" else "open" end,
       (.title // "" | gsub("[[:space:]]+"; " "))] | @tsv' <<<"${raw:-null}" 2>/dev/null)" || jobs[$main/$id]=""
   fi
