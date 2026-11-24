@@ -7,7 +7,9 @@
 # branch, and a terminal it would end that is working or blocked. The guard
 # asks the person before it runs. --check makes every refusal and changes
 # nothing: the cleanup routine reads it. Exit 1 is a refusal; 2, that it could
-# not read the Herdr app, hc or its helpers.
+# not read the Herdr app, hc or its helpers. Once the worktree is gone it adds a
+# line to retired.jsonl, which tells dispatch the job's desk went on purpose, so
+# the job may get a new one; --gone records one removed some other way.
 
 # bercail's Herdr helpers, as the worktrunk hooks use them. False when absent.
 _cleanup_herdr_helpers() {
@@ -147,10 +149,41 @@ _cleanup_space_terminals() {
   jq -r '.terminals[] | select(.state == "live") | .address' <<<"$out" || return 1
 }
 
+# Appends that checkout $1 of repo $2 (branch $3) is retired; $4 is true when
+# it was gone already. Dispatch reads it: a handoff there before it names a
+# desk that went on purpose, not an unknown one.
+_cleanup_retired() {
+  local dir="${XDG_STATE_HOME:-$HOME/.local/state}/bercail"
+  mkdir -p "$dir" && jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg p "$1" --arg r "$2" --arg b "$3" --argjson gone "$4" \
+    '{v: 1, at: $at, path: $p, repo: $r, branch: $b} + (if $gone then {gone: true} else {} end)' >>"$dir/retired.jsonl"
+}
+
+# cleanup --gone <path>: a checkout a handoff started, removed without cleanup
+# (by hand, or wt remove). The person says nothing was lost; this records it.
+_cleanup_gone() {
+  local path="$1" handoffs line="" repo branch
+  handoffs="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl"
+  [[ ! -e "$path" ]] || die "$path is still there; bercail cleanup $path retires it"
+  [[ ! -f "$handoffs" ]] || line="$(jq -c --arg p "$path" 'select(.path == $p)' "$handoffs" | tail -1)"
+  [[ -n "$line" ]] || die "no handoff names $path, so no job waits on it; nothing to record"
+  repo="$(jq -r '.repo // empty' <<<"$line")"
+  branch="$(jq -r '.branch // empty' <<<"$line")"
+  if [[ -n "$repo" ]] && git -C "$repo" worktree list --porcelain | grep -qxF "worktree $path"; then
+    die "git still lists $path as a worktree; run git -C $repo worktree prune, then retry"
+  fi
+  _cleanup_retired "$path" "$repo" "$branch" true || die "could not record $path in retired.jsonl"
+  info "recorded $path as retired${branch:+; a dispatch of its job starts a new desk on $branch or a new branch}"
+}
+
 cmd_cleanup() {
-  local usage="usage: bercail cleanup [--check] <worktree>" wt main common repo branch dest="" ls="" space t out keep check=0 state
+  local usage="usage: bercail cleanup [--check] <worktree> | bercail cleanup --gone <path>" wt main common repo branch dest="" ls="" space t out keep check=0 state
   local -a ends=() shells=()
   [[ "${1:-}" != --check ]] || { check=1; shift; }
+  if [[ "${1:-}" == --gone && "$check" -eq 0 ]]; then
+    [[ $# -eq 2 && "$2" == /* ]] || die "--gone takes the checkout's absolute path, as its handoff names it; $usage"
+    _cleanup_gone "$2"
+    return
+  fi
   [[ $# -eq 1 && "$1" != -* ]] || die "$usage"
   [[ -d "$1" ]] || die "$1 is not a directory; $usage"
   wt="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" \
@@ -218,6 +251,9 @@ cmd_cleanup() {
   git --git-dir="$common" worktree remove "$wt" \
     || die "could not remove the worktree $wt${ends[*]:+ after ending ${ends[*]}}; its space stays${dest:+, and .bercail/ is archived in $dest}"
   info "removed worktree $wt${branch:+; branch $branch stays}"
+  # It is retired either way; unrecorded, its job's next dispatch asks for --gone.
+  _cleanup_retired "$wt" "$main" "$branch" false \
+    || warn "could not record $wt in retired.jsonl; a dispatch of its job will ask you to run bercail cleanup --gone $wt"
   if [[ -z "$space" ]]; then
     info "no Herdr space was open on $wt"
   else

@@ -56,11 +56,14 @@ usage: handoff-spawn --info
                   issue stacks on its parent's branch. The repo's git backend
                   records that parent (gh stack, gt track, or origin stack track).
   --existing-branch
-                  --branch only: the branch is on origin already (a PR's head).
-                  Fetch it and check it out at the fetched head with wt switch,
-                  never --create. A local branch behind it is fast-forwarded;
-                  one with commits origin lacks, or one already checked out,
-                  is refused.
+                  --branch only: the branch is cut already; wt switch checks it
+                  out, never --create. With --target pr:N it is the PR's head
+                  on origin: fetched, and checked out at the fetched head. A
+                  local branch behind it is fast-forwarded; one with commits
+                  origin lacks is refused. From bercail shep task dispatch, any
+                  other target's is the job's own local branch, kept when
+                  bercail cleanup retired its checkout, checked out as it is.
+                  One already checked out is refused.
   --adopt-reason TEXT
                   --branch only, from bercail shep task dispatch: start a desk
                   with a new session in the existing worktree of --branch,
@@ -278,8 +281,19 @@ handoff_track_origin() {
 
 # A PR's branch on origin, checked out at the fetched head. Moving a local
 # branch only ever fast-forwards it; anything else is the person's to sort out.
+# From dispatch, any other target's branch is the job's own, kept here when
+# bercail cleanup retired its checkout: checked out as it is.
 handoff_checkout_existing() {
-  local main="$1" branch="$2" remote mine at
+  local main="$1" branch="$2" target="$3" remote mine at
+  if [[ "$target" != pr:* && "${BERCAIL_TASK_RESERVED:-}" == 1 ]]; then
+    git -C "$main" rev-parse --verify --quiet "refs/heads/$branch^{commit}" >/dev/null \
+      || handoff_die "no local branch $branch; --existing-branch for $target checks out the job's own branch"
+    if at="$(handoff_worktree_of "$main" "$branch")"; then
+      handoff_die "$branch is already checked out at $at; continue that desk, or remove the worktree (wt remove $branch) and retry"
+    fi
+    wt switch "$branch" --no-cd --no-hooks || handoff_die "wt switch $branch failed"
+    return
+  fi
   _git_backend_bounded "$(handoff_gt_timeout)" git -C "$main" fetch --quiet origin \
     "+refs/heads/$branch:refs/remotes/origin/$branch" </dev/null >&2 \
     || handoff_die "git fetch origin $branch failed; the PR's head is unknown, so no desk started"
@@ -508,7 +522,7 @@ handoff_spawn_main() {
   local helper="${HOME:-}/.config/worktrunk/herdr-layout.sh"
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0
-  local base="" fresh="" model="" target="" fork_reason="" adopt_reason="" staged="" session="" lock="" prior path prior_main own created="" owned=0
+  local base="" fresh="" model="" target="" fork_reason="" adopt_reason="" staged="" session="" lock="" prior path prior_main own retired created="" owned=0
   local existing=0 reuse=0 released="" role=""
 
   while [[ $# -gt 0 ]]; do
@@ -657,6 +671,11 @@ handoff_spawn_main() {
   target="${target:-task:$issue}"
   [[ "$target" =~ ^(task:[A-Za-z0-9._-]+|pr:[1-9][0-9]*|trail:[1-9][0-9]*)$ ]] || handoff_die "--target must be task:ID, pr:N or trail:N"
   if [[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl" ]]; then
+    # A handoff whose checkout bercail cleanup retired after it holds nothing: its desk went on purpose.
+    # Only dispatch has checked that no desk of those handoffs is still live.
+    retired="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/retired.jsonl"
+    [[ -f "$retired" && "${BERCAIL_TASK_RESERVED:-}" == 1 ]] || retired=/dev/null
+    jq -e -s . "$retired" >/dev/null 2>&1 || handoff_die "$retired has a malformed line; which checkouts are retired is unknown, so no desk started"
     while IFS= read -r prior; do
       path="$(jq -r '.path // empty' <<<"$prior")"
       [[ -n "$path" ]] || continue
@@ -676,8 +695,9 @@ handoff_spawn_main() {
         handoff_die "original task already has a handoff: $prior; use bercail shep task dispatch, never a new preparation branch"
       fi
       [[ -n "$fork_reason" ]] || handoff_die "logical target already has a handoff: $prior; continue its issue, or pass --fork-reason on a separate exploration issue"
-    done < <(jq -c --arg i "$issue" --arg t "$target" --arg released "$released" \
-      '($released | split("\n")) as $gone | select((.issue == $i or .target == $t) and (.issue as $x | $gone | index($x) | not))' \
+    done < <(jq -c --arg i "$issue" --arg t "$target" --arg released "$released" --slurpfile retired "$retired" \
+      '($released | split("\n")) as $gone | select((.issue == $i or .target == $t) and (.issue as $x | $gone | index($x) | not))
+        | select(. as $h | $retired | any(.path == $h.path and ($h.at // "") < .at) | not)' \
       "${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl")
   fi
   session="$(</proc/sys/kernel/random/uuid)"
@@ -707,7 +727,7 @@ handoff_spawn_main() {
       || handoff_die "$sibling has changes; a partial creation is finished only in a clean worktree"
     dirty=0
   elif [[ "$existing" -eq 1 ]]; then
-    handoff_checkout_existing "$main" "$branch"
+    handoff_checkout_existing "$main" "$branch" "$target"
     dirty=0
   elif [[ -n "$base" ]]; then
     git -C "$main" rev-parse --verify --quiet "$base^{commit}" >/dev/null \

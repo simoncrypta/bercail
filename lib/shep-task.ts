@@ -216,9 +216,29 @@ function mainOf(path: string): string {
   const first = git(realpathSync(path), "worktree", "list", "--porcelain").split("\n")[0]!;
   return realpathSync(first.slice("worktree ".length));
 }
+// What bercail cleanup retired: each checkout path, and when (retired.jsonl).
+function retirements(): { path: string; at: string }[] {
+  const path = join(state(), "retired.jsonl");
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        throw new Error(`malformed line in ${path}; which checkouts are retired is UNKNOWN, no launch`);
+      }
+    });
+}
+// The handoffs of this repo. One whose checkout bercail cleanup retired after
+// it is retired: its desk went on purpose, also once a new checkout has its
+// path. One whose checkout is gone otherwise is unresolved, and so is one
+// logged in the second of its retirement, which cannot say which came first.
 function records(repo: string): any[] {
   const path = join(state(), "handoffs.jsonl");
   if (!existsSync(path)) return [];
+  const retired = retirements();
   return readFileSync(path, "utf8")
     .split("\n")
     .filter(Boolean)
@@ -230,6 +250,8 @@ function records(repo: string): any[] {
         throw new Error("malformed handoff record; ownership UNKNOWN, no launch");
       }
       if (!record.path) return [];
+      if (retired.some((r) => r.path === record.path && (record.at || "") < r.at))
+        return !record.repo || record.repo === repo ? [{ ...record, retired: true }] : [];
       try {
         return mainOf(record.path) === repo ? [record] : [];
       } catch {
@@ -443,8 +465,11 @@ function findOwner(
   history = records(repo),
 ): Owner | null {
   const handoffs = owned(history, id, target, fork);
-  if (handoffs.some((r) => r.unresolved))
-    throw new Error("stale/unresolved original checkout record; reconcile it before creating another desk");
+  const lost = handoffs.find((r) => r.unresolved);
+  if (lost)
+    throw new Error(
+      `the checkout ${lost.path} of ${lost.desk ? `desk ${lost.desk}` : id} is gone, and bercail cleanup did not retire it. Once you know nothing was lost there, run in your shell (Shep's guard cannot ask for it): bercail cleanup --gone '${lost.path.replaceAll("'", "'\\''")}', then dispatch again`,
+    );
   const candidates = live(repo).filter((t) => {
     if (saved?.desk === t.address || handoffs.some((r) => r.desk === t.address)) return true;
     // Labels find candidates, never establish ownership.
@@ -753,7 +778,25 @@ function dispatch(op: string, input: any): any {
           `superseded issue ${still.labels?.["bercail.issue"] || [...released].join(", ")} still has live desk ${still.address}; close it before its target moves`,
         );
     }
-    const history = recorded.filter((r) => !released.has(r.issue));
+    const history = recorded.filter((r) => !released.has(r.issue) && !r.retired);
+    // The job's handoffs whose checkouts bercail cleanup retired.
+    const gone = owned(
+      recorded.filter((r) => r.retired && !released.has(r.issue)),
+      value.id,
+      target,
+      !!(task?.forkReason || input.forkReason),
+    );
+    // A branch one of them had, kept here: a new desk checks it out as it is.
+    // A PR's own branch starts at origin's head instead.
+    const kept = (branch: string) => {
+      if (target.startsWith("pr:") || !gone.some((r) => r.branch === branch)) return false;
+      try {
+        git(repo, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`);
+        return true;
+      } catch {
+        return false;
+      }
+    };
     if (target.startsWith("pr:") && history.some((r) => (!r.target || r.target.startsWith("task:")) && r.branch)) {
       const pr = prFacts(repo, target);
       if (!pr.headRefName || pr.isCrossRepository)
@@ -810,7 +853,7 @@ function dispatch(op: string, input: any): any {
     }
     if (task?.retired?.includes(input.requestId))
       throw new Error(
-        `request ${input.requestId} is retired: it was for a desk whose checkout was adopted, or is v0.17 work with no queue file. Dispatch it again with a new requestId`,
+        `request ${input.requestId} is retired: it was for a desk whose checkout was adopted or retired by cleanup, or is v0.17 work with no queue file. Dispatch it again with a new requestId`,
       );
     if (
       task?.pending &&
@@ -855,7 +898,7 @@ function dispatch(op: string, input: any): any {
             : "Starting the creation again: the last one left no worktree";
           reserve(repo, value, task!);
           const done = create(repo, value, task!, {
-            existing,
+            existing: existing || (!path && kept(task!.branch)),
             reuse: !!path,
             released,
             adoption: null,
@@ -918,8 +961,17 @@ function dispatch(op: string, input: any): any {
     // it found there but never started; older records have no flags.
     const before = owned(history, value.id, target, fork);
     const started = before.some((r) => r.desk && r.ok !== false && r.agent_started !== false);
-    const adopting = !owner && (asked || !!task?.owner || started);
     const unsettled = ["creating", "unknown"].includes(task?.creation?.status || "");
+    // Each desk the job had went with a checkout bercail cleanup retired: it
+    // starts again in a new worktree, of its kept branch or the one Shep names.
+    const restart =
+      !owner &&
+      !asked &&
+      !unsettled &&
+      !before.length &&
+      gone.length > 0 &&
+      (!task?.owner || gone.some((r) => r.desk === task!.owner!.desk));
+    const adopting = !owner && !restart && (asked || !!task?.owner || started);
     if (!owner && !adopting && before.length)
       throw new Error(
         `original owner missing/stale; inspect the recorded checkout/space, no replacement was started${unsettled ? `. Its creation is UNKNOWN: retry request ${task!.creation!.id}` : ""}`,
@@ -930,14 +982,14 @@ function dispatch(op: string, input: any): any {
       );
     if (owner && task?.creation?.result?.session && owner.session !== task.creation.result.session)
       throw new Error("original startup session changed; no transfer to a replacement");
-    if (input.branch && (owner || task) && input.branch !== (owner?.branch || task?.branch))
+    if (!restart && input.branch && (owner || task) && input.branch !== (owner?.branch || task?.branch))
       throw new Error(
         "branch differs from original task; continue the original checkout or fork to a separate issue with a reason",
       );
     // A spawn that ended partial settles its creation once its space is closed: adoption may take its checkout.
     const ended = adopting && task?.creation?.status === "unknown" ? partial(before, value.id) : null;
     if (ended) closed(repo, ended);
-    if (task && !owner && (!adopting || (unsettled && !ended)))
+    if (task && !owner && !restart && (!adopting || (unsettled && !ended)))
       throw new Error(
         `creation outcome UNKNOWN; retry its own requestId${task.creation ? ` (${task.creation.id})` : ""} to finish a partial creation, or inspect the worktree/space facts; do not launch another`,
       );
@@ -952,6 +1004,30 @@ function dispatch(op: string, input: any): any {
       branch: owner?.branch || adoption?.branch || input.branch || "",
       ...(input.forkReason ? { forkReason: String(input.forkReason) } : {}),
     };
+    if (restart) {
+      // A desk of a retired checkout still live (ended by hand, or --gone too soon) is not gone.
+      const desks = new Set(gone.map((r) => r.desk).filter(Boolean));
+      const up = JSON.parse(run(bin("hc"), ["ls", "--json"], repo)).terminals.filter(
+        (t: any) => t.state === "live" && desks.has(t.address),
+      );
+      if (up.length)
+        throw new Error(
+          `desk ${up.map((t: any) => t.address).join(", ")} of a retired checkout is still live; end it or continue it, no launch occurred`,
+        );
+      // The gone desks' requests never reach the new one.
+      if (task.pending && Object.hasOwn(task.pending, request.id))
+        throw new Error(
+          `request ${request.id} was for desk ${task.owner?.desk}, gone with its retired checkout; dispatch the work again with a new requestId`,
+        );
+      task.retired = [
+        ...(task.retired || []),
+        ...(task.creation ? [task.creation.id] : []),
+        ...Object.keys(task.pending || {}),
+      ];
+      delete task.pending;
+      const branches = [...new Set(gone.map((r) => r.branch).filter(Boolean))];
+      task.branch = input.branch || task.branch || (branches.length === 1 ? branches[0] : "");
+    }
     if (!owner && !task.branch) throw new Error("no existing owner; pass branch explicitly for a new visible desk");
     // A new desk on a PR's own branch starts at its fetched head; the branch is never cut again.
     let existing = false;
@@ -997,7 +1073,7 @@ function dispatch(op: string, input: any): any {
     task.creation = { ...request, status: "creating", next: "Inspect visible creation result" };
     reserve(repo, value, task);
     const done = create(repo, value, task, {
-      existing,
+      existing: existing || (restart && kept(task.branch)),
       reuse: false,
       released,
       adoption,

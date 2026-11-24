@@ -1551,6 +1551,43 @@ _desk_moved_origin() {
   ! grep -q '^wt switch' "$DESK_HERDR_LOG" || fail "no worktree after a refusal: $(cat "$DESK_HERDR_LOG")"
 }
 
+@test "--existing-branch from dispatch on a job's own target checks out its local branch as it is, never origin's" {
+  local out mine
+  _desk_fixture existing-local
+  _desk_origin existing-local
+  mine="$(git -C "$DESK_REPO" rev-parse feat)"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn --existing-branch 2>"$BATS_TEST_TMPDIR/existing-local.err")" \
+    || fail "existing-branch spawn failed: $out $(cat "$BATS_TEST_TMPDIR/existing-local.err")"
+  grep -q '^wt switch feat --no-cd --no-hooks$' "$DESK_HERDR_LOG" || fail "wt switch, never --create: $(cat "$DESK_HERDR_LOG")"
+  [[ "$(git -C "$DESK_REPO.feat" rev-parse HEAD)" == "$mine" ]] || fail "the desk starts where the local branch is, not at origin's $PR_HEAD"
+  [[ "$(git -C "$DESK_REPO" rev-parse feat)" == "$mine" ]] || fail "the local branch is not moved"
+}
+
+@test "for dispatch, a handoff whose checkout bercail cleanup retired after it no longer holds the job" {
+  local out old
+  _desk_fixture retired
+  mkdir -p "$DESK_STATE/bercail"
+  old="$BATS_TEST_TMPDIR/retired.old"
+  jq -nc --arg p "$old" --arg i "$ISSUE" --arg r "$(cd "$DESK_REPO" && pwd -P)" \
+    '{at:"2026-11-20T10:00:00Z",path:$p,branch:"old",issue:$i,desk:"t130",target:"task:\($i)",repo:$r}' \
+    >"$DESK_STATE/bercail/handoffs.jsonl"
+  # One before the handoff is of an earlier checkout; one in its second cannot say which came first.
+  jq -nc --arg p "$old" '{v:1,at:"2026-11-19T10:00:00Z",path:$p,branch:"old"}, {v:1,at:"2026-11-20T10:00:00Z",path:$p,branch:"old"}' \
+    >"$DESK_STATE/bercail/retired.jsonl"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn 2>&1)" && fail "a retirement before the handoff let it go: $out"
+  [[ "$out" == *"original task already has a handoff"* ]] || fail "$out"
+  printf '{"path":\n' >>"$DESK_STATE/bercail/retired.jsonl"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn 2>&1)" && fail "a malformed retired.jsonl let it go: $out"
+  [[ "$out" == *"retired.jsonl has a malformed line"* ]] || fail "$out"
+  sed -i '$d' "$DESK_STATE/bercail/retired.jsonl"
+  jq -nc --arg p "$old" '{v:1,at:"2026-11-21T10:00:00Z",path:$p,branch:"old"}' >>"$DESK_STATE/bercail/retired.jsonl"
+  # Only dispatch has checked that the retired handoff's desk is not still live.
+  out="$(_desk_spawn 2>&1)" && fail "a spawn outside dispatch went past a retired handoff: $out"
+  [[ "$out" == *"original task already has a handoff"* ]] || fail "$out"
+  out="$(BERCAIL_TASK_RESERVED=1 _desk_spawn 2>"$BATS_TEST_TMPDIR/retired.err")" || fail "retired spawn failed: $out $(cat "$BATS_TEST_TMPDIR/retired.err")"
+  jq -e '.ok and .branch == "feat"' <<<"$out" >/dev/null || fail "$out"
+}
+
 @test "stage autopilot --branch starts an autopilot desk, only on an existing PR branch" {
   local out
   _desk_fixture autopilot-desk

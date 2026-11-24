@@ -113,7 +113,8 @@ spawn_ok() {
 #!/usr/bin/env bash
 printf 'spawn %s\n' "$*" >>"$LOG"
 while (($#)); do case "$1" in --issue) issue="$2" ;; --branch) branch="$2" ;; esac; shift; done
-[[ -d "$REPO.$branch" ]] || git -C "$REPO" worktree add -qb "$branch" "$REPO.$branch"
+[[ -d "$REPO.$branch" ]] || git -C "$REPO" worktree add -q "$REPO.$branch" "$branch" 2>/dev/null \
+  || git -C "$REPO" worktree add -qb "$branch" "$REPO.$branch"
 printf 'bercail handoff: stage bstack, linked worktree %s' "$REPO.$branch" | "$ROOT/bin/bercail" job comment "$issue" --repo "$REPO.$branch" >/dev/null
 jq -n --arg p "$REPO.$branch" --arg i "$issue" '{address:"t21",cwd:$p,state:"live",status:{app:"pi",state:"working"},
   labels:{"bercail.role":"agent","bercail.space":"sp-new","bercail.issue":$i}}' >"$HC_DATA/t21.json"
@@ -330,6 +331,33 @@ trail:1: Research the login flow · planning · blocked by #2" ]] || fail "list:
   out="$(dispatch '.requestId = "r2" | del(.branch)')" || fail "adoption: $out"
   jq -e '.status == "started" and (.warning | contains("Adopted:") and contains("trail:1 is blocked by #2"))' <<<"$out" >/dev/null \
     || fail "adoption warning: $out"
+}
+
+@test "a trail whose desk bercail cleanup retired gets a new desk in a fresh worktree of its kept branch" {
+  local out
+  spawn_ok
+  trail 1 "Research the login flow" open planning "Find where it expires."
+  dispatch >/dev/null || fail "first dispatch"
+  # Cleanup ended t21, removed its worktree, kept branch login, and said so.
+  mv "$HC_DATA/t21.json" "$BATS_TEST_TMPDIR/t21.json"
+  printf '{"terminals":[]}\n' >"$HC_DATA/ls.json"
+  git -C "$REPO" worktree remove --force "$REPO.login"
+  jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg p "$REPO.login" --arg r "$REPO" \
+    '{v:1,at:$at,path:$p,repo:$r,branch:"login"}' >"$XDG_STATE_HOME/bercail/retired.jsonl"
+  # A desk of that checkout still live, without its job's label, is not gone.
+  jq '.labels |= del(.["bercail.issue"])' "$BATS_TEST_TMPDIR/t21.json" >"$HC_DATA/t21.json"
+  printf '{"terminals":[{"address":"t21","cwd":"%s","state":"live"}]}\n' "$REPO" >"$HC_DATA/ls.json"
+  out="$(dispatch '.requestId = "r2"' 2>&1)" && fail "a live desk was replaced: $out"
+  [[ "$out" == *"desk t21 of a retired checkout is still live"* ]] || fail "$out"
+  rm "$HC_DATA/t21.json"
+  printf '{"terminals":[]}\n' >"$HC_DATA/ls.json"
+  out="$(dispatch '.requestId = "r2" | .message = "Merge main into the branch"')" || fail "dispatch after cleanup: $out"
+  jq -e --arg p "$REPO.login" '.status == "started" and .creation.desk == "t21" and .creation.path == $p' <<<"$out" >/dev/null \
+    || fail "dispatch after cleanup: $out"
+  [[ "$(grep -c '^spawn --branch login --stage bstack --issue trail:1 --target trail:1 .*--existing-branch' "$LOG")" == 1 ]] \
+    || fail "spawn argv: $(cat "$LOG")"
+  jq -e '.creation.id == "r2" and .creation.message == "Merge main into the branch" and .owner == null and (.retired | index("r1"))' \
+    "$(record_file 1.json)" >/dev/null || fail "job record: $(cat "$(record_file 1.json)")"
 }
 
 @test "a retry of a creation that left no desk does not start one once the trail is blocked" {

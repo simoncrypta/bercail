@@ -110,6 +110,8 @@ Post-install CLI (bercail):
                 closes its space, and keeps the branch. Refuses uncommitted work,
                 commits on neither trunk nor a remote branch, and submodules.
                 --check <worktree> makes the same refusals and changes nothing.
+                --gone <path>: a checkout removed some other way; records it retired, as
+                cleanup does, so dispatch starts its job a new desk.
 EOF
 }
 

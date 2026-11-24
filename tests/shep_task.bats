@@ -967,3 +967,145 @@ v017_record() {
   order="$(for file in "$XDG_STATE_HOME/bercail/desk-follow-ups/t9"/*.json; do jq -r '.request.id' "$file"; done)"
   [[ "$order" == $'earlier\nlater' ]] || fail "the desk would take: ${order//$'\n'/, }"
 }
+
+# A bstack job on its own target, task:app-1. Its first dispatch queues to t9,
+# whose handoff the setup records, so the task names t9 its owner.
+job() {
+  jq -nc --arg repo "$REPO" --arg id "${1:-r1}" '{repo:$repo,issue:"app-1",target:"task:app-1",requestId:$id,stage:"bstack",message:"Build the login"}'
+}
+
+# bercail cleanup retired $REPO.fix: desk t9 and its Pi ended, the worktree
+# went, branch fix stayed, and retired.jsonl says so, after t9's handoff.
+retire_fix() {
+  kill "$PID" && wait "$PID" 2>/dev/null || true
+  PID=
+  rm "$TASK_DATA/t9.hc"
+  git -C "$REPO" worktree remove --force "$REPO.fix"
+  jq -nc --arg at "$(date -u -d '-1 minute' +%Y-%m-%dT%H:%M:%SZ)" --arg p "$REPO.fix" --arg r "$REPO" \
+    '{v:1,at:$at,path:$p,repo:$r,branch:"fix"}' >>"$XDG_STATE_HOME/bercail/retired.jsonl"
+}
+
+# A handoff-spawn that starts desk t10 (session s2, space sp1) in a new
+# worktree $REPO.<branch>, on the branch as it is when it exists, and logs the
+# handoff with its time, as handoff-spawn does.
+spawn_new() {
+  export BERCAIL_HANDOFF_SPAWN="$BATS_TEST_TMPDIR/bin/spawn" TASK_REPO="$REPO"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'SPAWN'
+#!/usr/bin/env bash
+printf 'spawn %s\n' "$*" >>"$LOG"
+while (($#)); do [[ $1 != --branch ]] || branch="$2"; shift; done
+wt="$TASK_REPO.$branch"
+git -C "$TASK_REPO" worktree add -q "$wt" "$branch" 2>/dev/null || git -C "$TASK_REPO" worktree add -qb "$branch" "$wt"
+jq -n --arg cwd "$wt" '{address:"t10",cwd:$cwd,state:"live",labels:{"bercail.role":"agent","bercail.issue":"app-1","bercail.space":"sp1"}}' >"$TASK_DATA/t10.hc"
+jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg p "$wt" --arg b "$branch" \
+  '{at:$at,ok:true,agent_started:true,path:$p,branch:$b,space:"sp1",desk:"t10",session:"s2",issue:"app-1",target:"task:app-1"}' \
+  | tee -a "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+SPAWN
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+}
+
+@test "a task whose checkout bercail cleanup retired gets a new desk on a new branch" {
+  local out
+  spawn_new
+  job | task dispatch >/dev/null || fail "first dispatch"
+  retire_fix
+  out="$(job r2 | jq '.branch="next"' | task dispatch)" || fail "$out"
+  jq -e --arg p "$REPO.next" '.status == "started" and .creation.desk == "t10" and .creation.path == $p' <<<"$out" || fail "$out"
+  grep -q -- '^spawn --branch next ' "$LOG" || fail "$(cat "$LOG")"
+  ! grep -q -- '--existing-branch' "$LOG" || fail "a new branch is cut: $(cat "$LOG")"
+  jq -e '.metadata.bercail_task | .owner == null and .branch == "next" and .creation.id == "r2"' "$TASK_DATA/app-1.json" \
+    || fail "$(jq .metadata "$TASK_DATA/app-1.json")"
+}
+
+@test "a task whose checkout bercail cleanup retired starts again on its kept branch, and follow-ups reach only the new desk" {
+  local out
+  spawn_new
+  job | task dispatch >/dev/null || fail "first dispatch"
+  retire_fix
+  out="$(job r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .creation.desk == "t10" and .creation.branch == "fix"' <<<"$out" || fail "$out"
+  grep -q -- '^spawn --branch fix .*--existing-branch' "$LOG" || fail "the kept branch, as it is: $(cat "$LOG")"
+  # The new desk's Pi comes up in the new checkout, at the old one's path.
+  start_pi PID
+  TICKS="$(awk '{print $22}' "/proc/$PID/stat")"
+  owner t10 s2
+  out="$(job r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t10" and .owner.session == "s2"' <<<"$out" || fail "$out"
+  out="$(job r3 | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t10"' <<<"$out" || fail "$out"
+  [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups/t9" -name '*.json' | wc -l)" == 1 ]] || fail "t9 keeps only r1"
+  [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups/t10" -name '*.json' | wc -l)" == 2 ]] || fail "t10 gets r2 and r3"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
+}
+
+@test "a checkout gone some other way still refuses, and the refusal names the command that retires it" {
+  local out
+  spawn_new
+  jq -c '.at = "2026-11-20T10:00:00Z"' "$XDG_STATE_HOME/bercail/handoffs.jsonl" >"$BATS_TEST_TMPDIR/h"
+  mv "$BATS_TEST_TMPDIR/h" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  job | task dispatch >/dev/null || fail "first dispatch"
+  kill "$PID" && wait "$PID" 2>/dev/null || true
+  PID=
+  rm "$TASK_DATA/t9.hc"
+  rm -rf "$REPO.fix"
+  git -C "$REPO" worktree prune
+  out="$(job r2 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"the checkout $REPO.fix of desk t9 is gone, and bercail cleanup did not retire it"*"run in your shell (Shep's guard cannot ask for it): bercail cleanup --gone '$REPO.fix'"* ]] \
+    || fail "$out"
+  # A retirement of that path before t9's handoff is of an earlier checkout,
+  # and one in the same second cannot say which came first.
+  for at in 2026-11-19T10:00:00Z 2026-11-20T10:00:00Z; do
+    jq -nc --arg p "$REPO.fix" --arg at "$at" '{v:1,at:$at,path:$p,branch:"fix"}' >"$XDG_STATE_HOME/bercail/retired.jsonl"
+    out="$(job r2 | task dispatch 2>&1)" && fail "$at: $out"
+    [[ "$out" == *"bercail cleanup did not retire it"* ]] || fail "$at: $out"
+  done
+  printf '{"path":\n' >>"$XDG_STATE_HOME/bercail/retired.jsonl"
+  out="$(job r2 | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"malformed line in $XDG_STATE_HOME/bercail/retired.jsonl"* ]] || fail "$out"
+  sed -i '$d' "$XDG_STATE_HOME/bercail/retired.jsonl"
+  ! grep -q '^spawn ' "$LOG" || fail "a refusal spawned: $(cat "$LOG")"
+  "$ROOT/bin/bercail" cleanup --gone "$REPO.fix" || fail "cleanup --gone"
+  out="$(job r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .creation.desk == "t10"' <<<"$out" || fail "$out"
+}
+
+@test "a retry of a creation after cleanup that left no desk checks out the kept branch again" {
+  local out
+  spawn_new
+  job | task dispatch >/dev/null || fail "first dispatch"
+  retire_fix
+  mv "$BERCAIL_HANDOFF_SPAWN" "$BATS_TEST_TMPDIR/spawn.ok"
+  printf '#!/bin/sh\nprintf "spawn %%s\\n" "$*" >>"$LOG"\nexit 1\n' >"$BERCAIL_HANDOFF_SPAWN"
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+  out="$(job r2 | task dispatch 2>&1)" && fail "a failed spawn passed: $out"
+  jq -e '.metadata.bercail_task.creation | .id == "r2" and .status == "unknown"' "$TASK_DATA/app-1.json" || fail "$(jq .metadata "$TASK_DATA/app-1.json")"
+  mv "$BATS_TEST_TMPDIR/spawn.ok" "$BERCAIL_HANDOFF_SPAWN"
+  out="$(job r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .creation.desk == "t10" and .creation.branch == "fix"' <<<"$out" || fail "$out"
+  [[ "$(grep -c -- '^spawn --branch fix .*--existing-branch' "$LOG")" == 2 ]] || fail "$(cat "$LOG")"
+}
+
+@test "a job with no task record whose checkout cleanup retired starts again on the branch its handoff names" {
+  local out
+  spawn_new
+  retire_fix
+  out="$(job | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .creation.branch == "fix"' <<<"$out" || fail "$out"
+  grep -q -- '^spawn --branch fix .*--existing-branch' "$LOG" || fail "$(cat "$LOG")"
+}
+
+@test "a follow-up saved for a desk cleanup retired is not sent again as the new desk's first request" {
+  local out dir="$XDG_STATE_HOME/bercail/desk-follow-ups"
+  spawn_new
+  mkdir -p "$dir"
+  touch "$dir/t9" # a file where t9's folder goes: the write fails after the save
+  out="$(job half | task dispatch 2>&1)" && fail "$out"
+  rm "$dir/t9"
+  retire_fix
+  out="$(job half | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"request half was for desk t9, gone with its retired checkout"* ]] || fail "$out"
+  ! grep -q '^spawn ' "$LOG" || fail "$(cat "$LOG")"
+  out="$(job r2 | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .creation.desk == "t10"' <<<"$out" || fail "$out"
+  jq -e '.metadata.bercail_task | .creation.id == "r2" and (.retired | index("half")) and (has("pending") | not)' "$TASK_DATA/app-1.json" || fail "$(jq .metadata "$TASK_DATA/app-1.json")"
+}

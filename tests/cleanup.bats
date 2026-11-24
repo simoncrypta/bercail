@@ -106,6 +106,7 @@ assert_kept() {
   [[ "$(jq -r '[.[] | select(.state == "live")] | length' "$STATE/hc.json")" == "$(jq length "$STATE/hc.json")" ]] \
     || fail "$why: no terminal is ended"
   [[ ! -e "$ARCHIVE" ]] || fail "$why: nothing is archived"
+  [[ ! -e "$XDG_STATE_HOME/bercail/retired.jsonl" ]] || fail "$why: nothing is recorded as retired"
   if grep -q 'space.close\|^hc kill' "$CALLS"; then fail "$why: nothing is closed or ended"; fi
 }
 
@@ -137,6 +138,45 @@ assert_kept() {
   assert_eq "verify/run-1/unit.txt" "$(readlink "$dest/.bercail/latest")" "a link is copied as a link"
   assert_eq 700 "$(stat -c %a "$ARCHIVE")" "the archive is private"
   assert_has "$out" "archived .bercail/ to $dest/.bercail" "the report names the copy"
+}
+
+@test "cleanup records the checkout it retired, once it is gone, for dispatch to start the job a new desk" {
+  local out wt
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  out="$("$BERCAIL" cleanup "$wt" 2>&1)" || fail "cleanup: $out"
+  jq -se --arg p "$wt" --arg r "$WORK/widgets" 'length == 1 and (.[0] | .path == $p and .repo == $r and .branch == "alpha"
+    and (.at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")))' "$XDG_STATE_HOME/bercail/retired.jsonl" >/dev/null \
+    || fail "one line names the retired checkout: $(cat "$XDG_STATE_HOME/bercail/retired.jsonl")"
+  # It is retired even when the line cannot be written; the warning says what a dispatch will ask.
+  [[ "$(id -u)" != 0 ]] || return 0
+  desk_space bravo
+  chmod 400 "$XDG_STATE_HOME/bercail/retired.jsonl"
+  out="$("$BERCAIL" cleanup "$WORK/widgets.bravo" 2>&1)" || fail "cleanup: $out"
+  [[ ! -e "$WORK/widgets.bravo" ]] || fail "the worktree is removed"
+  assert_has "$out" "could not record $WORK/widgets.bravo in retired.jsonl; a dispatch of its job will ask you to run bercail cleanup --gone $WORK/widgets.bravo" "the warning"
+}
+
+@test "cleanup --gone records a checkout removed some other way, only one a handoff names and git no longer lists" {
+  local out wt handoffs="$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  if out="$("$BERCAIL" cleanup --gone "$wt" 2>&1)"; then fail "a checkout still there is recorded gone: $out"; fi
+  assert_has "$out" "$wt is still there; bercail cleanup $wt retires it" "still there"
+  rm -rf "$wt"
+  if out="$("$BERCAIL" cleanup --gone "$wt" 2>&1)"; then fail "a checkout no handoff names is recorded: $out"; fi
+  assert_has "$out" "no handoff names $wt" "no handoff"
+  mkdir -p "$(dirname "$handoffs")"
+  jq -nc --arg p "$wt" --arg r "$WORK/widgets" '{at:"2026-11-20T10:00:00Z",path:$p,branch:"alpha",issue:"w-1",desk:"d-alpha",repo:$r}' >"$handoffs"
+  if out="$("$BERCAIL" cleanup --gone "$wt" 2>&1)"; then fail "a checkout git still lists is recorded: $out"; fi
+  assert_has "$out" "git still lists $wt as a worktree; run git -C $WORK/widgets worktree prune" "still listed"
+  [[ ! -e "$XDG_STATE_HOME/bercail/retired.jsonl" ]] || fail "a refusal records nothing"
+  git -C "$WORK/widgets" worktree prune
+  out="$("$BERCAIL" cleanup --gone "$wt" 2>&1)" || fail "cleanup --gone: $out"
+  assert_has "$out" "recorded $wt as retired" "the report"
+  jq -se --arg p "$wt" --arg r "$WORK/widgets" 'length == 1 and (.[0] | .path == $p and .repo == $r and .branch == "alpha" and .gone)' \
+    "$XDG_STATE_HOME/bercail/retired.jsonl" >/dev/null || fail "$(cat "$XDG_STATE_HOME/bercail/retired.jsonl")"
+  if grep -q 'space.close\|^hc kill' "$CALLS"; then fail "--gone ends and closes nothing"; fi
 }
 
 @test "cleanup removes nothing when the archive cannot be written" {

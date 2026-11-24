@@ -130,7 +130,7 @@ working directory to `cwd` from `--info`. Flags only.
 - `--model <provider/id[:thinking]>` is optional: run this one agent on another Pi model, such as
   `claude-bridge/claude-fable-5-2:high`, when the person asks for one. See [Another model](#another-model).
 - Plan-only work is a line in the issue, not a flag.
-- `--existing-branch` starts the desk on a branch origin already has (a PR's head): it fetches it, fast-forwards a local branch that is behind, and runs `wt switch` without `--create`. It refuses a local branch with commits origin lacks, or one checked out elsewhere.
+- `--existing-branch` starts the desk on a branch that is cut already, with `wt switch` and no `--create`. With `--target pr:N` it is the PR's head on origin: it fetches it, fast-forwards a local branch that is behind, and refuses one with commits origin lacks. From dispatch, any other target's is the job's own local branch, kept when `bercail cleanup` retired its checkout, checked out as it is. A branch checked out elsewhere is refused.
 - `--stage autopilot` with `--branch` needs `--target pr:N` and `--existing-branch`: an autopilot desk on that PR's branch, which may commit and push its fixes.
 - `--branch` needs bstack's Pi lead profile (`bercail update` writes it).
 ## The desk (`--branch`)
