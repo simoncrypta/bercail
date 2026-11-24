@@ -163,18 +163,21 @@ hold() {
     || fail "back: $(last_run check)"
 }
 
-@test "run --dry-run prints the event and writes no state, no run and no inbox file" {
+@test "run --dry-run prints what it found and writes no state, no run and no inbox file" {
   declare_routine check
-  findings check '{"key":"a","title":"A"}'
+  findings check '{"key":"a","title":"A"}' '{"key":"b","title":"B","detail":"why","repo":"~/Work/x","issue":"x-1"}'
   out="$(routine run check --dry-run)" || fail "dry run: $out"
-  jq -e '.source == "bercail" and .schema == "bercail.routine/v1" and .kind == "routine" and .sink == "shep"
-    and .routine == "check" and .outcome == "emitted" and .counts == {found: 1, new: 1, changed: 0}
-    and (.run | test("^[0-9]{8}T[0-9]{6}Z-[0-9]+$")) and .event_id == "routine:check:\(.run)"
-    and .show == "bercail routine show check --run \(.run)"' <<<"$out" >/dev/null || fail "event: $out"
-  [[ ! -e "$STATE/check/state.json" && ! -e "$STATE/check/runs.jsonl" ]] || fail "dry run wrote: $(ls -R "$STATE")"
+  [[ "$out" == "check: emitted, 2 found (2 new, 0 changed); dry run, nothing written"$'\n'"  new      a  A"$'\n'"  new      b  B"$'\n'"           why (~/Work/x, x-1)" ]] \
+    || fail "dry run: $out"
+  [[ ! -e "$STATE/check/state.json" && ! -e "$STATE/check/runs.jsonl" && ! -e "$STATE/check/outputs" ]] \
+    || fail "dry run wrote: $(ls -R "$STATE")"
   [[ -z "$(inbox_files)" ]] || fail "dry run queued: $(inbox_files)"
   out="$(routine run check)"
   [[ "$out" == "check: emitted, "* ]] || fail "the real run after it: $out"
+  findings check '{"key":"a","title":"A"}' '{"key":"b","title":"B, now worse"}'
+  out="$(routine run check --dry-run)" || fail "dry run: $out"
+  [[ "$out" == "check: emitted, 2 found (0 new, 1 changed); dry run, nothing written"$'\n'"  same     a  A"$'\n'"  changed  b  B, now worse" ]] \
+    || fail "a dry run after a real one: $out"
 }
 
 @test "a run with new findings leaves one event file in Shep's inbox: its counts and the show command, no finding text" {

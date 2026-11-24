@@ -37,10 +37,12 @@ case "$1" in
   *) exit 2 ;;
 esac
 SH
-  # bd answers show from the main checkout of the repo it runs in: .beads/fake/<id>.json.
+  # bd answers show from the main checkout of the repo it runs in: .beads/fake/<id>.json,
+  # after running .beads/fake/<id>.hook when there is one.
   cat >"$BATS_TEST_TMPDIR/bin/bd" <<'SH'
 #!/usr/bin/env bash
 main="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+[[ "$1" != show || ! -f "$main/.beads/fake/$2.hook" ]] || bash "$main/.beads/fake/$2.hook"
 [[ "$1" == show ]] && cat "$main/.beads/fake/$2.json" 2>/dev/null
 SH
   # The Herdr app: a window runs while $HERDR exists, and ls prints it.
@@ -183,10 +185,41 @@ ledger() {
     if out="$(query 2>&1)"; then fail "an unreadable index is a finding: $out"; fi
     chmod 600 "$index"
     [[ "$out" == *"error: git could not read the index of $WORK/widgets.alpha"* ]] || fail "the run names the index: $out"
+    # A .git or a folder that cannot be read once the run found the worktree: still there, not gone.
+    local what rc
+    for what in "$WORK/widgets.alpha/.git" "$WORK/widgets.alpha"; do
+      printf 'chmod 000 %q\n' "$what" >"$MAIN/.beads/fake/w-1.hook"
+      rc=0
+      out="$(query 2>&1)" || rc=$?
+      chmod 700 "$what"
+      ((rc != 0)) || fail "an unreadable $what is a gone worktree: $out"
+      [[ "$out" == *"error: git could not read the index of $WORK/widgets.alpha"* ]] || fail "the run names the index: $out"
+    done
+    chmod 600 "$WORK/widgets.alpha/.git"
+    rm "$MAIN/.beads/fake/w-1.hook"
   fi
   jq '(.[] | select(.address == "d-alpha") | .status.state) = "working"' "$HC_DATA/terminals.json" >"$HC_DATA/t.tmp"
   mv "$HC_DATA/t.tmp" "$HC_DATA/terminals.json"
   assert_eq "" "$(keys)" "a desk still working there, as the review queue counts it"
+}
+
+@test "the cleanup routine skips a worktree removed while it runs, and finds the rest" {
+  job w-1 closed
+  job w-2 open
+  job w-3 closed
+  worktree alpha w-1
+  worktree bravo w-2
+  worktree charlie w-3
+  desk d-bravo "$WORK/widgets.bravo" w-2 "done"
+  # The worktrees sit in a checkout of their own, with a change staged there.
+  git_init "$WORK"
+  printf 'notes\n' >"$WORK/notes.txt"
+  git -C "$WORK" add notes.txt
+  # Reading alpha's job, the routine meets a cleanup at work: alpha is half
+  # removed, its .git gone, and bravo, read later as a done desk's worktree, is gone.
+  printf 'rm %q\nrm -rf %q\n' "$WORK/widgets.alpha/.git" "$WORK/widgets.bravo" >"$MAIN/.beads/fake/w-1.hook"
+  assert_eq "cleanup:$WORK/widgets.charlie" "$(keys)" "alpha and bravo are skipped, charlie still found"
+  assert_eq '{}' "$(jq -c . "$SEEN")" "a desk on a gone worktree is not seen done"
 }
 
 @test "the cleanup routine finds a desk done on an open job with nothing staged once two runs a day apart saw it" {
@@ -300,7 +333,9 @@ ledger() {
   local out
   desk b-1 "$MAIN" w-1 "done" bg
   out="$("$ROOT/bin/bercail" routine run cleanup --dry-run)" || fail "dry run: $out"
-  assert_eq "emitted 1" "$(jq -r '"\(.outcome) \(.counts.new)"' <<<"$out")" "a dry run prints the event it would send"
+  assert_eq "cleanup: emitted, 1 found (1 new, 0 changed); dry run, nothing written" "$(head -n 1 <<<"$out")" "a dry run's line"
+  assert_eq "  new      bg-done:b-1  background Shep n-b-1 (w-1: Job w-1) finished and is still live" "$(sed -n 2p <<<"$out")" \
+    "a dry run prints what it found"
   [[ ! -e "$SEEN" ]] || fail "a dry run writes no seen-done.json"
   out="$("$ROOT/bin/bercail" routine run cleanup)" || fail "run: $out"
   [[ "$out" == *"emitted, 1 found (1 new, 0 changed)"* ]] || fail "the first run sends it: $out"

@@ -1,6 +1,6 @@
 # routines
 
-A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, the built-in [cleanup routine](#the-cleanup-routine), and [the Routines panel](#the-routines-panel) in Shep's view. `bercail routine run` runs one now, and `--dry-run` prints the event a run would send. The plan is bercail-2qig.
+A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, the built-in [cleanup routine](#the-cleanup-routine), and [the Routines panel](#the-routines-panel) in Shep's view. `bercail routine run` runs one now, and `--dry-run` prints what a run would find, without keeping it. The plan is bercail-2qig.
 
 ## Declare one
 
@@ -47,7 +47,7 @@ A run fails when the query exits non-zero, prints anything that is not findings,
 | `bercail routine show <name>` | Its schedule and state, and its last 10 runs, newest first |
 | `bercail routine show <name> --run <id>` | What that run found, each finding marked new, changed or same |
 | `bercail routine run <name>` | Run it now. It prints one line: `emitted`, `skipped (quiet)`, `skipped (paused)`, `skipped (overlap)`, `skipped (load)` or `failed`, and a line when an [event](#the-event) waits. It exits 1 when the run failed, or when it could not write its run, its state or its [event](#the-event) |
-| `bercail routine run <name> --dry-run` | Run it under the same locks, and print the `bercail.routine/v1` event it would send, or its line when there is none. It writes no state, no run and no inbox file, so the next real run counts the same findings again. Its query runs with `BERCAIL_ROUTINE_DRY_RUN=1` (`0` on a real run), so a built-in keeps no state of its own either |
+| `bercail routine run <name> --dry-run` | Run it under the same locks, and print its line, then each finding marked new, changed or same, as `show --run` does. It writes no state, no findings for `show --run`, no run and no inbox file, so the next real run counts the same findings again. Its query runs with `BERCAIL_ROUTINE_DRY_RUN=1` (`0` on a real run), so a built-in keeps no state of its own either |
 | `bercail routine pause <name>` / `resume <name>` | Stop and restart it. `resume` also clears the failures in a row |
 | `bercail routine ask <name>` | Put your request about it, read on stdin (at most 500 characters), in Shep's inbox as one `bercail.routine_ask/v1` event. The Routines panel's **Ask Shep** runs it; the guard blocks it for agents |
 | `bercail routine tick` | Start each routine that is due, once. [The loop](#the-scheduler) runs it every minute |
@@ -152,7 +152,7 @@ Shep's `inbox.ts` writes the event's line from those fields only, and quarantine
 | `discuss:<terminal>` | A Discuss terminal is open on a card the ledger has as answered, superseded or withdrawn |
 | `thread:<topic>` | Shep's selected thread topic has no card waiting |
 
-A job bd or Entire cannot read is not closed, and gives no finding. A source that does not answer (`hc`, the window's list once it runs, the ledger, a card's live check, or what `cleanup --check` reads) fails the run: a run that left its findings out would drop their hashes, and the next one would send them again as new. Titles hold no state or time, so a finding stays `same` while it holds. A space found while the window was open is new again after a run with no window.
+A job bd or Entire cannot read is not closed, and gives no finding. A worktree whose `.git` is gone by the time its index is read, because a cleanup removed it meanwhile or is removing it, is skipped, not a failed source. A source that does not answer (`hc`, the window's list once it runs, the ledger, a card's live check, or what `cleanup --check` reads) fails the run: a run that left its findings out would drop their hashes, and the next one would send them again as new. Titles hold no state or time, so a finding stays `same` while it holds. A space found while the window was open is new again after a run with no window.
 
 `routines/<name>/seen-done.json` keeps when each desk was first seen done, and drops one seen working, gone, staged, or on another job, so its clock starts over. A dry run reads it and writes nothing.
 

@@ -67,12 +67,26 @@ _job() {
   [[ -n "$job" ]]
 }
 
-# Nothing staged in the worktree; read without refreshing its index. An index
-# git cannot read fails the run.
+# Worktree TOP is gone, or going: its folder is, or its .git is, which git
+# worktree remove takes before the index. A folder that cannot be searched
+# does not tell, so it is not gone.
+_gone() {
+  [[ -x "${1%/*}" ]] || return 1
+  [[ -e "$1" ]] || return 0
+  [[ -x "$1" && ! -e "$1/.git" && ! -L "$1/.git" ]]
+}
+
+# Nothing staged in worktree TOP (status 0), staged changes (1), or the
+# worktree gone since it was found (2). Read without refreshing its index, and
+# never a checkout above it. An index git cannot read in a worktree still
+# there fails the run.
 _unstaged() {
   local rc=0
-  GIT_OPTIONAL_LOCKS=0 git -C "$1" diff --cached --quiet 2>/dev/null || rc=$?
-  ((rc <= 1)) || _source_failed "git could not read the index of $1"
+  GIT_OPTIONAL_LOCKS=0 GIT_CEILING_DIRECTORIES="${1%/*}" git -C "$1" diff --cached --quiet 2>/dev/null || rc=$?
+  if ((rc > 1)); then
+    ! _gone "$1" || return 2
+    _source_failed "git could not read the index of $1"
+  fi
   return "$rc"
 }
 
@@ -114,7 +128,10 @@ while IFS= read -r rec; do
   ((rc == 0)) || _source_failed "could not tell which Herdr space is on $top: hc did not answer in full"
   there="$(jq -c --arg top "$top" --arg space "$space" '[.[] | select(.top == $top or ($space != "" and .space == $space))]' <<<"$desks")"
   jq -e --arg issue "$issue" 'all(.[]; .issue == $issue and .state != "working")' <<<"$there" >/dev/null || continue
-  if ! _unstaged "$top"; then
+  rc=0
+  _unstaged "$top" || rc=$?
+  ((rc != 2)) || continue
+  if ((rc == 1)); then
     finding "staged-closed:$top" "$issue: ${job#*$'\t'} is closed, but its worktree has staged changes" "$top" "$main" "$issue"
     continue
   fi

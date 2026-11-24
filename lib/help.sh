@@ -101,7 +101,7 @@ Post-install CLI (bercail):
                 worktree, the run dir, and the space.
   routine       Your [routine.<name>] queries (docs/routines.md): list [--json] | show <name> [--run <id>] |
                 run <name> [--dry-run] (now, under its locks; new findings or a pause send Shep one event;
-                --dry-run prints the event and writes nothing) |
+                --dry-run prints what it found and writes nothing) |
                 pause <name> | resume <name> | ask <name> (your request on stdin, to Shep's inbox;
                 the Routines panel's Ask Shep) | tick (start each one that is due) |
                 loop (a tick a minute; the hidden terminal bercail-routines runs it) | start (that terminal)

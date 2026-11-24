@@ -554,12 +554,10 @@ routine_run() {
     return 1
   fi
   result="$_routine_result"
-  if [[ "$dry" == 1 ]] && jq -e '.event' <<<"$result" >/dev/null; then
-    jq -c .event <<<"$result"
-  else
-    line="$(_routine_said "$(jq -c .run <<<"$result")")"
-    log "$name: $line; $([[ "$dry" == 1 ]] && printf 'dry run, nothing written' || printf 'run %s' "$id")"
-  fi
+  line="$(_routine_said "$(jq -c .run <<<"$result")")"
+  log "$name: $line; $([[ "$dry" == 1 ]] && printf 'dry run, nothing written' || printf 'run %s' "$id")"
+  # A dry run keeps no findings for show --run, so it prints them.
+  [[ "$dry" != 1 ]] || jq -c '.findings[]?' <<<"$result" | _routine_print_findings
   [[ "$(jq -r .paused_now <<<"$result")" != true || "$dry" == 1 ]] \
     || log "$name: failed 3 times in a row and is paused; bercail routine resume $name"
   _routine_tell_waiting "$name" || return 1
@@ -685,6 +683,14 @@ routine_ask() {
   log "$name: your request is in Shep's inbox"
 }
 
+# The findings on stdin, one JSON object a line with its status, in words:
+# status, key and title, then its detail, repo and issue.
+_routine_print_findings() {
+  jq -r '"  \(.status + "        " | .[:8]) \(.key)  \(.title)",
+    ([.detail, ([.repo, .issue] | map(select(. != null)) | if length > 0 then "(\(join(", ")))" else empty end)]
+     | map(select(. != null)) | if length > 0 then "           " + join(" ") else empty end)'
+}
+
 # bercail routine show NAME [--run ID]: its last runs, or what one run found.
 routine_show() {
   local name="$1" run="${2:-}" entry state file line output
@@ -711,9 +717,7 @@ routine_show() {
     log "run $run: emitted (its line is no longer kept)"
   fi
   if [[ -f "$output" ]]; then
-    jq -r '"  \(.status + "        " | .[:8]) \(.key)  \(.title)",
-      ([.detail, ([.repo, .issue] | map(select(. != null)) | if length > 0 then "(\(join(", ")))" else empty end)]
-       | map(select(. != null)) | if length > 0 then "           " + join(" ") else empty end)' "$output"
+    _routine_print_findings <"$output"
   elif jq -e '.outcome == "emitted"' <<<"${line:-null}" >/dev/null; then
     log "  (what it found is no longer kept: only the last $ROUTINE_KEEP_OUTPUTS emitted runs' findings are)"
   fi
