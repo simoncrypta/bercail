@@ -29,10 +29,15 @@
 //   OKs it, or reverses it and Shep withdraws it. Close takes any card off but a landing one.
 // - "discuss": the bar of a Discuss dialog: a read-only Pi on a branch of the session
 //   the question came from (`bercail shep discuss`). props.token is the question.
+// - "routines": the Routines panel under Shep's terminal (`shep-routines`, hidden until
+//   the header's Routines toggle shows it): each [routine.<name>] with its schedule and
+//   state, its last run and what it last found, and Ask Shep, which sends Shep the
+//   person's words about one. It reads `bercail routine list --json` and runs nothing else.
+//   Shep decides what the request becomes (SHEP.md, Routine requests).
 // - "modal": the bar of an agent's terminal opened over either view (bercail-agents
 //   opens it); props.terminal is the agent, props.back where the keyboard was.
 import { View, div, image, svg } from "gpui-kit";
-import { h_flex, v_flex } from "gpui-base";
+import { Input, InputState, h_flex, v_flex } from "gpui-base";
 import {
   agents,
   closeOverlay,
@@ -90,6 +95,11 @@ const ANSWER = `${BERCAIL_PATH}; exec bercail shep question answer <<<"$1"`;
 const DISCUSS = `${BERCAIL_PATH}; exec bercail shep discuss "$1"`;
 const CLOSED = `${BERCAIL_PATH}; exec bercail shep question closed "$1" "$2"`;
 const PANEL_ID = "shep-decisions";
+// The Routines panel reads the routines, and Ask Shep writes the person's request into
+// Shep's inbox, both through bercail where it runs (docs/routines.md).
+const ROUTINES = `${BERCAIL_PATH}; exec bercail routine list --json`;
+const ASK = `${BERCAIL_PATH}; exec bercail routine ask "$1" <<<"$2"`;
+const ROUTINES_ID = "shep-routines";
 const DISCUSS_ROLE = "shep-discuss";
 const KEYS_HINT =
   "↑↓ card · ←→ or 1-9 choice · Enter answers · o OKs a default · r reverses it · x closes a card · d discusses";
@@ -505,6 +515,105 @@ async function openDiscuss(card) {
   openOverlay(discussDialog(address, card.token, opening, focused()));
 }
 
+// Shared by every copy, as D is: the last routines list, its error, the load in flight,
+// and the copies waiting to redraw.
+const R = { view: null, error: null, loading: null, waiters: [] };
+const nextRoutines = () => new Promise((wake) => R.waiters.push(wake));
+
+function routinesShown(tree = layout()) {
+  const node = find(tree, ROUTINES_ID);
+  return viewOf(tree) === "shep" && Boolean(node) && !node.hidden;
+}
+
+// The routines are where bercail runs: on the backend when there is one.
+function loadRoutines() {
+  R.loading ??= readBackend()
+    .then(() => exec("bash", ["-lc", ROUTINES], { timeout: 30000, on: S.backend }))
+    .then((r) => {
+      if (r.code !== 0) throw new Error(r.stderr.trim() || `bercail routine list exited ${r.code}`);
+      R.view = JSON.parse(r.stdout);
+      R.error = null;
+    })
+    .catch((e) => {
+      R.error = String(e?.message ?? e);
+    })
+    .finally(() => {
+      R.loading = null;
+      const waiting = R.waiters;
+      R.waiters = [];
+      for (const wake of waiting) wake();
+    });
+  return R.loading;
+}
+
+// A routine in words: its state, a problem to fix, its next and last run, and what its
+// last emitted run found that was new or changed, at most 3 of them. Quiet runs keep no
+// findings, so those can be older than the last run.
+export function routineWords(r) {
+  const bad = r.errors?.length > 0 || Boolean(r.state_error);
+  const word = r.errors?.length
+    ? "invalid"
+    : r.state_error
+      ? "unreadable"
+      : r.running
+        ? r.paused
+          ? "running, paused"
+          : "running"
+        : r.paused
+          ? "paused"
+          : "active";
+  const problem = r.errors?.length
+    ? r.errors.join("; ")
+    : (r.state_error ??
+      (r.paused && r.failures
+        ? `paused after ${r.failures} failures in a row`
+        : r.failures
+          ? `failed ${r.failures} ${r.failures === 1 ? "time" : "times"} in a row`
+          : null));
+  const l = r.last;
+  const said = !l
+    ? null
+    : l.outcome === "emitted"
+      ? `emitted, ${l.counts.new} new and ${l.counts.changed} changed of ${l.counts.found}`
+      : l.outcome === "failed"
+        ? `failed: ${l.error}`
+        : l.reason === "quiet"
+          ? `skipped (quiet), ${l.counts.found} found, nothing new or changed`
+          : `skipped (${l.reason})`;
+  const fresh = (r.found?.findings ?? []).filter((f) => f.status !== "same");
+  return {
+    word,
+    problem,
+    next: r.next_due && !r.paused && !bad ? `next ${clock(r.next_due)}` : null,
+    last: bad ? null : l ? `last run ${clock(l.end)}: ${said}` : "never run",
+    found:
+      fresh.length && r.found.run !== l?.id
+        ? r.found.end
+          ? `found ${clock(r.found.end)}`
+          : "found in an earlier run"
+        : null,
+    findings: fresh.slice(0, 3).map((f) => `${f.status}  ${f.title}`),
+    more: fresh.length > 3 ? `and ${fresh.length - 3} more: bercail routine show ${r.name} --run ${r.found.run}` : null,
+  };
+}
+
+// The panel's header line: how many, and how many need a look.
+function routinesCount(list) {
+  const n = (f) => list.filter(f).length;
+  const parts = {
+    paused: n((r) => r.paused),
+    running: n((r) => r.running),
+    invalid: n((r) => r.errors?.length > 0),
+    unreadable: n((r) => Boolean(r.state_error)),
+  };
+  return [
+    `${list.length} ${list.length === 1 ? "routine" : "routines"}`,
+    ...Object.entries(parts).map(([w, k]) => (k ? `${k} ${w}` : "")),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function checkBercail() {
   S.check ??= readBackend()
     .then(() =>
@@ -582,6 +691,21 @@ export default class BercailShep extends View {
       cx.notify();
     });
     if (this.role === "header" || this.role === "decisions") watchDecisions(cx);
+    if (this.role === "routines") {
+      this.asking = null; // { name, input }: the routine whose Ask Shep field is open
+      this.sending = false;
+      this.notes = {}; // name -> { text, error }: how its last ask went
+      cx.spawn(async (cx) => {
+        for (;;) {
+          await nextRoutines();
+          cx.notify();
+        }
+      });
+      cx.timer.every(30000, () => {
+        if (routinesShown()) loadRoutines();
+      });
+      loadRoutines();
+    }
     if (this.role === "decisions") {
       this.h = cx.focus_handle();
       this.sel = 0; // the card the keys act on
@@ -711,6 +835,8 @@ export default class BercailShep extends View {
         return this.empty(t);
       case "decisions":
         return this.decisions(t);
+      case "routines":
+        return this.routines(t);
       case "modal":
         return this.modal(t);
       case "discuss":
@@ -798,8 +924,224 @@ export default class BercailShep extends View {
           .child(shep?.title || "the orchestrator for every desk"),
       )
       .child(div().text_color(color).child(word))
+      .child(this.routinesToggle(t))
       .child(this.decisionsToggle(t))
       .child(div().text_size(11).text_color(t.dim).child(`${KEY} spaces`));
+  }
+
+  // In the header: the person's click shows or hides the Routines panel, read afresh.
+  routinesToggle(t) {
+    const open = routinesShown();
+    return (
+      div()
+        .id("shep-routines-toggle")
+        .flex_none()
+        .px(8)
+        .py(2)
+        .rounded(5)
+        .cursor_pointer()
+        .text_color(t.dim)
+        .when(open, (el) => el.bg(t.selected))
+        .when(!open, (el) => el.hover((s) => s.bg(t.hover)))
+        .tooltip(open ? "Hide routines" : "Show your routines")
+        // The header drags the window; a press on the toggle doesn't.
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click(() => {
+          if (!find(layout(), ROUTINES_ID)) return;
+          run(open ? "layout.hide" : "layout.show", { id: ROUTINES_ID });
+          if (!open) loadRoutines();
+        })
+        .child("Routines")
+    );
+  }
+
+  // The Routines panel: a card per routine, each with Ask Shep.
+  routines(t) {
+    const list = R.view?.routines ?? [];
+    const loop = R.view?.loop;
+    const say = (text, color = t.dim) => div().px(12).py(6).text_color(color).child(text);
+    return v_flex()
+      .id("routines-root")
+      .size_full()
+      .bg(t.background)
+      .border_t(1)
+      .border_color(t.border)
+      .text_size(12.5)
+      .text_color(t.muted)
+      .child(
+        h_flex()
+          .h(32)
+          .flex_none()
+          .px(12)
+          .gap(8)
+          .items_center()
+          .child(div().text_color(t.foreground).font_semibold().child("Routines"))
+          .child(
+            div()
+              .flex_1()
+              .truncate()
+              .text_color(t.dim)
+              .child(R.view ? routinesCount(list) : ""),
+          )
+          .when(Boolean(loop), (el) =>
+            el.child(
+              div()
+                .flex_none()
+                .text_size(11)
+                .text_color(loop.running ? t.dim : t.blocked)
+                .child(
+                  !loop.running
+                    ? "the scheduler is not running: bercail routine start"
+                    : loop.last_tick
+                      ? `scheduler ticked ${clock(loop.last_tick)}`
+                      : "scheduler running",
+                ),
+            ),
+          ),
+      )
+      .when(Boolean(R.error), (el) => el.child(say(`Can't read the routines: ${R.error}`, t.blocked)))
+      .when(!list.length && !R.error, (el) =>
+        el.child(
+          say(R.view ? "No routines. Declare one as [routine.<name>] in ~/.config/bercail/config.toml." : "Loading…"),
+        ),
+      )
+      .child(
+        v_flex()
+          .id("routine-list")
+          .flex_1()
+          .min_h(0)
+          .px(10)
+          .pb(10)
+          .gap(8)
+          .overflow_y_scrollbar()
+          .children(list.map((r) => this.routineCard(t, r))),
+      );
+  }
+
+  routineCard(t, r) {
+    const w = routineWords(r);
+    const color =
+      {
+        running: t.working,
+        "running, paused": t.working,
+        paused: t.unknown,
+        invalid: t.blocked,
+        unreadable: t.blocked,
+      }[w.word] ?? t.dim;
+    const asking = this.asking?.name === r.name ? this.asking : null;
+    // Shep's inbox takes only a name the runner can run (inbox.ts, routineAskLine).
+    const askable = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(r.name);
+    const note = this.notes[r.name];
+    const button = (id, label, enabled, onClick) =>
+      div()
+        .id(id)
+        .flex_none()
+        .px(10)
+        .py(3)
+        .rounded(5)
+        .bg(t.raised)
+        .text_color(enabled ? t.foreground : t.dim)
+        .when(enabled, (el) =>
+          el
+            .cursor_pointer()
+            .hover((s) => s.bg(t.hover))
+            .on_click(onClick),
+        )
+        .child(label);
+    const line = (text, c = t.dim) => div().text_color(c).child(text);
+    return v_flex()
+      .id(`routine-${r.name}`)
+      .flex_none()
+      .p(10)
+      .gap(4)
+      .rounded(8)
+      .border(1)
+      .border_color(t.border)
+      .bg(t.chrome)
+      .child(
+        h_flex()
+          .gap(8)
+          .items_center()
+          .child(div().flex_none().font_semibold().text_color(t.foreground).child(r.name))
+          .child(
+            div()
+              .flex_1()
+              .truncate()
+              .text_color(t.dim)
+              .child(r.schedule ?? ""),
+          )
+          .child(div().flex_none().text_size(11).text_color(color).child(w.word))
+          .when(!asking && askable, (el) =>
+            el.child(button(`routine-ask-${r.name}`, "Ask Shep", true, (_e, cx) => this.ask(r.name, cx))),
+          ),
+      )
+      .when(Boolean(w.problem), (el) => el.child(line(w.problem, t.blocked)))
+      .when(Boolean(w.next), (el) => el.child(line(w.next)))
+      .when(Boolean(w.last), (el) => el.child(line(w.last, t.muted)))
+      .when(Boolean(w.found), (el) => el.child(line(w.found)))
+      .children(w.findings.map((f) => line(f, t.foreground)))
+      .when(Boolean(w.more), (el) => el.child(line(w.more)))
+      .when(Boolean(note), (el) => el.child(line(note.text, note.error ? t.blocked : t.dim)))
+      .when(Boolean(asking), (el) =>
+        el.child(
+          h_flex()
+            .gap(6)
+            .items_center()
+            .child(div().flex_1().child(Input.new(asking.input)))
+            .child(
+              button(`routine-send-${r.name}`, this.sending ? "Sending…" : "Send", !this.sending, (_e, cx) =>
+                this.send(cx),
+              ),
+            )
+            .child(button(`routine-cancel-${r.name}`, "Cancel", !this.sending, (_e, cx) => this.cancelAsk(cx))),
+        ),
+      );
+  }
+
+  // Ask Shep: a field for the person's words about this routine, with the keyboard in it.
+  ask(name, cx) {
+    if (this.sending) return;
+    this.asking?.input.release();
+    const input = InputState.new({ placeholder: "What should change: its schedule, what it runs, pause or resume…" });
+    input.on("submit", (_e, cx) => this.send(cx));
+    this.asking = { name, input };
+    input.focus();
+    cx.notify();
+  }
+
+  cancelAsk(cx) {
+    if (this.sending) return;
+    this.asking?.input.release();
+    this.asking = null;
+    cx.notify();
+  }
+
+  // The person's words go to Shep's inbox through bercail, where Shep runs. A failure
+  // keeps them in the field.
+  send(cx) {
+    const a = this.asking;
+    const text = a?.input.value().trim();
+    if (!text || this.sending) return;
+    this.sending = true;
+    cx.spawn(async (cx) => {
+      let r;
+      try {
+        r = await readBackend().then(() =>
+          exec("bash", ["-lc", ASK, NAME, a.name, text], { timeout: 30000, on: S.backend }),
+        );
+      } catch (e) {
+        r = { code: 1, stdout: "", stderr: String(e?.message ?? e) };
+      }
+      this.sending = false;
+      if (r.code === 0) {
+        this.notes[a.name] = { text: `Sent to Shep at ${clock(new Date().toISOString())}`, error: false };
+        a.input.release();
+        if (this.asking === a) this.asking = null;
+      } else {
+        this.notes[a.name] = { text: `Not sent: ${r.stderr.trim() || `exit ${r.code}`}`, error: true };
+      }
+      cx.notify();
+    });
   }
 
   // In the header: the count of open decisions, and the person's click shows or hides

@@ -573,6 +573,17 @@ _routine_last() {
   [[ -f "$file" ]] && tail -n 1 "$file" || true
 }
 
+# When ENTRY with STATE is next due, as of NOW. One that never ran: an every
+# routine is due now, an at one at its next slot.
+_routine_shown_next() {
+  local next
+  next="$(jq -r '.next_due // empty' <<<"$2")"
+  if [[ -z "$next" ]]; then
+    [[ "$(jq -r .every <<<"$1")" != null ]] && next="$3" || next="$(_routine_next_due "$1" "$3")"
+  fi
+  printf '%s' "$next"
+}
+
 # bercail routine list: each routine's schedule, next due, last outcome, and
 # whether it is paused; a bad entry says what is wrong.
 routine_list() {
@@ -588,16 +599,90 @@ routine_list() {
       continue
     fi
     state="$(routine_state "$name")"
-    # One that never ran: an every routine is due now, an at one at its next slot.
-    next="$(jq -r '.next_due // empty' <<<"$state")"
-    if [[ -z "$next" ]]; then
-      [[ "$(jq -r .every <<<"$entry")" != null ]] && next="$now" || next="$(_routine_next_due "$entry" "$now")"
-    fi
+    next="$(_routine_shown_next "$entry" "$state" "$now")"
     last="$(_routine_last "$name")"
     [[ -z "$last" ]] && last="never run" || last="$(jq -r 'if .outcome == "skipped" then "skipped (\(.reason))" else .outcome end' <<<"$last")"
     printf '%-*s  %-11s  next %s  %-17s  %s\n' "$width" "$name" "$(_routine_schedule "$entry")" \
       "$(_routine_local "$next")" "$last" "$(jq -r 'if .paused then "paused" else "active" end' <<<"$state")"
   done <<<"$entries"
+}
+
+# bercail routine list --json: the same as data, for the Routines panel
+# (bercail-shep): each routine's entry and state, its last run, whether a run
+# holds its lock, and what its last emitted run found; and the loop. A bad
+# entry has its errors and no state; a state.json it cannot read, state_error.
+# The last 10 emitted runs' findings outlive their lines in runs.jsonl: one
+# whose line is gone has no end, and its counts come from its findings.
+routine_list_json() {
+  local dir now entry name state next last emitted found running tick
+  local -a outputs
+  dir="$(routine_dir)"
+  now="$(_routine_now)"
+  running=false
+  command -v flock >/dev/null 2>&1 && ! _routine_unheld "$dir/.loop.lock" && running=true
+  tick="$(jq -r '.at // empty' "$dir/tick.json" 2>/dev/null || true)"
+  [[ -z "$tick" ]] || tick="$(_routine_iso "$tick")"
+  while IFS= read -r entry; do
+    name="$(jq -r .name <<<"$entry")"
+    entry="$(jq -c '. + {schedule: null, state_error: null, paused: null, failures: null, running: null,
+      next_due: null, last: null, found: null}' <<<"$entry")"
+    if jq -e '.errors != []' <<<"$entry" >/dev/null; then
+      printf '%s\n' "$entry"
+      continue
+    fi
+    entry="$(jq -c --arg s "$(_routine_schedule "$entry")" '.schedule = $s' <<<"$entry")"
+    if ! state="$(routine_state "$name" 2>/dev/null)"; then
+      jq -c --arg e "cannot read $dir/$name/state.json; fix it, or move it aside to start the routine over" \
+        '.state_error = $e' <<<"$entry"
+      continue
+    fi
+    next="$(_routine_shown_next "$entry" "$state" "$now")"
+    last="$(_routine_last "$name")"
+    found="" emitted=""
+    outputs=("$dir/$name"/outputs/*.jsonl)
+    [[ ! -f "${outputs[-1]}" ]] || found="${outputs[-1]}"
+    if [[ -n "$found" && -f "$dir/$name/runs.jsonl" ]]; then
+      emitted="$(jq -c --arg id "$(basename "$found" .jsonl)" 'select(.id == $id)' "$dir/$name/runs.jsonl" | tail -n 1)"
+    fi
+    jq -c --argjson s "$state" --arg next "$(_routine_iso "$next")" --argjson last "${last:-null}" \
+      --arg run "$(basename "$found" .jsonl)" --argjson e "${emitted:-null}" --slurpfile f "${found:-/dev/null}" \
+      --argjson running "$(command -v flock >/dev/null 2>&1 && ! _routine_unheld "$dir/$name/lock" && echo true || echo false)" '
+      def count($s): [$f[] | select(.status == $s)] | length;
+      . + {paused: $s.paused, failures: $s.failures, running: $running, next_due: $next, last: $last,
+           found: (if ($f | length) == 0 then null
+                   else {run: $run, end: $e.end, findings: $f,
+                         counts: ($e.counts // {found: ($f | length), new: count("new"), changed: count("changed")})} end)}' <<<"$entry"
+  done < <(routine_entries) | jq -s --arg at "$(_routine_iso "$now")" --argjson running "$running" --arg tick "$tick" \
+    '{at: $at, loop: {running: $running, last_tick: (if $tick == "" then null else $tick end)}, routines: .}'
+}
+
+# bercail routine ask NAME: the person's request about NAME, read on stdin, as
+# one bercail.routine_ask/v1 event in Shep's inbox. The Routines panel sends
+# it; the guard keeps agents from it. Their words are data to Shep, and
+# SHEP.md's Routine requests says what it may do with them.
+routine_ask() {
+  local name="$1" text inbox now id tmp file
+  routine_entry "$name" >/dev/null
+  [[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$ ]] \
+    || die "routine $(_routine_label "$name"): a name is letters, digits, - and _, at most 64 of them, so Shep's inbox cannot take it; rename [routine.$name] in $BERCAIL_USER_CONFIG"
+  text="$(cat)"
+  text="${text#"${text%%[![:space:]]*}"}"
+  text="${text%"${text##*[![:space:]]}"}"
+  [[ -n "$text" ]] || die "say what should change on $name: its schedule, what it runs, pause or resume"
+  ((${#text} <= 500)) || die "a request is at most 500 characters; this one has ${#text}"
+  inbox="$(shep_inbox_dir)"
+  [[ -n "$inbox" ]] || die "no Shep inbox in $(shep_state_dir) yet; start Shep once (bercail shep), then ask again"
+  now="$(_routine_now)"
+  id="routine-ask:$name:$(_routine_stamp "$now")-$$"
+  file="$inbox/${id//:/_}.json"
+  tmp="$(umask 077 && mktemp "$inbox/.event.XXXXXX")" || die "cannot write to Shep's inbox $inbox"
+  if ! jq -nc --arg at "$(_routine_iso "$now")" --arg id "$id" --arg n "$name" --arg t "$text" \
+    '{source: "bercail", schema: "bercail.routine_ask/v1", kind: "routine_ask", sink: "shep", at: $at,
+      event_id: $id, routine: $n, text: $t}' >"$tmp" || ! mv -f "$tmp" "$file"; then
+    rm -f "$tmp"
+    die "cannot write to Shep's inbox $inbox"
+  fi
+  log "$name: your request is in Shep's inbox"
 }
 
 # bercail routine show NAME [--run ID]: its last runs, or what one run found.
@@ -879,9 +964,14 @@ routine_restart_loop() {
 
 cmd_routine() {
   local sub="${1:-}" name="${2:-}"
-  local usage="usage: bercail routine list | show <name> [--run <id>] | run <name> [--dry-run] | pause <name> | resume <name> | tick | loop | start"
+  local usage="usage: bercail routine list [--json] | show <name> [--run <id>] | run <name> [--dry-run] | pause <name> | resume <name> | ask <name> (the request on stdin) | tick | loop | start"
   case "$sub" in
-    list) [[ $# -eq 1 ]] || die "$usage"; routine_list ;;
+    list)
+      if [[ $# -eq 1 ]]; then routine_list
+      elif [[ $# -eq 2 && "$2" == --json ]]; then routine_list_json
+      else die "$usage"; fi
+      ;;
+    ask) [[ $# -eq 2 ]] || die "$usage"; routine_ask "$name" ;;
     show)
       if [[ $# -eq 2 ]]; then routine_show "$name"
       elif [[ $# -eq 4 && "$3" == --run ]]; then routine_show "$name" "$4"

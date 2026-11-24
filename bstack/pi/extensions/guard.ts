@@ -135,6 +135,7 @@ const trustCommand =
 const protectedFile = "This file decides what bercail's guard lets through. Ask the person to edit it.";
 const answerCommand =
   "Answering one of Shep's questions is the person's pick, on a Decisions card or in Discuss. Leave it to them.";
+const routineAsk = "A request about a routine is the person's, sent from the Routines panel. Leave it to them.";
 const syntheticInput =
   "Typing or clicking for the person (wtype, ydotool, xdotool, /dev/uinput, hyprctl's key dispatchers) is blocked: it could answer for them.";
 const discussOnly =
@@ -1529,6 +1530,12 @@ function runsGuardAsk(words: string[]): boolean {
   );
 }
 
+// bercail routine ask: the person's request to Shep, which only the Routines panel sends.
+function isRoutineAsk(words: string[]): boolean {
+  const plain = plainWords(words);
+  return plain.some((word, i) => basename(word) === "bercail" && plain[i + 1] === "routine" && plain[i + 2] === "ask");
+}
+
 function isPolicyTrust(words: string[]): boolean {
   const plain = plainWords(words);
   return plain.some((word, i) => word === "policy" && plain[i + 1] === "trust");
@@ -2621,6 +2628,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     decision = worse(decision, decideJob(words, here));
     if (questionOp(words, "answer")) decision = worse(decision, block(answerCommand));
     if (questionOp(words, "push-approval")) decision = worse(decision, block(pushApprovalCommand));
+    if (isRoutineAsk(words)) decision = worse(decision, block(routineAsk));
     if (["guard-create", "guard-default", "guard-claim"].some((op) => questionOp(words, op)) || runsGuardAsk(words))
       decision = worse(decision, block(guardAskCommand));
     if (writesTodo(words) && input.role !== "shep") decision = worse(decision, block(basecampWrite));

@@ -629,6 +629,105 @@ GATE
   grep -qx 'broken  invalid: no run or command; every must be <n>h or <n>d, at least 1h, not 30m' <<<"$out" || fail "broken: $out"
 }
 
+@test "list --json gives each routine's schedule, state, last run and last findings, a bad entry's errors, and the loop" {
+  declare_routine daily 'at = "07:30"'
+  declare_routine often 'every = "1d"'
+  printf '[routine.broken]\nevery = "30m"\n' >>"$CONFIG"
+  findings often '{"key":"a","title":"A"}' '{"key":"b","title":"B","detail":"why"}'
+  routine run often >/dev/null
+  findings often '{"key":"a","title":"A"}' '{"key":"b","title":"B","detail":"why"}'
+  routine run often >/dev/null
+  emitted="$(head -n 1 "$STATE/often/runs.jsonl" | jq -c .)" quiet="$(last_run often | jq -c .)"
+  routine pause daily >/dev/null
+  out="$(routine list --json)" || fail "$out"
+  jq -e '(.at | test("^[0-9-]+T[0-9:]+Z$")) and .loop == {running: false, last_tick: null}
+    and (.routines | map(.name)) == ["daily", "often", "broken"]' <<<"$out" >/dev/null || fail "top: $out"
+  jq -e '.routines[0] | .run == null and .command != null and .at == "07:30" and .every == null
+    and .schedule == "at 07:30" and .errors == [] and .paused and .failures == 0 and .running == false
+    and (.next_due | test("T[0-9:]+Z$")) and .last == null and .found == null' <<<"$out" >/dev/null \
+    || fail "daily: $(jq -c '.routines[0]' <<<"$out")"
+  jq -e --argjson e "$emitted" --argjson q "$quiet" '.routines[1] | .schedule == "every 1d" and (.paused | not)
+    and .last == $q and .found.run == $e.id and .found.end == $e.end and .found.counts == {found: 2, new: 2, changed: 0}
+    and .found.findings == [{key: "a", title: "A", detail: null, repo: null, issue: null, status: "new"},
+      {key: "b", title: "B", detail: "why", repo: null, issue: null, status: "new"}]' \
+    <<<"$out" >/dev/null || fail "often: $(jq -c '.routines[1]' <<<"$out")"
+  jq -e '.routines[2] | .name == "broken" and .errors == ["no run or command", "every must be <n>h or <n>d, at least 1h, not 30m"]
+    and .paused == null and .next_due == null' <<<"$out" >/dev/null || fail "broken: $(jq -c '.routines[2]' <<<"$out")"
+}
+
+@test "list --json still gives the last emitted run's findings once its line is gone, with no end it does not know" {
+  declare_routine check
+  findings check '{"key":"a","title":"A"}' '{"key":"b","title":"B"}'
+  routine run check >/dev/null
+  findings check '{"key":"a","title":"A changed"}' '{"key":"b","title":"B"}'
+  routine run check >/dev/null
+  id="$(last_run check | jq -r .id)"
+  # 100 quiet runs later, only the last 100 lines are kept; outputs stay.
+  for i in $(seq 1 100); do
+    printf '{"id":"20991231T000%03dZ-1","outcome":"skipped","reason":"quiet"}\n' "$i"
+  done >"$STATE/check/runs.jsonl"
+  out="$(routine list --json)" || fail "$out"
+  jq -e --arg id "$id" '.routines[0].found | .run == $id and .end == null
+    and .counts == {found: 2, new: 0, changed: 1} and (.findings | map(.status)) == ["changed", "same"]' <<<"$out" >/dev/null \
+    || fail "$(jq -c '.routines[0].found' <<<"$out")"
+}
+
+@test "list --json says a routine is running while its run holds its lock, and names a state it cannot read" {
+  declare_routine check
+  declare_routine other
+  hold check
+  pid=$!
+  out="$(routine list --json)" || fail "$out"
+  touch "$MEET/release"
+  wait "$pid"
+  jq -e '.routines[0].running and (.routines[1].running | not)' <<<"$out" >/dev/null || fail "$out"
+  mkdir -p "$STATE/other" && printf 'not json' >"$STATE/other/state.json"
+  out="$(routine list --json)" || fail "$out"
+  jq -e '.routines[1] | (.state_error | contains("cannot read")) and .paused == null' <<<"$out" >/dev/null || fail "$out"
+  printf '' >"$CONFIG"
+  [[ "$(routine list --json | jq -c .routines)" == '[]' ]] || fail "none: $(routine list --json)"
+}
+
+@test "ask puts the person's request about a routine in Shep's inbox as one event, their words as data" {
+  need node
+  declare_routine check
+  out="$(printf '  run it at 08:00 "instead"\n' | routine ask check)" || fail "$out"
+  [[ "$out" == "check: your request is in Shep's inbox" ]] || fail "$out"
+  file="$(inbox_files)"
+  [[ "$file" == "$INBOX"/routine-ask_check_*.json && "$(stat -c %a "$file")" == 600 ]] || fail "inbox: $file"
+  jq -e '.source == "bercail" and .schema == "bercail.routine_ask/v1" and .kind == "routine_ask" and .sink == "shep"
+    and .routine == "check" and .text == "run it at 08:00 \"instead\"" and (.at | test("Z$"))
+    and (.event_id | test("^routine-ask:check:[0-9]{8}T[0-9]{6}Z-[0-9]+$"))' "$file" >/dev/null || fail "$(cat "$file")"
+  [[ "${file##*/}" == "$(jq -r '.event_id | gsub(":"; "_")' "$file").json" ]] || fail "name: $file"
+  # Shep's inbox reads it as a line, the words quoted.
+  line="$(node --input-type=module -e 'const { eventLine } = await import(process.argv[1]);
+    const { readFileSync } = await import("node:fs");
+    console.log(eventLine(JSON.parse(readFileSync(process.argv[2], "utf8"))));' \
+    "$ROOT/shep/pi/inbox.ts" "$file" 2>&1)" || true
+  [[ "$line" == "- A request about routine check from the Routines panel, "*': "run it at 08:00 \"instead\"". '*"[event $(jq -r .event_id "$file")]" ]] \
+    || fail "inbox line: $line"
+  printf 'pause it' | routine ask check >/dev/null
+  [[ "$(inbox_files | wc -l)" -eq 2 ]] || fail "a second ask is a second event: $(inbox_files)"
+}
+
+@test "ask refuses an empty or long request, a routine that is not declared, and no Shep inbox, and writes nothing" {
+  declare_routine check
+  run routine ask check <<<"   "
+  [[ "$status" -eq 1 && "$output" == *"say what should change"* ]] || fail "empty: $output"
+  run routine ask check <<<"$(printf 'a%.0s' $(seq 501))"
+  [[ "$status" -eq 1 && "$output" == *"at most 500 characters"* ]] || fail "long: $output"
+  run routine ask nope <<<"pause it"
+  [[ "$status" -eq 1 && "$output" == *"no routine nope in $CONFIG"* ]] || fail "undeclared: $output"
+  # Declared, but a name Shep's inbox would not take.
+  printf '[routine._odd]\ncommand = ["x"]\nevery = "1h"\n' >>"$CONFIG"
+  run routine ask _odd <<<"rename it"
+  [[ "$status" -eq 1 && "$output" == *"a name is letters, digits"* ]] || fail "bad name: $output"
+  [[ -z "$(inbox_files)" ]] || fail "wrote: $(inbox_files)"
+  rm -rf "$INBOX"
+  run routine ask check <<<"pause it"
+  [[ "$status" -eq 1 && "$output" == *"no Shep inbox"*"start Shep once"* ]] || fail "no inbox: $output"
+}
+
 @test "show lists the last runs, and --run shows what that run found, new or changed" {
   declare_routine check
   findings check '{"key":"a","title":"A"}'

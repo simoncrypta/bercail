@@ -93,6 +93,15 @@ is which of `shep` and `work` is hidden.
   an **Answer X** button (`raised`; "Pick a choice" until one is picked).
   Discuss opens a modal dialog (86%): a 34px bar ("Discuss", the question in
   `dim`, "read-only branch · /pick answers", ✕) over the branch's terminal.
+  Before Decisions, **Routines** (`dim`; `selected` fill while shown) shows or
+  hides `shep-routines`, 220px (min 120) under it, hidden at first: a 32px
+  row ("Routines", the counts, "scheduler ticked HH:MM" or, in `blocked`,
+  that it is not running), then a card per routine (`chrome` fill, 1px
+  `border`, radius 8): the name semibold, the schedule in `dim`, the state
+  word (`working` running, `unknown` paused, `blocked` invalid or
+  unreadable), what is wrong in `blocked`, the next run, the last run, up to
+  3 new or changed findings in `foreground`, and an **Ask Shep** button
+  (`raised`) that opens a text field with **Send** and **Cancel**.
 - **Sidebar**, 268px wide (min 44, max 480, not resizable), `chrome`
   background. Herdr's own brand row (46px); the **Shep row** (44px): in the
   Shep view a selected (`selected`) row with an 18px `solid` tile "S",
@@ -189,7 +198,9 @@ is which of `shep` and `work` is hidden.
   block = `bercail-shep` with `props: {role: "header"}`, `window_drag`;
   `shep-stack` stack of `shep-empty`, `bercail-shep` with
   `props: {role: "empty"}`, plus the `{terminal: …}` block `shep-<address>`
-  the mod adds; `shep-keys` block, 0px = `bercail-desk` with
+  the mod adds; the hidden blocks `shep-decisions` and `shep-routines`,
+  `bercail-shep` with `props: {role: "decisions"}` and `{role: "routines"}`;
+  `shep-keys` block, 0px = `bercail-desk` with
   `props: {role: "keys"}`), `sidebar` column (`brand` workspace-chrome, `shep-nav`
   block = `bercail-shep` with `props: {role: "nav"}`, `sidebar-lists` column
   of `spaces` (`bercail-spaces`) and `agents`, `sidebar-footer`
@@ -213,7 +224,7 @@ is which of `shep` and `work` is hidden.
   waits on review, counts them in its header (a click opens the Review list,
   the same mod with `props.role: "reviews"`, as a dialog), and takes
   `review-next` (`Ctrl+Shift+J`).
-- `mods/bercail-shep` (`place: "none"`), one script, four roles:
+- `mods/bercail-shep` (`place: "none"`), one script, several roles:
   - `nav` (default): the Shep row. It is always shown, so it holds the logic:
     on its first render of the app session (a flag on `globalThis`, which a
     mod reload keeps) it shows the Shep view; once `terminals()` lists
@@ -232,6 +243,11 @@ is which of `shep` and `work` is hidden.
     `bercail-desk.<command>`: from the Shep view, once the space view shows
     and the keyboard is back in the space.
   - `header`, `empty`: the Shep column's bar and placeholder.
+  - `decisions`, `discuss`: the Decisions panel and a Discuss dialog's bar.
+  - `routines`: the Routines panel. It reads `bash -lc 'bercail routine list
+    --json'` (on the backend when set) when the header's toggle opens it and
+    every 30 s while shown; Ask Shep runs `bash -lc 'bercail routine ask "$1"
+    <<<"$2"'` with the routine and the person's words. Nothing else.
   - `modal`: the bar of an agent dialog, `props: {terminal, back}`.
 - Agent dialogs: `openOverlay({kind: "dialog", width: 0.86, height: 0.86,
   layout: {type: "column", children: [{size: {px: 34}, content: {mod:

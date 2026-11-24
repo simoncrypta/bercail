@@ -59,6 +59,21 @@
               },
               "min": 120,
               "hidden": true
+            },
+            {
+              "id": "shep-routines",
+              "type": "block",
+              "content": {
+                "mod": "bercail-shep",
+                "props": {
+                  "role": "routines"
+                }
+              },
+              "size": {
+                "px": 220
+              },
+              "min": 120,
+              "hidden": true
             }
           ],
           "background": "background",

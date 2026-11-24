@@ -64,6 +64,14 @@ const el = () => {
 };
 export class View {}
 export const ScrollHandle = { new: () => ({ scroll_to_item() {} }) };
+// A text field's state: its value, its handlers by event, and whether it was focused.
+export const InputState = { new: (o = {}) => {
+  const s = { text: o.value ?? "", placeholder: o.placeholder, handlers: {}, focused: false, released: false };
+  Object.assign(s, { value: () => s.text, set_value: (v) => (s.text = v), focus: () => (s.focused = true),
+    release: () => (s.released = true), on: (ev, f) => ((s.handlers[ev] = f), true) });
+  return s;
+} };
+export const Input = { new: (state) => { const p = el(); els.at(-1).input = state; return p; } };
 export const div = el, image = el, svg = el, h_flex = el, v_flex = el;
 EOF
   local mod
@@ -75,7 +83,7 @@ EOF
   cp "$ROOT/bercail/keys.json" "$BATS_TEST_TMPDIR/keys.json"
   cat >"$BATS_TEST_TMPDIR/prelude.mjs" <<'EOF'
 import { readFileSync } from "node:fs";
-import Shep, { find, viewOf, stackPlan, focusPlan, withView, loadDecisions, cardWords, answerable, takes } from "./bercail-shep.mjs";
+import Shep, { find, viewOf, stackPlan, focusPlan, withView, loadDecisions, cardWords, answerable, takes, routineWords } from "./bercail-shep.mjs";
 import Spaces from "./bercail-spaces.mjs";
 import { els } from "./gpui.mjs";
 
@@ -136,6 +144,33 @@ const panelExec = (view, answer = { accepted: true }) => (cmd, args) =>
   : cmd === "bash" && /question answer/.test(args[1]) ? { code: 0, stdout: JSON.stringify(answer), stderr: "" }
   : cmd === "hc" && args[0] === "run" ? { code: 0, stdout: '{"address":"t30","state":"live"}', stderr: "" }
   : okExec();
+// Routines as `bercail routine list --json` prints them: one that emitted, one paused after
+// its failures, one running, and a bad entry.
+const ROUTINE = (name, extra = {}) => ({
+  name, run: null, command: ["~/bin/q"], at: null, every: "4h", schedule: "every 4h", errors: [], state_error: null,
+  paused: false, failures: 0, running: false, next_due: "2026-11-24T12:30:00Z", last: null, found: null, ...extra,
+});
+const RUN = (outcome, extra = {}) => ({ id: "20261124T073000Z-41", due: "2026-11-24T07:30:00Z", start: "2026-11-24T07:30:00Z",
+  end: "2026-11-24T07:30:04Z", outcome, reason: null, counts: null, event: null, error: null, ...extra });
+const ROUTINES_VIEW = { at: "2026-11-24T08:00:00Z", loop: { running: true, last_tick: "2026-11-24T07:59:00Z" }, routines: [
+  ROUTINE("cleanup", { run: "cleanup", command: null, at: "07:30", every: null, schedule: "at 07:30",
+    last: RUN("emitted", { counts: { found: 5, new: 2, changed: 1 } }),
+    found: { run: "20261124T073000Z-41", end: "2026-11-24T07:30:04Z", counts: { found: 5, new: 2, changed: 1 }, findings: [
+      { key: "a", title: "x's job is closed", status: "new" }, { key: "b", title: "y's desk is done", status: "changed" },
+      { key: "c", title: "z", status: "same" }, { key: "d", title: "w's card is old", status: "new" },
+      { key: "e", title: "v", status: "same" },
+    ] } }),
+  ROUTINE("my-check", { paused: true, failures: 3, last: RUN("failed", { error: "exit 2: no such repo" }) }),
+  ROUTINE("issues", { running: true, paused: true, last: RUN("skipped", { reason: "quiet", counts: { found: 4, new: 0, changed: 0 } }) }),
+  ROUTINE("broken", { schedule: null, errors: ["no run or command"], next_due: null, paused: null, failures: null }),
+  ROUTINE("_odd", { schedule: null, errors: ["a name is letters, digits, - and _, at most 64 of them"], next_due: null, paused: null, failures: null }),
+] };
+// bash -lc SCRIPT bercail-shep ARGS: the routines' list, an ask (ok unless told to fail), else success.
+const routinesExec = (view, ask = { code: 0, stdout: "cleanup: your request is in Shep's inbox\n", stderr: "" }) => (cmd, args) =>
+  cmd === "bash" && /routine list --json/.test(args[1]) ? { code: 0, stdout: JSON.stringify(view), stderr: "" }
+  : cmd === "bash" && /routine ask/.test(args[1]) ? ask
+  : okExec();
+const asks = () => globalThis.herdr.execs.filter((e) => /routine ask/.test(e[2] ?? ""));
 // The panel's keyboard: a key pressed while it holds focus.
 const press = (d, ...keys) => {
   for (const k of keys) {
@@ -1106,5 +1141,133 @@ await b.close();
 const closed = globalThis.herdr.execs.find((e) => /question closed/.test(e[2] ?? ""));
 if (closed?.on !== "box") fail(`the close was told on ${closed?.on}`);
 eq(globalThis.herdr.execs[0].slice(0, 3), ["hc", "kill", "box/t30"], "the branch ends on box");
+EOF
+}
+
+@test "the Routines panel shows each routine's schedule, state, next and last run, and what its last run found" {
+  mod_case <<'EOF'
+setup({ exec: routinesExec(ROUTINES_VIEW) });
+const r = copy("routines");
+for (let i = 0; i < 3; i++) await tick();
+els.length = 0;
+r.render(cx);
+const all = texts();
+// As the mod's clock(): HH:MM today, else with its date.
+const at = (iso) => {
+  const d = new Date(iso), pad = (n) => String(n).padStart(2, "0");
+  const time = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  return d.toDateString() === new Date().toDateString() ? time : `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${time}`;
+};
+for (const want of [
+  "Routines", "5 routines · 2 paused · 1 running · 2 invalid", `scheduler ticked ${at("2026-11-24T07:59:00Z")}`,
+  "cleanup", "at 07:30", "active", `next ${at("2026-11-24T12:30:00Z")}`,
+  `last run ${at("2026-11-24T07:30:04Z")}: emitted, 2 new and 1 changed of 5`,
+  "new  x's job is closed", "changed  y's desk is done", "new  w's card is old",
+  "my-check", "every 4h", "paused", "paused after 3 failures in a row",
+  `last run ${at("2026-11-24T07:30:04Z")}: failed: exit 2: no such repo`,
+  "issues", "running, paused", `last run ${at("2026-11-24T07:30:04Z")}: skipped (quiet), 4 found, nothing new or changed`,
+  "broken", "invalid", "no run or command",
+]) if (!all.includes(want)) fail(`missing "${want}" in ${JSON.stringify(all)}`);
+// Only what was new or changed, and a paused routine has no next run.
+if (all.some((x) => /^same /.test(x))) fail(`a same finding is listed: ${JSON.stringify(all)}`);
+if (all.filter((x) => x.startsWith("next ")).length !== 1) fail(`next runs: ${all.filter((x) => x.startsWith("next "))}`);
+// The panel's one action is Ask Shep, on each routine Shep's inbox can name; it never runs a routine.
+eq(els.filter((e) => e.click).map((e) => e.id),
+  ["routine-ask-cleanup", "routine-ask-my-check", "routine-ask-issues", "routine-ask-broken"], "buttons");
+eq(routineWords(ROUTINE("new")).last, "never run", "a routine that never ran");
+// Findings from an earlier run than the last are dated; past 3, the rest are counted.
+const many = routineWords(ROUTINE("many", { last: RUN("skipped", { id: "later", reason: "quiet", counts: { found: 4, new: 0, changed: 0 } }),
+  found: { run: "20261124T073000Z-41", end: "2026-11-24T07:30:04Z", counts: { found: 4, new: 4, changed: 0 },
+    findings: ["a", "b", "c", "d"].map((key) => ({ key, title: key, status: "new" })) } }));
+eq(routineWords(ROUTINE("old", { found: { run: "r1", end: null, counts: { found: 1, new: 1, changed: 0 },
+  findings: [{ key: "a", title: "A", status: "new" }] } })).found, "found in an earlier run", "a run whose line is gone");
+eq([many.found, many.findings.length, many.more], [`found ${at("2026-11-24T07:30:04Z")}`, 3,
+  "and 1 more: bercail routine show many --run 20261124T073000Z-41"], "older and more findings");
+eq(routineWords(ROUTINE("x", { state_error: "cannot read it" })).word, "unreadable", "a state it cannot read");
+// A list that fails says why; a stopped scheduler and no routines are said so.
+setup({ exec: () => ({ code: 1, stdout: "", stderr: "error: boom" }) });
+const bad = copy("routines");
+for (let i = 0; i < 3; i++) await tick();
+els.length = 0;
+bad.render(cx);
+if (!texts().includes("Can't read the routines: error: boom")) fail(`no error: ${JSON.stringify(texts())}`);
+setup({ exec: routinesExec({ ...ROUTINES_VIEW, loop: { running: false, last_tick: null }, routines: [] }) });
+const none = copy("routines");
+for (let i = 0; i < 3; i++) await tick();
+els.length = 0;
+none.render(cx);
+for (const want of ["the scheduler is not running: bercail routine start", "No routines. Declare one as [routine.<name>] in ~/.config/bercail/config.toml."])
+  if (!texts().includes(want)) fail(`missing "${want}" in ${JSON.stringify(texts())}`);
+EOF
+}
+
+@test "the header's Routines toggle shows and hides the panel and reads the routines when it opens" {
+  mod_case <<'EOF'
+const block = find(shipped, "shep-routines");
+if (block?.content?.mod !== "bercail-shep" || block.content.props?.role !== "routines" || !block.hidden)
+  fail(`shep-routines: ${JSON.stringify(block)}`);
+setup({ terminals: [shep], exec: routinesExec(ROUTINES_VIEW) });
+const h = copy("header");
+await tick();
+const toggle = () => {
+  els.length = 0;
+  h.render(cx);
+  return els.find((e) => e.id === "shep-routines-toggle");
+};
+let stopped = false;
+toggle()["on_mouse_down:left"](null, { stop_propagation: () => (stopped = true) });
+if (!stopped) fail("a press on the toggle must not drag the window");
+const lists = () => globalThis.herdr.execs.filter((e) => /routine list --json/.test(e[2] ?? "")).length;
+const before = lists();
+toggle().click();
+for (let i = 0; i < 3; i++) await tick();
+if (find(globalThis.herdr.layout, "shep-routines").hidden) fail("a click must show the panel");
+if (lists() !== before + 1) fail(`opening the panel must read the routines: ${before} then ${lists()}`);
+toggle().click();
+if (!find(globalThis.herdr.layout, "shep-routines").hidden) fail("a second click must hide it");
+eq(globalThis.herdr.calls.map(([n, a]) => `${n} ${a.id}`), ["layout.show shep-routines", "layout.hide shep-routines"], "toggle commands");
+EOF
+}
+
+@test "Ask Shep sends the person's words about one routine to bercail routine ask, on the backend, and runs nothing else" {
+  mod_case <<'EOF'
+setup({ files: { "/home/me/.config/bercail/config.toml": '[herdr]\nbackend = "box"\n' }, exec: routinesExec(ROUTINES_VIEW) });
+const r = copy("routines");
+for (let i = 0; i < 5; i++) await tick();
+const render = () => { els.length = 0; r.render(cx); };
+const el = (id) => (render(), els.find((e) => e.id === id));
+el("routine-ask-cleanup").click(null, cx);
+const field = (render(), els.find((e) => e.input));
+if (!field?.input.focused) fail("Ask Shep must open a field with the keyboard in it");
+// Nothing to send yet: Send waits for words.
+el("routine-send-cleanup").click?.(null, cx);
+await tick();
+eq(asks().length, 0, "an empty request is not sent");
+field.input.set_value("  run it at 08:00 instead ");
+field.input.handlers.submit({}, cx);
+for (let i = 0; i < 5; i++) await tick();
+eq(asks().map((e) => [e.slice(3), e.on]), [[["bercail-shep", "cleanup", "run it at 08:00 instead"], "box"]], "the ask");
+if (!/exec bercail routine ask "\$1" <<<"\$2"$/.test(asks()[0][2])) fail(`ask script: ${asks()[0][2]}`);
+render();
+if (els.some((e) => e.input)) fail("the field must close once sent");
+if (!field.input.released) fail("the field's state must be released");
+if (!texts().some((x) => /^Sent to Shep at \d\d:\d\d$/.test(x))) fail(`no note: ${JSON.stringify(texts())}`);
+// A failed ask keeps the words and says why.
+globalThis.herdr.exec = routinesExec(ROUTINES_VIEW, { code: 1, stdout: "", stderr: "error: no Shep inbox yet\n" });
+el("routine-ask-my-check").click(null, cx);
+const again = (render(), els.find((e) => e.input));
+again.input.set_value("resume it");
+el("routine-send-my-check").click(null, cx);
+for (let i = 0; i < 5; i++) await tick();
+render();
+if (!texts().includes("Not sent: error: no Shep inbox yet")) fail(`no error: ${JSON.stringify(texts())}`);
+if (els.find((e) => e.input)?.input.value() !== "resume it") fail("a failed ask must keep the words");
+// Cancel closes the field and sends nothing.
+el("routine-cancel-my-check").click(null, cx);
+render();
+if (els.some((e) => e.input)) fail("Cancel must close the field");
+// Nothing but the list and the asks ran: no pause, resume or run.
+const ran = globalThis.herdr.execs.filter((e) => e[0] === "bash" && !/routine (list --json|ask)|command -v bercail/.test(e[2] ?? ""));
+eq(ran, [], "other commands");
 EOF
 }

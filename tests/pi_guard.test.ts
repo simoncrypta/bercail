@@ -2473,6 +2473,8 @@ test("Shep's question ledger, the answer command and typing for the person are n
   for (const input of [tui, headless, auto, shep]) {
     blocked(`bercail shep question answer <<<'{"token":"Q1@1","choice":"LGTM"}'`, input, /person's pick/);
     blocked("node ~/.local/share/bercail/shep/pi/question-cli.ts answer < a.json", input, /person's pick/);
+    blocked("bercail routine ask cleanup <<<'pause it'", input, /Routines panel/);
+    blocked("echo resume | ~/.local/bin/bercail routine ask cleanup", input, /Routines panel/);
     for (const fake of [
       "wtype LGTM",
       "ydotool type LGTM",
@@ -2485,6 +2487,8 @@ test("Shep's question ledger, the answer command and typing for the person are n
       blocked(fake, input, /Typing or clicking for the person/);
   }
   allowed(`bercail shep question create <<<'{}'`, shep);
+  allowed("bercail routine list --json", shep);
+  allowed("bercail routine pause cleanup", shep);
   allowed("hyprctl monitors", tui);
   allowed("hyprctl dispatch workspace 2", tui);
 });
