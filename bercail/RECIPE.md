@@ -50,7 +50,11 @@ Second choice, the layout on its own, when the person says no:
   `mods/bercail-spaces/` and `mods/bercail-agents/` into
   `~/.config/herdr-app/`, merge the `layout:bercail` and `terminal` sections
   of `keys.json` into `~/.config/herdr-app/keys.json` without replacing the
-  person's keys, run `herdr-app check` on each mod
+  person's keys (when that file is missing, start it from
+  `herdr-keys/keys.json`, Herdr's defaults, or `keys.macos.json` on macOS,
+  without the `terminal` section's `ctrl-shift-f`, which would take
+  `layout:bercail`'s: Herdr reads a keys.json it did not write as the whole
+  keymap), run `herdr-app check` on each mod
   (`~/.config/herdr-app/mods/bercail-desk`, `.../bercail-shep`,
   `.../bercail-spaces`, `.../bercail-agents`), then switch with
   `ctrl-shift-l`.

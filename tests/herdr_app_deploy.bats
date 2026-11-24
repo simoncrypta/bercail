@@ -15,6 +15,9 @@ setup() {
 exit 0
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/herdr-app"
+  # Herdr's Linux keys, whatever the host; the macOS case says Darwin.
+  printf '#!/bin/sh\n[ "$1" = -s ] && echo Linux && exit 0\nexec /usr/bin/uname "$@"\n' >"$BATS_TEST_TMPDIR/bin/uname"
+  chmod +x "$BATS_TEST_TMPDIR/bin/uname"
   export PATH="$BATS_TEST_TMPDIR/bin:$PATH"
 
   # shellcheck source=/dev/null
@@ -91,7 +94,9 @@ app_edits_then_update() {
   jq -e '.["layout:bercail"] | (has("ctrl-shift-s") or has("ctrl-alt-q")) | not' "$APP/keys.json" >/dev/null \
     || fail "a key the person removed stays removed, and a key bercail dropped goes: $(section)"
   grep -q 'key ctrl-shift-f: yours is my.files' <<<"$out" || fail "update should warn about the kept key: $out"
-  cmp -s "$ROOT/bercail/keys.json" "$BERCAIL_SHARE_DIR/herdr-app/keys.json" || fail "update records the shipped keys"
+  jq -e --slurpfile ours "$ROOT/bercail/keys.json" '.global["ctrl-shift-t"] == "tab.new"
+      and .["layout:bercail"] == $ours[0]["layout:bercail"]' "$BERCAIL_SHARE_DIR/herdr-app/keys.json" >/dev/null \
+    || fail "update records the shipped keys: $(cat "$BERCAIL_SHARE_DIR/herdr-app/keys.json")"
   before="$(cat "$APP/keys.json")"
   deploy_herdr_app >/dev/null 2>&1
   [[ "$(cat "$APP/keys.json")" == "$before" ]] || fail "a second update must not change keys.json"
@@ -225,25 +230,63 @@ app_edits_then_update() {
   grep -q 'missing  Herdr keys' <<<"$out" || fail "missing keys message: $out"
 }
 
-@test "a missing keys.json gets the layout:bercail section and Herdr's copy and paste keys" {
+# Herdr reads a keys.json it did not write as the whole keymap: one bercail starts
+# must carry Herdr's own keys too.
+@test "a missing keys.json gets Herdr's default keys beside layout:bercail" {
   fresh_install
   rm -f "$APP/keys.json"
   deploy_herdr_app >/dev/null
-  jq -e 'keys == ["layout:bercail", "terminal"]
-      and .terminal == {"ctrl-shift-c": "terminal.copy", "ctrl-shift-v": "terminal.paste"}' "$APP/keys.json" >/dev/null \
+  jq -e --slurpfile herdr "$ROOT/bercail/herdr-keys/keys.json" --slurpfile ours "$ROOT/bercail/keys.json" '
+      keys == ["global", "layout:bercail", "terminal"]
+      and .global == $herdr[0].global
+      and .global["ctrl-shift-t"] == "tab.new" and .global["ctrl-shift-l"] == "layout.switch"
+      and .terminal == ($herdr[0].terminal | del(.["ctrl-shift-f"]))
+      and .["layout:bercail"] == $ours[0]["layout:bercail"]' "$APP/keys.json" >/dev/null \
     || fail "new keys.json: $(cat "$APP/keys.json")"
 }
 
-# A keys.json from a bercail that shipped no terminal section, as on the client that
-# lost Ctrl+Shift+C/V. The person bound ctrl-shift-v and one other terminal key.
-@test "update adds the copy and paste keys to an existing keys.json and keeps the person's" {
+@test "on macOS a missing keys.json gets Herdr's macOS default keys" {
+  printf '#!/bin/sh\necho Darwin\n' >"$BATS_TEST_TMPDIR/bin/uname" && chmod +x "$BATS_TEST_TMPDIR/bin/uname"
+  mkdir -p "$APP"
+  deploy_herdr_app >/dev/null
+  jq -e --slurpfile herdr "$ROOT/bercail/herdr-keys/keys.macos.json" --slurpfile ours "$ROOT/bercail/keys.json" '
+      .global == $herdr[0].global and .global["cmd-t"] == "tab.new"
+      and .terminal == $herdr[0].terminal + $ours[0].terminal' "$APP/keys.json" >/dev/null \
+    || fail "macOS keys.json: $(cat "$APP/keys.json")"
+}
+
+# A keys.json Herdr wrote at 0.1.12 that bercail then merged into: edited, so Herdr
+# added none of its later defaults. The person changed one of Herdr's keys and added one.
+@test "update adds the Herdr defaults a merged keys.json missed and keeps the person's keys" {
+  local before
+  fresh_install
+  jq --slurpfile ours "$ROOT/bercail/keys.json" '
+      del(.global["ctrl-?"]) | .global["ctrl-shift-t"] = "my.tab" | .global["ctrl-shift-y"] = "my.own"
+      | .terminal |= del(.["ctrl-shift-f"], .["ctrl-insert"], .["shift-insert"])
+      | .["layout:bercail"] = $ours[0]["layout:bercail"]' "$ROOT/bercail/herdr-keys/keys.json" >"$APP/keys.json"
+  cp "$ROOT/bercail/keys.json" "$BERCAIL_SHARE_DIR/herdr-app/keys.json"
+  deploy_herdr_app >/dev/null 2>&1
+  jq -e '.global["ctrl-?"] == "app.help" and .global["ctrl-shift-t"] == "my.tab" and .global["ctrl-shift-y"] == "my.own"
+      and .terminal["ctrl-insert"] == "terminal.copy" and .terminal["shift-insert"] == "terminal.paste"
+      and (.terminal | has("ctrl-shift-f") | not)' "$APP/keys.json" >/dev/null \
+    || fail "Herdr defaults merge: $(cat "$APP/keys.json")"
+  before="$(cat "$APP/keys.json")"
+  deploy_herdr_app >/dev/null 2>&1
+  [[ "$(cat "$APP/keys.json")" == "$before" ]] || fail "a second update must not change keys.json"
+}
+
+# A keys.json an earlier bercail started, with only its layout:bercail keys, as on a
+# client with no Ctrl+Shift+T. The person bound ctrl-shift-v and one other terminal key.
+@test "update adds Herdr's keys to a keys.json bercail started and keeps the person's" {
   local before
   fresh_install
   jq 'del(.terminal)' "$ROOT/bercail/keys.json" >"$BERCAIL_SHARE_DIR/herdr-app/keys.json"
-  jq '.terminal = {"ctrl-left": "send:x", "ctrl-shift-v": "my.paste"}' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
+  jq '{"layout:bercail": .["layout:bercail"], terminal: {"ctrl-left": "send:x", "ctrl-shift-v": "my.paste"}}' \
+    "$ROOT/bercail/keys.json" >"$APP/keys.json"
   deploy_herdr_app >/dev/null 2>&1
-  jq -e '.terminal == {"ctrl-left": "send:x", "ctrl-shift-v": "my.paste", "ctrl-shift-c": "terminal.copy"}
-      and .global["ctrl-shift-t"] == "tab.new"' "$APP/keys.json" >/dev/null \
+  jq -e --slurpfile herdr "$ROOT/bercail/herdr-keys/keys.json" '
+      .terminal == ($herdr[0].terminal | del(.["ctrl-shift-f"]) + {"ctrl-left": "send:x", "ctrl-shift-v": "my.paste"})
+      and .global == $herdr[0].global and .global["alt-up"] == "agent.prev"' "$APP/keys.json" >/dev/null \
     || fail "terminal keys merge: $(cat "$APP/keys.json")"
   before="$(cat "$APP/keys.json")"
   deploy_herdr_app >/dev/null 2>&1
@@ -260,15 +303,48 @@ app_edits_then_update() {
 
 # The terminal section wins over every other one while a terminal has the keyboard,
 # so a copy or paste key there would take a chord the person bound elsewhere.
-@test "update adds no copy or paste key the person binds in another section" {
+@test "update adds no terminal key the person binds in another section" {
   fresh_install
   jq 'del(.terminal) | .global["ctrl-shift-c"] = "tab.new" | .["layout:bercail"]["ctrl-shift-v"] = "mine.paste"' "$APP/keys.json" >"$K" \
     && mv "$K" "$APP/keys.json"
   jq 'del(.terminal)' "$ROOT/bercail/keys.json" >"$BERCAIL_SHARE_DIR/herdr-app/keys.json"
   deploy_herdr_app >/dev/null 2>&1
-  jq -e '(has("terminal") | not) and .global["ctrl-shift-c"] == "tab.new"
-      and .["layout:bercail"]["ctrl-shift-v"] == "mine.paste"' "$APP/keys.json" >/dev/null \
+  jq -e '(.terminal | has("ctrl-shift-c") or has("ctrl-shift-v") | not) and .terminal["ctrl-insert"] == "terminal.copy"
+      and .global["ctrl-shift-c"] == "tab.new" and .["layout:bercail"]["ctrl-shift-v"] == "mine.paste"' "$APP/keys.json" >/dev/null \
     || fail "a key bound elsewhere was shadowed: $(cat "$APP/keys.json")"
+}
+
+# Herdr reads modifiers in any order and case, and an upper-case letter as shift.
+@test "update adds no Herdr key the person binds under another spelling" {
+  mkdir -p "$APP"
+  printf '%s\n' '{"global":{" ctrl-T ":"space.new","shift-ctrl-w":"my.close"},"layout:mine":{"SHIFT-INSERT":"tab.new"}}' >"$APP/keys.json"
+  deploy_herdr_app >/dev/null 2>&1
+  jq -e '.global[" ctrl-T "] == "space.new" and .global["shift-ctrl-w"] == "my.close"
+      and (.global | has("ctrl-shift-t") or has("ctrl-shift-w") | not)
+      and .global["ctrl-shift-o"] == "pane.split:right"
+      and (.terminal | has("shift-insert") | not) and .terminal["ctrl-insert"] == "terminal.copy"' "$APP/keys.json" >/dev/null \
+    || fail "a key bound under another spelling was taken: $(cat "$APP/keys.json")"
+}
+
+# Herdr's terminal ctrl-insert would run at once and cut off the person's global sequence.
+@test "update adds no Herdr key that starts one of the person's key sequences" {
+  mkdir -p "$APP"
+  printf '%s\n' '{"global":{"ctrl-insert x":"tab.new"}}' >"$APP/keys.json"
+  deploy_herdr_app >/dev/null 2>&1
+  jq -e '.global["ctrl-insert x"] == "tab.new"
+      and (.terminal | has("ctrl-insert") | not) and .terminal["shift-insert"] == "terminal.paste"' "$APP/keys.json" >/dev/null \
+    || fail "a key sequence lost its first keystroke: $(cat "$APP/keys.json")"
+}
+
+# The person removed the terminal section after an earlier bercail shipped its copy and
+# paste there, to give every key to the program: Herdr's other terminal keys stay out too.
+@test "update keeps out a section the person removed before it shipped more keys there" {
+  fresh_install
+  cp "$ROOT/bercail/keys.json" "$BERCAIL_SHARE_DIR/herdr-app/keys.json"
+  jq 'del(.terminal)' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
+  deploy_herdr_app >/dev/null 2>&1
+  jq -e '(has("terminal") | not) and .global["ctrl-shift-l"] == "layout.switch"' "$APP/keys.json" >/dev/null \
+    || fail "a removed section came back: $(cat "$APP/keys.json")"
 }
 
 @test "no Herdr app skips the step" {

@@ -53,7 +53,13 @@ These keys go to the layout, never to the program in Shep or the desk. If your i
 
 `bercail update` keeps the keys you changed or removed in that section and warns about each one, and about any `terminal` key that takes one of bercail's. `bercail doctor` lists them too.
 
-The rest are the Herdr app's: `Ctrl+Shift+T`/`W` new/close tab, `Ctrl+Shift+O`/`E` split, `Ctrl+Shift+X` close pane, `Ctrl+Shift+Z` zoom, `Alt+1`…`9` tabs, `Alt+H`/`J`/`K`/`L` panes, `Ctrl+Shift+B` sidebar, `Ctrl+Shift+L` layout, `Ctrl+Shift+?` all keys.
+The rest are the Herdr app's: `Ctrl+Shift+T`/`W` new/close tab, `Ctrl+Shift+O`/`E` split, `Ctrl+Shift+X` close pane, `Ctrl+Shift+Z` zoom, `Alt+1`…`9` spaces, `Ctrl+1`…`9` tabs, `Alt+H`/`J`/`K`/`L` panes, `Ctrl+Shift+B` sidebar, `Ctrl+Shift+L` layout, `Ctrl+Shift+?` all keys.
+
+## Herdr's default keys
+
+Herdr reads `keys.json` as the whole keymap. It writes its defaults there when the file is missing, and refreshes a file it wrote when it updates, but it adds nothing to a file that was edited or that something else wrote. So `bercail update` keeps Herdr's defaults in that file itself, from a copy of them in bercail (`bercail/herdr-keys/`, `keys.macos.json` on macOS), with `Ctrl+Shift+C`/`V` copy and paste in the `terminal` section on every OS. It treats them like the `layout:bercail` keys: a value you set stays, a key or section you removed after bercail shipped it stays removed (a removed `layout:bercail` comes back whole), and a default added since bercail last ran is added unless you bind that key already, in any spelling Herdr reads as the same (`shift-ctrl-t`, `ctrl-T`), or bind a key sequence that starts with it. A new release of Herdr's defaults reaches you with the bercail release that copies them. The first time it runs on a file bercail never shipped Herdr's keys to, it cannot tell a default you removed from one Herdr never wrote there, so it adds it.
+
+It adds no `terminal` key that another section binds, since the `terminal` section would win over it. That leaves out Herdr's `Ctrl+Shift+F` terminal search, which would take the bercail layout's `Ctrl+Shift+F` files; if Herdr wrote it before bercail ran, it stays, and the update warns about it. `bercail uninstall` leaves Herdr's keys.
 
 ## Copy
 
@@ -61,7 +67,7 @@ Shep and the desks run Pi fullscreen, which holds the mouse: a plain drag select
 
 Hold `Shift` while you drag to select with the Herdr app instead. It copies on release while `copy_on_select` is on (the default), and `Ctrl+Shift+C` copies the selection either way; `Ctrl+Shift+V` pastes. `Ctrl+C` is not a copy key here: it goes to Pi, where a second quick press quits it. This copy is the Herdr window's, to its own computer's clipboard, apart from Pi's OSC 52 above.
 
-Herdr refreshes an untouched default `keys.json` when it updates, but adds no default keys to one that was edited or written by something else, so a file bercail started had no copy or paste. `bercail update` puts `"ctrl-shift-c": "terminal.copy"` and `"ctrl-shift-v": "terminal.paste"` in its `terminal` section, the same way as the `layout:bercail` keys: a value you set there stays, and a key or section you removed stays removed. It skips a key you bind in another section, since the `terminal` section would win over it. `bercail uninstall` leaves them, since they are Herdr's own defaults.
+bercail keeps `Ctrl+Shift+C` and `Ctrl+Shift+V` in `keys.json` with [Herdr's default keys](#herdrs-default-keys).
 
 On Omarchy, `Super+C` and `Super+V` send `Ctrl+Shift+C` and `Ctrl+Shift+V` only to a window tagged as a terminal; any other window gets `Ctrl+C` and `Ctrl+V`, and `Ctrl+C` goes to Pi. The Herdr app is not tagged by default, and bercail does not add the tag, so add this line to `~/.config/hypr/hyprland.lua` yourself:
 

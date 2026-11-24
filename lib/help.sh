@@ -242,7 +242,7 @@ Config:
   ~/.config/herdr-app/layouts/bercail.json    the layout
   ~/.config/herdr-app/mods/bercail-desk/      the desk mod
   ~/.config/herdr-app/mods/bercail-shep/      the Shep view (bercail shep run) and Back to Shep
-  ~/.config/herdr-app/keys.json               its "layout:bercail" keys and terminal copy/paste (update keeps yours)
+  ~/.config/herdr-app/keys.json               its "layout:bercail" keys, Herdr's defaults and Ctrl+Shift+C/V (update keeps yours)
   ~/.config/worktrunk/herdr-layout.sh
   ~/.config/worktrunk/config.toml             worktrunk hooks
   ~/.agents/skills/handoff/                   handoff skill (canonical)

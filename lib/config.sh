@@ -249,11 +249,22 @@ deploy_herdr_app_layout() {
 }
 
 # keys.json is the person's, and Herdr adds no new default keys to one that was edited:
-# bercail owns only the keys it ships (layout:bercail, and the terminal section's copy
-# and paste) that are still as it last shipped them. The last shipped file is kept to tell the two
-# apart; with none kept, every section is the person's own.
+# bercail owns only the keys it ships (layout:bercail, and Herdr's own defaults) that are
+# still as it last shipped them. The last shipped file is kept to tell the two apart; with
+# none kept, every section is the person's own.
 _herdr_app_shipped_keys() {
   printf '%s/herdr-app/keys.json' "$BERCAIL_SHARE_DIR"
+}
+
+# The keys bercail ships: Herdr's defaults for this OS, copied from herdr-app's
+# defaults/keys*.json, under bercail's own (layout:bercail, and terminal Ctrl+Shift+C/V,
+# which macOS's defaults lack). Herdr reads keys.json as the whole keymap, so without
+# them a file bercail starts has no Ctrl+Shift+T or Ctrl+Shift+L.
+_herdr_app_keys_ours() {
+  local src defaults=keys.json
+  src="$(install_src_dir)"
+  [[ "$(detect_os)" != macos ]] || defaults=keys.macos.json
+  jq -s '.[0] * .[1]' "$src/bercail/herdr-keys/$defaults" "$src/bercail/keys.json"
 }
 
 # The keys bercail ships now and the ones it shipped last, compact, one per line. With no
@@ -272,23 +283,44 @@ _herdr_app_keys_sections() {
 # Merge each section bercail ships into keys.json (stdin), per key:
 # - still as bercail last shipped it: bercail's now (or gone, when bercail dropped it);
 # - changed or added by the person: theirs;
-# - removed by the person: stays removed, unless bercail binds it to something new.
-# A missing layout:bercail comes back whole. In the person's sections (terminal), bercail
-# adds no key another section binds: terminal wins over them all, so it would take it.
+# - removed by the person: stays removed, unless bercail binds it to something new;
+#   a section removed after bercail shipped it stays removed.
+# A missing layout:bercail comes back whole. bercail adds no key the section already
+# binds under another spelling (shift-ctrl-t, ctrl-T: Herdr reads both as ctrl-shift-t),
+# or as the first keystroke of a sequence (ctrl-insert x).
+# To terminal, it adds no key another section binds, in the file or in what it ships:
+# terminal wins over them all, so it would take it (Herdr's ctrl-shift-f search would
+# take layout:bercail's files).
 _herdr_app_keys_merge() {
-  jq --arg layout "$HERDR_APP_KEYS_SECTION" --argjson new "$1" --argjson old "$2" '
+  local mac=false
+  [[ "$(detect_os)" != macos ]] || mac=true
+  jq --arg layout "$HERDR_APP_KEYS_SECTION" --argjson new "$1" --argjson old "$2" --argjson mac "$mac" '
+    # A key as Herdr reads it (gpui Keystroke::parse): modifiers in any order and case.
+    def chord: [scan("\\S+")] | map(
+        (if endswith("-") then [(.[:-1] | split("-") | map(select(. != ""))), "-"]
+         else split("-") | [.[:-1], .[-1]] end) as [$mods, $key]
+        | ($mods | map(ascii_downcase | if . == "secondary" then (if $mac then "cmd" else "ctrl" end)
+            elif . == "super" or . == "win" then "cmd" else . end)) as $m
+        | if ($key | test("^[A-Z]$")) then ($m + ["shift"] | unique) + [$key | ascii_downcase]
+          else ($m | unique) + [$key | ascii_downcase] end
+        | join("-")) | join(" ");
+    # Whether a chord is one of $chords, or the first keystrokes of one.
+    def clash($chords): . as $c | any($chords[]; . == $c or startswith($c + " "));
     . as $file
     | reduce ($new | keys_unsorted[]) as $s (.;
       $new[$s] as $n | ($old[$s] // {}) as $o
-      | if $s == $layout and .[$s] == null then .[$s] = $n else
+      | if $s == $layout and .[$s] == null then .[$s] = $n
+        elif .[$s] == null and ($old | has($s)) then .
+        else
           (.[$s] // {}) as $mine
-          | (if $s == $layout then [] else [$file | to_entries[] | select(.key != $s) | .value | objects | keys[]] end) as $taken
+          | ([$mine | keys[] | chord]
+            + if $s != "terminal" then [] else [$file, $new | to_entries[] | select(.key != $s) | .value | objects | keys[] | chord] end) as $taken
           | (reduce (($n + $o + $mine) | keys_unsorted[]) as $k ({};
               if ($mine | has($k)) then
                 if ($o | has($k)) and $mine[$k] == $o[$k] then
                   if ($n | has($k)) then .[$k] = $n[$k] else . end
                 else .[$k] = $mine[$k] end
-              elif ($n | has($k)) and (($o | has($k) | not) or $o[$k] != $n[$k]) and ($taken | index($k)) == null then
+              elif ($n | has($k)) and (($o | has($k) | not) or $o[$k] != $n[$k]) and ($k | chord | clash($taken) | not) then
                 .[$k] = $n[$k]
               else . end)) as $merged
           | if .[$s] == null and $merged == {} then . else .[$s] = $merged end
@@ -304,10 +336,10 @@ deploy_herdr_app_keys() {
     base="$(mktemp)"
     printf '{}\n' >"$base"
   fi
-  if ! DRY_RUN=0 deploy_install_file "bercail/keys.json" "$ours" >/dev/null \
+  if ! _herdr_app_keys_ours >"$ours" \
     || ! { read -r new && read -r old; } < <(_herdr_app_keys_sections "$ours") \
     || ! _herdr_app_keys_merge "$new" "$old" <"$base" >"$tmp"; then
-    warn "could not merge bercail's keys into $keys; copy its sections from bercail/keys.json"
+    warn "could not merge bercail's keys into $keys; copy its sections from bercail/keys.json and bercail/herdr-keys"
     rm -f "$ours" "$tmp"
     [[ "$base" == "$keys" ]] || rm -f "$base"
     return 0

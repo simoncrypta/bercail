@@ -112,8 +112,9 @@ expect_client_only() {
   done
   jq -e '.["layout:bercail"]["ctrl-shift-a"] == "bercail-desk.agent"' "$APP/keys.json" >/dev/null \
     || fail "$1: no layout:bercail keys"
-  jq -e '.terminal["ctrl-shift-c"] == "terminal.copy" and .terminal["ctrl-shift-v"] == "terminal.paste"' \
-    "$APP/keys.json" >/dev/null || fail "$1: no copy and paste keys: $(cat "$APP/keys.json")"
+  jq -e '.terminal["ctrl-shift-c"] == "terminal.copy" and .terminal["ctrl-shift-v"] == "terminal.paste"
+      and ([.global[]] | index("tab.new") and index("layout.switch"))' \
+    "$APP/keys.json" >/dev/null || fail "$1: no Herdr default keys: $(cat "$APP/keys.json")"
   [[ -x "$HOME/.local/bin/bercail" ]] || fail "$1: no bercail CLI"
   for what in .agents .pi .config/worktrunk .config/bercail/shell .config/herdr-core \
     .local/bin/bercail-desk-agent .local/share/bercail/pi .local/share/bercail/pi-extensions .bashrc .zshrc; do
@@ -138,9 +139,9 @@ expect_client_only() {
   grep -qx 'backend = "box"' "$CONFIG" || fail "backend lost: $(cat "$CONFIG")"
 }
 
-@test "bercail update gives a client's keys.json from an earlier bercail its copy and paste keys" {
+@test "bercail update gives a client's keys.json from an earlier bercail Herdr's default keys" {
   clone_install
-  jq 'del(.terminal)' "$APP/keys.json" >"$BATS_TEST_TMPDIR/k" && mv "$BATS_TEST_TMPDIR/k" "$APP/keys.json"
+  jq 'del(.terminal, .global)' "$APP/keys.json" >"$BATS_TEST_TMPDIR/k" && mv "$BATS_TEST_TMPDIR/k" "$APP/keys.json"
   jq 'del(.terminal)' "$ROOT/bercail/keys.json" >"$HOME/.local/share/bercail/herdr-app/keys.json"
   out="$("$HOME/.local/bin/bercail" update 2>&1)" || fail "update: $out"
   expect_client_only "update"

@@ -48,7 +48,7 @@ master is unreleased trunk; neither the curl install nor its `bercail update` re
 
 ## What the installer does
 
-Bercail runs on the Herdr app. When it is missing, the installer runs [herdr.dev](https://herdr.dev)'s own installer (`~/.local`, no sudo), which brings herdr-core (`hc`); the app keeps both updated after that. The installer copies the bercail layout and its three mods into `~/.config/herdr-app`: `bercail-desk` (the desk and Review), `bercail-agents` (Herdr's agents list, with a row for each desk), and `bercail-review` (the Stack tab of a `bercail review-pr` space). It adds its keys to the `layout:bercail` section of `keys.json`. Switch to it once with `Ctrl+Shift+L` → bercail.
+Bercail runs on the Herdr app. When it is missing, the installer runs [herdr.dev](https://herdr.dev)'s own installer (`~/.local`, no sudo), which brings herdr-core (`hc`); the app keeps both updated after that. The installer copies the bercail layout and its three mods into `~/.config/herdr-app`: `bercail-desk` (the desk and Review), `bercail-agents` (Herdr's agents list, with a row for each desk), and `bercail-review` (the Stack tab of a `bercail review-pr` space). It adds its keys to the `layout:bercail` section of `keys.json`, beside [Herdr's default keys](keys.md#herdrs-default-keys). Switch to it once with `Ctrl+Shift+L` → bercail.
 
 It also installs what bercail needs, and does a little extra on Omarchy, Linux, and macOS. See [development](development.md#dependencies) for the list and [platforms](development.md#platforms) for the details. Every file it writes is listed in [config](config.md#files-bercail-manages).
 
