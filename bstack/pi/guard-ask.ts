@@ -12,6 +12,7 @@ import {
   changedFacts,
   cleanEnv,
   decideLive,
+  factsDir,
   guardAsks,
   guardDefault,
   guardOperation,
@@ -100,11 +101,13 @@ function brief(ticket: GuardTicket, cls: GuardDefault): string {
   const facts =
     f.kind === "command"
       ? `${argvText(f.argv)} in ${f.dir}, as these ${f.argv.length} words with no shell`
-      : f.kind === "cleanup"
-        ? `bercail cleanup of ${f.worktree} (branch ${f.branch ?? "detached"}, HEAD ${f.head})`
-        : f.kind === "trail merge"
-          ? `${f.job ? `bercail job merge ${f.job} --change` : "entire trail merge"} ${f.change} in ${f.checkout}: trail ${f.trailId}, head ${f.head}, into ${f.base}${f.job ? `, then closes ${f.job} once no change is open` : ""}`
-          : `git push from ${f.dir} (git dir ${f.gitDir}) to ${urlText(f.url)}: ${f.refspecs.join(", ")}`;
+      : f.kind === "cleanup" && "gone" in f
+        ? `bercail cleanup --gone ${f.path}, the gone checkout a handoff of ${f.repo} names (branch ${f.branch ?? "none"}): it records it as retired and removes nothing`
+        : f.kind === "cleanup"
+          ? `bercail cleanup of ${f.worktree} (branch ${f.branch ?? "detached"}, HEAD ${f.head})`
+          : f.kind === "trail merge"
+            ? `${f.job ? `bercail job merge ${f.job} --change` : "entire trail merge"} ${f.change} in ${f.checkout}: trail ${f.trailId}, head ${f.head}, into ${f.base}${f.job ? `, then closes ${f.job} once no change is open` : ""}`
+            : `git push from ${f.dir} (git dir ${f.gitDir}) to ${urlText(f.url)}: ${f.refspecs.join(", ")}`;
   return `Shep ran: ${ticket.command}. On Allow, its worker guard-ask-${ticket.id} runs ${facts}, once, and only if none of that has changed. ${atDeadline(ticket, cls)}`;
 }
 
@@ -116,9 +119,6 @@ async function changed(op: GuardOp, was: GuardFacts): Promise<string[]> {
     return [`no longer pins: ${(error as Error).message}`];
   }
 }
-
-// The folder the operation acts in: the card binds to its repo.
-const folderOf = (f: GuardFacts) => (f.kind === "cleanup" ? f.worktree : f.kind === "trail merge" ? f.checkout : f.dir);
 
 const sleep = (ms: number) => new Promise((done) => setTimeout(done, ms));
 
@@ -234,7 +234,8 @@ async function handle(ticket: GuardTicket) {
     prompt: ticket.reason,
     brief: brief(ticket, cls),
     origin: { event: `guard:${id}`, session: ticket.shep.session || "unknown", entry: null },
-    dir: folderOf(ticket.facts),
+    // The card binds to the repo whose policy speaks for it.
+    dir: factsDir(ticket.facts),
     guard: {
       ticket: id,
       worker,

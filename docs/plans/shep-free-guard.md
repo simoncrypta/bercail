@@ -88,6 +88,7 @@ dialog has today.
 | Operation | Recognized form | Pinned | Worker runs |
 |-----------|-----------------|--------|-------------|
 | cleanup | `bercail cleanup <worktree>` | the worktree's real path, its branch and HEAD | `bercail cleanup <real path>` |
+| cleanup | `bercail cleanup --gone <path>`, the path absolute | the path, which lstat must find gone; every handoff naming it, all of one repo whose real path is its own top folder and lists no worktree there; the last one's branch, and how many there are. The state folder is absolute with no `..`, and every handoff line is a JSON object | `bercail cleanup --gone <path>` |
 | trail merge | `entire trail merge [<trail>]`, plain | the main checkout, the trail's Entire ID, the one change as `<repo>/<number>`, its head and its base | `entire trail merge <repo>/<number>` in that checkout |
 | push | `git [-C dir] push <remote> <refspec>...`, which the policy asks about | the git dir, the remote's one effective push URL, and each source as an object ID with its full destination ref | `git -C <dir> push <URL> <oid>:<ref>...` |
 

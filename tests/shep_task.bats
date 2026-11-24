@@ -1050,7 +1050,7 @@ SPAWN
   rm -rf "$REPO.fix"
   git -C "$REPO" worktree prune
   out="$(job r2 | task dispatch 2>&1)" && fail "$out"
-  [[ "$out" == *"the checkout $REPO.fix of desk t9 is gone, and bercail cleanup did not retire it"*"run in your shell (Shep's guard cannot ask for it): bercail cleanup --gone '$REPO.fix'"* ]] \
+  [[ "$out" == *"the checkout $REPO.fix of desk t9 is gone, and bercail cleanup did not retire it"*"run it alone (the guard asks the person on a Decisions card, or runs it where the repo's shep_may_run lists cleanup): bercail cleanup --gone '$REPO.fix'"* ]] \
     || fail "$out"
   # A retirement of that path before t9's handoff is of an earlier checkout,
   # and one in the same second cannot say which came first.

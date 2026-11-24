@@ -468,7 +468,7 @@ function findOwner(
   const lost = handoffs.find((r) => r.unresolved);
   if (lost)
     throw new Error(
-      `the checkout ${lost.path} of ${lost.desk ? `desk ${lost.desk}` : id} is gone, and bercail cleanup did not retire it. Once you know nothing was lost there, run in your shell (Shep's guard cannot ask for it): bercail cleanup --gone '${lost.path.replaceAll("'", "'\\''")}', then dispatch again`,
+      `the checkout ${lost.path} of ${lost.desk ? `desk ${lost.desk}` : id} is gone, and bercail cleanup did not retire it. Once nothing was lost there, run it alone (the guard asks the person on a Decisions card, or runs it where the repo's shep_may_run lists cleanup): bercail cleanup --gone '${lost.path.replaceAll("'", "'\\''")}', then dispatch again`,
     );
   const candidates = live(repo).filter((t) => {
     if (saved?.desk === t.address || handoffs.some((r) => r.desk === t.address)) return true;

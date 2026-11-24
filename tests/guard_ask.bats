@@ -336,6 +336,28 @@ wait
   grep -qx "bercail cleanup $WT" "$LOG" || fail "argv: $(cat "$LOG")"
 }
 
+@test "a cleanup --gone goes on the card as a record that removes nothing, and on an Allow records the checkout retired" {
+  GONE="$BATS_TEST_TMPDIR/repo.gone"
+  mkdir -p "$XDG_STATE_HOME/bercail"
+  jq -nc --arg p "$GONE" --arg r "$REPO" '{path: $p, repo: $r, branch: "feature"}' >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  printf '#!/bin/sh\nprintf "bercail %%s\\n" "$*" >>"$LOG"\nexec "$REAL" "$@"\n' >"$BATS_TEST_TMPDIR/bin/bercail-logged"
+  chmod +x "$BATS_TEST_TMPDIR/bin/bercail-logged"
+  export REAL="$ROOT/bin/bercail"
+  id="$(ticket "bercail cleanup --gone '$GONE'")"
+  BERCAIL_BIN="$BATS_TEST_TMPDIR/bin/bercail-logged" worker "$id"
+  token="$(card "$id")"
+  notice "notify-send Bercail Decisions: allow cleanup --gone of $GONE?"
+  bercail shep question json | jq -e --arg t "$token" --arg g "$GONE" --arg r "$REPO" '.questions[] | select("\(.id)@\(.revision)" == $t)
+    | .brief | contains("bercail cleanup --gone \($g), the gone checkout a handoff of \($r) names (branch feature): it records it as retired and removes nothing")' \
+    >/dev/null || fail "brief: $(bercail shep question json | jq -c '.questions[-1].brief')"
+  pick "$token" Allow >/dev/null
+  jq -e '.operation == "cleanup" and .target == $g and .outcome == "ran" and .exit == 0' --arg g "$GONE" <<<"$(event "$id")" >/dev/null \
+    || fail "cleanup --gone: $(cat "$INBOX/guard-$id.json")"
+  grep -qx "bercail cleanup --gone $GONE" "$LOG" || fail "argv: $(cat "$LOG")"
+  jq -e --arg g "$GONE" --arg r "$REPO" 'select(.path == $g) | .repo == $r and .branch == "feature" and .gone == true' \
+    "$XDG_STATE_HOME/bercail/retired.jsonl" >/dev/null || fail "retired: $(cat "$XDG_STATE_HOME/bercail/retired.jsonl")"
+}
+
 @test "bercail guard check says what changed since a card's facts were pinned" {
   id="$(ticket "git -C $REPO push origin feature")"
   input="$(jq -c '{op, facts}' "$ASKS/$id.json")"

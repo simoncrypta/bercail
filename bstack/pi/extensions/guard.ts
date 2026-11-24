@@ -158,6 +158,8 @@ const trailHeadless =
   "A headless run does not create trails on entire.com. Put the trail you need in your report, and Shep or the person creates it.";
 const cleanupAsk =
   "Retire this worktree? bercail cleanup archives its .bercail/, ends its desk, removes the worktree and closes its space. The branch stays.";
+const cleanupGoneAsk =
+  "Record this gone checkout as retired? bercail cleanup --gone removes nothing: it notes in retired.jsonl that the checkout went with nothing lost, so its job's next dispatch starts a new desk.";
 const cleanupHeadless =
   "bercail cleanup removes a worktree, so it runs only where the person can say yes. Leave it to Shep or the person.";
 const spaceCloseAsk = "Close this Herdr space? It ends every terminal in it.";
@@ -1494,7 +1496,7 @@ function decideCleanup(words: string[], input: GuardInput): GuardDecision {
   if (readOnlyRole(input.role)) return block(readOnly);
   if (!input.hasUI) return block(cleanupHeadless);
   if (input.role === "shep-bg") return block(backgroundOnly);
-  return { action: "ask", reason: cleanupAsk };
+  return { action: "ask", reason: words[1] === "cleanup" && words[2] === "--gone" ? cleanupGoneAsk : cleanupAsk };
 }
 
 // Closing a Herdr space ends every terminal in it, so the person says yes first.
@@ -2959,7 +2961,8 @@ export async function decideLive(
 
 /** What Shep's command asks for, read from its words alone. */
 export type GuardOp =
-  | { kind: "cleanup"; path: string }
+  // gone: bercail cleanup --gone, which records a checkout removed some other way.
+  | { kind: "cleanup"; path: string; gone?: true }
   // job: a trail job's bercail job merge, which closes the trail once no change is open.
   | { kind: "trail merge"; dir: string; trail: string | null; job?: string }
   | { kind: "push"; dir: string; remote: string; refspecs: string[] }
@@ -2969,6 +2972,9 @@ export type GuardOp =
 /** What it acts on, read from disk, git and entire: the worker runs on these alone. */
 export type GuardFacts =
   | { kind: "cleanup"; worktree: string; branch: string | null; head: string }
+  // The gone checkout's path as its handoffs name it, their one repo, the last one's branch,
+  // and how many there are.
+  | { kind: "cleanup"; gone: true; path: string; repo: string; branch: string | null; handoffs: number }
   | { kind: "trail merge"; checkout: string; trailId: string; change: string; head: string; base: string; job?: string }
   | { kind: "push"; dir: string; gitDir: string; url: string; refspecs: string[] }
   | { kind: "command"; dir: string; argv: string[] };
@@ -3072,8 +3078,11 @@ export function guardOperation(command: string, cwd: string | undefined, home: s
   const named = [basename(words[0]), ...words.slice(1)];
   const merges = [named, entireValueReading(named)].some((reading) => reading && entireKind(reading) === "merge");
   if (basename(words[0]) === "bercail" && plain[1] === "cleanup") {
+    // --gone takes the absolute path its handoff names, which is gone: nothing to place.
+    if (words.length === 4 && words[1] === "cleanup" && words[2] === "--gone" && words[3].startsWith("/"))
+      return { kind: "cleanup", path: words[3], gone: true };
     if (words.length !== 3 || words[1] !== "cleanup" || words[2].startsWith("-"))
-      return "bercail cleanup takes the one worktree it retires";
+      return "bercail cleanup takes the one worktree it retires, or --gone and the absolute path of one already removed";
     return { kind: "cleanup", path: placeIn(dir, words[2])! };
   }
   if (merges) {
@@ -3291,9 +3300,73 @@ async function pinTrail(read: Read, dir: string, trail: string | null, job?: str
   };
 }
 
+// A cleanup --gone's checkout, as bercail cleanup --gone checks it, and stricter: nothing
+// at its path, and handoffs that name it, all of one repo whose top folder git no longer
+// lists it in. Dispatch retires every handoff at the path, so the repo whose policy speaks
+// for it must own them all; their count pins them, so a later handoff there moves it.
+async function pinGone(read: Read, path: string) {
+  // The journal bercail reads from /, as its shell spells it: join() would resolve a
+  // relative root against Pi's folder, and collapse a .. that bash follows after a symlink.
+  const root = process.env.XDG_STATE_HOME || process.env.HOME || "";
+  if (!isAbsolute(root) || /(^|\/)\.\.(\/|$)/.test(root))
+    fail("the state folder (XDG_STATE_HOME, else HOME) is not an absolute path without ..");
+  // Gone only when lstat says so: a folder it cannot read is not known to be gone.
+  let there = true;
+  try {
+    lstatSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
+    there = false;
+  }
+  if (there) fail(`${path} is still there; bercail cleanup ${path} retires it`);
+  let lines: string[] = [];
+  try {
+    lines = readFileSync(join(stateDir(), "handoffs.jsonl"), "utf8").split("\n");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  // Each line an object, as jq's select over the file needs.
+  const named = lines
+    .map((line, i) => {
+      if (!line.trim()) return undefined;
+      let handoff;
+      try {
+        handoff = JSON.parse(line);
+      } catch {}
+      if (typeof handoff !== "object" || handoff === null || Array.isArray(handoff))
+        fail(`handoffs.jsonl line ${i + 1} is not a JSON object`);
+      return handoff;
+    })
+    .filter((handoff) => handoff?.path === path);
+  if (!named.length) fail(`no handoff names ${path}, so no job waits on it`);
+  const repos = new Set(named.map((handoff) => handoff.repo));
+  const [recorded] = repos;
+  if (repos.size !== 1 || typeof recorded !== "string" || !isAbsolute(recorded))
+    fail(`the handoffs of ${path} name no one repo, whose policy could speak for them all`);
+  const last = named.at(-1);
+  if (last.branch !== undefined && typeof last.branch !== "string")
+    fail(`the handoff of ${path} names a branch that is not text`);
+  const repo = realpathSync(recorded);
+  if (realpathSync(await read("git", ["-C", repo, "rev-parse", "--show-toplevel"], repo)) !== repo)
+    fail(`the handoffs of ${path} name ${recorded}, which is not a repo's top folder`);
+  const worktrees = await read("git", ["-C", repo, "worktree", "list", "--porcelain"], repo);
+  if (worktrees.split("\n").includes(`worktree ${path}`))
+    fail(`git still lists ${path} as a worktree; run git -C ${repo} worktree prune first`);
+  return {
+    kind: "cleanup" as const,
+    gone: true as const,
+    path,
+    repo,
+    branch: last.branch || null,
+    handoffs: named.length,
+  };
+}
+
 // The objects an operation acts on now. It throws when they cannot be pinned.
 export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<GuardFacts> {
   if (op.kind === "trail merge") return pinTrail(read, op.dir, op.trail, op.job);
+  if (op.kind === "cleanup" && op.gone) return pinGone(read, op.path);
   // Its folder by its real path, so a symlink moved later cannot send it elsewhere.
   if (op.kind === "command") return { kind: "command", dir: realpathSync(op.dir), argv: op.argv };
   if (op.kind === "cleanup") {
@@ -3322,6 +3395,8 @@ export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<G
 // <hash>^{commit}, which no ref named like the hash can shadow.
 export function runOf(facts: GuardFacts): { argv: string[]; cwd: string } {
   if (facts.kind === "command") return { argv: facts.argv, cwd: facts.dir };
+  if (facts.kind === "cleanup" && "gone" in facts)
+    return { argv: [process.env.BERCAIL_BIN || "bercail", "cleanup", "--gone", facts.path], cwd: "/" };
   if (facts.kind === "cleanup")
     return { argv: [process.env.BERCAIL_BIN || "bercail", "cleanup", facts.worktree], cwd: "/" };
   if (facts.kind === "trail merge" && facts.job)
@@ -3564,14 +3639,16 @@ function executable(name: string): string | undefined {
 // The operation in a few words, and what it acts on, for the card and the event.
 export function opTarget(facts: GuardFacts): string {
   if (facts.kind === "command") return argvText(facts.argv);
-  if (facts.kind === "cleanup") return facts.worktree;
+  if (facts.kind === "cleanup") return "gone" in facts ? facts.path : facts.worktree;
   if (facts.kind === "trail merge") return facts.change;
   return `${urlText(facts.url)} ${facts.refspecs.map((spec) => spec.split(":")[1]).join(" ")}`;
 }
 
 // "push of <target>", or "command <its words>".
 export const opWhat = (facts: GuardFacts) =>
-  facts.kind === "command" ? `command ${opTarget(facts)}` : `${facts.kind} of ${opTarget(facts)}`;
+  facts.kind === "command"
+    ? `command ${opTarget(facts)}`
+    : `${facts.kind}${"gone" in facts ? " --gone" : ""} of ${opTarget(facts)}`;
 
 // An unanswered guard card counts as an Allow at its deadline only when what it runs
 // stays private or local (bercail-mdfb, docs/plans/guard-default-allow.md); anything
@@ -3726,7 +3803,7 @@ async function privateTarget(
 ): Promise<{ what: string } | { why: string }> {
   if (facts.kind === "cleanup") {
     const seen = await privateRepo(read, await ownOrigin(read, dir), dir);
-    return "what" in seen ? { what: `a worktree of ${seen.what}` } : seen;
+    return "what" in seen ? { what: `${"gone" in facts ? "a gone checkout" : "a worktree"} of ${seen.what}` } : seen;
   }
   if (facts.kind === "push") {
     // The policy read speaks for this repo's own remote, and Entire's hook pushes beside it.
@@ -3760,9 +3837,15 @@ async function privateTarget(
   return "what" in seen ? { what: `${what} in ${seen.what}` } : seen;
 }
 
-// The folder whose repo's policy speaks for these facts.
-const factsDir = (facts: GuardFacts) =>
-  facts.kind === "trail merge" ? facts.checkout : facts.kind === "cleanup" ? facts.worktree : facts.dir;
+// The folder whose repo's policy speaks for these facts; a gone checkout's, its handoff's repo.
+export const factsDir = (facts: GuardFacts) =>
+  facts.kind === "trail merge"
+    ? facts.checkout
+    : facts.kind === "cleanup"
+      ? "gone" in facts
+        ? facts.repo
+        : facts.worktree
+      : facts.dir;
 
 // Whether a card for these pinned facts defaults to Allow at its deadline. A cleanup is
 // local. A push, a trail merge or a trail link defaults only in a repo whose trusted
@@ -3770,6 +3853,8 @@ const factsDir = (facts: GuardFacts) =>
 // (privateTarget). Each call reads afresh; it never throws, and anything it cannot read
 // waits. The why names the repo, so a card defaults only while it reads the same.
 export async function guardDefault(facts: GuardFacts, read: Read = readOut): Promise<GuardDefault> {
+  if (facts.kind === "cleanup" && "gone" in facts)
+    return { defaults: true, why: "a cleanup --gone is local: it only records that the gone checkout is retired" };
   if (facts.kind === "cleanup")
     return { defaults: true, why: "a cleanup is local: the worktree goes, and its branch stays" };
   if (facts.kind === "command" && !plainLink(facts.argv))

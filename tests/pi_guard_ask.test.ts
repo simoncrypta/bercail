@@ -136,6 +136,121 @@ test("a cleanup pins the worktree's real path, branch and HEAD; a trail merge, i
   );
 });
 
+// A handoffs.jsonl line per handoff, as handoff-spawn writes them, under $XDG_STATE_HOME.
+const handoffs = (...lines: (Record<string, unknown> | string)[]) => {
+  mkdirSync(join(dir, "state/bercail"), { recursive: true });
+  writeFileSync(
+    join(dir, "state/bercail/handoffs.jsonl"),
+    lines.map((line) => (typeof line === "string" ? line : JSON.stringify(line))).join("\n") + "\n",
+  );
+};
+
+test("a cleanup --gone pins the path, its handoffs' one repo, the last one's branch and their count, and its worker runs bercail cleanup --gone on it", async () => {
+  vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
+  const gone = join(dir, "repo.gone");
+  symlinkSync(repo, join(dir, "link"));
+  const lines = [
+    { path: gone, repo: join(dir, "link"), branch: "old" },
+    "",
+    { path: join(dir, "other"), repo: "/elsewhere", branch: "main" },
+    { path: gone, repo: join(dir, "link"), branch: "feature" },
+  ];
+  handoffs(...lines);
+  const facts = { kind: "cleanup", gone: true, path: gone, repo, branch: "feature", handoffs: 2 } as const;
+  // As dispatch names it: the path in single quotes.
+  const gonePath = op(`bercail cleanup --gone '${gone}'`);
+  expect(gonePath).toStrictEqual({ kind: "cleanup", path: gone, gone: true });
+  expect(await pinOperation(gonePath)).toStrictEqual(facts);
+  expect(runOf(facts)).toStrictEqual({ argv: ["bercail", "cleanup", "--gone", gone], cwd: "/" });
+  expect(opTarget(facts)).toBe(gone);
+  // A later handoff at that path, of the same repo and branch, moves what a card named.
+  handoffs(...lines, { path: gone, repo: join(dir, "link"), branch: "feature" });
+  expect(changedFacts(facts, await pinOperation(gonePath))).toStrictEqual(["handoffs changed"]);
+});
+
+test.each([
+  ["a path that is still there", () => mkdirSync(join(dir, "repo.gone")), /repo\.gone is still there/],
+  ["a path no handoff names", () => handoffs({ path: join(dir, "other"), repo }), /no handoff names/],
+  ["a handoff with no repo", () => handoffs({ path: join(dir, "repo.gone") }), /name no one repo/],
+  // Dispatch retires every handoff at the path: one repo's policy cannot speak for another's.
+  [
+    "handoffs of two repos",
+    () => handoffs({ path: join(dir, "repo.gone"), repo: "/elsewhere" }, { path: join(dir, "repo.gone"), repo }),
+    /name no one repo/,
+  ],
+  [
+    "an earlier handoff with no repo",
+    () => handoffs({ path: join(dir, "repo.gone") }, { path: join(dir, "repo.gone"), repo }),
+    /name no one repo/,
+  ],
+  [
+    "a ledger with a line that is not JSON",
+    () => handoffs("", "not json", { path: join(dir, "repo.gone"), repo }),
+    /handoffs.jsonl line 2 is not a JSON object/,
+  ],
+  // jq's select cannot read a string's .path, so bercail cleanup --gone would fail on it.
+  [
+    "a ledger with a line that is not an object",
+    () => handoffs({ path: join(dir, "repo.gone"), repo }, '"text"'),
+    /handoffs.jsonl line 2 is not a JSON object/,
+  ],
+  [
+    "a relative XDG_STATE_HOME, which bercail reads from /",
+    () => {
+      vi.stubEnv("XDG_STATE_HOME", "state");
+      vi.stubEnv("HOME", dir);
+    },
+    /state folder .* not an absolute path/,
+  ],
+  [
+    "an XDG_STATE_HOME with ..",
+    () => {
+      vi.stubEnv("XDG_STATE_HOME", `${dir}/state/bercail/..`);
+    },
+    /state folder .* without \.\./,
+  ],
+  [
+    "a handoff whose branch is not text",
+    () => handoffs({ path: join(dir, "repo.gone"), repo, branch: 7 }),
+    /branch that is not text/,
+  ],
+  [
+    "a path in a folder it cannot read",
+    () => {
+      mkdirSync(join(dir, "locked"));
+      handoffs({ path: join(dir, "locked/repo.gone"), repo });
+      chmodSync(join(dir, "locked"), 0);
+      return join(dir, "locked/repo.gone");
+    },
+    /EACCES/,
+  ],
+  [
+    "a handoff whose repo is a folder inside one",
+    () => {
+      mkdirSync(join(repo, "sub"));
+      handoffs({ path: join(dir, "repo.gone"), repo: join(repo, "sub") });
+    },
+    /not a repo's top folder/,
+  ],
+  [
+    "a checkout git still lists as a worktree",
+    () => {
+      git("worktree", "add", "-q", join(dir, "repo.gone"), "feature");
+      rmSync(join(dir, "repo.gone"), { recursive: true });
+    },
+    /git still lists .*repo\.gone as a worktree; run git -C .* worktree prune first/,
+  ],
+])("a cleanup --gone of %s does not pin", async (_name, setup, why) => {
+  vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
+  handoffs({ path: join(dir, "repo.gone"), repo });
+  const path = setup() ?? join(dir, "repo.gone");
+  try {
+    await expect(pin(`bercail cleanup --gone ${path}`)).rejects.toThrow(why);
+  } finally {
+    if (existsSync(join(dir, "locked"))) chmodSync(join(dir, "locked"), 0o755);
+  }
+});
+
 test("a trail job merge pins its trail's change as a trail merge does, and its worker runs bercail job merge on it", async () => {
   const merged = {
     kind: "trail merge",
@@ -213,6 +328,11 @@ test.each([
   ["a trail merge after a selector", (r: string) => `cd ${r} && entire --context work trail merge 41`],
   ["a trail merge with a flag inside its path", (r: string) => `cd ${r} && entire trail --branch feature merge`],
   ["a cleanup after a flag", (r: string) => `bercail -q cleanup ${r}`],
+  ["a cleanup --gone of a relative path", () => "bercail cleanup --gone repo.gone"],
+  ["a cleanup --gone of two paths", (r: string) => `bercail cleanup --gone ${r}.a ${r}.b`],
+  ["a cleanup --gone of no path", () => "bercail cleanup --gone"],
+  ["a cleanup --gone after its path", (r: string) => `bercail cleanup ${r}.gone --gone`],
+  ["a cleanup --gone with ..", (r: string) => `bercail cleanup --gone ${r}/../repo.gone`],
   ["a job merge after a flag", (r: string) => `bercail -q job merge trail:41 --repo ${r}`],
   ["a relative folder with no cwd", () => "git -C repo push origin feature"],
   ["a folder with ..", (r: string) => `git -C ${r}/../repo push origin feature`],
@@ -466,6 +586,12 @@ const github = (visibility: string) => ({
 test.each([
   ["a cleanup, always", { kind: "cleanup", worktree: "/w", branch: null, head: "a".repeat(40) }, world(""), true],
   [
+    "a cleanup --gone, always",
+    { kind: "cleanup", gone: true, path: "/w", repo: "/r", branch: null, handoffs: 1 },
+    world(""),
+    true,
+  ],
+  [
     "a push to a private GitHub origin",
     push("git@github.com:acme/app.git"),
     world("git@github.com:acme/app.git", github("PRIVATE")),
@@ -675,6 +801,7 @@ const askFixtures = () => [
   "gh release create v1.0.0",
   "gh pr create --fill",
   `bercail cleanup ${repo}`,
+  `bercail cleanup --gone ${repo}.gone`,
   `cd ${repo} && entire trail merge 41`,
   `bercail job merge trail:41 --repo ${repo}`,
   "entire brain distill --dry-run",
@@ -1087,4 +1214,33 @@ test("a cleanup's miss reason names no credential from its origin or a read's er
   );
   const log = readFileSync(join(dir, "state/bercail/guard-warnings.jsonl"), "utf8");
   for (const text of [first?.reason, second?.reason, third?.reason, log]) expect(text).not.toContain(secret);
+});
+
+// bercail-cty3: dispatch told Shep to run bercail cleanup --gone for two gone Lesentiel
+// checkouts, and the guard refused it outright, though Lesentiel's shep_may_run lists cleanup.
+test("Shep's cleanup --gone runs with no card where its handoff's repo lists cleanup in shep_may_run, else goes to one that says it removes nothing", async () => {
+  let mayRun = ["cleanup"];
+  const { bin, shep, world } = lesentiel(() => ({ policy: { shep_may_run: mayRun }, entire: true }));
+  world(repo);
+  const gone = join(dir, "glkvm-readonly-wave4");
+  handoffs({ path: gone, repo, branch: "glkvm-readonly-wave4" });
+  const command = `bercail cleanup --gone '${gone}'`;
+  expect(await shep.bash(command)).toBeUndefined();
+  expect(shep.ran.command).toBe(`cd / && GIT_TERMINAL_PROMPT=0 ${join(bin, "bercail")} cleanup --gone ${gone}`);
+  expect(readFileSync(join(dir, "state/bercail/guard-approvals.jsonl"), "utf8")).toContain(
+    'lists \\"cleanup\\" in shep_may_run, and a gone checkout of the private Entire repo et/lesentiel/lesentiel',
+  );
+  mayRun = [];
+  world(repo);
+  const why = `the trusted policy that ${repo} reads does not list "cleanup" in shep_may_run`;
+  const handed = await shep.bash(command);
+  expect(handed).toMatchObject(handedOff(why));
+  expect(handed?.reason).toContain(`this cleanup --gone of ${gone} on a Decisions card`);
+  const [name] = readdirSync(asks()).filter((n) => n.endsWith(".json"));
+  expect(JSON.parse(readFileSync(join(asks(), name), "utf8"))).toMatchObject({
+    reason: expect.stringMatching(/^Record this gone checkout as retired\? .* removes nothing/),
+    op: { kind: "cleanup", path: gone, gone: true },
+    facts: { kind: "cleanup", gone: true, path: gone, repo, branch: "glkvm-readonly-wave4", handoffs: 1 },
+  });
+  expect(shep.confirm).not.toHaveBeenCalled();
 });
