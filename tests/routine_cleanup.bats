@@ -354,8 +354,8 @@ ledger() {
     || fail "the run names what it could not read: $out"
   # cleanup --check could not list the terminals of the worktree's space: not a refusal either.
   jq -n --arg f "$WORK/widgets.alpha" '{spaces: [{id: "sp-alpha", name: "Alpha", folder: $f, machine: null}]}' >"$HERDR"
-  if out="$(HC_FAIL="ls --json --label bercail.space=sp-alpha" query 2>&1)"; then fail "a --check that could not read hc is quiet: $out"; fi
-  [[ "$out" == *"error: cleanup --check $WORK/widgets.alpha could not read what it needs: could not tell which terminals"* ]] \
+  if out="$(HC_FAIL="ls --json" query 2>&1)"; then fail "a --check that could not read hc is quiet: $out"; fi
+  [[ "$out" == *"error: cleanup --check $WORK/widgets.alpha could not read what it needs: hc did not list its terminals"* ]] \
     || fail "the run names what --check could not read: $out"
 }
 

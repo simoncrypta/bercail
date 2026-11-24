@@ -1,10 +1,11 @@
 # shellcheck shell=bash
 # shellcheck disable=SC1010 # "do" is a herdr-app subcommand here, not the keyword
 # bercail cleanup <worktree>: retire a finished checkout in one step. It copies
-# the ignored .bercail/ evidence to the archive, ends the space's desk and its
-# siblings, removes the worktree and closes its Herdr space. The branch stays.
-# It refuses work nobody reviewed, and commits on neither trunk nor a remote
-# branch, and a terminal it would end that is working or blocked. The guard
+# the ignored .bercail/ evidence to the archive, ends the space's desk, its
+# siblings and what they started, parents first, removes the worktree and
+# closes its Herdr space. The branch stays. It refuses work nobody reviewed,
+# and commits on neither trunk nor a remote branch, and a terminal it would end
+# that is working or blocked, and stops partway when one changes. The guard
 # asks the person before it runs. --check makes every refusal and changes
 # nothing: the cleanup routine reads it. Exit 1 is a refusal; 2, that it could
 # not read the Herdr app, hc or its helpers. Once the worktree is gone it adds a
@@ -101,20 +102,20 @@ _cleanup_archive() {
   printf '%s' "$dest"
 }
 
-# hc ls --json "$@", only when it answers with a list: a failed or blank answer
-# is not an empty one. Nothing in these helpers runs under set -e (their callers
+# hc ls --json, only when it answers with a list: a failed or blank answer is
+# not an empty one. Nothing in these helpers runs under set -e (their callers
 # test them), so each step says when it fails.
 _cleanup_hc_ls() {
   local out
-  out="$("$HC" ls --json "$@")" || return 1
+  out="$("$HC" ls --json)" || return 1
   jq -e '.terminals | type == "array"' <<<"$out" >/dev/null || return 1
   printf '%s' "$out"
 }
 
 # The checkout's space on this machine, from the window's list $2 (a space
 # another machine shows may sit on the same path), else from hc: the space of a
-# kept Shell or a desk there. Status 5 (jq's error) when two match, 1 when hc
-# did not answer.
+# kept Shell or a desk there. Status 5 (jq's error) when two match; 1, with
+# the read that failed, when hc did not answer.
 _cleanup_space() {
   local wt="$1" ls="$2" list rows address cwd detail on=""
   if [[ -n "$ls" ]]; then
@@ -123,11 +124,12 @@ _cleanup_space() {
     return
   fi
   list="$(_cleanup_hc_ls)" || return 1
-  rows="$(jq -r '.terminals[] | select(.state == "live" and (.cwd // "") != "") | [.address, .cwd] | @tsv' <<<"$list")" || return 1
+  rows="$(jq -r '.terminals[] | if (.address | type) == "string" and (.state | type) == "string" then . else error("row") end
+    | select(.state == "live" and (.cwd // "") != "") | [.address, .cwd] | @tsv' <<<"$list" 2>/dev/null)" || return 1
   while IFS=$'\t' read -r address cwd; do
     [[ -n "$address" && "$(_wt_realpath "$cwd")" == "$wt" ]] || continue
-    detail="$("$HC" get "$address" --json)" || return 1
-    jq -e '.labels | type == "object"' <<<"$detail" >/dev/null || return 1
+    detail="$("$HC" get "$address" --json)" || { (($? == 3)) && continue; printf 'hc could not read terminal %s' "$address"; return 1; }
+    jq -e '.labels | type == "object"' <<<"$detail" >/dev/null || { printf 'hc could not read terminal %s' "$address"; return 1; }
     on+="$detail"$'\n'
   done <<<"$rows"
   jq -ers '[.[] | if .labels["bercail.space_name"] != null then .labels["herdr.space"]
@@ -135,18 +137,126 @@ _cleanup_space() {
     | unique | if length > 1 then error("two spaces") else .[0] // "" end' <<<"$on"
 }
 
-# The terminals cleanup ends in space $1, one a line: its desk first, then its
-# siblings (builder, judge), then, with no window here ($2 empty), its kept
-# Shell. Ending the parent first keeps a child's exit from waking it.
-_cleanup_space_terminals() {
-  local space="$1" window="$2" desk out
-  desk="$(_wt_herdr_space_desk "$space")" || return 1
-  [[ -z "$desk" ]] || printf '%s\n' "$desk"
-  out="$(_cleanup_hc_ls --label "bercail.space=$space")" || return 1
-  jq -r --arg desk "$desk" '.terminals[] | select(.state == "live" and .address != $desk) | .address' <<<"$out" || return 1
-  [[ -z "$window" ]] || return 0
-  out="$(_cleanup_hc_ls --label "herdr.space=$space")" || return 1
-  jq -r '.terminals[] | select(.state == "live") | .address' <<<"$out" || return 1
+# Every live terminal on this machine, those named in $@, and the finished
+# ancestors of both, as hc get prints them, cut to what cleanup checks. A
+# terminal hc no longer knows (exit 3) has ended. When hc did not answer, or
+# answered without an address or a state, it prints what failed, and status 1.
+_cleanup_snapshot() {
+  local list address detail rc out="" more
+  list="$(_cleanup_hc_ls)" || { printf 'hc did not list its terminals'; return 1; }
+  list="$(jq -r '.terminals[] | if (.address | type) == "string" and (.state | type) == "string" then . else error("row") end
+    | select(.state == "live" and (.address | contains("/") | not)) | .address' <<<"$list" 2>/dev/null)" \
+    || { printf 'hc listed a terminal without its address or state'; return 1; }
+  more="$(printf '%s\n' "$list" "$@" | awk 'NF && !seen[$0]++')"
+  while [[ -n "$more" ]]; do
+    while IFS= read -r address; do
+      rc=0
+      detail="$("$HC" get "$address" --json)" || rc=$?
+      if ((rc == 3)); then
+        detail="$(jq -nc --arg a "$address" '{address: $a, state: "gone", labels: {}}')"
+      elif ((rc != 0)) || ! jq -e --arg a "$address" '.address == $a and (.labels | type == "object")
+          and (.state | IN("live", "finished"))' <<<"$detail" >/dev/null 2>&1; then
+        printf 'hc could not read terminal %s' "$address"
+        return 1
+      fi
+      out+="$detail"$'\n'
+    done <<<"$more"
+    # A finished parent still links what it started to the tree.
+    more="$(jq -rs 'map(.address) as $have | [.[].parent | strings | select((IN($have[]) | not) and (contains("/") | not))]
+      | unique | .[]' <<<"$out")"
+  done
+  jq -sc 'map({address, parent, live: (.state == "live"), dies: (.die_with_parent == true), pid, start: .created_ms,
+    status: (if .status == null then "none" elif (.status.state | type) == "string" then .status.state else "unknown" end),
+    role: .labels["bercail.role"], bs: .labels["bercail.space"], hs: .labels["herdr.space"]})' <<<"$out"
+}
+
+# The owner tree of space $2 in snapshot $1, as {end, close, problems}. end is
+# what cleanup ends: the space's desk, its siblings, with no window ($3 true)
+# its kept Shell, and every terminal they started, each parent before what it
+# started, so no child's end wakes a terminal still to end. Ended members of
+# the earlier tree $5, and ended terminals the space labels, still link what
+# they started. close is what closing
+# the space ends: the window's terminals $4 and what dies with them. A
+# terminal labelled for another space is never taken: problems names one it
+# would end, a member with another space's label, and two desks.
+_cleanup_tree() {
+  jq -c --arg space "$2" --argjson nowin "$3" --argjson w "$4" --argjson was "$5" '
+    . as $all | (map({(.address): .}) | add // {}) as $by
+    | def keep: reduce .[] as $a ([]; if IN(.[]; $a) then . else . + [$a] end);
+      def mine: [.bs, .hs] | map(select(. != null)) | all(. == $space);
+      def grow($any): . as $s | [$all[] | select((.parent | IN($s[])) and (.address | IN($s[]) | not)
+          and mine and ($any or .dies or (.live | not))) | .address] as $n
+        | if $n == [] then $s else $s + $n | grow($any) end;
+      def live: map(select($by[.].live));
+      def depth($set): ($by[.].parent // null) as $p | if $p != null and ($p | IN($set[])) then ($p | depth($set)) + 1 else 0 end;
+    [$all[] | select(.live and .role == "agent" and .bs == $space) | .address] as $desk
+    | ($desk + [$all[] | select(.live and .bs == $space) | .address] + [$all[] | select(.live and $nowin and .hs == $space) | .address]
+      | keep) as $roots
+    | ($roots + [$all[] | select((.live | not) and (.bs == $space or ($nowin and .hs == $space))) | .address]
+      + ($was.end | map(select($by[.].live | not))) | keep | grow(true)) as $e
+    | ($w | keep | grow(false)) as $c
+    | ($e | live) as $end
+    | {end: ($end | to_entries | sort_by((.value | depth($end)), .key) | map(.value)),
+      close: ($c | live | map(select(IN($end[]) | not))),
+      problems: ((if ($desk | length) > 1 then ["two desks claim space \($space): \($desk | join(", "))"] else [] end)
+        + [($roots + ($w | live))[] | $by[.] | select(mine | not)
+          | "terminal \(.address) is labelled for another space (bercail.space \(.bs // "none"), herdr.space \(.hs // "none"))"]
+        + [$all[] | select(.live and .dies and (mine | not) and (.parent | IN($e[], $c[])))
+          | "terminal \(.address) of space \(.bs // .hs) would end with \(.parent)"])}' <<<"$1"
+}
+
+# What changed for worktree $1 and its space $2 (the window's list $3, empty
+# with none) since snapshot $4 of owner tree $5. Prints {ended, problems}: the
+# worktree is still on that space (with no window, the space is known from
+# the terminals cleanup ends, so none is fine); a member hc has as finished or no longer
+# knows has ended; one still live must be the process checked, with the same
+# parent, labels and place in the tree, still reporting a status if it did,
+# and neither working nor blocked; and the tree, read again, holds nothing new. When hc or the
+# window did not answer, it prints what failed, and status 1.
+_cleanup_recheck() {
+  local wt="$1" space="$2" window="$3" snap="$4" tree="$5" shells='[]' now next nowin=true on rc=0
+  local -a named=()
+  if [[ -n "$window" ]]; then
+    nowin=false
+    window="$("$HERDR_APP" ls)" && jq -e '.spaces | type == "array"' <<<"$window" >/dev/null 2>&1 \
+      || { printf 'herdr-app could not list its spaces'; return 1; }
+    shells="$(jq -c --arg id "$space" '[.spaces[] | select(.id == $id) | .tabs[]?.terminals[]?.terminal]' <<<"$window")"
+  fi
+  on="$(_cleanup_space "$wt" "$window")" || rc=$?
+  ((rc == 0 || rc == 5)) || { printf 'could not tell which Herdr space is on %s: %s' "$wt" "${on:-hc did not answer}"; return 1; }
+  ((rc == 0)) || on="two spaces"
+  if [[ -z "$space" ]]; then
+    jq -nc --arg on "$on" '{ended: [], problems: (if $on == "" then [] else ["Herdr space \($on) is on the worktree now"] end)}'
+    return
+  fi
+  mapfile -t named < <(jq -r '.[]' <<<"$shells"; jq -r '.end[], .close[]' <<<"$tree")
+  now="$(_cleanup_snapshot "${named[@]}")" || { printf '%s' "$now"; return 1; }
+  next="$(_cleanup_tree "$now" "$space" "$nowin" "$shells" "$tree")"
+  jq -nc --arg space "$space" --arg on "$on" --argjson nowin "$nowin" --argjson was "$snap" --argjson now "$now" --argjson tree "$tree" --argjson next "$next" '
+    ($was | map({(.address): .}) | add // {}) as $w | ($now | map({(.address): .}) | add // {}) as $n
+    | ($tree.end + $tree.close) as $m
+    | {ended: [$m[] | select($n[.].live | not)],
+      problems: ((if $on == $space or ($nowin and $on == "") then [] else ["the Herdr space on the worktree is \(if $on == "" then "none" else $on end) now, not \($space)"] end)
+        + [$m[] | . as $a | $n[$a] | select(.live) | $w[$a] as $o
+          | (if [.pid, .start] != [$o.pid, $o.start]
+              then "terminal \($a) is not the process cleanup checked (pid \($o.pid) from \($o.start), now pid \(.pid) from \(.start))" else empty end),
+            (if [.parent, .bs, .hs] != [$o.parent, $o.bs, $o.hs]
+              then "terminal \($a) has another parent or space now (parent \(.parent // "none"), space \(.bs // .hs // "none"))"
+            elif ($a | IN($tree.end[])) != ($a | IN($next.end[])) or ($a | IN($tree.close[])) != ($a | IN($next.close[]))
+              then "terminal \($a) is no longer where cleanup found it in space \($space)" else empty end),
+            (if .status | IN("working", "blocked", "unknown") then "terminal \($a) is \(.status) now"
+            elif .status == "none" and $o.status != "none" then "terminal \($a) no longer reports its status" else empty end)]
+        + [($next.end + $next.close)[] | select(IN($m[]) | not)
+          | "terminal \(.) joined the space after cleanup checked it\(if $n[.].status | IN("working", "blocked", "unknown") then ", and is \($n[.].status)" else "" end)"]
+        + $next.problems)}'
+}
+
+# What a cleanup that stops partway leaves: the terminals it ended ($2...),
+# the worktree and space that stay, and the archive $1.
+_cleanup_left() {
+  local dest="$1"
+  shift
+  printf '%sthe worktree and its space stay%s' "${*:+it ended $*; }" "${dest:+, and .bercail/ is archived in $dest}"
 }
 
 # Appends that checkout $1 of repo $2 (branch $3) is retired; $4 is true when
@@ -176,8 +286,9 @@ _cleanup_gone() {
 }
 
 cmd_cleanup() {
-  local usage="usage: bercail cleanup [--check] <worktree> | bercail cleanup --gone <path>" wt main common repo branch dest="" ls="" space t out keep check=0 state
-  local -a ends=() shells=()
+  local usage="usage: bercail cleanup [--check] <worktree> | bercail cleanup --gone <path>" wt main common repo branch dest="" ls="" space t out keep check=0
+  local snap="" tree='{"end": [], "close": []}' shells='[]' got
+  local -a ends=() named=() ended=() killed=()
   [[ "${1:-}" != --check ]] || { check=1; shift; }
   if [[ "${1:-}" == --gone && "$check" -eq 0 ]]; then
     [[ $# -eq 2 && "$2" == /* ]] || die "--gone takes the checkout's absolute path, as its handoff names it; $usage"
@@ -205,28 +316,24 @@ cmd_cleanup() {
   fi
   space="$(_cleanup_space "$wt" "$ls")" || {
     (($? == 5)) && die "refusing to clean up $wt: two Herdr spaces sit on it; close one, then clean up again"
-    _cleanup_unread "could not tell which Herdr space is on $wt: neither the Herdr app nor hc answered in full; nothing was removed"
+    _cleanup_unread "could not tell which Herdr space is on $wt: ${space:-neither the Herdr app nor hc answered in full}; nothing was removed"
   }
   if [[ -n "$space" ]]; then
-    out="$(_cleanup_space_terminals "$space" "$ls" | awk '!seen[$0]++')" \
-      || _cleanup_unread "could not tell which terminals belong to space $space; nothing was removed"
-    [[ -z "$out" ]] || mapfile -t ends <<<"$out"
-    if [[ -n "$ls" ]]; then
-      # Closing the space ends the window's own terminals in it.
-      out="$(jq -r --arg id "$space" '.spaces[] | select(.id == $id) | .tabs[]?.terminals[]?.terminal' <<<"$ls")"
-      [[ -z "$out" ]] || mapfile -t shells <<<"$out"
-    fi
-    for t in "${ends[@]}" "${shells[@]}"; do
+    # Closing the space ends the window's own terminals in it.
+    [[ -z "$ls" ]] || shells="$(jq -c --arg id "$space" '[.spaces[] | select(.id == $id) | .tabs[]?.terminals[]?.terminal]' <<<"$ls")"
+    mapfile -t named < <(jq -r '.[]' <<<"$shells")
+    snap="$(_cleanup_snapshot "${named[@]}")" || _cleanup_unread "$snap; nothing was removed"
+    tree="$(_cleanup_tree "$snap" "$space" "$([[ -n "$ls" ]] && echo false || echo true)" "$shells" "$tree")"
+    mapfile -t ends < <(jq -r '.end[]' <<<"$tree")
+    while IFS= read -r t; do
       [[ "$t" != "${HC_TERMINAL_ID:-}" ]] \
         || die "refusing to clean up $wt from its own space ($t); run it from Shep or another shell"
-    done
-    # A terminal still at work, or waiting on the person, is not done.
-    for t in "${ends[@]}" "${shells[@]}"; do
-      state="$("$HC" get "$t" --json | jq -er '.status.state // "none"')" \
-        || _cleanup_unread "hc could not read terminal $t; nothing was removed"
-      [[ "$state" != working && "$state" != blocked ]] \
-        || die "refusing to clean up $wt: terminal $t is $state; let it finish or end it, then clean up again"
-    done
+    done < <(jq -r '.end[], .close[]' <<<"$tree")
+    # A terminal still at work, waiting on the person, or not saying, is not
+    # done; one another space owns is not cleanup's to end.
+    out="$(jq -r --argjson tree "$tree" '[.[] | select((.address | IN($tree.end[], $tree.close[]))
+      and (.status | IN("working", "blocked", "unknown"))) | "terminal \(.address) is \(.status)"] + $tree.problems | join("; ")' <<<"$snap")"
+    [[ -z "$out" ]] || die "refusing to clean up $wt: $out; nothing was removed"
   fi
 
   [[ ! -d "$wt/.bercail" ]] || _cleanup_archive_check "$wt" "$(_cleanup_archive_root "$repo")"
@@ -240,9 +347,25 @@ cmd_cleanup() {
   else
     info "no .bercail/ in $wt to archive"
   fi
-  for t in "${ends[@]}"; do
+  # Each kill, the removal and the close wait on a fresh look at the whole
+  # tree: an end wakes a parent outside it, hc brings one back, an agent
+  # starts another. A member that ended with its parent is not ended again.
+  for t in "${ends[@]}" ""; do
+    [[ -z "$t" || " ${ended[*]} " != *" $t "* ]] || continue
+    got="$(_cleanup_recheck "$wt" "$space" "$ls" "$snap" "$tree")" \
+      || _cleanup_unread "cleanup stopped: $got; $(_cleanup_left "$dest" "${killed[@]}")"
+    out="$(jq -r '.problems | join("; ")' <<<"$got")"
+    [[ -z "$out" ]] || die "cleanup stopped: $out; $(_cleanup_left "$dest" "${killed[@]}")"
+    while IFS= read -r out; do
+      [[ " ${ended[*]} " != *" $out "* ]] || continue
+      ended+=("$out")
+      info "terminal $out had ended already"
+    done < <(jq -r '.ended[]' <<<"$got")
+    [[ -n "$t" && " ${ended[*]} " != *" $t "* ]] || continue
     "$HC" kill "$t" >/dev/null \
-      || die "could not end terminal $t; the worktree and its space stay${dest:+, and .bercail/ is archived in $dest}"
+      || die "could not end terminal $t; $(_cleanup_left "$dest" "${killed[@]}")"
+    ended+=("$t")
+    killed+=("$t")
     "$HC" rm "$t" >/dev/null 2>&1 || true
     info "ended terminal $t"
   done
@@ -259,12 +382,20 @@ cmd_cleanup() {
   else
     if [[ -n "$ls" ]]; then
       keep="$(_wt_herdr_focused_space || true)"
+      got="$(_cleanup_recheck "$wt" "$space" "$ls" "$snap" "$tree")" \
+        || _cleanup_unread "removed worktree $wt, but did not close Herdr space $space: $got; close it by hand"
+      out="$(jq -r '.problems | join("; ")' <<<"$got")"
+      [[ -z "$out" ]] || die "removed worktree $wt, but left Herdr space $space open: $out; close it by hand once that is done"
       "$HERDR_APP" "do" space.close --id "$space" --confirmed true >/dev/null \
         || die "herdr-app did not close space $space; close it by hand"
       [[ "$keep" == "$space" ]] || _wt_herdr_keep_user_focus "$keep"
     fi
     info "closed Herdr space $space"
   fi
+  # The records of those that ended with their parent, once nothing else waits.
+  for t in "${ended[@]}"; do
+    [[ " ${killed[*]} " == *" $t "* ]] || "$HC" rm "$t" >/dev/null 2>&1 || true
+  done
   # What the person sees, not only the space it closed.
   [[ -z "$ls" ]] || "$HERDR_APP" ls 2>/dev/null \
     | jq -r '"Herdr sidebar: \(.spaces | length) open, \(.recent // [] | length) recent"' || true

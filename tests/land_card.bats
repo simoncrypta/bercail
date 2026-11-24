@@ -84,7 +84,7 @@ case "$1" in
   get)
     jq -e --arg a "$2" '.[] | select(.address == $a)' "$st" \
       || { printf '{"error":{"kind":"not_found","message":"no terminal"}}\n'; exit 3; } ;;
-  kill) jq --arg a "$2" 'map(if .address == $a then .state = "done" else . end)' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
+  kill) jq --arg a "$2" 'map(if .address == $a then .state = "finished" else . end)' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
   rm) jq --arg a "$2" 'map(select(.address != $a))' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
 esac
 SH

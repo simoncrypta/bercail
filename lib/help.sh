@@ -107,9 +107,11 @@ Post-install CLI (bercail):
                 the Routines panel's Ask Shep) | tick (start each one that is due) |
                 loop (a tick a minute; the hidden terminal bercail-routines runs it) | start (that terminal)
   cleanup       Retire a finished worktree: cleanup <worktree> copies its .bercail/ to
-                ~/Work/worktree-archives/<repo>/, ends its desk, removes the worktree,
-                closes its space, and keeps the branch. Refuses uncommitted work,
-                commits on neither trunk nor a remote branch, and submodules.
+                ~/Work/worktree-archives/<repo>/, ends its desk and what it started,
+                parents first, removes the worktree, closes its space, and keeps the
+                branch. Refuses uncommitted work, commits on neither trunk nor a remote
+                branch, submodules, and a terminal at work; stops, with every reason,
+                when one starts working, is replaced or joins the space meanwhile.
                 --check <worktree> makes the same refusals and changes nothing.
                 --gone <path>: a checkout removed some other way; records it retired, as
                 cleanup does, so dispatch starts its job a new desk.

@@ -23,13 +23,20 @@ setup() {
 
   # The Herdr app: open spaces and recent ones in $STATE/herdr.json. Closing a
   # space moves it to recent, as the sidebar does. $STATE/down: no window.
+  # $STATE/on-status-<n>: a jq filter run on hc.json at the nth status call.
   cat >"$FAKE_BIN/herdr-app" <<'SH'
 #!/usr/bin/env bash
 printf 'herdr-app %s\n' "$*" >>"$CALLS"
 [[ ! -f "$STATE/down" ]] || exit 1
 st="$STATE/herdr.json"
 case "$1 ${2:-}" in
-  "status ") echo '{"space":"sp-main"}' ;;
+  "status ")
+    n=$(($(cat "$STATE/statuses" 2>/dev/null || echo 0) + 1))
+    echo "$n" >"$STATE/statuses"
+    if [[ -f "$STATE/on-status-$n" ]]; then
+      jq -f "$STATE/on-status-$n" "$STATE/hc.json" >"$STATE/hc.tmp" && mv "$STATE/hc.tmp" "$STATE/hc.json"
+    fi
+    echo '{"space":"sp-main"}' ;;
   "ls ") [[ -f "$STATE/blank-ls" ]] || cat "$st" ;;
   "do space.close")
     jq --arg id "$4" '(.spaces[] | select(.id == $id) | {name, folder}) as $s
@@ -37,25 +44,55 @@ case "$1 ${2:-}" in
   *) echo '{"ok":true}' ;;
 esac
 SH
-  # hc: terminals in $STATE/hc.json, each {address, state, cwd, labels}. ls,
-  # like the real one, prints no labels; get does. $HC_FAIL: the call that fails;
-  # $HC_BLANK: the call that succeeds and prints nothing.
+  # hc: terminals in $STATE/hc.json, each {address, state, cwd, labels}, and
+  # as the real one {parent, die_with_parent, notify, pid, created_ms, status}.
+  # ls prints only the live ones, and no labels; get does, and exits 3 on one
+  # it does not know. kill ends the terminal and, natively, every terminal that
+  # dies with it; each one that ends with notify wakes its live parent, idle or
+  # done, to working. With $STATE/lag those that die with it end only at the
+  # next kill. $STATE/on-kill-<address>, on-rm-<address>: a jq filter run on
+  # hc.json after that call; herdr-on-kill-<address>, on herdr.json. With
+  # $STATE/bad-row, ls lists a row with no address first. A kill of a working terminal is logged. $HC_FAIL:
+  # the call that fails; $HC_BLANK: the call that succeeds and prints nothing.
+  # get answers not_found for a terminal marked gone, which ls still lists.
   cat >"$FAKE_BIN/hc" <<'SH'
 #!/usr/bin/env bash
 printf 'hc %s\n' "$*" >>"$CALLS"
 [[ "$*" != "${HC_FAIL:-}" ]] || exit 1
 [[ "$*" != "${HC_BLANK:-}" ]] || exit 0
 st="$STATE/hc.json"
+save() { jq "$@" "$st" >"$st.tmp" && mv "$st.tmp" "$st"; }
+# End the terminals in $1 (a JSON list), and wake the parents they notify.
+end() {
+  save --argjson e "$1" '(map(select(.address | IN($e[])) | select(.notify) | .parent)) as $w
+    | map(if .address | IN($e[]) then .state = "finished" | .status = null
+      elif (.address | IN($w[])) and .state == "live" and (.status.state | IN("idle", "done")) then .status.state = "working"
+      else . end)'
+}
 case "$1" in
   ls)
     want=()
     while [[ $# -gt 0 ]]; do [[ "$1" != --label ]] || want+=("$2"); shift; done
-    jq --args '{terminals: [.[] | select(. as $t | $ARGS.positional
-        | all(split("=") as [$k, $v] | $t.labels[$k] == $v)) | {address, state, cwd, labels: null}]}' \
-      "${want[@]}" <"$st" ;;
-  get) jq -e --arg a "$2" '.[] | select(.address == $a)' "$st" ;;
-  kill) jq --arg a "$2" 'map(if .address == $a then .state = "done" else . end)' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
-  rm) jq --arg a "$2" 'map(select(.address != $a))' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
+    jq --args --argjson bad "$([[ -f "$STATE/bad-row" ]] && echo true || echo false)" '{terminals:
+        ((if $bad then [{address: null, state: "live"}] else [] end) + [.[] | select(.state == "live") | select(. as $t | $ARGS.positional
+        | all(split("=") as [$k, $v] | $t.labels[$k] == $v)) | {address, state, cwd}])}' "${want[@]}" <"$st" ;;
+  get) jq -e --arg a "$2" '.[] | select(.address == $a and (.gone | not))' "$st" || exit 3 ;;
+  kill)
+    [[ ! -f "$STATE/pending" ]] || { end "$(cat "$STATE/pending")"; rm "$STATE/pending"; }
+    jq -e --arg a "$2" 'any(.[]; .address == $a and .state == "live" and .status.state == "working")' "$st" >/dev/null \
+      && printf 'killed working %s\n' "$2" >>"$CALLS"
+    end "[\"$2\"]"
+    dies="$(jq -c --arg a "$2" '. as $all | def grow: . as $s | [$all[] | select(.state == "live" and .die_with_parent
+        and (.parent | IN($s[])) and (.address | IN($s[]) | not)) | .address] as $n
+      | if $n == [] then $s else $s + $n | grow end; [$a] | grow | .[1:]' "$st")"
+    if [[ -f "$STATE/lag" ]]; then printf '%s' "$dies" >"$STATE/pending"; else end "$dies"; fi
+    [[ ! -f "$STATE/on-kill-$2" ]] || save -f "$STATE/on-kill-$2"
+    if [[ -f "$STATE/herdr-on-kill-$2" ]]; then
+      jq -f "$STATE/herdr-on-kill-$2" "$STATE/herdr.json" >"$STATE/h.tmp" && mv "$STATE/h.tmp" "$STATE/herdr.json"
+    fi ;;
+  rm)
+    save --arg a "$2" 'map(select(.address != $a))'
+    [[ ! -f "$STATE/on-rm-$2" ]] || save -f "$STATE/on-rm-$2" ;;
 esac
 SH
   chmod +x "$FAKE_BIN/herdr-app" "$FAKE_BIN/hc"
@@ -90,10 +127,20 @@ desk_space() {
   jq --arg id "sp-$name" --arg f "$wt" --arg n "${name^}_Widgets" \
     '.spaces += [{id: $id, name: $n, folder: $f, machine: null, tabs: [{terminals: [{terminal: "s-\($id)"}]}]}]' \
     "$STATE/herdr.json" >"$STATE/h.tmp" && mv "$STATE/h.tmp" "$STATE/herdr.json"
-  jq --arg s "sp-$name" --arg n "$name" --arg f "$wt" '. + [
-      {address: "s-\($s)", state: "live", cwd: $f, labels: {"herdr.space": $s}},
-      {address: "d-\($n)", state: "live", cwd: $f, labels: {"bercail.role": "agent", "bercail.space": $s}},
-      {address: "b-\($n)", state: "live", cwd: $f, labels: {"bercail.role": "bstack-builder", "bercail.space": $s}}]' \
+  jq --arg s "sp-$name" --arg n "$name" --arg f "$wt" 'length as $i | . + [
+      {address: "s-\($s)", state: "live", cwd: $f, pid: ($i + 101), created_ms: ($i + 101), labels: {"herdr.space": $s}},
+      {address: "d-\($n)", state: "live", cwd: $f, pid: ($i + 102), created_ms: ($i + 102),
+        labels: {"bercail.role": "agent", "bercail.space": $s}},
+      {address: "b-\($n)", state: "live", cwd: $f, pid: ($i + 103), created_ms: ($i + 103),
+        labels: {"bercail.role": "bstack-builder", "bercail.space": $s}}]' \
+    "$STATE/hc.json" >"$STATE/c.tmp" && mv "$STATE/c.tmp" "$STATE/hc.json"
+}
+
+# set_term ADDRESS OBJECT: merges the jq object into that terminal in hc.json,
+# or adds it live at the end, with a pid of its own.
+set_term() {
+  jq --arg a "$1" "($2) as \$t | "'if any(.[]; .address == $a) then map(if .address == $a then . * $t else . end)
+      else . + [{address: $a, state: "live", pid: (length + 101), created_ms: (length + 101), labels: {}} + $t] end' \
     "$STATE/hc.json" >"$STATE/c.tmp" && mv "$STATE/c.tmp" "$STATE/hc.json"
 }
 
@@ -304,18 +351,27 @@ assert_kept() {
 @test "cleanup stops before removing when hc cannot list or end a terminal" {
   local out
   desk_space alpha
-  if out="$(HC_BLANK="ls --json --label bercail.space=sp-alpha" "$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then
-    fail "cleanup reads a blank answer as no siblings: $out"
+  if out="$(HC_BLANK="get b-alpha --json" "$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then
+    fail "cleanup reads a blank answer as a terminal that ended: $out"
   fi
-  assert_has "$out" "nothing was removed" "a blank list"
-  assert_kept alpha "a blank list"
+  assert_has "$out" "hc could not read terminal b-alpha; nothing was removed" "a blank read"
+  assert_kept alpha "a blank read"
+  # The window's Shell, as hc gets it, has no state.
+  cp "$STATE/hc.json" "$STATE/hc.keep"
+  jq 'map(if .address == "s-sp-alpha" then del(.state) else . end)' "$STATE/hc.keep" >"$STATE/hc.json"
+  if out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then
+    fail "cleanup reads a terminal with no state as one that ended: $out"
+  fi
+  assert_has "$out" "hc could not read terminal s-sp-alpha; nothing was removed" "no state"
+  mv "$STATE/hc.keep" "$STATE/hc.json"
+  assert_kept alpha "no state"
   touch "$STATE/down"
   if out="$(HC_FAIL="ls --json" "$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then fail "cleanup goes on with neither Herdr nor hc: $out"; fi
   assert_has "$out" "neither the Herdr app nor hc answered" "nothing answers"
-  if out="$(HC_FAIL="ls --json --label herdr.space=sp-alpha" "$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then
+  if out="$(HC_FAIL="get s-sp-alpha --json" "$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then
     fail "cleanup goes on without the space's Shell: $out"
   fi
-  assert_has "$out" "nothing was removed" "a failed list"
+  assert_has "$out" "nothing was removed" "a failed read"
   rm "$STATE/down"
   assert_kept alpha "a failed list"
   if out="$(HC_FAIL="kill d-alpha" "$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then fail "cleanup goes on past a live desk: $out"; fi
@@ -332,7 +388,7 @@ assert_kept() {
   if out="$(HC_FAIL="get s-sp-alpha --json" "$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then
     fail "cleanup takes an unread Shell for no space: $out"
   fi
-  assert_has "$out" "could not tell which Herdr space" "a failed hc get"
+  assert_has "$out" "could not tell which Herdr space is on $WORK/widgets.alpha: hc could not read terminal s-sp-alpha" "a failed hc get"
   [[ -d "$WORK/widgets.alpha" ]] || fail "the worktree stays when its Shell cannot be read"
   if out="$(HC_BLANK="get s-sp-alpha --json" "$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then
     fail "cleanup takes a blank read of its Shell for no space: $out"
@@ -469,7 +525,7 @@ check_agrees() {
   ln -s "$wt/.keep" "$HOME/Work/worktree-archives"
   check_agrees "$wt" "an archive inside the worktree"
   rm "$HOME/Work/worktree-archives"
-  HC_BLANK="ls --json --label bercail.space=sp-alpha" check_agrees "$wt" "a blank list of its terminals"
+  HC_BLANK="get b-alpha --json" check_agrees "$wt" "a blank read of its builder"
   assert_kept alpha "every refusal"
 }
 
@@ -514,6 +570,220 @@ check_agrees() {
   out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)" || fail "an idle builder holds it back: $out"
 }
 
+@test "cleanup ends each parent before what it started, so no child's end wakes a terminal it still has to end" {
+  local name out
+  for name in alpha bravo; do
+    : >"$CALLS"
+    desk_space "$name"
+    # The builder outlives the desk; its judge dies with it, and hc lists the
+    # judge first. bravo's judge ends a moment after its builder.
+    set_term "b-$name" '{parent: "d-'"$name"'", notify: true, status: {app: "pi", state: "idle"}}'
+    set_term "j-$name" '{parent: "b-'"$name"'", die_with_parent: true, notify: true, status: {app: "pi", state: "idle"},
+      labels: {"bercail.role": "bstack-judge", "bercail.space": "sp-'"$name"'"}}'
+    jq --arg b "b-$name" 'sort_by(.address == $b)' "$STATE/hc.json" >"$STATE/c.tmp" && mv "$STATE/c.tmp" "$STATE/hc.json"
+    [[ "$name" == alpha ]] || touch "$STATE/lag"
+    out="$("$BERCAIL" cleanup --check "$WORK/widgets.$name" 2>&1)" || fail "--check: $out"
+    assert_has "$out" "end d-$name b-$name j-$name" "$name: parents come before what they started"
+    out="$("$BERCAIL" cleanup "$WORK/widgets.$name" 2>&1)" || fail "$name: cleanup: $out"
+    if grep -q '^killed working' "$CALLS"; then fail "$name: a child's end woke its parent, and cleanup ended it at work"; fi
+    [[ ! -e "$WORK/widgets.$name" ]] || fail "$name: the worktree is removed"
+  done
+  assert_eq "hc kill d-bravo"$'\n'"hc kill b-bravo"$'\n'"hc kill j-bravo" "$(grep '^hc kill' "$CALLS")" \
+    "a judge still live once its builder ended is ended in turn"
+}
+
+@test "cleanup ends nothing the judge's builder took with it, and says it ended already" {
+  local name out
+  # bravo's judge is still listed once its builder ends, but hc no longer knows it.
+  for name in alpha bravo; do
+    : >"$CALLS"
+    desk_space "$name"
+    set_term "b-$name" '{parent: "d-'"$name"'", notify: true}'
+    set_term "j-$name" '{parent: "b-'"$name"'", die_with_parent: true, notify: true, labels: {"bercail.space": "sp-'"$name"'"}}'
+    [[ "$name" == alpha ]] || printf 'map(if .address == "j-bravo" then .state = "live" | .gone = true else . end)\n' >"$STATE/on-kill-b-bravo"
+    out="$("$BERCAIL" cleanup "$WORK/widgets.$name" 2>&1)" || fail "$name: cleanup: $out"
+    assert_eq "hc kill d-$name"$'\n'"hc kill b-$name" "$(grep '^hc kill' "$CALLS")" "$name: the judge ended with its builder"
+    assert_has "$out" "terminal j-$name had ended already" "$name: the report says so"
+  done
+}
+
+@test "cleanup checks and ends what a sibling started, labelled or not, and refuses one at work" {
+  local out
+  desk_space alpha
+  set_term u-alpha '{parent: "b-alpha", die_with_parent: true, status: {app: "pi", state: "working"}}'
+  check_agrees "$WORK/widgets.alpha" "a working terminal the builder started"
+  assert_has "$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" "terminal u-alpha is working" "the refusal names it"
+  assert_kept alpha "a working terminal the builder started"
+  set_term u-alpha '{status: {app: "pi", state: "idle"}}'
+  assert_has "$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" "end d-alpha b-alpha u-alpha" "--check names it"
+  out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)" || fail "cleanup: $out"
+  [[ ! -e "$WORK/widgets.alpha" ]] || fail "the worktree is removed"
+  jq -e 'any(.[]; .address == "u-alpha" and .state == "live") | not' "$STATE/hc.json" >/dev/null \
+    || fail "the terminal the builder started is ended"
+}
+
+@test "cleanup stops, keeps the worktree and its space, and gives the reasons, when a terminal changed since it checked" {
+  local name out
+  local -A said=()
+  # alpha: ending its builder wakes the agent in the window's tab, which closing the space would end.
+  desk_space alpha
+  set_term s-sp-alpha '{status: {app: "pi", state: "idle"}}'
+  set_term b-alpha '{parent: "s-sp-alpha", notify: true}'
+  # bravo: once the desk ends, hc has brought its builder back in place, and it is at work.
+  desk_space bravo
+  set_term b-bravo '{pid: 2, created_ms: 100}'
+  printf 'map(if .address == "b-bravo" then .created_ms = 200 | .status.state = "working" else . end)\n' >"$STATE/on-kill-d-bravo"
+  # charlie: once the desk ends, its builder is at work and a new terminal joins the space.
+  desk_space charlie
+  printf '%s\n' '. + [{address: "n-charlie", state: "live", pid: 60, labels: {"bercail.space": "sp-charlie"}, status: {state: "idle"}}]' \
+    '| map(if .address == "b-charlie" then .status = {state: "working"} else . end)' >"$STATE/on-kill-d-charlie"
+  # delta: the desk started an unlabelled terminal that outlives it, just before it ended.
+  desk_space delta
+  printf '%s\n' '. + [{address: "late", state: "live", pid: 70, parent: "d-delta", labels: {}, status: {state: "working"}}]' \
+    >"$STATE/on-kill-d-delta"
+  # echo: once the desk ends, its builder belongs to another space.
+  desk_space echo
+  printf 'map(if .address == "b-echo" then .labels["bercail.space"] = "sp-elsewhere" else . end)\n' >"$STATE/on-kill-d-echo"
+  # foxtrot: once the desk ends, the space is on another folder, and its Shell left the window's tab.
+  desk_space foxtrot
+  printf '.spaces |= map(if .id == "sp-foxtrot" then .folder = "/elsewhere" | .tabs = [] else . end)\n' >"$STATE/herdr-on-kill-d-foxtrot"
+  # golf: once the desk ends, its builder no longer reports a status.
+  desk_space golf
+  set_term b-golf '{status: {app: "pi", state: "idle"}}'
+  printf 'map(if .address == "b-golf" then .status = null else . end)\n' >"$STATE/on-kill-d-golf"
+  for name in alpha bravo charlie delta echo foxtrot golf; do
+    : >"$CALLS"
+    if out="$("$BERCAIL" cleanup "$WORK/widgets.$name" 2>&1)"; then fail "$name: cleanup goes on: $out"; fi
+    [[ -d "$WORK/widgets.$name/.bercail" ]] || fail "$name: the worktree stays"
+    jq -e --arg id "sp-$name" 'any(.spaces[]; .id == $id)' "$STATE/herdr.json" >/dev/null || fail "$name: its space stays open"
+    if grep -q 'space.close\|^killed working' "$CALLS"; then fail "$name: nothing at work is ended or closed"; fi
+    [[ ! -e "$XDG_STATE_HOME/bercail/retired.jsonl" ]] || fail "$name: nothing is recorded as retired"
+    assert_has "$out" "the worktree and its space stay, and .bercail/ is archived in $ARCHIVE/" "$name: what stays"
+    if [[ "$name" != alpha ]] && grep -q "^hc kill [bn]-$name" "$CALLS"; then fail "$name: what changed is not ended"; fi
+    said[$name]="$out"
+  done
+  assert_has "${said[alpha]}" "cleanup stopped: terminal s-sp-alpha is working now; it ended d-alpha b-alpha;" "a woken parent"
+  assert_has "${said[bravo]}" "terminal b-bravo is not the process cleanup checked (pid 2 from 100, now pid 2 from 200); terminal b-bravo is working now; it ended d-bravo;" \
+    "a replaced builder, and every reason it fails"
+  assert_has "${said[charlie]}" "terminal b-charlie is working now; terminal n-charlie joined the space after cleanup checked it; it ended d-charlie;" \
+    "every reason, not the first"
+  assert_has "${said[delta]}" "terminal late joined the space after cleanup checked it, and is working; it ended d-delta;" \
+    "a child of a desk that ended"
+  assert_has "${said[echo]}" "terminal b-echo has another parent or space now (parent none, space sp-elsewhere); it ended d-echo;" \
+    "a builder bound elsewhere"
+  assert_has "${said[foxtrot]}" "cleanup stopped: the Herdr space on the worktree is none now, not sp-foxtrot; terminal s-sp-foxtrot is no longer where cleanup found it in space sp-foxtrot; it ended d-foxtrot;" \
+    "a space moved off the worktree"
+  assert_has "${said[golf]}" "terminal b-golf no longer reports its status; it ended d-golf;" "an agent gone silent"
+}
+
+@test "cleanup refuses a terminal labelled for two spaces, a hidden grandchild at work, two desks, and a status it cannot read" {
+  local out rc
+  desk_space alpha
+  desk_space bravo
+  # With no window, bravo's builder carries alpha's Shell label too.
+  touch "$STATE/down"
+  set_term b-bravo '{labels: {"herdr.space": "sp-alpha"}}'
+  check_agrees "$WORK/widgets.alpha" "a terminal labelled for two spaces"
+  assert_has "$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" \
+    "terminal b-bravo is labelled for another space (bercail.space sp-bravo, herdr.space sp-alpha)" "the refusal names both labels"
+  set_term b-bravo '{labels: {"herdr.space": null}}'
+  rm "$STATE/down"
+  # The window lists bravo's desk in alpha's tab.
+  jq '.spaces |= map(if .id == "sp-alpha" then .tabs[0].terminals += [{terminal: "d-bravo"}] else . end)' "$STATE/herdr.json" \
+    >"$STATE/h.tmp" && mv "$STATE/h.tmp" "$STATE/herdr.json"
+  check_agrees "$WORK/widgets.alpha" "another space's desk in the window's tab"
+  jq '.spaces |= map(if .id == "sp-alpha" then .tabs[0].terminals |= map(select(.terminal != "d-bravo")) else . end)' "$STATE/herdr.json" \
+    >"$STATE/h.tmp" && mv "$STATE/h.tmp" "$STATE/herdr.json"
+  # The builder's helper finished; the terminal it started is at work.
+  set_term i-alpha '{parent: "b-alpha", state: "finished"}'
+  set_term u-alpha '{parent: "i-alpha", status: {app: "pi", state: "working"}}'
+  check_agrees "$WORK/widgets.alpha" "a grandchild under a finished helper"
+  assert_has "$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" "terminal u-alpha is working" "the refusal names it"
+  set_term u-alpha '{state: "finished"}'
+  # The desk finished; the unlabelled terminal it started is at work.
+  set_term d-alpha '{state: "finished"}'
+  set_term v-alpha '{parent: "d-alpha", status: {app: "pi", state: "working"}}'
+  check_agrees "$WORK/widgets.alpha" "a child of a finished desk"
+  assert_has "$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" "terminal v-alpha is working" "the refusal names it"
+  set_term v-alpha '{state: "finished"}'
+  set_term d-alpha '{state: "live"}'
+  set_term d2-alpha '{labels: {"bercail.role": "agent", "bercail.space": "sp-alpha"}}'
+  check_agrees "$WORK/widgets.alpha" "two desks"
+  assert_has "$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" "two desks claim space sp-alpha: d-alpha, d2-alpha" "both named"
+  set_term d2-alpha '{state: "finished"}'
+  set_term b-alpha '{status: {app: "pi"}}'
+  check_agrees "$WORK/widgets.alpha" "a builder with no state"
+  assert_has "$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" "terminal b-alpha is unknown" "the refusal names it"
+  set_term b-alpha '{status: null}'
+  touch "$STATE/bad-row"
+  rc=0
+  out="$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" || rc=$?
+  assert_eq 2 "$rc" "a list with a row it cannot read is not a refusal"
+  assert_has "$out" "hc listed a terminal without its address or state" "it says so"
+  touch "$STATE/down"
+  rc=0
+  "$BERCAIL" cleanup --check "$WORK/widgets.alpha" >/dev/null 2>&1 || rc=$?
+  assert_eq 2 "$rc" "with no window, a row it cannot read does not mean no space"
+  rm "$STATE/bad-row" "$STATE/down"
+  "$BERCAIL" cleanup --check "$WORK/widgets.alpha" >/dev/null 2>&1 || fail "alpha passes once each is settled"
+}
+
+@test "cleanup with no window stops before removing when a terminal at work joins the space as it ends the desk" {
+  local out
+  desk_space alpha
+  touch "$STATE/down"
+  printf '. + [{address: "w-alpha", state: "live", pid: 80, labels: {"bercail.space": "sp-alpha"}, status: {state: "working"}}]\n' \
+    >"$STATE/on-rm-d-alpha"
+  if out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then fail "cleanup removes it with a worker in its space: $out"; fi
+  assert_has "$out" "terminal w-alpha joined the space after cleanup checked it, and is working; it ended d-alpha;" "the reason"
+  [[ -d "$WORK/widgets.alpha/.bercail" ]] || fail "the worktree stays"
+}
+
+@test "cleanup removes no record between a look and the kill it guards" {
+  local out
+  desk_space alpha
+  set_term b-alpha '{status: {app: "pi", state: "idle"}}'
+  set_term j-alpha '{parent: "d-alpha", die_with_parent: true}'
+  printf 'map(if .address == "b-alpha" then .status.state = "working" else . end)\n' >"$STATE/on-rm-j-alpha"
+  out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)" || fail "cleanup: $out"
+  if grep -q '^killed working' "$CALLS"; then fail "a record removed after the look let a working builder be ended"; fi
+  assert_has "$out" "terminal j-alpha had ended already" "the desk's helper ended with it"
+}
+
+@test "cleanup leaves a terminal another space owns, and refuses when it would end with one of its own" {
+  local out
+  desk_space alpha
+  desk_space bravo
+  desk_space charlie
+  # alpha's builder started bravo's desk, which outlives it; bravo's builder
+  # started charlie's desk, which dies with it.
+  set_term d-bravo '{parent: "b-alpha"}'
+  set_term d-charlie '{parent: "b-bravo", die_with_parent: true}'
+  assert_has "$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" "end d-alpha b-alpha, remove" "--check leaves bravo's desk"
+  out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)" || fail "cleanup: $out"
+  assert_eq "hc kill d-alpha"$'\n'"hc kill b-alpha" "$(grep '^hc kill' "$CALLS")" "bravo's desk is not ended"
+  : >"$CALLS"
+  if out="$("$BERCAIL" cleanup "$WORK/widgets.bravo" 2>&1)"; then fail "cleanup ends charlie's desk with bravo's builder: $out"; fi
+  assert_has "$out" "refusing to clean up $WORK/widgets.bravo: terminal d-charlie of space sp-charlie would end with b-bravo; nothing was removed" \
+    "the refusal names it"
+  [[ -d "$WORK/widgets.bravo/.bercail" ]] || fail "bravo's worktree stays"
+  if grep -q '^hc kill' "$CALLS"; then fail "nothing is ended"; fi
+}
+
+@test "cleanup keeps the space open, and says the worktree is gone, when the window's terminal is at work by the close" {
+  local out
+  desk_space alpha
+  set_term s-sp-alpha '{status: {app: "pi", state: "idle"}}'
+  # The second status call is the focus read once the worktree is gone.
+  printf 'map(if .address == "s-sp-alpha" then .status.state = "working" else . end)\n' >"$STATE/on-status-2"
+  if out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then fail "cleanup closes a space at work: $out"; fi
+  assert_has "$out" "removed worktree $WORK/widgets.alpha, but left Herdr space sp-alpha open: terminal s-sp-alpha is working now" \
+    "the report says what is gone and what stays"
+  [[ ! -e "$WORK/widgets.alpha" ]] || fail "the worktree is gone"
+  jq -e 'any(.spaces[]; .id == "sp-alpha")' "$STATE/herdr.json" >/dev/null || fail "the space stays open"
+  if grep -q 'space.close' "$CALLS"; then fail "the space is not closed"; fi
+}
+
 @test "cleanup --check exits 1 on a refusal, and 2 when hc does not answer" {
   local rc=0
   desk_space alpha
@@ -522,8 +792,8 @@ check_agrees() {
   assert_eq 1 "$rc" "a changed file is a refusal"
   git -C "$WORK/widgets.alpha" checkout -q alpha.txt
   rc=0
-  HC_BLANK="ls --json --label bercail.space=sp-alpha" "$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>/dev/null || rc=$?
-  assert_eq 2 "$rc" "a blank list of its terminals is not a refusal"
+  HC_BLANK="get b-alpha --json" "$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>/dev/null || rc=$?
+  assert_eq 2 "$rc" "a blank read of its builder is not a refusal"
   rc=0
   : >"$STATE/blank-ls"
   "$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>/dev/null || rc=$?
