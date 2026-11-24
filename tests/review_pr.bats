@@ -914,6 +914,11 @@ JS
   assert_eq 7 "$(jq -r .current "$REVIEWS/stack-7/stack.json")" "rereview leaves the stack on its PR"
 }
 
+@test "a gather with no ready card starts no stack summary, so none holds the stack" {
+  space_7
+  [[ ! -e "$REVIEWS/stack-7/summary.log" ]] || fail "a summary was started for a stack with no ready card"
+}
+
 @test "one read-only visible desk session, cached ready-stack summary, invalidation, failure, and busy desk protection" {
   local stack="$REVIEWS/stack-7" dir="$REVIEWS/stack-7/pr-7/$SHA7" session before out
   ready_7

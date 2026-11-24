@@ -169,6 +169,14 @@ _review_summary_state() {
   fi
 }
 
+# True when every card is ready and no ready summary has this input. Writes the
+# input to FILE.
+_review_summary_due() {
+  _review_summary_input "$1" || return 1
+  ! jq -e --arg f "$(git hash-object --no-filters "$1")" '.fingerprint == $f and .status == "ready"' \
+    "$R_STACK/stack-summary.json" >/dev/null 2>&1
+}
+
 _review_valid_summary() {
   jq -se 'def texts: type == "array" and all(.[]; type == "string");
     length == 1 and (.[0] | type == "object" and (.overview | type == "string" and length > 0)
@@ -188,11 +196,8 @@ review_summarize() (
   trap 'exit 143' TERM
   trap 'exit 130' INT
   _review_lock "$R_STACK/summary" || exit 0
-  _review_summary_input "$tmp/input.json" || exit 0
+  _review_summary_due "$tmp/input.json" || exit 0
   fingerprint="$(git hash-object --no-filters "$tmp/input.json")"
-  if jq -e --arg f "$fingerprint" '.fingerprint == $f and .status == "ready"' "$R_STACK/stack-summary.json" >/dev/null 2>&1; then
-    exit 0
-  fi
   _review_herdr || die "the stack summary needs the review desk in the Herdr app"
   session="$(_review_desk_session)" || exit 1
   _review_lock_wait "$R_STACK/desk-pass" 3600 || die "the review desk is busy; try the stack summary again later"
@@ -226,6 +231,13 @@ review_summarize() (
   [[ -z "$reason" ]]
 )
 
+# Only a stack that needs its summary starts one: a summarizer with nothing to
+# do still holds summary.lock for a moment, and close refuses while it does.
 _review_spawn_summary() {
-  _review_spawn "$R_STACK/summary.log" "$(_review_self)" review-pr summarize --stack "$R_STACK"
+  local tmp
+  tmp="$(mktemp -d)"
+  if _review_summary_due "$tmp/input.json"; then
+    _review_spawn "$R_STACK/summary.log" "$(_review_self)" review-pr summarize --stack "$R_STACK"
+  fi
+  rm -rf "$tmp"
 }
