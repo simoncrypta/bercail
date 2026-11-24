@@ -251,6 +251,25 @@ _cleanup_recheck() {
         + $next.problems)}'
 }
 
+# Those that die with terminal $1 (from snapshot $2) end a moment after its
+# kill, and hc clears their status first. Waits up to 10 seconds for them to
+# finish, so the next look does not read one on its way out as gone silent.
+# One still live then is the next look's to judge.
+_cleanup_wait_dying() {
+  local a detail rc deadline=$((SECONDS + 10))
+  while IFS= read -r a; do
+    while ((SECONDS < deadline)); do
+      rc=0
+      detail="$("$HC" get "$a" --json 2>/dev/null)" || rc=$?
+      ((rc == 0)) && jq -e '.state == "live"' <<<"$detail" >/dev/null 2>&1 || break
+      sleep 0.1
+    done
+  done < <(jq -r --arg t "$1" '. as $all
+    | def grow: . as $s | [$all[] | select(.live and .dies and (.parent | IN($s[])) and (.address | IN($s[]) | not)) | .address] as $n
+      | if $n == [] then $s else $s + $n | grow end;
+    [$t] | grow | .[1:][]' <<<"$2")
+}
+
 # What a cleanup that stops partway leaves: the terminals it ended ($2...),
 # the worktree and space that stay, and the archive $1.
 _cleanup_left() {
@@ -368,6 +387,7 @@ cmd_cleanup() {
     killed+=("$t")
     "$HC" rm "$t" >/dev/null 2>&1 || true
     info "ended terminal $t"
+    _cleanup_wait_dying "$t" "$snap"
   done
   # Off the worktree before it goes; cleanup may run from inside it.
   cd /

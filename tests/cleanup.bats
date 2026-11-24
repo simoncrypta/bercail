@@ -49,8 +49,9 @@ SH
   # ls prints only the live ones, and no labels; get does, and exits 3 on one
   # it does not know. kill ends the terminal and, natively, every terminal that
   # dies with it; each one that ends with notify wakes its live parent, idle or
-  # done, to working. With $STATE/lag those that die with it end only at the
-  # next kill. $STATE/on-kill-<address>, on-rm-<address>: a jq filter run on
+  # done, to working. With $STATE/lag, as the real one, those that die with it
+  # stay live a moment with no status: each ends once a get has read it so.
+  # $STATE/on-kill-<address>, on-rm-<address>: a jq filter run on
   # hc.json after that call; herdr-on-kill-<address>, on herdr.json. With
   # $STATE/bad-row, ls lists a row with no address first. A kill of a working terminal is logged. $HC_FAIL:
   # the call that fails; $HC_BLANK: the call that succeeds and prints nothing.
@@ -78,18 +79,22 @@ case "$1" in
         ((if $bad then [{address: null, state: "live"}] else [] end) + [.[] | select(.state == "live") | select(. as $t | $ARGS.positional
         | all(split("=") as [$k, $v] | $t.labels[$k] == $v)) | {address, state, cwd}])}' "${want[@]}" <"$st" ;;
   get)
-    jq -e --arg a "$2" '.[] | select(.address == $a and (.gone | not))' "$st" && exit
+    if jq -e --arg a "$2" '.[] | select(.address == $a and (.gone | not)) | del(.dying)' "$st"; then
+      ! jq -e --arg a "$2" 'any(.[]; .address == $a and .state == "live" and .dying)' "$st" >/dev/null || end "[\"$2\"]"
+      exit
+    fi
     printf '{"error":{"kind":"not_found","message":"no terminal \\"%s\\""}}\n' "$2" >&2
     exit 3 ;;
   kill)
-    [[ ! -f "$STATE/pending" ]] || { end "$(cat "$STATE/pending")"; rm "$STATE/pending"; }
     jq -e --arg a "$2" 'any(.[]; .address == $a and .state == "live" and .status.state == "working")' "$st" >/dev/null \
       && printf 'killed working %s\n' "$2" >>"$CALLS"
     end "[\"$2\"]"
     dies="$(jq -c --arg a "$2" '. as $all | def grow: . as $s | [$all[] | select(.state == "live" and .die_with_parent
         and (.parent | IN($s[])) and (.address | IN($s[]) | not)) | .address] as $n
       | if $n == [] then $s else $s + $n | grow end; [$a] | grow | .[1:]' "$st")"
-    if [[ -f "$STATE/lag" ]]; then printf '%s' "$dies" >"$STATE/pending"; else end "$dies"; fi
+    if [[ -f "$STATE/lag" ]]; then
+      save --argjson e "$dies" 'map(if .address | IN($e[]) then .status = null | .dying = true else . end)'
+    else end "$dies"; fi
     [[ ! -f "$STATE/on-kill-$2" ]] || save -f "$STATE/on-kill-$2"
     if [[ -f "$STATE/herdr-on-kill-$2" ]]; then
       jq -f "$STATE/herdr-on-kill-$2" "$STATE/herdr.json" >"$STATE/h.tmp" && mv "$STATE/h.tmp" "$STATE/herdr.json"
@@ -592,8 +597,22 @@ check_agrees() {
     if grep -q '^killed working' "$CALLS"; then fail "$name: a child's end woke its parent, and cleanup ended it at work"; fi
     [[ ! -e "$WORK/widgets.$name" ]] || fail "$name: the worktree is removed"
   done
-  assert_eq "hc kill d-bravo"$'\n'"hc kill b-bravo"$'\n'"hc kill j-bravo" "$(grep '^hc kill' "$CALLS")" \
-    "a judge still live once its builder ended is ended in turn"
+  assert_eq "hc kill d-bravo"$'\n'"hc kill b-bravo" "$(grep '^hc kill' "$CALLS")" \
+    "a judge on its way out with its builder is not ended again"
+}
+
+@test "cleanup waits for a judge that dies with the desk it ended, and does not read it as gone silent" {
+  # As hc does: once the desk is killed, its judge is live a moment with no
+  # status, then finished, killed, status null.
+  local out
+  desk_space alpha
+  set_term j-alpha '{parent: "d-alpha", die_with_parent: true, notify: true, status: {app: "pi", state: "idle"},
+    labels: {"bercail.role": "bstack-judge", "bercail.space": "sp-alpha"}}'
+  touch "$STATE/lag"
+  out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)" || fail "cleanup stops: $out"
+  [[ ! -e "$WORK/widgets.alpha" ]] || fail "the worktree is removed"
+  assert_has "$out" "terminal j-alpha had ended already" "the judge ended with the desk"
+  if grep -q '^hc kill j-alpha' "$CALLS"; then fail "the judge is not ended again"; fi
 }
 
 @test "cleanup ends nothing the judge's builder took with it, and says it ended already" {
