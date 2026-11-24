@@ -25,9 +25,13 @@ setup() {
   RECORDS="$XDG_STATE_HOME/bercail/handoffs.jsonl"
   printf '{"terminals":[]}\n' >"$HC_DATA/ls.json"
 
-  # hc answers ls, get and read from $HC_DATA.
+  # hc answers ls, get and read from $HC_DATA. get ADDR waits, up to 30s, for the file
+  # that $HC_DATA/ADDR.wait names.
   cat >"$BATS_TEST_TMPDIR/bin/hc" <<'EOF'
 #!/usr/bin/env bash
+if [[ "$1" == get && -e "$HC_DATA/$2.wait" ]]; then
+  for _ in $(seq 300); do [[ -e "$(cat "$HC_DATA/$2.wait")" ]] && break; sleep 0.1; done
+fi
 case "$1" in
   ls) printf 'hc ls %s\n' "$*" >>"$LOG"; cat "$HC_DATA/ls.json" ;;
   get) cat "$HC_DATA/$2.json" 2>/dev/null || { printf '{"error":{"kind":"not_found"}}\n'; exit 5; } ;;
@@ -389,23 +393,35 @@ EOF
   jq -n '{requestId:"a1", token:"Q1@1", choice:"auth", source:"panel picker"}' | shep question answer >/dev/null
   out="$(shep board)" || fail "board: $out"
   [[ "$out" == *$'\nDecisions:\n- nothing' ]] || fail "an answered card is still on the board: $out"
-  # A card whose check waits for the queue's first read runs beside the board, so it is
-  # listed; one that outlasts its 4 seconds is UNKNOWN, and the rest of the board still prints.
+  # A card whose check (its desk's hc get) waits for the queue's first read runs beside the
+  # board, so it is listed; one that outlasts its 4 seconds is UNKNOWN, and the rest of the
+  # board still prints.
   jq -n '[{id: "app-1", title: "Fix the login", status: "in_progress", labels: []}]' >"$HOME/Work/app/.beads/fake/app-1.json"
+  mkdir -p "$XDG_STATE_HOME/bercail/desk-sessions"
+  printf '{}\n' >"$XDG_STATE_HOME/bercail/desk-sessions/t5.json"
   jq -n --arg repo "$HOME/Work/app" '{requestId:"r2", kind:"planning", prompt:"Login first?", options:["yes","no"],
-    origin:{event:"chat", session:"shep-1", entry:null}, repo:$repo, issue:"app-1", topic:"login", desk:null, base:null, action:null}' \
+    origin:{event:"chat", session:"shep-1", entry:null}, repo:$repo, issue:"app-1", topic:"login", desk:"t5", base:null, action:null}' \
     | shep question create >/dev/null || fail "no issue question"
   export HERDR_APP_BIN="$BATS_TEST_TMPDIR/bin/herdr-app"
   printf '#!/bin/sh\n: >"%s/queue-read"\nprintf %s\n' "$BATS_TEST_TMPDIR" "'{\"spaces\":[]}'" >"$HERDR_APP_BIN"
   chmod +x "$HERDR_APP_BIN"
-  printf '%s\n' "$BATS_TEST_TMPDIR/queue-read" >"$HOME/Work/app/.beads/fake/app-1.wait"
+  printf '%s\n' "$BATS_TEST_TMPDIR/queue-read" >"$HC_DATA/t5.wait"
   out="$(shep board)" || fail "board beside a waiting check: $out"
   [[ "$out" == *$'\nDecisions:\n- app-1: Login first?' ]] || fail "the check did not run beside the board: $out"
-  printf '%s\n' "$BATS_TEST_TMPDIR/never" >"$HOME/Work/app/.beads/fake/app-1.wait"
+  printf '%s\n' "$BATS_TEST_TMPDIR/never" >"$HC_DATA/t5.wait"
   out="$(shep board)" || fail "board with a slow check: $out"
   [[ "$out" == *$'Waiting on the person:\n- nothing\nDecisions: UNKNOWN (the ledger could not be read, or its cards checked within 4s; the Decisions panel shows them)' ]] \
     || fail "a slow check is not UNKNOWN beside the rest of the board: $out"
+  rm "$HC_DATA/t5.wait"
+  # The board's check does not read the card's issue from beads (bercail-f54s): a bd that
+  # never answers leaves the card listed. The panel still asks bd.
+  printf '%s\n' "$BATS_TEST_TMPDIR/never" >"$HOME/Work/app/.beads/fake/app-1.wait"
+  out="$(shep board)" || fail "board beside a stuck bd: $out"
+  [[ "$out" == *$'\nDecisions:\n- app-1: Login first?' ]] || fail "the board's check waited on beads: $out"
   rm "$HOME/Work/app/.beads/fake/app-1.wait"
+  : >"$LOG"
+  shep question panel >/dev/null || fail "no panel"
+  grep -q '^bd show app-1 --json' "$LOG" || fail "the panel did not check the issue in beads: $(cat "$LOG")"
   printf 'not json\n' >"$STATE/questions.json"
   out="$(shep board)" || fail "board: $out"
   [[ "$out" == *$'\nDecisions: UNKNOWN (the ledger could not be read, or its cards checked within 4s; the Decisions panel shows them)' ]] \

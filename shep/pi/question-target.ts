@@ -173,8 +173,8 @@ function trailFacts(id: string, worktree: string): { trailId: string; url: strin
   return { trailId: shown.trail_id, url: shown.url };
 }
 
-// The target and its desk warnings.
-function inspectTarget(input: TargetInput): { target: QuestionTarget; warnings: string[] } {
+// The target and its desk warnings. With beads false, a beads issue is taken as asked.
+function inspectTarget(input: TargetInput, beads = true): { target: QuestionTarget; warnings: string[] } {
   if (!["planning", "review", "action"].includes(input.kind)) fail("invalid kind");
   text(input.repo, "repo");
   text(input.topic, "topic");
@@ -190,7 +190,7 @@ function inspectTarget(input: TargetInput): { target: QuestionTarget; warnings: 
   if (input.issue !== null) {
     if (input.issue.startsWith("-")) fail("invalid issue id");
     if (input.issue.startsWith("trail:")) trail = trailFacts(input.issue, worktree);
-    else {
+    else if (beads) {
       const jobs = JSON.parse(run("bd", ["show", input.issue, "--json"], worktree));
       if (!Array.isArray(jobs) || jobs.length !== 1 || jobs[0]?.id !== input.issue)
         fail("issue does not match the repo's beads job");
@@ -621,7 +621,10 @@ export function checkLand(question: Question, commit?: string, landed = false) {
   };
 }
 
-export async function checkQuestion(question: Question) {
+// With beads false a planning, review or action card's issue is not read back from bd, for
+// the board, which cannot wait on bd: its calls on one database queue behind each other.
+// The issue was bound when asked; the panel and the checks before an action still read it.
+export async function checkQuestion(question: Question, { beads = true } = {}) {
   if (question.kind === "guard") return checkGuard(question);
   if (question.kind === "land") return checkLand(question);
   const target = question.target;
@@ -634,15 +637,18 @@ export async function checkQuestion(question: Question) {
     reasons.push(`question is ${question.status}`);
   try {
     text(target.worktree, "worktree");
-    ({ target: current, warnings } = inspectTarget({
-      kind: question.kind,
-      repo: target.worktree,
-      issue: target.issue,
-      topic: target.topic,
-      desk: target.desk,
-      base: target.baseRef,
-      action: target.action,
-    }));
+    ({ target: current, warnings } = inspectTarget(
+      {
+        kind: question.kind,
+        repo: target.worktree,
+        issue: target.issue,
+        topic: target.topic,
+        desk: target.desk,
+        base: target.baseRef,
+        action: target.action,
+      },
+      beads,
+    ));
     // An approval names the staged tree, not HEAD: committing that tree on the asked
     // HEAD and branch keeps it, and so moves a base named HEAD or that branch. A
     // question asked before branches were kept gets no such pass.

@@ -442,7 +442,8 @@ function spaceNames(state: string, ids: string[], now: number): Record<string, s
 
 // "Waiting on you" for the board and Shep's reply, from the ledger alone: one line per
 // card that waits on the person, named by its desk's Herdr space (else its job or folder),
-// with its live check when not fresh and a two-way door's countdown.
+// with its live check when not fresh and a two-way door's countdown. Its check skips
+// beads (checkQuestion says why).
 export async function decisions(snapshot: { questions: Question[] }, state: string) {
   const now = Date.now();
   const cut = (s: string, max: number) => {
@@ -458,7 +459,7 @@ export async function decisions(snapshot: { questions: Question[] }, state: stri
   );
   const lines = ["Decisions:"];
   for (const q of cards) {
-    const check = await checkQuestion(q);
+    const check = await checkQuestion(q, { beads: false });
     const folder = (q.target.worktree ?? "").split("/").filter(Boolean).pop();
     const where = (q.target.space && names[q.target.space]) || q.target.issue || folder || q.target.topic;
     const parts = [`- ${cut(where, 64)}: ${cut(q.prompt, 100)}`];
