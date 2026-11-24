@@ -474,11 +474,11 @@ The card shows how far the chain got until it ends, and Shep gets one `bercail.l
 
 ### Today's flow
 
-Every other repo lands this way. After review and your request to ship, Shep runs `bercail land <worktree>` with `--reviewed-by "<name>"` when your LGTM is required. Only Shep can run it, on a branch other than trunk, with a valid `/validate` description. It commits the staged tree with the `bercail describe commit` text, then starts a waiter and returns. Rerunning with the described tree already at HEAD makes no second commit. **Land does not push.** Shep pushes the named branch to origin so branch CI runs.
+Every other repo lands this way. After review and your request to ship, Shep runs `bercail land <worktree>` with `--reviewed-by "<name>"` when your LGTM is required. Only Shep can run it, on a branch other than trunk, with a valid `/validate` description. It commits the staged tree with the `bercail describe commit` text, then starts a waiter and returns. In a repo whose git backend is `entire` it starts no waiter: that repo's CI is its trail's gates, which `gh run list` never sees, so Shep pushes the branch, links it to the trail and reads the gates with `entire trail show <n>` ([trails as jobs](#trails-as-jobs)). Rerunning with the described tree already at HEAD makes no second commit. **Land does not push.** Shep pushes the named branch to origin so branch CI runs.
 
 The hc terminal `land-<12-character sha>` (`bercail.land=wait`, `bercail.land_head=<sha>`) runs `bercail land --wait <sha> <worktree>`. Every 30 seconds for up to two hours it checks `gh run list --commit <sha> --branch <branch> --event push`. It does not select workflows by name: if required CI runs only on PRs, an unrelated passing push workflow can give a false ready. Bercail's CI runs on every branch push.
 
-Shep gets one `bercail.land/v1` inbox event (`kind: land`), with the status, commit, branch and runs. Its text comes from those facts, not desk prose; the issue comes from the checkout's handoff record.
+From the waiter Shep gets one `bercail.land/v1` inbox event (`kind: land`), with the status, commit, branch and runs. Its text comes from those facts, not desk prose; the issue comes from the checkout's handoff record.
 
 - `ready`: all returned runs finished, at least one succeeded and none failed. Shep lands **that SHA**, not the branch tip: `git push origin <sha>:<trunk>` for direct integration, or the PR or trail the policy requires. The guard enforces policy, not CI freshness.
 - `failed`: a run failed or finished with a conclusion other than success, skipped or neutral, or every run was skipped or neutral. Report the runs; do not land.

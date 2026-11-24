@@ -92,6 +92,30 @@ event() {
   [[ "$(jq -r .text <<<"$ev")" == *"is ready to land: CI passed"*"git push origin $sha:main"* ]] || fail "text: $ev"
 }
 
+@test "in an Entire repo land commits and starts no CI wait: the trail's gates decide" {
+  git -C "$REPO" remote add origin entire://aws-us-east-2.entire.io/et/acme/widgets
+  described "file: add a line"
+  run land "$REPO"
+  [ "$status" -eq 0 ] || fail "land: $output"
+  [ "$(git log -1 --format=%s)" = "file: add a line" ] || fail "subject: $(git log -1 --format=%s)"
+  ! grep -q '^hc \|^gh ' "$LOG" || fail "a wait was started or gh asked: $(cat "$LOG")"
+  [[ -z "$(ls -A "$INBOX")" ]] || fail "an event: $(ls -A "$INBOX")"
+  [[ "$output" == *"no CI wait"*"trail's gates decide"*"entire trail show"* ]] || fail "no word on the gates: $output"
+  [[ "$output" == *"git -C $REPO push origin feature"* ]] || fail "no push step for Shep: $output"
+}
+
+@test "an interrupted backend probe commits nothing and starts no wait" {
+  git -C "$REPO" remote add origin https://origin.cursor.com/git/acme/widgets
+  printf '#!/bin/sh\nexit 130\n' >"$BATS_TEST_TMPDIR/bin/origin"
+  chmod +x "$BATS_TEST_TMPDIR/bin/origin"
+  described
+  head="$(git rev-parse HEAD)"
+  run land "$REPO"
+  [ "$status" -eq 130 ] || fail "want 130: $status $output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "it committed"
+  ! grep -q '^hc ' "$LOG" || fail "a wait was started: $(cat "$LOG")"
+}
+
 @test "on red CI no event says ready" {
   # Skipped or neutral alone is not a pass.
   for spec in "Lint:completed:success CI:completed:failure" "Lint:completed:success CI:completed:cancelled" \

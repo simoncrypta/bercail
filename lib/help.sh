@@ -85,7 +85,8 @@ Post-install CLI (bercail):
   land          Shep's landing of a desk's branch: land WORKTREE [--reviewed-by NAME] runs
                 describe check, commits the staged tree with its text, and starts a
                 background wait for the commit's CI that ends in one land event in Shep's
-                inbox (ready, failed, moved or timeout). It never pushes; desks are refused.
+                inbox (ready, failed, moved or timeout); in an Entire repo no wait, as the
+                trail's gates decide. It never pushes; desks are refused.
                 land ask WORKTREE puts up one land card where the repo's trusted policy says
                 push = "main", integrate = "direct" and names required_ci: the person's pick
                 commits, pushes, waits for CI, lands, cleans up, syncs main and closes the job

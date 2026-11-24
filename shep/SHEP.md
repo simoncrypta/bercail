@@ -484,12 +484,15 @@ and `--issue` when there is one, and say so in one line with its link:
 - Run `bercail describe check <worktree>` before shipping. On any failure,
   tell the person why, send the reason to the desk for /validate and stop.
   To ship the reviewed branch, run `bercail land <worktree>`: it checks the
-  description, commits the staged tree with its text and starts a CI waiter. On trunk or detached HEAD,
+  description, commits the staged tree with its text and starts a CI waiter
+  (none with git backend `entire`: the trail's gates decide, below). On trunk or detached HEAD,
   stop and identify the desk branch. If the waiter could not start after
   the commit, rerun `bercail land` on the same worktree.
-- Push the named branch for CI. Only a `land` event with `ready` lets you
-  push to trunk, or open the PR or trail the policy names, and only for its
-  exact commit. For direct integration use `git push origin <sha>:<trunk>`,
+- Push the named branch for CI. Where land started a waiter, only its `land`
+  event with `ready` lets you push to trunk, or open the PR or trail the
+  policy names, and only for its exact commit. With git backend `entire` no
+  event comes: link that commit's branch to its trail and let its gates
+  decide (below). For direct integration use `git push origin <sha>:<trunk>`,
   never the moving branch. Where the guard would ask about that push, ask it
   as a `shep_question` with `push` (`approves`: the choice that pushes,
   `remote`, full `refs`). Once the person picks it on the panel card (a Discuss pick does not count) and `question check` is

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # Landing a desk's change, for Shep only: check the description, commit the
-# staged tree with its text, and start a background wait for the branch's CI.
+# staged tree with its text, and start a background wait for the branch's CI
+# (none in an Entire repo, where the trail's gates are its CI).
 # The wait ends with one event in Shep's inbox: ready, failed, moved or timeout. land
 # never pushes: Shep pushes the branch, and on a ready event lands it the way
 # the repo's policy says, with plain git, gh or entire under its guard.
@@ -30,7 +31,7 @@ _land_err() {
 # Commit the described tree, unless HEAD already is it (a land rerun after its
 # commit), then start the wait on that commit.
 land_run() {
-  local dir="$1" reviewer="$2" root branch trunk msg sha described name
+  local dir="$1" reviewer="$2" root branch trunk msg sha described name backend
   local hc="${HC_BIN:-hc}"
   root="$(_desc_root "$dir")" || return 1
   branch="$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null)" \
@@ -39,6 +40,8 @@ land_run() {
   [[ "$branch" != "$trunk" ]] \
     || { _land_err "$root is on $trunk itself: land a desk's branch, so its CI runs before $trunk"; return 1; }
   msg="$(_desc_print commit "$root" "$reviewer")" || return 1
+  # Before the commit: an interrupted backend probe (130) commits nothing.
+  backend="$(git_backend "$root")" || return $?
   if git -C "$root" diff --cached --quiet; then
     described="$(_desc_meta "$root/$DESC_FILE" tree)"
     [[ "$(git -C "$root" rev-parse 'HEAD^{tree}')" == "$described" ]] \
@@ -49,6 +52,13 @@ land_run() {
       || { _land_err "git commit failed in $root; its error is above, and nothing was committed"; return 1; }
   fi
   sha="$(git -C "$root" rev-parse HEAD)"
+  # An Entire repo's CI is its trail's gates, which gh run list never sees: no wait to start.
+  if [[ "$backend" == entire ]]; then
+    printf 'committed %s on %s: %s\n' "${sha:0:12}" "$branch" "$(head -n 1 <<<"$msg")"
+    printf "no CI wait: in an Entire repo the trail's gates decide (entire trail show <n>, from the repo's main checkout)\n"
+    printf 'next: git -C %q push origin %q, then link it to its trail\n' "$root" "$branch"
+    return 0
+  fi
   name="land-${sha:0:12}"
   # hc run starts the wait from the Herdr server, so only this env prefix reaches it.
   "$hc" run --bg --name "$name" --cwd "$root" --outlive-parent --no-notify --rm \
