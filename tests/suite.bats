@@ -19,8 +19,9 @@ setup() {
   [[ "$XDG_STATE_HOME" == "$HOME/.local/state" ]] || fail "XDG_STATE_HOME is $XDG_STATE_HOME"
   [[ "$TMPDIR" == "$BATS_TEST_TMPDIR/"* ]] || fail "TMPDIR is $TMPDIR"
   [[ "$BERCAIL_TMP_ROOT" == "$BATS_TEST_TMPDIR/"* ]] || fail "a sweep would take $BERCAIL_TMP_ROOT for /tmp"
+  [[ "$BERCAIL_PROC_DIR" == "$BATS_TEST_TMPDIR/"* ]] || fail "the live Pi list would read $BERCAIL_PROC_DIR"
   local leaked
-  leaked="$(compgen -e | grep -E '^(HC|HERDR|BERCAIL|BEADS|BD|HANDOFF)_' | grep -vx BERCAIL_TMP_ROOT || true)"
+  leaked="$(compgen -e | grep -E '^(HC|HERDR|BERCAIL|BEADS|BD|HANDOFF)_' | grep -vx -e BERCAIL_TMP_ROOT -e BERCAIL_PROC_DIR || true)"
   [[ -z "$leaked" ]] || fail "desk variables reached the test: $leaked"
 }
 

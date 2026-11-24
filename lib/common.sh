@@ -31,7 +31,7 @@ BERCAIL_INSTALL_MODE_FILE="${BERCAIL_SHARE_DIR}/install-mode"
 BERCAIL_RELEASE_DIR="${BERCAIL_SHARE_DIR}/release"
 # The libs every command loads after this file, in order, for install.sh and
 # bin/bercail. The others (review.sh, policy.sh, ...) load with their command.
-BERCAIL_LIBS=(detect deps config skills shell-rc uninstall help omarchy notify doctor bstack desk shep)
+BERCAIL_LIBS=(detect deps config skills shell-rc uninstall help omarchy notify doctor bstack desk pi-code shep)
 
 DRY_RUN=0
 YES=0
@@ -96,6 +96,24 @@ copy_file() {
     return 0
   fi
   cp "$src" "$dest"
+}
+
+# Readies DIR for a deploy that copies RELS into it, as the remove-and-copy it
+# replaces did: every link goes (DIR itself included), and every other file,
+# then the folders left empty, one where a file of RELS goes among them. A
+# plain file of RELS stays, so copy_file leaves it alone when its content does
+# not change, and its mtime says when that content arrived (lib/pi-code.sh).
+prune_for_deploy() {
+  local dir="$1" rel file
+  local -A keep=()
+  shift
+  [[ ! -L "$dir" ]] || run rm -f "$dir"
+  [[ -d "$dir" ]] || return 0
+  for rel in "$@"; do keep["$dir/$rel"]=1; done
+  while IFS= read -r -d '' file; do
+    [[ -v "keep[$file]" && ! -L "$file" ]] || run rm -f "$file"
+  done < <(find "$dir" ! -type d -print0)
+  run find "$dir" -mindepth 1 -depth -type d -empty -delete
 }
 
 script_dir() {

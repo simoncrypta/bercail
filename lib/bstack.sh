@@ -352,20 +352,18 @@ bstack_guard_worker() {
 
 _bstack_deploy_pi() {
   local work="$1" rel name fable
-  [[ ! -d "$BSTACK_PI_DIR" ]] || run rm -rf "$BSTACK_PI_DIR"
+  # The guard puts op-shim/op first on PATH in a repo with a desk secret (lib/desk-secret.sh).
+  local -a copied=(extensions/fallback.ts extensions/provider-error.ts extensions/guard.ts guard-ask.ts
+    extensions/review.ts "$BSTACK_PI_EMPHASIS" extensions/pi-emphasis/LICENSE op-shim/op)
+  # The profile holds only what this installs, so a file a release dropped goes with it.
+  prune_for_deploy "$BSTACK_PI_DIR" "${BSTACK_PI_RENDERED[@]}" "${copied[@]}" lead.json review.json models
   for rel in "${BSTACK_PI_RENDERED[@]}"; do
     _bstack_render "$work/src/pi/$rel" "$work/pi-rendered"
     copy_file "$work/pi-rendered" "$BSTACK_PI_DIR/$rel"
   done
-  copy_file "$work/src/pi/extensions/fallback.ts" "$BSTACK_PI_DIR/extensions/fallback.ts"
-  copy_file "$work/src/pi/extensions/provider-error.ts" "$BSTACK_PI_DIR/extensions/provider-error.ts"
-  copy_file "$work/src/pi/extensions/guard.ts" "$BSTACK_PI_DIR/extensions/guard.ts"
-  copy_file "$work/src/pi/guard-ask.ts" "$BSTACK_PI_DIR/guard-ask.ts"
-  copy_file "$work/src/pi/extensions/review.ts" "$BSTACK_PI_DIR/extensions/review.ts"
-  copy_file "$work/src/pi/$BSTACK_PI_EMPHASIS" "$BSTACK_PI_DIR/$BSTACK_PI_EMPHASIS"
-  copy_file "$work/src/pi/extensions/pi-emphasis/LICENSE" "$BSTACK_PI_DIR/extensions/pi-emphasis/LICENSE"
-  # The guard puts it first on PATH in a repo with a desk secret (lib/desk-secret.sh).
-  copy_file "$work/src/pi/op-shim/op" "$BSTACK_PI_DIR/op-shim/op"
+  for rel in "${copied[@]}"; do
+    copy_file "$work/src/pi/$rel" "$BSTACK_PI_DIR/$rel"
+  done
   run chmod 755 "$BSTACK_PI_DIR/op-shim/op"
   # The desk's lead, as a JSON argv: bercail-desk-agent runs it with the
   # Anthropic env unset.

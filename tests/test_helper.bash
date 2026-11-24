@@ -16,6 +16,8 @@ isolate() {
   unset PI_CODING_AGENT_DIR
   # What a sweep takes as /tmp: never the real one.
   export BERCAIL_TMP_ROOT="$BATS_TEST_TMPDIR/system-tmp"
+  # The live Pi processes lib/pi-code.sh reads: none but a test's fake_proc ones.
+  export BERCAIL_PROC_DIR="$BATS_TEST_TMPDIR/proc"
   mkdir -p "$HOME" "$TMPDIR" "$BERCAIL_TMP_ROOT"
   mkdir -m 700 "$XDG_RUNTIME_DIR"
   export DESKTOP_TEST="${BATS_TEST_FILENAME##*/}: $BATS_TEST_DESCRIPTION"
@@ -130,4 +132,19 @@ real_pi() {
 pi_at_least() {
   node -e 'const [a, b] = process.argv[1].split(".").map(Number); const [x, y] = process.argv[2].split(".").map(Number);
     process.exit(a > x || (a === x && b >= y) ? 0 : 1)' "$1" "$2"
+}
+
+# A process in a fake /proc booted at 1000, for lib/pi-code.sh:
+# fake_proc PID PPID STARTED COMM TERMINAL ARGV..., STARTED in epoch seconds.
+fake_proc() {
+  local pid="$1" ppid="$2" started="$3" comm="$4" terminal="$5" dir
+  shift 5
+  dir="$BERCAIL_PROC_DIR/$pid"
+  mkdir -p "$dir"
+  printf 'cpu 0\nbtime 1000\n' >"$BERCAIL_PROC_DIR/stat"
+  printf '%s\n' "$comm" >"$dir/comm"
+  printf '%s\0' "$@" >"$dir/cmdline"
+  printf 'HOME=%s\0HC_TERMINAL_ID=%s\0' "$HOME" "$terminal" >"$dir/environ"
+  printf '%s (%s) S %s %s%s\n' "$pid" "$comm" "$ppid" "$(printf '0 %.0s' {1..17})" \
+    "$(((started - 1000) * $(getconf CLK_TCK)))" >"$dir/stat"
 }

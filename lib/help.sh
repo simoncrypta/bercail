@@ -20,7 +20,8 @@ Post-install CLI (bercail):
                 model DESK PROVIDER/MODEL[:thinking] (switch a live desk's model)
   update        Re-sync configs, Herdr layout and mod, helper, and skills (a client: the
                 Herdr layout, mods and keys, and the CLI; from a clone, only a clean
-                checkout of the latest release, or BERCAIL_REF=<tag>|HEAD)
+                checkout of the latest release, or BERCAIL_REF=<tag>|HEAD); then names each
+                live Pi still running older bercail code, and how to restart it
   reconfigure   Refresh skills from config.toml (not a full redeploy)
   dry-run       Show planned actions without changes
   uninstall     Remove marker block and managed files

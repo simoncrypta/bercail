@@ -188,7 +188,10 @@ SHEP_JQ_DEFS='
   def flat: gsub("[[:space:][:cntrl:]]+"; " ") | sub("^ +"; "") | sub(" +$"; "");
   def unknown_open: if .open != null then "\(.open) open"
     elif .beads or .entire then "UNKNOWN (\([if .beads then "beads" else empty end, if .entire then "Entire" else empty end] | join(" or ")) unavailable)"
-    else "no beads" end;'
+    else "no beads" end;
+  def stale_code: if .stale_code then ", may run stale code" else "" end;
+  def restart: if .bg then "let it report, then start a new one with bercail shep bg"
+    else "quit its Pi, press Ctrl+Shift+A in its space, then /resume its session" end;'
 
 shep_repos() {
   local json=0 out
@@ -217,10 +220,12 @@ shep_repos() {
 
 # Live desks and background Sheps: address, name, cwd, state (working, done,
 # blocked, idle), and the issue, title, space and model (handoff --model) on
-# their labels. Fails when hc does not answer. The desks are read at once: one
+# their labels, and stale_code when the desk's own Pi (its process or that
+# one's child) runs bercail code older than what is installed (lib/pi-code.sh).
+# Fails when hc does not answer. The desks are read at once: one
 # after another, 18 of them took 2 seconds of the board's 10 (bercail-tzx7).
 _shep_desks_json() {
-  local get="${1:-_shep_hc}" addr rows fd snapshot=""
+  local get="${1:-_shep_hc}" addr rows fd snapshot="" stale
   local -a fds=()
   _shep_need_policy
   rows="$(_shep_hc ls --json --label bercail.role=agent)" || return 1
@@ -230,7 +235,10 @@ _shep_desks_json() {
     fds+=("$fd")
   done < <(jq -r '.terminals[] | select(.state == "live") | .address' <<<"$rows")
   _shep_workers_read snapshot "${fds[@]}" || return 1
-  jq -sc '[.[] | select(.address)]' <<<"$snapshot"
+  declare -F pi_code_stale_json >/dev/null || source "$(dirname "${BASH_SOURCE[0]}")/pi-code.sh"
+  stale="$(pi_code_stale_json)" || stale='[]'
+  jq -sc --argjson stale "$stale" '[.[] | select(.address) | . as $d
+    | .stale_code = any($stale[]; .terminal == $d.address and (.pid == $d.pid or .ppid == $d.pid)) | del(.pid)]' <<<"$snapshot"
 }
 
 # One desk of _shep_desks_json: desk ADDR, read with GET.
@@ -238,7 +246,7 @@ _shep_desk_json() {
   local detail main
   detail="$("$1" get "$2" --json 2>/dev/null </dev/null)" || return 1
   main="$(_shep_main_of "$(jq -r '.cwd // ""' <<<"$detail")")" || main=""
-  jq -c --arg repo "$main" '{address, name, cwd, repo:$repo, state: (.status.state // "unknown"),
+  jq -c --arg repo "$main" '{address, name, cwd, pid, repo:$repo, state: (.status.state // "unknown"),
     issue: .labels["bercail.issue"], title: .labels["bercail.issue_title"], space: .labels["bercail.space"],
     model: .labels["bercail.model"], bg: (.labels["bercail.shep"] == "bg")}' <<<"$detail"
 }
@@ -379,12 +387,13 @@ shep_brief() {
         + " · repo \($repo | tilde)",
       (if ($issue.waiting_on // []) | length > 0 then "blocked: waits on \($issue.waiting_on | join(", "))"
        elif ($issue.blocked_by // []) | length > 0 then "ready: \($issue.blocked_by | join(", ")) closed or merged" else empty end),
-      ([ (if $desk then "\(who) \($desk.state)" elif $rec.desk then "desk \($rec.desk) gone" else "no desk" end),
+      ([ (if $desk then "\(who) \($desk.state)\($desk | stale_code)" elif $rec.desk then "desk \($rec.desk) gone" else "no desk" end),
          (if ($desk.space // $rec.space) then "space " + ([$rec.label, ($desk.space // $rec.space)] | map(select(.)) | if length == 2 then "\(.[0]) (\(.[1]))" else .[0] end) else empty end),
          (if $rec.branch then "branch \($rec.branch)" else empty end),
          (if ($rec.path // $desk.cwd) then "worktree \(($rec.path // $desk.cwd) | tilde)" else empty end),
          ((if $desk then $desk.model else $rec.model end) | if . then "model \(.)" else empty end) ] | join(" · ")),
       (if $staged != "" then $staged else empty end),
+      (if $desk.stale_code then "\(who) may run bercail code older than what is installed; restart it: \($desk | restart)" else empty end),
       ($comments[] | (.text // "") | select(startswith("bercail todo:")) | "todo:" + ltrimstr("bercail todo:") | flat),
       (if $screen != "" then "\(who) is blocked; its screen ends with:", ($screen | split("\n")[] | "  | " + .),
         "(the whole screen: hc read \($desk.address) --lines 60)" else empty end),
@@ -444,7 +453,7 @@ _shep_board_snapshot() {
           ($mine[] | "- " + head(.)
             + (if .phase then " [\(.phase)]" elif .status != "open" then " [\(.status)]" else "" end)
             + (if (.waiting // []) | length > 0 then " · blocked by \(.waiting | join(", "))" else "" end)
-            + " · " + (if .desk then "\(who(.desk)) \(.desk.state)" elif .rec.desk then "desk \(.rec.desk) gone" else "no desk" end)
+            + " · " + (if .desk then "\(who(.desk)) \(.desk.state)\(.desk | stale_code)" elif .rec.desk then "desk \(.rec.desk) gone" else "no desk" end)
             + " · " + (.rec.branch // "-")
             + ((if .desk then .desk.model else .rec.model end) | if . then " · model \(.)" else "" end)) ),
       ([ $repos[] | . as $r | select(([$jobs[] | select(.repo == $r.path)] | length) == 0)
@@ -467,6 +476,8 @@ _shep_board_snapshot() {
                "- " + head($j) + ": \(who(.desk)) finished; " + (if .desk.bg then "report it from \(brief($j)), then hc kill \(.desk.name // .desk.address)" else "read its report in \(brief($j)), then review its staged changes in its space" end)
              else empty end),
          ($desks[] | select((.issue | not) and .state == "blocked") | "- \(who(.)) (\(.cwd // "?" | tilde)) is blocked"),
+         ($desks | map(select(.stale_code)) | group_by(.bg)[] | select(length > 0)
+           | "- \(map(who(.)) | join(", ")) may run bercail code older than what is installed; restart each: \(.[0] | restart)"),
          ($todos // [] | .[] | . as $t | def tag: if .issue then " for \(.issue)" else "" end;
            if .error then "- todos\(if .target then " in \(.target)" else "" end): \(.error)"
            else (.open[] | "- todo\(tag): \(.title | flat | cut(70))" + (if .due then " · due \(.due)" else "" end)

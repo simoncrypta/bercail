@@ -467,6 +467,34 @@ EOF
     || fail "board, a desk on the lead names no model: $out"
 }
 
+@test "shep brief and board mark a desk whose own Pi runs bercail code older than what is installed" {
+  local out share="$HOME/.local/share/bercail"
+  repo app
+  printf '%s\n' "$HOME/Work/app" >"$STATE/repos"
+  issues app 'app-1|Fix the login|in_progress' 'app-3|Plain|in_progress'
+  jq -n '{id: "app-1", title: "Fix the login", status: "in_progress", labels: []}' >"$HOME/Work/app/.beads/fake/app-1.json"
+  desk t9 "$HOME/Work/app" working '{"bercail.issue": "app-1"}'
+  desk t4 "$HOME/Work/app" working '{"bercail.issue": "app-3"}'
+  jq '.pid = 4242' "$HC_DATA/t9.json" >"$HC_DATA/t9.tmp" && mv "$HC_DATA/t9.tmp" "$HC_DATA/t9.json"
+  jq '.pid = 4343' "$HC_DATA/t4.json" >"$HC_DATA/t4.tmp" && mv "$HC_DATA/t4.tmp" "$HC_DATA/t4.json"
+  mkdir -p "$share/pi/extensions"
+  : >"$share/pi/extensions/guard.ts"
+  touch -d @3000 "$share/pi/extensions/guard.ts"
+  fake_proc 4242 1 2000 pi t9 pi -e "$share/pi/extensions/guard.ts"
+  fake_proc 4343 1 4000 pi t4 pi -e "$share/pi/extensions/guard.ts"
+  # t4's shell ran an old Pi: not the desk's own.
+  fake_proc 4444 77 2000 pi t4 pi -e "$share/pi/extensions/guard.ts"
+  out="$(shep brief app-1)" || fail "brief: $out"
+  grep -qx 'desk t9 working, may run stale code · worktree ~/Work/app' <<<"$out" || fail "brief, desk line: $out"
+  grep -qx 'desk t9 may run bercail code older than what is installed; restart it: quit its Pi, press Ctrl+Shift+A in its space, then /resume its session' <<<"$out" \
+    || fail "brief, restart: $out"
+  out="$(shep board)" || fail "board: $out"
+  grep -qx -- '- app-1: Fix the login \[in_progress\] · desk t9 working, may run stale code · -' <<<"$out" || fail "board, stale desk: $out"
+  grep -qx -- '- app-3: Plain \[in_progress\] · desk t4 working · -' <<<"$out" || fail "board, fresh desk: $out"
+  grep -qx -- '- desk t9 may run bercail code older than what is installed; restart each: quit its Pi, press Ctrl+Shift+A in its space, then /resume its session' <<<"$out" \
+    || fail "board, waiting: $out"
+}
+
 @test "shep remember, list and forget keep dated rules with their scope in Shep's preferences file" {
   local out today file="$STATE/preferences.md"
   today="$(date +%Y-%m-%d)"

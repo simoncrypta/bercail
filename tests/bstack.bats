@@ -345,6 +345,21 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
   [[ ! -e "$p/prompts/ready.md" ]] || fail "the old ready.md stays after an update"
 }
 
+@test "a redeploy leaves a Pi file whose content did not change in place, with its time" {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="claude-bridge"
+  local p
+  p="$(PI_DIR)"
+  deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  touch -d @1500 "$p/extensions/guard.ts" "$p/extensions/fallback.ts"
+  printf '// changed\n' >>"$p/extensions/fallback.ts"
+  touch -d @1500 "$p/extensions/fallback.ts"
+  deploy_bstack >"$BATS_TEST_TMPDIR/pi.log" 2>&1 || fail "deploy: $(cat "$BATS_TEST_TMPDIR/pi.log")"
+  [[ "$(stat -c %Y "$p/extensions/guard.ts")" == 1500 ]] || fail "the same guard.ts got a new time"
+  [[ "$(stat -c %Y "$p/extensions/fallback.ts")" != 1500 ]] || fail "a rewritten fallback.ts kept its old time"
+}
+
 @test "deploy installs the bridge and renders the Pi profile and hc templates, preserving unrelated settings" {
   reset_home
   write_pi_config

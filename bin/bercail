@@ -159,6 +159,7 @@ cmd_update() {
   source "$(find_lib_dir)/routine.sh"
   routine_restart_loop
   show_summary
+  pi_code_report || warn "could not list the live Pi sessions that run older bercail code"
 }
 
 cmd_reconfigure() {

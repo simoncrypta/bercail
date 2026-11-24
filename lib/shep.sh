@@ -395,10 +395,11 @@ shep_bg() {
 # Install Shep's package: its rules, the background Shep's brief, and Pi extensions.
 deploy_shep() {
   local share rel
+  local -a pi=(background.ts inbox.ts compaction.ts questions.ts question-commands.ts question-target.ts question-cli.ts discuss.ts land-chain.ts)
   share="$(shep_share_dir)"
   # pi/ holds only what this installs, so a file a release dropped goes with it.
-  [[ ! -d "$share/pi" ]] || run rm -rf "$share/pi"
-  for rel in SHEP.md BACKGROUND.md pi/background.ts pi/inbox.ts pi/compaction.ts pi/questions.ts pi/question-commands.ts pi/question-target.ts pi/question-cli.ts pi/discuss.ts pi/land-chain.ts; do
+  prune_for_deploy "$share/pi" "${pi[@]}"
+  for rel in SHEP.md BACKGROUND.md "${pi[@]/#/pi/}"; do
     deploy_install_file "shep/$rel" "$share/$rel"
   done
 }
