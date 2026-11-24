@@ -208,7 +208,17 @@ desc_change_line() {
 # The staged tree: after the commit it equals HEAD^{tree}, so one id names the
 # change before and after it is committed.
 _desc_tree() {
-  git -C "$1" write-tree 2>/dev/null || { _desc_err "cannot write the index's tree in $1 (a merge in progress?)"; return 1; }
+  local index copy tree rc=0
+  index="$(git -C "$1" rev-parse --path-format=absolute --git-path index)" || return 1
+  # write-tree locks the index to save its cache, and title runs beside body
+  # (body | gh pr edit --title "$(title)"): a copy keeps one off the other's lock.
+  copy="$(mktemp -d)" || return 1
+  # No index is the empty tree, as git has it; one that cannot be copied is an error.
+  [[ ! -e "$index" ]] || cp "$index" "$copy/index" 2>/dev/null || rc=1
+  ((rc != 0)) || tree="$(GIT_INDEX_FILE="$copy/index" git -C "$1" write-tree 2>/dev/null)" || rc=1
+  rm -rf "$copy"
+  ((rc == 0)) || { _desc_err "cannot write the index's tree in $1 (a merge in progress?)"; return 1; }
+  printf '%s\n' "$tree"
 }
 
 # The repo's beads ids as a JSON array; [] without beads. They mean nothing to a
@@ -526,6 +536,8 @@ cmd_describe() {
     shift
   done
   root="$(_desc_root "$dir")" || return 1
+  # No index refresh either, so describe commit | git commit -F - finds the index free.
+  export GIT_OPTIONAL_LOCKS=0
   case "$sub" in
     template)
       if [[ "$json" -eq 1 ]]; then

@@ -308,6 +308,43 @@ SH
   describe commit 2>&1 | grep -qF 'run /validate' && ! describe commit >/dev/null 2>&1 || fail "no description"
 }
 
+@test "title, body, commit and check take no index lock: body | gh --title \"\$(title)\" runs two at once" {
+  change
+  evidence 1
+  plain_body | description "file: add a line"
+  describe stamp >/dev/null || fail "stamp"
+  local sum out what
+  touch -t 202001010000 file.txt
+  sum="$(cksum <.git/index)"
+  out="$(describe check 2>&1)" || fail "check: $out"
+  grep -qF 'warn: the check' <<<"$out" || fail "no warning to test with: $out"
+  [[ "$(cksum <.git/index)" == "$sum" ]] || fail "check rewrote the index"
+  : >.git/index.lock
+  for what in title body commit; do
+    describe "$what" >"$BATS_TEST_TMPDIR/$what.out" 2>"$BATS_TEST_TMPDIR/$what.err" \
+      || fail "$what under a held lock: $(cat "$BATS_TEST_TMPDIR/$what.err")"
+    grep -qF 'warn: the check' "$BATS_TEST_TMPDIR/$what.err" || fail "$what: no warning on stderr"
+  done
+  [[ "$(<"$BATS_TEST_TMPDIR/title.out")" == "file: add a line" ]] || fail "title stdout: $(<"$BATS_TEST_TMPDIR/title.out")"
+  [[ "$(<"$BATS_TEST_TMPDIR/body.out")" == "$(plain_body)$NOBODY" ]] || fail "body stdout: $(<"$BATS_TEST_TMPDIR/body.out")"
+  [[ "$(<"$BATS_TEST_TMPDIR/commit.out")" == "file: add a line"$'\n\n'"$(plain_body)$NOBODY" ]] || fail "commit stdout"
+}
+
+@test "the staged tree comes from the index git uses, and an index it cannot read fails" {
+  described
+  local tree
+  tree="$(git write-tree)"
+  cp .git/index alternate
+  git rm -q --cached file.txt
+  (cd .. && GIT_INDEX_FILE=alternate "$ROOT/bin/bercail" describe check repo >/dev/null 2>&1) \
+    || fail "a relative GIT_INDEX_FILE is read from the repo: $(cd .. && GIT_INDEX_FILE=alternate "$ROOT/bin/bercail" describe check repo 2>&1)"
+  git read-tree "$tree"
+  chmod 000 .git/index
+  [[ -r .git/index ]] && skip "running as root: every file is readable"
+  describe check 2>&1 | grep -qF "cannot write the index's tree" || fail "an unreadable index: $(describe check 2>&1)"
+  chmod 600 .git/index
+}
+
 @test "provenance: the desk's recorded model, the reviewer only when given, the policy's form, never by hand" {
   local sessions="$XDG_STATE_HOME/bercail/desk-sessions"
   mkdir -p "$sessions"
