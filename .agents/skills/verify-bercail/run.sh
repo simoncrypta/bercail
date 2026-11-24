@@ -19,21 +19,11 @@ real_pi="$(mise which pi 2>/dev/null || command -v pi || true)"
 # Resolved here: a mise shim on PATH would read the box's HOME.
 real_node="$(mise which node 2>/dev/null || command -v node || true)"
 
-# --- tests: the suite must not write the real handoff log ---
-# The suite's temp files go under one root, so a line a test wrote names it.
-# Resolved, as handoff-spawn records the paths it writes.
-real_handoffs="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl"
-scratch="$(cd "$(mktemp -d)" && pwd -P)" box=""
-# A test may leave a read-only folder in TMPDIR; it goes too.
-trap 'chmod -R u+w "$scratch"; rm -rf "$scratch" ${box:+"$box"}' EXIT
-tests_root="$scratch/tmp"
-mkdir "$tests_root"
-cat "$real_handoffs" >"$scratch/handoffs-before.jsonl" 2>/dev/null
+# --- tests: tests/run.sh fails a run that wrote the real state ---
+box=""
+trap 'rm -rf ${box:+"$box"}' EXIT
 tests_rc=0
-TMPDIR="$tests_root" bash "$repo/tests/run.sh" >"$evidence/tests.out" 2>&1 </dev/null || tests_rc=$?
-handoffs_rc=0
-"$repo/.agents/skills/verify-bercail/handoffs-canary.sh" "$real_handoffs" "$scratch/handoffs-before.jsonl" "$tests_root" \
-  "$evidence/handoffs-added.jsonl" 2>>"$evidence/tests.out" || handoffs_rc=$?
+bash "$repo/tests/run.sh" >"$evidence/tests.out" 2>&1 </dev/null || tests_rc=$?
 
 # --- launch: nothing below can reach the real HOME or a real Herdr core ---
 box="$(mktemp -d)"
@@ -110,7 +100,6 @@ check() {
 
 printf '%s\t%s\t%s\n' tests "$tests_rc" "bash tests/run.sh" >>"$evidence/summary.tsv"
 check "tests pass" test "$tests_rc" -eq 0
-check "tests did not write the real handoffs.jsonl" test "$handoffs_rc" -eq 0
 
 profile="$HOME/.local/share/bercail/pi"
 templates="$XDG_CONFIG_HOME/herdr-core/templates"

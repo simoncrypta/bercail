@@ -94,36 +94,6 @@ FIXTURE
   done
 }
 
-# verify-bercail checks that the suite leaves the real handoffs.jsonl alone.
-# Another desk spawning during the run is not the suite's doing.
-@test "verify's canary: another desk's spawn passes and is kept; a line naming the run's temp root fails" {
-  local canary="$ROOT/.agents/skills/verify-bercail/handoffs-canary.sh" dir="$BATS_TEST_TMPDIR/canary"
-  local root="$dir/run" log="$dir/handoffs.jsonl" before="$dir/before.jsonl" added="$dir/added.jsonl" out
-  mkdir -p "$root"
-  printf '{"path":"/home/me/Work/a"}\n' >"$log"
-  cp "$log" "$before"
-  "$canary" "$log" "$before" "$root" "$added" || fail "an untouched log failed"
-  [[ ! -e "$added" ]] || fail "nothing was added, yet $added was written"
-  printf '{"path":"/home/me/Work/b"}\n' >>"$log"
-  out="$("$canary" "$log" "$before" "$root" "$added" 2>&1)" || fail "another desk's spawn failed: $out"
-  grep -qx '{"path":"/home/me/Work/b"}' "$added" || fail "the added line was not kept: $(cat "$added")"
-  printf '{"path":"%s/bats-run-1/test/1/wt"}\n' "$root" >>"$log"
-  out="$("$canary" "$log" "$before" "$root" "$added" 2>&1)" && fail "a line from the run passed"
-  grep -qF 'a test wrote the real handoff log' <<<"$out" || fail "no reason given: $out"
-}
-
-@test "verify's canary: a line already in the log that changed fails, even with nothing added" {
-  local canary="$ROOT/.agents/skills/verify-bercail/handoffs-canary.sh" dir="$BATS_TEST_TMPDIR/canary" out
-  mkdir -p "$dir/run"
-  printf '{"path":"/home/me/Work/a"}\n' >"$dir/before.jsonl"
-  printf '{"path":"/home/me/Work/x"}\n' >"$dir/handoffs.jsonl"
-  out="$("$canary" "$dir/handoffs.jsonl" "$dir/before.jsonl" "$dir/run" "$dir/added.jsonl" 2>&1)" && fail "a changed line passed"
-  grep -qF 'lines already in the handoff log changed' <<<"$out" || fail "no reason given: $out"
-  rm "$dir/handoffs.jsonl"
-  "$canary" "$dir/handoffs.jsonl" "$dir/before.jsonl" "$dir/run" "$dir/added.jsonl" 2>/dev/null && fail "a deleted log passed"
-  true
-}
-
 # A leak once ran the real gh past a stand-in: BASH_ENV put the mise shims back
 # ahead of it (bercail-fss). isolate fails a test whose PATH or BASH_ENV can.
 @test "a test fails when its PATH or BASH_ENV reaches the real mise shims" {
@@ -151,6 +121,20 @@ FIXTURE
   grep -qx 'not ok 3 bash_env' <<<"$out" || fail "a BASH_ENV passed: $out"
   grep -q 'BASH_ENV is set (/home/me/.bash_env)' <<<"$out" || fail "the failure does not name BASH_ENV: $out"
   grep -qx 'ok 4 clean' <<<"$out" || fail "the suite's own PATH failed the check: $out"
+}
+
+# The same leak opened real GitHub issues: a bash child's BASH_ENV put the
+# shims back ahead of the test's gh (bercail-fss).
+@test "a bash child of a test resolves the test's stand-ins for gh, hc and bd" {
+  local tool got
+  for tool in gh hc bd; do
+    printf '#!/bin/sh\nexit 0\n' >"$BATS_TEST_TMPDIR/bin/$tool"
+    chmod +x "$BATS_TEST_TMPDIR/bin/$tool"
+  done
+  for tool in gh hc bd; do
+    got="$(PATH="$BATS_TEST_TMPDIR/bin:$PATH" bash -c "command -v $tool")"
+    [[ "$got" == "$BATS_TEST_TMPDIR/bin/$tool" ]] || fail "a bash child resolves $got, not the stand-in $tool"
+  done
 }
 
 # A judge once ran the suite with GIT_DIR at a desk's worktree: fixtures moved

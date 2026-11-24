@@ -25,6 +25,13 @@ setup() {
   mkdir -p "$MEET"
 }
 
+# The processes a test below leaves, so they do not outlive it.
+teardown() {
+  local pids
+  [[ ! -s "$MEET/pid" ]] || mapfile -t pids <"$MEET/pid"
+  [[ -z "${pids[*]:-}" ]] || kill "${pids[@]}" 2>/dev/null || true
+}
+
 # A file whose one test passes only when the file named OTHER runs alongside it.
 # printf, not a heredoc: bats rewrites any line here that starts with @test.
 meet_file() {
@@ -91,4 +98,75 @@ meet_file() {
     bash "$tree/tests/run.sh" tests/top.bats
   [[ "$status" -eq 0 ]] || fail "status $status: $output"
   [[ ! -s "$MEET/seen" ]] || fail "the test file saw: $(cat "$MEET/seen")"
+}
+
+# Tests once wrote the person's handoff log, herdr-core templates and Shep's
+# inbox (bercail-fss). Here the runner's HOME stands for the person's: a test
+# reaches it through TEST_REAL_HOME, past its own isolated one.
+@test "run.sh fails the run when a test writes the person's state, and names the file" {
+  printf '%s\n' 'load test_helper' 'setup() { isolate; }' '@test "leaks" {' \
+    '  mkdir -p "$TEST_REAL_HOME/.local/state/bercail/shep/inbox"' \
+    '  printf "{\"cwd\":\"%s\"}\n" "$HOME" >"$TEST_REAL_HOME/.local/state/bercail/shep/inbox/leak.json"' '}' \
+    >"$tree/tests/leak.bats"
+  run env PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh" tests/leak.bats
+  [[ "$status" -ne 0 ]] || fail "a write to the person's state passed the run: $output"
+  grep -qF "$HOME/.local/state/bercail/shep/inbox/leak.json" <<<"$output" || fail "the file is not named: $output"
+}
+
+# Shep and other desks write the same folders while the suite runs.
+@test "run.sh passes a run while something else writes the person's state" {
+  printf '%s\n' 'load test_helper' 'setup() { isolate; }' '@test "another desk" {' \
+    '  mkdir -p "$TEST_REAL_HOME/.config/herdr-app"' \
+    '  printf "{\"cwd\":\"/home/me/Work/a\"}\n" >"$TEST_REAL_HOME/.config/herdr-app/view.json"' '}' \
+    >"$tree/tests/other.bats"
+  run env PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh" tests/other.bats
+  [[ "$status" -eq 0 ]] || fail "status $status: $output"
+}
+
+# Another desk's spawn appends to the handoff log during the run; nothing else
+# may change it.
+@test "run.sh fails the run when a line already in the handoff log changes or the log goes" {
+  local log="$HOME/.local/state/bercail/handoffs.jsonl" change
+  for change in 'printf "{\"path\":\"/x\"}\n" >"$log"' 'rm "$log"'; do
+    mkdir -p "${log%/*}"
+    printf '{"path":"/home/me/Work/a"}\n' >"$log"
+    printf '%s\n' 'load test_helper' 'setup() { isolate; }' '@test "rewrites" {' \
+      '  log="$TEST_REAL_HOME/.local/state/bercail/handoffs.jsonl"' "  $change" '}' >"$tree/tests/log.bats"
+    run env PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh" tests/log.bats
+    [[ "$status" -ne 0 ]] || fail "[$change] passed the run: $output"
+    grep -qF "$log: lines it had changed or went" <<<"$output" || fail "[$change] the log is not named: $output"
+  done
+  printf '{"path":"/home/me/Work/a"}\n' >"$log"
+  printf '%s\n' 'load test_helper' 'setup() { isolate; }' '@test "another spawn" {' \
+    '  echo "{\"path\":\"/home/me/Work/b\"}" >>"$TEST_REAL_HOME/.local/state/bercail/handoffs.jsonl"' '}' >"$tree/tests/log.bats"
+  run env PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh" tests/log.bats
+  [[ "$status" -eq 0 ]] || fail "an appended spawn failed the run: $output"
+}
+
+# A proof once overwrote them with its own deploy, which need not name its run.
+@test "run.sh fails the run when a herdr-core template changes, whatever it says" {
+  mkdir -p "$HOME/.config/herdr-core/templates"
+  printf 'old\n' >"$HOME/.config/herdr-core/templates/bstack-judge.md"
+  printf '%s\n' 'load test_helper' 'setup() { isolate; }' '@test "deploys" {' \
+    '  echo new >"$TEST_REAL_HOME/.config/herdr-core/templates/bstack-judge.md"' '}' >"$tree/tests/deploy.bats"
+  run env PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh" tests/deploy.bats
+  [[ "$status" -ne 0 ]] || fail "an overwritten template passed the run: $output"
+  grep -qF "$HOME/.config/herdr-core/templates/bstack-judge.md: changed" <<<"$output" || fail "the template is not named: $output"
+}
+
+# A stub a test starts in the background outlives it (trail 111 left 82), and
+# one started with no environment still has its working dir in the run.
+@test "run.sh fails the run when a test leaves a process running, and names it" {
+  printf '%s\n' 'load test_helper' 'setup() { isolate; }' '@test "leaves two" {' \
+    '  sleep 301 </dev/null >/dev/null 2>&1 3>&- &' '  echo "$!" >>"$MEET/pid"' \
+    '  (cd "${BATS_RUN_TMPDIR%/*}" && exec env -i sleep 302 </dev/null >/dev/null 2>&1 3>&-) &' '  echo "$!" >>"$MEET/pid"' '}' \
+    >"$tree/tests/stray.bats"
+  run env PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh" tests/stray.bats
+  local pid pids=()
+  mapfile -t pids <"$MEET/pid"
+  [[ ${#pids[@]} -eq 2 ]] || fail "the test did not start both: ${pids[*]}"
+  [[ "$status" -ne 0 ]] || fail "processes left running passed the run: $output"
+  for pid in "${pids[@]}"; do
+    grep -qE "^ *$pid sleep$" <<<"$output" || fail "pid $pid is not named: $output"
+  done
 }

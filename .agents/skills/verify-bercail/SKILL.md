@@ -25,12 +25,8 @@ then starts when one frees.
 ## Tests
 
 First, `tests/run.sh` (the unit suite, every test in its own throwaway HOME),
-with `TMPDIR` set to a temp root of its own. Then `handoffs-canary.sh` checks
-the real `${XDG_STATE_HOME:-~/.local/state}/bercail/handoffs.jsonl`: the lines
-it had must be unchanged, and a line added since that names the temp root came
-from a test and fails the check. A line naming any other path is another desk's
-spawn during the run and passes. Every added line goes to `handoffs-added.jsonl`.
-The live proofs (`tests/run.sh --live`) are not part of it.
+which fails when a test wrote the real bercail or Herdr state or left a process
+running (`docs/development.md`). The live proofs (`tests/run.sh --live`) are not part of it.
 
 Run it from the checkout you are proving, or a `git clone --no-local` of it
 with the diff applied. Not a `cp -a`: a worktree's `.git` is a pointer to the
@@ -78,7 +74,6 @@ higher is a crash.
 
 - `summary.tsv`: step, exit code, command.
 - `tests.out`: the suite's output.
-- `handoffs-added.jsonl`: the lines added to the real handoff log during the suite, when there were any.
 - `checks.tsv`: `ok` or `FAIL` for each claim about the state the run left.
 - `<step>.out`: each step's output.
 - `hc-calls.log`: every call to the stand-in.

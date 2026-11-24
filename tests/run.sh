@@ -4,6 +4,8 @@
 # (test_helper.bash); setup_suite.bash cuts the run off from the desk it ran in.
 # With no arguments, the TypeScript unit tests (tests/*.test.ts) run after them
 # with vp test. The live proofs (real Pi, tagged `live`) run only with --live.
+# Either run fails when a test wrote the person's bercail or Herdr state or
+# left a process running (canary, below).
 # Each run first takes one of the machine's test slots (lib/slots.sh), and
 # waits for one while [tests] slots others run. It gets its share of the cores:
 # two bats jobs per core, since most tests spend their time waiting on a child
@@ -19,6 +21,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # dir bats runs in for one. setup_suite does both too, but bats reads each test
 # file before it runs (bercail-m94t).
 unset "${!GIT_@}"
+# A BASH_ENV (mise activate) runs in bats and every bash child, and can put the
+# real mise shims back on PATH ahead of a test's stand-ins (bercail-fss).
+unset BASH_ENV
 export GIT_CEILING_DIRECTORIES="${TMPDIR:-/tmp}"
 bats=node_modules/.bin/bats vp=node_modules/.bin/vp
 for tool in "$bats" "$vp"; do
@@ -54,10 +59,85 @@ for arg in "$@"; do
   [[ ! -e "$arg" ]] || named=1
 done
 ((named)) || set -- "$@" tests
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+tmp="$(cd "$(mktemp -d)" && pwd -P)"
+# A test may leave a read-only folder in it; that goes too.
+trap 'chmod -R u+w "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
 # GNU parallel keeps a cache in ~/.parallel; this run's goes in the temp dir.
-export PARALLEL_HOME="$tmp"
+# So does every test's: its HOME, TMPDIR and worktrees all name $tmp.
+export PARALLEL_HOME="$tmp" TMPDIR="$tmp"
+
+# The person's bercail and Herdr state, which no test may write (bercail-fss).
+# Shep and other desks write most of it during the run, so there a file counts
+# against the run only when it changed since the run began and names $tmp. Pi
+# transcripts are left out: they record what an agent read, maybe this run's
+# output. Two parts have a stricter rule: the handoff log is append-only, and
+# a file added, removed or changed (size or mtime) under herdr-core counts,
+# whoever wrote it: only the person and bercail update should.
+state="${XDG_STATE_HOME:-$HOME/.local/state}/bercail" config="${XDG_CONFIG_HOME:-$HOME/.config}"
+templates() { find "$config/herdr-core" -type f -printf '%P\t%s\t%T@\n' 2>/dev/null | sort || true; }
+touch "$tmp/start"
+cat "$state/handoffs.jsonl" >"$tmp/handoffs" 2>/dev/null || true
+templates >"$tmp/herdr-core"
+
+# One line per file a test wrote, with why it counts.
+state_written() {
+  local dir dirs=() size
+  for dir in "$state" "$config/bercail" "$config/herdr-core" "$config/herdr-app"; do
+    [[ ! -d "$dir" ]] || dirs+=("$dir")
+  done
+  ((${#dirs[@]} == 0)) || find "${dirs[@]}" \( -path "$state/shep/pi-sessions" -o -path "$state/shep/discuss" \) -prune \
+    -o -type f -cnewer "$tmp/start" -print0 2>/dev/null | xargs -0r grep -lF -- "$tmp" 2>/dev/null |
+    sed "s/\$/: names the run's temp dir/" || true
+  size="$(wc -c <"$tmp/handoffs")"
+  ((size == 0)) || cmp -s -n "$size" "$tmp/handoffs" "$state/handoffs.jsonl" 2>/dev/null ||
+    printf '%s: lines it had changed or went; it is append-only\n' "$state/handoffs.jsonl"
+  { templates | diff "$tmp/herdr-core" - || true; } | awk -F'\t' -v dir="$config/herdr-core/" '/^[<>] / {
+    print dir substr($1, 3) ": changed; if you or a bercail update changed it during the run, run again" }' | sort -u
+}
+
+# The processes the run left: any whose environment names $tmp (a test's
+# TMPDIR) or whose working dir is in it, but this shell and what it runs now.
+# A stub or daemon a test starts in the background outlives it.
+leftovers() {
+  local file pid
+  [[ -d /proc/self ]] || return 0
+  for file in $(grep -lzF -- "$tmp" /proc/[0-9]*/environ 2>/dev/null) \
+    $(find /proc/[0-9]*/cwd -maxdepth 0 \( -lname "$tmp" -o -lname "$tmp/*" \) 2>/dev/null); do
+    pid="${file#/proc/}" pid="${pid%%/*}"
+    ours "$pid" || printf '%s\n' "$pid"
+  done | sort -un
+}
+
+# Whether pid $1 is this shell or under it, by its parents in /proc.
+ours() {
+  local pid="$1" stat
+  while ((pid > 1)); do
+    ((pid != $$)) || return 0
+    read -r stat 2>/dev/null <"/proc/$pid/stat" || return 0
+    read -r _ pid _ <<<"${stat##*) }"
+  done
+  return 1
+}
+
+# Fails the run when a test wrote the person's state or left a process. Only
+# reads; what it finds is for the person to look at and stop.
+canary() {
+  local written left n
+  written="$(state_written)"
+  if [[ -n "$written" ]]; then
+    printf '\ntests/run.sh: a test wrote the real state; give it its own HOME and XDG dirs (isolate) and stand-ins for hc and Herdr:\n%s\n' \
+      "$written" >&2
+    rc=1
+  fi
+  for n in 1 2 3 4 5 6 7 8 9 10; do
+    left="$(leftovers)"
+    [[ -n "$left" ]] || return 0
+    ((n == 10)) || sleep 0.3
+  done
+  printf '\ntests/run.sh: the run left these processes running, and a test must stop what it starts:\n' >&2
+  ps -o pid=,comm= -p "$(paste -sd, <<<"$left")" >&2 || true
+  rc=1
+}
 
 # One file's bats run, for xargs: its output goes to a log, and a line says how
 # it went. A failed file's log is kept as .failed for run_files to show.
@@ -118,4 +198,5 @@ fi
 if ((vitest)); then
   "$vp" test --maxWorkers "$share" || rc=$?
 fi
+canary
 exit "$rc"

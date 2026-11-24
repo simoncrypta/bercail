@@ -217,10 +217,12 @@ EOF
 @test "live: the real op hands op run's child the token, and the shim takes it back out" {
   [[ -x /usr/bin/op ]] || skip "no /usr/bin/op"
   # No network and a scratch HOME: a dummy token, never a real account or app.
-  unshare -rn true 2>/dev/null || skip "unshare -rn is not allowed here"
+  # A pid namespace of its own: op may start an op daemon, which outlives op
+  # run, and the kernel stops it once op ends.
+  unshare -rnpf true 2>/dev/null || skip "unshare -rnpf is not allowed here"
   local raw shimmed
-  raw="$(unshare -rn env OP_SERVICE_ACCOUNT_TOKEN="$TOKEN" /usr/bin/op run -- printenv OP_SERVICE_ACCOUNT_TOKEN || true)"
-  shimmed="$(unshare -rn env BERCAIL_OP_SERVICE_ACCOUNT="$SECRET" "$ROOT/bstack/pi/op-shim/op" \
+  raw="$(unshare -rnpf env OP_SERVICE_ACCOUNT_TOKEN="$TOKEN" /usr/bin/op run -- printenv OP_SERVICE_ACCOUNT_TOKEN || true)"
+  shimmed="$(unshare -rnpf env BERCAIL_OP_SERVICE_ACCOUNT="$SECRET" "$ROOT/bstack/pi/op-shim/op" \
     run -- sh -c 'echo ran; printenv OP_SERVICE_ACCOUNT_TOKEN' || true)"
   [[ "$raw" == "$TOKEN" ]] || fail "real op no longer passes the token on; the shim's strip may be moot"
   [[ "$shimmed" == ran ]] || fail "through the shim, op run's child did not run, or saw a token"
