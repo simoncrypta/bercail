@@ -128,7 +128,7 @@ _cleanup_space() {
     | select(.state == "live" and (.cwd // "") != "") | [.address, .cwd] | @tsv' <<<"$list" 2>/dev/null)" || return 1
   while IFS=$'\t' read -r address cwd; do
     [[ -n "$address" && "$(_wt_realpath "$cwd")" == "$wt" ]] || continue
-    detail="$("$HC" get "$address" --json)" || { (($? == 3)) && continue; printf 'hc could not read terminal %s' "$address"; return 1; }
+    detail="$("$HC" get "$address" --json 2>/dev/null)" || { (($? == 3)) && continue; printf 'hc could not read terminal %s' "$address"; return 1; }
     jq -e '.labels | type == "object"' <<<"$detail" >/dev/null || { printf 'hc could not read terminal %s' "$address"; return 1; }
     on+="$detail"$'\n'
   done <<<"$rows"
@@ -151,7 +151,7 @@ _cleanup_snapshot() {
   while [[ -n "$more" ]]; do
     while IFS= read -r address; do
       rc=0
-      detail="$("$HC" get "$address" --json)" || rc=$?
+      detail="$("$HC" get "$address" --json 2>/dev/null)" || rc=$?
       if ((rc == 3)); then
         detail="$(jq -nc --arg a "$address" '{address: $a, state: "gone", labels: {}}')"
       elif ((rc != 0)) || ! jq -e --arg a "$address" '.address == $a and (.labels | type == "object")

@@ -54,7 +54,8 @@ SH
   # hc.json after that call; herdr-on-kill-<address>, on herdr.json. With
   # $STATE/bad-row, ls lists a row with no address first. A kill of a working terminal is logged. $HC_FAIL:
   # the call that fails; $HC_BLANK: the call that succeeds and prints nothing.
-  # get answers not_found for a terminal marked gone, which ls still lists.
+  # get answers not_found on stderr, as hc does, for a terminal marked gone,
+  # which ls still lists.
   cat >"$FAKE_BIN/hc" <<'SH'
 #!/usr/bin/env bash
 printf 'hc %s\n' "$*" >>"$CALLS"
@@ -76,7 +77,10 @@ case "$1" in
     jq --args --argjson bad "$([[ -f "$STATE/bad-row" ]] && echo true || echo false)" '{terminals:
         ((if $bad then [{address: null, state: "live"}] else [] end) + [.[] | select(.state == "live") | select(. as $t | $ARGS.positional
         | all(split("=") as [$k, $v] | $t.labels[$k] == $v)) | {address, state, cwd}])}' "${want[@]}" <"$st" ;;
-  get) jq -e --arg a "$2" '.[] | select(.address == $a and (.gone | not))' "$st" || exit 3 ;;
+  get)
+    jq -e --arg a "$2" '.[] | select(.address == $a and (.gone | not))' "$st" && exit
+    printf '{"error":{"kind":"not_found","message":"no terminal \\"%s\\""}}\n' "$2" >&2
+    exit 3 ;;
   kill)
     [[ ! -f "$STATE/pending" ]] || { end "$(cat "$STATE/pending")"; rm "$STATE/pending"; }
     jq -e --arg a "$2" 'any(.[]; .address == $a and .state == "live" and .status.state == "working")' "$st" >/dev/null \
@@ -605,6 +609,15 @@ check_agrees() {
     assert_eq "hc kill d-$name"$'\n'"hc kill b-$name" "$(grep '^hc kill' "$CALLS")" "$name: the judge ended with its builder"
     assert_has "$out" "terminal j-$name had ended already" "$name: the report says so"
   done
+}
+
+@test "cleanup reads a terminal hc forgot once it ended as gone, and prints nothing of hc's not_found" {
+  # Cleanup ends and removes each terminal, then looks again: hc no longer knows it.
+  local out
+  desk_space alpha
+  out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)" || fail "cleanup: $out"
+  [[ ! -e "$WORK/widgets.alpha" ]] || fail "the worktree is removed"
+  if grep -qF not_found <<<"$out"; then fail "hc's raw error is not in the output:"$'\n'"$out"; fi
 }
 
 @test "cleanup checks and ends what a sibling started, labelled or not, and refuses one at work" {
