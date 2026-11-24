@@ -151,14 +151,15 @@ EOF
 # runs in a session of its own, out of Pi's process group. It writes its pid and
 # the helper's to $PIDS, its TMPDIR to $PIDS.tmpdir, and the time of each TERM
 # to $PIDS.term. With ORPHAN_ON_TERM set, a TERM also starts a process outside
-# its tree, on its TMPDIR, that outlives it by half a second. The stop's grace
-# is 2s.
+# its tree, on its TMPDIR, that outlives it by half a second. It ends on exit
+# so that bash, not an exec of its last sleep, holds the folder throughout: a
+# process mid-exec shows no environment. The stop's grace is 2s.
 stuck_pi() {
   export BERCAIL_SHEP_STOP_GRACE=2 PIDS="$BATS_TEST_TMPDIR/pids"
   cat >"$BATS_TEST_TMPDIR/bin/pi" <<'EOF'
 #!/usr/bin/env bash
 [[ " $* " != *" --list-models "* ]] || { printf 'provider  model  context\nfake      lead   1M\n'; exit 0; }
-trap 'date +%s%N >>"$PIDS.term"; [[ -z "${ORPHAN_ON_TERM:-}" ]] || (setsid bash -c "while kill -0 $$; do sleep 0.05; done 2>/dev/null; sleep 0.5" &)' TERM
+trap 'date +%s%N >>"$PIDS.term"; [[ -z "${ORPHAN_ON_TERM:-}" ]] || (setsid bash -c "while kill -0 $$; do sleep 0.05; done 2>/dev/null; sleep 0.5; exit" &)' TERM
 trap '' HUP
 printf '{"type":"session","id":"s1"}\n{"type":"message","text":"kept"}\n' >"$BERCAIL_SHEP_STATE/pi-sessions/s1.jsonl"
 setsid sleep 300 &
