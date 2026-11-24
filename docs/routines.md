@@ -1,6 +1,6 @@
 # routines
 
-A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, the built-in [cleanup routine](#the-cleanup-routine), and [the Routines panel](#the-routines-panel) in Shep's view. `bercail routine run` runs one now, and `--dry-run` prints what a run would find, without keeping it. The plan is bercail-2qig.
+A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, the built-in [cleanup routine](#the-cleanup-routine) and [deps routine](#the-deps-routine), and [the Routines panel](#the-routines-panel) in Shep's view. `bercail routine run` runs one now, and `--dry-run` prints what a run would find, without keeping it. The plan is bercail-2qig.
 
 ## Declare one
 
@@ -155,6 +155,14 @@ Shep's `inbox.ts` writes the event's line from those fields only, and quarantine
 A job bd or Entire cannot read is not closed, and gives no finding. Each bd call gets 10 seconds, and a lookup killed or out of time fails the run instead, since that job may be closed. A worktree whose `.git` is gone by the time its index is read, because a cleanup removed it meanwhile or is removing it, is skipped, not a failed source. A source that does not answer (`hc`, the window's list once it runs, the ledger, a card's live check, or what `cleanup --check` reads) fails the run: a run that left its findings out would drop their hashes, and the next one would send them again as new. Titles hold no state or time, so a finding stays `same` while it holds. A space found while the window was open is new again after a run with no window.
 
 `routines/<name>/seen-done.json` keeps when each desk was first seen done, and drops one seen working, gone, staged, or on another job, so its clock starts over. A dry run reads it and writes nothing.
+
+## The deps routine
+
+`run = "deps"` reads the open issues the [dependency tracker](development.md#dependency-tracker) keeps on bercail's GitHub repo, for whoever works on bercail. The tracker runs at 07:17 UTC, so schedule the routine after it, such as `at = "08:00"`. It only reads: `gh issue list --repo simoncrypta/bercail --label deps --state open`, and `bd list` in your bercail checkout: the one of [Shep's repos](shep.md#known-repos) whose `origin` is that GitHub repo, over https or ssh. It never opens, closes or comments on an issue, and keeps no state of its own.
+
+Each open issue with a `deps:<name>` label is a finding keyed `deps:<name>`; when two have the label, the newest counts. Its title is the issue's (`deps: tuicr 0.30.0`), its `repo` is your bercail checkout, and its detail gives the issue's URL, the version (the title's last word: a release, a date, or a vendored copy's commit), and the beads issues there that link it, an open one first: `https://github.com/simoncrypta/bercail/issues/71; version 0.30.0; linked by bercail-12 (open)`, or `no beads issue links it`. A beads issue links it when its external ref is `gh-71` or the URL, or its title or description holds the URL; a bare `#71` or `tuicr 0.30.0` does not, since any issue that mentions the version reads so. The first one that links it is the finding's `issue`. A new version retitles the tracker's issue, so the finding counts as changed; a beads issue that links it, or one that closes, changes it too. `deps:tracker` is the tracker's own `deps: tracker failing` issue, with no version. [SHEP.md](../shep/SHEP.md#routine-events) says what Shep does with each.
+
+The run fails when no bercail checkout is among Shep's repos (add its path to `~/.local/state/bercail/shep/repos`), when there are two (each has its own beads, so a finding could not say which links it), when that checkout has no beads, or when `gh` or `bd` does not answer.
 
 ## The Routines panel
 

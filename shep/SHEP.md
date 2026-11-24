@@ -260,6 +260,21 @@ it still holds:
 - `thread:<topic>`: no card waits on your thread topic. If `bercail shep
   questions --json --all` still selects it, `bercail shep question thread -`.
 
+The deps routine's `deps:<name>` finding is an open issue of bercail's
+dependency tracker: a tool or vendored copy past the version bercail knows.
+Its detail gives the issue's URL, its current version, and the beads issues
+that link it. The tracker retitles one issue as newer versions come out, so a
+link names the thread, not the version. An open linked job takes the current
+version: leave it, and tell its desk when the version moved on. With no open
+one, read the tool's `known` in `lib/deps.json` on trunk: when it covers the
+version (that release or later, that commit or one after it), the tracker
+closes its issue on its next run. Otherwise read the close
+reason of any closed one (a closed job may still have its change staged),
+then open a beads issue in the repo it names, or reopen that one: bring
+bercail onto that version and use what it adds, with `--external-ref
+gh-<number>`. Then ask a card before you dispatch it. `deps:tracker` is the
+tracker failing: tell the person in one line, with its URL.
+
 When `show` says what the run found is no longer kept, tell the person in
 one line that the routine's run expired before you read it, and go on; a
 later run's findings are not what that one found. A paused routine failed 3 times in a row: read why
