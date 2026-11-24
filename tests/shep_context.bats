@@ -299,21 +299,48 @@ GH
   jq -e '[.items[] | {kind, number, branch}] == [{kind: "pr", number: 7, branch: "login"}]' <<<"$out" >/dev/null || fail "queue: $out"
 }
 
-@test "shep board and queue fit their 10s and 6s caps with 450 handoff records, 18 desks and 6 staged jobs" {
-  local name n out start
+# The board's or the queue's snapshot, $1, with no deadline: every bounded read
+# runs to its end, so a stand-in that waits for the others is cut off by no bound.
+unbounded() {
+  bash -c 'set -uo pipefail; source "$ROOT/lib/common.sh"; for n in "${BERCAIL_LIBS[@]}"; do source "$ROOT/lib/$n.sh"; done
+    _shep_need_policy
+    source "$ROOT/lib/todo.sh"
+    source "$ROOT/lib/routine.sh"
+    _git_backend_bounded() { shift; "$@"; }
+    "$@"' _ "$@"
+}
+
+@test "shep board and queue over 450 handoff records, 18 desks and 6 staged jobs read each desk once and at once, the repos at once, and the issues in one bd call" {
+  local name n out want
   need node
-  # This machine's shape on 2026-11-24 (bercail-tzx7), with the stand-ins as slow as
-  # its sources: hc get 0.1s a desk, bd list 0.5s, bd show 1s an issue.
+  # This machine's shape on 2026-11-24 (bercail-tzx7). The reads that cost it 17s:
+  # each read one after another, the desks twice, and a bd show per staged job.
+  # A stand-in that must run beside the others waits at meet GROUP NAME N until N
+  # of its group have come, up to 10s; one after another, the first never sees them.
   mv "$BATS_TEST_TMPDIR/bin/bd" "$BATS_TEST_TMPDIR/bin/bd.fake"
   mv "$BATS_TEST_TMPDIR/bin/hc" "$BATS_TEST_TMPDIR/bin/hc.fake"
+  cat >"$BATS_TEST_TMPDIR/bin/meet" <<'EOF'
+#!/usr/bin/env bash
+dir="$BATS_TEST_TMPDIR/meet/$1"
+mkdir -p "$dir" && touch "$dir/$2"
+for _ in $(seq 200); do
+  here=("$dir"/*)
+  [[ "${#here[@]}" -ge "$3" ]] && exit 0
+  sleep 0.05
+done
+exit 1
+EOF
   cat >"$BATS_TEST_TMPDIR/bin/bd" <<'EOF'
 #!/usr/bin/env bash
-case "$1" in list) sleep 0.5 ;; show) sleep 1 ;; esac
+[[ "$1" != list || " $* " == *" --id "* ]] || meet repos "${PWD##*/}" 4 || exit 1
 exec bd.fake "$@"
 EOF
   cat >"$BATS_TEST_TMPDIR/bin/hc" <<'EOF'
 #!/usr/bin/env bash
-[[ "$1" != get ]] || sleep 0.1
+if [[ "$1" == get ]]; then
+  printf 'hc get %s\n' "$2" >>"$LOG"
+  meet "desks-$MEET" "$2" 18 || exit 1
+fi
 exec hc.fake "$@"
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/"*
@@ -337,13 +364,17 @@ EOF
   for n in {1..12}; do desk "t-idle-$n" "$HOME/Work/b" idle; done
   [[ "$(wc -l <"$RECORDS")" -eq 450 ]] || fail "fixture has $(wc -l <"$RECORDS") records"
 
-  start=$SECONDS
-  out="$(shep board 2>&1)" || fail "board past its cap after $((SECONDS - start))s: $out"
-  [[ "$out" == *"~/Work/a: 6 jobs"* && "$out" == *"Review queue: 18 lines in 6 changes"* ]] || fail "board: $out"
-  [[ "$out" != *"bd does not answer"* ]] || fail "a bd read ran out of time: $out"
-  start=$SECONDS
-  out="$(unset BERCAIL_SHEP_QUEUE_WAIT; shep queue --json)" || fail "queue past its cap after $((SECONDS - start))s: $out"
-  jq -e '[.items[] | .state] == [range(6) | "review"]' <<<"$out" >/dev/null || fail "queue: $out"
+  want="$(for n in {1..6}; do echo "hc get t-a-job$n"; done; for n in {1..12}; do echo "hc get t-idle-$n"; done)"
+
+  out="$(MEET=board unbounded _shep_board_snapshot 2>&1)" || fail "board: $out"
+  [[ "$out" == *"~/Work/a: 6 jobs"* && "$out" == *"Review queue: 18 lines in 6 changes"* \
+    && "$out" == *"Other repos: ~/Work/b (1 open), ~/Work/c (1 open), ~/Work/d (1 open)"* ]] || fail "board: $out"
+  [[ "$(grep '^hc get ' "$LOG" | sort)" == "$(sort <<<"$want")" ]] || fail "the board's desk reads: $(grep '^hc get ' "$LOG")"
+  : >"$LOG"
+  out="$(MEET=queue unbounded _shep_queue_snapshot --json)" || fail "queue: $out"
+  jq -e '[.items[] | [.issue, .state]] | sort == [range(1; 7) | ["a-\(.)", "review"]]' <<<"$out" >/dev/null || fail "queue: $out"
+  [[ "$(grep '^hc get ' "$LOG" | sort)" == "$(sort <<<"$want")" ]] || fail "the queue's desk reads: $(grep '^hc get ' "$LOG")"
+  [[ "$(grep -c '^bd ' "$LOG")" -eq 1 ]] && grep -Eq '^bd list (.* )?--id ' "$LOG" || fail "the queue's bd calls: $(grep '^bd ' "$LOG")"
 }
 
 @test "shep board lists the ledger's pending cards under Decisions, and nothing once they are answered" {
