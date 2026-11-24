@@ -212,7 +212,7 @@ bercail shep forget 1
 
 They are `- DATE [SCOPE] RULE` lines in `~/.local/state/bercail/shep/preferences.md` (`--scope` is a repo, issue, desk, or `all`, the default; a repeat is kept once), in the start context and every compaction summary. A rule for everyone belongs in [`shep/SHEP.md`](../shep/SHEP.md) or a repo's [policy](config.md#git-policy-per-repo).
 
-In a repo with Entire's Brain, a desk proposes a memory about the code as `Memory: "<text>" --path <p>` and never records one. Shep records it with `entire brain remember` only on your yes: a memory reaches every branch and desk at once, and Brain has no review queue.
+In a repo with Entire's Brain, a desk proposes a memory about the code as `Memory: "<text>" --path <p>` and never records one. Shep records it with `entire brain remember` from the repo's main checkout without asking you, and its report shows the text, the path and the fact ID; `entire brain memories retract <id>` takes one back. Brain takes only a taxonomy path, `category.subcategory.type` under `architecture`, `constraints`, `preferences`, `project` or `workflow` (such as `workflow.testing.rules`), so Shep maps a desk's file path to one and names the file in the text as its locus.
 
 ### Mistakes
 

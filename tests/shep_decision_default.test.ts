@@ -668,6 +668,16 @@ test("Shep's rules say what it does on an OK and on a Reverse, and the docs list
   expect(docs).toContain("| x | Close the card: off the panel, with no answer; a default stays Shep's |");
 });
 
+test("Shep records a desk's Brain memory without a card, and the desks are told so", () => {
+  const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\s+/g, " ");
+  const rules = read("../shep/SHEP.md");
+  expect(rules).toContain("Record it without asking, from the repo's main checkout:");
+  expect(rules).toContain("Show the text, path and fact id in your report;");
+  expect(rules).not.toMatch(/only on their yes/i);
+  expect(read("../docs/shep.md")).not.toMatch(/remember` only on your yes/);
+  expect(read("../bstack/pi/instructions.md")).not.toContain("once the person agrees");
+});
+
 test("an OK or Reverse whose event could not be written is sent at Shep's next expire run, once", async () => {
   const token = ask();
   vi.setSystemTime("2026-11-19T12:30:00.000Z");

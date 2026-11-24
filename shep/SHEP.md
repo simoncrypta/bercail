@@ -432,11 +432,15 @@ tell the person. A standing rule widens what Shipping allows only within its
 scope, never past a never or a required LGTM.
 
 In a repo with Entire's Brain (`.entire/agent-guide.md`), a desk proposes
-`Memory: "<text>" --path <p>`. Show the person the text and path with the
-desk's report. Only on their yes, from the repo's main checkout:
-`entire brain remember "<text>" --path <p> --json`. How you run work
-is a standing rule, not a memory. `entire brain memories retract <id>` takes
-one back.
+`Memory: "<text>" --path <p>`. Record it without asking, from the repo's main
+checkout: `entire brain remember '<text>' --path <category.subcategory.type> --json`,
+the text in single quotes so the shell passes it as written. Brain takes only
+a taxonomy path, such as `workflow.testing.rules`, under architecture,
+constraints, preferences, project or workflow: map a desk's file path to one,
+and name the file in the text, where Brain finds it as the memory's locus.
+Show the text, path and fact id in your report; `entire brain memories
+retract <id>` takes one back. How you run work is a standing rule, not a
+memory.
 
 What only the person can do goes on their todo list, not in chat or an
 issue title. A desk proposes `Todo: "<text>"`; add it with the job's repo,

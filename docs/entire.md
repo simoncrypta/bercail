@@ -127,7 +127,7 @@ public repo whose checkpoints go to a private one, such as bercail.
 Pi loads `AGENTS.md` but not the guide it imports, so bstack's instructions
 tell each desk to run `entire brain brief` at the start of a job and `recall`
 before it changes a rule. A desk proposes a memory in its report, and Shep
-records it with `entire brain remember` once you agree.
+records it with `entire brain remember` without asking you.
 
 When the plugin is installed, `bercail doctor`'s Entire section also checks
 Brain's and Graph's versions, that the guide and the `AGENTS.md` block are
