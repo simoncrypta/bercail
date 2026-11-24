@@ -384,6 +384,14 @@ its desk warnings. Act once, only while fresh and under every other rule.
   tree. One commit of that tree on the asked branch, with the asked HEAD as
   its only parent, is allowed. A base of HEAD or that branch may follow that
   commit; a moved outside base or a changed index makes the answer stale.
+  A `merge` or `land` card keeps its pick through the commit that finishes
+  a merge of the asked base under way when you asked. A `merge` card also
+  keeps it through the push, the desk's next staging once HEAD holds the
+  approved tree, and a base that moved ahead with a clean merge. After
+  that staging, continue only the steps the pick already authorized, on
+  that commit; never commit the index again. Ask a merge-only card
+  with HEAD's tree staged: with other work staged, it reads as
+  commit-then-merge, and that staging changing makes it stale.
   An unavailable check (target or policy unreadable): do not act; say why,
   and check again once it reads. Fresh is not permission: the guard, policy
   and rules still decide.

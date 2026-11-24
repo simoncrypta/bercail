@@ -44,29 +44,46 @@ function run(command: string, args: string[], cwd: string, timeout = 5000): stri
   }).trim();
 }
 const git = (cwd: string, ...args: string[]) => run("git", args, cwd);
-// The staged tree, from a copy of the index into objects of its own: git write-tree
-// rewrites the index it reads and adds its tree to the repo, and a check only reads.
-function stagedTree(cwd: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "bercail-index-"));
-  const path = (name: string) => git(cwd, "rev-parse", "--path-format=absolute", "--git-path", name);
+const gitPath = (cwd: string, name: string) => git(cwd, "rev-parse", "--path-format=absolute", "--git-path", name);
+// A git run whose writes go to objects of its own, the repo's only read: a check only reads.
+function scratch(cwd: string, args: string[], env: (dir: string) => NodeJS.ProcessEnv = () => ({})) {
+  const dir = mkdtempSync(join(tmpdir(), "bercail-check-"));
   try {
-    copyFileSync(path("index"), join(dir, "index"));
     mkdirSync(join(dir, "objects"));
-    return execFileSync("git", ["write-tree"], {
+    return spawnSync("git", args, {
       cwd,
       env: {
         ...targetEnv(),
-        GIT_INDEX_FILE: join(dir, "index"),
+        ...env(dir),
         GIT_OBJECT_DIRECTORY: join(dir, "objects"),
         // One entry of a colon-separated list: quoted, as git reads a path with a colon.
-        GIT_ALTERNATE_OBJECT_DIRECTORIES: JSON.stringify(path("objects")),
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: JSON.stringify(gitPath(cwd, "objects")),
       },
       encoding: "utf8",
       timeout: 5000,
       stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+    });
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+}
+// The staged tree, from a copy of the index: git write-tree rewrites the index it reads.
+function stagedTree(cwd: string): string {
+  const index = gitPath(cwd, "index");
+  const result = scratch(cwd, ["write-tree"], (dir) => {
+    copyFileSync(index, join(dir, "index"));
+    return { GIT_INDEX_FILE: join(dir, "index") };
+  });
+  if (result.error || result.status !== 0) throw result.error ?? new Error(result.stderr.trim());
+  return result.stdout.trim();
+}
+// The commits a merge under way merges (MERGE_HEAD), space-separated; null with none.
+function mergeHead(cwd: string): string | null {
+  try {
+    return readFileSync(gitPath(cwd, "MERGE_HEAD"), "utf8").trim().split(/\s+/).join(" ") || null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
 const identity = (cwd: string) => realpathSync(git(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"));
@@ -223,6 +240,9 @@ function inspectTarget(input: TargetInput, beads = true): { target: QuestionTarg
     action: input.action,
     ...trail,
   };
+  // A merge under way is part of what a commit of the staged tree makes.
+  const merging = input.kind === "planning" ? null : mergeHead(worktree);
+  if (merging) target.mergeHead = merging;
   return { target, warnings };
 }
 
@@ -232,17 +252,47 @@ export const captureTarget = (input: TargetInput): QuestionTarget => inspectTarg
 // the desk, whose problems are warnings, nor the trail's link.
 const UNBOUND = new Set<keyof QuestionTarget>(["space", "session", "url"]);
 
-// The approved tree was committed: `now` is one commit, with `old` its only parent and
-// the approved tree its tree. Anything more (other commits, a merge, an amend) is new work.
-// It reads the commit object's own headers, which replace refs and grafts cannot fake.
-function committedOnce(cwd: string, old: string, now: string, tree: string | null): boolean {
+// A commit's tree and parents, from the commit object's own headers, which replace refs
+// and grafts cannot fake. Null when it cannot be read.
+function headers(cwd: string, oid: string): { tree: string | undefined; parents: string[] } | null {
   try {
-    const head = git(cwd, "--no-replace-objects", "cat-file", "commit", now).split("\n\n")[0]!;
-    const parents = [...head.matchAll(/^parent (\S+)$/gm)].map((m) => m[1]);
-    return parents.length === 1 && parents[0] === old && /^tree (\S+)$/m.exec(head)?.[1] === tree;
+    const head = git(cwd, "--no-replace-objects", "cat-file", "commit", oid).split("\n\n")[0]!;
+    return { tree: /^tree (\S+)$/m.exec(head)?.[1], parents: [...head.matchAll(/^parent (\S+)$/gm)].map((m) => m[1]!) };
   } catch {
-    return false;
+    return null;
   }
+}
+
+// The approved tree was committed: `now` is one commit, with `old` its only parent and
+// the approved tree its tree. On a merge or land card asked while the desk merged in the
+// asked base, the commit that finishes that merge has the base as second parent. Anything
+// more (other commits, another merge, an amend) is new work.
+function committedOnce(cwd: string, old: string, now: string, tree: string | null, target?: QuestionTarget) {
+  const commit = headers(cwd, now);
+  const finishes =
+    (target?.action === "merge" || target?.action === "land") && target.mergeHead && target.mergeHead === target.base;
+  const want = finishes ? [old, target.base] : [old];
+  return !!commit && commit.tree === tree && JSON.stringify(commit.parents) === JSON.stringify(want);
+}
+
+// Merging `head` into `base`, which moved ahead from `pinned`, has no conflict, as git's
+// own merge reads it, with the base's attributes rather than the desk's next job's. Config
+// naming a merge driver or renormalizing could run a program or change the result, so it
+// never counts as clean.
+function mergesCleanAhead(cwd: string, pinned: string, base: string, head: string): boolean {
+  const ok = (args: string[]) =>
+    scratch(cwd, ["--no-replace-objects", ...args], (dir) => ({ GIT_GRAFT_FILE: join(dir, "none") })).status === 0;
+  const drivers = spawnSync("git", ["config", "--get-regexp", "^merge\\.(default|renormalize|.*\\.driver)$"], {
+    cwd,
+    env: targetEnv(),
+    stdio: "ignore",
+    timeout: 5000,
+  });
+  return (
+    drivers.status === 1 &&
+    ok(["merge-base", "--is-ancestor", pinned, base]) &&
+    ok([`--attr-source=${base}`, "merge-tree", "--write-tree", "--quiet", base, head])
+  );
 }
 
 // The repo a folder belongs to, as a question's target names it.
@@ -254,7 +304,7 @@ export function approvedCommits(question: Question, head: string | null): string
   const { answer, target } = question;
   if (!answer?.head || !target.worktree) return [];
   const committed =
-    head && head !== answer.head && committedOnce(target.worktree, answer.head, head, answer.stagedTree);
+    head && head !== answer.head && committedOnce(target.worktree, answer.head, head, answer.stagedTree, target);
   return committed ? [answer.head, head] : [answer.head];
 }
 
@@ -657,18 +707,36 @@ export async function checkQuestion(question: Question, { beads = true } = {}) {
       typeof branch === "string" &&
       branch === current.branch &&
       target.head !== current.head &&
-      committedOnce(target.worktree, target.head!, current.head!, target.stagedTree);
+      committedOnce(target.worktree, target.head!, current.head!, target.stagedTree, target);
     const followsHead =
       typeof branch === "string" &&
       ["HEAD", branch, branch.replace(/^refs\/heads\//, "")].includes(target.baseRef!) &&
       target.base === target.head &&
       current.base === current.head;
+    // A merge card takes HEAD, not the index: once HEAD holds the approved tree, what the
+    // desk stages next is its next job. Before that, the index is what gets committed.
+    const holds =
+      target.action === "merge" &&
+      typeof branch === "string" &&
+      branch === current.branch &&
+      (committed ||
+        (current.head === target.head && headers(target.worktree, current.head!)?.tree === target.stagedTree));
+    // A merge of that HEAD into a base that only moved ahead, with no conflict, merges what
+    // was approved; the merge itself checks again.
+    const ahead =
+      holds &&
+      current.base !== target.base &&
+      mergesCleanAhead(target.worktree, target.base!, current.base!, current.head!);
     for (const key of Object.keys(target) as (keyof QuestionTarget)[]) {
-      if (UNBOUND.has(key) || target[key] === current[key]) continue;
+      if (UNBOUND.has(key) || key === "mergeHead" || target[key] === current[key]) continue;
       if (key === "head" && committed) continue;
-      if (key === "base" && committed && followsHead) continue;
+      if (key === "stagedTree" && holds) continue;
+      if (key === "base" && ((committed && followsHead) || ahead)) continue;
       reasons.push(`${key} changed`);
     }
+    // While a commit is owed, the merge under way is part of it, none included.
+    if (!committed && !holds && (target.mergeHead ?? null) !== (current.mergeHead ?? null))
+      reasons.push("mergeHead changed");
     // Never rebound: a desk now on another session is said, and Discuss keeps the asked one.
     if (target.session && current.session && current.session !== target.session)
       warnings.push(`desk ${target.desk} runs another session than when Shep asked`);

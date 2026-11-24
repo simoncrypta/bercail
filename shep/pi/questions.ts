@@ -28,6 +28,8 @@ export interface QuestionTarget {
   /** When the issue is `trail:<n>`: the trail's Entire ID, and its page for the card. Absent otherwise. */
   trailId?: string;
   url?: string;
+  /** The merge under way when asked (MERGE_HEAD, several space-separated); absent with none or in older questions. */
+  mergeHead?: string;
   head: string | null;
   stagedTree: string | null;
   base: string | null;
@@ -328,7 +330,8 @@ function spec(value: unknown): asserts value is QuestionSpec {
     "base",
     "baseRef",
   ];
-  shape(value.target, [...keys, ...optional(value.target, ["branch", "trailId", "url"])], "target");
+  shape(value.target, [...keys, ...optional(value.target, ["branch", "trailId", "url", "mergeHead"])], "target");
+  if (value.target.mergeHead !== undefined) text(value.target.mergeHead, "target.mergeHead");
   if (value.target.branch != null) text(value.target.branch, "target.branch");
   if (value.target.trailId !== undefined) text(value.target.trailId, "target.trailId");
   if (value.target.url !== undefined) text(value.target.url, "target.url");
@@ -1143,7 +1146,8 @@ export class QuestionStore {
         source,
         at: new Date().toISOString(),
         head: check.current?.head ?? null,
-        stagedTree: check.current?.stagedTree ?? null,
+        // Fresh, the live tree is the asked one, or a merge card's index moved on past it.
+        stagedTree: check.current ? q.target.stagedTree : null,
       };
       return { question: q, accepted: true };
     });
@@ -1170,7 +1174,7 @@ export class QuestionStore {
         source: DEFAULT_SOURCE,
         at: new Date().toISOString(),
         head: check.current.head,
-        stagedTree: check.current.stagedTree,
+        stagedTree: q.target.stagedTree,
       };
       return { question: q, accepted: true };
     }, true);
@@ -1215,7 +1219,7 @@ export class QuestionStore {
         source,
         at: new Date().toISOString(),
         head: check.current!.head,
-        stagedTree: check.current!.stagedTree,
+        stagedTree: q.target.stagedTree,
       };
       return { question: q, accepted: true };
     });

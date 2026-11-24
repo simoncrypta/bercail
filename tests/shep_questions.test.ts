@@ -592,7 +592,8 @@ describe("durable targeted questions", () => {
   // A reversible planning pick (no action): Shep's recommendation is what it defaults to.
   const reversible = (topic = "alpha", extra: Partial<QuestionSpec> = {}): QuestionSpec => ({
     ...fields(topic),
-    target: { ...fields(topic).target, action: null },
+    // As a planning card is asked: no HEAD or staged tree.
+    target: { ...fields(topic).target, action: null, head: null, stagedTree: null },
     prompt: "Which desk starts first?",
     options: ["auth", "search"],
     recommendation: { choice: "auth", why: "it unblocks search" },

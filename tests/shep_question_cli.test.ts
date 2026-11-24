@@ -384,6 +384,192 @@ test("a base named for the job's branch moves with its commit; an outside ref mo
   expect(ok("check", undefined, ["Q2@1"])).toMatchObject({ status: "stale", reasons: ["base changed"] });
 });
 
+// A merge or land pick names several steps (commit, update the branch, merge): each step
+// Shep takes on the approved tree keeps it fresh, and nothing else does (bercail-0w3q).
+describe("a merge pick stays fresh across its own steps, and only those", () => {
+  const commitTree = (input: string, ...parents: string[]) =>
+    execFileSync("git", ["-C", repo, "commit-tree", git("write-tree"), ...parents.flatMap((p) => ["-p", p])], {
+      env,
+      input,
+      encoding: "utf8",
+    }).trim();
+  // trunk gets other work, and the job branch carries one reviewed commit.
+  function branches() {
+    const job = git("symbolic-ref", "--short", "HEAD");
+    git("branch", "trunk");
+    writeFileSync(join(repo, "file"), "job\n");
+    git("commit", "-qam", "the job's work");
+    git("switch", "-q", "trunk");
+    writeFileSync(join(repo, "other"), "trunk\n");
+    git("add", "other");
+    git("commit", "-qm", "trunk's new work");
+    git("switch", "-q", job);
+  }
+  const check = () => ok("check", undefined, ["Q1@1"]);
+
+  test("commit with the merged base as second parent, then push: fresh; a second commit: stale", () => {
+    branches();
+    const remote = join(dir, "remote.git");
+    execFileSync("git", ["init", "-q", "--bare", remote], { env });
+    git("remote", "add", "origin", remote);
+    const base = git("rev-parse", "trunk");
+    // The desk merged trunk in; Shep's commit of that staged tree finishes the merge.
+    git("merge", "-q", "--no-commit", "--no-ff", "trunk");
+    expect(ok("create", spec({ base, action: "merge" })).target.mergeHead).toBe(base);
+    pick("p1", "yes");
+    git("commit", "-qm", "merge trunk");
+    expect(git("rev-list", "--parents", "-n1", "HEAD").split(" ").slice(1)).toEqual([git("rev-parse", "HEAD^"), base]);
+    expect(check()).toMatchObject({ status: "fresh", reasons: [] });
+    git("push", "-q", "origin", "HEAD");
+    expect(check()).toMatchObject({ status: "fresh", reasons: [] });
+    writeFileSync(join(repo, "file"), "more\n");
+    git("commit", "-qam", "more work nobody reviewed");
+    expect(check()).toMatchObject({
+      status: "stale",
+      reasons: ["head changed", "stagedTree changed", "mergeHead changed"],
+    });
+  });
+
+  test("the approved tree with a second parent other than the asked base is stale", () => {
+    branches();
+    const asked = git("rev-parse", "HEAD");
+    git("merge", "-q", "--no-commit", "--no-ff", "trunk");
+    ok("create", spec({ base: asked, action: "merge" }));
+    const unreviewed = git("commit-tree", git("rev-parse", "trunk^{tree}"), "-p", "trunk", "-m", "unreviewed");
+    git("update-ref", "HEAD", commitTree("same tree, other parent\n", asked, unreviewed));
+    expect(check()).toMatchObject({ status: "stale", reasons: ["head changed"] });
+  });
+
+  test("the asked base as second parent is stale when no merge of it was under way at ask", () => {
+    branches();
+    const asked = git("rev-parse", "HEAD");
+    const base = git("rev-parse", "trunk");
+    git("merge", "-q", "--squash", "trunk");
+    expect(ok("create", spec({ base, action: "merge" })).target).not.toHaveProperty("mergeHead");
+    git("update-ref", "HEAD", commitTree("a merge nobody asked about\n", asked, base));
+    expect(check()).toMatchObject({ status: "stale", reasons: ["head changed"] });
+  });
+
+  test("once the approved tree is committed, the desk staging its next job leaves it fresh", () => {
+    writeFileSync(join(repo, "file"), "two\n");
+    git("add", "file");
+    const tree = git("write-tree");
+    ok("create", spec({ action: "merge" }));
+    ok("create", spec({ requestId: "land", topic: "land", action: "land" }));
+    ok("create", spec({ requestId: "commit", topic: "commit", action: "commit" }));
+    git("commit", "-qm", "the approved tree");
+    writeFileSync(join(repo, "file"), "next job\n");
+    git("add", "file");
+    expect(check()).toMatchObject({ status: "fresh", reasons: [] });
+    // A land runs bercail land, which commits what is staged: the index stays bound.
+    expect(ok("check", undefined, ["Q2@1"])).toMatchObject({ status: "stale", reasons: ["stagedTree changed"] });
+    // The pick records the tree it approved, not the next job's.
+    expect(pick("p1", "yes")).toMatchObject({ accepted: true, question: { answer: { stagedTree: tree } } });
+    // A commit card's step is the commit: the next index is not what it approved.
+    expect(ok("check", undefined, ["Q3@1"])).toMatchObject({ status: "stale", reasons: ["stagedTree changed"] });
+    git("commit", "-qm", "the next job");
+    expect(check()).toMatchObject({
+      status: "stale",
+      reasons: ["head changed", "stagedTree changed", "base changed"],
+    });
+  });
+
+  test("before the commit, a merge started after the ask is stale, though the index is the same", () => {
+    branches();
+    writeFileSync(join(repo, "file"), "two\n");
+    git("add", "file");
+    ok("create", spec({ action: "merge" }));
+    ok("create", spec({ requestId: "commit", topic: "commit", action: "commit" }));
+    // As git merge --no-commit leaves it: the index the same, trunk to be its second parent.
+    writeFileSync(join(repo, ".git/MERGE_HEAD"), `${git("rev-parse", "trunk")}\n`);
+    expect(check()).toMatchObject({ status: "stale", reasons: ["mergeHead changed"] });
+    expect(ok("check", undefined, ["Q2@1"])).toMatchObject({ status: "stale", reasons: ["mergeHead changed"] });
+  });
+
+  test("before the commit, a changed index is still stale", () => {
+    writeFileSync(join(repo, "file"), "two\n");
+    git("add", "file");
+    ok("create", spec({ action: "merge" }));
+    writeFileSync(join(repo, "file"), "unreviewed\n");
+    git("add", "file");
+    expect(check()).toMatchObject({ status: "stale", reasons: ["stagedTree changed"] });
+  });
+
+  test("a merge card on a committed HEAD ignores the next job staged on top until it is committed", () => {
+    ok("create", spec({ action: "merge" }));
+    writeFileSync(join(repo, "file"), "next job\n");
+    git("add", "file");
+    expect(check()).toMatchObject({ status: "fresh", reasons: [] });
+    git("commit", "-qm", "the next job");
+    expect(check().status).toBe("stale");
+  });
+
+  test("trunk moved ahead with a clean merge stays fresh; a conflict, a rewrite or a land card is stale", () => {
+    branches();
+    const ahead = git("rev-parse", "trunk");
+    git("update-ref", "refs/heads/trunk", git("rev-parse", "trunk^"));
+    ok("create", spec({ base: "trunk", action: "merge" }));
+    ok("create", spec({ requestId: "land", topic: "land", base: "trunk", action: "land" }));
+    const pinned = git("rev-parse", "trunk");
+    git("update-ref", "refs/heads/trunk", ahead);
+    expect(check()).toMatchObject({ status: "fresh", reasons: [] });
+    expect(ok("check", undefined, ["Q2@1"])).toMatchObject({ status: "stale", reasons: ["base changed"] });
+    // trunk rewritten: the new tip does not hold the pinned base.
+    git("update-ref", "refs/heads/trunk", git("commit-tree", git("rev-parse", "trunk^{tree}"), "-m", "rewritten"));
+    expect(check()).toMatchObject({ status: "stale", reasons: ["base changed"] });
+    // trunk ahead, but its change to file conflicts with the job's.
+    git("switch", "-q", "trunk");
+    git("reset", "-q", "--hard", pinned);
+    writeFileSync(join(repo, "file"), "trunk's own\n");
+    git("commit", "-qam", "conflicting work");
+    git("switch", "-q", "-");
+    expect(check()).toMatchObject({ status: "stale", reasons: ["base changed"] });
+  });
+
+  test("trunk moved ahead is stale when an attribute makes the merge conflict", () => {
+    writeFileSync(join(repo, "lines"), "a\nb\nc\nd\ne\n");
+    writeFileSync(join(repo, ".gitattributes"), "lines -merge\n");
+    git("add", "lines", ".gitattributes");
+    git("commit", "-qm", "lines that never merge");
+    git("branch", "trunk");
+    writeFileSync(join(repo, "lines"), "job\nb\nc\nd\ne\n");
+    git("commit", "-qam", "the job's first line");
+    ok("create", spec({ base: "trunk", action: "merge" }));
+    // trunk's last line: plain text would merge clean, -merge says it conflicts.
+    git("switch", "-q", "trunk");
+    writeFileSync(join(repo, "lines"), "a\nb\nc\nd\ntrunk\n");
+    git("commit", "-qam", "trunk's last line");
+    git("switch", "-q", "-");
+    expect(check()).toMatchObject({ status: "stale", reasons: ["base changed"] });
+    // The desk's next job drops the attribute: the merge still reads trunk's.
+    writeFileSync(join(repo, ".gitattributes"), "");
+    git("add", ".gitattributes");
+    expect(check()).toMatchObject({ status: "stale", reasons: ["base changed"] });
+  });
+
+  test("trunk moved ahead is stale when config names a merge driver, which a check never runs", () => {
+    branches();
+    const ahead = git("rev-parse", "trunk");
+    git("update-ref", "refs/heads/trunk", git("rev-parse", "trunk^"));
+    ok("create", spec({ base: "trunk", action: "merge" }));
+    git("update-ref", "refs/heads/trunk", ahead);
+    git("config", "merge.default", "text");
+    expect(check()).toMatchObject({ status: "stale", reasons: ["base changed"] });
+  });
+
+  test("trunk moved ahead before the approved tree is committed is stale, though HEAD alone merges clean", () => {
+    branches();
+    const ahead = git("rev-parse", "trunk");
+    git("update-ref", "refs/heads/trunk", git("rev-parse", "trunk^"));
+    writeFileSync(join(repo, "other"), "candidate\n");
+    git("add", "other");
+    ok("create", spec({ base: "trunk", action: "merge" }));
+    // trunk's new work adds the file the staged candidate adds: no conflict with HEAD, one with the candidate.
+    git("update-ref", "refs/heads/trunk", ahead);
+    expect(check()).toMatchObject({ status: "stale", reasons: ["base changed"] });
+  });
+});
+
 test("a base moved by other work is stale even when head and candidate stay unchanged", () => {
   git("branch", "review-base");
   const q = ok("create", spec({ base: "review-base" }));
