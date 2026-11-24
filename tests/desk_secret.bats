@@ -184,17 +184,27 @@ EOF
 }
 
 @test "a desk in a repo with a desk secret shows the token nowhere: not its env, record, screen or hc calls" {
+  need flock
   export HC_TERMINAL_ID=t9
+  # Events keep coming, as hc's do, so the desk's watcher sees it end at once.
   cat >"$BIN/hc" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >>"$BATS_TEST_TMPDIR/hc.log"
 [[ "\$1" != get ]] || printf '{"labels":{"bercail.role":"agent","bercail.space":"sp1"}}\n'
+[[ "\$1" != events ]] || while printf '{}\\n'; do sleep 0.2; done
 EOF
   # The desk's screen: what the harness got, argv and environment.
   printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*"; env\n' >"$BIN/pi"
   chmod +x "$BIN/hc" "$BIN/pi"
   cd "$REPO"
+  # The watcher and the start sweep outlive the desk and write in this HOME, so
+  # bats could not remove it. They inherit fd 8 and its lock: the lock frees
+  # when the last of them is gone.
+  exec 8>"$BATS_TEST_TMPDIR/desk.lock"
+  flock 8
   run "$ROOT/bin/bercail-desk-agent" --prompt "Your job is beads issue x-1: t." pi --model m
+  exec 8>&-
+  flock -w 30 "$BATS_TEST_TMPDIR/desk.lock" true || fail "the desk's watcher or sweep still runs"
   [[ "$status" -eq 0 && "$output" == *"--model m"* ]] || fail "the desk did not start: $status"
   local record="$XDG_STATE_HOME/bercail/desk-sessions/t9.json"
   [[ -s "$record" ]] || fail "no desk record"
