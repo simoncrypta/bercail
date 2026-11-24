@@ -120,12 +120,29 @@ notify_payload() {
      event_id:$event_id, agent:$agent, space:$space, desk:$desk, text:line}'
 }
 
+# The prompt a blocked desk shows now, as <session>.<screen hash>: the Pi session
+# its desk record names for this pid, else the pid. Nothing when hc gives no
+# screen or pid to tell prompts apart; fails when hc no longer says blocked.
+# The prompt names the event, so a prompt that comes back is one file.
+notify_blocked_prompt() {
+  local address="$1" screen pid session
+  screen="$("$(notify_hc)" read "$address" --json 2>/dev/null </dev/null | jq -r '.text // empty' 2>/dev/null)"
+  pid="$("$(notify_hc)" get "$address" --json 2>/dev/null </dev/null \
+    | jq -r 'select(.status.state == "blocked") | .foreground.pid // .pid // "none"' 2>/dev/null)"
+  [[ -n "$pid" ]] || return 1
+  [[ -n "$screen" && "$pid" =~ ^[0-9]+$ ]] || return 0
+  session="$(jq -r --argjson pid "$pid" 'select(.pid == $pid) | .session // empty' \
+    "${XDG_STATE_HOME:-$HOME/.local/state}/bercail/desk-sessions/$address.json" 2>/dev/null)" || session=""
+  printf '%s.%s' "${session:-$pid}" "$(printf '%s' "$screen" | sha256sum | cut -c1-16)"
+}
+
 # One desk changed status: classify it and queue it for Shep. ISSUE,
 # ISSUE_TITLE and SHEP are its bercail.issue, bercail.issue_title and
-# bercail.shep labels.
+# bercail.shep labels. PROMPT names a block (notify_blocked_prompt), or is
+# `stale` when hc no longer shows it: then only a provider error's episode goes.
 notify_desk_changed() {
   local address="$1" prev="$2" status="$3" app="$4" space="$5" cwd="$6" title="$7"
-  local issue="${8:-}" issue_title="${9:-}" shep="${10:-}" seq="${11:-}"
+  local issue="${8:-}" issue_title="${9:-}" shep="${10:-}" seq="${11:-}" prompt="${12:-}"
   local kind agent_json space_json desk_json
   kind="$(notify_classify "$prev" "$status")"
   [[ "$kind" != "none" ]] || return 0
@@ -144,6 +161,10 @@ notify_desk_changed() {
     kind=blocked
     episode="$(jq -r '.result.provider_error.episode_id // empty' <<<"$desk_json")"
     [[ -z "$episode" ]] || event_id="provider-error:$episode:blocked"
+  elif [[ "$prompt" == stale ]]; then
+    return 0
+  elif [[ "$kind" == blocked && -n "$prompt" ]]; then
+    event_id="$address:blocked:$prompt:$$"
   fi
   notify_shep_enqueue "$kind" "$agent_json" "$space_json" "$desk_json" "$event_id"
 }
@@ -175,9 +196,15 @@ notify_shep_enqueue() {
 
 # Current source observations are not events: no historical id or desk-authored
 # prose. These helpers read notify_follow's maps and keep one bounded projection.
+# TURN is hc's turn in the one lookup STATUS came from, when it did.
 _notify_follow_source() {
-  local address="$1" status="$2" space desk
+  local address="$1" status="$2" turn="${3:-0}" space desk
   [[ -n "$(notify_shep_inbox)" ]] || return 0
+  # Pi starts idle: a desk that has not worked yet has no finish to reconstruct.
+  if [[ "$status" == idle && -z "${workedof[$address]+x}" && "$turn" == 0 ]]; then
+    unset "sourceof[$address]"
+    return 0
+  fi
   space="$(notify_space_info "${spaceof[$address]:-}" "${cwdof[$address]:-}")"
   desk="$(notify_desk_info "${cwdof[$address]:-}" "${appof[$address]:-}" "${issueof[$address]:-}")"
   sourceof[$address]="$(jq -nc --arg at "$observed_at" --arg a "$address" --arg s "$status" \
@@ -207,9 +234,10 @@ _notify_follow_source_write() {
 # runs of whitespace separators, so an empty field would shift the ones after it):
 #   S                                        a snapshot starts (top level, or under
 #                                            params for `missed` and other notifications)
-#   T address status app space cwd title issue issue_title shep
+#   T address status app space cwd title issue issue_title shep turn
 #                                            a live desk in that snapshot, with its
 #                                            bercail.issue, .issue_title and .shep labels
+#                                            and hc's turn count
 #   E type address status app title seq      an `event` notification: one fact changed
 # Heartbeats and anything else give nothing.
 _NOTIFY_FOLLOW_JQ='
@@ -227,7 +255,7 @@ _NOTIFY_FOLLOW_JQ='
     | ["T", .address, (.status.state // ""), (.status.app // .foreground.name // ""),
        (.labels["bercail.space"] // ""), (.cwd // ""), (.title // ""),
        (.labels["bercail.issue"] // ""), (.labels["bercail.issue_title"] // ""),
-       (.labels["bercail.shep"] // "")] | row) else empty end;
+       (.labels["bercail.shep"] // ""), (.turn // 0)] | row) else empty end;
   if (.terminals | type) == "array" then snap
   elif (.params.terminals? | type) == "array" then .params | snap
   elif .method? == "event" and (.params.terminal? | type) == "string" then
@@ -239,13 +267,36 @@ _NOTIFY_FOLLOW_JQ='
        ($p.seq | numbers // "")] | row end
   else empty end'
 
-# A desk went from $2 to $3: queue a finish or block for Shep.
+# A desk went from $2 to $3: queue a finish or block for Shep, with the prompt
+# _notify_follow_takes found.
 # Called by notify_follow; reads its per-desk maps (bash scoping is dynamic).
 _notify_follow_changed() {
   local address="$1" before="$2" now="$3" seq="${4:-}"
   notify_desk_changed "$address" "$before" "$now" "${appof[$address]:-}" "${spaceof[$address]:-}" \
     "${cwdof[$address]:-}" "${titleof[$address]:-}" "${issueof[$address]:-}" \
-    "${issuetitleof[$address]:-}" "${shepof[$address]:-}" "$seq" || true
+    "${issuetitleof[$address]:-}" "${shepof[$address]:-}" "$seq" "$prompt" || true
+}
+
+# Whether the follower takes STATUS for a desk: a new block only while hc still
+# shows it, read once here and kept in `prompt` for its event. Else the desk
+# keeps its status, whether it has worked, and its source row: a stale block
+# there would come back to Shep as a reconstructed notice.
+_notify_follow_takes() {
+  local address="$1" status="$2"
+  prompt=""
+  [[ "$status" != blocked || "${prev[$address]-}" == blocked ]] && return 0
+  prompt="$(notify_blocked_prompt "$address")" && return 0
+  prompt=stale
+  return 1
+}
+
+# hc just said a desk is not blocked: a row of a desk met by a lookup alone that
+# says blocked is gone. A row from the stream is kept as it was.
+_notify_follow_unblock() {
+  local address="$1"
+  [[ -z "${prev[$address]+x}" ]] || return 0
+  jq -e '.agent.status == "blocked"' <<<"${sourceof[$address]:-null}" >/dev/null 2>&1 || return 0
+  unset "sourceof[$address]"
 }
 
 # Read `hc events` lines on stdin; queue each desk's status changes for Shep.
@@ -255,21 +306,27 @@ _notify_follow_changed() {
 # a desk seen for the first time has no previous status, so no historical
 # transition is invented. Shep also gets a separate current-source projection.
 notify_follow() {
-  local line kind a b c d e g h i j k snapped address info changed observed_at last_status_seq=0
-  local -A prev=() spaceof=() cwdof=() titleof=() appof=() issueof=() issuetitleof=() shepof=() seen=() sourceof=()
+  local line kind a b c d e g h i j k turn prompt snapped address info changed observed_at last_status_seq=0
+  local -A prev=() spaceof=() cwdof=() titleof=() appof=() issueof=() issuetitleof=() shepof=() seen=() sourceof=() workedof=()
   while IFS= read -r line; do
     snapped=0
     changed=0
     observed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     seen=()
-    while IFS=$'\x1f' read -r kind a b c d e g h i j; do
+    while IFS=$'\x1f' read -r kind a b c d e g h i j turn; do
       case "$kind" in
-        S) snapped=1; sourceof=() ;;
-        T) # address status app space cwd title issue issue_title shep
+        S) snapped=1 ;;
+        T) # address status app space cwd title issue issue_title shep turn
           [[ -n "$a" ]] || continue
           seen[$a]=1
           appof[$a]="$c"; spaceof[$a]="$d"; cwdof[$a]="$e"; titleof[$a]="$g"
           issueof[$a]="$h"; issuetitleof[$a]="$i"; shepof[$a]="$j"
+          if ! _notify_follow_takes "$a" "$b"; then
+            [[ -z "${prev[$a]+x}" ]] || _notify_follow_changed "$a" "${prev[$a]}" "$b"
+            _notify_follow_unblock "$a"
+            continue
+          fi
+          [[ "$b" != working && "${turn:-0}" == 0 ]] || workedof[$a]=1
           if [[ -n "${prev[$a]+x}" && "${prev[$a]}" != "$b" ]]; then
             _notify_follow_changed "$a" "${prev[$a]}" "$b"
           fi
@@ -291,11 +348,11 @@ notify_follow() {
             finished|removed|lost)
               # Forget it, so a reused address starts fresh.
               unset "prev[$address]" "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]" \
-                "issueof[$address]" "issuetitleof[$address]" "shepof[$address]" "sourceof[$address]"
+                "issueof[$address]" "issuetitleof[$address]" "shepof[$address]" "sourceof[$address]" "workedof[$address]"
               changed=1
               continue
               ;;
-            restarted) unset "prev[$address]" ;;
+            restarted) unset "prev[$address]" "workedof[$address]" ;;
           esac
           # A desk this follower hasn't met (started after the snapshot), or
           # whose labels changed: ask hc where it is.
@@ -304,25 +361,38 @@ notify_follow() {
               select(.labels["bercail.role"] == "agent" and .state == "live")
               | [(.labels["bercail.space"] // ""), (.cwd // ""), (.title // ""),
                  (.status.app // .foreground.name // ""), (.labels["bercail.issue"] // ""),
-                 (.labels["bercail.issue_title"] // ""), (.labels["bercail.shep"] // ""), (.status.state // "")]
+                 (.labels["bercail.issue_title"] // ""), (.labels["bercail.shep"] // ""), (.status.state // ""), (.turn // 0)]
               | map(tostring | gsub("[\t\n\u001f]"; " ")) | join("\u001f")' 2>/dev/null)" || info=""
             if [[ -z "$info" ]]; then
               unset "prev[$address]" "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]" \
-                "issueof[$address]" "issuetitleof[$address]" "shepof[$address]" "sourceof[$address]"
+                "issueof[$address]" "issuetitleof[$address]" "shepof[$address]" "sourceof[$address]" "workedof[$address]"
               changed=1
               continue
             fi
             IFS=$'\x1f' read -r "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]" \
-              "issueof[$address]" "issuetitleof[$address]" "shepof[$address]" k <<<"$info"
+              "issueof[$address]" "issuetitleof[$address]" "shepof[$address]" k turn <<<"$info"
             # hc get can be ahead of the stream: a desk this follower knows keeps
             # its status until the status event comes, so the source never says
             # done before the finish is queued (Shep would read a gap notice too).
-            _notify_follow_source "$address" "${prev[$address]-$k}"
+            # A status event's own status is projected below, once it is taken. A
+            # desk not met yet is projected from this lookup alone, its turn too.
+            if [[ "$a" != status && -n "${prev[$address]+x}" ]]; then
+              _notify_follow_source "$address" "${prev[$address]}"
+            elif [[ "$a" != status ]]; then
+              _notify_follow_source "$address" "$k" "${turn:-0}"
+            fi
             changed=1
           fi
           [[ -n "$e" ]] && titleof[$address]="$e"
           [[ "$a" == status ]] || continue
           [[ -n "$d" ]] && appof[$address]="$d"
+          if ! _notify_follow_takes "$address" "$c"; then
+            [[ -z "${prev[$address]+x}" ]] || _notify_follow_changed "$address" "${prev[$address]}" "$c" "$g"
+            _notify_follow_unblock "$address"
+            changed=1
+            continue
+          fi
+          [[ "$c" != working ]] || workedof[$address]=1
           if [[ -n "${prev[$address]+x}" && "${prev[$address]}" != "$c" ]]; then
             _notify_follow_changed "$address" "${prev[$address]}" "$c" "$g"
           fi
@@ -337,7 +407,7 @@ notify_follow() {
       for address in "${!spaceof[@]}"; do
         [[ -n "${seen[$address]+x}" ]] || \
           unset "prev[$address]" "spaceof[$address]" "cwdof[$address]" "titleof[$address]" "appof[$address]" \
-            "issueof[$address]" "issuetitleof[$address]" "shepof[$address]" "sourceof[$address]"
+            "issueof[$address]" "issuetitleof[$address]" "shepof[$address]" "sourceof[$address]" "workedof[$address]"
       done
     fi
     if [[ "$snapped" -eq 1 || "$changed" -eq 1 ]]; then

@@ -38,10 +38,11 @@ setup() {
   mkdir -p "$(shep_state_dir)/inbox"
 }
 
-# Shep's inbox events, oldest first by the second (and sequence) in their id.
+# Shep's inbox events, oldest first by when their file was written (a blocked
+# event's id names its prompt, not a time).
 events() {
-  find "$(shep_state_dir)/inbox" -maxdepth 1 -name '*.json' -exec cat {} + \
-    | jq -sc 'sort_by(.event_id | split(":")[2] | tonumber? // 0)'
+  find "$(shep_state_dir)/inbox" -maxdepth 1 -name '*.json' -printf '%T@ %p\n' | sort -n | cut -d' ' -f2- \
+    | while IFS= read -r file; do cat "$file"; done | jq -sc .
 }
 
 kinds() {
@@ -56,14 +57,55 @@ kinds() {
   events | jq -e 'length == 1 and all(.[]; .kind == "blocked" and .event_id == "provider-error:session-237:user-1:blocked"
     and .desk.result.provider_error.candidate == "tree-237" and (.text | contains("is blocked")))' >/dev/null \
     || fail "want one blocked episode: $(events)"
+  # Through the follower, behind a block hc no longer shows, the episode still goes.
+  rm -f "$(shep_state_dir)/inbox/"*.json
+  hc_desk working 'Reading lib/notify.sh'
+  { event working; status_event blocked; } | notify_follow
+  events | jq -e 'length == 1 and .[0].event_id == "provider-error:session-237:user-1:blocked"' >/dev/null \
+    || fail "a stale block hid the provider episode: $(events)"
 }
 
-# One `hc events` line: every terminal, the desk with STATUS.
+# One `hc events` line: every terminal, the desk with STATUS, after TURN turns (1).
 event() {
-  jq -nc --arg s "$1" --arg cwd "$desk" '{seq:1, terminals:[
+  jq -nc --arg s "$1" --argjson turn "${2:-1}" --arg cwd "$desk" '{seq:1, terminals:[
     {address:"t5", state:"live", status:{state:"working", app:"pi"}, labels:{"herdr.space":"sp1"}, cwd:"/"},
-    {address:"t9", state:"live", status:(if $s == "" then null else {state:$s, app:"pi"} end),
+    {address:"t9", state:"live", status:(if $s == "" then null else {state:$s, app:"pi"} end), turn:$turn,
      labels:{"bercail.role":"agent","bercail.space":"sp1"}, cwd:$cwd, title:"Beads\tissue myapp-1"}]}'
+}
+
+# A fake hc for desk t9 in HC_BIN: `get` says STATUS after one turn for Pi pid
+# 4242 (the files status, turn and pid, so a test can change them; a status file
+# of several lines gives one per get, the last one again), and each `read` shows
+# the next of SCREENS, the last one again once they run out.
+hc_desk() {
+  local status="$1"
+  shift
+  printf '%s\n' "$status" >"$BATS_TEST_TMPDIR/status"
+  printf '4242' >"$BATS_TEST_TMPDIR/pid"
+  printf '1' >"$BATS_TEST_TMPDIR/turn"
+  printf '%s\n' "$@" >"$BATS_TEST_TMPDIR/screens"
+  cat >"$BATS_TEST_TMPDIR/bin/hc-desk" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+  'get t9')
+    g=\$(( \$(cat "$BATS_TEST_TMPDIR/gets" 2>/dev/null || echo 0) + 1 ))
+    printf '%s' "\$g" >"$BATS_TEST_TMPDIR/gets"
+    total=\$(wc -l <"$BATS_TEST_TMPDIR/status")
+    jq -nc --arg s "\$(sed -n "\$(( g < total ? g : total ))p" "$BATS_TEST_TMPDIR/status")" --argjson pid "\$(<"$BATS_TEST_TMPDIR/pid")" \\
+      --argjson turn "\$(<"$BATS_TEST_TMPDIR/turn")" --arg cwd "$desk" \\
+      '{address:"t9", state:"live", pid:\$pid, foreground:{name:"pi", pid:\$pid}, cwd:\$cwd, turn:\$turn,
+        status:{state:\$s, app:"pi"}, labels:{"bercail.role":"agent","bercail.space":"sp1"}}' ;;
+  'read t9')
+    n=\$(( \$(cat "$BATS_TEST_TMPDIR/reads" 2>/dev/null || echo 0) + 1 ))
+    printf '%s' "\$n" >"$BATS_TEST_TMPDIR/reads"
+    total=\$(wc -l <"$BATS_TEST_TMPDIR/screens")
+    jq -nc --arg text "\$(sed -n "\$(( n < total ? n : total ))p" "$BATS_TEST_TMPDIR/screens")" \\
+      '{text:\$text, complete:false, how:"screen", why:"blocked"}' ;;
+  *) exit 1 ;;
+esac
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/hc-desk"
+  export HC_BIN="$BATS_TEST_TMPDIR/bin/hc-desk"
 }
 
 # hc sends heartbeats between snapshots; they carry no terminals.
@@ -104,6 +146,7 @@ source_state() {
 
 @test "first-seen terminal states reconcile for Shep without invented events" {
   local state status
+  hc_desk blocked 'Allow this command?'
   mkdir -p "$desk/.bercail"
   printf '{"issue":"myapp-1","summary":"untrusted-answer","status":"ready"}\n' >"$desk/.bercail/handoff-result.json"
   for status in done idle blocked; do
@@ -162,6 +205,7 @@ EOF
 }
 
 @test "reconciliation survives follower restart and malformed source does not erase valid state" {
+  hc_desk blocked 'Allow this command?'
   event done | notify_follow
   [[ -f "$(source_state)" ]] || fail "no initial source projection"
   event blocked | notify_follow
@@ -175,6 +219,7 @@ EOF
 }
 
 @test "malformed status deltas do not replace a valid source observation" {
+  hc_desk blocked 'Allow this command?'
   { event blocked
     printf '%s\n' '{"method":"event","params":{"terminal":"t9","type":"status","data":{"status":"bad"}}}' \
       '{"method":"event","params":{"terminal":"t9","type":"status","data":{"status":{"state":{}}}}}'
@@ -223,7 +268,7 @@ EOF
 printf '%s\\n' "\$*" >>"$BATS_TEST_TMPDIR/source-hc.log"
 [[ "\$1 \$2" == 'get t9' ]] || exit 1
 jq -nc --arg cwd "$next" '{address:"t9",state:"live",cwd:\$cwd,title:"Replacement desk",
-  status:{state:"working",app:"pi"},labels:{"bercail.role":"agent","bercail.space":"new-space",
+  status:{state:"blocked",app:"pi"},labels:{"bercail.role":"agent","bercail.space":"new-space",
     "bercail.issue":"new-2","bercail.issue_title":"Replacement job","bercail.shep":"bg"}}'
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/hc-reused"
@@ -233,7 +278,6 @@ EOF
     status_event blocked
   } | HC_BIN="$BATS_TEST_TMPDIR/bin/hc-reused" notify_follow
   [[ -f "$BATS_TEST_TMPDIR/source-hc.log" ]] || fail "reused address skipped hc lookup after empty snapshot"
-  [[ "$(grep -c '^get t9 --json$' "$BATS_TEST_TMPDIR/source-hc.log")" -eq 1 ]] || fail "replacement mapping not looked up once"
   jq -e --arg p "$next" '.desks | length == 1 and (.[0] | .agent.address == "t9"
     and .agent.status == "blocked" and .agent.role == "shep-bg" and .space.id == "new-space"
     and .space.checkout_path == $p and .space.repo == "new-app" and .desk.issue == "new-2")' \
@@ -286,12 +330,14 @@ EOF
   rm -f "$(shep_state_dir)/inbox/"*.json
   { event working; printf '%s\n' "$labels"; status_event blocked; status_event done; } \
     | HC_BIN="$BATS_TEST_TMPDIR/bin/hc-ahead" notify_follow
-  [[ "$(kinds)" == '["blocked","finished"]' ]] || fail "the queued statuses must be reported once, in order: $(kinds)"
+  # hc already says done, so the block is stale by the time it would be sent.
+  [[ "$(kinds)" == '["finished"]' ]] || fail "the queued statuses must be reported once, in order: $(kinds)"
   jq -e '.desks[0].agent.status == "done"' "$(source_state)" >/dev/null || fail "source not current"
 }
 
 @test "a desk seen done first is not reported; working->done, blocked once, blocked->done are" {
   local got
+  hc_desk blocked 'Allow this command?'
   follow_session
   got="$(kinds)"
   [[ "$got" == '["finished","blocked","finished"]' ]] || fail "kinds: $got"
@@ -299,6 +345,7 @@ EOF
 
 @test "the event names the desk, its space and handoff" {
   local first
+  hc_desk blocked 'Allow this command?'
   follow_session
   first="$(events | jq -c '.[0]')"
   jq -e --arg p "$desk" '
@@ -328,6 +375,7 @@ EOF
   events | jq -e '.[0] | .sink == "shep" and .space.repo == "myapp" and .space.linked == true' \
     >/dev/null || fail "heartbeat finished event: $(events)"
   rm -f "$(shep_state_dir)/inbox/"*.json
+  hc_desk blocked 'Allow this command?'
   { event working; heartbeat 1; printf 'not json\n'; heartbeat 2; event blocked; } | notify_follow
   got="$(kinds)"
   [[ "$got" == '["blocked"]' ]] || fail "heartbeat between working and blocked: $got"
@@ -343,6 +391,7 @@ EOF
 @test "status events after the snapshot queue finished and blocked" {
   local got
   # (The 10:43 miss: the follower read the snapshot and nothing after it.)
+  hc_desk blocked 'Allow this command?'
   { event working; heartbeat 4054
     printf '{"jsonrpc":"2.0","method":"event","params":{"seq":4055,"terminal":"t9","type":"size","data":{"cols":200,"rows":120}}}\n'
     status_event working; status_event working; status_event done; status_event idle
@@ -353,6 +402,121 @@ EOF
     and .agent.previous_status == "working" and .space.id == "sp1" and .space.repo == "myapp"
     and .space.checkout_path == $p and .desk.issue == "myapp-1"' >/dev/null \
     || fail "event delta payload: $(events | jq -c '.[0]')"
+}
+
+@test "a prompt that stays up is reported once, through working flickers and a follower restart" {
+  hc_desk blocked 'Allow this command? git push origin feat'
+  { event working; status_event blocked; status_event working; status_event blocked
+    status_event working; status_event blocked; } | notify_follow
+  { event working; status_event blocked; } | notify_follow
+  [[ "$(kinds)" == '["blocked"]' ]] || fail "one prompt, one event: $(kinds)"
+}
+
+@test "a blocked flicker during a working turn is not reported, nor left in the source" {
+  hc_desk working 'Reading lib/notify.sh'
+  { event working; status_event blocked; } | notify_follow
+  [[ "$(kinds)" == '[]' ]] || fail "hc says working by the time it would be sent: $(kinds)"
+  jq -e '.desks[0].agent.status == "working"' "$(source_state)" >/dev/null \
+    || fail "a block hc no longer shows, left in the source, comes back to Shep reconstructed: $(<"$(source_state)")"
+  # A desk first met by its blocked status, which hc already disproves.
+  { printf '{"terminals":[]}\n'; status_event blocked t9 32; } | notify_follow
+  [[ "$(kinds)" == '[]' ]] || fail "a desk met blocked: $(kinds)"
+  jq -e '.desks == []' "$(source_state)" >/dev/null \
+    || fail "a desk met blocked, working by then, left in the source: $(<"$(source_state)")"
+  # Met by its created event first, then that block.
+  { printf '{"terminals":[]}\n'; printf '%s\n' '{"method":"event","params":{"terminal":"t9","type":"created","data":{}}}'
+    status_event blocked t9 33; } | notify_follow
+  jq -e '.desks[0].agent.status == "working"' "$(source_state)" >/dev/null \
+    || fail "a desk met by created, then blocked, left blocked in the source: $(<"$(source_state)")"
+  # A missed snapshot that says blocked: the desk keeps its row, and has not worked.
+  { event idle 0; event blocked 1 | jq -c '{jsonrpc:"2.0",method:"missed",params:.}'
+    printf '%s\n' '{"method":"event","params":{"terminal":"t9","type":"labels","data":{}}}'; } | notify_follow
+  jq -e '.desks == []' "$(source_state)" >/dev/null \
+    || fail "a rejected snapshot block changed the source: $(<"$(source_state)")"
+  # The row kept is the one taken, not the old status under the snapshot's new labels.
+  { event done 1 | jq -c '.terminals[1].labels["bercail.issue"] = "issue-1"'
+    event blocked 2 | jq -c '.terminals[1].labels["bercail.issue"] = "issue-2" | {jsonrpc:"2.0",method:"missed",params:.}'
+  } | notify_follow
+  jq -e '.desks | length == 1 and .[0].agent.status == "done" and .[0].desk.issue == "issue-1"' "$(source_state)" >/dev/null \
+    || fail "a rejected snapshot block changed the desk's row: $(<"$(source_state)")"
+  [[ "$(kinds)" == '[]' ]] || fail "a rejected block was sent: $(kinds)"
+  { event working; status_event blocked; status_event working; status_event done; } | notify_follow
+  [[ "$(kinds)" == '["finished"]' ]] || fail "hc says working by the time it would be sent: $(kinds)"
+}
+
+# The desk record bercail-desk.ts keeps: which Pi session runs in t9, in which pid.
+desk_record() {
+  mkdir -p "$XDG_STATE_HOME/bercail/desk-sessions"
+  jq -nc --arg s "$1" '{address:"t9", pid:4242, session:$s}' >"$XDG_STATE_HOME/bercail/desk-sessions/t9.json"
+}
+
+@test "one hc read decides both a block's event and its source row" {
+  # hc says blocked, then working: the one read that decides says blocked.
+  hc_desk $'blocked\nworking' 'Allow this command?'
+  { event working; status_event blocked; } | notify_follow
+  [[ "$(kinds)" == '["blocked"]' ]] || fail "the block hc showed: $(kinds)"
+  jq -e '.desks[0].agent.status == "blocked"' "$(source_state)" >/dev/null || fail "source: $(<"$(source_state)")"
+  # A desk first met by that block: the lookup says blocked, the deciding read working.
+  rm -f "$(shep_state_dir)/inbox/"*.json "$BATS_TEST_TMPDIR/gets"
+  { printf '{"terminals":[]}\n'; status_event blocked t9 40; } | notify_follow
+  [[ "$(kinds)" == '[]' ]] || fail "a block the deciding read disproves: $(kinds)"
+  jq -e '.desks == []' "$(source_state)" >/dev/null || fail "the lookup's status was projected: $(<"$(source_state)")"
+  # Met by its created event, whose lookup says blocked; the block after it is disproved.
+  rm -f "$BATS_TEST_TMPDIR/gets"
+  { printf '{"terminals":[]}\n'; printf '%s\n' '{"method":"event","params":{"terminal":"t9","type":"created","data":{}}}'
+    status_event blocked t9 41; } | notify_follow
+  [[ "$(kinds)" == '[]' ]] || fail "a block the deciding read disproves: $(kinds)"
+  jq -e '.desks == []' "$(source_state)" >/dev/null || fail "the lookup's disproved block stayed: $(<"$(source_state)")"
+}
+
+@test "a different prompt, or the same screen in a new Pi session or process, is reported again" {
+  desk_record s1
+  hc_desk blocked 'Allow this command? git push origin feat' 'Allow this command? git push origin main'
+  { event working; status_event blocked; status_event working; status_event blocked; } | notify_follow
+  [[ "$(kinds)" == '["blocked","blocked"]' ]] || fail "a second prompt: $(kinds)"
+  # /new in the same Pi.
+  desk_record s2
+  { event working; status_event blocked; } | notify_follow
+  [[ "$(kinds)" == '["blocked","blocked","blocked"]' ]] || fail "a new session: $(kinds)"
+  # A new Pi the record does not name yet.
+  printf '5151' >"$BATS_TEST_TMPDIR/pid"
+  { event working; status_event blocked; } | notify_follow
+  [[ "$(kinds)" == '["blocked","blocked","blocked","blocked"]' ]] || fail "a new process: $(kinds)"
+}
+
+@test "a block whose screen hc cannot read keeps the time-based name, never a shared prompt key" {
+  hc_desk blocked ''
+  { event working; status_event blocked; status_event working; status_event blocked; } | notify_follow
+  [[ "$(kinds)" == '["blocked","blocked"]' ]] || fail "two unreadable blocks: $(kinds)"
+}
+
+@test "a desk that has not worked yet is not projected idle, so Shep reconstructs no finish" {
+  local created='{"method":"event","params":{"terminal":"t9","type":"created","data":{}}}'
+  event idle 0 | notify_follow
+  jq -e '.desks == []' "$(source_state)" >/dev/null || fail "a starting desk projected idle: $(<"$(source_state)")"
+  # Met after the snapshot: hc get says idle, turn 0.
+  hc_desk idle
+  printf '0' >"$BATS_TEST_TMPDIR/turn"
+  { printf '{"terminals":[]}\n'; printf '%s\n' "$created"; } | notify_follow
+  jq -e '.desks == []' "$(source_state)" >/dev/null || fail "a desk met later projected idle: $(<"$(source_state)")"
+  # Idle after three turns, by that same lookup: a finish Shep may reconstruct.
+  printf '3' >"$BATS_TEST_TMPDIR/turn"
+  { printf '{"terminals":[]}\n'; printf '%s\n' "$created"; } | notify_follow
+  jq -e '.desks[0].agent.status == "idle"' "$(source_state)" >/dev/null || fail "a worked desk met idle: $(<"$(source_state)")"
+  printf '0' >"$BATS_TEST_TMPDIR/turn"
+  # Met by a lookup that says working, before the stream's startup idle comes.
+  printf 'working\n' >"$BATS_TEST_TMPDIR/status"
+  { printf '{"terminals":[]}\n'; printf '%s\n' "$created"; status_event idle t9 21; } | notify_follow
+  jq -e '.desks == []' "$(source_state)" >/dev/null || fail "a lookup ahead of a new desk projected idle: $(<"$(source_state)")"
+  # A lookup ahead of the stream says working: the stream's idle is still Pi starting.
+  printf 'working\n' >"$BATS_TEST_TMPDIR/status"
+  { event idle 0; printf '%s\n' '{"method":"event","params":{"terminal":"t9","type":"labels","data":{}}}'; } | notify_follow
+  jq -e '.desks == []' "$(source_state)" >/dev/null || fail "a lookup ahead of the stream projected idle: $(<"$(source_state)")"
+  # Once it has worked, idle is current and Shep may reconstruct from it.
+  { event working 0; status_event idle; } | notify_follow
+  jq -e '.desks[0].agent.status == "idle"' "$(source_state)" >/dev/null || fail "after work: $(<"$(source_state)")"
+  event idle 1 | notify_follow
+  jq -e '.desks[0].agent.status == "idle"' "$(source_state)" >/dev/null || fail "after a turn: $(<"$(source_state)")"
 }
 
 @test "a desk started later is looked up, labels and all; a finished terminal is forgotten" {
