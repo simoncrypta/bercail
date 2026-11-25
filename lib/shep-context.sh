@@ -1000,7 +1000,7 @@ shep_mistake_groups_file() {
   printf '%s/mistake-groups.json' "$(shep_state_dir)"
 }
 
-SHEP_MISTAKE_USAGE='usage: bercail shep mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] | mistake list'
+SHEP_MISTAKE_USAGE='usage: bercail shep mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] | mistake list [--json]'
 SHEP_MISTAKE_KEY_ERR="KEY is a short name in a-z, 0-9 and -, the same each time the mistake shows up (bercail shep mistake list shows the ones in use)"
 SHEP_MISTAKE_JQ_DEFS="$SHEP_JQ_DEFS"'
   def times: "\(.) time\(if . == 1 then "" else "s" end)";
@@ -1116,27 +1116,39 @@ _shep_mistake_group() {
 }
 
 # Each group with its count, the most frequent first, then its keys the same
-# way, then one line per time it happened. Keys in no group come last.
+# way, then one line per time it happened. Keys in no group come last. --json
+# gives the same as an array: each group's id, name, against (null for no
+# group), count, keys with their entries, and the issues its entries name.
 _shep_mistake_list() {
-  local file groups
-  [[ $# -eq 0 ]] || { _shep_err "$SHEP_MISTAKE_USAGE"; return 1; }
+  local file groups json=0
+  case "$*" in
+    --json) json=1 ;;
+    "") ;;
+    *) _shep_err "$SHEP_MISTAKE_USAGE"; return 1 ;;
+  esac
   file="$(shep_mistakes_file)"
   if [[ ! -s "$file" ]]; then
-    printf 'no mistakes recorded yet; record one with: bercail shep mistake KEY "WHAT" --group ID [--repo DIR] [--issue ID]\n'
+    ((json)) && printf '[]\n' \
+      || printf 'no mistakes recorded yet; record one with: bercail shep mistake KEY "WHAT" --group ID [--repo DIR] [--issue ID]\n'
     return 0
   fi
   groups="$(_shep_mistake_groups)" || { _shep_err "$(shep_mistake_groups_file) is not JSON; fix or remove it"; return 1; }
-  jq -nr --arg home "$HOME" --argjson groups "$groups" "$SHEP_MISTAKE_JQ_DEFS"'
+  jq -nrc --arg home "$HOME" --argjson groups "$groups" --argjson json "$json" "$SHEP_MISTAKE_JQ_DEFS"'
     [inputs | select(type == "object" and .key)] as $all
     | [($groups.groups | keys[]), (if any($all[]; $groups.keys[.key] == null) then null else empty end)]
-    | map(. as $id | {id: $id, es: [$all[] | select($groups.keys[.key] == $id)]})
-    | sort_by(.id == null, -(.es | length), (.es[0].at // "~"))[]
-    | (.es | group_by(.key) | sort_by(-length, .[0].at)) as $ks
-    | (if .id == null then "no group (bercail shep mistake group ID \"NAME\" --against KIND KEY... puts a key in one)"
-       else "\(.id) \($groups.groups[.id].name) (counts against \($groups.groups[.id].against | against))" end)
-      + ": \(.es | length | times), \($ks | length) key\(if ($ks | length) == 1 then "" else "s" end)",
-      ($ks[] | "  \(.[0].key): \(length | times)",
-        (.[] | "    \(.at[0:10])  " + (where | join(" · ") | if . == "" then "" else . + ": " end) + .what))' "$file"
+    | map(. as $id | [$all[] | select($groups.keys[.key] == $id)] as $es | (if $id then $groups.groups[$id] else {} end) as $g
+        | {id: $id, name: $g.name, against: $g.against, count: ($es | length),
+           keys: ($es | group_by(.key) | sort_by(-length, .[0].at) | map({key: .[0].key, count: length, entries: map(del(.key))})),
+           issues: ([$es[] | select(.issue) | {id: .issue} + (if .repo then {repo} else {} end)]
+             | reduce .[] as $i ([]; if any(.[]; . == $i) then . else . + [$i] end)), first: ($es[0].at // "~")})
+    | sort_by(.id == null, -.count, .first) | map(del(.first))
+    | if $json == 1 then . else .[]
+      | (if .id == null then "no group (bercail shep mistake group ID \"NAME\" --against KIND KEY... puts a key in one)"
+         else "\(.id) \(.name) (counts against \(.against | against))" end)
+        + ": \(.count | times), \(.keys | length) key\(if (.keys | length) == 1 then "" else "s" end)",
+        (.keys[] | "  \(.key): \(.count | times)",
+          (.entries[] | "    \(.at[0:10])  " + (where | join(" · ") | if . == "" then "" else . + ": " end) + .what))
+      end' "$file"
 }
 
 # --- what Shep gets at start ----------------------------------------------------------

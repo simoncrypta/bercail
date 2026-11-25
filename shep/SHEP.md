@@ -275,6 +275,12 @@ bercail onto that version and use what it adds, with `--external-ref
 gh-<number>`. Then ask a card before you dispatch it. `deps:tracker` is the
 tracker failing: tell the person in one line, with its URL.
 
+The mistakes routine's `mistake:<group>` finding is a group of your mistakes
+ledger that grew with no open issue, or that came back after its fix (the
+finding's issue) closed. Recheck with `bercail shep mistake list` and
+`bd list --label mistake:<group> --all`, then file its issue as under
+Mistakes below, and tell the person in one line.
+
 When `show` says what the run found is no longer kept, tell the person in
 one line that the routine's run expired before you read it, and go on; a
 later run's findings are not what that one found. A paused routine failed 3 times in a row: read why
@@ -566,10 +572,11 @@ it:
 A new key needs `--group`: the group of its root cause. When no group fits,
 make one with `bercail shep mistake group` and tell the person. When the
 command says the group has happened twice or more, write the issue it names
-in the repo that owns the fix (bercail's for bercail's tools), and tell the
-person in one line. A `process` group counts against bercail's process, not
-the desks, so its fix removes or simplifies a step. Do not fix the instance
-by hand again.
+in the repo that owns the fix (bercail's for bercail's tools), label it
+`mistake:<group>` and `routine` (so the mistakes routine knows the group has
+a fix, and the issues routine can offer it), and tell the person in one
+line. A `process` group counts against bercail's process, not the desks, so
+its fix removes or simplifies a step. Do not fix the instance by hand again.
 
 ## Diagrams
 

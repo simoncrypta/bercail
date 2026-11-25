@@ -1103,6 +1103,16 @@ G8 Spend (counts against a tool): 0 times, 0 keys
 no group (bercail shep mistake group ID \"NAME\" --against KIND KEY... puts a key in one): 1 time, 1 key
   old-key: 1 time
     2026-11-13  from before groups" ]] || fail "list: $out"
+  # --json: the same groups in the same order, each with its keys and the issues they name.
+  out="$(shep mistake list --json | jq -c 'map({id, name, against, count, keys: (.keys | map("\(.key) \(.count) \(.entries | map(.what) | join("|"))")), issues})')"
+  [[ "$out" == '[{"id":"G7","name":"Test isolation","against":"tool","count":3,"keys":["pipefail-grep-q 2 first|second","tests-touch-real-state 1 wrote the real handoffs.jsonl"],"issues":[{"id":"app-1"}]},'\
+'{"id":"G5","name":"Landing by hand","against":"conduct","count":1,"keys":["desk-pushed-main 1 pushed master itself"],"issues":[]},'\
+'{"id":"G8","name":"Spend","against":"tool","count":0,"keys":[],"issues":[]},'\
+'{"id":null,"name":null,"against":null,"count":1,"keys":["old-key 1 from before groups"],"issues":[]}]' ]] || fail "list --json: $out"
+  shep mistake list --json | jq -e --arg t "$today" '.[0].keys[0].entries[0] == {at: .[0].keys[0].entries[0].at, what: "first", issue: "app-1"}
+    and (.[0].keys[0].entries[0].at | startswith($t))' >/dev/null || fail "an entry: $(shep mistake list --json | jq -c '.[0].keys[0].entries[0]')"
+  rm "$STATE/mistakes.jsonl"
+  [[ "$(shep mistake list --json)" == "[]" ]] || fail "an empty ledger: $(shep mistake list --json)"
 }
 
 @test "shep mistake refuses a bad key, no WHAT, a new key with no group, or a --repo that is no checkout, and writes nothing" {

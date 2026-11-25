@@ -451,6 +451,24 @@ hold() {
   [[ "$(_routine_next_due '{"at":null,"every":"2h"}' 1000)" == 8200 ]]
 }
 
+@test "an at routine with a day is next due on that day at its local time, also across a clock change" {
+  [[ -e /usr/share/zoneinfo/America/Toronto ]] || unavailable "no tz database"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/common.sh"
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/routine.sh"
+  export TZ=America/Toronto
+  local from want
+  # From a Tuesday, the slot itself, and a minute before it; and from a
+  # Tuesday in EDT to the Monday after the clocks went back (2026-11-01).
+  for from in "2026-11-24 12:00 2026-11-30 08:00" "2026-11-30 08:00 2026-12-07 08:00" \
+    "2026-11-30 07:59 2026-11-30 08:00" "2026-10-27 12:00 2026-11-02 08:00"; do
+    want="${from#* * }"
+    next="$(_routine_next_due '{"at":"Mon 08:00","every":null}' "$(date -d "${from% * *}" +%s)")"
+    [[ "$(printf '%(%F %H:%M)T' "$next")" == "$want" ]] || fail "from ${from% * *}: $(printf '%(%F %H:%M %Z)T' "$next")"
+  done
+}
+
 @test "output over 64 KB fails the run" {
   declare_routine check
   jq -nc '[range(700) | {key: "k\(.)", title: ("x" * 100)}] | .[]' >"$Q/check.out"
@@ -792,7 +810,12 @@ GATE
   done
   run routine run broken
   [[ "$status" -eq 1 ]] || fail "$output"
-  [[ "$output" == *"routine broken: run and command are both set; at must be HH:MM, not 25:00"* ]] || fail "$output"
+  [[ "$output" == *"routine broken: run and command are both set; at must be HH:MM, or a day and HH:MM such as Mon 08:00, not 25:00"* ]] \
+    || fail "$output"
+  printf '[routine.broken]\nrun = "cleanup"\nat = "Monday 08:00"\n' >"$CONFIG"
+  run routine run broken
+  [[ "$status" -eq 1 && "$output" == *"routine broken: at must be HH:MM, or a day and HH:MM such as Mon 08:00, not Monday 08:00"* ]] \
+    || fail "a day is its first three letters: $output"
   long="$(printf 'a%.0s' $(seq 65))"
   declare_routine "$long"
   run routine run "$long"

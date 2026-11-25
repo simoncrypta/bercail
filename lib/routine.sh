@@ -73,8 +73,8 @@ routine_entries() {
           (if $v | has("at") and has("every") then "at and every are both set"
            elif ($v | has("at") or has("every")) | not then "no at or every"
            elif $v | has("at") then
-             if ($v.at | type) == "string" and ($v.at | test("^([01][0-9]|2[0-3]):[0-5][0-9]$")) then empty
-             else "at must be HH:MM, not \($v.at)" end
+             if ($v.at | type) == "string" and ($v.at | test("^((Mon|Tue|Wed|Thu|Fri|Sat|Sun) )?([01][0-9]|2[0-3]):[0-5][0-9]$")) then empty
+             else "at must be HH:MM, or a day and HH:MM such as Mon 08:00, not \($v.at)" end
            elif ($v.every | type) == "string" and ($v.every | test("^[1-9][0-9]*[hd]$")) then empty
            else "every must be <n>h or <n>d, at least 1h, not \($v.every)" end)
         end ] as $errors
@@ -102,15 +102,29 @@ _routine_schedule() {
 }
 
 # The epoch second it is next due after FROM: an every routine that long after
-# it, an at routine at its next local HH:MM.
+# it, an at routine at its next local HH:MM, on its day of the week when it
+# names one.
 _routine_next_due() {
-  local entry="$1" from="$2" at every n hms h m s mid d got
+  local entry="$1" from="$2" at every n day=0 got
+  # %u, not %a: a day's name depends on the locale, its number does not.
+  local -A days=([Mon]=1 [Tue]=2 [Wed]=3 [Thu]=4 [Fri]=5 [Sat]=6 [Sun]=7)
   at="$(jq -r '.at // ""' <<<"$entry")" every="$(jq -r '.every // ""' <<<"$entry")"
   if [[ -n "$every" ]]; then
     n="${every%?}"
     [[ "$every" == *h ]] && printf '%s' $((from + n * 3600)) || printf '%s' $((from + n * 86400))
     return 0
   fi
+  [[ "$at" != *" "* ]] || day="${days[${at%% *}]}" at="${at#* }"
+  n="$(_routine_next_at "$at" "$from")"
+  while ((day)) && printf -v got '%(%u)T' "$n" && ((got != day)); do
+    n="$(_routine_next_at "$at" "$n")"
+  done
+  printf '%s' "$n"
+}
+
+# The epoch second after FROM that next reads HH:MM AT, local time.
+_routine_next_at() {
+  local at="$1" from="$2" n hms h m s mid d got
   printf -v hms '%(%H %M %S)T' "$from"
   read -r h m s <<<"$hms"
   mid=$((from - 10#$h * 3600 - 10#$m * 60 - 10#$s))
@@ -380,7 +394,7 @@ _routine_finish() {
         | {found: ($a | length), new: ([$a[] | select(.status == "new")] | length),
            changed: ([$a[] | select(.status == "changed")] | length)} as $counts
         | (if $counts.new + $counts.changed > 0 then "emitted" else "skipped" end) as $o
-        | {state: ($s + {failures: 0, next_due: $next, sent: ($a | map({(.key): .hash}) | add // {})}),
+        | {state: ($s + {failures: 0, next_due: $next, sent: ($a | map({(.key): .hash}) | add // {}), kept: $c.id}),
            run: ($run + {outcome: $o, reason: (if $o == "skipped" then "quiet" else null end), counts: $counts,
                          event: (if $o == "emitted" then $eid else null end), error: null}),
            paused_now: false,
@@ -522,7 +536,8 @@ routine_run() {
   fi
   out="$dir/.out.$$" err="$dir/.err.$$" findings="$dir/.findings.$$"
   # A dry run tells its query, so a built-in that keeps state of its own writes none.
-  BERCAIL_ROUTINE_DRY_RUN="$dry" _routine_exec "$limit" "$out" "$err" "${argv[@]}" || rc=$?
+  # The run's id lets a built-in tell, from kept in state.json, that its last run was kept.
+  BERCAIL_ROUTINE_DRY_RUN="$dry" BERCAIL_ROUTINE_RUN="$id" _routine_exec "$limit" "$out" "$err" "${argv[@]}" || rc=$?
   if ((rc == 124)); then
     error="timed out after ${limit}s"
   elif (($(wc -c <"$out") > ROUTINE_OUTPUT_MAX)); then
@@ -600,7 +615,7 @@ routine_list() {
     next="$(_routine_shown_next "$entry" "$state" "$now")"
     last="$(_routine_last "$name")"
     [[ -z "$last" ]] && last="never run" || last="$(jq -r 'if .outcome == "skipped" then "skipped (\(.reason))" else .outcome end' <<<"$last")"
-    printf '%-*s  %-11s  next %s  %-17s  %s\n' "$width" "$name" "$(_routine_schedule "$entry")" \
+    printf '%-*s  %-12s  next %s  %-17s  %s\n' "$width" "$name" "$(_routine_schedule "$entry")" \
       "$(_routine_local "$next")" "$last" "$(jq -r 'if .paused then "paused" else "active" end' <<<"$state")"
   done <<<"$entries"
 }

@@ -224,9 +224,10 @@ One cause often shows up under several keys, so each key belongs to a group, and
 bercail shep mistake group G7 "Test isolation" --against tool tests-touch-real-state   # make or rename a group, move keys into it
 bercail shep mistake tests-touch-real-state "the handoff test wrote to the real handoffs.jsonl" --repo ~/Work/bercail --issue bercail-4k9
 bercail shep mistake list   # each group with its count and keys, most frequent first
+bercail shep mistake list --json   # the same as data: each group's id, name, against, count, keys with their entries, and the issues they name
 ```
 
-A key is a-z, 0-9 and `-`, the same each time. A key in no group needs `--group` when it is recorded, and keeps that group after; only `mistake group` moves a key, since a move changes the count of its past entries. At a group's second time the command says so, with the fix that fits: a guardrail for a `tool` group (a lint rule, a test, the guard, or a doctor check), a rule in SHEP.md or a skill, or a check, for a `conduct` group, and removing or simplifying the step for a `process` group. Shep writes that issue and tells you.
+A key is a-z, 0-9 and `-`, the same each time. A key in no group needs `--group` when it is recorded, and keeps that group after; only `mistake group` moves a key, since a move changes the count of its past entries. At a group's second time the command says so, with the fix that fits: a guardrail for a `tool` group (a lint rule, a test, the guard, or a doctor check), a rule in SHEP.md or a skill, or a check, for a `conduct` group, and removing or simplifying the step for a `process` group. Shep writes that issue, labels it `mistake:<group>` and `routine`, and tells you. The [mistakes routine](routines.md#the-mistakes-routine) reads the label to tell a group with a fix from one without.
 
 What counts as good conduct for Shep is written down as [behavior specs](../.agents/behaviors/README.md), for reviewing its traces rather than for its prompt. Their README maps each group of mistakes to a spec, or marks it a product bug.
 

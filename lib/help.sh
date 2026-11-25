@@ -39,7 +39,7 @@ Post-install CLI (bercail):
                 queue [--repo DIR] [--json] (bounded status; UNKNOWN is not an empty queue or a dispatch gate) |
                 remember "RULE" [--scope SCOPE] | list | forget N (Shep's standing rules) |
                 mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] |
-                mistake list (the mistakes ledger, by group) |
+                mistake list [--json] (the mistakes ledger, by group) |
                 diagram [FILE] (a Mermaid diagram without its click and link statements) |
                 questions [--json [--all]] (pending targeted questions; replies are unverified;
                   --json: the pending cards and the defaults not yet OK'd, and the land cards

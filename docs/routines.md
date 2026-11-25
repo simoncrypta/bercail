@@ -1,6 +1,6 @@
 # routines
 
-A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, the built-in [cleanup routine](#the-cleanup-routine) and [deps routine](#the-deps-routine), and [the Routines panel](#the-routines-panel) in Shep's view. `bercail routine run` runs one now, and `--dry-run` prints what a run would find, without keeping it. The plan is bercail-2qig.
+A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, the built-in [cleanup](#the-cleanup-routine), [deps](#the-deps-routine) and [mistakes](#the-mistakes-routine) routines, and [the Routines panel](#the-routines-panel) in Shep's view. `bercail routine run` runs one now, and `--dry-run` prints what a run would find, without keeping it. The plan is bercail-2qig.
 
 ## Declare one
 
@@ -14,10 +14,14 @@ every = "1d"                             # or at = "07:30", a local time each da
 [routine.cleanup]
 run = "cleanup"                          # a built-in, lib/routine/<name>.sh: see below
 at = "07:30"
+
+[routine.mistakes]
+run = "mistakes"
+at = "Mon 08:00"                         # a local time each week, on that day
 ```
 
 - Each routine has one of `run` (a built-in's name) or `command` (an argv, not a shell line).
-- Each has one of `at = "HH:MM"` (a daily local slot) or `every = "<n>h"` or `"<n>d"` (at least `1h`).
+- Each has one of `at = "HH:MM"` (a daily local slot), `at = "Mon HH:MM"` (a weekly one; `Mon` to `Sun`), or `every = "<n>h"` or `"<n>d"` (at least `1h`).
 - A name is letters, digits, `-` and `_`, at most 64 of them.
 
 `bercail doctor` names a bad entry, such as `invalid  routine nowhen: no at or every`, and a key nothing reads. Neither counts as a failure. `bercail routine list` names a bad entry too, and `bercail routine run` refuses one.
@@ -47,7 +51,7 @@ A run fails when the query exits non-zero, prints anything that is not findings,
 | `bercail routine show <name>` | Its schedule and state, and its last 10 runs, newest first |
 | `bercail routine show <name> --run <id>` | What that run found, each finding marked new, changed or same |
 | `bercail routine run <name>` | Run it now. It prints one line: `emitted`, `skipped (quiet)`, `skipped (paused)`, `skipped (overlap)`, `skipped (load)` or `failed`, and a line when an [event](#the-event) waits. It exits 1 when the run failed, or when it could not write its run, its state or its [event](#the-event) |
-| `bercail routine run <name> --dry-run` | Run it under the same locks, and print its line, then each finding marked new, changed or same, as `show --run` does. It writes no state, no findings for `show --run`, no run and no inbox file, so the next real run counts the same findings again. Its query runs with `BERCAIL_ROUTINE_DRY_RUN=1` (`0` on a real run), so a built-in keeps no state of its own either |
+| `bercail routine run <name> --dry-run` | Run it under the same locks, and print its line, then each finding marked new, changed or same, as `show --run` does. It writes no state, no findings for `show --run`, no run and no inbox file, so the next real run counts the same findings again. Its query runs with `BERCAIL_ROUTINE_DRY_RUN=1` (`0` on a real run), so a built-in keeps no state of its own either. Every run also gives its query `BERCAIL_ROUTINE_RUN`, the run's id |
 | `bercail routine pause <name>` / `resume <name>` | Stop and restart it. `resume` also clears the failures in a row |
 | `bercail routine ask <name>` | Put your request about it, read on stdin (at most 500 characters), in Shep's inbox as one `bercail.routine_ask/v1` event. The Routines panel's **Ask Shep** runs it; the guard blocks it for agents |
 | `bercail routine tick` | Start each routine that is due, once. [The loop](#the-scheduler) runs it every minute |
@@ -72,7 +76,7 @@ Once a pause returns, no run starts its query until you resume. A run whose quer
 
 Everything is under `~/.local/state/bercail/routines/`:
 
-- `<name>/state.json`: when it is next due, the failures in a row, whether it is paused, the hash counted per key, the highest slot a run met (`slot`), and the outbox: [events](#the-event) not yet in Shep's inbox.
+- `<name>/state.json`: when it is next due, the failures in a row, whether it is paused, the hash counted per key, the id of the last run whose findings it counted (`kept`), the highest slot a run met (`slot`), and the outbox: [events](#the-event) not yet in Shep's inbox.
 - `<name>/runs.jsonl`: a line per run with its `id`, `due`, `start`, `end`, `outcome`, `reason` for a skip, `counts` (found, new, changed), `event` id and `error`. The last 100 runs are kept.
 - `<name>/outputs/<id>.jsonl`: what an emitted run found. The last 10 are kept.
 - `<name>/tried.json`: the slot a scheduled run last let its query run for, and when ([the scheduler](#the-scheduler) reads it).
@@ -93,7 +97,7 @@ One loop per machine: it holds `routines/.loop.lock`, and a second one refuses.
 
 Each tick reads the wall clock and compares it with each routine's `next_due`. It never counts on how long it slept, because a sleep stops counting while the machine is suspended.
 
-- **Due.** An `at` routine is due at its next `HH:MM`, and one that never ran waits for it. An `every` routine is due that long after its last start, and one that never ran is due now. The tick writes a never-run routine's first due time before it starts it, so a retry is for the same slot.
+- **Due.** An `at` routine is due at its next `HH:MM`, on its day when it names one, and one that never ran waits for it. An `every` routine is due that long after its last start, and one that never ran is due now. The tick writes a never-run routine's first due time before it starts it, so a retry is for the same slot.
 - **Overdue.** After sleep or a shutdown, a routine runs once, however many slots it missed. The run is for its first missed slot, which names its event, and the next one is due a whole period after it starts.
 - **Once per slot.** The tick decides outside the routine's locks, so the run it starts checks again under them: it runs only while its slot is still the routine's next due, and is skipped as `done` otherwise. A run by hand meets the slot that was due when it started, so a tick that was about to start it does not run the query a second time.
 - **A clock that goes back.** Each run writes the highest slot met, and the next due time comes after both that slot and the run's start. So a slot never runs twice, and nothing gets stuck on one; after a big step back, a routine waits until the clock is past the last slot it met. A scheduled run whose clock says its slot is still ahead is skipped as `early` and leaves the slot due, so the query runs in its window.
@@ -163,6 +167,19 @@ A job bd or Entire cannot read is not closed, and gives no finding. Each bd call
 Each open issue with a `deps:<name>` label is a finding keyed `deps:<name>`; when two have the label, the newest counts. Its title is the issue's (`deps: tuicr 0.30.0`), its `repo` is your bercail checkout, and its detail gives the issue's URL, the version (the title's last word: a release, a date, or a vendored copy's commit), and the beads issues there that link it, an open one first: `https://github.com/simoncrypta/bercail/issues/71; version 0.30.0; linked by bercail-12 (open)`, or `no beads issue links it`. A beads issue links it when its external ref is `gh-71` or the URL, or its title or description holds the URL; a bare `#71` or `tuicr 0.30.0` does not, since any issue that mentions the version reads so. The first one that links it is the finding's `issue`. A new version retitles the tracker's issue, so the finding counts as changed; a beads issue that links it, or one that closes, changes it too. `deps:tracker` is the tracker's own `deps: tracker failing` issue, with no version. [SHEP.md](../shep/SHEP.md#routine-events) says what Shep does with each.
 
 The run fails when no bercail checkout is among Shep's repos (add its path to `~/.local/state/bercail/shep/repos`), when there are two (each has its own beads, so a finding could not say which links it), when that checkout has no beads, or when `gh` or `bd` does not answer.
+
+## The mistakes routine
+
+`run = "mistakes"` finds the groups of [Shep's mistakes ledger](shep.md#mistakes) that need a fix in the system, on the schedule you give it, such as `at = "Mon 08:00"`. It only reads: `bercail shep mistake list --json`, every issue of each known repo with beads (one `bd list` a repo), and the trails the entries name. A group is found, with the key `mistake:<group>`, when its count grew since the last run, none of its entries names an open issue or trail, and either:
+
+| Title | Found when |
+|-------|------------|
+| `G7 Test isolation has happened 7 times, counts against a tool, and has no open issue` | It has happened twice or more, and no issue is labelled `mistake:G7` |
+| `… has happened 9 times, counts against a tool: 2 times since its fix bercail-12 closed on 2026-11-20` | Every issue labelled `mistake:G7` is closed, and it happened again after the last one closed: the fix did not hold. The finding's `repo` and `issue` name that fix |
+
+Its `detail` lists the group's keys and their counts. An entry's beads issue with no repo is looked up in every repo; one in a repo without beads, or that bd does not have, is not open. A trail with no repo may be open, so it holds its group back. Keys in no group are left out. [SHEP.md](../shep/SHEP.md#routine-events) has Shep file the issue the group counts against, in the repo that owns the fix, labelled `mistake:<group>` and `routine`, so the issues routine can offer it.
+
+`routines/<name>/counts.json` keeps each group's count and the run that saw it, so a group that did not grow is not found again, even once the issue that held it back has closed. A run counts from the last run the runner kept (`kept` in its `state.json`): when the runner could not write its state, the next run finds the same groups again. A source that fails fails the run, as in the cleanup routine: a bd list, or a trail Entire could not show, which may be open. A dry run reads `counts.json` and writes nothing.
 
 ## The Routines panel
 
