@@ -144,7 +144,7 @@ desk() {
     '{address: $t, session: "desk-session-\($t)", cwd: $p, harness: "pi", issue: $i, space: $sp}' \
     >"$XDG_STATE_HOME/bercail/desk-sessions/$t.json"
   [[ -f "$STATE/hc.json" ]] || echo '[]' >"$STATE/hc.json"
-  jq --arg t "$t" --arg p "$dir" --arg i "$issue" --arg sp "$sp" '. + [{address: $t, state: "live", reason: null,
+  jq --arg t "$t" --arg p "$dir" --arg i "$issue" --arg sp "$sp" '. + [{address: $t, state: "live", reason: null, pid: (length + 101),
       cwd: $p, labels: {"bercail.role": "agent", "bercail.issue": $i, "bercail.space": $sp},
       records: {"desk-session-\($t)": {app: "pi", state: "idle"}}}]' "$STATE/hc.json" >"$STATE/hc.tmp"
   mv "$STATE/hc.tmp" "$STATE/hc.json"
@@ -540,7 +540,7 @@ events() { cat "$INBOX"/land-*.json 2>/dev/null; }
   jq 'del(.questions[0].landing)' "$SHEP/questions.json" >"$SHEP/q.tmp" && mv "$SHEP/q.tmp" "$SHEP/questions.json"
   question expire | jq -e --arg t "$token" '. == ["\($t) started"]' >/dev/null || fail "no start after a crash"
   # A worker hc reports live, or hc that cannot answer: the sweep waits.
-  jq '. + [{address: "land-q1-1", state: "live", cwd: "/", labels: {}}]' "$STATE/hc.json" >"$STATE/hc.tmp" && mv "$STATE/hc.tmp" "$STATE/hc.json"
+  jq '. + [{address: "land-q1-1", state: "live", pid: (length + 101), cwd: "/", labels: {}}]' "$STATE/hc.json" >"$STATE/hc.tmp" && mv "$STATE/hc.tmp" "$STATE/hc.json"
   question expire | jq -e '. == []' >/dev/null || fail "it started a second worker beside a live one"
   question land-claim "$token" | jq -e .accepted >/dev/null || fail "claim"
   : >"$STATE/hc-down"

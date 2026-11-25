@@ -52,7 +52,9 @@ SH
   # done, to working. With $STATE/lag, as the real one, those that die with it
   # stay live a moment with no status: each ends once a get has read it so.
   # $STATE/on-kill-<address>, on-rm-<address>: a jq filter run on
-  # hc.json after that call; herdr-on-kill-<address>, on herdr.json. With
+  # hc.json after that call; herdr-on-kill-<address>, on herdr.json. After an
+  # rm of the terminal $STATE/arm-ls-<address> names, $STATE/on-ls-<n> is a jq
+  # filter run on hc.json before the nth ls, and herdr-on-ls-<n> on herdr.json. With
   # $STATE/bad-row, ls lists a row with no address first. A kill of a working terminal is logged. $HC_FAIL:
   # the call that fails; $HC_BLANK: the call that succeeds and prints nothing.
   # get answers not_found on stderr, as hc does, for a terminal marked gone,
@@ -73,6 +75,14 @@ end() {
 }
 case "$1" in
   ls)
+    if [[ -f "$STATE/ls-armed" ]]; then
+      n=$(($(cat "$STATE/ls-armed") + 1))
+      echo "$n" >"$STATE/ls-armed"
+      [[ ! -f "$STATE/on-ls-$n" ]] || save -f "$STATE/on-ls-$n"
+      if [[ -f "$STATE/herdr-on-ls-$n" ]]; then
+        jq -f "$STATE/herdr-on-ls-$n" "$STATE/herdr.json" >"$STATE/h.tmp" && mv "$STATE/h.tmp" "$STATE/herdr.json"
+      fi
+    fi
     want=()
     while [[ $# -gt 0 ]]; do [[ "$1" != --label ]] || want+=("$2"); shift; done
     jq --args --argjson bad "$([[ -f "$STATE/bad-row" ]] && echo true || echo false)" '{terminals:
@@ -101,6 +111,7 @@ case "$1" in
     fi ;;
   rm)
     save --arg a "$2" 'map(select(.address != $a))'
+    [[ ! -f "$STATE/arm-ls-$2" ]] || echo 0 >"$STATE/ls-armed"
     [[ ! -f "$STATE/on-rm-$2" ]] || save -f "$STATE/on-rm-$2" ;;
 esac
 SH
@@ -118,6 +129,32 @@ SH
   WORK="$(cd "$WORK" && pwd -P)"
   jq -n '{spaces: [], recent: [{name: "Old_Widgets", folder: "/gone"}]}' >"$STATE/herdr.json"
   echo '[]' >"$STATE/hc.json"
+}
+
+# The processes a test starts in a worktree, stopped after a failure too: each
+# still in this test's folder, so no other process with its pid since.
+teardown() {
+  local pid
+  [[ -f "$BATS_TEST_TMPDIR/pids" ]] || return 0
+  while read -r pid; do
+    [[ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" != "$BATS_TEST_TMPDIR"/* ]] || kill -KILL "$pid" 2>/dev/null || true
+  done <"$BATS_TEST_TMPDIR/pids"
+}
+
+# in_worktree DIR COMMAND...: starts the command in DIR, in the background, and
+# prints its pid. A test that runs one makes cleanup read the real /proc.
+in_worktree() {
+  local dir="$1"
+  shift
+  (cd "$dir" && exec "$@") </dev/null >/dev/null 2>&1 3>&- &
+  echo "$!" >>"$BATS_TEST_TMPDIR/pids"
+  echo "$!"
+}
+
+# True while process $1 runs: neither gone nor a zombie the test has not reaped.
+running() {
+  local stat
+  stat="$(cat "/proc/$1/stat" 2>/dev/null)" && [[ "${stat##*) }" != Z* ]]
 }
 
 # A worktree widgets.$1 on branch $1, with one pushed commit, its .bercail/
@@ -603,6 +640,286 @@ check_agrees() {
   assert_eq "$before" "$(stat -c '%Y %s' "$index") $(sha256sum <"$index")" "--check leaves the index as it was"
   out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)" || fail "cleanup refuses what --check passed: $out"
   [[ ! -e "$WORK/widgets.alpha" ]] || fail "cleanup takes it"
+}
+
+@test "cleanup stops a dev server still writing in the worktree, which no terminal holds, and what the window's shell runs, names them but not their argv, and spares the shell and another space's desk" {
+  local out wt writer deaf shell job foreign leaf mine left pids="$BATS_TEST_TMPDIR/pids"
+  desk_space alpha
+  desk_space bravo
+  wt="$WORK/widgets.alpha"
+  printf '.vite/\n' >>"$WORK/widgets/.git/info/exclude"
+  export BERCAIL_PROC_DIR=/proc
+  # Its argv holds a token, and a newline that would make a line of its own.
+  writer="$(in_worktree "$wt" timeout 30 bash -c 'w=$PWD; while :; do mkdir -p "$w/.vite/deps" && : >"$w/.vite/deps/x"; sleep 0.05; done' \
+    dev "tok-s3cr3t"$'\n'"1 1 init")"
+  # One deaf to TERM gets KILL.
+  deaf="$(in_worktree "$wt" timeout -s KILL 30 bash -c 'trap "" TERM; exec sleep 30')"
+  # The window's shell runs a job there; another space's desk, from elsewhere,
+  # runs one there two levels down.
+  shell="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >>"$1"; wait; exec sleep 30' sh "$pids")"
+  set_term s-sp-alpha "{pid: $shell}"
+  foreign="$(in_worktree "$BATS_TEST_TMPDIR" bash -c '( (cd "$1" && exec sleep 30) & echo $! >>"$2"; wait ); :' desk "$wt" "$pids")"
+  set_term d-bravo "{pid: $foreign, status: {app: \"pi\", state: \"working\"}}"
+  # The desk cleanup ends runs one there that outlives it, as a detached one does.
+  mine="$(in_worktree "$BATS_TEST_TMPDIR" bash -c '( (cd "$1" && exec sleep 30) & echo $! >>"$2"; wait ); :' desk "$wt" "$pids")"
+  set_term d-alpha "{pid: $mine}"
+  for _ in {1..50}; do [[ "$(wc -l <"$pids")" -lt 8 ]] || break; sleep 0.1; done
+  job="$(sed -n 4p "$pids")" leaf="$(sed -n 6p "$pids")" left="$(sed -n 8p "$pids")"
+  for _ in {1..50}; do [[ ! -e "$wt/.vite/deps/x" ]] || break; sleep 0.1; done
+  [[ -e "$wt/.vite/deps/x" ]] || fail "the dev server never wrote"
+  out="$("$BERCAIL" cleanup --check "$wt" 2>&1)" || fail "--check: $out"
+  assert_has "$out" "process $writer (timeout)" "--check names what it would stop"
+  [[ "$out" != *s3cr3t* ]] || fail "--check shows no argv: $out"
+  [[ "$out" == *"process $job "* && "$out" == *"process $left "* && "$out" != *"process $mine "* \
+    && "$out" != *"process $foreign "* && "$out" != *"process $leaf "* ]] \
+    || fail "--check names what the sweep stops, and spares what it spares: $out"
+  running "$writer" || fail "--check stops nothing"
+  out="$("$BERCAIL" cleanup "$wt" 2>&1)" || fail "cleanup: $out"
+  assert_has "$out" "process $writer (timeout)" "the report names what it stopped"
+  assert_has "$out" "process $deaf (timeout)" "the report names the one KILL stopped"
+  [[ "$out" != *s3cr3t* && "$out" != *"process 1 "* ]] || fail "the report shows no argv: $out"
+  [[ "$out" != *"process $shell "* ]] || fail "the window's shell, which closing the space ends, is not named: $out"
+  [[ ! -e "$wt" ]] || fail "the worktree is gone, not recreated: $(find "$wt")"
+  if running "$writer" || running "$deaf"; then fail "the dev server and the one deaf to TERM are stopped"; fi
+  running "$shell" || fail "the window's shell is left for the space's close"
+  if running "$job" || running "$left"; then fail "what the window's shell runs there, and what outlived the desk, are stopped"; fi
+  running "$foreign" && running "$leaf" || fail "another space's working desk and what it runs are not cleanup's to stop"
+  jq -e 'all(.spaces[]; .id != "sp-alpha")' "$STATE/herdr.json" >/dev/null || fail "the space closes"
+}
+
+@test "cleanup signals no process it did not find, one started as it stopped the rest, and keeps the worktree" {
+  local out wt pids="$BATS_TEST_TMPDIR/pids" first late
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  export BERCAIL_PROC_DIR=/proc
+  # On TERM it starts another there, and ends.
+  first="$(in_worktree "$wt" bash -c 'trap "(exec sleep 30) & echo \$! >>$1; exit" TERM; while :; do sleep 0.1; done' respawn "$pids")"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "cleanup removes it with a process it never saw: $out"; fi
+  late="$(tail -1 "$pids")"
+  assert_has "$out" "cleanup stopped: process $late (sleep) still runs in $wt after it sent TERM to process $first (bash)" "the reason"
+  running "$late" || fail "the one it did not find is not signalled"
+  [[ -d "$wt/.bercail" ]] || fail "the worktree stays"
+}
+
+@test "cleanup spares every live terminal's process in the worktree, with no space on it, or one that came as it ended the last" {
+  local out wt foreign late mode bad
+  desk_space alpha
+  desk_space bravo
+  wt="$WORK/widgets.charlie"
+  git -C "$WORK/widgets" worktree add -q -b charlie "$wt" master
+  export BERCAIL_PROC_DIR=/proc
+  foreign="$(in_worktree "$wt" sleep 30)"
+  # A live terminal hc gives no whole pid could be any process: nothing is signalled.
+  for bad in null 1.5; do
+    set_term d-bravo "{pid: $bad}"
+    for mode in --check ""; do
+      out="$("$BERCAIL" cleanup $mode "$wt" 2>&1)" && fail "cleanup $mode with a terminal of pid $bad: $out"
+      assert_eq 2 "$?" "cleanup $mode, pid $bad: exits 2"
+      assert_has "$out" "hc could not read terminal d-bravo" "cleanup $mode, pid $bad: the reason"
+    done
+  done
+  running "$foreign" || fail "nothing is signalled on a guess"
+  [[ -d "$wt" ]] || fail "the worktree stays"
+  # A whole pid spelled as a decimal is still that process.
+  set_term d-bravo "{pid: $foreign.0, status: {app: \"pi\", state: \"working\"}}"
+  out="$("$BERCAIL" cleanup "$wt" 2>&1)" || fail "cleanup with no space: $out"
+  assert_has "$out" "no Herdr space was open on $wt" "no space"
+  running "$foreign" || fail "with no space on the worktree, another space's working desk is spared: $out"
+  # One of bravo's that came as cleanup ended alpha's last terminal.
+  wt="$WORK/widgets.alpha"
+  late="$(in_worktree "$wt" sleep 30)"
+  printf '. + [{address: "late-bravo", state: "live", cwd: "%s", pid: %s, labels: {"bercail.space": "sp-bravo"}, status: {state: "working"}}]\n' \
+    "$wt" "$late" >"$STATE/on-rm-b-alpha"
+  out="$("$BERCAIL" cleanup "$wt" 2>&1)" || fail "cleanup: $out"
+  running "$late" || fail "a terminal of another space that came meanwhile is spared: $out"
+}
+
+@test "cleanup stops nothing in the worktree when a terminal at work joins the space as it ends the last one" {
+  local out wt late
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  export BERCAIL_PROC_DIR=/proc
+  late="$(in_worktree "$wt" sleep 30)"
+  printf '. + [{address: "late", state: "live", cwd: "%s", pid: %s, labels: {"bercail.space": "sp-alpha"}, status: {state: "working"}}]\n' \
+    "$wt" "$late" >"$STATE/on-rm-b-alpha"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "cleanup removes it with a worker in its space: $out"; fi
+  assert_has "$out" "terminal late joined the space after cleanup checked it, and is working" "the reason"
+  [[ "$out" != *"stopped process"* ]] || fail "it stops nothing: $out"
+  running "$late" || fail "the late terminal's process runs on"
+  [[ -d "$wt/.bercail" ]] || fail "the worktree stays"
+}
+
+@test "cleanup signals nothing and keeps the worktree when a terminal at work has joined the space by its last look" {
+  local out wt late job
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  export BERCAIL_PROC_DIR=/proc
+  # The terminal runs a job of its own there.
+  late="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >>"$1"; wait' late "$BATS_TEST_TMPDIR/pids")"
+  for _ in {1..50}; do [[ "$(wc -l <"$BATS_TEST_TMPDIR/pids")" -lt 2 ]] || break; sleep 0.1; done
+  job="$(tail -1 "$BATS_TEST_TMPDIR/pids")"
+  # The first ls after the builder's record goes is the last look, before any
+  # signal; the second, the look after the stop.
+  touch "$STATE/arm-ls-b-alpha"
+  printf '. + [{address: "late", state: "live", cwd: "%s", pid: %s, labels: {"bercail.space": "sp-alpha"}, status: {state: "working"}}]\n' \
+    "$wt" "$late" >"$STATE/on-ls-1"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "cleanup removes it with a worker in its space: $out"; fi
+  assert_has "$out" "terminal late joined the space after cleanup checked it, and is working" "the reason"
+  [[ "$out" != *"stopped process"* && "$out" != *"removed worktree"* ]] || fail "it signals and removes nothing: $out"
+  running "$late" && running "$job" || fail "the joined terminal and its job run on"
+  [[ -d "$wt/.bercail" ]] || fail "the worktree stays"
+  [[ ! -e "$XDG_STATE_HOME/bercail/retired.jsonl" ]] || fail "nothing is recorded as retired"
+}
+
+@test "cleanup keeps the worktree when a terminal at work joins the space after its last look, with nothing to stop" {
+  local out
+  desk_space alpha
+  # The second ls after the builder's record goes: the look after the stop.
+  touch "$STATE/arm-ls-b-alpha"
+  printf '. + [{address: "late", state: "live", pid: 80, labels: {"bercail.space": "sp-alpha"}, status: {state: "working"}}]\n' \
+    >"$STATE/on-ls-2"
+  if out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then fail "cleanup removes it with a worker in its space: $out"; fi
+  assert_has "$out" "terminal late joined the space after cleanup checked it, and is working" "the reason"
+  [[ "$out" != *"removed worktree"* ]] || fail "it removes nothing: $out"
+  [[ -d "$WORK/widgets.alpha/.bercail" ]] || fail "the worktree stays"
+  [[ ! -e "$XDG_STATE_HOME/bercail/retired.jsonl" ]] || fail "nothing is recorded as retired"
+}
+
+@test "cleanup with no window signals nothing when a terminal at work there takes another space's labels by its last look" {
+  local out wt late job
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  touch "$STATE/down"
+  export BERCAIL_PROC_DIR=/proc
+  late="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >>"$1"; wait' late "$BATS_TEST_TMPDIR/pids")"
+  for _ in {1..50}; do [[ "$(wc -l <"$BATS_TEST_TMPDIR/pids")" -lt 2 ]] || break; sleep 0.1; done
+  job="$(tail -1 "$BATS_TEST_TMPDIR/pids")"
+  set_term fresh "{cwd: \"$wt\", pid: $late, status: {state: \"working\"}}"
+  # After the kept Shell's record goes, the last look reads the terminals,
+  # then which space is on the worktree: the desk's labels come in between.
+  touch "$STATE/arm-ls-s-sp-alpha"
+  printf 'map(if .address == "fresh" then .labels = {"bercail.role": "agent", "bercail.space": "sp-fresh"} else . end)\n' \
+    >"$STATE/on-ls-2"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "cleanup removes a worktree another desk claimed: $out"; fi
+  assert_has "$out" "the Herdr space on the worktree is sp-fresh now, not sp-alpha" "the reason"
+  [[ "$out" != *"stopped process"* ]] || fail "it signals nothing: $out"
+  running "$late" && running "$job" || fail "the desk and its job run on"
+  [[ -d "$wt/.bercail" ]] || fail "the worktree stays"
+}
+
+@test "cleanup signals nothing a terminal at work there runs once it joins the space by its last look, as its desk or in the window" {
+  local out wt late job mode n
+  for mode in desk window; do
+    desk_space "$mode"
+    wt="$WORK/widgets.$mode"
+    n="$(cat "$BATS_TEST_TMPDIR/pids" 2>/dev/null | wc -l)"
+    late="$(BERCAIL_PROC_DIR=/proc in_worktree "$wt" bash -c 'sleep 30 & echo $! >>"$1"; wait' late "$BATS_TEST_TMPDIR/pids")"
+    for _ in {1..50}; do [[ "$(wc -l <"$BATS_TEST_TMPDIR/pids")" -lt $((n + 2)) ]] || break; sleep 0.1; done
+    job="$(tail -1 "$BATS_TEST_TMPDIR/pids")"
+    set_term "fresh-$mode" "{cwd: \"$wt\", pid: $late, status: {state: \"working\"}}"
+    rm -f "$STATE/ls-armed" "$STATE"/on-ls-* "$STATE"/herdr-on-ls-* "$STATE"/arm-ls-*
+    if [[ "$mode" == desk ]]; then
+      # No window: it takes the space's desk labels between the last look's two reads.
+      touch "$STATE/down" "$STATE/arm-ls-s-sp-desk"
+      printf 'map(if .address == "fresh-desk" then .labels = {"bercail.role": "agent", "bercail.space": "sp-desk"} else . end)\n' \
+        >"$STATE/on-ls-2"
+    else
+      # It joins the space's tab as the last look reads the terminals.
+      rm -f "$STATE/down"
+      touch "$STATE/arm-ls-b-window"
+      printf '(.spaces[] | select(.id == "sp-window") | .tabs[0].terminals) += [{terminal: "fresh-window"}]\n' >"$STATE/herdr-on-ls-1"
+    fi
+    if out="$(BERCAIL_PROC_DIR=/proc "$BERCAIL" cleanup "$wt" 2>&1)"; then fail "$mode: cleanup removes it with a worker in its space: $out"; fi
+    assert_has "$out" "terminal fresh-$mode joined the space after cleanup checked it" "$mode: the reason"
+    [[ "$out" != *"stopped process"* ]] || fail "$mode: it signals nothing: $out"
+    running "$late" && running "$job" || fail "$mode: the terminal and its job run on"
+    [[ -d "$wt/.bercail" ]] || fail "$mode: the worktree stays"
+  done
+}
+
+@test "cleanup with no window and no space signals nothing when a desk at work claims the worktree by its last look" {
+  local out wt late job
+  desk_space bravo
+  wt="$WORK/widgets.charlie"
+  git -C "$WORK/widgets" worktree add -q -b charlie "$wt" master
+  touch "$STATE/down"
+  export BERCAIL_PROC_DIR=/proc
+  late="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >>"$1"; wait' late "$BATS_TEST_TMPDIR/pids")"
+  for _ in {1..50}; do [[ "$(wc -l <"$BATS_TEST_TMPDIR/pids")" -lt 2 ]] || break; sleep 0.1; done
+  job="$(tail -1 "$BATS_TEST_TMPDIR/pids")"
+  # ls 1 finds no space on it; 2 and 3 are the last look: what to spare, then
+  # which space is on it.
+  echo 0 >"$STATE/ls-armed"
+  printf '. + [{address: "fresh", state: "live", cwd: "%s", pid: %s, labels: {"bercail.role": "agent", "bercail.space": "sp-fresh"}, status: {state: "working"}}]\n' \
+    "$wt" "$late" >"$STATE/on-ls-3"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "cleanup removes a worktree a desk claimed: $out"; fi
+  assert_has "$out" "Herdr space sp-fresh is on the worktree now" "the reason"
+  [[ "$out" != *"stopped process"* ]] || fail "it signals nothing: $out"
+  running "$late" && running "$job" || fail "the desk and its job run on"
+  [[ -d "$wt" ]] || fail "the worktree stays"
+}
+
+@test "cleanup spares the processes it runs under, a terminal among them or not" {
+  local out wt
+  desk_space bravo
+  wt="$WORK/widgets.charlie"
+  git -C "$WORK/widgets" worktree add -q -b charlie "$wt" master
+  export BERCAIL_PROC_DIR=/proc
+  # An outer shell runs one that hc knows as a terminal of bravo, which runs
+  # cleanup --check; both from the worktree.
+  cat >"$BATS_TEST_TMPDIR/inner" <<SH
+#!/usr/bin/env bash
+jq --argjson p \$\$ '. + [{address: "inner", state: "live", pid: \$p, created_ms: 1, labels: {"bercail.space": "sp-bravo"}}]' \
+  "$STATE/hc.json" >"$STATE/c.tmp" && mv "$STATE/c.tmp" "$STATE/hc.json"
+exec "$BERCAIL" cleanup --check "$wt"
+SH
+  chmod +x "$BATS_TEST_TMPDIR/inner"
+  out="$(cd "$wt" && bash -c '"$1"; exit $?' outer "$BATS_TEST_TMPDIR/inner" 2>&1)" || fail "--check: $out"
+  assert_has "$out" "cleanup would retire $wt" "--check"
+  [[ "$out" != *"stop process"* ]] || fail "neither shell it runs under is listed: $out"
+}
+
+@test "cleanup keeps a folder git left, written to as it removed it, and its space, and says how to finish with --gone" {
+  local out wt real how name handoffs="$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  desk_space alpha
+  desk_space bravo
+  wt="$WORK/widgets.alpha"
+  real="$(command -v git)"
+  # git as it ran in the incident: the worktree dropped, then a file written
+  # meanwhile keeps its folder. With $STATE/git-ok it exits 0 all the same.
+  cat >"$FAKE_BIN/git" <<SH
+#!/usr/bin/env bash
+[[ " \$* " == *" worktree remove "* ]] || exec "$real" "\$@"
+"$real" "\$@" || exit
+wt="\${*: -1}"
+mkdir -p "\$wt/apps/api/.vite" && : >"\$wt/apps/api/.vite/deps"
+[[ ! -f "$STATE/git-ok" ]] || exit 0
+echo "error: failed to delete '\$wt': Directory not empty" >&2
+exit 255
+SH
+  chmod +x "$FAKE_BIN/git"
+  how="once git worktree list in its repo does not name it, stop what still writes there, move the folder aside, close its Herdr space by hand, then run bercail cleanup --gone"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "cleanup takes a folder git left: $out"; fi
+  assert_has "$out" "could not remove the worktree $wt" "the failure"
+  assert_has "$out" "if git removed it partway, $how $wt" "the how"
+  touch "$STATE/git-ok"
+  if out="$("$BERCAIL" cleanup "$WORK/widgets.bravo" 2>&1)"; then fail "cleanup takes a folder made again: $out"; fi
+  assert_has "$out" "git removed the worktree $WORK/widgets.bravo, but something wrote its folder again; its space stays; $how" "made again"
+  for name in alpha bravo; do
+    [[ -f "$WORK/widgets.$name/apps/api/.vite/deps" ]] || fail "$name: what was written there stays"
+    jq -e --arg id "sp-$name" 'any(.spaces[]; .id == $id)' "$STATE/herdr.json" >/dev/null || fail "$name: its space stays"
+  done
+  [[ ! -e "$XDG_STATE_HOME/bercail/retired.jsonl" ]] || fail "neither is recorded as retired"
+  # The rerun of the incident and --gone say how; once the folder is aside, --gone records it.
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "a folder git does not know is cleaned up: $out"; fi
+  assert_has "$out" "not a git worktree; if a cleanup removed it partway, $how $wt" "the rerun"
+  if out="$("$BERCAIL" cleanup --gone "$wt" 2>&1)"; then fail "--gone records a folder still there: $out"; fi
+  assert_has "$out" "$wt is still there, but holds no checkout; if a cleanup removed it partway, $how $wt" "--gone"
+  mv "$wt" "$BATS_TEST_TMPDIR/aside"
+  mkdir -p "$(dirname "$handoffs")"
+  jq -nc --arg p "$wt" --arg r "$WORK/widgets" '{at:"2026-11-20T10:00:00Z",path:$p,branch:"alpha",issue:"w-1",desk:"d-alpha",repo:$r}' >"$handoffs"
+  out="$("$BERCAIL" cleanup --gone "$wt" 2>&1)" || fail "cleanup --gone: $out"
+  assert_has "$out" "recorded $wt as retired" "--gone"
 }
 
 @test "cleanup refuses to end a terminal that is working or blocked, and --check says so" {

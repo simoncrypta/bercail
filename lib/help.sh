@@ -116,7 +116,8 @@ Post-install CLI (bercail):
                 loop (a tick a minute; the hidden terminal bercail-routines runs it) | start (that terminal)
   cleanup       Retire a finished worktree: cleanup <worktree> copies its .bercail/ to
                 ~/Work/worktree-archives/<repo>/, ends its desk and what it started,
-                parents first, removes the worktree, closes its space, and keeps the
+                parents first, stops your processes still running in it (a detached
+                dev server), removes the worktree, closes its space, and keeps the
                 branch. Refuses uncommitted work, commits on neither trunk nor a remote
                 branch, submodules, a terminal at work, and a question Shep asked you
                 about it that still waits; stops, with every reason, when a terminal

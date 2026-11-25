@@ -87,9 +87,10 @@ worktree() {
     '{v: 1, ok: true, path: $p, branch: $b, issue: $i, desk: "d-\($b)", space: "sp-\($b)", repo: $r}' >>"$RECORDS"
 }
 
-# desk ADDRESS CWD ISSUE STATE [bg] [SPACE]: a live desk, or a background Shep.
+# desk ADDRESS CWD ISSUE STATE [bg] [SPACE]: a live desk, or a background Shep,
+# with a pid of its own, as hc gives one.
 desk() {
-  jq --arg a "$1" --arg c "$2" --arg i "$3" --arg s "$4" --arg bg "${5:-}" --arg sp "${6:-}" '. + [{address: $a, name: "n-\($a)",
+  jq --arg a "$1" --arg c "$2" --arg i "$3" --arg s "$4" --arg bg "${5:-}" --arg sp "${6:-}" '. + [{address: $a, name: "n-\($a)", pid: (length + 101),
       state: "live", cwd: $c, status: {state: $s}, labels: ({"bercail.role": "agent", "bercail.issue": $i, "bercail.issue_title": "Job \($i)"}
         + (if $bg == "bg" then {"bercail.shep": "bg"} else {} end) + (if $sp == "" then {} else {"bercail.space": $sp} end))}]' \
     "$HC_DATA/terminals.json" >"$HC_DATA/t.tmp" && mv "$HC_DATA/t.tmp" "$HC_DATA/terminals.json"
