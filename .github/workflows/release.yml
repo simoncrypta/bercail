@@ -57,7 +57,7 @@ jobs:
             gh release create "$TAG" dist/bercail.tar.gz --verify-tag --generate-notes
           fi
 
-      - uses: jdx/packslip@e0340e0c1d10c90a434de2b90f3a1ba345923564 # v1.11.4
+      - uses: jdx/packslip@9d5b1c469ba90d26b6dbd0a0162e84a95da524d5 # v1.11.5
         with:
           artifacts: dist/bercail.tar.gz
           manifest: packaging/packslip.toml

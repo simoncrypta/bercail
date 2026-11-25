@@ -40,7 +40,7 @@
     "source": "github:max-sixty/worktrunk",
     "min": "0.80.0",
     "why": "`wt list --format=json` is {schema, items: [...]} from 0.80.0 on; the shell block reads that shape.",
-    "known": "0.82.0",
+    "known": "0.83.0",
     "pinned_in": [],
     "notes": "The install fallback downloads releases/latest (lib/deps.sh)."
   },
@@ -49,7 +49,7 @@
     "source": "github:agavra/tuicr",
     "min": "0.29.0",
     "why": "From 0.29.0, q keeps a session that holds comments from tuicr review add. Older tuicr deletes it, review-pr's seeded drafts with it, when a reviewed mark is set and the TUI has not loaded them yet.",
-    "known": "0.29.0",
+    "known": "0.30.0",
     "pinned_in": [],
     "notes": "tuicr ignores config keys it does not know, so a key bercail ships that needs a newer tuicr fails silently: raise the minimum with it."
   },
@@ -150,9 +150,9 @@
     "source": "npm:vite-plus",
     "min": null,
     "why": null,
-    "known": "1.7.0",
+    "known": "1.8.0",
     "pinned_in": ["package.json:\"vite-plus\""],
-    "notes": "An exact pin. package.json's vite override names the @voidzero-dev/vite-plus-core that vite-plus depends on (npm view vite-plus@<version> dependencies.vite); from 1.7.0 its version is the bundled Vite's (8.3.8000 for Vite 8.3.8), not vite-plus's."
+    "notes": "An exact pin. package.json's vite override names the @voidzero-dev/vite-plus-core that vite-plus depends on (npm view vite-plus@<version> dependencies.vite); from 1.7.0 its version follows the bundled Vite's, not vite-plus's."
   },
   {
     "name": "bats",
@@ -235,7 +235,7 @@
     "source": "action:jdx/packslip",
     "min": null,
     "why": null,
-    "known": "1.11.4",
+    "known": "1.11.5",
     "pinned_in": [".github/workflows/release.yml:jdx/packslip"],
     "notes": "Signs the release bundle."
   },
