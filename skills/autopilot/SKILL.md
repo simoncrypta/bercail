@@ -133,8 +133,8 @@ body is current, and what waits on a person. Do not merge. Say "ready to merge" 
 
 ## 4. A restack the person publishes
 
-Autopilot never publishes a rewritten branch, and no agent does: the person
-pushes it from their own terminal. When the PR's own head branch must be
+Autopilot never publishes a rewritten branch: the person does, from their own
+terminal or on Shep's guard card. When the PR's own head branch must be
 restacked or rebased onto its base, prepare it and stop:
 
 1. Before you restack, fetch and pin the PR head the restack starts from, in
@@ -153,7 +153,7 @@ git push --no-follow-tags <push url> --force-with-lease=refs/heads/<branch>:<pin
 ```
 
 Do not try `gt submit`, `gh stack submit`, a force flag, or a `+` refspec in
-its place: the guard blocks a force-push for every role. The lease makes the
+its place: the guard blocks a force-push for autopilot. The lease makes the
 push fail if the branch there no longer equals the pinned head when it runs.
 
 ## Inside bercail

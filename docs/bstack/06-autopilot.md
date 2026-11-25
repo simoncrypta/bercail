@@ -54,10 +54,11 @@ at, and:
 Asking for autopilot is asking it to commit and push to the PR's branch. It
 runs as `bstack-autopilot`, a sibling agent that may commit and push without
 asking. It may not force-push, push to `main` or `master`, pass `--no-verify`,
-or merge: bstack's guard extension blocks each of those for every role. A
+or merge: bstack's guard extension blocks each of those for autopilot. A
 restack of the PR's branch is yours to publish: autopilot pins the PR head,
 restacks and checks it, then stops with the pinned and new heads and the
-`git push --force-with-lease` command for you to run. It
+`git push --force-with-lease` command for you to run, or for Shep to put on a
+[guard card](../shep.md#guard-asks) you allow. It
 does not tag or release unless the repo's trusted
 [git policy](../config.md#git-policy-per-repo) sets `agent_may_release`.
 

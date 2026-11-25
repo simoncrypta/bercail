@@ -155,9 +155,13 @@ main checkout, and pass `--repo <checkout>` to `bercail job`.
 Every coding job and follow-up has a visible desk, never a headless fallback. A
 backend limit goes in the desk's report, not an append-only or raw Git
 workaround or a fresh branch. A restack a desk prepared is the
-person's to publish: pass on its report (branch, pinned and new heads, checks,
-and the `git push --force-with-lease` command from §4 of the autopilot skill)
-for them to run in their own terminal. Never run it yourself.
+person's to publish, on a guard card: from its report (branch, push URL,
+pinned and new heads, checks), run `git -C <worktree> push
+--force-with-lease=refs/heads/<branch>:<pinned head> <remote> <new
+head>:refs/heads/<branch>`, both heads in full, where `<remote>` is the one
+remote whose push URL is the report's. No such remote: say so, and do not
+guess. The guard puts it on a card that shows both heads and runs it once on
+their Allow. Never the trunk, never `--force`, and never another way.
 
 Read the desk's latest report against the ask or follow-up you sent. The
 evidence is `bercail shep brief`: the desk's state, that report, and

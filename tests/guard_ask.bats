@@ -136,6 +136,39 @@ pushes() { git -C "$ORIGIN" reflog show --format=%H refs/heads/feature 2>/dev/nu
   [[ "$(git -C "$ORIGIN" rev-parse refs/heads/feature)" == "$pinned" ]] || fail "sent another commit"
 }
 
+@test "on the person's Allow the worker publishes a desk's restack under its lease, and a push over it since withdraws the card" {
+  git -C "$REPO" push -q origin main feature
+  mkdir -p "$XDG_STATE_HOME/bercail"
+  jq -nc --arg p "$REPO" '{at: "2026-11-24T10:00:00Z", ok: true, agent_started: true, desk: "t1", path: $p, repo: $p, branch: "feature"}' \
+    >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  old="$(git -C "$REPO" rev-parse feature)"
+  # The desk's restack: feature rewritten, so origin's head is not under the new one.
+  git -C "$REPO" checkout -q feature
+  git -C "$REPO" commit -q --amend --allow-empty -m restacked
+  new="$(git -C "$REPO" rev-parse HEAD)"
+  id="$(ticket "git -C $REPO push --force-with-lease=refs/heads/feature:$old origin $new:refs/heads/feature")"
+  worker "$id"
+  token="$(card "$id")"
+  notice "notify-send Bercail Decisions: allow force-with-lease push of $ORIGIN refs/heads/feature? It waits for you."
+  bercail shep question json | jq -e --arg t "$token" --arg old "$old" --arg new "$new" '.questions[]
+    | select("\(.id)@\(.revision)" == $t)
+    | (.brief | contains("the old head \($old) to the new head \($new)")) and (.guard | has("defaults") | not)' >/dev/null \
+    || fail "card: $(bercail shep question json)"
+  pick "$token" Allow >/dev/null
+  jq -e '.outcome == "ran" and .exit == 0' <<<"$(event "$id")" >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(git -C "$ORIGIN" rev-parse refs/heads/feature)" == "$new" ]] || fail "not published: $(cat "$ASKS/$id.log")"
+
+  # Someone pushed over it before the worker's first check: the card goes stale, and their push stays.
+  git -C "$REPO" commit -q --amend --allow-empty -m again
+  again="$(git -C "$REPO" rev-parse HEAD)"
+  id="$(ticket "git -C $REPO push --force-with-lease=refs/heads/feature:$new origin $again:refs/heads/feature")"
+  git -C "$REPO" push -q --force origin "$old:refs/heads/feature"
+  worker "$id"
+  jq -e '.outcome == "changed" and (.why | test("not the old head"))' <<<"$(event "$id")" >/dev/null \
+    || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(git -C "$ORIGIN" rev-parse refs/heads/feature)" == "$old" ]] || fail "their push was replaced"
+}
+
 @test "a Deny, an expiry, a withdrawal or a Discuss pick runs nothing" {
   id="$(ticket "git -C $REPO push origin feature")"
   worker "$id"
