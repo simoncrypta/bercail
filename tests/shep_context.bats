@@ -1457,7 +1457,9 @@ EOF
 
   out="$(shep queue --json)" || fail "queue: $out"
 
-  jq -e '[.items[] | [.issue, .title, .state]] == [["a-1", "Job a-1", "review"], ["b-1", "Job b-1", "review"]]' <<<"$out" >/dev/null \
+  # Sorted: the queue orders by when each index last changed, to the second,
+  # and the reads it makes can touch an index staged that same second.
+  jq -e '[.items[] | [.issue, .title, .state]] | sort == [["a-1", "Job a-1", "review"], ["b-1", "Job b-1", "review"]]' <<<"$out" >/dev/null \
     || fail "queue: $(jq -c '[.items[] | {issue, title, state, why}]' <<<"$out")"
 }
 

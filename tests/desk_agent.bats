@@ -21,12 +21,20 @@ for a in "$@"; do printf ' [%s]' "$a"; done
 printf '\n'
 AGENT
   chmod +x "$BATS_TEST_TMPDIR/bin/other"
+  # Every process the test starts inherits this FIFO open, so teardown can wait for them all.
+  mkfifo "$BATS_TEST_TMPDIR/hold"
+  exec {HOLD}<>"$BATS_TEST_TMPDIR/hold"
 }
 
-# A watcher reads hc events until they end, as they do under hc once the
-# terminal goes: end the stand-in's, so no watcher outlives its test.
+# A desk's watcher ignores TERM, as does the hc it starts: they end after the
+# agent (see arrange_record). The FIFO also covers what outlives the watcher,
+# so nothing is left for tests/run.sh's leak check.
 teardown() {
-  [[ ! -f "$BATS_TEST_TMPDIR/events.pids" ]] || xargs kill <"$BATS_TEST_TMPDIR/events.pids" 2>/dev/null || true
+  local held rc=0
+  exec {held}<"$BATS_TEST_TMPDIR/hold" {HOLD}>&-
+  read -r -t 10 -u "$held" _ || rc=$?
+  exec {held}<&-
+  ((rc <= 128)) || fail "a process the test started still runs after 10s"
 }
 
 desk() { "$ROOT/bin/bercail-desk-agent" "$@"; }
@@ -45,6 +53,8 @@ AGENT
 }
 
 # Fake hc: a labelled desk unless a test says otherwise. Records land under the test HOME.
+# Its events are $EVENTS, then a heartbeat every 0.2s, as hc's own wake the
+# watcher: it sees its agent go and closes the stream. It notes its pid to be checked.
 arrange_record() {
   export HC_TERMINAL_ID=t9
   RECORDS="$XDG_STATE_HOME/bercail/desk-sessions"
@@ -54,7 +64,11 @@ arrange_record() {
 #!/usr/bin/env bash
 case "\$1" in
   get) cat "$BATS_TEST_TMPDIR/terminal.json" ;;
-  events) echo "\$\$" >>"$BATS_TEST_TMPDIR/events.pids"; cat "$EVENTS"; exec sleep 30 ;;
+  events)
+    printf '%s\n' "\$\$" >"$BATS_TEST_TMPDIR/events.pid"
+    cat "$EVENTS"
+    while printf '{}\n'; do sleep 0.2; done
+    ;;
 esac
 HC
   chmod +x "$BATS_TEST_TMPDIR/bin/hc"
@@ -79,23 +93,6 @@ wait_for() {
 pi_sleeps() {
   printf '#!/usr/bin/env bash\nexec sleep "${AGENT_LIFE:-2}"\n' >"$BATS_TEST_TMPDIR/bin/pi"
   chmod +x "$BATS_TEST_TMPDIR/bin/pi"
-  hash -r
-}
-
-# hc events that keep streaming: they wake the watcher, as hc's own exit event does.
-# The fake notes its pid to be checked. The 0.2s sleep is the stream, not a readiness wait.
-hc_streams_events() {
-  cat >"$BATS_TEST_TMPDIR/bin/hc" <<HC
-#!/usr/bin/env bash
-case "\$1" in
-  get) cat "$BATS_TEST_TMPDIR/terminal.json" ;;
-  events)
-    printf '%s\n' "\$\$" >"$BATS_TEST_TMPDIR/events.pid"
-    while :; do printf '{}\n'; sleep 0.2; done
-    ;;
-esac
-HC
-  chmod +x "$BATS_TEST_TMPDIR/bin/hc"
   hash -r
 }
 
@@ -356,7 +353,6 @@ AGENT
 @test "the watcher goes when the agent does" {
   arrange_record
   pi_sleeps
-  hc_streams_events
   AGENT_LIFE=1 desk pi >/dev/null
   wait_for '[[ -s "$BATS_TEST_TMPDIR/events.pid" ]] && ! kill -0 "$(cat "$BATS_TEST_TMPDIR/events.pid")" 2>/dev/null'
 }
@@ -364,7 +360,6 @@ AGENT
 @test "the desk runs on its own scratch TMPDIR, and its watcher sweeps it and a killed sibling's when the agent exits" {
   local root="$XDG_CACHE_HOME/bercail/scratch" seen
   arrange_record
-  hc_streams_events
   sleep 0 &
   local dead=$!
   wait "$dead"
@@ -386,7 +381,6 @@ AGENT
 @test "a recorded desk's start sweeps your old temp dir entries by itself, while the agent runs" {
   local pid
   arrange_record
-  hc_streams_events
   mkdir -p "$BERCAIL_TMP_ROOT/old-copy/bin"
   : >"$BERCAIL_TMP_ROOT/old-copy/bin/op"
   chmod a-w "$BERCAIL_TMP_ROOT/old-copy/bin"
@@ -404,7 +398,6 @@ AGENT
 @test "a desk that exits while its start sweep still runs leaves no scratch: that sweep does not hold the folder" {
   local root="$XDG_CACHE_HOME/bercail/scratch" seen
   arrange_record
-  hc_streams_events
   # The start sweep passes the live agent's folder by, then looks at the temp
   # dir, which asks id for the uid. This id says it is there and waits to be
   # let go (15s at most); the agent ends once the sweep is in it.
@@ -443,7 +436,6 @@ PI
   local pid
   arrange_record
   pi_sleeps
-  hc_streams_events
   AGENT_LIFE=30 "$ROOT/bin/bercail-desk-agent" pi >/dev/null &
   pid=$!
   wait_for '[[ "$(record .pid 2>/dev/null)" == "$pid" ]]'
