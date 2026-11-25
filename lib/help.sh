@@ -33,7 +33,8 @@ Post-install CLI (bercail):
                 task dispatch [--wait-ready] [--dry-run] (JSON stdin; a first visible desk, or a follow-up into the original desk's session,
                   shown at its next turn even while it works; a gone owner's checkout gets a new desk, unasked;
                   --wait-ready: return once a new desk's Pi is up, with the message queued;
-                  --dry-run: dispatch's checks, then would-start or would-queue, and nothing created or recorded) |
+                  --dry-run: dispatch's checks, then would-start or would-queue, and nothing created or recorded;
+                  "model":"PROVIDER/MODEL[:thinking]" starts a new desk on it; a live desk takes bercail desk model) |
                 runtime (source/installed fingerprints and actual startup evidence; read-only) |
                 discuss TOKEN (a read-only Pi on the question's branch: what Discuss runs) |
                 repos [--json] (your known repos) | board (open jobs, what waits on you) |

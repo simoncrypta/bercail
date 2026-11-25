@@ -110,7 +110,8 @@ exploration needs a separate issue and `--fork-reason`.
 `--adopt-reason` (from dispatch only, when it adopts) starts a new-session desk in
 the existing worktree of a branch whose original desk is gone. `--reuse-worktree`
 and `--released` are dispatch's too: finishing a creation that stopped before its
-desk, and a target given up by a superseded issue.
+desk, and a target given up by a superseded issue. Dispatch passes a `model`
+as `--model`, after `--check-model` says Pi lists it.
 Background Sheps cannot use this coding route.
 
 Run the **resolved script directly** (absolute path below). Set the process

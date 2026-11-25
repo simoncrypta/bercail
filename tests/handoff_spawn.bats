@@ -1802,6 +1802,23 @@ STUB
   [[ ! -e "$DESK_REPO.feat" ]] || fail "no worktree when the model cannot be checked"
 }
 
+@test "--check-model says whether Pi lists a model, for Shep too, and starts nothing" {
+  local out rc=0 spawn="$ROOT/skills/handoff/scripts/handoff-spawn"
+  _pi_ready
+  _pi_lists_models
+  BERCAIL_ROLE=shep "$spawn" --check-model claude-bridge/fable:low || fail "a listed model passes"
+  jq -e --arg e "$(jq -r '.[6]' "$HANDOFF_PI_PROFILE/lead.json")" '.[0:2] == ["--offline", "--list-models"] and index(["-e", $e])' \
+    "$PI_LIST_LOG" >/dev/null || fail "Pi lists models with the lead's extensions: $(cat "$PI_LIST_LOG")"
+  out="$(BERCAIL_ROLE=shep "$spawn" --check-model claude-bridge/nope 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$out" == *"Pi has no model claude-bridge/nope."* ]] || fail "$rc $out"
+  [[ "$(wc -l <"$PI_LIST_LOG")" -eq 2 ]] || fail "one list per check: $(cat "$PI_LIST_LOG")"
+  _desk_fixture check-empty
+  rc=0
+  out="$(_desk_spawn --check-model '' 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$out" == *"--check-model takes PROVIDER/MODEL"* ]] || fail "an empty model is refused: $rc $out"
+  [[ ! -e "$DESK_REPO.feat" && ! -s "$DESK_HC_LOG" && ! -e "$DESK_STATE/bercail/handoffs.jsonl" ]] || fail "an empty check started a desk"
+}
+
 @test "headless --model swaps only the model; an unknown one starts nothing" {
   local wt="$BATS_TEST_TMPDIR/model-headless" out base rc=0
   _start_fixture "$wt"

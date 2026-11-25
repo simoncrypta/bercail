@@ -56,7 +56,9 @@ is UNKNOWN or over budget; never hold accepted work for it.
    repos.
 3. Pipe JSON to `bercail shep task dispatch --wait-ready`: `repo`, `issue`,
    `target`, a stable `requestId`, `message`, and `branch` for a first desk
-   (an owner or adoption keeps its own). `--wait-ready` returns once a new desk's Pi is up with the message
+   (an owner or adoption keeps its own). When the person names a model for a
+   new desk, add `model` (`provider/model[:thinking]`); a live desk refuses
+   it, so switch that one with `bercail desk model`. `--wait-ready` returns once a new desk's Pi is up with the message
    queued. With `ready: false`, the desk started but the message didn't queue.
    Follow `next`: after a timeout retry the same id and payload once Pi is up;
    if binding was refused, inspect the original desk rather than relaunching.

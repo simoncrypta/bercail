@@ -16,6 +16,7 @@ source "$_HANDOFF_SPAWN_DIR/handoff-stages.sh"
 handoff_usage() {
   cat >&2 <<'EOF'
 usage: handoff-spawn --info
+       handoff-spawn --check-model PROVIDER/MODEL[:thinking]
        handoff-spawn --stage bstack|autopilot --issue ID --worktree PATH
                      [--resume SESSION] [--dry-run] [--model PROVIDER/MODEL[:thinking]]
        handoff-spawn --branch <name> --stage bstack|autopilot --issue ID
@@ -24,6 +25,8 @@ usage: handoff-spawn --info
                      [--model PROVIDER/MODEL[:thinking]] [--adopt-reason TEXT]
 
   --info          print JSON facts and exit
+  --check-model M exit 0 when Pi lists model M with the lead's extensions, as
+                  --model checks it; else say why and exit 1. Starts nothing.
   --issue ID      beads issue to work (bd show ID). It holds the detail. The
                   agent's whole prompt is one line: the id, its short title,
                   and run bd show ID.
@@ -523,12 +526,17 @@ handoff_spawn_main() {
   local json keep_space info=0 started=0 space="" desk=""
   local stage="" worktree="" resume="" dry=0
   local base="" fresh="" model="" target="" fork_reason="" adopt_reason="" staged="" session="" lock="" prior path prior_main own retired created="" owned=0
-  local existing=0 reuse=0 released="" role=""
+  local existing=0 reuse=0 released="" role="" check_model=""
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
       -h|--help) handoff_usage ;;
       --info) info=1; shift ;;
+      --check-model)
+        [[ $# -ge 2 && -n "$2" ]] || handoff_die "--check-model takes PROVIDER/MODEL[:thinking]; it checks one model and starts nothing"
+        check_model="$2"
+        shift 2
+        ;;
       --dirty) dirty=1; shift ;;
       --clean) dirty=0; shift ;;
       --issue)
@@ -594,6 +602,15 @@ handoff_spawn_main() {
     command -v jq >/dev/null 2>&1 || handoff_die "jq is required"
     handoff_info_json
     printf '\n'
+    return 0
+  fi
+  # Dispatch asks before it records a creation, so a model Pi lacks reserves none.
+  if [[ -n "$check_model" ]]; then
+    [[ -f "$(handoff_pi_lead_file)" ]] \
+      || handoff_die "Pi lead profile is missing ($(handoff_pi_lead_file)). Run bercail update."
+    handoff_bin_present "${HANDOFF_PI_BIN:-pi}" \
+      || handoff_die "pi is not on PATH, so --model $check_model cannot be checked. Install it (bercail update)."
+    handoff_pi_model_check "${HANDOFF_PI_BIN:-pi}" "$(handoff_pi_lead_file)" "$check_model"
     return 0
   fi
 

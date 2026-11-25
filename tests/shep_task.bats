@@ -1182,3 +1182,73 @@ snapshot() {
   done
   [[ ! -d "$XDG_STATE_HOME/bercail/desk-follow-ups" ]]
 }
+
+on_model() { create "${2:-r1}" | jq --arg m "${1:-openai/gpt-6.2-astra}" '.model=$m'; }
+
+# handoff-spawn's --check-model knows only openai/gpt-6.2-astra, as a Pi listing
+# that one would; every other call goes to the spawn stand-in already set.
+lists_astra() {
+  mv "$BERCAIL_HANDOFF_SPAWN" "$BERCAIL_HANDOFF_SPAWN-desk"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'EOF'
+#!/usr/bin/env bash
+[[ $1 == --check-model ]] || exec "$0-desk" "$@"
+printf 'check %s\n' "$2" >>"$LOG"
+[[ $2 == openai/gpt-6.2-astra ]] || { echo "handoff-spawn: Pi has no model $2. pi --list-models lists the ones you can use." >&2; exit 1; }
+EOF
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+}
+
+@test "a first desk starts on the model dispatch names, the issue records it, and a retry of its UNKNOWN creation keeps it" {
+  local out
+  slow_launch
+  lists_astra
+  out="$(on_model | task dispatch --dry-run)" || fail "$out"
+  jq -e '.status == "would-start" and (.spawn | index(["--model","openai/gpt-6.2-astra"]))' <<<"$out" || fail "$out"
+  on_model | task dispatch >/dev/null 2>&1 && fail "the slow spawn should time out"
+  jq -e '.metadata.bercail_task.creation | .status == "unknown" and .model == "openai/gpt-6.2-astra"' "$TASK_DATA/app-1.json" || fail "$(jq .metadata "$TASK_DATA/app-1.json")"
+  out="$(create | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"requestId payload changed"* ]] || fail "a retry without the model is other work: $out"
+  out="$(on_model | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .retry' <<<"$out" || fail "$out"
+  [[ "$(grep -c -- '^spawn --branch fresh --stage bstack .*--model openai/gpt-6.2-astra' "$LOG")" == 2 ]] || fail "$(cat "$LOG")"
+}
+
+@test "a model Pi does not list is refused before the creation is recorded, so the same id can name the right one" {
+  local out dry before
+  rm "$TASK_DATA/t9.hc" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  spawn_ok t21 "$REPO.fresh"
+  lists_astra
+  before="$(snapshot)"
+  dry="$(on_model openai/gpt-6.2-astro | task dispatch --dry-run 2>&1)" && fail "$dry"
+  [[ "$(snapshot)" == "$before" ]] || fail "the dry run changed state"
+  out="$(on_model openai/gpt-6.2-astro | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"Pi has no model openai/gpt-6.2-astro."* && "$dry" == "$out" ]] || fail "dry: $dry; real: $out"
+  ! grep -q '^spawn ' "$LOG" || fail "$(cat "$LOG")"
+  jq -e '.metadata.bercail_task | has("creation") | not' "$TASK_DATA/app-1.json" || fail "$(jq .metadata "$TASK_DATA/app-1.json")"
+  out="$(on_model | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .creation.desk == "t21"' <<<"$out" || fail "$out"
+  grep -q -- '^spawn --branch fresh .*--model openai/gpt-6.2-astra' "$LOG" || fail "$(cat "$LOG")"
+}
+
+@test "a retry of a v0.17 creation that adds a model is other work, since v0.17 had none" {
+  local out
+  slow_launch
+  create lost-spawn | task dispatch >/dev/null 2>&1 && fail "the slow spawn should time out"
+  jq '.metadata.bercail_task |= (del(.creation) | .v=1 | .requests=[{id:"lost-spawn",sequence:0,payload:"hashed the v0.17 way",outcome:"stage",stage:"bstack",message:"Amend with gt m -a and publish the new head",status:"unknown",next:"Retry this requestId"}])' \
+    "$TASK_DATA/app-1.json" >"$BATS_TEST_TMPDIR/issue"
+  mv "$BATS_TEST_TMPDIR/issue" "$TASK_DATA/app-1.json"
+  out="$(on_model openai/gpt-6.2-astra lost-spawn | task dispatch --dry-run 2>&1)" && fail "$out"
+  [[ "$out" == *"requestId payload changed"* ]] || fail "$out"
+}
+
+@test "a follow-up to a live desk refuses a model and names bercail desk model, in a dry run too" {
+  local out dry
+  out="$(request | jq '.model="openai/gpt-6.2-astra"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"desk t9 is live, and a follow-up runs on its model; switch it with bercail desk model t9 openai/gpt-6.2-astra"* ]] || fail "$out"
+  dry="$(request | jq '.model="openai/gpt-6.2-astra"' | task dispatch --dry-run 2>&1)" && fail "$dry"
+  [[ "$dry" == "$out" ]] || fail "dry: $dry; real: $out"
+  [[ ! -d "$XDG_STATE_HOME/bercail/desk-follow-ups" ]]
+  ! grep -q '^bd update' "$LOG" || fail "$(cat "$LOG")"
+  out="$(request | jq '.model="gpt-6.2-astra"' | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"model takes PROVIDER/MODEL[:thinking]"* ]] || fail "$out"
+}

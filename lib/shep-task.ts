@@ -35,6 +35,7 @@ type Request = { id: string; payload: string; stage: string; message: string };
 // and a retry once it started binds the new desk and queues its message.
 type Creation = Request & {
   status: "creating" | "unknown" | "started";
+  model?: string;
   next: string;
   reason?: string;
   result?: any;
@@ -96,11 +97,12 @@ type Adoption = {
   from: { desk: string; session: string; space: string }[];
 };
 // A retry asks for the same work: the same payload, or, for a v0.17 request
-// whose payload was hashed another way, the same message and stage.
-function same(stored: Request, request: Request): boolean {
+// whose payload was hashed another way, the same message and stage, and no
+// model, which v0.17 had not.
+function same(stored: Request, request: Request, model?: string): boolean {
   return stored.payload
     ? stored.payload === request.payload
-    : stored.message === request.message && (stored.stage || "bstack") === request.stage;
+    : !model && stored.message === request.message && (stored.stage || "bstack") === request.stage;
 }
 const state = () => join(process.env.XDG_STATE_HOME || join(process.env.HOME!, ".local/state"), "bercail");
 // --dry-run: save, queue and create write nothing; dispatch's checks around
@@ -627,13 +629,28 @@ type Spawn = {
   forkReason?: string;
   adoptReason?: string;
 };
+const spawner = () =>
+  process.env.BERCAIL_HANDOFF_SPAWN || join(process.env.HOME!, ".agents/skills/handoff/scripts/handoff-spawn");
+// Refuse a model Pi does not list before the creation is reserved: handoff-spawn
+// would refuse it with no desk started, and the creation would stay UNKNOWN.
+function checkModel(repo: string, model: string): void {
+  try {
+    run(spawner(), ["--check-model", model], repo, 30_000);
+  } catch (error: any) {
+    throw new Error(
+      String(error?.stderr || error)
+        .trim()
+        .replace(/^handoff-spawn: /, ""),
+      { cause: error },
+    );
+  }
+}
 // Start the visible desk for task.creation. timeout runs the spawn in its own
 // process group and kills the whole group when time runs out, so nothing it
 // started is still on its way to a desk when the creation turns UNKNOWN.
 function create(repo: string, value: any, task: Task, opts: Spawn): any {
   const creation = task.creation!;
-  const spawn =
-    process.env.BERCAIL_HANDOFF_SPAWN || join(process.env.HOME!, ".agents/skills/handoff/scripts/handoff-spawn");
+  const spawn = spawner();
   const secs = spawnTimeout();
   const args = [
     "--branch",
@@ -645,6 +662,7 @@ function create(repo: string, value: any, task: Task, opts: Spawn): any {
     "--target",
     task.target,
     "--clean",
+    ...(creation.model ? ["--model", creation.model] : []),
     ...(opts.forkReason ? ["--fork-reason", opts.forkReason] : []),
     ...(opts.adoption ? ["--adopt-reason", opts.adoptReason!] : []),
     ...(opts.reuse ? ["--reuse-worktree"] : opts.existing ? ["--existing-branch"] : []),
@@ -717,12 +735,17 @@ function dispatch(op: string, input: any): any {
     "branch",
     "forkReason",
     "adoptReason",
+    "model",
   ]);
   const unknown = Object.keys(input).filter((key) => !allowed.has(key));
   if (unknown.length)
     throw new Error(`unknown task field ${unknown.join(", ")}; dispatch takes ${[...allowed].join(", ")}`);
   if (JSON.stringify(input).length > 65536) throw new Error("request exceeds 64KiB");
   if (input.branch) run("git", ["check-ref-format", "--branch", input.branch], process.cwd());
+  if (input.model !== undefined && !/^[^/\s]+\/\S+$/.test(typeof input.model === "string" ? input.model : ""))
+    throw new Error(
+      "model takes PROVIDER/MODEL[:thinking], as pi --list-models names it (claude-bridge/claude-opus-5-5:high)",
+    );
   const repo = mainOf(input.repo);
   const common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir");
   const lock = join(common, "bercail-task.lock");
@@ -828,6 +851,8 @@ function dispatch(op: string, input: any): any {
             branch: input.branch || "",
             forkReason: input.forkReason || "",
             adoptReason: input.adoptReason || "",
+            // Only when set, so the payloads recorded before model existed still match.
+            ...(input.model ? { model: input.model } : {}),
           }),
         )
         .digest("hex"),
@@ -849,7 +874,13 @@ function dispatch(op: string, input: any): any {
     // A retry of a follow-up: it was queued once, and is never sent again.
     const sent = queued(repo, value.id, request);
     if (sent) {
-      if (!same({ ...sent.file.request, payload: sent.file.v === 2 ? sent.file.request.payload : "" }, request))
+      if (
+        !same(
+          { ...sent.file.request, payload: sent.file.v === 2 ? sent.file.request.payload : "" },
+          request,
+          input.model,
+        )
+      )
         throw new Error("requestId payload changed; this is not a retry");
       const adopted = task?.adoptions?.find((a) => a.request === input.requestId);
       return {
@@ -874,7 +905,7 @@ function dispatch(op: string, input: any): any {
       throw new Error("requestId payload changed; this is not a retry");
     const prior = task?.creation?.id === input.requestId ? task?.creation : undefined;
     if (prior) {
-      if (!same(prior, request)) throw new Error("requestId payload changed; this is not a retry");
+      if (!same(prior, request, input.model)) throw new Error("requestId payload changed; this is not a retry");
       // The spawn of an UNKNOWN creation has ended. When it ended partial and
       // its desk came up after all, bind that desk. When it left no desk,
       // finish it in its clean worktree, or start it again.
@@ -986,6 +1017,10 @@ function dispatch(op: string, input: any): any {
       throw new Error(
         `original owner missing/stale; inspect the recorded checkout/space, no replacement was started${unsettled ? `. Its creation is UNKNOWN: retry request ${task!.creation!.id}` : ""}`,
       );
+    if (owner && input.model)
+      throw new Error(
+        `desk ${owner.desk} is live, and a follow-up runs on its model; switch it with bercail desk model ${owner.desk} ${input.model}, then dispatch without model`,
+      );
     if (asked && owner)
       throw new Error(
         `live original owner ${owner.desk}; continue it with a normal dispatch, adoption is only for a gone owner`,
@@ -1080,7 +1115,13 @@ function dispatch(op: string, input: any): any {
       save(repo, value, task, false); // The issue may be closed meanwhile: leave its status.
       return { ...delivered(path), owner, authority: false };
     }
-    task.creation = { ...request, status: "creating", next: "Inspect visible creation result" };
+    if (input.model) checkModel(repo, input.model);
+    task.creation = {
+      ...request,
+      ...(input.model ? { model: input.model } : {}),
+      status: "creating",
+      next: "Inspect visible creation result",
+    };
     reserve(repo, value, task);
     const done = create(repo, value, task, {
       existing: existing || (restart && kept(task.branch)),
