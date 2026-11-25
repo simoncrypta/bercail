@@ -50,7 +50,8 @@ land_run() {
   fi
   # Before the commit: an interrupted backend probe (130) commits nothing.
   backend="$(git_backend "$root")" || return $?
-  if git -C "$root" diff --cached --quiet; then
+  # A merge under way is committed even when its tree is HEAD's: its trunk parent is the point.
+  if [[ -z "$(_desc_merge_heads "$root")" ]] && git -C "$root" diff --cached --quiet; then
     described="$(_desc_meta "$root/$DESC_FILE" tree)"
     [[ "$(git -C "$root" rev-parse 'HEAD^{tree}')" == "$described" ]] \
       || { _land_err "nothing is staged in $root: the desk stages its change and runs /validate"; return 1; }

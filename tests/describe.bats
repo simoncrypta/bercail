@@ -433,6 +433,80 @@ committed_policy() {
     || fail "a committed policy edit lowered the stakes: $(describe check --json | jq -c .change)"
 }
 
+@test "stakes: a staged merge of the trunk is measured against the trunk, not as the trunk's own files, before and after its commit" {
+  local out staged later side
+  committed_policy 'high_stakes = ["lib/"]\n'
+  git checkout -qb feat
+  printf 'doc\n' >notes.md && git add notes.md && git commit -qm notes
+  # The trunk adds a high-stakes file and edits the policy, which the branch then merges.
+  git checkout -q main
+  mkdir -p lib && printf 'a\nb\n' >lib/a.sh
+  printf 'high_stakes = ["lib/"]\ndiff_budget = 500\n' >.bercail/policy.toml
+  git add lib && git add -f .bercail/policy.toml && git commit -qm 'trunk: lib'
+  git checkout -q feat
+  git merge -q --no-commit --no-ff main
+  printf 'more\n' >>notes.md && git add notes.md
+  evidence
+  plain_body | description "notes: add a line"
+  out="$(describe stamp)" || fail "stamp: $out"
+  [[ "$out" == *"the change: 2 lines in 1 file, stakes low, measured against main, the trunk side of this merge"* ]] || fail "stamp says: $out"
+  grep -qx "base: $(git rev-parse main)" .bercail/description.md || fail "the stamp's base: $(cat .bercail/description.md)"
+  staged="$(describe check --json | jq -c .change)"
+  jq -e '.files == 1 and .lines == 2 and .stakes == "low" and .high_stakes == [] and .against == "main"' <<<"$staged" >/dev/null \
+    || fail "the staged merge: $staged"
+  out="$(describe check 2>&1)" || fail "$out"
+  ! grep -q 'base moved' <<<"$out" || fail "the trunk's tip is merged in: $out"
+  # A stamp naming the branch's HEAD does not choose the range of a merge under way.
+  sed -i "s/^base: .*/base: $(git rev-parse HEAD)/" .bercail/description.md
+  [[ "$(describe check --json | jq -c .change)" == "$staged" ]] || fail "the stamp's base won: $(describe check --json | jq -c .change)"
+  describe stamp >/dev/null
+  git commit -qF <(describe commit) || fail "commit"
+  [[ "$(describe check --json | jq -c .change)" == "$staged" ]] || fail "the committed merge: $(describe check --json | jq -c .change)"
+  side="$(git rev-parse main)"
+  later="$(git commit-tree 'main^{tree}' -p main -m later)"
+  git update-ref refs/heads/main "$later"
+  out="$(describe check 2>&1)"
+  [[ "$out" == *'warn: the base moved: main has 1 commit(s)'* ]] || fail "the trunk moved past the merge: $out"
+  [[ "$out" == *"measured against ${side:0:12} on main,"* ]] || fail "the side is no longer main's tip: $out"
+}
+
+@test "stakes: against the trunk's side, the policy file still counts: one on disk the trunk lacks, ignored or not, and a mode change" {
+  git checkout -qb feat
+  git checkout -q main
+  printf 'x\n' >trunk.txt && git add trunk.txt && git commit -qm trunk
+  git checkout -q feat
+  git merge -q --no-commit --no-ff main
+  describe check --json | jq -e '.change | .against == "main" and .stakes == "low"' >/dev/null || fail "$(describe check --json | jq -c .change)"
+  mkdir -p .bercail && printf 'high_stakes = []\n' >.bercail/policy.toml
+  printf '.bercail/policy.toml\n' >>.git/info/exclude
+  describe check --json | jq -e '.change.high_stakes == [".bercail/policy.toml"]' >/dev/null \
+    || fail "an ignored policy on disk: $(describe check --json | jq -c .change)"
+  rm .bercail/policy.toml
+  git merge --abort
+  git checkout -q main
+  committed_policy 'high_stakes = []\n'
+  git checkout -q feat
+  git merge -q --no-commit --no-ff main
+  chmod +x .bercail/policy.toml && git add -f .bercail/policy.toml
+  describe check --json | jq -e '.change.high_stakes == [".bercail/policy.toml"]' >/dev/null \
+    || fail "a mode change: $(describe check --json | jq -c .change)"
+}
+
+@test "stakes: a merge of a local trunk ahead of origin's is measured from HEAD, so its unpushed commits count" {
+  committed_policy 'high_stakes = ["lib/"]\n'
+  git init -q --bare "$BATS_TEST_TMPDIR/origin.git"
+  git remote add origin "$BATS_TEST_TMPDIR/origin.git"
+  git push -q origin main
+  git fetch -q origin
+  git checkout -qb feat
+  git checkout -q main
+  mkdir -p lib && printf 'a\n' >lib/a.sh && git add lib && git commit -qm 'local only'
+  git checkout -q feat
+  git merge -q --no-commit --no-ff main
+  describe check --json | jq -e '.change | .against == null and .stakes == "high" and .high_stakes == ["lib/a.sh"]' >/dev/null \
+    || fail "the local trunk's commit was left out: $(describe check --json | jq -c .change)"
+}
+
 @test "stakes: review = always makes a low-stakes change wait for the person" {
   mkdir -p "$XDG_CONFIG_HOME/bercail"
   printf '[policy."%s"]\nreview = "always"\n' "$(pwd -P)" >"$XDG_CONFIG_HOME/bercail/config.toml"

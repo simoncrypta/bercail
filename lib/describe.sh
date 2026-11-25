@@ -153,6 +153,49 @@ _desc_numstat() {
   done
 }
 
+# The trunk's refs at ROOT that exist: origin's as last fetched, then the local one.
+_desc_trunk_refs() {
+  local root="$1" trunk ref
+  trunk="$(git_backend_trunk "$root")"
+  for ref in "refs/remotes/origin/$trunk" "refs/heads/$trunk"; do
+    git -C "$root" rev-parse --verify --quiet "$ref^{commit}" >/dev/null && printf '%s\n' "$ref"
+  done
+  return 0
+}
+
+# The commits a merge under way at ROOT brings in (MERGE_HEAD), one a line.
+_desc_merge_heads() {
+  local file
+  file="$(git -C "$1" rev-parse --path-format=absolute --git-path MERGE_HEAD)" || return 0
+  [[ ! -f "$file" ]] || grep . "$file" || true
+}
+
+# The trunk side of a merge of the trunk, as "<commit> <name>": the one commit
+# a merge under way brings in, whatever BASE says, or once that merge is
+# committed, HEAD's second parent when it is BASE. Only when it is on the trunk
+# the change goes to, origin's once fetched: a local trunk ahead of it holds
+# commits nobody reviewed. Measured from it, the change is what the branch
+# lands on the trunk, not the trunk's own commits that the merge brings along.
+# The name is the trunk's, or "<short commit> on <trunk>" when it moved on.
+_desc_trunk_side() {
+  local root="$1" base="${2:-}" heads side ref name
+  heads="$(_desc_merge_heads "$root")"
+  if [[ -n "$heads" ]]; then
+    [[ "$heads" != *$'\n'* ]] || return 0
+    side="$heads"
+  elif [[ -n "$base" ]]; then
+    side="$(git -C "$root" rev-parse --verify --quiet 'HEAD^2')" && [[ "$side" == "$base" ]] || return 0
+  else
+    return 0
+  fi
+  ref="$(_desc_trunk_refs "$root" | head -n 1)"
+  [[ -n "$ref" ]] && git -C "$root" merge-base --is-ancestor "$side" "$ref" 2>/dev/null || return 0
+  name="${ref#refs/*/}"
+  [[ "$(git -C "$root" rev-parse "$ref^{commit}")" == "$side" ]] || name="${side:0:12} on $name"
+  printf '%s %s\n' "$side" "$name"
+}
+
+
 # The staged change at ROOT as its reviewer meets it, as JSON: the files, the
 # lines added and removed without lockfiles, binaries and files .gitattributes
 # marks linguist-generated (left_out counts those), the high-stakes paths it
@@ -161,12 +204,15 @@ _desc_numstat() {
 # from HEAD (or BASE), staged or not: this reads the worktree's copy, so a desk
 # that edits high_stakes on its branch must not lower its own change's stakes.
 # With BASE, the change runs from that commit to the index instead of from
-# HEAD, so it keeps its size and stakes once it is committed.
+# HEAD, so it keeps its size and stakes once it is committed. A merge of the
+# trunk runs from the trunk's side (against names it), as its PR would.
 desc_change() {
-  local root="$1" base="${2:-}" numstat generated="" high="" glob policy
+  local root="$1" base="${2:-}" numstat generated="" high="" glob policy side against=""
   local -a specs=()
   policy="$(policy_json "$root" 2>/dev/null | jq -c .policy)" || policy=""
   [[ -n "$policy" ]] || policy="$POLICY_DEFAULTS"
+  side="$(_desc_trunk_side "$root" "$base")"
+  [[ -z "$side" ]] || { base="${side%% *}"; against="${side#* }"; }
   numstat="$(_desc_numstat "$root" "$base")"
   if [[ -n "$numstat" ]]; then
     generated="$(cut -f3- <<<"$numstat" | tr '\n' '\0' | git -C "$root" check-attr -z --stdin linguist-generated \
@@ -176,12 +222,19 @@ desc_change() {
     done < <(jq -r '.high_stakes // [] | .[]' <<<"$policy")
     ((${#specs[@]} == 0)) || high="$(git -C "$root" diff --cached --no-renames --name-only ${base:+"$base"} -- "${specs[@]}")"
   fi
-  if [[ -n "$(git -C "$root" status --porcelain --untracked-files=all -- "$POLICY_FILE")" ]] \
+  # Against the trunk's side, the trunk's own policy edit is not the change's.
+  # A file git does not track counts too, ignored or not: the policy is read from disk.
+  if [[ -n "$against" ]]; then
+    if ! git -C "$root" diff --quiet "$base" -- "$POLICY_FILE" || ! git -C "$root" diff --cached --quiet "$base" -- "$POLICY_FILE" \
+      || { [[ -e "$root/$POLICY_FILE" || -L "$root/$POLICY_FILE" ]] && [[ -z "$(git -C "$root" ls-files -- "$POLICY_FILE")" ]]; }; then
+      high+=$'\n'"$POLICY_FILE"
+    fi
+  elif [[ -n "$(git -C "$root" status --porcelain --untracked-files=all -- "$POLICY_FILE")" ]] \
     || { [[ -n "$base" ]] && ! git -C "$root" diff --quiet "$base" -- "$POLICY_FILE"; }; then
     high+=$'\n'"$POLICY_FILE"
   fi
   high="$(sort -u <<<"$high" | jq -Rnc '[inputs | select(. != "")]')"
-  jq -Rnc --argjson policy "$policy" --argjson high "$high" --arg gen "$generated" --arg locks "$DESC_LOCKFILES" '
+  jq -Rnc --argjson policy "$policy" --argjson high "$high" --arg gen "$generated" --arg locks "$DESC_LOCKFILES" --arg against "$against" '
     ($gen | split("\n")) as $g | ($locks | split(" ")) as $l
     | [inputs | select(. != "") | split("\t") | {a: .[0], d: .[1], p: (.[2:] | join("\t"))}
         | .out = (.a == "-" or (.p | IN($g[])) or (.p | split("/") | last | IN($l[])))
@@ -190,7 +243,7 @@ desc_change() {
     | (if ($high | length) > 0 then "high" else "low" end) as $stakes
     | {files: ($f | length), lines: $lines,
        left_out: {files: ([$f[] | select(.out)] | length), lines: ([$f[] | select(.out) | .n] | add // 0)},
-       stakes: $stakes, high_stakes: $high,
+       stakes: $stakes, high_stakes: $high, against: (if $against == "" then null else $against end),
        review: (if $policy.review == "always" or ($policy.review == "by-stakes" and $stakes == "high") then "required" else "optional" end),
        diff_budget: $policy.diff_budget, over_budget: ($lines > $policy.diff_budget)}' <<<"$numstat"
 }
@@ -202,6 +255,7 @@ desc_change_line() {
     + (if .left_out.files > 0 then " (\(.left_out.files) more left out: lockfiles, generated or binary)" else "" end)
     + ", stakes \(.stakes)"
     + (if .stakes == "high" then ": " + (.high_stakes | if length > 3 then (.[0:3] | join(", ")) + ", …" else join(", ") end) else "" end)
+    + (if .against then ", measured against \(.against), the trunk side of this merge" else "" end)
     + (if .review == "required" then "; the person reviews it before it is committed or merged" else "" end)' <<<"$1"
 }
 
@@ -298,19 +352,20 @@ _desc_body_problems() {
       }'
 }
 
-# A warning when the trunk has commits HEAD is not on: origin's as last fetched,
-# else the local one. Validated on a moved base, the change is rebased at merge,
-# which makes its description stale. No fetch, so check stays offline.
+# A warning when the trunk has commits neither HEAD nor a merge under way is
+# on: origin's as last fetched, else the local one. Validated on a moved base,
+# the change is rebased at merge, which makes its description stale. No fetch,
+# so check stays offline.
 _desc_base_moved() {
-  local root="$1" trunk ref n
-  trunk="$(git_backend_trunk "$root")"
-  for ref in "refs/remotes/origin/$trunk" "refs/heads/$trunk"; do
-    git -C "$root" rev-parse --verify --quiet "$ref^{commit}" >/dev/null || continue
-    n="$(git -C "$root" rev-list --count "HEAD..$ref" 2>/dev/null)" || continue
+  local root="$1" ref n
+  local -a heads=()
+  mapfile -t heads < <(_desc_merge_heads "$root")
+  while IFS= read -r ref; do
+    n="$(git -C "$root" rev-list --count "HEAD..$ref" ${heads[@]+"${heads[@]/#/^}"} 2>/dev/null)" || continue
     [[ "$n" -gt 0 ]] || continue
     printf 'the base moved: %s has %s commit(s) this change is not on; bring the branch onto it (rebase, restack or merge), then rerun /validate' "${ref#refs/*/}" "$n"
     return 0
-  done
+  done < <(_desc_trunk_refs "$root")
 }
 
 # Everything check knows, as JSON. Exit status is not the verdict; .fails is.
@@ -335,7 +390,8 @@ desc_state() {
   # Measured from the commit the stamp saw: after the change is committed,
   # the index holds nothing new, and the stakes that gate a merge must hold.
   # Only an ancestor of HEAD: the desk writes this file, and a made-up commit
-  # whose tree is the index would measure the change as nothing.
+  # whose tree is the index would measure the change as nothing. A merge of
+  # the trunk under way picks its own base.
   base="$(_desc_meta "$file" base)"
   [[ -z "$base" ]] || git -C "$root" merge-base --is-ancestor "$base" HEAD 2>/dev/null || base=""
   change="$(desc_change "$root" "$base")"
@@ -439,7 +495,9 @@ _desc_stamp() {
   [[ "$style" == pr ]] || template=""
   agent="$(_desc_agent "$root")"
   change="$(desc_change "$root")"
-  base="$(git -C "$root" rev-parse --verify --quiet HEAD || true)"
+  base="$(_desc_trunk_side "$root")"
+  base="${base%% *}"
+  [[ -n "$base" ]] || base="$(git -C "$root" rev-parse --verify --quiet HEAD || true)"
   tmp="$(mktemp "$file.XXXXXX")"
   {
     printf -- '---\ntitle: %s\ntree: %s\n' "$title" "$tree"

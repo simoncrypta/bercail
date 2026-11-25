@@ -65,7 +65,8 @@ claude-opus-5-5); reviewed by Simon`, or `not yet reviewed` without
 or `none`.
 
 The check warns when the base moved: when origin's default branch, as last
-fetched, or the local one has commits HEAD is not on. Bring the branch onto it
+fetched, or the local one has commits that neither HEAD nor a merge under way
+(`MERGE_HEAD`) is on. Bring the branch onto it
 (rebase, restack a stack, or merge it into a pushed PR branch) and rerun
 /validate, since doing that at merge would make the description stale. The
 check never fetches. Where the policy says `integrate = "direct"`, `bercail land`
@@ -74,9 +75,11 @@ refuses such a change before it commits; a PR branch keeps the warning.
 The check also weighs the change for you. It warns when the change is over the
 policy's `diff_budget` (400 lines by default, lockfiles and generated files
 left out), so the desk splits it or says why it is one. It marks the change
-high-stakes when a staged path matches the policy's `high_stakes`. Once the
-change is committed, it measures from the commit the stamp saw, so the size
-and stakes stay the same until Shep merges it. With `review = "by-stakes"`
+high-stakes when a staged path matches the policy's `high_stakes`. A staged
+merge of the trunk (origin's, once fetched) is measured against the trunk's
+side, the change its PR lands, not the trunk's own files the merge brings along, and the
+check says so. Once the change is committed, it measures from the commit the
+stamp saw, so the size and stakes stay the same until Shep merges it. With `review = "by-stakes"`
 (the default) such a change waits for your LGTM, and in
 a repo that commits straight to main `bercail describe commit` refuses it
 without `--reviewed-by`. See [review by stakes and size](../config.md#review-by-stakes-and-size).

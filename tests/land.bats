@@ -270,6 +270,44 @@ GIT
   done
 }
 
+@test "where the policy integrates direct, a staged merge of the trunk's tip is on the trunk: committed as the merge, no moved base" {
+  direct
+  git branch -f main HEAD
+  base="$(git rev-parse HEAD)"
+  git checkout -q main
+  printf 'trunk\n' >trunk.txt && git add trunk.txt && git commit -qm trunk
+  git checkout -q feature
+  git merge -q --no-commit --no-ff main
+  described
+  runs CI:completed:success
+  run land "$REPO"
+  [ "$status" -eq 0 ] || fail "refused: $output"
+  [[ "$output" != *"base moved"* ]] || fail "called the base moved: $output"
+  [ "$(git rev-parse HEAD^1) $(git rev-parse HEAD^2)" = "$base $(git rev-parse main)" ] || fail "not the merge: $(git log --format='%H %P' -1)"
+}
+
+@test "a staged merge of the trunk whose tree is HEAD's is still committed as the merge, never taken as already landed" {
+  direct
+  git branch -f main HEAD
+  # Both sides make the same edit, so the merge's tree is HEAD's.
+  printf 'same\n' >>file.txt && git commit -qam same
+  base="$(git rev-parse HEAD)"
+  git checkout -q main
+  printf 'same\n' >>file.txt && git commit -qam 'same on the trunk'
+  git checkout -q feature
+  git merge -q --no-commit --no-ff main
+  [ "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')" ] || fail "the merge changed the tree"
+  jq -n --arg t "$(git write-tree)" \
+    '{tree: $t, checks: [{kind: "test", command: "bash tests/run.sh", exit_code: 0, evidence: "all passed"}]}' >.bercail/validate.json
+  printf -- '---\ntitle: merge the trunk\n---\nBrings the branch onto the trunk.\n\nValidation: bash tests/run.sh passed.\n' >.bercail/description.md
+  "$ROOT/bin/bercail" describe stamp >/dev/null || fail "stamp"
+  runs CI:completed:success
+  run land "$REPO"
+  [ "$status" -eq 0 ] || fail "refused: $output"
+  [[ "$output" != *"no new commit"* ]] || fail "took the merge as landed: $output"
+  [ "$(git rev-parse HEAD^1) $(git rev-parse HEAD^2)" = "$base $(git rev-parse main)" ] || fail "not the merge: $(git log --format='%H %P' -1)"
+}
+
 @test "a described change on the trunk itself is refused: it has no branch CI to wait for" {
   git checkout -q main
   described
