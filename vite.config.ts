@@ -43,6 +43,9 @@ export default defineConfig({
   test: {
     include: ["tests/**/*.test.ts"],
     setupFiles: ["tests/setup.ts"],
+    // A guard against a hung test, not a speed check: tests that start the
+    // question CLI a dozen times take over 5 seconds on a busy 4-core runner.
+    testTimeout: 30_000,
     unstubEnvs: true,
     unstubGlobals: true,
   },

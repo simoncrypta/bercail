@@ -2,15 +2,21 @@ name: CI
 
 # Lint and tests run side by side on every push, to master or any branch, and
 # every PR: Shep lands a branch on master only once its CI here passed
-# (bercail land). The Cloudflare deploy runs only for a v* tag, once both
-# pass: master is unreleased trunk, and a tag is the release. docs/development.md#ci has the
-# timings, the caches, and how to turn on a bigger test runner.
+# (bercail land). The bats suite runs in 8 shards and vitest in a job of its
+# own. A branch or PR runs the tests its change needs (tests/plan.sh); master,
+# a tag, the nightly run and a manual run test everything. The Cloudflare
+# deploy runs only for a v* tag, once all pass: master is unreleased trunk, and
+# a tag is the release. docs/development.md#ci has the timings, the caches, and
+# how to turn on a bigger test runner.
 on:
   push:
     branches: ['**']
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+  # Nightly, on master: the full suite, so nothing goes untested for long.
+  schedule:
+    - cron: '43 6 * * *'
 
 # A newer push to the same PR or branch, master included, cancels the run it
 # supersedes. A tag run never cancels: it is the release and the deploy.
@@ -47,52 +53,84 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: bash .github/scripts/deps-track.sh stale
 
+  # One shard of the bats suite: tests/plan.sh deals the files to the shards by
+  # their CI time (tests/weights.tsv). A shard with nothing to run stops after
+  # its plan.
   test:
+    name: test (${{ matrix.shard }}/8)
     # The repo variable CI_TEST_RUNNER names a bigger runner's label; unset,
     # the free 4-vCPU runner. tests/run.sh sizes its jobs to the cores it gets.
     runs-on: ${{ vars.CI_TEST_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
       BD_VERSION: 1.3.4
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # desk_upgrade.bats updates from real release tags.
+          # desk_upgrade.bats updates from real release tags, and the plan
+          # diffs a branch against master.
           fetch-depth: 0
+      - name: Plan
+        id: plan
+        run: bash .github/scripts/test-plan.sh --shard ${{ matrix.shard }}/8
       # With CI set, a test fails when a tool it needs is missing (need, in
       # tests/test_helper.bash), so nothing skips here unseen. The beads tests
       # need the real bd, pinned.
-      - uses: ./.github/actions/setup
+      - if: steps.plan.outputs.run
+        uses: ./.github/actions/setup
         with:
           tools: github:gastownhall/beads@${{ env.BD_VERSION }}
       # With GNU parallel, tests/run.sh spreads tests over two jobs per core;
       # without it, it falls back to one bats run per file. The runner image
       # ships it; fail here if that changes.
-      - name: GNU parallel
+      - if: steps.plan.outputs.run
+        name: GNU parallel
         run: command -v parallel
       # tla-ts, from bercail's lockfile as lib/deps.sh installs it, for the test
       # that runs the Shep inbox's check.sh (tests/statechart.bats). No Java.
-      - name: tla-ts
+      - if: steps.plan.outputs.run
+        name: tla-ts
         run: |
           d="$RUNNER_TEMP/statechart"
           mkdir -p "$d"
           cp lib/statechart/package.json lib/statechart/package-lock.json "$d/"
           npm ci --prefix "$d" --ignore-scripts --omit=dev --no-audit --no-fund --no-update-notifier
           echo "TLA_TS=$d/node_modules/tla-ts/dist/cli.js" >>"$GITHUB_ENV"
-      # The bats unit suite, then the TypeScript unit tests (vp test). The runner
-      # holds one run, so it takes every core rather than a slot's share; a
-      # runner with a bercail config of its own keeps its [tests] slots.
-      - name: Run tests
-        run: |
-          if [ ! -e ~/.config/bercail/config.toml ]; then
-            mkdir -p ~/.config/bercail
-            printf '[tests]\nslots = 1\n' >~/.config/bercail/config.toml
-          fi
-          bash tests/run.sh
+      # The plan's options as data: they hold a PR's base branch name, which
+      # must not become shell code. Unquoted, one word an option (a ref has no
+      # spaces).
+      - if: steps.plan.outputs.run
+        name: Run tests
+        env:
+          PLAN: ${{ steps.plan.outputs.args }}
+        run: bash tests/run.sh $PLAN
+
+  # The TypeScript unit tests (vp test), beside the bats shards.
+  vitest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Plan
+        id: plan
+        run: bash .github/scripts/test-plan.sh --vitest
+      - if: steps.plan.outputs.run
+        uses: ./.github/actions/setup
+      - if: steps.plan.outputs.run
+        name: Run tests
+        env:
+          PLAN: ${{ steps.plan.outputs.args }}
+        run: bash tests/run.sh $PLAN
 
   deploy:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [lint, test]
+    needs: [lint, test, vitest]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

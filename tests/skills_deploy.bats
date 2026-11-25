@@ -121,18 +121,49 @@ need_tag() {
     || fail "release tag $1 is missing: git -C $ROOT fetch --tags"
 }
 
-@test "deploy_skills removes the review skill every release installed, and its pi link" {
-  local tag n=0
+# The releases that shipped the review skill, oldest tag name first.
+review_releases() {
+  local tag
+  git -C "$ROOT" tag -l 'v*' | while IFS= read -r tag; do
+    git -C "$ROOT" cat-file -e "$tag:skills/review/SKILL.md" 2>/dev/null && printf '%s\n' "$tag"
+  done
+}
+
+# Every fourth of them from the Kth: four tests, so their deploys run side by side.
+removes_review_skills() {
+  local k="$1" tag n=0
   need_tag v0.17.4
   while IFS= read -r tag; do
-    git -C "$ROOT" cat-file -e "$tag:skills/review/SKILL.md" 2>/dev/null || continue
     old_review_skill "$tag"
     deploy_skills >/dev/null
     [[ ! -e "$AGENTS_SKILLS_DIR/review" ]] || fail "an update keeps $tag's review skill: $(find "$AGENTS_SKILLS_DIR/review")"
     [[ ! -L "$HOME/.pi/agent/skills/review" ]] || fail "an update keeps the pi link to $tag's review skill"
     n=$((n + 1))
-  done < <(git -C "$ROOT" tag -l 'v*')
+  done < <(review_releases | awk -v k="$k" 'NR % 4 == k')
+  ((n > 0)) || fail "no release in this fourth shipped the review skill"
+}
+
+@test "over 30 releases shipped the review skill that deploy_skills removes" {
+  local n
+  need_tag v0.17.4
+  n="$(review_releases | wc -l)"
   ((n > 30)) || fail "only $n releases shipped the review skill"
+}
+
+@test "deploy_skills removes the review skill the 1st, 5th, ... release installed, and its pi link" {
+  removes_review_skills 1
+}
+
+@test "deploy_skills removes the review skill the 2nd, 6th, ... release installed, and its pi link" {
+  removes_review_skills 2
+}
+
+@test "deploy_skills removes the review skill the 3rd, 7th, ... release installed, and its pi link" {
+  removes_review_skills 3
+}
+
+@test "deploy_skills removes the review skill the 4th, 8th, ... release installed, and its pi link" {
+  removes_review_skills 0
 }
 
 @test "deploy_skills keeps a review script someone edited and a file they added, and removes the rest" {

@@ -28,6 +28,7 @@ bin/bercail <cmd>                         # this checkout's CLI; a bare `bercail
 npm ci                                    # once: bats-core and vite-plus are pinned devDependencies
 bash tests/run.sh                         # the unit suite: bats, then vp test (CI runs this); waits for a free test slot
 bash tests/run.sh tests/notify.bats       # one area
+bash tests/run.sh --affected origin/master   # what your change needs, as CI runs a branch (tests/plan.sh)
 node_modules/.bin/bats -f 'regex' tests/notify.bats   # the tests whose names match
 bash tests/run.sh --live                  # the real-Pi live proofs, tagged live
 npm exec -- vp test -t 'regex'            # the TypeScript tests whose names match

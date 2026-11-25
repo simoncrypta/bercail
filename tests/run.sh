@@ -4,6 +4,8 @@
 # (test_helper.bash); setup_suite.bash cuts the run off from the desk it ran in.
 # With no arguments, the TypeScript unit tests (tests/*.test.ts) run after them
 # with vp test. The live proofs (real Pi, tagged `live`) run only with --live.
+# --shard I/N, --affected BASE and --vitest run what tests/plan.sh lists for
+# them instead: CI's shards, and the tests a branch's change needs.
 # Either run fails when a test wrote the person's bercail or Herdr state or
 # left a process running (canary, below).
 # Each run first takes one of the machine's test slots (lib/slots.sh), and
@@ -35,7 +37,18 @@ if ! slot_held; then
   slot_run tests/run.sh bash "$PWD/tests/run.sh" "$@"
   exit
 fi
-vitest=$(($# == 0))
+vitest=$(($# == 0)) bats_run=1 weights=0
+if [[ "${1:-}" =~ ^--(shard|affected|vitest)$ ]]; then
+  items="$(bash tests/plan.sh "$@")"
+  mapfile -t files < <(grep '\.bats$' <<<"$items" || true)
+  vitest=0 also=""
+  ! grep -qx vitest <<<"$items" || vitest=1 also=" and vitest"
+  printf 'tests/run.sh: %s runs %d .bats files%s\n' "$*" "${#files[@]}" "$also"
+  # Each test's time, to see what makes a shard long, and each file's below.
+  set -- --timing ${files[@]+"${files[@]}"}
+  weights=1
+  ((${#files[@]})) || bats_run=0
+fi
 tags='!live'
 jobs=() per_file=0
 cores="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
@@ -65,6 +78,9 @@ trap 'chmod -R u+w "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT
 # GNU parallel keeps a cache in ~/.parallel; this run's goes in the temp dir.
 # So does every test's: its HOME, TMPDIR and worktrees all name $tmp.
 export PARALLEL_HOME="$tmp" TMPDIR="$tmp"
+# Tests start Node on bercail's TypeScript thousands of times: Node compiles
+# each module once for the run instead of once a process.
+export NODE_COMPILE_CACHE="$tmp/node-compile-cache"
 
 # The person's bercail and Herdr state, which no test may write (bercail-fss).
 # Shep and other desks write most of it during the run, so there a file counts
@@ -122,7 +138,7 @@ ours() {
 # Fails the run when a test wrote the person's state or left a process. Only
 # reads; what it finds is for the person to look at and stop.
 canary() {
-  local written left n
+  local written left n pid comm name
   written="$(state_written)"
   if [[ -n "$written" ]]; then
     printf '\ntests/run.sh: a test wrote the real state; give it its own HOME and XDG dirs (isolate) and stand-ins for hc and Herdr:\n%s\n' \
@@ -135,7 +151,11 @@ canary() {
     ((n == 10)) || sleep 0.3
   done
   printf '\ntests/run.sh: the run left these processes running, and a test must stop what it starts:\n' >&2
-  ps -o pid=,comm= -p "$(paste -sd, <<<"$left")" >&2 || true
+  # With the test that started it, from the name isolate puts in its environment.
+  ps -o pid=,comm= -p "$(paste -sd, <<<"$left")" | while read -r pid comm; do
+    name="$(tr '\0' '\n' <"/proc/$pid/environ" 2>/dev/null | sed -n 's/^DESKTOP_TEST=//p')"
+    printf '%7s %s%s\n' "$pid" "$comm" "${name:+ ($name)}"
+  done >&2 || true
   rc=1
 }
 
@@ -190,10 +210,18 @@ run_files() {
 }
 
 rc=0
-if ((per_file)); then
+if ((!bats_run)); then
+  :
+elif ((per_file)); then
   run_files "$@" || rc=$?
 else
+  ((!weights)) || jobs+=(--report-formatter junit --output "$tmp")
   "$bats" ${jobs[@]+"${jobs[@]}"} --filter-tags "$tags" "$@" || rc=$?
+fi
+# Each file's summed test time, the line tests/weights.tsv takes
+# (docs/development.md#ci).
+if [[ -f "$tmp/report.xml" ]]; then
+  sed -nE 's|^<testsuite name="([^"]*)".* time="([^"]*)".*|weight tests/\1\t\2|p' "$tmp/report.xml"
 fi
 if ((vitest)); then
   "$vp" test --maxWorkers "$share" || rc=$?

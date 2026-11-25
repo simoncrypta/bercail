@@ -10,6 +10,7 @@ herdr-app check bercail/mods/bercail-spaces
 herdr-app check bercail/mods/bercail-agents
 herdr-app check bercail/mods/bercail-review
 npm ci && bash tests/run.sh   # the unit suite: bats, then vp test; or name files: bash tests/run.sh tests/notify.bats
+bash tests/run.sh --affected origin/master   # only what your change needs, as CI runs a branch (tests/plan.sh)
 bash tests/run.sh --live      # the live proofs: real Pi, offline, with a stand-in model
 node_modules/.bin/bats -f 'regex' tests/x.bats   # the tests whose names match
 npm exec -- vp test -t 'regex'                   # the TypeScript tests whose names match
@@ -52,16 +53,23 @@ The Pi extensions' unit tests and the Worker's are Vitest (`tests/*.test.ts`, ru
 
 ## ci
 
-`.github/workflows/ci.yml` runs on each push to master or any other branch, each PR, and each `v*` tag. A branch's run is the one [`bercail land`](cli.md#install--cli) waits for before Shep pushes the branch to master. Two jobs run side by side, and each starts with the setup in `.github/actions/setup` (Node 26, `npm ci`, and the mise tools the job names):
+`.github/workflows/ci.yml` runs on each push to master or any other branch, each PR, each `v*` tag, and nightly on master. A branch's run is the one [`bercail land`](cli.md#install--cli) waits for before Shep pushes the branch to master. Its jobs run side by side, and each starts with the setup in `.github/actions/setup` (Node 26, `node_modules`, and the mise tools the job names):
 
-- `lint` runs `tests/lint.sh`: shellcheck, at the version pinned in `SHELLCHECK_VERSION`, then `tests/lint_grep_q.sh` (`printf … | grep -q`), then `vp check` and the mods' lint. It takes about 50 seconds, most of it shellcheck. It then warns, without failing, when the [dependency tracker](#dependency-tracker) has not succeeded in 3 days.
-- `test` runs `tests/run.sh` with GNU parallel: the bats suite, then `vp test`. It takes 2.5 to 3.5 minutes on the free 4-vCPU runner, nearly all of it the bats run. bd comes from mise at the version pinned in `BD_VERSION`, and the checkout has full history for `tests/desk_upgrade.bats`.
+- `lint` runs `tests/lint.sh`: shellcheck, at the version pinned in `SHELLCHECK_VERSION`, one file a process on every core with `-x` so each sees the files it sources, then `tests/lint_grep_q.sh` (`printf … | grep -q`), then `vp check` and the mods' lint. It takes about a minute, half of it shellcheck. It then warns, without failing, when the [dependency tracker](#dependency-tracker) has not succeeded in 3 days.
+- `test (1/8)` to `test (8/8)` each run one shard of the bats suite, `tests/run.sh --shard I/8`, with GNU parallel. bd comes from mise at the version pinned in `BD_VERSION`, and the checkout has full history for `tests/desk_upgrade.bats`.
+- `vitest` runs `vp test`, `tests/run.sh --vitest`.
 
-`deploy` runs only for a `v*` tag, after both jobs pass, and deploys the site and the Workers when `CLOUDFLARE_API_TOKEN` is set. A newer push to the same branch or PR cancels the older run, on master too, so several merges in a row test only the last one. A tag run is never cancelled.
+Each shard and the `vitest` job runs `tests/run.sh`, so each fails when a test wrote the real state or left a process running. A full run takes 2 to 2.5 minutes: 10 to 20 seconds of setup, then 40 to 120 seconds a shard, the longest set by the slowest single tests (the Shep inbox's `check.sh`, about 55 seconds). A docs change takes about a minute, the lint job's. Before the shards a run took 10 to 15 minutes, one job running every test.
+
+`tests/plan.sh` says what each job runs. It deals the `.bats` files to the shards longest first, each to the shard with the least so far, by `tests/weights.tsv`: what each file's tests took, summed, on the CI runner. The same tree deals the same way in every shard, so each file runs in exactly one, and `tests/plan.bats` checks that. A file missing from the table counts as the mean, so a stale table only unbalances the shards. Each shard prints a `weight tests/<file>` line a file. To refresh the table from a full run, keep its header and its 0 lines, and replace the rest with `gh run view <run-id> --log | sed -n 's/.*weight tests\//tests\//p' | sort`.
+
+A branch push or a PR runs only what its change needs since master (or the PR's base): `.github/scripts/test-plan.sh` adds `--affected` to the plan. A change to a doc runs the tests that read that doc (`readers` in `tests/plan.sh`) and `tests/suite.bats`; a shard left with nothing stops after its plan. Any other change, a test or the harness included, runs everything: code reaches other code through function calls and `bercail <command>` runs that no file name shows, so only a short list kept by hand may run less. A push to master, a tag, the nightly run and a manual run always test everything, so nothing goes untested for long.
+
+`deploy` runs only for a `v*` tag, after every job passes, and deploys the site and the Workers when `CLOUDFLARE_API_TOKEN` is set. A newer push to the same branch or PR cancels the older run, on master too, so several merges in a row test only the last one. A tag run is never cancelled.
 
 Every action is pinned by its full commit SHA, with the release tag in a comment beside it (`actions/checkout@<sha> # v7.0.1`), so a moved tag cannot change what runs. To update one, take the new tag's commit SHA and change both; the dependency tracker's issue for it names the SHA.
 
-The caches: setup-node caches npm's download cache, keyed on `package-lock.json`. mise-action caches mise's data dir under a key that holds the job's tool specs, so changing a pin installs fresh, and it saves the cache after the job installs the tools. A hit saves 5 to 10 seconds of setup. Vite+ has no cache in CI. On the runner, `vp check` takes about a second and `vp test` under one, so its task cache, or the Oxlint and Vitest caches, would save at most a second or two on a run that waits about 2 minutes for bats.
+The caches: `node_modules` itself, keyed on Node's version, `package.json` and `package-lock.json`, so a hit skips `npm ci`. npm's download cache is not kept beside it, so after a change to either file each job's `npm ci` downloads every package, once. mise-action caches mise's data dir under a key that holds the job's tool specs, so changing a pin installs fresh, and it saves the cache after the job installs the tools. `tests/run.sh` points `NODE_COMPILE_CACHE` at its temp dir, so Node compiles each module once a run instead of once a process: the question CLI's tests went from 91 to 22 seconds of user CPU time with the cache warm. Vite+ has no cache in CI: `vp check` takes about a second.
 
 ### A bigger test runner
 

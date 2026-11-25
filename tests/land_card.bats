@@ -2,180 +2,19 @@
 # One pick lands a job (docs/plans/one-pick-landing.md, step 6): bercail land ask
 # puts up a land card, and on the person's Ship it the worker, bercail land run,
 # commits, pushes a CI branch, waits for CI, pushes the trunk, closes the issue,
-# cleans up the desk and fast-forwards the main checkout. Real git repos, origin
-# a bare repo behind a stand-in ssh as git@github.com:o/app.git; stand-ins for
-# gh, hc, bd and the Herdr app at the process boundary; poll and timeout 0.
+# cleans up the desk and fast-forwards the main checkout. This file covers the
+# chains that land: one pick, two chains on one trunk commit, two workers on
+# one pick, a cleanup that does not hold, a desk's merge of a moved trunk, the
+# sweep, a lost event, and the trust of a landed policy file. Where the chain
+# stops or refuses is in tests/land_card_stops.bats; the fixture is
+# tests/land_card.bash.
 
 setup() {
   load test_helper
   isolate
-  need git jq node flock
-  set -o pipefail
-  unset BERCAIL_CONFIG HC_TERMINAL_ID BERCAIL_SELF
-  export BERCAIL_ROLE=shep BERCAIL_LAND_POLL=0 BERCAIL_LAND_TIMEOUT=0
-  export FAKE="$BATS_TEST_TMPDIR/bin" STATE="$BATS_TEST_TMPDIR/fake" LOG="$BATS_TEST_TMPDIR/argv"
-  export HERDR_APP_BIN="$FAKE/herdr-app" HC_BIN="$FAKE/hc" BERCAIL_HERDR_LAYOUT="$ROOT/config/worktrunk/herdr-layout.sh"
-  export PATH="$FAKE:$PATH"
-  mkdir -p "$STATE"
-  : >"$LOG"
-  # The worker drops GIT_CONFIG_*, so git's settings live in HOME, as the person's do.
-  git config --global user.name Simon
-  git config --global user.email simon@example.com
-  git config --global init.defaultBranch master
-  BERCAIL="$ROOT/bin/bercail"
-  SHEP="$XDG_STATE_HOME/bercail/shep"
-  INBOX="$SHEP/inbox"
-  GH="$BATS_TEST_TMPDIR/github"
-  ORIGIN="$GH/o/app.git"
-  MAIN="$HOME/Work/app"
-  WT="$HOME/Work/app.login"
-  mkdir -p "$GH/o" "$INBOX" "$XDG_STATE_HOME/bercail/desk-sessions"
-  stand_ins
-  git init -q --bare -b master "$ORIGIN"
-  git_init "$MAIN"
-  git -C "$MAIN" branch -M master
-  mkdir -p "$MAIN/.bercail"
-  printf 'push = "main"\nintegrate = "direct"\nrequired_ci = [".github/workflows/ci.yml"]\n' >"$MAIN/.bercail/policy.toml"
-  git -C "$MAIN" add -f .bercail/policy.toml
-  git -C "$MAIN" commit -qm policy
-  printf '.bercail/\n' >>"$MAIN/.git/info/exclude"
-  git -C "$MAIN" remote add origin git@github.com:o/app.git
-  git -C "$MAIN" config core.sshCommand "$FAKE/ssh"
-  git -C "$MAIN" config ssh.variant simple
-  git -C "$MAIN" push -q -u origin master
-  git -C "$MAIN" remote set-head origin master
-  MAIN="$(cd "$MAIN" && pwd -P)" WT="$(cd "$HOME/Work" && pwd -P)/app.login"
-  "$BERCAIL" policy trust "$MAIN" >/dev/null
-  desk "$WT" login app-1 t9 sp1
-  printf 'new\n' >>"$WT/file.txt"
-  git -C "$WT" add file.txt
-  described "$WT" "file: add a line"
+  load land_card
+  land_setup
 }
-
-# Stand-ins at the process boundary, each logging its argv to $LOG.
-stand_ins() {
-  mkdir -p "$FAKE"
-  # ssh: serves git@github.com:<path> from the bare repos under $GH.
-  printf '#!/bin/sh\nfor last; do :; done\ncd %q && exec sh -c "$last"\n' "$GH" >"$FAKE/ssh"
-  # The Herdr app: no window here, so cleanup finds the space through hc.
-  printf '#!/bin/sh\nexit 1\n' >"$FAKE/herdr-app"
-  # hc: terminals in $STATE/hc.json. run logs the start, as the Herdr server
-  # would get it, and the test runs it; $STATE/run-fails makes it fail.
-  # $STATE/hc-down: hc answers nothing.
-  cat >"$FAKE/hc" <<'SH'
-#!/usr/bin/env bash
-printf 'hc %s\n' "$*" >>"$LOG"
-[[ ! -f "$STATE/hc-down" ]] || exit 1
-st="$STATE/hc.json"
-case "$1" in
-  run)
-    [[ ! -f "$STATE/run-fails" ]] || { echo "hc: the server is gone" >&2; exit 1; }
-    while [[ $# -gt 0 && "$1" != -- ]]; do shift; done
-    shift
-    printf '%q ' "$@" >>"$STATE/starts"
-    printf '\n' >>"$STATE/starts"
-    printf '{"address":"t50"}\n' ;;
-  ls)
-    want=()
-    while [[ $# -gt 0 ]]; do [[ "$1" != --label ]] || want+=("$2"); shift; done
-    jq --args '{terminals: [.[] | select(. as $t | $ARGS.positional
-        | all(split("=") as [$k, $v] | $t.labels[$k] == $v)) | {address, state, cwd, labels: null}]}' \
-      "${want[@]}" <"$st" ;;
-  get)
-    jq -e --arg a "$2" '.[] | select(.address == $a)' "$st" \
-      || { printf '{"error":{"kind":"not_found","message":"no terminal"}}\n'; exit 3; } ;;
-  kill) jq --arg a "$2" 'map(if .address == $a then .state = "finished" else . end)' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
-  rm) jq --arg a "$2" 'map(select(.address != $a))' "$st" >"$st.tmp" && mv "$st.tmp" "$st" ;;
-esac
-SH
-  # gh: the required and optional workflows, and the push runs of the commit and
-  # branch asked about, from $STATE/ci: one run a line, "<workflow id> <status>
-  # <conclusion> [branch] [attempt]". Each call first runs $STATE/on-ci, if any.
-  cat >"$FAKE/gh" <<'SH'
-#!/usr/bin/env bash
-printf 'gh %s\n' "$*" >>"$LOG"
-case "$1 $2" in
-  "workflow list") printf '[{"id":7,"path":".github/workflows/ci.yml"},{"id":9,"path":".github/workflows/site.yml"}]\n' ;;
-  "run list")
-    [[ ! -x "$STATE/on-ci" ]] || "$STATE/on-ci"
-    while [[ $# -gt 0 ]]; do
-      case "$1" in --commit) sha="$2" ;; --branch) branch="$2" ;; --limit) limit="$2" ;; esac
-      shift
-    done
-    n=0
-    while read -r id status conclusion other attempt; do
-      [[ -n "$id" ]] || continue
-      n=$((n + 1))
-      [[ -n "$other" && "$other" != - ]] || other="$branch"
-      jq -nc --argjson id "$id" --arg s "$status" --arg c "$conclusion" --arg sha "$sha" --arg b "$other" \
-        --argjson n "$n" --argjson a "${attempt:-1}" \
-        '{databaseId: $n, workflowDatabaseId: $id, headBranch: $b, headSha: $sha, attempt: $a, status: $s, conclusion: $c}'
-    done < <(cat "$STATE/ci" 2>/dev/null) | jq -s --argjson limit "$limit" '.[:$limit]' ;;
-  *) exit 2 ;;
-esac
-SH
-  # bd: app-1 and app-2, open until closed. $STATE/on-close runs on a close.
-  cat >"$FAKE/bd" <<'SH'
-#!/usr/bin/env bash
-printf 'bd %s\n' "$*" >>"$LOG"
-case "$1" in
-  show)
-    [[ -f "$STATE/issue-$2.json" ]] || exit 1
-    jq -c --arg s "$(cat "$STATE/status-$2" 2>/dev/null || echo open)" '[. + {status: $s}]' "$STATE/issue-$2.json" ;;
-  close)
-    [[ ! -x "$STATE/on-close" ]] || "$STATE/on-close"
-    echo closed >"$STATE/status-$2" ;;
-  *) exit 2 ;;
-esac
-SH
-  chmod +x "$FAKE"/*
-}
-
-# A desk: worktree DIR on BRANCH for ISSUE, its live desk terminal T and space
-# SP, its handoff record and desk session record.
-desk() {
-  local dir="$1" branch="$2" issue="$3" t="$4" sp="$5"
-  git -C "$MAIN" worktree add -q -b "$branch" "$dir"
-  jq -nc --arg i "$issue" --arg b "$branch" --arg t "$t" \
-    '{id: $i, title: "Login", metadata: {bercail_task: {branch: $b, owner: {desk: $t}}}}' >"$STATE/issue-$issue.json"
-  jq -nc --arg p "$dir" --arg i "$issue" --arg b "$branch" '{path: $p, issue: $i, branch: $b, stage: "bstack"}' \
-    >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
-  jq -nc --arg t "$t" --arg p "$dir" --arg i "$issue" --arg sp "$sp" \
-    '{address: $t, session: "desk-session-\($t)", cwd: $p, harness: "pi", issue: $i, space: $sp}' \
-    >"$XDG_STATE_HOME/bercail/desk-sessions/$t.json"
-  [[ -f "$STATE/hc.json" ]] || echo '[]' >"$STATE/hc.json"
-  jq --arg t "$t" --arg p "$dir" --arg i "$issue" --arg sp "$sp" '. + [{address: $t, state: "live", reason: null,
-      cwd: $p, labels: {"bercail.role": "agent", "bercail.issue": $i, "bercail.space": $sp},
-      records: {"desk-session-\($t)": {app: "pi", state: "idle"}}}]' "$STATE/hc.json" >"$STATE/hc.tmp"
-  mv "$STATE/hc.tmp" "$STATE/hc.json"
-}
-
-# Evidence and a stamped description titled TITLE for DIR's staged change.
-described() {
-  local dir="$1" title="$2"
-  mkdir -p "$dir/.bercail"
-  jq -n --arg t "$(git -C "$dir" write-tree)" \
-    '{tree: $t, checks: [{kind: "test", command: "bash tests/run.sh", exit_code: 0, evidence: "all passed"}]}' >"$dir/.bercail/validate.json"
-  printf -- '---\ntitle: %s\n---\nAdds a line for readers of file.txt.\n\nValidation: bash tests/run.sh passed.\n' \
-    "$title" >"$dir/.bercail/description.md"
-  (cd "$dir" && "$BERCAIL" describe stamp >/dev/null) || fail "stamp $dir"
-}
-
-question() { "$BERCAIL" shep question "$@"; }
-# The card's token from land ask's line.
-ask() { "$BERCAIL" land ask "${1:-$WT}" | grep -o '^Q[0-9]*@[0-9]*'; }
-# The person's pick on the panel.
-pick() {
-  jq -nc --arg t "$1" --arg c "${2:-Ship it}" '{requestId: "pick-\($t)-\($c)", token: $t, choice: $c, source: "panel picker"}' \
-    | question answer
-}
-# What the worker's terminal runs, as hc run got it.
-run_worker() { eval "$(tail -n 1 "$STATE/starts")"; }
-card() { question get "$1"; }
-trunk() { git --git-dir="$ORIGIN" rev-parse master; }
-ref() { git --git-dir="$ORIGIN" rev-parse --verify --quiet "$1" || true; }
-# The land events in Shep's inbox.
-events() { cat "$INBOX"/land-*.json 2>/dev/null; }
 
 @test "one pick lands it: one commit on the trunk, the job closed, the desk and worktree gone, main synced, one event" {
   local base token out sha ci_ref
@@ -224,165 +63,6 @@ events() { cat "$INBOX"/land-*.json 2>/dev/null; }
   [[ "$(stat -c %a "$XDG_STATE_HOME/bercail/land/Q1-1.log")" == 600 ]] || fail "the log is not private"
 }
 
-@test "land ask refuses what one pick cannot land, says how to fix it, and puts up no card" {
-  local out other
-  # The main checkout, or the trunk itself.
-  out="$("$BERCAIL" land ask "$MAIN" 2>&1)" && fail "asked on the main checkout: $out"
-  [[ "$out" == *"is the repo's main checkout: land a desk's own worktree"* ]] || fail "main: $out"
-  # A repo one pick cannot land: an untrusted policy, or one that integrates by PR.
-  "$BERCAIL" policy untrust "$MAIN" >/dev/null
-  out="$("$BERCAIL" land ask "$WT" 2>&1)" && fail "asked on an untrusted policy: $out"
-  [[ "$out" == *"one land card cannot land this repo: its policy is not trusted; land it as before, with bercail land $WT"* ]] \
-    || fail "untrusted: $out"
-  "$BERCAIL" policy trust "$MAIN" >/dev/null
-  mkdir -p "$XDG_CONFIG_HOME/bercail"
-  printf '[policy."%s"]\nintegrate = "pr"\n' "$MAIN" >"$XDG_CONFIG_HOME/bercail/config.toml"
-  out="$("$BERCAIL" land ask "$WT" 2>&1)" && fail "asked on a PR repo: $out"
-  [[ "$out" == *"it integrates by pr, not straight to the trunk"* ]] || fail "pr: $out"
-  rm "$XDG_CONFIG_HOME/bercail/config.toml"
-  # No job to close.
-  other="$HOME/Work/app.other"
-  git -C "$MAIN" worktree add -q -b other "$other"
-  out="$("$BERCAIL" land ask "$other" 2>&1)" && fail "asked with no job: $out"
-  [[ "$out" == *"has no beads issue in its handoff record"* ]] || fail "no issue: $out"
-  # A merge of anything but the trunk's tip on origin.
-  git -C "$MAIN" commit -q --allow-empty -m "not the trunk"
-  git -C "$MAIN" rev-parse HEAD >"$(git -C "$WT" rev-parse --absolute-git-dir)/MERGE_HEAD"
-  out="$("$BERCAIL" land ask "$WT" 2>&1)" && fail "asked on another merge: $out"
-  [[ "$out" == *"is merging something other than master on origin"* ]] || fail "merge: $out"
-  rm "$(git -C "$WT" rev-parse --absolute-git-dir)/MERGE_HEAD"
-  git -C "$MAIN" reset -q --hard HEAD~1
-  # A description that no longer describes the staged tree.
-  cp "$WT/file.txt" "$STATE/file.txt"
-  printf 'more\n' >>"$WT/file.txt"
-  git -C "$WT" add file.txt
-  out="$("$BERCAIL" land ask "$WT" 2>&1)" && fail "asked on a stale description: $out"
-  [[ "$out" == *"does not check out"*"the desk runs /validate"* ]] || fail "stale: $out"
-  cp "$STATE/file.txt" "$WT/file.txt"
-  git -C "$WT" add file.txt
-  # A trunk that moved past HEAD.
-  git -C "$MAIN" commit -q --allow-empty -m moved
-  git -C "$MAIN" push -q origin master
-  out="$("$BERCAIL" land ask "$WT" 2>&1)" && fail "asked behind the trunk: $out"
-  [[ "$out" == *"not master on origin"*"the desk brings its staged change onto master's tip"* ]] || fail "behind: $out"
-  [[ "$(question json | jq '.questions | length')" == 0 ]] || fail "a refusal put up a card"
-  git -C "$MAIN" reset -q --hard HEAD~1
-  git -C "$MAIN" push -q -f origin master
-  # One card at a time for the job.
-  ask >/dev/null || fail "the first ask"
-  out="$("$BERCAIL" land ask "$WT" 2>&1)" && fail "a second card: $out"
-  [[ "$out" == *"Q1@1 is pending for the same worktree, branch or job"* ]] || fail "second: $out"
-  [[ "$(question json | jq '.questions | length')" == 1 ]] || fail "two cards"
-}
-
-@test "a card on the main checkout cannot be made, and a forged one started by hand pushes nothing" {
-  local token base out
-  base="$(trunk)"
-  jq -nc --arg p "$MAIN" '{path: $p, issue: "app-1", branch: "master"}' >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
-  out="$(jq -nc --arg wt "$MAIN" '{requestId: "forged", prompt: "Land: x", origin: {event: "x", session: "s", entry: null},
-    worktree: $wt, issue: "app-1"}' | question land-create 2>&1)" && fail "a card on the main checkout: $out"
-  [[ "$(question json | jq '.questions | length')" == 0 ]] || fail "it made a card"
-  token="$(ask)" || fail "ask"
-  pick "$token" >/dev/null
-  # The ledger edited to name the main checkout: the worker's first check stops it.
-  jq --arg m "$MAIN" '.questions[0].target.worktree = $m' "$SHEP/questions.json" >"$SHEP/q.tmp"
-  mv "$SHEP/q.tmp" "$SHEP/questions.json"
-  out="$("$BERCAIL" land run "$token" 2>&1)" || fail "worker: $out"
-  [[ "$out" == "$token: changed ("*"registered changed"* ]] || fail "worker said: $out"
-  [[ "$(trunk)" == "$base" && "$(git --git-dir="$ORIGIN" for-each-ref | wc -l)" == 1 ]] || fail "something was pushed"
-  [[ "$(git -C "$MAIN" rev-parse HEAD)" == "$base" ]] || fail "the main checkout got a commit"
-}
-
-@test "a fact that moved after the pick stops the chain at changed, and nothing is committed or pushed" {
-  local base token out name n=0
-  base="$(trunk)"
-  echo "7 completed success" >"$STATE/ci"
-  for name in tree head branch description policy url desk backend; do
-    n=$((n + 1))
-    token="$(ask)" || fail "$name: ask"
-    pick "$token" | jq -e .accepted >/dev/null || fail "$name: pick"
-    case "$name" in
-      tree) printf 'more\n' >>"$WT/file.txt"; git -C "$WT" add file.txt ;;
-      head) git -C "$WT" commit -q --allow-empty -m "a desk commit" ;;
-      branch) git -C "$WT" checkout -q -b elsewhere ;;
-      description) sed -i 's/^Adds a line/Adds two lines/' "$WT/.bercail/description.md"; (cd "$WT" && "$BERCAIL" describe stamp >/dev/null) ;;
-      policy) mkdir -p "$XDG_CONFIG_HOME/bercail"; printf '[policy."%s"]\ndiff_budget = 1\n' "$MAIN" >"$XDG_CONFIG_HOME/bercail/config.toml" ;;
-      url) git -C "$MAIN" remote set-url origin git@github.com:o/fork.git ;;
-      desk) jq 'map(if .address == "t9" then .state = "done" else . end)' "$STATE/hc.json" >"$STATE/hc.tmp"; mv "$STATE/hc.tmp" "$STATE/hc.json" ;;
-      backend) mkdir -p "$XDG_CONFIG_HOME/bercail"; printf '[git]\n"%s" = "gt"\n' "$MAIN" >"$XDG_CONFIG_HOME/bercail/config.toml" ;;
-    esac
-    out="$(run_worker 2>&1)" || fail "$name: worker: $out"
-    [[ "$out" == "$token: changed ("* ]] || fail "$name: worker said: $out"
-    card "$token" | jq -e '.landing.result | .outcome == "changed" and .step == "check" and .commit == null' >/dev/null \
-      || fail "$name: result $(card "$token" | jq -c .landing.result)"
-    [[ "$(trunk)" == "$base" && "$(git --git-dir="$ORIGIN" for-each-ref | wc -l)" == 1 ]] || fail "$name: something was pushed"
-    case "$name" in
-      tree) git -C "$WT" checkout -q HEAD -- file.txt; printf 'new\n' >>"$WT/file.txt"; git -C "$WT" add file.txt ;;
-      head) git -C "$WT" reset -q --soft HEAD~1 ;;
-      branch) git -C "$WT" checkout -q login ;;
-      description) sed -i 's/^Adds two lines/Adds a line/' "$WT/.bercail/description.md"; (cd "$WT" && "$BERCAIL" describe stamp >/dev/null) ;;
-      policy) rm "$XDG_CONFIG_HOME/bercail/config.toml" ;;
-      url) git -C "$MAIN" remote set-url origin git@github.com:o/app.git ;;
-      desk) jq 'map(if .address == "t9" then .state = "live" else . end)' "$STATE/hc.json" >"$STATE/hc.tmp"; mv "$STATE/hc.tmp" "$STATE/hc.json" ;;
-      backend) rm "$XDG_CONFIG_HOME/bercail/config.toml" ;;
-    esac
-    [[ "$(git -C "$WT" rev-parse HEAD)" == "$base" ]] || fail "$name: HEAD moved"
-  done
-  [[ "$(events | jq -s length)" == "$n" ]] || fail "want one event a card: $(ls "$INBOX")"
-}
-
-@test "a hook that changes the commit stops it at unknown, and nothing is pushed" {
-  local base token out
-  base="$(trunk)"
-  echo "7 completed success" >"$STATE/ci"
-  printf '#!/bin/sh\nprintf "\\nSigned-off-by: a hook\\n" >>"$1"\n' >"$MAIN/.git/hooks/commit-msg"
-  chmod +x "$MAIN/.git/hooks/commit-msg"
-  token="$(ask)"
-  pick "$token" >/dev/null
-  out="$(run_worker 2>&1)" || fail "worker: $out"
-  [[ "$out" == "$token: unknown (the commit "*"a hook changed it, so nothing was pushed)" ]] || fail "worker said: $out"
-  card "$token" | jq -e --arg h "$(git -C "$WT" rev-parse HEAD)" '.landing.result | .commit == $h and .step == "commit"' >/dev/null \
-    || fail "result: $(card "$token" | jq -c .landing.result)"
-  [[ "$(trunk)" == "$base" && "$(git --git-dir="$ORIGIN" for-each-ref | wc -l)" == 1 ]] || fail "something was pushed"
-}
-
-@test "CI that is red, rerun red, missing, on another branch, or cut short never reaches the trunk" {
-  local base token out spec ci_ref
-  base="$(trunk)"
-  for spec in "ci-failed|7 completed failure;9 completed success" "ci-failed|7 completed success - 1;7 completed failure - 2" \
-    "ci-timeout|9 completed success" "ci-timeout|7 completed success other" "ci-timeout|7 completed success;9 completed success"; do
-    tr ';' '\n' <<<"${spec#*|}" >"$STATE/ci"
-    if [[ "$spec" == *";9 completed success" && "$spec" == ci-timeout* ]]; then export BERCAIL_LAND_RUN_LIMIT=2; fi
-    token="$(ask)" || fail "$spec: ask"
-    ci_ref="$(card "$token" | jq -r .land.ciRef)"
-    pick "$token" >/dev/null
-    out="$(run_worker 2>&1)" || fail "$spec: worker: $out"
-    unset BERCAIL_LAND_RUN_LIMIT
-    [[ "$out" == "$token: ${spec%%|*} ("* ]] || fail "$spec: worker said: $out"
-    [[ "$(trunk)" == "$base" ]] || fail "$spec: the trunk moved"
-    [[ "$(ref "$ci_ref")" == "$(git -C "$WT" rev-parse HEAD)" ]] || fail "$spec: its CI branch is not its commit"
-    card "$token" | jq -e '.landing.result.step == "ci"' >/dev/null || fail "$spec: $(card "$token" | jq -c .landing.result)"
-    # The desk puts its change back on the trunk for the next card.
-    git -C "$WT" reset -q --soft "$base"
-  done
-  [[ "$(question json | jq -r '[.questions[].landing.result.why] | join("\n")')" == *"may be cut short at 2 runs"* ]] \
-    || fail "the cut-short list is not named"
-}
-
-@test "a trunk that moves during CI stops it at behind, and the trunk keeps the other commit" {
-  local token out moved
-  echo "7 completed success" >"$STATE/ci"
-  moved="$(git --git-dir="$ORIGIN" commit-tree -p master -m "someone else" "master^{tree}")"
-  printf '#!/bin/sh\ngit --git-dir=%q update-ref refs/heads/master %s\n' "$ORIGIN" "$moved" >"$STATE/on-ci"
-  chmod +x "$STATE/on-ci"
-  token="$(ask)"
-  pick "$token" >/dev/null
-  out="$(run_worker 2>&1)" || fail "worker: $out"
-  [[ "$out" == "$token: behind (master is now ${moved:0:12} on the remote"* ]] || fail "worker said: $out"
-  [[ "$(trunk)" == "$moved" ]] || fail "the trunk is not the other commit"
-  events | jq -e '.outcome == "behind" and .step == "trunk"' >/dev/null || fail "event: $(events)"
-}
-
 @test "two chains on one trunk commit: one lands and the other stops at behind" {
   local a b out pids=()
   echo "7 completed success" >"$STATE/ci"
@@ -405,22 +85,6 @@ events() { cat "$INBOX"/land-*.json 2>/dev/null; }
   out="$(cat "$STATE"/out.*)"
   [[ "$(grep -c ': landed$' <<<"$out")" == 1 && "$(grep -c ': behind (master is now' <<<"$out")" == 1 ]] || fail "workers said: $out"
   [[ "$(git --git-dir="$ORIGIN" rev-list --count master)" == 3 ]] || fail "the trunk did not get exactly one of them"
-}
-
-@test "a guard that cannot pin the trunk push refuses it, and the trunk is unchanged" {
-  local base token out
-  base="$(trunk)"
-  echo "7 completed success" >"$STATE/ci"
-  # During CI, a url rule that rewrites origin's push URL to itself: the card's facts hold,
-  # but the guard's own pinning refuses a rewritten URL.
-  printf '#!/bin/sh\ngit -C %q config url.git@github.com:o/app.git.pushInsteadOf git@github.com:o/app.git\n' "$MAIN" >"$STATE/on-ci"
-  chmod +x "$STATE/on-ci"
-  token="$(ask)"
-  pick "$token" >/dev/null
-  out="$(run_worker 2>&1)" || fail "worker: $out"
-  [[ "$out" == "$token: refused (the trunk push: the guard pins it to other facts: "*"a url.* rule rewrites origin's push URL)" ]] \
-    || fail "worker said: $out"
-  [[ "$(trunk)" == "$base" ]] || fail "the trunk moved"
 }
 
 @test "two workers on one pick run the chain once, and a declined card's worker runs nothing" {
@@ -578,16 +242,6 @@ events() { cat "$INBOX"/land-*.json 2>/dev/null; }
   question expire | jq -e '. == []' >/dev/null || fail "sent after its receipt was pruned"
   [[ ! -e "$INBOX/land-Q1-1.json" ]] || fail "a second event"
 }
-
-# A staged change to the repo's policy file in the desk's worktree, described; prints its sha256.
-policy_change() {
-  printf 'rules = "%s"\n' "$1" >>"$WT/.bercail/policy.toml"
-  git -C "$WT" add -f .bercail/policy.toml
-  described "$WT" "policy: $1"
-  git -C "$WT" cat-file blob :.bercail/policy.toml | sha256sum | cut -d' ' -f1
-}
-trusted_hash() { jq -r --arg m "$MAIN" '.[$m].sha256' "$XDG_STATE_HOME/bercail/policy-trust.json"; }
-
 @test "approving a change to the policy file trusts exactly its new file once its commit is on the trunk" {
   local hash token out brief
   echo "7 completed success" >"$STATE/ci"

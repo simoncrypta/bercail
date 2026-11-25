@@ -23,6 +23,12 @@ AGENT
   chmod +x "$BATS_TEST_TMPDIR/bin/other"
 }
 
+# A watcher reads hc events until they end, as they do under hc once the
+# terminal goes: end the stand-in's, so no watcher outlives its test.
+teardown() {
+  [[ ! -f "$BATS_TEST_TMPDIR/events.pids" ]] || xargs kill <"$BATS_TEST_TMPDIR/events.pids" 2>/dev/null || true
+}
+
 desk() { "$ROOT/bin/bercail-desk-agent" "$@"; }
 expect() { [[ "$1" == "$2" ]] || fail "$3: got '$1', want '$2'"; }
 
@@ -48,7 +54,7 @@ arrange_record() {
 #!/usr/bin/env bash
 case "\$1" in
   get) cat "$BATS_TEST_TMPDIR/terminal.json" ;;
-  events) cat "$EVENTS"; exec sleep 30 ;;
+  events) echo "\$\$" >>"$BATS_TEST_TMPDIR/events.pids"; cat "$EVENTS"; exec sleep 30 ;;
 esac
 HC
   chmod +x "$BATS_TEST_TMPDIR/bin/hc"
@@ -386,11 +392,13 @@ AGENT
   chmod a-w "$BERCAIL_TMP_ROOT/old-copy/bin"
   find "$BERCAIL_TMP_ROOT/old-copy" -exec touch -d '3 days ago' {} +
   pi_sleeps
-  AGENT_LIFE=30 desk pi >/dev/null &
+  # Not desk: a kill of the function's subshell would leave the agent.
+  AGENT_LIFE=30 "$ROOT/bin/bercail-desk-agent" pi >/dev/null &
   pid=$!
   wait_for '[[ ! -e "$BERCAIL_TMP_ROOT/old-copy" ]]'
   kill -0 "$pid" || fail "the sweep came only after the agent exited"
   kill "$pid"
+  wait "$pid" 2>/dev/null || true
 }
 
 @test "a desk that exits while its start sweep still runs leaves no scratch: that sweep does not hold the folder" {

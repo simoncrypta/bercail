@@ -25,7 +25,10 @@ while IFS= read -r f; do
       ;;
   esac
 done < <(git ls-files)
-shellcheck -S warning "${files[@]}"
+# One file a process, a core each. -x follows what a file sources, as one run
+# over every file did: alone, install.sh would not see lib/common.sh read YES.
+printf '%s\0' "${files[@]}" |
+  xargs -0 -n 1 -P "$(nproc 2>/dev/null || echo 2)" shellcheck -x -S warning
 tests/lint_grep_q.sh "${files[@]}"
 
 "$vp" check

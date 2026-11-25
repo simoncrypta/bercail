@@ -222,6 +222,15 @@
     "notes": null
   },
   {
+    "name": "actions/cache",
+    "source": "action:actions/cache",
+    "min": null,
+    "why": null,
+    "known": "6.1.0",
+    "pinned_in": [".github/actions/setup/action.yml:actions/cache"],
+    "notes": null
+  },
+  {
     "name": "jdx/mise-action",
     "source": "action:jdx/mise-action",
     "min": null,

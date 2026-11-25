@@ -9,7 +9,7 @@ setup() {
   # passes, so the files it runs are the ones each test writes.
   tree="$BATS_TEST_TMPDIR/tree"
   mkdir -p "$tree/tests" "$tree/lib" "$tree/node_modules/.bin"
-  cp "$ROOT/tests/run.sh" "$ROOT/tests/test_helper.bash" "$tree/tests/"
+  cp "$ROOT/tests/run.sh" "$ROOT/tests/plan.sh" "$ROOT/tests/test_helper.bash" "$tree/tests/"
   cp "$ROOT/lib/slots.sh" "$ROOT/lib/toml.sh" "$tree/lib/"
   ln -s "$ROOT/node_modules/bats/bin/bats" "$tree/node_modules/.bin/bats"
   printf '#!/bin/sh\nexit 0\n' >"$tree/node_modules/.bin/vp"
@@ -167,6 +167,42 @@ meet_file() {
   [[ ${#pids[@]} -eq 2 ]] || fail "the test did not start both: ${pids[*]}"
   [[ "$status" -ne 0 ]] || fail "processes left running passed the run: $output"
   for pid in "${pids[@]}"; do
-    grep -qE "^ *$pid sleep$" <<<"$output" || fail "pid $pid is not named: $output"
+    grep -qE "^ *$pid sleep( \(stray.bats: leaves two\))?$" <<<"$output" || fail "pid $pid is not named: $output"
   done
+}
+
+# A file whose one test leaves its name in $MEET/ran.
+ran_file() {
+  # shellcheck disable=SC2016 # expands when the test runs
+  printf '%s\n' 'load test_helper' 'setup() { isolate; }' "@test \"$1 runs\" {" "  echo $1 >>\"\$MEET/ran\"" '}' \
+    >"$tree/tests/$1.bats"
+}
+
+# CI's shards (tests/plan.sh): each runs its own files, and vitest runs alone.
+@test "run.sh --shard runs only that shard's files, and --vitest only vp test" {
+  ran_file a
+  ran_file b
+  printf 'tests/a.bats\t10\ntests/b.bats\t1\n' >"$tree/tests/weights.tsv"
+  printf '#!/bin/sh\necho vp "$@" >>"$MEET/ran"\n' >"$tree/node_modules/.bin/vp"
+  run env PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh" --shard 2/2
+  [[ "$status" -eq 0 ]] || fail "status $status: $output"
+  [[ "$(cat "$MEET/ran")" == b ]] || fail "shard 2 ran: $(cat "$MEET/ran")"
+  : >"$MEET/ran"
+  run env PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh" --vitest
+  [[ "$status" -eq 0 ]] || fail "status $status: $output"
+  [[ "$(cat "$MEET/ran")" == "vp test --maxWorkers "* ]] || fail "--vitest ran: $(cat "$MEET/ran")"
+}
+
+@test "run.sh --shard with nothing to run passes, and still fails a process left running" {
+  ran_file a
+  run env PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh" --shard 2/2
+  [[ "$status" -eq 0 ]] || fail "an empty shard failed: $output"
+  [[ "$output" == *"--shard 2/2 runs 0 .bats files"* ]] || fail "no word on what it runs: $output"
+  [[ ! -e "$MEET/ran" ]] || fail "an empty shard ran: $(cat "$MEET/ran")"
+  # The canary looks at what the run's own processes left, a test or not.
+  printf '#!/bin/sh\nsleep 303 </dev/null >/dev/null 2>&1 &\necho $! >>"$MEET/pid"\n' >"$tree/node_modules/.bin/vp"
+  run env PATH="$BATS_TEST_TMPDIR/path" bash "$tree/tests/run.sh" --vitest
+  [[ "$status" -ne 0 ]] || fail "a process left by vp test passed the run: $output"
+  grep -qE "^ *$(cat "$MEET/pid") sleep \(run.bats: run.sh --shard with nothing to run" <<<"$output" \
+    || fail "the process and the test that left it are not named: $output"
 }
