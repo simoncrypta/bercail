@@ -149,7 +149,7 @@ Review queue: 12 lines in 3 changes
 - app-3: Old job · 2 lines staged in 1 file · stakes low · describe check fails: no .bercail/description.md: run /validate · state unknown: issue closed but staged changes remain; custody/outcome unproven · ~/Work/app.old
 ```
 
-Parent and child links are not read as replacements. A staged change is queued once its desk is not working, marked `described` or `describe check fails:` and why (from a copy of the index, without the no-beads-ids rule). Its state comes from records, never prose:
+Parent and child links are not read as replacements. A staged change is queued once its desk is not working, and so is a merge under way that changes no file, since it still lands a commit. A merge of the trunk is measured from the trunk's side, as `describe check` measures it, and its line says `measured against <trunk>, the trunk side of this merge`. Each is marked `described` or `describe check fails:` and why (from a copy of the index, without the no-beads-ids rule). Its state comes from records, never prose:
 
 - **review**: it waits on you. **lgtm**: the same, and its policy requires your review (a `high_stakes` path, or `review = "always"`).
 - **superseded**: `bd supersede` or `bd duplicate` names a replacement, or the latest handoff went to another worktree that still exists. Listed last, not counted.

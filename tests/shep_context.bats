@@ -1006,6 +1006,64 @@ spaces_fixture() {
     || fail "queue --json: $(jq -c '[.items[] | [.issue, .state, .counts]]' <<<"$out")"
 }
 
+@test "shep queue: a merge under way is listed even when it changes no file; a merge of the trunk is measured against the trunk side" {
+  local out wt g=(-c user.name=t -c user.email=t@example.invalid)
+  repo web
+  printf '%s\n' "$HOME/Work/web" >"$STATE/repos"
+  issues web 'web-1|Job web-1|in_progress' 'web-2|Job web-2|in_progress' 'web-3|Job web-3|in_progress' \
+    'web-4|Job web-4|in_progress' 'web-5|Job web-5|in_progress'
+  for wt in 1 2 3 4 5; do bd_issue "$wt" in_progress; done
+  for wt in same docs zero side other clean; do worktree web "$wt"; done
+  seq 1 50 >"$HOME/Work/web/trunk.md"
+  git -C "$HOME/Work/web" add trunk.md
+  git -C "$HOME/Work/web" "${g[@]}" commit -q -m trunk
+  for wt in same docs; do
+    seq 1 4 >"$HOME/Work/web.$wt/own.md"
+    git -C "$HOME/Work/web.$wt" add own.md
+    git -C "$HOME/Work/web.$wt" "${g[@]}" commit -q -m own
+  done
+  # web.same and web.zero already have the trunk's file, so the merge's tree is
+  # HEAD's; web.zero's is the trunk's too. web.side merges a branch, not the
+  # trunk, whose tree is its own.
+  for wt in same zero; do
+    seq 1 50 >"$HOME/Work/web.$wt/trunk.md"
+    git -C "$HOME/Work/web.$wt" add trunk.md
+    git -C "$HOME/Work/web.$wt" "${g[@]}" commit -q -m trunk-copy
+  done
+  for wt in side other; do
+    seq 1 3 >"$HOME/Work/web.$wt/side.md"
+    git -C "$HOME/Work/web.$wt" add side.md
+    git -C "$HOME/Work/web.$wt" "${g[@]}" commit -q -m "side-$wt"
+  done
+  for wt in same docs zero; do git -C "$HOME/Work/web.$wt" "${g[@]}" merge -q --no-ff --no-commit main >/dev/null; done
+  git -C "$HOME/Work/web.side" "${g[@]}" merge -q --no-ff --no-commit other >/dev/null
+  for wt in same zero side; do
+    git -C "$HOME/Work/web.$wt" diff --cached --quiet || fail "web.$wt: the merge's tree is not HEAD's"
+  done
+  seq 1 2 >"$HOME/Work/web.docs/docs.md"
+  stage_at "$HOME/Work/web.same" 1700000100
+  stage_at "$HOME/Work/web.docs" 1700000200
+  stage_at "$HOME/Work/web.zero" 1700000300
+  stage_at "$HOME/Work/web.side" 1700000400
+  record --arg p "$HOME/Work/web.same" '{path: $p, branch: "same", issue: "web-1", desk: "t1"}'
+  record --arg p "$HOME/Work/web.docs" '{path: $p, branch: "docs", issue: "web-2", desk: "t2"}'
+  record --arg p "$HOME/Work/web.zero" '{path: $p, branch: "zero", issue: "web-3", desk: "t3"}'
+  record --arg p "$HOME/Work/web.side" '{path: $p, branch: "side", issue: "web-4", desk: "t4"}'
+  record --arg p "$HOME/Work/web.clean" '{path: $p, branch: "clean", issue: "web-5", desk: "t5"}'
+
+  out="$(shep queue --json)" || fail "queue --json: $out"
+  jq -e '[.items[] | [.issue, .change.files, .change.lines, .change.against]]
+    == [["web-1", 1, 4, "main"], ["web-2", 2, 6, "main"], ["web-3", 0, 0, "main"], ["web-4", 0, 0, null]]' \
+    <<<"$out" >/dev/null || fail "queue --json: $(jq -c '[.items[] | [.issue, .change]]' <<<"$out")"
+  out="$(shep queue --repo "$HOME/Work/web")" || fail "queue: $out"
+  [[ "$out" == *"
+- web-1: Job web-1 · 4 lines staged in 1 file, measured against main, the trunk side of this merge · stakes low · "*"
+- web-2: Job web-2 · 6 lines staged in 2 files, measured against main, the trunk side of this merge · stakes low · "*"
+- web-3: Job web-3 · 0 lines staged in 0 files, measured against main, the trunk side of this merge · stakes low · "*"
+- web-4: Job web-4 · 0 lines staged in 0 files · stakes low · "* ]] \
+    || fail "queue: $out"
+}
+
 @test "shep brief and queue show the job's staged size, stakes and describe check" {
   local out
   queue_fixture

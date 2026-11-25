@@ -700,13 +700,15 @@ _shep_live_spaces() {
 # One repo's staged worktrees as a JSON array of queue items. The candidates
 # come on stdin, a line each: path, issue, title, desk and space, \x1f apart.
 # Their issues are read from bd in one call, before the worktrees are measured.
+# A merge under way counts as staged even when it changes no file: it still
+# lands a commit, and desc_change measures a merge of the trunk from its side.
 _shep_queue_staged() {
   local main="$1" records="$2" live="$3" row path issue title desk space stale change state since described items='[]' issues
   local -a measure=() ids=()
   # \x1f, not a tab: read would merge an empty title's two tabs into one.
   while IFS= read -r row; do
     IFS=$'\x1f' read -r path issue _ _ space <<<"$row"
-    git -C "$path" diff --cached --quiet 2>/dev/null && continue
+    git -C "$path" diff --cached --quiet 2>/dev/null && [[ -z "$(_desc_merge_heads "$path")" ]] && continue
     stale=""
     if [[ -n "$live" ]] && ! jq -e --arg s "$space" --arg p "$path" '(.ids | index($s)) or (.paths | index($p))' <<<"$live" >/dev/null; then
       stale=1
@@ -719,7 +721,7 @@ _shep_queue_staged() {
   for row in "${measure[@]}"; do
     IFS=$'\x1f' read -r stale path issue title desk space <<<"$row"
     change="$(desc_change "$path" 2>/dev/null </dev/null)" || continue
-    jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || continue
+    jq -e '.files > 0' <<<"$change" >/dev/null 2>&1 || [[ -n "$(_desc_merge_heads "$path")" ]] || continue
     if [[ -n "$stale" ]]; then
       # A title lookup must not hold up the snapshot for an already-classified row.
       state='{"state":"stale","why":"no Herdr space"}'
@@ -834,6 +836,7 @@ _shep_queue_text() {
         + " · gates: \(.gates.text) · \(.url)"
       else (if .issue then .issue + (if .title then ": \(.title | flat | cut(70))" else "" end) else (.path | tilde) end)
         + ((.change.files - .change.left_out.files) as $n | " · \(size) staged in \($n) file\(if $n == 1 then "" else "s" end)")
+        + (if .change.against then ", measured against \(.change.against), the trunk side of this merge" else "" end)
         + " · stakes \(.change.stakes)" + (if .counts and .change.review == "required" then ", needs the person'"'"'s LGTM" else "" end)
         + (.described | if . == null then "" elif .ok then " · described" else " · describe check fails: \(.why | flat | cut(90))" end)
         + ({unknown: " · state unknown: \(.why)", cleanup: " · \(.why), a cleanup candidate",
