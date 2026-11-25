@@ -51,6 +51,13 @@ export type GuardInput = {
   cwd: string | undefined;
   /** Within one command: each dir the shell may be in, as after A && cd X; undefined: one it lost. */
   cwds?: (string | undefined)[];
+  /** For the rest of the command the guard cannot vouch for cwds: they outgrew its count, or
+   *  a function was defined, whose body may cd anywhere. Unlike a dir it lost, a relative
+   *  write is declined for a read-only role; the known dirs are still checked. */
+  cwdsCapped?: boolean;
+  /** cwds outgrew the guard's count, which dropped the known ones: a relative write is
+   *  refused for every role, for the rest of the command. */
+  cwdsOverflowed?: boolean;
   /** Current branch per git dir. Missing: not looked up. "": lookup failed. */
   branches?: Record<string, string>;
   /** Effective policy per git dir. Missing: not looked up. */
@@ -209,9 +216,11 @@ const todoFile =
 const basecampFlags =
   "Put basecamp's flags after its command and action (basecamp todos list --in 1), so the guard can tell what it runs.";
 const unclosedSub =
-  "The guard cannot find where this $( or backtick ends (a heredoc with an apostrophe inside $( ) does that). Write the body to a file first, then pass its path.";
+  "The guard could not read this command to its end: a $( or backtick it could not close, or a case it could not parse. Write the body to a file first, then pass its path.";
 const unclosedWarn =
-  "The guard could not find where a $( or backtick ends, so it did not check the rest of this command. Next time, write the body to a file first, then pass its path.";
+  "The guard could not read a $( or backtick, or a case, to its end, so it did not check the rest of this command. Next time, write the body to a file first, then pass its path.";
+const tooManyCwds =
+  "The guard lost track of the folder (more cds than it follows), so it cannot place a relative path. Write the target as an absolute path.";
 const lostCwd =
   "The guard lost track of the folder after a cd it could not follow, so it checked a relative write target by its name only.";
 const pushApproved = (token: string) =>
@@ -318,55 +327,185 @@ function specIsTag(spec: string): boolean {
   return isTagRef(colon >= 0 ? bare.slice(0, colon) : bare) || isTagRef(refDest(bare));
 }
 
+type Heredoc = { delim: string; strip: boolean; quoted: boolean };
+
+// The heredoc a << at i opens, and where its delimiter word ends. A <<< is a here-string.
+function heredocAt(text: string, i: number): (Heredoc & { end: number }) | undefined {
+  const op = text[i] === "<" ? redirectAt(text, i) : undefined;
+  if (op?.op !== "<<") return undefined;
+  let j = op.end;
+  const strip = text[j] === "-";
+  if (strip) j++;
+  j = blanksEnd(text, j);
+  let delim = "";
+  let quoted = false;
+  while (j < text.length && !" \t\n;|&<>()".includes(text[j])) {
+    const ch = text[j];
+    if (ch === "'" || ch === '"') {
+      quoted = true;
+      const end = text.indexOf(ch, j + 1);
+      if (end < 0) {
+        j = text.length;
+        break;
+      }
+      delim += text.slice(j + 1, end);
+      j = end + 1;
+      continue;
+    }
+    if (ch === "\\") {
+      quoted = true;
+      delim += text[j + 1] ?? "";
+      j += 2;
+      continue;
+    }
+    delim += ch;
+    j++;
+  }
+  return delim ? { delim, strip, quoted, end: j } : undefined;
+}
+
+// Past the blanks and backslash-newlines at i, never a real newline.
+function blanksEnd(text: string, i: number): number {
+  while (text[i] === " " || text[i] === "\t" || (text[i] === "\\" && text[i + 1] === "\n"))
+    i += text[i] === "\\" ? 2 : 1;
+  return i;
+}
+
+// A heredoc's body from the line start at i: its lines, and where the line after
+// its delimiter starts.
+function heredocBody(text: string, i: number, doc: Heredoc): { lines: string[]; end: number } {
+  const lines: string[] = [];
+  while (i < text.length) {
+    let end = text.indexOf("\n", i);
+    if (end < 0) end = text.length;
+    const line = text.slice(i, end);
+    i = end + 1;
+    if ((doc.strip ? line.replace(/^\t+/, "") : line) === doc.delim) break;
+    lines.push(line);
+  }
+  return { lines, end: i };
+}
+
+// Where a string that ends at an unescaped quote closes: a backtick's, or $'...''s
+// from its first character. -1 when it never does.
+function escapedEnd(text: string, i: number, quote: string): number {
+  while (i < text.length) {
+    if (text[i] === "\\") i += 2;
+    else if (text[i] === quote) return i + 1;
+    else i++;
+  }
+  return -1;
+}
+
+// Characters that end a word, so what follows starts one.
+const wordBreak = " \t\n;&|()<>";
+const keyword = /[A-Za-z!{]+/y;
+
+// The body of the ( at open and where it ends, as bash finds its ): past quotes,
+// $'...', backslashes, # comments, heredoc bodies, nested ( ), "$( )" and backticks,
+// and a case's pattern ). One pass, so a $( that never closes costs one scan.
 function readBalanced(text: string, open: number): { body: string; end: number } | undefined {
-  let depth = 1;
+  // One frame per open ( or "; cases: the case commands open in a ( frame.
+  const frames: { quote: boolean; cases: number }[] = [{ quote: false, cases: 0 }];
+  const docs: Heredoc[] = [];
+  let command = true;
+  // At a word's start: set as characters are read, so an escaped blank stays in its word.
+  let start = true;
   let i = open + 1;
-  let quote: "'" | '"' | null = null;
   while (i < text.length) {
     const c = text[i];
-    if (quote) {
-      if (c === "\\" && quote === '"' && i + 1 < text.length) {
-        i += 2;
-        continue;
+    const frame = frames[frames.length - 1];
+    if (c === "\\") {
+      if (text[i + 1] !== "\n") start = false;
+      i += 2;
+      continue;
+    }
+    if (c === "`") {
+      i = escapedEnd(text, i + 1, "`");
+      if (i < 0) return undefined;
+      start = false;
+      continue;
+    }
+    if (frame.quote) {
+      start = c === "$" && text[i + 1] === "(";
+      if (c === '"') frames.pop();
+      else if (start) {
+        frames.push({ quote: false, cases: 0 });
+        command = true;
+        i++;
       }
-      if (c === quote) quote = null;
       i++;
       continue;
     }
-    if (c === "'" || c === '"') {
-      quote = c;
+    if (c === "#" && start) {
+      const end = text.indexOf("\n", i);
+      i = end < 0 ? text.length : end;
+      continue;
+    }
+    if (c === "'" || (c === "$" && text[i + 1] === "'")) {
+      i = c === "'" ? text.indexOf("'", i + 1) + 1 : escapedEnd(text, i + 2, "'");
+      if (i <= 0) return undefined;
+      command = start = false;
+      continue;
+    }
+    if (c === '"') {
+      frames.push({ quote: true, cases: 0 });
+      command = start = false;
       i++;
       continue;
     }
-    if (c === "(") depth++;
-    if (c === ")") {
-      depth--;
-      if (depth === 0) return { body: text.slice(open + 1, i), end: i + 1 };
+    const doc = heredocAt(text, i);
+    if (doc) {
+      docs.push(doc);
+      i = doc.end;
+      start = false;
+      continue;
     }
+    if (c === "\n" && docs.length) {
+      i++;
+      for (const open of docs.splice(0)) i = heredocBody(text, i, open).end;
+      command = start = true;
+      continue;
+    }
+    if (c === "(") frames.push({ quote: false, cases: 0 });
+    else if (c === ")" && !frame.cases) {
+      frames.pop();
+      if (!frames.length) return { body: text.slice(open + 1, i), end: i + 1 };
+    } else if (start && !wordBreak.includes(c)) {
+      keyword.lastIndex = i;
+      const word = keyword.exec(text)?.[0] ?? "";
+      const whole = word !== "" && (i + word.length === text.length || wordBreak.includes(text[i + word.length]));
+      if (command && whole && word === "case") frame.cases++;
+      if (command && whole && word === "esac" && frame.cases) frame.cases--;
+      command = whole && shellPrefixes.has(word);
+    }
+    // After ( or ;, and after a case pattern's ), a command starts.
+    if ("();&|\n".includes(c)) command = c !== ")" || frame.cases > 0;
+    start = wordBreak.includes(c);
     i++;
   }
   return undefined;
 }
 
-// $(...) and `...` inside an unquoted heredoc body still run.
-function subsIn(text: string): string[] {
+// The $( ) and backtick bodies in an unquoted heredoc's body, which still run.
+// unclosed: one that never closes; the rest is not read.
+function subsIn(text: string): { subs: string[]; unclosed: boolean } {
   const subs: string[] = [];
   for (let i = 0; i < text.length; i++) {
-    if (text[i] === "$" && text[i + 1] === "(") {
+    if (text[i] === "\\") i++;
+    else if (text[i] === "$" && text[i + 1] === "(") {
       const inner = readBalanced(text, i + 1);
-      if (inner) {
-        subs.push(inner.body);
-        i = inner.end - 1;
-      }
+      if (!inner) return { subs, unclosed: true };
+      subs.push(inner.body);
+      i = inner.end - 1;
     } else if (text[i] === "`") {
-      const end = text.indexOf("`", i + 1);
-      if (end > i) {
-        subs.push(text.slice(i + 1, end));
-        i = end;
-      }
+      const end = escapedEnd(text, i + 1, "`");
+      if (end < 0) return { subs, unclosed: true };
+      subs.push(text.slice(i + 1, end - 1));
+      i = end - 1;
     }
   }
-  return subs;
+  return { subs, unclosed: false };
 }
 
 // $(mktemp -d ...) and nothing else, not a dry run: it prints a new, empty directory.
@@ -403,14 +542,44 @@ function placeIn(base: string | undefined, target: string): string | undefined {
 const literalDollar = "\u0001";
 const literal = (text: string) => text.replaceAll("$", literalDollar);
 
-// A shell word, an operator that ends a command, a command substitution's body,
-// a line of an unquoted heredoc, or a $( or backtick the guard cannot find the end of.
+// A redirect: 2>&1 is fd 2, op >&, target 1. The target is in marked form, and
+// undefined when there is none or the guard cannot read it as one word (>$(x)); text
+// keeps its literal parts all the same ("$PW" of >"$PW$(date)").
+type Redirect = { fd: string; op: string; target: string | undefined; text: string };
+
+// A shell word, a redirect, an operator that ends a command, a substitution's body
+// ($( ), backtick, <( ) or >( ); output: a >( ), whose output is the command's), a line
+// of an unquoted heredoc, or a substitution the guard cannot find the end of.
 type Token =
-  | { kind: "op"; op: string; redirect?: boolean }
-  | { kind: "word"; value: string; quoted: boolean }
-  | { kind: "sub"; value: string }
+  | { kind: "op"; op: string }
+  | { kind: "word"; value: string; quoted: boolean; literal: boolean }
+  | ({ kind: "redirect" } & Redirect)
+  | { kind: "sub"; value: string; output?: boolean }
   | { kind: "doc"; value: string }
   | { kind: "unclosed" };
+
+const redirectOps = ["&>>", "&>", "<<<", "<<", "<>", "<&", "<", ">>", ">|", ">&", ">"];
+// A redirect's fd, glued on, unquoted and unescaped: 2>&1, {fd}>x.
+const redirectFd = /^(?:\d+|\{[A-Za-z_]\w*\})$/;
+// The escapes of $'...' the guard decodes; it keeps any other as written.
+const ansiEscapes: Record<string, string> = { "\\": "\\", "'": "'", '"': '"', n: "\n", t: "\t" };
+
+// The redirect operator at i and where it ends, past the backslash-newlines bash
+// drops before it reads >&2, 2>&1 or &>file. A <( or >( is a process substitution.
+function redirectAt(command: string, i: number): { op: string; end: number } | undefined {
+  if ("<>".includes(command[i]) && command[i + 1] === "(") return undefined;
+  let text = "";
+  const ends: number[] = [];
+  let j = i;
+  while (text.length < 3) {
+    while (j > i && command[j] === "\\" && command[j + 1] === "\n") j += 2;
+    if (j >= command.length || !"<>&|".includes(command[j])) break;
+    text += command[j++];
+    ends.push(j);
+  }
+  const op = redirectOps.find((candidate) => text.startsWith(candidate));
+  return op ? { op, end: ends[op.length - 1] } : undefined;
+}
 
 // tag keeps the mktemp -d dirs of nested commands apart.
 function tokenize(command: string, tag = ""): Token[] {
@@ -418,135 +587,79 @@ function tokenize(command: string, tag = ""): Token[] {
   let temps = 0;
   const tempDir = () => `${tempPrefix}${tag}.${temps++}`;
   // Heredocs opened on the current line; their bodies start after its newline.
-  const heredocs: { delim: string; strip: boolean; quoted: boolean }[] = [];
+  const heredocs: Heredoc[] = [];
   let i = 0;
-  let bareRedirect = false;
-  while (i < command.length) {
-    const c = command[i];
-    if (c === " " || c === "\t") {
-      bareRedirect = false;
-      i++;
-      continue;
-    }
-    if (c === "<" && command[i + 1] === "<" && command[i + 2] !== "<") {
-      let j = i + 2;
-      const strip = command[j] === "-";
-      if (strip) j++;
-      while (command[j] === " " || command[j] === "\t") j++;
-      let delim = "";
-      let quoted = false;
-      while (j < command.length && !" \t\n;|&<>()".includes(command[j])) {
-        const ch = command[j];
-        if (ch === "'" || ch === '"') {
-          quoted = true;
-          const end = command.indexOf(ch, j + 1);
-          if (end < 0) {
-            j = command.length;
-            break;
-          }
-          delim += command.slice(j + 1, end);
-          j = end + 1;
-          continue;
-        }
-        if (ch === "\\") {
-          quoted = true;
-          delim += command[j + 1] ?? "";
-          j += 2;
-          continue;
-        }
-        delim += ch;
-        j++;
-      }
-      if (delim) {
-        heredocs.push({ delim, strip, quoted });
-        bareRedirect = false;
-        i = j;
-        continue;
-      }
-    }
-    if (c === "\n" && heredocs.length) {
-      bareRedirect = false;
-      tokens.push({ kind: "op", op: "\n" });
-      i++;
-      for (const doc of heredocs.splice(0)) {
-        while (i < command.length) {
-          let end = command.indexOf("\n", i);
-          if (end < 0) end = command.length;
-          const line = command.slice(i, end);
-          i = end + 1;
-          if ((doc.strip ? line.replace(/^\t+/, "") : line) === doc.delim) break;
-          if (doc.quoted) continue;
-          tokens.push({ kind: "doc", value: line });
-          for (const sub of subsIn(line)) tokens.push({ kind: "sub", value: sub });
-        }
-      }
-      continue;
-    }
-    if (c === "\n" || c === ";" || c === "|" || c === "&") {
-      const double = (c === "|" && command[i + 1] === "|") || (c === "&" && command[i + 1] === "&");
-      // Backslash-newline disappears before bash reads >&2, 2>&1 or &>file.
-      let next = i + 1;
-      while (command[next] === "\\" && command[next + 1] === "\n") next += 2;
-      const redirect = c === "&" && !double && (bareRedirect || command[next] === ">");
-      bareRedirect = false;
-      tokens.push({ kind: "op", op: double ? c + c : c, redirect });
-      i += double ? 2 : 1;
-      continue;
-    }
-    if (c === "$" && command[i + 1] === "(") {
-      const inner = readBalanced(command, i + 1);
-      if (inner && !makesTempDir(inner.body)) {
-        bareRedirect = false;
-        tokens.push({ kind: "sub", value: inner.body });
-        i = inner.end;
-        continue;
-      }
-    }
+  // The fd glued before the redirect at i.
+  let fd = "";
+  // Where the last sub token read from the top ended: a # there is in its word.
+  let glued = -1;
+  // The $( ), backtick, <( ) or >( ) that opens at j: its body and end (-1 when it
+  // never closes); undefined when none opens there.
+  const scanSub = (j: number): { body: string; end: number; output: boolean } | undefined => {
+    const c = command[j];
     if (c === "`") {
-      const end = command.indexOf("`", i + 1);
-      if (end > i && !makesTempDir(command.slice(i + 1, end))) {
-        bareRedirect = false;
-        tokens.push({ kind: "sub", value: command.slice(i + 1, end) });
-        i = end + 1;
-        continue;
-      }
+      const end = escapedEnd(command, j + 1, "`");
+      return { body: end < 0 ? "" : command.slice(j + 1, end - 1), end, output: false };
     }
+    if (!"$<>".includes(c) || command[j + 1] !== "(") return undefined;
+    const inner = readBalanced(command, j + 1);
+    return { body: inner?.body ?? "", end: inner?.end ?? -1, output: c === ">" };
+  };
+  // One that becomes a sub token, not part of a word: all but a $(mktemp -d).
+  const subAt = (j: number) => {
+    const sub = scanSub(j);
+    return sub && sub.end > 0 && ("<>".includes(command[j]) || !makesTempDir(sub.body)) ? sub : undefined;
+  };
+  // quoted: it had quotes; literal: quotes or a backslash, so ( or case in it is text.
+  const readWord = () => {
+    const start = i;
     let word = "";
     let quoted = false;
+    let escaped = false;
     while (i < command.length) {
       const ch = command[i];
       if (" \t\n;|&".includes(ch)) break;
-      // readBalanced gives up on a $( it can't close, like one around a heredoc
-      // whose body has an apostrophe. Breaking on an empty word would leave i
-      // where it is and loop forever, so the rest is left unchecked and blocked.
-      if (ch === "$" && command[i + 1] === "(") {
-        const inner = readBalanced(command, i + 1);
-        if (!inner && !word) {
+      // An unquoted < or > ends the word, as in bash: echo hi>x writes x. A <( or >(
+      // here is one the top could not close: the rest is left unchecked.
+      if (ch === "<" || ch === ">") {
+        if (i === start && command[i + 1] === "(") {
+          tokens.push({ kind: "unclosed" });
+          i = command.length;
+        }
+        break;
+      }
+      // A sub the top could not close. Breaking on an empty word would leave i where it
+      // is and loop forever, so the rest is left unchecked.
+      const sub = ch === "$" || ch === "`" ? scanSub(i) : undefined;
+      if (sub) {
+        if (sub.end < 0 && !word) {
           tokens.push({ kind: "unclosed" });
           i = command.length;
           break;
         }
-        if (!inner || !makesTempDir(inner.body)) break;
-        bareRedirect = false;
+        if (sub.end < 0 || !makesTempDir(sub.body)) break;
         word += tempDir();
-        i = inner.end;
+        i = sub.end;
         continue;
       }
-      if (ch === "`") {
-        const end = command.indexOf("`", i + 1);
-        if (end < 0 && !word) {
-          tokens.push({ kind: "unclosed" });
-          i = command.length;
-          break;
+      // $'...' ends at the first ' no backslash escapes.
+      if (ch === "$" && command[i + 1] === "'") {
+        quoted = true;
+        let text = "";
+        i += 2;
+        while (i < command.length && command[i] !== "'") {
+          if (command[i] === "\\" && i + 1 < command.length) {
+            text += ansiEscapes[command[i + 1]] ?? command.slice(i, i + 2);
+            i += 2;
+            continue;
+          }
+          text += command[i++];
         }
-        if (end < 0 || !makesTempDir(command.slice(i + 1, end))) break;
-        bareRedirect = false;
-        word += tempDir();
-        i = end + 1;
+        word += literal(text);
+        i++;
         continue;
       }
       if (ch === "'") {
-        bareRedirect = false;
         quoted = true;
         const end = command.indexOf("'", i + 1);
         if (end < 0) {
@@ -559,7 +672,6 @@ function tokenize(command: string, tag = ""): Token[] {
         continue;
       }
       if (ch === '"') {
-        bareRedirect = false;
         quoted = true;
         i++;
         while (i < command.length && command[i] !== '"') {
@@ -568,24 +680,18 @@ function tokenize(command: string, tag = ""): Token[] {
             i += 2;
             continue;
           }
-          if (command[i] === "$" && command[i + 1] === "(") {
-            const inner = readBalanced(command, i + 1);
-            if (inner) {
-              if (makesTempDir(inner.body)) word += tempDir();
-              else tokens.push({ kind: "sub", value: inner.body });
-              i = inner.end;
-              continue;
-            }
+          const sub = command[i] === "$" || command[i] === "`" ? scanSub(i) : undefined;
+          // One that never closes ends the reading: rescanning from each later one would be quadratic.
+          if (sub && sub.end < 0) {
+            tokens.push({ kind: "unclosed" });
+            i = command.length;
+            break;
           }
-          if (command[i] === "`") {
-            const end = command.indexOf("`", i + 1);
-            if (end > i) {
-              const body = command.slice(i + 1, end);
-              if (makesTempDir(body)) word += tempDir();
-              else tokens.push({ kind: "sub", value: body });
-              i = end + 1;
-              continue;
-            }
+          if (sub) {
+            if (makesTempDir(sub.body)) word += tempDir();
+            else tokens.push({ kind: "sub", value: sub.body });
+            i = sub.end;
+            continue;
           }
           word += command[i];
           i++;
@@ -598,69 +704,247 @@ function tokenize(command: string, tag = ""): Token[] {
           i += 2;
           continue;
         }
-        bareRedirect = false;
+        escaped = true;
         if (i + 1 < command.length) word += literal(command[i + 1]);
         i += 2;
         continue;
       }
       // A ( that starts a word, and any unquoted ), is a word of its own, as bash reads
-      // them: time (cd x; true)>/dev/null. A <( or a=( stays in its word.
+      // them: time (cd x; true)>/dev/null. An a=( stays in its word.
       if (ch === ")" && word) break;
-      bareRedirect = ch === "<" || ch === ">";
       word += ch;
       i++;
       if (ch === ")" || word === "(") break;
     }
-    if (word || quoted) tokens.push({ kind: "word", value: word, quoted });
+    return { word, quoted, literal: escaped || quoted };
+  };
+  // A redirect's target: one shell word, undefined when there is none, a process
+  // substitution comes next, or the word holds a substitution.
+  const readTarget = (): { target: string | undefined; text: string } => {
+    let target = "";
+    let quoted = false;
+    let known = true;
+    while (i < command.length && !" \t\n;|&()<>".includes(command[i])) {
+      const sub = subAt(i);
+      if (sub) {
+        tokens.push({ kind: "sub", value: sub.body, output: sub.output });
+        known = false;
+        i = sub.end;
+        continue;
+      }
+      const from = i;
+      const pushed = tokens.length;
+      const part = readWord();
+      target += part.word;
+      quoted ||= part.quoted;
+      if (tokens.length !== pushed) known = false;
+      if (i === from) break;
+    }
+    return { target: known && (target || quoted) ? target : undefined, text: target };
+  };
+  while (i < command.length) {
+    const c = command[i];
+    if (c === " " || c === "\t") {
+      i++;
+      continue;
+    }
+    // A # that starts a word comments out the rest of the line; the newline still ends it.
+    // readWord keeps a # inside a word (a\ #b), so here one starts a word unless a sub
+    // just ended there.
+    if (c === "#" && i !== glued) {
+      const end = command.indexOf("\n", i);
+      i = end < 0 ? command.length : end;
+      continue;
+    }
+    const heredoc = heredocAt(command, i);
+    if (heredoc) {
+      heredocs.push(heredoc);
+      fd = "";
+      i = heredoc.end;
+      continue;
+    }
+    // Its subs are found over the whole body, so a $( may span lines.
+    if (c === "\n" && heredocs.length) {
+      tokens.push({ kind: "op", op: "\n" });
+      i++;
+      for (const doc of heredocs.splice(0)) {
+        const body = heredocBody(command, i, doc);
+        i = body.end;
+        if (doc.quoted) continue;
+        for (const line of body.lines) tokens.push({ kind: "doc", value: line });
+        const found = subsIn(body.lines.join("\n"));
+        for (const sub of found.subs) tokens.push({ kind: "sub", value: sub });
+        if (found.unclosed) tokens.push({ kind: "unclosed" });
+      }
+      continue;
+    }
+    const redirect = redirectAt(command, i);
+    if (redirect) {
+      i = redirect.end;
+      i = blanksEnd(command, i);
+      tokens.push({ kind: "redirect", fd, op: redirect.op, ...readTarget() });
+      fd = "";
+      continue;
+    }
+    if (c === "\n" || c === ";" || c === "|" || c === "&") {
+      // ;; ;& and ;;& end a case arm.
+      const op =
+        c === ";"
+          ? ([";;&", ";;", ";&"].find((end) => command.startsWith(end, i)) ?? ";")
+          : (c === "|" || c === "&") && command[i + 1] === c
+            ? c + c
+            : c;
+      tokens.push({ kind: "op", op });
+      i += op.length;
+      continue;
+    }
+    const sub = subAt(i);
+    if (sub) {
+      tokens.push({ kind: "sub", value: sub.body, output: sub.output });
+      i = glued = sub.end;
+      continue;
+    }
+    const { word, quoted, literal } = readWord();
+    if (!literal && redirectFd.test(word) && "<>".includes(command[i] ?? "\0") && command[i + 1] !== "(") fd = word;
+    else if (word || quoted) tokens.push({ kind: "word", value: word, quoted, literal });
   }
   return tokens;
 }
 
 // One simple command, with the operators before and after it ("" at either end).
 // marked keeps literalDollar where words has the $ back; quoted: each word had quotes.
-// redirect: the & after it belongs to a redirect such as >&2.
+// captured: each sub's output is read by the command (all but a >( )).
+// redirects: in order and in marked form, kept out of words so none hides the verb.
 // docs: unquoted heredoc lines read just before these words; they belong to an earlier command.
+// A case arm's command is a segment of its own, with ) before it; its pattern is dropped.
+// So is a function definition's head, so its body's commands are read as written;
+// pastFunction marks every segment from the first head on.
 type Segment = {
   words: string[];
   marked: string[];
   quoted: boolean[];
   subs: string[];
+  captured: boolean[];
   docs: string[];
   before: string;
   after: string;
-  redirect: boolean;
+  redirects: Redirect[];
   unclosed: boolean;
+  pastFunction: boolean;
 };
+
+const armEnds = new Set([";;", ";&", ";;&"]);
+const functionName = /^[^\s()<>;&|'"`$]+$/;
+
+// How many words a function definition's head takes: NAME (), NAME() or function NAME [()].
+function functionHead(words: string[], verbatim: boolean[]): number {
+  const bare = (k: number, word: string | RegExp) =>
+    !verbatim[k] && words[k] !== undefined && (typeof word === "string" ? words[k] === word : word.test(words[k]));
+  const parens = (k: number) => (bare(k, "(") && bare(k + 1, ")") ? 2 : 0);
+  const glued = (k: number) => bare(k, /^[^\s()<>;&|'"`$]+\($/) && bare(k + 1, ")");
+  if (bare(0, "function") && bare(1, functionName)) return 2 + parens(2);
+  if (bare(0, "function") && glued(1)) return 3;
+  if (glued(0)) return 2;
+  return bare(0, functionName) && parens(1) ? 3 : 0;
+}
 
 function segmentsOf(command: string, tag = ""): Segment[] {
   const out: Segment[] = [];
   let words: string[] = [];
   let quoted: boolean[] = [];
+  // Each word had quotes or a backslash: \( and "case" are text, not syntax.
+  let verbatim: boolean[] = [];
   let subs: string[] = [];
+  let captured: boolean[] = [];
   let docs: string[] = [];
+  let redirects: Redirect[] = [];
   let before = "";
   let unclosed = false;
-  const flush = (op: string, redirect = false) => {
-    if (words.length || subs.length || docs.length || unclosed) {
+  // The case commands open; a header being read ("selector", then "in" once it has one);
+  // whether an arm's pattern is being read, up to its ).
+  let cases = 0;
+  let header = "";
+  let pattern = false;
+  // Only reserved words and ( so far: the next word starts the command.
+  const atStart = () => words.every((word, k) => !verbatim[k] && (shellPrefixes.has(word) || word === "("));
+  let pastFunction = false;
+  const flush = (op: string) => {
+    const head = functionHead(words, verbatim);
+    pastFunction ||= head > 0;
+    words = words.slice(head);
+    quoted = quoted.slice(head);
+    if (words.length || subs.length || docs.length || redirects.length || unclosed) {
       const plain = words.map((word) => word.replaceAll(literalDollar, "$"));
-      out.push({ words: plain, marked: words, quoted, subs, docs, before, after: op, redirect, unclosed });
+      out.push({
+        words: plain,
+        marked: words,
+        quoted,
+        subs,
+        captured,
+        docs,
+        before,
+        after: op,
+        redirects,
+        unclosed,
+        pastFunction,
+      });
     }
     words = [];
     quoted = [];
+    verbatim = [];
     subs = [];
+    captured = [];
     docs = [];
+    redirects = [];
     before = op;
   };
   for (const token of tokenize(command, tag)) {
-    if (token.kind === "op") flush(token.op, token.redirect);
+    const bare = token.kind === "word" && !token.literal ? token.value : undefined;
+    if (pattern && (token.kind === "word" || token.kind === "op")) {
+      if (bare === ")") {
+        pattern = false;
+        before = ")";
+        continue;
+      }
+      if (bare !== "esac") continue;
+      pattern = false;
+    }
+    // case SELECTOR in, newlines allowed, the selector any word or substitution. A header
+    // the guard cannot read leaves the rest unchecked rather than read as plain words.
+    if (header === "in" && bare === "in") {
+      words.push("in");
+      quoted.push(false);
+      verbatim.push(false);
+      flush(")");
+      header = "";
+      cases++;
+      pattern = true;
+      continue;
+    }
+    if (header && token.kind === "op") {
+      if (token.op === "\n") continue;
+      unclosed = true;
+      header = "";
+    } else if (header && (token.kind === "word" || token.kind === "sub")) header = "in";
+    if (bare === "esac" && !words.length && cases) cases--;
+    if (bare === "case" && atStart()) header = "selector";
+    if (token.kind === "op" && cases && armEnds.has(token.op)) {
+      flush(token.op);
+      pattern = true;
+    } else if (token.kind === "op") flush(token.op);
+    else if (token.kind === "redirect") redirects.push(token);
     else if (token.kind === "unclosed") unclosed = true;
-    else if (token.kind === "sub") subs.push(token.value);
-    else if (token.kind === "doc") docs.push(token.value);
+    else if (token.kind === "sub") {
+      subs.push(token.value);
+      captured.push(!token.output);
+    } else if (token.kind === "doc") docs.push(token.value);
     else {
       words.push(token.value);
       quoted.push(token.quoted);
+      verbatim.push(token.literal);
     }
   }
+  if (header) unclosed = true;
   flush("");
   return out;
 }
@@ -1535,16 +1819,9 @@ function decideJob(words: string[], input: GuardInput): GuardDecision {
 
 // bercail desk answer: a desk's guard prompt, answered from outside the desk (lib/desk.sh).
 // bercail as the program run (past env, sudo, xargs and other wrappers, or by sh or bash),
-// then its area and verb: the first two words after it that are neither options nor a
-// redirect, which bash takes even glued on, nor a bare redirect's target.
+// then its area and verb: the first two words after it that are not options.
 function answersDesk(words: string[]): boolean {
-  const kept: string[] = [];
-  for (let i = 0; i < words.length; i++) {
-    const op = redirectOp.exec(words[i]);
-    if (op?.[0] === words[i]) i++;
-    else if (!op) kept.push(words[i].split(/&?[<>]/)[0]);
-  }
-  const run = commandWords(kept);
+  const run = commandWords(words);
   const isAnswer = (at: number) => {
     const [area, verb] = plainWords(run.slice(at + 1));
     return basename(run[at] ?? "") === "bercail" && area === "desk" && verb === "answer";
@@ -1619,31 +1896,13 @@ function isRoutineAsk(words: string[]): boolean {
   return plain.some((word, i) => basename(word) === "bercail" && plain[i + 1] === "routine" && plain[i + 2] === "ask");
 }
 
-// A redirect: bash takes it, and the word after a bare one, so the program never sees them.
-const redirectOp = /^(\d*|&)?(<<<|<<-?|<>|<&|>&|>>|<|>)/;
-
 // bercail config set or unset, or routine enable or disable: a write to the person's
-// config.toml. Its area and verb anywhere after it, each word cut at a redirect, which
-// bash takes even glued on: a command that only looks odd asks too.
+// config.toml. Its area and verb anywhere after it: a command that only looks odd asks too.
 function editsConfig(words: string[]): boolean {
-  const plain = plainWords(words.map((word) => (redirectOp.test(word) ? "" : word.split(/&?[<>]/)[0])));
+  const plain = plainWords(words);
   const rest = plain.slice(plain.findIndex((word) => basename(word) === "bercail") + 1 || plain.length);
   const has = (...any: string[]) => rest.some((word) => any.includes(word));
   return (has("config") && has("set", "unset")) || (has("routine") && has("enable", "disable"));
-}
-
-// Each command's words, as commandsOf reads them, with the | of a >| put back too: the
-// tokenizer ends a segment there, as if it were a pipe.
-function configCommands(command: string): string[][] {
-  const out: string[][] = [];
-  let clobber = false;
-  for (const segment of commandsOf(command)) {
-    const words = unparen(segment.words, segment.quoted);
-    if (clobber) out[out.length - 1].push(...words);
-    else out.push(words);
-    clobber = segment.after === "|" && /[>]$/.test(segment.words.at(-1) ?? "");
-  }
-  return out;
 }
 
 // Its --dry-run, which writes nothing, only in a command the guard reads word for word
@@ -1661,7 +1920,9 @@ function isPolicyTrust(words: string[]): boolean {
 // The files a shell command writes: its redirect targets, and what a file writer
 // changes. Reads (cat, jq, sed -n, the source of a cp) are not writes, and
 // neither is 2>&1. A seatbelt, not a sandbox.
-const redirect = /^(?:\d*>>?|&>>?)(.*)$/;
+const fileWrites = new Set([">", ">>", ">|", "&>", "&>>", "<>"]);
+// The target of >& or <& that names an fd, not a file: 2>&1, >&-, 3>&1- (a move).
+const fdTarget = /^(\d+-?|-)$/;
 const everyOperand = new Set(["tee", "mv", "rm", "unlink", "shred", "truncate", "chmod", "touch"]);
 const toDestination = new Set(["cp", "ln", "install"]);
 const inPlace: Record<string, RegExp> = { sed: /^-[bnrsuzE]*i|^--in-place/, perl: /^-[^-MIei]*i/ };
@@ -1681,18 +1942,17 @@ const valueFlag: Record<string, RegExp> = {
 const scriptFlag: Record<string, RegExp> = { sed: /^(-[^-]*[ef]|--expression|--file)/, perl: /^-[^-]*[eE]/ };
 const chmodMode = /^[0-7]{1,4}$|^[ugoa]*[-+=][-+=rwxXstugoa,]*$/;
 
-// A redirect's target: glued on (>file) or the next word.
-function redirectTargets(raw: string[]): string[] {
-  return raw.flatMap((word, i) => {
-    const to = redirect.exec(word);
-    return to ? [to[1] || raw[i + 1] || ""] : [];
-  });
+// The files redirects write; a target the guard cannot read is left out.
+function redirectTargets(redirects: Redirect[]): string[] {
+  return redirects.flatMap(({ op, target }) =>
+    target !== undefined && (fileWrites.has(op) || (op === ">&" && !fdTarget.test(target))) ? [target] : [],
+  );
 }
 
-function writeTargets(words: string[], raw: string[]): string[] {
-  const targets = redirectTargets(raw);
-  const operands = words.filter((word, i) => !redirect.test(word) && redirect.exec(words[i - 1] ?? "")?.[1] !== "");
-  const [name, ...args] = operands;
+// redirected: redirectTargets' files.
+function writeTargets(words: string[], redirected: string[]): string[] {
+  const targets = [...redirected];
+  const [name, ...args] = words;
   // One pass, so a flag's value (touch -r -r FILE) is never read as a flag or as --.
   const valued = valueFlag[name];
   const plain: string[] = [];
@@ -1718,7 +1978,7 @@ function writeTargets(words: string[], raw: string[]): string[] {
     // ln with one operand makes the link in the current dir, under the target's name.
     else if (name === "ln" && plain.length === 1) targets.push(basename(plain[0]));
   }
-  return targets.filter((target) => target !== "" && !target.startsWith("&"));
+  return targets.filter((target) => target !== "");
 }
 
 // The real path, through symlinks, even when the file or its parents do not exist yet.
@@ -1870,9 +2130,7 @@ function operandsOf(args: string[], valued: Set<string>): string[] {
   return out;
 }
 
-function madeAt(command: string[]): string[] {
-  // Redirects are writeTargets'; here they would read as operands.
-  const words = command.filter((word, i) => !redirect.test(word) && redirect.exec(command[i - 1] ?? "")?.[1] !== "");
+function madeAt(words: string[]): string[] {
   const [name, ...args] = words;
   const plain = (from = 0) => args.slice(from).filter((arg) => !arg.startsWith("-"));
   const valueOf = (flag: RegExp) =>
@@ -1891,16 +2149,16 @@ function madeAt(command: string[]): string[] {
 
 // A shell write under /tmp while the agent has its own TMPDIR. A removal's
 // operands are not writes; its redirects are.
-function writesInTmp(words: string[], raw: string[], targets: string[], tmpdir: string | undefined): boolean {
+function writesInTmp(words: string[], redirected: string[], targets: string[], tmpdir: string | undefined): boolean {
   if (!tmpdir) return false;
-  const paths = ["rm", "unlink", "shred"].includes(words[0]) ? redirectTargets(raw) : [...targets, ...madeAt(words)];
+  const paths = ["rm", "unlink", "shred"].includes(words[0]) ? redirected : [...targets, ...madeAt(words)];
   return paths.some((path) => inTmp(path, tmpdir));
 }
 
 // $(mktemp -d -p /tmp): the segments stand a path in for it, so its words are read here.
 function mktempInTmp(command: string, tmpdir: string | undefined): boolean {
   if (!tmpdir) return false;
-  return subsIn(command).some(
+  return subsIn(command).subs.some(
     (body) => makesTempDir(body) && madeAt(body.trim().split(/\s+/)).some((path) => inTmp(path, tmpdir)),
   );
 }
@@ -1913,9 +2171,15 @@ function readOnlyTarget(target: string, input: GuardInput): boolean {
   if (/^\/dev\/(null|stdout|stderr|tty|fd\/\d+)$/.test(target)) return true;
   const path = expandDirs(target, input.home);
   if (/[$`]/.test(path) || path.startsWith("~")) return true;
+  if (input.cwdsCapped && !isAbsolute(path)) return false;
   const cwds = isAbsolute(path) ? [input.cwd] : (input.cwds ?? [input.cwd]);
-  if (!isAbsolute(path) && cwds.includes(undefined)) return true;
-  return cwds.every((cwd) => tempRoot(resolve(cwd ?? "/", path)) || readOnlyWrite(path, input, cwd, true));
+  // A dir the guard lost passes only for itself: each known one is still checked.
+  return cwds.every(
+    (cwd) =>
+      (cwd === undefined && !isAbsolute(path)) ||
+      tempRoot(resolve(cwd ?? "/", path)) ||
+      readOnlyWrite(path, input, cwd, true),
+  );
 }
 
 // git commands that leave HEAD on its branch. Anything else, an alias included,
@@ -2372,7 +2636,8 @@ function recordTemps(command: string, segment: Segment, words: string[], vars: T
   const plain = ["", ";", "\n", "&&"].includes(segment.before) && ["", ";", "\n", "&&"].includes(segment.after);
   const head = declares.has(words[0]) ? 1 : 0;
   const rest = words.slice(head);
-  const pure = rest.every((word) => assign.test(word) || (head === 1 && word.startsWith("-")));
+  const pure =
+    !segment.redirects.length && rest.every((word) => assign.test(word) || (head === 1 && word.startsWith("-")));
   for (const word of rest.filter((w) => assign.test(w))) {
     const name = word.slice(0, word.indexOf("="));
     const value = word.slice(name.length + 1);
@@ -2433,17 +2698,11 @@ function revealsVault(words: string[], raw: string[]): boolean {
 
 // Where op read or op inject sends the secret when it shows it: no -o, or an -o
 // the guard cannot place outside the worktree, and stdout not sent to /dev/null.
-function showsSecret(words: string[], input: GuardInput): boolean {
+function showsSecret(words: string[], redirects: Redirect[], input: GuardInput): boolean {
   const args = opArgs(words);
   if (!args || !(args[0] === "read" || args[0] === "inject") || input.captured || !input.deskSecret) return false;
   const at = args.findIndex((word) => /^(-o|--out-file)(=|$)/.test(word));
-  if (at < 0) {
-    const quiet = words.some(
-      (word, i) =>
-        /^(1|&)?>\/dev\/null$/.test(word) || ([">", "1>", "&>"].includes(word) && words[i + 1] === "/dev/null"),
-    );
-    return !quiet;
-  }
+  if (at < 0) return stdoutOf(redirects) !== "/dev/null";
   let out = args[at].includes("=") ? args[at].slice(args[at].indexOf("=") + 1) : (args[at + 1] ?? "");
   if (out.startsWith("~/") && input.home) out = join(input.home, out.slice(2));
   const path = placeIn(input.cwd, out);
@@ -2451,6 +2710,36 @@ function showsSecret(words: string[], input: GuardInput): boolean {
   if (tempRoot(path)) return false;
   const root = input.deskSecret.root;
   return [root, "/dev", "/proc"].some((dir) => path === dir || path.startsWith(`${dir}/`));
+}
+
+// Where fd 1 points once the redirects are done, in order; undefined when the guard
+// cannot tell. >/dev/null 1>&2 sends it back to the terminal. An fd is its number: 01 is 1.
+function stdoutOf(redirects: Redirect[]): string | undefined {
+  const number = (fd: string) => (/^\d+$/.test(fd) ? String(Number(fd)) : fd);
+  const fds = new Map<string, string | undefined>([
+    ["1", "tty"],
+    ["2", "tty"],
+  ]);
+  for (const { fd, op, target } of redirects) {
+    const from = number(fd || (op.startsWith("<") ? "0" : "1"));
+    if (op === "&>" || op === "&>>") {
+      fds.set("1", target);
+      fds.set("2", target);
+    } else if (op === ">&" || op === "<&") {
+      if (target === undefined) return undefined;
+      // N>&M copies M; N>&M- moves it, closing M; >&- closes N; >&file and 1>&file send both.
+      const dup = /^(\d+)(-?)$/.exec(target);
+      if (dup) {
+        fds.set(from, fds.get(number(dup[1])));
+        if (dup[2]) fds.delete(number(dup[1]));
+      } else if (target === "-") fds.delete(from);
+      else if (op === ">&" && from === "1") {
+        fds.set("1", target);
+        fds.set("2", target);
+      } else return undefined;
+    } else fds.set(from, target);
+  }
+  return fds.get("1");
 }
 
 // The segment prints the environment, or the token's variable by name: a bare env,
@@ -2494,58 +2783,35 @@ function inSecret(tool: string, path: string, secret: DeskSecret, home: string |
   return tool === "grep" && !!home && path.startsWith(`${home}/`) && secret.file.startsWith(`${path}/`);
 }
 
-// segmentsOf, with the & of >&2, 2>&1 and &>file put back in its command: the
-// tokenizer ends a segment there, as if it ran in the background.
-function commandsOf(command: string): Segment[] {
-  const out: Segment[] = [];
-  for (const segment of segmentsOf(command, "secret")) {
-    const last = out.at(-1);
-    if (!last?.redirect) {
-      out.push(segment);
-      continue;
-    }
-    out[out.length - 1] = {
-      words: [...last.words, ...segment.words],
-      marked: [...last.marked, ...segment.marked],
-      quoted: [...last.quoted, ...segment.quoted],
-      subs: [...last.subs, ...segment.subs],
-      docs: [...last.docs, ...segment.docs],
-      before: last.before,
-      after: segment.after,
-      redirect: segment.redirect,
-      unclosed: last.unclosed || segment.unclosed,
-    };
-  }
-  return out;
-}
-
 // The words without a ( subshell's parens, which tokenize makes words of their own:
 // (git commit) runs git commit.
 function unparen(words: string[], quoted: boolean[]): string[] {
   return words.filter((word, i) => !(["(", ")"].includes(word) && !quoted[i]));
 }
 
-// The segment runs op that prints a secret, itself or in a sh -c script.
+// The segment runs op that prints a secret, itself, in a sh -c script, or in a >( ),
+// whose output is the segment's.
 function segmentReadsSecret(segment: Segment): boolean {
   const words = commandWords(unparen(segment.words, segment.quoted));
   const script = shellScript(words.map((word, i) => (i === 0 ? basename(word) : word)));
-  return readsSecret(words) || (script !== undefined && commandsOf(script).some(segmentReadsSecret));
+  const outputs = segment.subs.filter((_, k) => !segment.captured[k]);
+  return (
+    readsSecret(words) ||
+    [...(script === undefined ? [] : [script]), ...outputs].some((body) =>
+      segmentsOf(body, "secret").some(segmentReadsSecret),
+    )
+  );
 }
 
 // 2>&1 in $(op read ...): op's error text becomes the value, and passes a check.
 function joinsErrors(segment: Segment): boolean {
-  return segment.words.some((word, i) => word === "2>" && segment.words[i + 1] === "1");
-}
-
-// The segment's command reads op's secret from a <( ).
-function readsSecretFrom(segment: Segment): boolean {
-  const at = segment.words.findIndex((word) => word.includes("<("));
-  const word = segment.words[at] ?? "";
-  return at >= 0 && readsSecret([word.slice(word.indexOf("<(") + 2), ...segment.words.slice(at + 1)]);
+  return segment.redirects.some(({ fd, op, target }) => fd === "2" && op === ">&" && target === "1");
 }
 
 // The names a plain assignment sets, export and local included; undefined when it runs a command.
+// A redirect can fail before the assignment runs.
 function assignedNames(segment: Segment): { names: string[]; exported: boolean } | undefined {
+  if (segment.redirects.length) return undefined;
   let words = segment.words;
   while (shellPrefixes.has(words[0])) words = words.slice(1);
   const head = declares.has(words[0]) || words[0] === "local";
@@ -2579,7 +2845,7 @@ function exits(segments: Segment[], j: number): boolean {
 // cannot hide: its flag and name. [ and test need "$X" quoted, since an empty X
 // leaves [ -n ], which is true.
 function testOf(segment: Segment): { flag: string; name: string; inIf: boolean } | undefined {
-  if (!["", ";", "\n", "&&"].includes(segment.before)) return undefined;
+  if (segment.redirects.length || !["", ";", "\n", "&&"].includes(segment.before)) return undefined;
   const at = segment.marked[0] === "if" ? 1 : 0;
   const words = segment.marked.slice(at);
   const brackets = words.length === 4 && words[0] === "[[" && words[3] === "]]";
@@ -2617,7 +2883,7 @@ function refersTo(text: string, name: string): boolean {
 // op's secret goes into a pipe or straight into a command, or a variable that holds
 // it is used, or exported, before a check stops the shell when it is empty.
 function feedsEmptySecret(command: string): boolean {
-  const segments = commandsOf(command);
+  const segments = segmentsOf(command, "secret");
   // Names that hold op's secret and are not checked yet; true when exported.
   const unchecked = new Map<string, boolean>();
   // Names a [ -n "$X" ] && earlier in this && chain vouches for.
@@ -2627,7 +2893,7 @@ function feedsEmptySecret(command: string): boolean {
     const segment = segments[i];
     if (segment.before !== "&&") guarded.clear();
     read ||= segmentReadsSecret(segment);
-    if ((segmentReadsSecret(segment) && segment.after === "|") || readsSecretFrom(segment)) return true;
+    if (segmentReadsSecret(segment) && segment.after === "|") return true;
     // { op read; } | curl: the group's output, op's included, goes into the pipe.
     const closes = segment.words.some((word) => ["}", "done", "fi", "esac"].includes(word) || word.endsWith(")"));
     if (read && closes && segment.after === "|") return true;
@@ -2653,10 +2919,14 @@ function feedsEmptySecret(command: string): boolean {
     for (const [name, exported] of unchecked) {
       if (guarded.has(name)) continue;
       const named = declares.has(segment.words[0]) && segment.words.includes(name);
-      const used = [...segment.marked, ...segment.subs].some((text) => refersTo(text, name));
+      const targets = segment.redirects.map(({ text }) => text);
+      const used = [...segment.marked, ...targets, ...segment.subs].some((text) => refersTo(text, name));
       if (exported || named || used) return true;
     }
-    const readers = segment.subs.flatMap((sub) => commandsOf(sub).filter(segmentReadsSecret));
+    // A >( )'s output is shown, not held: an assignment from one holds a /dev/fd path.
+    const readers = segment.subs
+      .filter((_, k) => segment.captured[k])
+      .flatMap((sub) => segmentsOf(sub, "secret").filter(segmentReadsSecret));
     if (readers.some(joinsErrors)) return true;
     if (readers.length === 0) continue;
     const assigned = assignedNames(segment);
@@ -2664,6 +2934,44 @@ function feedsEmptySecret(command: string): boolean {
     for (const name of assigned.names) unchecked.set(name, assigned.exported);
   }
   return false;
+}
+
+// What a segment's command and redirects write, and /dev/uinput.
+// subbed: the segment has a substitution, whose output may be a writer's destination.
+function decideWrites(
+  words: string[],
+  raw: string[],
+  redirects: Redirect[],
+  here: GuardInput,
+  subbed = false,
+): GuardDecision {
+  let decision: GuardDecision = allow;
+  const redirected = redirectTargets(redirects);
+  const devices = redirects.flatMap(({ target }) => target ?? []);
+  if (fakesInput(words, [...raw, ...devices])) decision = worse(decision, block(syntheticInput));
+  const targets = writeTargets(words, redirected);
+  // Past the cap only a destination that starts with / as written is placed: not ~ (quoted,
+  // it stays relative), a $VAR, a redirect whose target the guard could not read, or a file
+  // writer given a substitution, which may be its destination.
+  const placed = (target: string) => target.startsWith("/") && !/[$`]/.test(target);
+  const unread =
+    redirects.some(({ op, target }) => target === undefined && (fileWrites.has(op) || op === ">&")) ||
+    (subbed &&
+      (everyOperand.has(words[0]) ||
+        toDestination.has(words[0]) ||
+        (Object.hasOwn(inPlace, words[0]) && words.some((word) => inPlace[words[0]].test(word))) ||
+        words[0] === "dd"));
+  if (here.cwdsOverflowed && (unread || !targets.every(placed))) decision = worse(decision, block(tooManyCwds));
+  if (here.role === "shep-bg" && targets.some((target) => !stream.test(target) && !readOnlyWrite(target, here)))
+    decision = worse(decision, block(backgroundOnly));
+  // A protected file's reason, below, wins over this one.
+  if (readOnlyRole(here.role) && !targets.every((target) => readOnlyTarget(target, here)))
+    decision = worse(decision, block(readOnlyTool));
+  if (writesGuardFiles(targets, here)) decision = worse(decision, block(protectedFile));
+  if (writesTodoFiles(targets, here)) decision = worse(decision, block(todoFile));
+  if (here.cwds?.includes(undefined) && targets.some(relativeTarget)) decision = worse(decision, warn(lostCwd));
+  if (writesInTmp(words, redirected, targets, here.tmpdir)) decision = worse(decision, warn(tmpWrite(here.tmpdir!)));
+  return decision;
 }
 
 export function decideBash(command: string, input: GuardInput, depth = 0): GuardDecision {
@@ -2674,22 +2982,33 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   if (secret && (/\$\{?OP_SERVICE_ACCOUNT_TOKEN/.test(command) || /\/proc\/\S*environ/.test(command)))
     return block(printsToken);
   let decision: GuardDecision = mktempInTmp(command, input.tmpdir) ? warn(tmpWrite(input.tmpdir!)) : allow;
-  // Over commandsOf's commands: segmentsOf ends one at the & of a 2>&1 before its program's last words.
-  const configEdit = configCommands(command).some((words) => editsConfig(commandWords(words)));
+  const segments = segmentsOf(command, `${depth}`);
+  const configEdit = segments.some((s) => editsConfig(commandWords(unparen(s.words, s.quoted))));
   if (configEdit && !(depth === 0 && dryConfigRun(command, input)))
     decision = input.role === "shep" ? ask(configEditAsk) : block(configEditRefused);
-  if (configCommands(command).some((words) => answersDesk(commandWords(words))))
+  if (segments.some((s) => answersDesk(commandWords(unparen(s.words, s.quoted)))))
     decision = worse(decision, decideDeskAnswer(command, input, depth));
   // Each dir the shell may be in; git and forges use it only when there is one.
   let cwds = input.cwds ?? [input.cwd];
+  let capped = input.cwdsCapped ?? false;
   const cwdOf = () => (cwds.length === 1 ? cwds[0] : undefined);
+  let overflowed = input.cwdsOverflowed ?? false;
+  // Set the dirs the shell may be in, each once. Past a few the guard stops tracking them
+  // for the rest of the command (a chain of redirected relative cds doubles them), and
+  // refuses what it would have checked in the ones it dropped.
+  const place = (list: (string | undefined)[]) => {
+    const unique = [...new Set(list)];
+    overflowed ||= unique.length > 8;
+    capped ||= overflowed;
+    cwds = overflowed ? [undefined] : unique;
+  };
   let gitEnv = input.gitEnv ?? false;
   let gitConfigEnv = input.gitConfigEnv ?? false;
   let branchMoved = input.branchMoved ?? false;
-  const segments = segmentsOf(command, `${depth}`);
   // Later-tokenized redirects/heredocs run first; pipe/background peers can change aliases concurrently.
   let graphiteAliases = segments.some(
-    (segment) => ["|", "&"].includes(segment.after) || (segment.docs.length && segment.subs.length),
+    (segment) =>
+      ["|", "&"].includes(segment.after) || segment.redirects.length || (segment.docs.length && segment.subs.length),
   )
     ? undefined
     : input.graphiteAliases;
@@ -2698,14 +3017,22 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   const vars: TempVars = new Map();
   let straight = true;
   let closed = false;
+  // A function was defined: from there a call may move the shell, so each dir stays possible.
+  let defined = false;
   for (const segment of segments) {
     // Apply a ) before the next segment, even when it stood alone after a ;.
     // No inner variables or cwd can be borrowed outside it.
     if (closed) {
-      cwds = [undefined];
+      place(defined ? [...cwds, undefined] : [undefined]);
       skippedCd = [];
       straight = false;
       vars.clear();
+    }
+    // A function body runs when it is called, from wherever the shell is then, and may cd
+    // anywhere: from its definition on, the shell may be in any dir it was in, or another.
+    if (segment.pastFunction && !defined) {
+      defined = capped = true;
+      place([...cwds, undefined]);
     }
     // tokenize makes each unquoted ) a word of its own; a quoted one is text.
     closed = segment.words.some((word, i) => word === ")" && !segment.quoted[i]);
@@ -2723,7 +3050,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     // What ran after && may not have run once that chain ends.
     if (segment.before !== "&&") {
       for (const [name, v] of vars) if (v.chained) vars.delete(name);
-      cwds = [...new Set([...cwds, ...skippedCd])];
+      place([...cwds, ...skippedCd]);
       skippedCd = [];
     }
     const bare = unparen(segment.marked, segment.quoted);
@@ -2733,16 +3060,37 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       straight = false;
       vars.clear();
     }
-    const here = { ...input, cwd: cwdOf(), cwds, gitEnv, gitConfigEnv, branchMoved, graphiteAliases, sole: false };
-    for (const sub of segment.subs)
-      decision = worse(decision, decideBash(sub, { ...here, captured: true, graphiteAliases: undefined }, depth + 1));
+    const here = {
+      ...input,
+      cwd: cwdOf(),
+      cwds,
+      cwdsCapped: capped,
+      cwdsOverflowed: overflowed,
+      gitEnv,
+      gitConfigEnv,
+      branchMoved,
+      graphiteAliases,
+      sole: false,
+    };
+    // A >( )'s output is the command's: captured only when the command's is.
+    segment.subs.forEach((sub, k) => {
+      const captured = segment.captured[k] || here.captured;
+      decision = worse(decision, decideBash(sub, { ...here, captured, graphiteAliases: undefined }, depth + 1));
+    });
     if (segment.subs.length) here.graphiteAliases = graphiteAliases = undefined;
     const raw = bare.map((word) => expandTemps(word, vars).replaceAll(literalDollar, "$"));
+    const redirects = segment.redirects.map((redirect) => ({
+      ...redirect,
+      target: redirect.target && expandTemps(redirect.target, vars).replaceAll(literalDollar, "$"),
+    }));
     if (straight) recordTemps(command, segment, raw, vars);
     // A substitution's output is not in raw and could add arguments that change help into a write.
     const staticArgs =
-      !command.includes("\\") && !segment.quoted.some(Boolean) && raw.every((word) => staticArg.test(word));
-    const help = depth === 0 && staticArgs && segment.subs.length === 0 && cliHelp(raw, graphiteAliases);
+      !command.includes("\\") &&
+      !segment.quoted.some(Boolean) &&
+      !redirects.length &&
+      raw.every((word) => staticArg.test(word));
+    const help = depth === 0 && staticArgs && !segment.subs.length && raw.length > 0 && cliHelp(raw, graphiteAliases);
     // Only these bare reads and directory changes leave Graphite's alias proof intact.
     const bareRead =
       staticArgs &&
@@ -2755,9 +3103,15 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     const words = commandWords(raw);
     if (secret) {
       if (printsEnv(words, raw)) return block(printsToken);
-      if (revealsVault(words, raw) || showsSecret(words, here)) return block(vaultShown);
+      // The text check above stops at the & of 2>&1; the words have no redirect.
+      if (basename(words[0] ?? "") === "systemd-creds" && words.includes("decrypt")) return block(secretFile);
+      if (revealsVault(words, raw) || showsSecret(words, redirects, here)) return block(vaultShown);
     }
-    if (words.length === 0) continue;
+    // >file alone runs no command but writes.
+    if (words.length === 0) {
+      decision = worse(decision, decideWrites(words, raw, redirects, here));
+      continue;
+    }
     // Nothing the guard reads differently from bash: no env prefix or wrapper, and git
     // itself, not ./git.
     here.sole =
@@ -2777,11 +3131,18 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     const piped = segment.before === "|" || segment.after === "|" || segment.after === "&";
     // A cd after && may not have run once that chain ends.
     if (["cd", "pushd", "popd"].includes(words[0]) && segment.before === "&&") skippedCd.push(...cwds);
-    // cd $(pwd): the target is the substitution's output, which words leave out.
+    // cd $(pwd): the target is the substitution's output, which words leave out. A
+    // redirect can fail before cd runs, and past a definition a call may undo it, so the
+    // shell is in either dir.
     const unseen = piped || segment.subs.length > 0;
     if (words[0] === "cd" || words[0] === "pushd")
-      cwds = [...new Set(cwds.map((cwd) => (unseen ? undefined : cdTarget(words, cwd, input.home))))];
-    else if (words[0] === "popd") cwds = [undefined];
+      place(
+        cwds.flatMap((cwd) => {
+          const to = unseen ? undefined : cdTarget(words, cwd, input.home);
+          return redirects.length || defined ? [cwd, to] : [to];
+        }),
+      );
+    else if (words[0] === "popd") place(defined ? [...cwds, undefined] : [undefined]);
     const script = shellScript(words);
     if (script) decision = worse(decision, decideBash(script, here, depth + 1));
     // What eval or source sets stays set, and the guard cannot see what that is.
@@ -2837,17 +3198,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     if (isLand(words) && input.role !== "shep") decision = worse(decision, block(landCommand));
     if (runsLandWorker(words)) decision = worse(decision, block(landWorker));
     decision = worse(decision, decideBasecamp(words, input.role));
-    if (fakesInput(words, raw)) decision = worse(decision, block(syntheticInput));
-    const targets = writeTargets(words, raw);
-    if (input.role === "shep-bg" && targets.some((target) => !stream.test(target) && !readOnlyWrite(target, here)))
-      decision = worse(decision, block(backgroundOnly));
-    // A protected file's reason, below, wins over this one.
-    if (readOnlyRole(input.role) && !targets.every((target) => readOnlyTarget(target, here)))
-      decision = worse(decision, block(readOnlyTool));
-    if (writesGuardFiles(targets, here)) decision = worse(decision, block(protectedFile));
-    if (writesTodoFiles(targets, here)) decision = worse(decision, block(todoFile));
-    if (cwds.includes(undefined) && targets.some(relativeTarget)) decision = worse(decision, warn(lostCwd));
-    if (writesInTmp(words, raw, targets, input.tmpdir)) decision = worse(decision, warn(tmpWrite(input.tmpdir!)));
+    decision = worse(decision, decideWrites(words, raw, redirects, here, segment.subs.length > 0));
     const prCheckout = words[0] === "gh" && forgePlain[1] === "pr" && forgePlain[2] === "checkout";
     const checkoutRefused = prCheckout && !help ? noChange(input.role) : undefined;
     if (checkoutRefused) decision = worse(decision, checkoutRefused);
