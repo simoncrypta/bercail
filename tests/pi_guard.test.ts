@@ -1591,6 +1591,63 @@ test("autopilot's force-push block tells it to stop and report the restack for t
   }
 });
 
+// Shep publishes a desk's restack on a guard card (bercail-i5dx): exactly one lease on the
+// one branch it pushes, never main or master, under every push policy.
+test("Shep's lease push of one hash to its leased branch asks, whatever the policy; any other force is blocked", () => {
+  const [old, head] = ["a".repeat(40), "b".repeat(40)];
+  const flag = `--force-with-lease=refs/heads/feature:${old}`;
+  const lease = `git -C /work push ${flag} origin ${head}:refs/heads/feature`;
+  const reason = `Allow this force-with-lease push to origin: ${head} as refs/heads/feature, replacing ${old}? It fails if refs/heads/feature there is no longer ${old}. No keeps it local for the person.`;
+  const main = { "/work": { ...defaultPolicy, push: "main" as const, repo: "/work" } };
+  for (const policies of [none, main])
+    assertDeepEqual(decideBash(lease, { ...shep, policies }), { action: "ask", reason });
+  // Background Shep, desks and autopilot keep the block.
+  for (const input of [{ ...shep, role: "shep-bg" }, tui, auto]) blocked(lease, input, /Force-push/);
+  blocked(lease, { ...shep, hasUI: false }, /Force-push/);
+  // Only as the whole command: inside another, whose card would pin no lease, it is blocked.
+  for (const command of [
+    `git status && ${lease}`,
+    `cd /work && ${lease}`,
+    `bash -c '${lease}'`,
+    `timeout 60 ${lease}`,
+    `entire graph verify --test '${lease}'`,
+  ])
+    blocked(command, shep, /^Force-push is blocked/);
+  // Any other shape is blocked, and Shep is told the one it may run.
+  for (const command of [
+    `git -C /work push ${flag} origin ${head}:refs/heads/other`,
+    `git -C /work push ${flag} origin feature`,
+    `git -C /work push ${flag} origin ${head}`,
+    `git -C /work push ${flag} ${head}:refs/heads/feature`,
+    `git -C /work push ${flag} origin ${head}:refs/heads/feature ${head}:refs/heads/x`,
+    `git -C /work push ${flag} --tags origin ${head}:refs/heads/feature`,
+    `git -C /work push ${flag} --all origin`,
+    `git -C /work push ${flag} origin :refs/heads/feature`,
+    `git -C /work push ${flag} origin +${head}:refs/heads/feature`,
+    `git -C /work push ${flag} --mirror origin`,
+    `git -C /work push origin ${flag} ${head}:refs/heads/feature`,
+    `git -C /work push --force-with-lease origin ${head}:refs/heads/feature`,
+    `git -C /work push --force-with-lease=feature:${old} origin ${head}:refs/heads/feature`,
+    `git -C /work push --force-with-lease=refs/heads/feature:${old.slice(0, 12)} origin ${head}:refs/heads/feature`,
+    `git -C /work push ${flag} --force origin ${head}:refs/heads/feature`,
+    `git -C /work push ${flag} -f origin ${head}:refs/heads/feature`,
+    `git -C /work push ${flag} --force-if-includes origin ${head}:refs/heads/feature`,
+    `git -C /work push --force origin ${head}:refs/heads/feature`,
+  ])
+    blocked(
+      command,
+      shep,
+      /^Force-push is blocked\. Shep's one force push is a desk's restack, which goes to a guard card only as git -C <worktree> push --force-with-lease/,
+    );
+  blocked(`git -C /work push ${flag} --no-verify origin ${head}:refs/heads/feature`, shep, /no-verify/);
+  for (const trunk of ["main", "master"])
+    blocked(
+      `git -C /work push --force-with-lease=refs/heads/${trunk}:${old} origin ${head}:refs/heads/${trunk}`,
+      { ...shep, policies: main },
+      /force push to main or master is blocked/,
+    );
+});
+
 // A commit is local: under every policy it runs with a warning, and only the
 // read-only roles and background Shep are refused. A push there still asks.
 for (const command of ["git commit -m x", "git -C /work commit -qm x", "gt create -m x", "gt modify -c -m x"]) {

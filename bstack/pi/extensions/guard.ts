@@ -112,8 +112,14 @@ export type GuardDecision =
 const force = "Force-push is blocked. Push without --force, or ask the person.";
 const autopilotForce =
   "Force-push is blocked: autopilot does not publish a rewritten branch, the person does. Stop and report the branch, the PR head you fetched before the restack, the new head, and the checks you ran (the autopilot skill's section 4).";
-const forceFor = (input: GuardInput) => block(input.role === "autopilot" ? autopilotForce : force);
+const leaseShape =
+  "Force-push is blocked. Shep's one force push is a desk's restack, which goes to a guard card only as git -C <worktree> push --force-with-lease=refs/heads/<branch>:<old head> <remote> <new head>:refs/heads/<branch>, both heads as full hashes, with no other flag.";
+const forceFor = (input: GuardInput) =>
+  block(input.role === "autopilot" ? autopilotForce : input.role === "shep" ? leaseShape : force);
 const plusRef = "A refspec starting with + is a force-push. Push the branch without +.";
+const leaseToMain = "A force push to main or master is blocked, lease or not.";
+const leaseAsk = ({ remote, spec, lease }: Restack) =>
+  `Allow this force-with-lease push to ${remote}: ${spec.split(":")[0]} as ${lease.ref}, replacing ${lease.old}? It fails if ${lease.ref} there is no longer ${lease.old}. No keeps it local for the person.`;
 const mirror = "git push --mirror is blocked.";
 const deleteMain = "Deleting main or master is blocked.";
 const noVerify = "Skipping git hooks with --no-verify is blocked. Run the command so the hooks run.";
@@ -1199,6 +1205,19 @@ type PushFacts = {
   /** --all, --branches, or a glob refspec: main may be among what it pushes. */
   every: boolean;
 };
+
+// A desk's restack, as Shep publishes it (bercail-i5dx): exactly
+// --force-with-lease=refs/heads/<branch>:<old hash> <remote> <new hash>:refs/heads/<branch>.
+const leaseFlag = /^--force-with-lease=(refs\/heads\/[\w./-]+):([0-9a-f]{40}|[0-9a-f]{64})$/;
+const leaseSpec = /^([0-9a-f]{40}|[0-9a-f]{64}):(refs\/heads\/[\w./-]+)$/;
+type Restack = { remote: string; spec: string; lease: { ref: string; old: string } };
+
+function restackOf(args: string[]): Restack | undefined {
+  const [flag = "", remote = "", spec = "", ...more] = args;
+  const lease = leaseFlag.exec(flag);
+  if (!lease || more.length || !remoteName.test(remote) || leaseSpec.exec(spec)?.[2] !== lease[1]) return undefined;
+  return { remote, spec, lease: { ref: lease[1], old: lease[2] } };
+}
 
 function pushFacts(args: string[]): PushFacts {
   let forceFlag = false;
@@ -2413,6 +2432,10 @@ function decidePush(
 }
 
 function pushPolicy(args: string[], dir: string | undefined, input: GuardInput, via?: string): GuardDecision {
+  // Shep's restack push, as the whole command, asks under every policy, so it goes to a
+  // guard card that pins it (pinLease). Inside another command it is any other force push.
+  const restack = input.role === "shep" && input.sole ? restackOf(args) : undefined;
+  if (restack) return isMainRef(restack.lease.ref) ? block(leaseToMain) : askOr(input, leaseAsk(restack), force);
   const facts = pushFacts(args);
   if (facts.force) return forceFor(input);
   if (facts.plus) return block(plusRef);
@@ -3564,7 +3587,8 @@ export type GuardOp =
   | { kind: "cleanup"; path: string; gone?: true }
   // job: a trail job's bercail job merge, which closes the trail once no change is open.
   | { kind: "trail merge"; dir: string; trail: string | null; job?: string }
-  | { kind: "push"; dir: string; remote: string; refspecs: string[] }
+  // lease: a restack's --force-with-lease, on its one refspec's branch.
+  | { kind: "push"; dir: string; remote: string; refspecs: string[]; lease?: { ref: string; old: string } }
   // Any other one command, run as these words in dir with no shell.
   | { kind: "command"; dir: string; argv: string[] };
 
@@ -3579,7 +3603,7 @@ export type GuardFacts =
   // and how many there are.
   | { kind: "cleanup"; gone: true; path: string; repo: string; branch: string | null; handoffs: number }
   | { kind: "trail merge"; checkout: string; trailId: string; change: string; head: string; base: string; job?: string }
-  | { kind: "push"; dir: string; gitDir: string; url: string; refspecs: string[] }
+  | { kind: "push"; dir: string; gitDir: string; url: string; refspecs: string[]; lease?: { ref: string; old: string } }
   | { kind: "command"; dir: string; argv: string[] };
 
 // The words of each command joined by &&, as bash passes them, when nothing in them
@@ -3723,8 +3747,13 @@ export function guardOperation(command: string, cwd: string | undefined, home: s
     }
     if (dir === undefined) return "its git -C names no one folder";
     const [sub, remote, ...refspecs] = words.slice(i);
+    // A restack's push names its worktree with -C, as an absolute path, and nothing else.
+    const restack = sub === "push" ? restackOf(words.slice(i + 1)) : undefined;
+    if (restack && (segments.length !== 1 || i !== 3 || !isAbsolute(words[2])))
+      return "a restack's push names its worktree as git -C <absolute path>, with no cd";
+    if (restack) return { kind: "push", dir, remote: restack.remote, refspecs: [restack.spec], lease: restack.lease };
     if (sub !== "push" || !remote || !refspecs.length || [remote, ...refspecs].some((w) => w.startsWith("-")))
-      return "a push is handed off only as git [-C DIR] push REMOTE REFSPEC..., with no flags";
+      return "a push is handed off only as git [-C DIR] push REMOTE REFSPEC..., with no flags, or a restack as git -C <worktree> push --force-with-lease=refs/heads/<branch>:<old head> REMOTE <new head>:refs/heads/<branch>";
     if (!remoteName.test(remote)) return "it pushes to a URL, not a remote's name";
     return { kind: "push", dir, remote, refspecs };
   }
@@ -3906,6 +3935,30 @@ async function pinTrail(read: Read, dir: string, trail: string | null, job?: str
   };
 }
 
+// A journal in bercail's state folder, oldest first. Each line must be an object, as jq's
+// select over the file needs.
+function journal(name: string): any[] {
+  let lines: string[] = [];
+  try {
+    lines = readFileSync(join(stateDir(), name), "utf8").split("\n");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return lines.flatMap((line, i) => {
+    if (!line.trim()) return [];
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {}
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry))
+      fail(`${name} line ${i + 1} is not a JSON object`);
+    return [entry];
+  });
+}
+
+// The handoffs that name a checkout's path, oldest first.
+const handoffsAt = (path: string) => journal("handoffs.jsonl").filter((handoff) => handoff.path === path);
+
 // A cleanup --gone's checkout, as bercail cleanup --gone checks it, and stricter: nothing
 // at its path, and handoffs that name it, all of one repo whose top folder git no longer
 // lists it in. Dispatch retires every handoff at the path, so the repo whose policy speaks
@@ -3926,25 +3979,7 @@ async function pinGone(read: Read, path: string) {
     there = false;
   }
   if (there) fail(`${path} is still there; bercail cleanup ${path} retires it`);
-  let lines: string[] = [];
-  try {
-    lines = readFileSync(join(stateDir(), "handoffs.jsonl"), "utf8").split("\n");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  // Each line an object, as jq's select over the file needs.
-  const named = lines
-    .map((line, i) => {
-      if (!line.trim()) return undefined;
-      let handoff;
-      try {
-        handoff = JSON.parse(line);
-      } catch {}
-      if (typeof handoff !== "object" || handoff === null || Array.isArray(handoff))
-        fail(`handoffs.jsonl line ${i + 1} is not a JSON object`);
-      return handoff;
-    })
-    .filter((handoff) => handoff?.path === path);
+  const named = handoffsAt(path);
   if (!named.length) fail(`no handoff names ${path}, so no job waits on it`);
   const repos = new Set(named.map((handoff) => handoff.repo));
   const [recorded] = repos;
@@ -3995,7 +4030,51 @@ export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<G
   for (const spec of op.refspecs) refspecs.push(await pinRefspec(read, dir, spec, mapped));
   if (new Set(refspecs.map((spec) => spec.split(":")[1])).size !== refspecs.length)
     fail("it pushes to the same branch twice");
-  return { kind: "push", dir, gitDir, url: await pinUrl(read, dir, op.remote), refspecs };
+  const url = await pinUrl(read, dir, op.remote);
+  if (!op.lease) return { kind: "push", dir, gitDir, url, refspecs };
+  if (realpathSync(op.dir) !== dir) fail(`${op.dir} is not the worktree's top folder`);
+  await pinLease(read, dir, url, op.refspecs[0], refspecs[0], op.lease.old);
+  return { kind: "push", dir, gitDir, url, refspecs, lease: op.lease };
+}
+
+// A restack's push publishes a desk's own branch as the desk left it, over the head the
+// remote has now: the last handoff that started a desk in the checkout names that branch,
+// and bercail cleanup has not retired the checkout since (as dispatch reads them,
+// lib/shep-task.ts); the checkout is on the branch at the new head Shep named; and on the
+// remote the branch is at the old head and is neither main, master nor the default branch.
+// Each read fails closed.
+async function pinLease(read: Read, dir: string, url: string, asked: string, pinned: string, old: string) {
+  const [head, ref] = pinned.split(":");
+  const branch = ref.slice("refs/heads/".length);
+  if (isMainRef(ref)) fail(leaseToMain);
+  if (asked.split(":")[0] !== head) fail(`${asked.split(":")[0]} is not a commit's full hash`);
+  const desk = handoffsAt(dir)
+    .filter((handoff) => handoff.desk && handoff.ok !== false && handoff.agent_started !== false)
+    .at(-1);
+  if (desk?.branch !== branch) fail(`no desk's handoff names ${dir} on ${branch}, so it is no desk's own branch`);
+  if (journal("retired.jsonl").some((line) => line.path === dir && !(String(line.at) < String(desk.at ?? ""))))
+    fail(`bercail cleanup retired ${dir} after its desk started, so it is no desk's own checkout`);
+  const git = (...args: string[]) =>
+    read("git", ["-C", dir, ...args], dir).catch((error) => (error.code === 1 ? "" : Promise.reject(error)));
+  // The same path in another repo is another checkout. NUL-separated: a path can hold a newline.
+  const main = (await git("worktree", "list", "--porcelain", "-z")).split("\0")[0].slice("worktree ".length);
+  let recorded = "";
+  try {
+    recorded = isAbsolute(desk.repo) ? realpathSync(desk.repo) : "";
+  } catch {}
+  if (!recorded || !main || recorded !== realpathSync(main))
+    fail(`the handoff of ${dir} names the repo ${desk.repo}, not this checkout's ${main || "unknown repo"}`);
+  if ((await git("symbolic-ref", "-q", "HEAD")) !== ref)
+    fail(`${dir} is not on ${branch}: a restack's push publishes the checkout's own branch`);
+  const now = await git("rev-parse", "--verify", "HEAD^{commit}");
+  if (now !== head) fail(`${branch} is at ${now || "no commit"} in ${dir}, not ${head}`);
+  const there = (await read("git", ["-C", dir, "ls-remote", "--symref", url, "HEAD", ref], dir)).split("\n");
+  const trunk = there.find((line) => line.startsWith("ref: ") && line.endsWith("\tHEAD"))?.slice(5, -5);
+  if (!trunk) fail(`the guard cannot read the default branch of ${urlText(url)}`);
+  if (trunk === ref) fail(`${branch} is the default branch of ${urlText(url)}`);
+  const remoteHead = there.find((line) => line.endsWith(`\t${ref}`))?.split("\t")[0];
+  if (remoteHead !== old)
+    fail(`${branch} is at ${remoteHead ?? "nothing"} on ${urlText(url)}, not the old head ${old}`);
 }
 
 // A config.toml edit, run by bercail itself, never the program Shep named: the lines
@@ -4065,6 +4144,7 @@ export function runOf(facts: GuardFacts): { argv: string[]; cwd: string } {
       "push",
       "--no-follow-tags",
       "--recurse-submodules=no",
+      ...(facts.lease ? [`--force-with-lease=${facts.lease.ref}:${facts.lease.old}`] : []),
       facts.url,
       ...facts.refspecs.map((spec) => spec.replace(":", "^{commit}:")),
     ],
@@ -4290,7 +4370,7 @@ export function opTarget(facts: GuardFacts): string {
 export const opWhat = (facts: GuardFacts) =>
   facts.kind === "command"
     ? `command ${opTarget(facts)}`
-    : `${facts.kind}${"gone" in facts ? " --gone" : ""} of ${opTarget(facts)}`;
+    : `${"lease" in facts && facts.lease ? "force-with-lease push" : facts.kind}${"gone" in facts ? " --gone" : ""} of ${opTarget(facts)}`;
 
 // An unanswered guard card counts as an Allow at its deadline only when what it runs
 // stays private or local (bercail-mdfb, docs/plans/guard-default-allow.md); anything
@@ -4501,6 +4581,8 @@ export async function guardDefault(facts: GuardFacts, read: Read = readOut): Pro
     return { defaults: true, why: "a cleanup is local: the worktree goes, and its branch stays" };
   if (facts.kind === "command" && !plainLink(facts.argv))
     return waits("the guard does not class this command as private or local");
+  if (facts.kind === "push" && facts.lease)
+    return waits("a force-with-lease push replaces the branch's history on the remote");
   const dir = factsDir(facts);
   try {
     const policy = await policyOf(read, dir);

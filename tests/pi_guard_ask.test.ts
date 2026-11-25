@@ -25,6 +25,7 @@ import guard, {
   guardOperation,
   markStart,
   opTarget,
+  opWhat,
   pinOperation,
   runOf,
   type GuardFacts,
@@ -103,6 +104,222 @@ test("a push pins its checkout, the remote's URL and each commit to its full bra
   ).toMatchObject({
     refspecs: [`${head}:refs/heads/main`, `${head}:refs/heads/other`, `${head}:refs/heads/third`],
   });
+});
+
+// A restack a desk prepared (bercail-i5dx): origin has feature at the old head, and the
+// handoff that started the desk names the checkout on feature, which it rewrote.
+const handoff = (fields: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    at: "2026-11-24T10:00:00Z",
+    ok: true,
+    agent_started: true,
+    desk: "t1",
+    path: repo,
+    repo,
+    branch: "feature",
+    ...fields,
+  });
+const journal = (name: string, ...lines: string[]) =>
+  writeFileSync(join(dir, "state/bercail", name), lines.map((line) => `${line}\n`).join(""));
+const restack = () => {
+  git("push", "-q", "origin", "main", "feature");
+  execFileSync("git", ["-C", origin, "symbolic-ref", "HEAD", "refs/heads/main"]);
+  vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
+  mkdirSync(join(dir, "state/bercail"), { recursive: true });
+  journal("handoffs.jsonl", handoff());
+  const old = git("rev-parse", "feature");
+  git("checkout", "-q", "feature");
+  git("commit", "-q", "--amend", "--allow-empty", "-m", "restacked");
+  return { old, head: git("rev-parse", "HEAD") };
+};
+const leasePush = (old: string, head: string, branch = "feature") =>
+  `git -C ${repo} push --force-with-lease=refs/heads/${branch}:${old} origin ${head}:refs/heads/${branch}`;
+
+test("a restack's lease push pins both heads to the desk's own branch, runs leased, and never defaults", async () => {
+  const { old, head } = restack();
+  const lease = { ref: "refs/heads/feature", old };
+  const facts = await pin(leasePush(old, head));
+  expect(facts).toStrictEqual({
+    kind: "push",
+    dir: repo,
+    gitDir: join(repo, ".git"),
+    url: origin,
+    refspecs: [`${head}:refs/heads/feature`],
+    lease,
+  });
+  const { argv } = runOf(facts);
+  expect(argv).toStrictEqual([
+    "git",
+    "-C",
+    repo,
+    "push",
+    "--no-follow-tags",
+    "--recurse-submodules=no",
+    `--force-with-lease=refs/heads/feature:${old}`,
+    origin,
+    `${head}^{commit}:refs/heads/feature`,
+  ]);
+  expect(opWhat(facts)).toBe(`force-with-lease push of ${origin} refs/heads/feature`);
+  const reversible = async (command: string) =>
+    command.endsWith("bercail") ? JSON.stringify({ policy: { merge_reversible: true } }) : origin;
+  expect(await guardDefault(facts, reversible)).toStrictEqual({
+    defaults: false,
+    why: "a force-with-lease push replaces the branch's history on the remote",
+  });
+  // Someone pushes after the last check: git's lease refuses, and their head stays.
+  const theirs = git("commit-tree", "-m", "theirs", `${old}^{tree}`);
+  git("push", "-q", "origin", `${theirs}:refs/heads/feature`, "--force");
+  expect(() => execFileSync(argv[0], argv.slice(1), { stdio: "pipe" })).toThrow(/stale info/);
+  expect(execFileSync("git", ["-C", origin, "rev-parse", "feature"], { encoding: "utf8" }).trim()).toBe(theirs);
+});
+
+test.each([
+  ["a lease on another branch", (old: string, head: string) => leasePush(old, head).replace(/feature$/, "x")],
+  ["a short old head", (old: string, head: string) => leasePush(old.slice(0, 12), head)],
+  ["a short ref in the lease", (old: string, head: string) => leasePush(old, head).replace("=refs/heads/", "=")],
+  ["a new head by name", (old: string) => leasePush(old, "HEAD")],
+  ["two refspecs", (old: string, head: string) => `${leasePush(old, head)} ${head}:refs/heads/y`],
+  [
+    "the lease after the remote",
+    (old: string, head: string) => leasePush(old, head).replace(/(--force\S+) origin/, "origin $1"),
+  ],
+  ["no -C", (old: string, head: string) => leasePush(old, head).replace(`-C ${repo} `, "")],
+  ["a relative -C", (old: string, head: string) => leasePush(old, head).replace(`-C ${repo}`, "-C repo")],
+  ["a cd", (old: string, head: string) => `cd ${dir} && ${leasePush(old, head)}`],
+] as const)("a lease push with %s is no operation the guard hands off", (_name, command) => {
+  const [old, head] = ["a".repeat(40), "b".repeat(40)];
+  expect(guardOperation(command(old, head), dir, dir)).toMatch(/no flags|git -C <absolute path>/);
+});
+
+test.each([
+  [
+    "no desk's handoff",
+    () => rmSync(join(dir, "state/bercail/handoffs.jsonl")),
+    /no desk's handoff names .* on feature/,
+  ],
+  [
+    "a handoff on another branch",
+    () => journal("handoffs.jsonl", handoff({ branch: "other" })),
+    /no desk's handoff names/,
+  ],
+  [
+    "a handoff of another repo",
+    () => journal("handoffs.jsonl", handoff({ repo: origin })),
+    /names the repo .*, not this checkout's/,
+  ],
+  [
+    "a handoff whose repo is gone",
+    () => journal("handoffs.jsonl", handoff({ repo: join(dir, "gone") })),
+    /names the repo/,
+  ],
+  [
+    "only a spawn that never started a desk",
+    () => journal("handoffs.jsonl", handoff({ ok: false, agent_started: false })),
+    /no desk's handoff names/,
+  ],
+  [
+    "a desk whose checkout cleanup retired",
+    () => journal("retired.jsonl", JSON.stringify({ v: 1, at: "2026-11-24T11:00:00Z", path: repo })),
+    /bercail cleanup retired .* after its desk started/,
+  ],
+  [
+    "a retirement in the second its desk started",
+    () => journal("retired.jsonl", JSON.stringify({ v: 1, at: "2026-11-24T10:00:00Z", path: repo })),
+    /bercail cleanup retired/,
+  ],
+  [
+    "a later spawn that failed on another branch",
+    () => journal("handoffs.jsonl", handoff(), handoff({ at: "2026-11-24T12:00:00Z", ok: false, branch: "other" })),
+    null,
+  ],
+  [
+    "a checkout reused by a new desk after a retirement",
+    () => {
+      journal("retired.jsonl", JSON.stringify({ v: 1, at: "2026-11-24T09:00:00Z", path: repo }));
+      journal("handoffs.jsonl", handoff({ at: "2026-11-24T08:00:00Z", branch: "old" }), handoff());
+    },
+    null,
+  ],
+  ["a checkout on another branch", () => git("checkout", "-q", "main"), /is not on feature/],
+  [
+    "a desk that committed since",
+    () => git("commit", "-q", "--allow-empty", "-m", "three"),
+    /feature is at [0-9a-f]{40} in .*, not/,
+  ],
+  [
+    "a remote whose default branch it is",
+    () => execFileSync("git", ["-C", origin, "symbolic-ref", "HEAD", "refs/heads/feature"]),
+    /feature is the default branch of /,
+  ],
+  [
+    "a remote whose default branch it cannot read",
+    () => execFileSync("git", ["-C", origin, "symbolic-ref", "HEAD", "refs/heads/unborn"]),
+    /cannot read the default branch of /,
+  ],
+  [
+    "a remote someone pushed to since",
+    () =>
+      git("push", "-q", "--force", "origin", `${git("commit-tree", "-m", "theirs", "HEAD^{tree}")}:refs/heads/feature`),
+    /feature is at [0-9a-f]{40} on .*, not the old head/,
+  ],
+])("a lease push with %s: pins only where no reason is named", async (_name, change, why) => {
+  const { old, head } = restack();
+  change();
+  if (why) await expect(pin(leasePush(old, head))).rejects.toThrow(why);
+  else await expect(pin(leasePush(old, head))).resolves.toMatchObject({ lease: { old } });
+});
+
+test("a desk's linked worktree pins its lease push: the handoff names the main checkout as its repo", async () => {
+  restack();
+  const worktree = join(dir, "repo.topic");
+  git("worktree", "add", "-q", "-b", "topic", worktree, "main");
+  git("push", "-q", "origin", "topic");
+  const old = git("rev-parse", "topic");
+  execFileSync("git", ["-C", worktree, "commit", "-q", "--amend", "--allow-empty", "-m", "restacked"]);
+  const head = execFileSync("git", ["-C", worktree, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  journal("handoffs.jsonl", handoff({ path: worktree, repo, branch: "topic" }));
+  const command = `git -C ${worktree} push --force-with-lease=refs/heads/topic:${old} origin ${head}:refs/heads/topic`;
+  expect(await pin(command)).toMatchObject({ dir: worktree, lease: { ref: "refs/heads/topic", old } });
+  journal("handoffs.jsonl", handoff({ path: worktree, repo: worktree, branch: "topic" }));
+  await expect(pin(command)).rejects.toThrow(/names the repo .*repo\.topic, not this checkout's .*repo$/);
+});
+
+test("a desk's repo is read whole when its main checkout's path holds a newline", async () => {
+  restack();
+  const main = join(dir, "x\ny");
+  const run = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
+  execFileSync("git", ["init", "-q", "-b", "main", main]);
+  execFileSync("git", ["init", "-q", join(dir, "x")]);
+  run(main, "commit", "-q", "--allow-empty", "-m", "one");
+  run(main, "remote", "add", "origin", origin);
+  run(main, "push", "-q", "origin", "main:refs/heads/side");
+  const worktree = join(dir, "side");
+  run(main, "worktree", "add", "-q", "-b", "side", worktree);
+  const old = run(worktree, "rev-parse", "HEAD");
+  run(worktree, "commit", "-q", "--amend", "--allow-empty", "-m", "restacked");
+  const head = run(worktree, "rev-parse", "HEAD");
+  const command = `git -C ${worktree} push --force-with-lease=refs/heads/side:${old} origin ${head}:refs/heads/side`;
+  journal("handoffs.jsonl", handoff({ path: worktree, repo: main, branch: "side" }));
+  expect(await pin(command)).toMatchObject({ dir: worktree, lease: { old } });
+  // The path's first line is another repo: not this checkout's.
+  journal("handoffs.jsonl", handoff({ path: worktree, repo: join(dir, "x"), branch: "side" }));
+  await expect(pin(command)).rejects.toThrow(/names the repo/);
+});
+
+test("a lease push of main, over a null old head, of a tag's hash, or from a subfolder does not pin", async () => {
+  const { old, head } = restack();
+  await expect(pin(leasePush("0".repeat(40), head))).rejects.toThrow(/on .*, not the old head 0{40}/);
+  git("branch", "-f", "main", head);
+  git("checkout", "-q", "main");
+  await expect(pin(leasePush(old, head, "main"))).rejects.toThrow(/force push to main or master is blocked/);
+  git("checkout", "-q", "feature");
+  git("tag", "-a", "-m", "t", "t1");
+  await expect(pin(leasePush(old, git("rev-parse", "t1")))).rejects.toThrow(/is not a commit's full hash/);
+  mkdirSync(join(repo, "sub"));
+  await expect(pin(leasePush(old, head).replace(`-C ${repo}`, `-C ${repo}/sub`))).rejects.toThrow(
+    /sub is not the worktree's top folder/,
+  );
 });
 
 test("a cleanup pins the worktree's real path, branch and HEAD; a trail merge, its one change", async () => {
@@ -980,6 +1197,34 @@ test("an ask handed off writes its ticket and starts its worker, which Shep is t
       block: true,
       reason: expect.stringMatching(/the guard's/),
     });
+});
+
+test("Shep's lease push of a desk's restack goes to a card pinned to both heads; a desk's is still blocked", async () => {
+  const shep = session("shep", (args) => {
+    markStart(args.at(-1)!, "started");
+    return { code: 0 };
+  });
+  const { old, head } = restack();
+  const command = leasePush(old, head);
+  expect(await shep.bash(command)).toMatchObject({
+    block: true,
+    reason: expect.stringMatching(/^Handed off, not run: the person answers this force-with-lease push of /),
+  });
+  const [name] = readdirSync(asks()).filter((n) => n.endsWith(".json"));
+  const lease = { ref: "refs/heads/feature", old };
+  expect(JSON.parse(readFileSync(join(asks(), name), "utf8"))).toMatchObject({
+    command,
+    reason: expect.stringMatching(/^Allow this force-with-lease push to origin: .* replacing /),
+    op: { kind: "push", dir: repo, remote: "origin", refspecs: [`${head}:refs/heads/feature`], lease },
+    facts: { kind: "push", url: origin, refspecs: [`${head}:refs/heads/feature`], lease },
+  });
+  expect(shep.confirm).not.toHaveBeenCalled();
+  const desk = session("");
+  expect(await desk.bash(command)).toMatchObject({
+    block: true,
+    reason: expect.stringMatching(/^Force-push is blocked/),
+  });
+  expect(desk.confirm).not.toHaveBeenCalled();
 });
 
 test.each([

@@ -107,7 +107,9 @@ function brief(ticket: GuardTicket, cls: GuardDefault): string {
           ? `bercail cleanup of ${f.worktree} (branch ${f.branch ?? "detached"}, HEAD ${f.head})`
           : f.kind === "trail merge"
             ? `${f.job ? `bercail job merge ${f.job} --change` : "entire trail merge"} ${f.change} in ${f.checkout}: trail ${f.trailId}, head ${f.head}, into ${f.base}${f.job ? `, then closes ${f.job} once no change is open` : ""}`
-            : `git push from ${f.dir} (git dir ${f.gitDir}) to ${urlText(f.url)}: ${f.refspecs.join(", ")}`;
+            : f.lease
+              ? `git push --force-with-lease from ${f.dir} (git dir ${f.gitDir}) to ${urlText(f.url)}: ${f.lease.ref} goes from the old head ${f.lease.old} to the new head ${f.refspecs[0].split(":")[0]}, and the push fails if the branch there is no longer the old head`
+              : `git push from ${f.dir} (git dir ${f.gitDir}) to ${urlText(f.url)}: ${f.refspecs.join(", ")}`;
   const diff =
     f.kind === "command" && "diff" in f
       ? `It changes config.toml so:\n${f.diff}\n`
