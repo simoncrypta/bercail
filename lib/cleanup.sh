@@ -2,9 +2,10 @@
 # shellcheck disable=SC1010 # "do" is a herdr-app subcommand here, not the keyword
 # bercail cleanup <worktree>: retire a finished checkout in one step. It copies
 # the ignored .bercail/ evidence to the archive, ends the space's desk, its
-# siblings and what they started, parents first, removes the worktree and
-# closes its Herdr space. The branch stays. It refuses work nobody reviewed,
-# and commits on neither trunk nor a remote branch, and a terminal it would end
+# siblings and what they started, parents first, stops this user's processes
+# still running in the worktree, removes it and closes its Herdr space. The
+# branch stays. It refuses work nobody reviewed, and commits on neither trunk
+# nor a remote branch, and a terminal it would end
 # that is working or blocked, and a question to the person still about it, and
 # stops partway when a terminal changes. The guard asks the person before it
 # runs. --check makes every refusal and changes nothing: the cleanup routine
@@ -197,7 +198,8 @@ _cleanup_space() {
 # Every live terminal on this machine, those named in $@, and the finished
 # ancestors of both, as hc get prints them, cut to what cleanup checks. A
 # terminal hc no longer knows (exit 3) has ended. When hc did not answer, or
-# answered without an address or a state, it prints what failed, and status 1.
+# answered without an address or a state, or a live terminal without a whole
+# pid, it prints what failed, and status 1.
 _cleanup_snapshot() {
   local list address detail rc out="" more
   list="$(_cleanup_hc_ls)" || { printf 'hc did not list its terminals'; return 1; }
@@ -212,7 +214,8 @@ _cleanup_snapshot() {
       if ((rc == 3)); then
         detail="$(jq -nc --arg a "$address" '{address: $a, state: "gone", labels: {}}')"
       elif ((rc != 0)) || ! jq -e --arg a "$address" '.address == $a and (.labels | type == "object")
-          and (.state | IN("live", "finished"))' <<<"$detail" >/dev/null 2>&1; then
+          and (.state | IN("live", "finished"))
+          and (.state == "finished" or (.pid | type == "number" and . >= 1 and . == floor))' <<<"$detail" >/dev/null 2>&1; then
         printf 'hc could not read terminal %s' "$address"
         return 1
       fi
@@ -222,7 +225,7 @@ _cleanup_snapshot() {
     more="$(jq -rs 'map(.address) as $have | [.[].parent | strings | select((IN($have[]) | not) and (contains("/") | not))]
       | unique | .[]' <<<"$out")"
   done
-  jq -sc 'map({address, parent, live: (.state == "live"), dies: (.die_with_parent == true), pid, start: .created_ms,
+  jq -sc 'map({address, parent, live: (.state == "live"), dies: (.die_with_parent == true), pid: (.pid | if type == "number" then floor else . end), start: .created_ms,
     status: (if .status == null then "none" elif (.status.state | type) == "string" then .status.state else "unknown" end),
     role: .labels["bercail.role"], bs: .labels["bercail.space"], hs: .labels["herdr.space"]})' <<<"$out"
 }
@@ -263,7 +266,10 @@ _cleanup_tree() {
 }
 
 # What changed for worktree $1 and its space $2 (the window's list $3, empty
-# with none) since snapshot $4 of owner tree $5. Prints {ended, problems}: the
+# with none) since snapshot $4 of owner tree $5. Prints {ended, spared,
+# problems}, spared the pids of every terminal live now, which cleanup leaves
+# to hc (those it ended are not live, the window's end with the space,
+# another space's are not its). In problems: the
 # worktree is still on that space (with no window, the space is known from
 # the terminals cleanup ends, so none is fine); a member hc has as finished or no longer
 # knows has ended; one still live must be the process checked, with the same
@@ -273,26 +279,33 @@ _cleanup_tree() {
 _cleanup_recheck() {
   local wt="$1" space="$2" window="$3" snap="$4" tree="$5" shells='[]' now next nowin=true on rc=0
   local -a named=()
+  # The terminals are read before the space on the worktree, so a claim that
+  # read shows, the look at the space shows too.
   if [[ -n "$window" ]]; then
     nowin=false
     window="$("$HERDR_APP" ls)" && jq -e '.spaces | type == "array"' <<<"$window" >/dev/null 2>&1 \
       || { printf 'herdr-app could not list its spaces'; return 1; }
     shells="$(jq -c --arg id "$space" '[.spaces[] | select(.id == $id) | .tabs[]?.terminals[]?.terminal]' <<<"$window")"
   fi
+  [[ -z "$space" ]] || mapfile -t named < <(jq -r '.[]' <<<"$shells"; jq -r '.end[], .close[]' <<<"$tree")
+  now="$(_cleanup_snapshot "${named[@]}")" || { printf '%s' "$now"; return 1; }
+  if [[ -n "$window" ]]; then
+    window="$("$HERDR_APP" ls)" && jq -e '.spaces | type == "array"' <<<"$window" >/dev/null 2>&1 \
+      || { printf 'herdr-app could not list its spaces'; return 1; }
+  fi
   on="$(_cleanup_space "$wt" "$window")" || rc=$?
   ((rc == 0 || rc == 5)) || { printf 'could not tell which Herdr space is on %s: %s' "$wt" "${on:-hc did not answer}"; return 1; }
   ((rc == 0)) || on="two spaces"
   if [[ -z "$space" ]]; then
-    jq -nc --arg on "$on" '{ended: [], problems: (if $on == "" then [] else ["Herdr space \($on) is on the worktree now"] end)}'
+    jq -nc --arg on "$on" --argjson now "$now" '{ended: [], spared: [$now[] | select(.live) | .pid],
+      problems: (if $on == "" then [] else ["Herdr space \($on) is on the worktree now"] end)}'
     return
   fi
-  mapfile -t named < <(jq -r '.[]' <<<"$shells"; jq -r '.end[], .close[]' <<<"$tree")
-  now="$(_cleanup_snapshot "${named[@]}")" || { printf '%s' "$now"; return 1; }
   next="$(_cleanup_tree "$now" "$space" "$nowin" "$shells" "$tree")"
   jq -nc --arg space "$space" --arg on "$on" --argjson nowin "$nowin" --argjson was "$snap" --argjson now "$now" --argjson tree "$tree" --argjson next "$next" '
     ($was | map({(.address): .}) | add // {}) as $w | ($now | map({(.address): .}) | add // {}) as $n
     | ($tree.end + $tree.close) as $m
-    | {ended: [$m[] | select($n[.].live | not)],
+    | {ended: [$m[] | select($n[.].live | not)], spared: [$now[] | select(.live) | .pid],
       problems: ((if $on == $space or ($nowin and $on == "") then [] else ["the Herdr space on the worktree is \(if $on == "" then "none" else $on end) now, not \($space)"] end)
         + [$m[] | . as $a | $n[$a] | select(.live) | $w[$a] as $o
           | (if [.pid, .start] != [$o.pid, $o.start]
@@ -327,6 +340,95 @@ _cleanup_wait_dying() {
     [$t] | grow | .[1:][]' <<<"$2")
 }
 
+# Field $2 of process $1's stat after its name (0 its state, 1 its parent, 19
+# its start); status 1 once it is gone, or a zombie, which has no folder.
+_cleanup_proc_field() {
+  local stat
+  local -a f
+  { stat="$(<"${BERCAIL_PROC_DIR:-/proc}/$1/stat")"; } 2>/dev/null || return 1
+  read -ra f <<<"${stat##*) }"
+  [[ "${f[0]}" != Z ]] && printf '%s' "${f[$2]}"
+}
+
+# This user's processes whose folder is worktree $1 or in it, as "<pid> <start>
+# <name>" lines: a dev server a desk started detached, which no hc terminal
+# holds, writes there while git removes it. It spares itself and what it runs
+# under, the pids in $2 (the terminals left for the space's close; not what
+# they run), and pids $3... with all they run: the terminals live at the last
+# look, whatever space they claim, are hc's. The name is the kernel's, cut to
+# safe characters: argv may hold a secret, or a newline that would make
+# another line.
+_cleanup_procs() {
+  local wt="$1" dir cwd pid p start name
+  local -A spared=() owns=() up
+  p="$BASHPID"
+  while [[ "$p" =~ ^[1-9][0-9]*$ && -z "${spared[$p]:-}" ]]; do
+    spared[$p]=1
+    p="$(_cleanup_proc_field "$p" 1)" || break
+  done
+  for p in $2; do spared[$p]=1; done
+  shift 2
+  for p in "$@"; do [[ -z "$p" ]] || owns[$p]=1; done
+  # find runs from /, so it is not one of them.
+  while IFS= read -r -d '' dir && IFS= read -r -d '' cwd; do
+    pid="${dir##*/}"
+    [[ "$pid" =~ ^[1-9][0-9]*$ && -z "${spared[$pid]:-}" && ("$cwd" == "$wt" || "$cwd" == "$wt/"*) ]] || continue
+    p="$pid" up=()
+    while [[ "$p" =~ ^[1-9][0-9]*$ && -z "${up[$p]:-}" ]]; do
+      [[ -z "${owns[$p]:-}" ]] || continue 2
+      up[$p]=1
+      p="$(_cleanup_proc_field "$p" 1)" || break
+    done
+    start="$(_cleanup_proc_field "$pid" 19)" && [[ "$start" =~ ^[0-9]+$ ]] || continue
+    { name="$(<"$dir/comm")"; } 2>/dev/null || continue
+    printf '%s %s %s\n' "$pid" "$start" "${name//[^[:alnum:]._+:@-]/?}"
+  done < <(cd / && exec find "${BERCAIL_PROC_DIR:-/proc}/" -mindepth 2 -maxdepth 2 -name cwd -uid "$(id -u)" -printf '%h\0%l\0' 2>/dev/null)
+}
+
+# "process <pid> (<name>), ..." for the _cleanup_procs lines $1, or for its
+# lines that start with $2 and a space.
+_cleanup_named() {
+  local pid start name out="" lines="$1"
+  [[ -z "${2:-}" ]] || lines="$(sed -n "s/^$2 //p" <<<"$1")"
+  while read -r pid start name; do
+    [[ -z "$pid" ]] || out+="${out:+, }process $pid ($name)"
+  done <<<"$lines"
+  printf '%s' "$out"
+}
+
+# True while a process of the _cleanup_procs lines $1 runs, the same one by its start.
+_cleanup_running() {
+  local pid start name
+  while read -r pid start name; do
+    [[ -z "$pid" || "$(_cleanup_proc_field "$pid" 19)" != "$start" ]] || return 0
+  done <<<"$1"
+  return 1
+}
+
+# Stops what _cleanup_procs finds in worktree $1, sparing as $2... say: TERM,
+# then KILL to those still there 5 seconds on, each only while its pid has the
+# start time it was found with. Prints "stopped <line>" for each it sent TERM;
+# status 1, adding "left <line>" for what runs there then, when one outlives
+# KILL by 2 seconds or one it did not find started there: that one is not
+# signalled unseen.
+_cleanup_stop() {
+  local list sent="" pid start name sig wait deadline
+  list="$(_cleanup_procs "$@")"
+  for sig in TERM:5 KILL:2; do
+    wait="${sig#*:}" sig="${sig%:*}"
+    _cleanup_running "$list" || break
+    while read -r pid start name; do
+      [[ -n "$pid" && "$(_cleanup_proc_field "$pid" 19)" == "$start" ]] && kill -s "$sig" "$pid" 2>/dev/null || continue
+      [[ "$sig" == KILL ]] || sent+="stopped $pid $start $name"$'\n'
+    done <<<"$list"
+    deadline=$((SECONDS + wait))
+    while _cleanup_running "$list" && ((SECONDS < deadline)); do sleep 0.1; done
+  done
+  printf '%s' "$sent"
+  name="$(_cleanup_procs "$@")"
+  [[ -z "$name" ]] || { sed 's/^/left /' <<<"$name"; return 1; }
+}
+
 # What a cleanup that stops partway leaves: the terminals it ended ($2...),
 # the worktree and space that stay, and the archive $1.
 _cleanup_left() {
@@ -344,12 +446,21 @@ _cleanup_retired() {
     '{v: 1, at: $at, path: $p, repo: $r, branch: $b} + (if $gone then {gone: true} else {} end)' >>"$dir/retired.jsonl"
 }
 
+# How to finish by hand at folder $1, which a cleanup removed only partway.
+_cleanup_leftover_how() {
+  printf 'once git worktree list in its repo does not name it, stop what still writes there, move the folder aside, close its Herdr space by hand, then run bercail cleanup --gone %s' "$1"
+}
+
 # cleanup --gone <path>: a checkout a handoff started, removed without cleanup
 # (by hand, or wt remove). The person says nothing was lost; this records it.
 _cleanup_gone() {
   local path="$1" handoffs line="" repo branch
   handoffs="${XDG_STATE_HOME:-$HOME/.local/state}/bercail/handoffs.jsonl"
-  [[ ! -e "$path" ]] || die "$path is still there; bercail cleanup $path retires it"
+  if [[ -e "$path" ]]; then
+    [[ "$(git -C "$path" rev-parse --show-toplevel 2>/dev/null)" != "$(cd "$path" && pwd -P)" ]] \
+      || die "$path is still there; bercail cleanup $path retires it"
+    die "$path is still there, but holds no checkout; if a cleanup removed it partway, $(_cleanup_leftover_how "$path")"
+  fi
   [[ ! -f "$handoffs" ]] || line="$(jq -c --arg p "$path" 'select(.path == $p)' "$handoffs" | tail -1)"
   [[ -n "$line" ]] || die "no handoff names $path, so no job waits on it; nothing to record"
   repo="$(jq -r '.repo // empty' <<<"$line")"
@@ -363,8 +474,8 @@ _cleanup_gone() {
 
 cmd_cleanup() {
   local usage="usage: bercail cleanup [--check] <worktree> | bercail cleanup --gone <path>" wt main common repo branch dest="" ls="" space t out keep check=0
-  local snap="" tree='{"end": [], "close": []}' shells='[]' got
-  local -a ends=() named=() ended=() killed=()
+  local snap="" tree='{"end": [], "close": []}' shells='[]' got procs wpids='[]'
+  local -a ends=() named=() ended=() killed=() owners=()
   [[ "${1:-}" != --check ]] || { check=1; shift; }
   if [[ "${1:-}" == --gone && "$check" -eq 0 ]]; then
     [[ $# -eq 2 && "$2" == /* ]] || die "--gone takes the checkout's absolute path, as its handoff names it; $usage"
@@ -374,7 +485,7 @@ cmd_cleanup() {
   [[ $# -eq 1 && "$1" != -* ]] || die "$usage"
   [[ -d "$1" ]] || die "$1 is not a directory; $usage"
   wt="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null)" \
-    || die "refusing to clean up $1: not a git worktree"
+    || die "refusing to clean up $1: not a git worktree; if a cleanup removed it partway, $(_cleanup_leftover_how "$(cd "$1" && pwd -P)")"
   wt="$(cd "$wt" && pwd -P)"
   [[ "$(cd "$1" && pwd -P)" == "$wt" ]] || die "refusing to clean up $1: it is inside $wt; name the worktree itself"
   main="$(git_backend_main "$wt")"
@@ -410,12 +521,22 @@ cmd_cleanup() {
     out="$(jq -r --argjson tree "$tree" '[.[] | select((.address | IN($tree.end[], $tree.close[]))
       and (.status | IN("working", "blocked", "unknown"))) | "terminal \(.address) is \(.status)"] + $tree.problems | join("; ")' <<<"$snap")"
     [[ -z "$out" ]] || die "refusing to clean up $wt: $out; nothing was removed"
+    wpids="$(jq -c --argjson tree "$tree" '[.[] | select(.live and (.address | IN($tree.close[]))) | .pid]' <<<"$snap")"
   fi
   _cleanup_questions "$wt" "$tree"
 
   [[ ! -d "$wt/.bercail" ]] || _cleanup_archive_check "$wt" "$(_cleanup_archive_root "$repo")"
   if ((check)); then
-    info "cleanup would retire $wt: $([[ -d "$wt/.bercail" ]] && printf 'archive its .bercail/, ')${ends[*]:+end ${ends[*]}, }remove the worktree${branch:+ (branch $branch stays)}${space:+, close Herdr space $space}"
+    [[ -n "$snap" ]] || snap="$(_cleanup_snapshot)" || _cleanup_unread "$snap; nothing was removed"
+    # The terminals it ends are spared alone too: what they run is the sweep's
+    # once they have ended.
+    owners=()
+    out="$(jq -r --argjson w "$wpids" --argjson tree "$tree" '[.[] | select(.live and (.address | IN($tree.end[]))) | .pid] as $e
+      | ($w + $e | join(" ")), (.[] | select(.live) | .pid | select(IN($w[], $e[]) | not))' <<<"$snap")" \
+      || _cleanup_unread "could not read the terminals' pids; nothing was removed"
+    mapfile -t owners <<<"$out"
+    procs="$(_cleanup_named "$(_cleanup_procs "$wt" "${owners[@]}")")"
+    info "cleanup would retire $wt: $([[ -d "$wt/.bercail" ]] && printf 'archive its .bercail/, ')${ends[*]:+end ${ends[*]}, }${procs:+stop $procs, }remove the worktree${branch:+ (branch $branch stays)}${space:+, close Herdr space $space}"
     return 0
   fi
   if [[ -d "$wt/.bercail" ]]; then
@@ -433,6 +554,10 @@ cmd_cleanup() {
       || _cleanup_unread "cleanup stopped: $got; $(_cleanup_left "$dest" "${killed[@]}")"
     out="$(jq -r '.problems | join("; ")' <<<"$got")"
     [[ -z "$out" ]] || die "cleanup stopped: $out; $(_cleanup_left "$dest" "${killed[@]}")"
+    owners=()
+    out="$(jq -r --argjson w "$wpids" '.spared[] | select(IN($w[]) | not)' <<<"$got")" \
+      || _cleanup_unread "cleanup stopped: could not read the terminals' pids; $(_cleanup_left "$dest" "${killed[@]}")"
+    [[ -z "$out" ]] || mapfile -t owners <<<"$out"
     while IFS= read -r out; do
       [[ " ${ended[*]} " != *" $out "* ]] || continue
       ended+=("$out")
@@ -449,8 +574,24 @@ cmd_cleanup() {
   done
   # Off the worktree before it goes; cleanup may run from inside it.
   cd /
+  # It spares what the last look saw live; one it saw at work stopped it there.
+  out="$(_cleanup_stop "$wt" "$(jq -r 'join(" ")' <<<"$wpids")" "${owners[@]}")" || {
+    procs="$(_cleanup_named "$out" stopped)"
+    die "cleanup stopped: $(_cleanup_named "$out" left) still runs in $wt${procs:+ after it sent TERM to $procs}; $(_cleanup_left "$dest" "${killed[@]}")"
+  }
+  procs="$(_cleanup_named "$out" stopped)"
+  [[ -z "$procs" ]] || info "stopped $procs, which ran in $wt"
+  # A terminal that came since the last look, spared or not, keeps the worktree.
+  got="$(_cleanup_recheck "$wt" "$space" "$ls" "$snap" "$tree")" \
+    || _cleanup_unread "cleanup stopped: $got; $(_cleanup_left "$dest" "${killed[@]}")"
+  out="$(jq -r '.problems | join("; ")' <<<"$got")"
+  [[ -z "$out" ]] || die "cleanup stopped: $out; $(_cleanup_left "$dest" "${killed[@]}")"
+  # git drops the worktree even when a file written there meanwhile keeps its
+  # folder, and a rerun finds no checkout: say how to finish.
   git --git-dir="$common" worktree remove "$wt" \
-    || die "could not remove the worktree $wt${ends[*]:+ after ending ${ends[*]}}; its space stays${dest:+, and .bercail/ is archived in $dest}"
+    || die "could not remove the worktree $wt${ends[*]:+ after ending ${ends[*]}}; its space stays${dest:+, and .bercail/ is archived in $dest}; if git removed it partway, $(_cleanup_leftover_how "$wt")"
+  [[ ! -e "$wt" && ! -L "$wt" ]] \
+    || die "git removed the worktree $wt, but something wrote its folder again; its space stays; $(_cleanup_leftover_how "$wt")"
   info "removed worktree $wt${branch:+; branch $branch stays}"
   # It is retired either way; unrecorded, its job's next dispatch asks for --gone.
   _cleanup_retired "$wt" "$main" "$branch" false \

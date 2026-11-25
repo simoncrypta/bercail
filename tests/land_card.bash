@@ -142,7 +142,7 @@ desk() {
     '{address: $t, session: "desk-session-\($t)", cwd: $p, harness: "pi", issue: $i, space: $sp}' \
     >"$XDG_STATE_HOME/bercail/desk-sessions/$t.json"
   [[ -f "$STATE/hc.json" ]] || echo '[]' >"$STATE/hc.json"
-  jq --arg t "$t" --arg p "$dir" --arg i "$issue" --arg sp "$sp" '. + [{address: $t, state: "live", reason: null,
+  jq --arg t "$t" --arg p "$dir" --arg i "$issue" --arg sp "$sp" '. + [{address: $t, state: "live", reason: null, pid: (length + 101),
       cwd: $p, labels: {"bercail.role": "agent", "bercail.issue": $i, "bercail.space": $sp},
       records: {"desk-session-\($t)": {app: "pi", state: "idle"}}}]' "$STATE/hc.json" >"$STATE/hc.tmp"
   mv "$STATE/hc.tmp" "$STATE/hc.json"
