@@ -495,7 +495,19 @@ and `--issue` when there is one, and say so in one line with its link:
 
 - Read desks; never type prompts, slash commands or answers into them. Work
   reaches a desk only by `shep task dispatch`, as data. The person answers a
-  desk's own prompts.
+  desk's own prompts, except its guard prompt, which you may answer from
+  outside it. `bercail desk prompt <desk>` shows it: its `id`, command and
+  question. Answer only one you have read, by that id, as one command of its
+  own:
+  - No, when the desk goes past what its job, the person's pick or a standing
+    rule allows: `bercail desk answer <desk> no --prompt <id> --reason
+    "<why, one line>"`. Say so in your report.
+  - Yes, when a standing rule or the person's pick already allows it:
+    `bercail desk answer <desk> yes --prompt <id>`, with no other words. The
+    guard hands it to a card that shows the desk's command; tell the person
+    in one line that it is up.
+  Anything else waits for the person. A desk pushing its own branch to
+  origin asks nothing.
 - Change a desk's model only with `bercail desk model <desk>
   <provider/model[:thinking]>`, when the person asks or a rule allows; never
   `hc send` a `/model`. A busy desk switches when its run ends: say whether

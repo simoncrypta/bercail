@@ -9,6 +9,9 @@
 # A live Pi also writes $XDG_RUNTIME_DIR/bercail/open-sessions/<pid>.json
 # {pid, start_ticks, sessions} so an idle agent (hc records {}) is not started twice.
 
+# shellcheck source=lib/git-backend.sh
+source "$(dirname "${BASH_SOURCE[0]}")/git-backend.sh"
+
 # A record this close to the shutdown was still running then.
 DESK_RESTORE_WINDOW=600
 # How long a pass waits for hc to finish giving lost terminals their shells.
@@ -394,21 +397,29 @@ _desk_model_check() {
     || die "Pi has no model $id. pi --list-models lists the ones you can use."
 }
 
+# Sets DESK_ADDRESS, DESK_RECORD and DESK_PID for DESK, a live Pi desk, or dies.
+# WHAT finishes "only a desk ..." in the error.
+_desk_live() {
+  local desk="$1" what="$2" terminal
+  terminal="$(_desk_hc get "$desk" --json 2>/dev/null)" || die "no live terminal $desk (hc ls lists them)"
+  jq -e '.state == "live" and .labels["bercail.role"] == "agent"' <<<"$terminal" >/dev/null \
+    || die "$desk is not a live desk; only a desk (label bercail.role=agent) $what"
+  DESK_ADDRESS="$(jq -r .address <<<"$terminal")"
+  DESK_RECORD="$(_desk_sessions_dir)/$DESK_ADDRESS.json"
+  DESK_PID="$(jq -r 'select(.harness == "pi") | .pid // empty' "$DESK_RECORD" 2>/dev/null || true)"
+  [[ "$DESK_PID" =~ ^[0-9]+$ ]] && kill -0 "$DESK_PID" 2>/dev/null \
+    || die "$desk has no running Pi desk agent ($DESK_RECORD); start it with bercail-desk-agent"
+}
+
 # Asks a live Pi desk to switch model through the bercail-desk extension: a
 # request file it takes when it is idle, never a chat message. Waits a moment
 # for the answer; a busy desk switches when its run ends.
 _desk_model() {
-  local desk="$1" model="$2" terminal address record pid dir id request reply answer="" i
+  local desk="$1" model="$2" address pid dir id request reply answer="" i
   [[ "$model" =~ ^[^/[:space:]]+/[^[:space:]]+$ ]] \
     || die "bercail desk model takes PROVIDER/MODEL[:thinking], as pi --list-models names it (claude-bridge/claude-opus-5-5:high), not $model"
-  terminal="$(_desk_hc get "$desk" --json 2>/dev/null)" || die "no live terminal $desk (hc ls lists them)"
-  jq -e '.state == "live" and .labels["bercail.role"] == "agent"' <<<"$terminal" >/dev/null \
-    || die "$desk is not a live desk; only a desk (label bercail.role=agent) switches model"
-  address="$(jq -r .address <<<"$terminal")"
-  record="$(_desk_sessions_dir)/$address.json"
-  pid="$(jq -r 'select(.harness == "pi") | .pid // empty' "$record" 2>/dev/null || true)"
-  [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null \
-    || die "$desk has no running Pi desk agent ($record); start it with bercail-desk-agent"
+  _desk_live "$desk" "switches model"
+  address="$DESK_ADDRESS" pid="$DESK_PID"
   _desk_model_check "$model"
   dir="$(_desk_commands_dir)"
   ( umask 077 && mkdir -p "$dir" ) || die "cannot create $dir"
@@ -432,15 +443,151 @@ _desk_model() {
   fi
 }
 
+# --- guard prompts ---
+
+# How long `desk answer` waits for the desk's guard to take an answer, in seconds.
+DESK_ANSWER_WAIT="${BERCAIL_DESK_ANSWER_WAIT:-5}"
+DESK_ANSWER_USAGE="usage: bercail desk prompt DESK | desk answer DESK yes|no --prompt ID [--reason TEXT] [--dry-run]"
+
+_desk_prompts_dir() {
+  printf '%s/bercail/desk-prompts' "${XDG_STATE_HOME:-$HOME/.local/state}"
+}
+
+# Text from a prompt as it may be shown: no credential in a URL
+# (scheme://user:pass@ becomes scheme://***@). With "cut", at most 500 characters,
+# for what is logged; a card shows all of it.
+_desk_shown() {
+  jq -rn --arg s "$1" --arg cut "${2:-}" '$s | gsub("(?<s>[A-Za-z][A-Za-z0-9+.-]*://)[^/@\\s]+@"; "\(.s)***@")
+    | if $cut != "" and length > 500 then .[:500] + "…" else . end'
+}
+
+# The prompt the guard of the desk in DESK_ADDRESS/DESK_PID waits on, or status 1:
+# only one written by that desk's own Pi counts.
+_desk_pending() {
+  jq -ce --arg a "$DESK_ADDRESS" --argjson pid "$DESK_PID" \
+    'select(type == "object" and .address == $a and .pid == $pid and (.id | type) == "string")' \
+    "$(_desk_prompts_dir)/$DESK_ADDRESS.json" 2>/dev/null
+}
+
+# Prints the guard prompt a desk waits on, with its issue, command and question redacted.
+_desk_prompt() {
+  local desk="$1" pending
+  _desk_live "$desk" "has a guard prompt"
+  pending="$(_desk_pending)" || die "$desk has no guard prompt waiting"
+  jq -c --arg command "$(_desk_shown "$(jq -r '.command // ""' <<<"$pending")")" \
+    --arg reason "$(_desk_shown "$(jq -r '.reason // ""' <<<"$pending")")" --slurpfile record "$DESK_RECORD" \
+    '.command = $command | .reason = $reason | .issue = ($record[0].issue // "") | .issue_title = ($record[0].issue_title // "")' \
+    <<<"$pending"
+}
+
+# The guard's receipt for this writer's answer, or nothing yet.
+_desk_receipt() {
+  jq -c --arg id "$1" --arg n "$2" 'select(.id == $id and .nonce == $n)' "$3" 2>/dev/null || true
+}
+
+# Answers the guard prompt a desk waits on through a file its guard reads, never
+# by typing into it: ID must be the prompt read with desk prompt. One grammar, in
+# this order, the one the guard reads too. One writer per desk at a time, under
+# flock; the answer carries a nonce and the guard's receipt names it, so only the
+# answer the guard took is logged on the desk's issue.
+_desk_answer() {
+  local desk="${1:-}" answer="${2:-}" id="" reason="" dry=0 pending word tool command line dir file reply tmp nonce lock got="" issue cwd title main i
+  [[ "${3:-}" == --prompt && -n "${4:-}" ]] || die "$DESK_ANSWER_USAGE"
+  id="$4"
+  shift 4
+  if [[ "${1:-}" == --reason ]] && (($# >= 2)); then reason="$2" && shift 2; fi
+  if [[ "${1:-}" == --dry-run ]]; then dry=1 && shift; fi
+  [[ "$desk" =~ ^[A-Za-z0-9_.][A-Za-z0-9_.-]*$ && "$answer" =~ ^(yes|no)$ ]] && (($# == 0)) || die "$DESK_ANSWER_USAGE"
+  [[ "$answer" == yes || -n "${reason//[[:space:]]/}" ]] || die "a no needs --reason: the desk shows it to its agent"
+  reason="$(_desk_shown "$reason")"
+  _desk_live "$desk" "has a guard prompt"
+  pending="$(_desk_pending)" && [[ "$(jq -r .id <<<"$pending")" == "$id" ]] \
+    || die "the prompt you read is gone; bercail desk prompt $desk shows the one waiting now"
+  word="${answer^}"
+  tool="$(jq -r '.tool // ""' <<<"$pending")"
+  issue="$(jq -r '.issue // ""' "$DESK_RECORD")"
+  if ((dry)); then
+    title="$(jq -r '.issue_title // ""' "$DESK_RECORD")"
+    printf "Answer %s to desk %s's guard prompt%s: %s\n" "$word" "$DESK_ADDRESS" \
+      "${issue:+ ($issue${title:+: $title})}" "$(_desk_shown "$(jq -r '.reason // ""' <<<"$pending")")"
+    printf 'Its %s: %s\n' "$tool" "$(_desk_shown "$(jq -r '.command // ""' <<<"$pending")")"
+    [[ "$answer" == yes ]] || printf 'Why: %s\n' "$reason"
+    return 0
+  fi
+  command -v flock >/dev/null 2>&1 \
+    || die "bercail desk answer needs flock, so two answers to one desk never cross (util-linux on Linux, brew install flock on macOS)"
+  dir="$(_desk_prompts_dir)"
+  exec {lock}>>"$dir/$DESK_ADDRESS.answer.lock" || die "cannot write to $dir"
+  flock -n "$lock" || die "another answer to desk $DESK_ADDRESS waits for its guard; bercail desk prompt $desk shows what waits now"
+  file="$dir/$DESK_ADDRESS.answer.json"
+  nonce="$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
+  reply="$dir/$DESK_ADDRESS.done-$nonce.json"
+  tmp="$(umask 077 && mktemp "$dir/.$DESK_ADDRESS.answer.XXXXXX")" || die "cannot write to $dir"
+  jq -cn --arg id "$id" --arg a "$answer" --arg r "$reason" --arg n "$nonce" '{id: $id, answer: $a, reason: $r, nonce: $n}' >"$tmp" \
+    && mv "$tmp" "$file" || { rm -f "$tmp"; die "cannot write to $dir"; }
+  for ((i = 0; i < DESK_ANSWER_WAIT * 5; i++)); do
+    got="$(_desk_receipt "$id" "$nonce" "$reply")"
+    [[ -z "$got" ]] || break
+    sleep 0.2
+  done
+  if [[ -z "$got" ]]; then
+    # Withdraw it: no other writer holds the lock, so a rename that works takes back
+    # our own answer, which the guard never had.
+    tmp="$dir/.$DESK_ADDRESS.withdrawn.$nonce"
+    if mv "$file" "$tmp" 2>/dev/null; then
+      rm -f "$tmp"
+      die "desk $DESK_ADDRESS did not take the answer: its prompt may have closed. Nothing was answered."
+    fi
+    for ((i = 0; i < 5; i++)); do
+      got="$(_desk_receipt "$id" "$nonce" "$reply")"
+      [[ -z "$got" ]] || break
+      sleep 0.2
+    done
+    [[ -n "$got" ]] \
+      || die "desk $DESK_ADDRESS took the answer but did not say what became of it; the outcome is unknown: hc read $DESK_ADDRESS shows it."
+  fi
+  rm -f "$reply"
+  [[ "$(jq -r .status <<<"$got")" == taken ]] \
+    || die "desk $DESK_ADDRESS refused the answer: $(jq -r '.why // "no reason given"' <<<"$got")"
+  command="$(_desk_shown "$(jq -r '.command // ""' <<<"$pending")" cut)"
+  log "$DESK_ADDRESS answered $word: $command"
+  if [[ -z "$issue" ]]; then
+    warn "desk $DESK_ADDRESS has no issue in its record, so the answer is logged nowhere"
+    return 0
+  fi
+  line="bercail desk answer: answered $word to desk $DESK_ADDRESS's guard prompt \"$(_desk_shown "$(jq -r '.reason // ""' <<<"$pending")" cut)\" (its $tool: $command)${reason:+: $(_desk_shown "$reason" cut)}"
+  cwd="$(jq -r '.cwd // ""' "$DESK_RECORD")"
+  main="$(git_backend_main "$cwd")" \
+    || die "answered, but $cwd is no git checkout, so nothing went on $issue; log it there by hand: $line"
+  if [[ "$issue" == trail:* ]]; then
+    printf '%s' "$line" | node "$(dirname "${BASH_SOURCE[0]}")/jobs.ts" comment "$issue" --repo "$main" >/dev/null 2>&1 \
+      || die "answered, but bercail could not comment on $issue in $main; log it by hand: printf '%s' $(printf '%q' "$line") | bercail job comment $issue --repo $main"
+  else
+    (cd "$main" && bd comment "$issue" "$line" </dev/null >/dev/null 2>&1) \
+      || die "answered, but bd could not comment on $issue in $main; log it by hand: (cd $main && bd comment $issue $(printf '%q' "$line"))"
+  fi
+}
+
 cmd_desk() {
   local sub="${1:-}" mode=""
   shift || true
-  if [[ "$sub" == model ]]; then
-    (($# == 2)) || die "usage: bercail desk model DESK PROVIDER/MODEL[:thinking]"
-    _desk_model "$1" "$2"
-    return
-  fi
-  [[ "$sub" == restore ]] || die "usage: bercail desk restore [--dry-run] | desk model DESK PROVIDER/MODEL[:thinking]"
+  case "$sub" in
+    model)
+      (($# == 2)) || die "usage: bercail desk model DESK PROVIDER/MODEL[:thinking]"
+      _desk_model "$1" "$2"
+      return
+      ;;
+    prompt)
+      (($# == 1)) || die "$DESK_ANSWER_USAGE"
+      _desk_prompt "$1"
+      return
+      ;;
+    answer)
+      _desk_answer "$@"
+      return
+      ;;
+  esac
+  [[ "$sub" == restore ]] || die "usage: bercail desk restore [--dry-run] | desk model DESK PROVIDER/MODEL[:thinking] | desk prompt DESK | desk answer DESK yes|no --prompt ID [--reason TEXT] [--dry-run]"
   while (($#)); do
     case "$1" in
       --dry-run | --boot) mode="$1" ;;

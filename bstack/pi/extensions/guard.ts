@@ -2,7 +2,7 @@
 // tool_call and tool_result, the repo's git policy (bercail policy show), the
 // approval log, and the log of warnings and refusals.
 import { execFile } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   accessSync,
   constants as fsConstants,
@@ -13,6 +13,7 @@ import {
   readFileSync,
   readlinkSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -83,6 +84,9 @@ export type GuardInput = {
   sole?: boolean;
   /** The only tool call its assistant message made, so no other call of the session runs beside it. */
   alone?: boolean;
+  /** A desk's worktree and the branch its handoff record names, when that is not the trunk.
+   * mapped: git config may send a refspec with no :dst to another branch. */
+  deskBranch?: { path: string; branch: string; mapped: boolean };
 };
 
 /** A git push a Decisions answer may approve: commit hashes to full refs, from dir. */
@@ -191,6 +195,13 @@ const basecampAuth =
   "Logging Basecamp in or out (auth, login, logout, setup, profile create or delete), and its token, are the person's. They run basecamp auth login --device-code in their own shell.";
 const todoTargets =
   "Where the person's todos go (bercail todo target add|rm, bercail todo route) is Shep's. Say in your report which list a todo belongs on, and Shep sets it.";
+const deskAnswerRefused =
+  "Answering a desk's guard prompt is Shep's (bercail desk answer), or the person's at the desk. Leave it to them.";
+const deskAnswerAsk = "Answer Yes to a desk's guard prompt? The card shows what the desk asked to run.";
+const deskAnswerShape =
+  "bercail desk answer runs only alone, as bercail desk answer DESK no --prompt ID --reason TEXT, DESK yes --prompt ID, or either with a last --dry-run.";
+const deskAnswerNo =
+  "You answered No to a desk's guard prompt for the person: say in your report which desk, what it asked, and why.";
 const landCommand =
   "Landing a change (bercail land) is Shep's. Stage it, finish with /validate, and Shep lands it once it is reviewed.";
 const todoFile =
@@ -1522,6 +1533,61 @@ function decideJob(words: string[], input: GuardInput): GuardDecision {
   return allow;
 }
 
+// bercail desk answer: a desk's guard prompt, answered from outside the desk (lib/desk.sh).
+// bercail as the program run (past env, sudo, xargs and other wrappers, or by sh or bash),
+// then its area and verb: the first two words after it that are neither options nor a
+// redirect, which bash takes even glued on, nor a bare redirect's target.
+function answersDesk(words: string[]): boolean {
+  const kept: string[] = [];
+  for (let i = 0; i < words.length; i++) {
+    const op = redirectOp.exec(words[i]);
+    if (op?.[0] === words[i]) i++;
+    else if (!op) kept.push(words[i].split(/&?[<>]/)[0]);
+  }
+  const run = commandWords(kept);
+  const isAnswer = (at: number) => {
+    const [area, verb] = plainWords(run.slice(at + 1));
+    return basename(run[at] ?? "") === "bercail" && area === "desk" && verb === "answer";
+  };
+  if (!["sh", "bash", "dash", "zsh", "ksh"].includes(basename(run[0] ?? ""))) return isAnswer(0);
+  // A shell's script is its first operand. Its options may take values, even ending a
+  // cluster (-xo errexit): with any option, bercail desk answer anywhere counts.
+  if (!/^[-+]/.test(run[1] ?? "")) return isAnswer(1);
+  return run.some((_, at) => isAnswer(at));
+}
+
+// The one grammar lib/desk.sh accepts too, in this order:
+// bercail desk answer DESK yes|no --prompt ID [--reason TEXT] [--dry-run]. undefined for any other.
+const promptId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+function deskAnswerArgs(words: string[]): { answer: string; reason: boolean; dry: boolean } | undefined {
+  const [bin, area, verb, address, answer, flag, id, ...rest] = words;
+  if (basename(bin ?? "") !== "bercail" || area !== "desk" || verb !== "answer") return undefined;
+  if (!/^[\w.][\w.-]*$/.test(address ?? "") || !/^(yes|no)$/.test(answer ?? "")) return undefined;
+  if (flag !== "--prompt" || !promptId.test(id ?? "")) return undefined;
+  const reason = rest[0] === "--reason" && rest.length > 1;
+  const dry = rest[reason ? 2 : 0] === "--dry-run";
+  return rest.length === (reason ? 2 : 0) + (dry ? 1 : 0) ? { answer, reason, dry } : undefined;
+}
+
+// The one shape of a desk answer's Yes that goes to a card: the prompt's id and nothing else.
+function deskYes(words: string[]): boolean {
+  const args = deskAnswerArgs(words);
+  return args?.answer === "yes" && !args.reason && !args.dry;
+}
+
+// Shep's desk answer, only as one argv in that grammar: a --dry-run runs, a No with its
+// reason runs with a warning, a Yes goes to a card; any other shape is refused, as is
+// every other role.
+function decideDeskAnswer(command: string, input: GuardInput, depth: number): GuardDecision {
+  if (input.role !== "shep") return block(deskAnswerRefused);
+  const op = depth === 0 ? guardOperation(command, input.cwd, input.home) : undefined;
+  const args = typeof op === "object" && op.kind === "command" ? deskAnswerArgs(op.argv) : undefined;
+  if (args?.dry) return allow;
+  if (args?.answer === "no" && args.reason) return warn(deskAnswerNo);
+  if (typeof op === "object" && op.kind === "command" && deskYes(op.argv)) return ask(deskAnswerAsk);
+  return block(deskAnswerShape);
+}
+
 // bercail land: Shep's commit and CI wait for a desk's branch.
 function isLand(words: string[]): boolean {
   const plain = plainWords(words);
@@ -2117,6 +2183,14 @@ function pushPolicy(args: string[], dir: string | undefined, input: GuardInput, 
     return worse(decision, approve("autopilot pushes its pull request branch"));
   }
 
+  // Only a push that is the whole command and the only tool call of its message: nothing
+  // beside it may change the repo or config deskBranchAt read before it ran.
+  if (input.role === "" && input.deskBranch && input.sole && input.alone) {
+    const own = ownDeskPush(args, facts, dir, input.deskBranch, input);
+    if (typeof own !== "boolean") return own;
+    if (own) return worse(decision, approve(deskPush(input.deskBranch.branch)));
+  }
+
   const policy = policyFor(dir, input);
   if (!isPolicy(policy)) return policy;
   if (facts.every && policy.entire) return block(pushAllEntire);
@@ -2134,6 +2208,67 @@ function pushPolicy(args: string[], dir: string | undefined, input: GuardInput, 
   return worse(decision, publish("push", input, pushWhat(facts, dests, branch, via)));
 }
 
+const deskPush = (branch: string) => `a desk pushes its own branch (${branch}), which its handoff record names`;
+
+// Flags that change neither what a push sends nor where: any other (--repo, --prune,
+// --receive-pack, ...) asks as before.
+const deskPushFlags = new Set([
+  "-u",
+  "--set-upstream",
+  "-q",
+  "--quiet",
+  "-v",
+  "--verbose",
+  "-n",
+  "--dry-run",
+  "--porcelain",
+  "--progress",
+  "--no-progress",
+]);
+
+// The shape ownDeskPush may allow, read from the words alone, before any git or remote read:
+// one git push to origin, no global option, only its harmless flags, a refspec named.
+function mayPushOwn(command: string): boolean {
+  const git = parseGit(command.trim().split(/ +/), undefined);
+  if (git?.sub !== "push" || git.global.length) return false;
+  const facts = pushFacts(git.args);
+  return (
+    facts.remote === "origin" &&
+    facts.refspecs.length > 0 &&
+    git.args.every((arg) => !arg.startsWith("-") || deskPushFlags.has(arg))
+  );
+}
+
+// A desk's push of only its own branch to origin, from its worktree, with refspecs named:
+// a bare push follows push.default, which may send more. Each refspec sends the branch (or
+// HEAD on it) to the branch, a :dst in full; where git config maps a refspec with no :dst
+// (own.mapped), each names it. Deletes, tags and --all ask as before.
+function ownDeskPush(
+  args: string[],
+  facts: PushFacts,
+  dir: string | undefined,
+  own: { path: string; branch: string; mapped: boolean },
+  input: GuardInput,
+): boolean | GuardDecision {
+  if (dir !== own.path || facts.remote !== "origin" || !facts.refspecs.length) return false;
+  if (args.some((arg) => arg.startsWith("-") && !deskPushFlags.has(arg))) return false;
+  if (facts.deleted.length || facts.tags || facts.every) return false;
+  const names = [own.branch, `refs/heads/${own.branch}`];
+  let head = false;
+  for (const spec of facts.refspecs) {
+    const [src, dst] = spec.includes(":")
+      ? [spec.slice(0, spec.indexOf(":")), spec.slice(spec.indexOf(":") + 1)]
+      : [spec];
+    // git resolves a short :dst against the remote's refs, a tag of that name included.
+    if (dst === undefined ? own.mapped : dst !== names[1]) return false;
+    if (src === "HEAD") head = true;
+    else if (!names.includes(src)) return false;
+  }
+  if (!head) return true;
+  const branch = branchOf(dir, input);
+  return typeof branch === "string" ? branch === own.branch : branch;
+}
+
 // A commit is local and reversible, so it runs in every repo with a warning; only
 // a push publishes. Read-only roles and background Shep never commit.
 function decideCommit(input: GuardInput): GuardDecision {
@@ -2148,7 +2283,12 @@ function decideGit(git: GitCall, input: GuardInput): GuardDecision {
   if (hasNoVerify(sub, args) && ["commit", "push", "merge", "rebase"].includes(sub)) return block(noVerify);
   const risky = git.config.find((key) => riskyConfig.test(key)) ?? (sub === "config" ? configWrite(args) : undefined);
   if (risky) return configBlock(risky);
-  if (sub === "push") return decidePush(args, git.dir, input, undefined, approvable(git, input));
+  if (sub === "push") {
+    // A desk's own-branch push is plain: no -c or other global option, not even a -C,
+    // whose folder git may reach through a link the guard reads by name only.
+    const here = git.global.length === 0 ? input : { ...input, deskBranch: undefined };
+    return decidePush(args, git.dir, here, undefined, approvable(git, input));
+  }
   if (sub === "tag" && tagWrites(args)) return decideRelease(git.dir, input);
   if (sub === "commit") return decideCommit(input);
   if (gitWrite(sub, args)) {
@@ -2538,6 +2678,8 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   const configEdit = configCommands(command).some((words) => editsConfig(commandWords(words)));
   if (configEdit && !(depth === 0 && dryConfigRun(command, input)))
     decision = input.role === "shep" ? ask(configEditAsk) : block(configEditRefused);
+  if (configCommands(command).some((words) => answersDesk(commandWords(words))))
+    decision = worse(decision, decideDeskAnswer(command, input, depth));
   // Each dir the shell may be in; git and forges use it only when there is one.
   let cwds = input.cwds ?? [input.cwd];
   const cwdOf = () => (cwds.length === 1 ? cwds[0] : undefined);
@@ -2759,6 +2901,69 @@ export function decideTool(
   return allow;
 }
 
+// A desk's own branch, for its pushes: the last handoff record naming this terminal gives
+// its worktree and branch. None for no record, a branch that is the trunk (main, master,
+// the default branch origin's server names) or a default it cannot read, a name git resolves
+// to another ref, git config that makes a push send more (tags, submodules, a mirror), or a
+// push URL that is not origin's one fetch URL. mapped: git may send a refspec with no :dst elsewhere, by push.default upstream or a
+// remote.origin.push. Read on each push: config and the server's default may change.
+async function deskBranchAt(
+  pi: ExtensionAPI,
+  desk: string,
+  cwd: string,
+  signal: AbortSignal | undefined,
+): Promise<GuardInput["deskBranch"]> {
+  let lines: string[];
+  try {
+    lines = readFileSync(join(stateDir(), "handoffs.jsonl"), "utf8").split("\n");
+  } catch {
+    return undefined;
+  }
+  let record: { path?: unknown; branch?: unknown } | undefined;
+  for (let i = lines.length - 1; i >= 0 && !record; i--) {
+    try {
+      const line = JSON.parse(lines[i]);
+      if (line?.desk === desk) record = line;
+    } catch {}
+  }
+  const { path, branch } = record ?? {};
+  // Its worktree is where the push runs, before git reads anything there or at origin.
+  if (path !== cwd || !isAbsolute(path) || typeof branch !== "string" || !branch || isMainRef(branch)) return undefined;
+  try {
+    const git = (...args: string[]) => pi.exec("git", ["-C", path, ...args], { timeout: 5000, signal });
+    // One place it pushes to, the one ls-remote reads origin's default from below.
+    // Byte for byte but git's last newline: a path may end in a space.
+    // Pi decodes output as UTF-8, so a path that is not decodes lossily: then it cannot tell.
+    const fetch = await git("remote", "get-url", "--all", "origin");
+    const push = await git("remote", "get-url", "--push", "--all", "origin");
+    const url = fetch.stdout.replace(/\n$/, "");
+    if (fetch.code !== 0 || push.code !== 0 || !url || /[\n\uFFFD]/.test(url) || push.stdout.replace(/\n$/, "") !== url)
+      return undefined;
+    // The branch's own name resolves to the branch, not a tag or other ref git looks up first.
+    const full = await git("rev-parse", "--symbolic-full-name", branch);
+    if (full.code !== 0 || full.stdout.trim() !== `refs/heads/${branch}`) return undefined;
+    const config = await git(
+      "config",
+      "--get-regexp",
+      "^(push\\.(default|followtags|recursesubmodules)|remote\\.origin\\.(push|mirror)|submodule\\.recurse)$",
+    );
+    if (config.code !== 0 && config.code !== 1) return undefined;
+    const lines = config.stdout.split("\n").map((line) => line.trim().toLowerCase());
+    const more = /^(push\.followtags|push\.recursesubmodules|remote\.origin\.mirror|submodule\.recurse)( |$)/;
+    if (lines.some((line) => more.test(line) && !/ (false|no|off|0|check)$/.test(line))) return undefined;
+    const mapped = lines.some(
+      (line) => line.startsWith("remote.origin.push ") || /^push\.default (upstream|tracking)$/.test(line),
+    );
+    // The server's default branch, not the copy a fetch left in refs/remotes/origin/HEAD.
+    const head = await git("ls-remote", "--symref", "origin", "HEAD");
+    const remoteHead = /^ref: (refs\/heads\/\S+)\tHEAD$/m.exec(head.stdout)?.[1];
+    if (head.code !== 0 || !remoteHead || remoteHead === `refs/heads/${branch}`) return undefined;
+    return { path, branch, mapped };
+  } catch {
+    return undefined;
+  }
+}
+
 async function branchAt(pi: ExtensionAPI, dir: string, signal: AbortSignal | undefined): Promise<string> {
   try {
     const result = await pi.exec("git", ["-C", dir, "rev-parse", "--abbrev-ref", "HEAD"], { timeout: 5000, signal });
@@ -2865,8 +3070,10 @@ export function stateDir(): string {
 }
 
 // URL credentials never reach the log.
+const redactUrls = (text: string) => text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1***@");
+
 export function redact(command: string): string {
-  const clean = command.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1***@");
+  const clean = redactUrls(command);
   return clean.length > 500 ? `${clean.slice(0, 500)}…` : clean;
 }
 
@@ -3014,6 +3221,8 @@ export type GuardOp =
 export type GuardFacts =
   // A config.toml edit: the lines its --dry-run adds and removes.
   | { kind: "command"; dir: string; argv: string[]; diff: string }
+  // A desk answer's Yes, in the desk's worktree: what its --dry-run says it answers.
+  | { kind: "command"; dir: string; argv: string[]; answer: string }
   | { kind: "cleanup"; worktree: string; branch: string | null; head: string }
   // The gone checkout's path as its handoffs name it, their one repo, the last one's branch,
   // and how many there are.
@@ -3152,6 +3361,9 @@ export function guardOperation(command: string, cwd: string | undefined, home: s
     if (dir === undefined) return "its --repo names no one folder";
     return { kind: "trail merge", dir, trail: change ?? job[1], job: words[3] };
   }
+  // A desk answer's Yes goes to a card only in its one shape; a No or a --dry-run runs unasked.
+  if (answersDesk(words) && !deskYes(words) && !deskAnswerArgs(words)?.dry && deskAnswerArgs(words)?.answer !== "no")
+    return "a desk answer's Yes is handed off only as bercail desk answer DESK yes --prompt ID";
   if (basename(words[0]) === "git") {
     let i = 1;
     if (words[1] === "-C") {
@@ -3412,6 +3624,7 @@ export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<G
   if (op.kind === "cleanup" && op.gone) return pinGone(read, op.path);
   // Its folder by its real path, so a symlink moved later cannot send it elsewhere.
   if (op.kind === "command" && editsConfig(op.argv)) return pinConfigEdit(read, realpathSync(op.dir), op.argv);
+  if (op.kind === "command" && answersDesk(op.argv)) return pinDeskAnswer(read, op.dir, op.argv);
   if (op.kind === "command") return { kind: "command", dir: realpathSync(op.dir), argv: op.argv };
   if (op.kind === "cleanup") {
     const worktree = realpathSync(op.path);
@@ -3452,6 +3665,20 @@ async function pinConfigEdit(read: Read, dir: string, words: string[]) {
   const diff = lines.length ? lines.join("\n") : shown;
   const argv = [bin, ...words.slice(1), "--expect", createHash("sha256").update(diff).digest("hex")];
   return { kind: "command" as const, dir, argv, diff };
+}
+
+// A desk answer's Yes, run by bercail itself in the desk's worktree: the prompt as its
+// --dry-run reads it now, which the card shows. The worker pins it again while the card
+// waits and before it runs, so a prompt that closed or changed withdraws the card.
+async function pinDeskAnswer(read: Read, dir: string, words: string[]) {
+  if (!deskYes(words)) fail("a desk answer's Yes is handed off only as bercail desk answer DESK yes --prompt ID");
+  const bin = process.env.BERCAIL_BIN || "bercail";
+  const prompt = JSON.parse(await read(bin, ["desk", "prompt", words[3]], dir)) as { id?: unknown; cwd?: unknown };
+  if (prompt.id !== words[6] || typeof prompt.cwd !== "string" || !isAbsolute(prompt.cwd))
+    fail(`desk ${words[3]} has another prompt waiting now, or none`);
+  const desk = realpathSync(prompt.cwd);
+  const answer = await read(bin, [...words.slice(1), "--dry-run"], desk);
+  return { kind: "command" as const, dir: desk, argv: [bin, ...words.slice(1)], answer };
 }
 
 // The fixed argv the worker runs, and where: never the text Shep wrote. A push goes
@@ -3969,6 +4196,142 @@ export async function withoutCard(facts: GuardFacts, read: Read = readOut): Prom
   }
 }
 
+/** A desk's guard prompt while it waits, which bercail desk prompt shows and desk answer answers. */
+export type DeskPrompt = {
+  v: 1;
+  id: string;
+  address: string;
+  pid: number;
+  session: string;
+  cwd: string;
+  tool: string;
+  command: string;
+  reason: string;
+  at: string;
+};
+export type DeskAnswer = { id: string; answer: "yes" | "no"; reason: string };
+
+// desk-prompts/<address>.json: the prompt; .answer.json: bercail desk answer's, with its
+// writer's nonce; .done-<nonce>.json: the guard's receipt for that writer's answer.
+export const deskPrompts = () => join(stateDir(), "desk-prompts");
+const answerPoll = () => Number(process.env.BERCAIL_DESK_ANSWER_POLL_MS) || 500;
+
+function writeWhole(path: string, text: string): void {
+  const tmp = `${path}.tmp-${process.pid}`;
+  writeFileSync(tmp, `${text}\n`, { mode: 0o600 });
+  renameSync(tmp, path);
+}
+
+// The answer file, taken once: renamed before it is read, so no reader finds it twice.
+// undefined: none; null: one that does not parse.
+function takeAnswer(base: string): unknown {
+  const taken = `${base}.answer.taken-${process.pid}`;
+  try {
+    renameSync(`${base}.answer.json`, taken);
+  } catch {
+    return undefined;
+  }
+  try {
+    return JSON.parse(readFileSync(taken, "utf8"));
+  } catch {
+    return null;
+  } finally {
+    rmSync(taken, { force: true });
+  }
+}
+
+function answerFor(got: unknown, id: string): DeskAnswer | string {
+  const a = got as Partial<DeskAnswer> | null;
+  if (!a || typeof a !== "object" || a.id !== id) return "it answers another prompt";
+  if ((a.answer !== "yes" && a.answer !== "no") || typeof a.reason !== "string") return "it is not yes or no";
+  if (a.answer === "no" && !a.reason.trim()) return "a no gives its reason";
+  return { id, answer: a.answer, reason: a.reason };
+}
+
+// The person's confirm, raced with an answer from outside the desk (bercail desk answer).
+// The first settles it. The confirm resolving clears the poll in the same run of microtasks,
+// before its next tick; an answer taken first gets its receipt, then closes the confirm.
+// With nowhere to publish the prompt, the person alone answers.
+export async function confirmOrAnswer(
+  confirm: (title: string, message: string, opts?: { signal?: AbortSignal }) => Promise<boolean>,
+  title: string,
+  prompt: DeskPrompt,
+): Promise<{ yes: boolean; answer?: DeskAnswer }> {
+  const base = join(deskPrompts(), prompt.address);
+  try {
+    mkdirSync(deskPrompts(), { recursive: true, mode: 0o700 });
+    writeWhole(`${base}.json`, JSON.stringify(prompt));
+  } catch {
+    return { yes: await confirm(title, prompt.reason) };
+  }
+  const controller = new AbortController();
+  let answer: DeskAnswer | undefined;
+  const poll = setInterval(() => {
+    if (answer) return;
+    const got = takeAnswer(base);
+    if (got === undefined) return;
+    const { id = null, nonce } = (got ?? {}) as { id?: unknown; nonce?: unknown };
+    // No nonce, no receipt its writer can find: it is dropped, and nothing is answered.
+    if (typeof nonce !== "string" || !/^[0-9a-f]{32}$/.test(nonce)) return;
+    const read = answerFor(got, prompt.id);
+    const at = new Date().toISOString();
+    try {
+      writeWhole(
+        `${base}.done-${nonce}.json`,
+        JSON.stringify(
+          typeof read === "string"
+            ? { id, nonce, status: "refused", why: read, at }
+            : { id, nonce, status: "taken", answer: read.answer, at },
+        ),
+      );
+    } catch {
+      // Its writer could not learn what came of it: act on nothing.
+      return;
+    }
+    if (typeof read === "string") return;
+    answer = read;
+    controller.abort();
+  }, answerPoll());
+  try {
+    const yes = await confirm(title, prompt.reason, { signal: controller.signal });
+    return answer ? { yes: answer.answer === "yes", answer } : { yes };
+  } finally {
+    clearInterval(poll);
+    try {
+      if (JSON.parse(readFileSync(`${base}.json`, "utf8")).id === prompt.id) rmSync(`${base}.json`, { force: true });
+    } catch {}
+  }
+}
+
+// What a desk's lead publishes while it asks: only a desk (role "" in a named terminal) has
+// a prompt bercail desk answer can reach.
+function deskPromptOf(
+  role: string,
+  ctx: { cwd: string; sessionManager?: { getSessionId?: () => string } },
+  tool: string,
+  command: string,
+  reason: string,
+): DeskPrompt | undefined {
+  const address = process.env.HC_TERMINAL_ID ?? "";
+  if (role !== "" || !/^[\w.-]+$/.test(address)) return undefined;
+  return {
+    v: 1,
+    id: randomUUID(),
+    address,
+    pid: process.pid,
+    session: ctx.sessionManager?.getSessionId?.() ?? "",
+    cwd: ctx.cwd,
+    tool,
+    // Whole, so a card for its Yes shows all of what runs; desk answer cuts what it logs.
+    command: redactUrls(command),
+    reason: redactUrls(reason),
+    at: new Date().toISOString(),
+  };
+}
+
+const answeredYes =
+  "This prompt was answered Yes from outside the desk (bercail desk answer), on the person's Allow on a Decisions card or from their terminal. Say so in your report.";
+
 const policySection = "bercail_git_policy";
 
 const toolCallsOf = (message: { content?: unknown } | undefined): { id: string }[] =>
@@ -4005,13 +4368,16 @@ export default function (pi: ExtensionAPI) {
     // The one bercail config set writes, wherever BERCAIL_CONFIG or XDG_CONFIG_HOME point.
     join(home ?? "", ".config/bercail/config.toml"),
     join(stateDir(), "policy-trust.json"),
+    // The handoff records: a desk pushes the branch its own names without asking.
+    join(stateDir(), "handoffs.jsonl"),
     // Shep's question ledger: an answered question in it is the person's pick.
     join(stateDir(), "shep/questions.json"),
     join(stateDir(), "shep/questions.lock"),
     config,
   ];
   // Shep's state: its ledger, inbox and sessions; and the guard's tickets for Shep's asks.
-  const protectedDirs = [join(stateDir(), "shep"), guardAsks()];
+  // And a desk's guard prompts and their answers.
+  const protectedDirs = [join(stateDir(), "shep"), guardAsks(), deskPrompts()];
   // Not one of the guard's: a target decides where Shep writes, not what runs.
   const todoFiles = [join(dirname(config), "todo.json")];
 
@@ -4066,6 +4432,12 @@ export default function (pi: ExtensionAPI) {
     const command = event.toolName === "bash" ? String(input.command ?? "") : undefined;
     const notAlone = whyNotAlone(event, counts);
     const json = await startJson(ctx.cwd);
+    const desk = process.env.HC_TERMINAL_ID;
+    // Only for a command that could take the own-branch push: no remote read for any other.
+    const deskBranch =
+      (process.env.BERCAIL_ROLE ?? "") === "" && desk && notAlone === undefined && command && mayPushOwn(command)
+        ? await deskBranchAt(pi, desk, ctx.cwd, ctx.signal)
+        : undefined;
     let guardInput: GuardInput = {
       role: process.env.BERCAIL_ROLE ?? "",
       hasUI: ctx.hasUI,
@@ -4083,6 +4455,7 @@ export default function (pi: ExtensionAPI) {
       },
       tmpdir: process.env.TMPDIR && resolve(process.env.TMPDIR) !== "/tmp" ? process.env.TMPDIR : undefined,
       alone: notAlone === undefined,
+      ...(deskBranch ? { deskBranch } : {}),
     };
     const live = await decideLive(event.toolName, command, guardInput, input.path, {
       branch: (dir) => branchAt(pi, dir, ctx.signal),
@@ -4122,8 +4495,19 @@ export default function (pi: ExtensionAPI) {
     };
     if (decision.action === "ask") {
       if (!ctx.hasUI) return refuse(headless);
-      if (!(await ctx.ui.confirm("Allow this command?", decision.reason)))
-        return refuse(`The person said no to: ${decision.reason} Leave it for them.`);
+      const prompt = deskPromptOf(guardInput.role, ctx, event.toolName, logged, decision.reason);
+      const asked = prompt
+        ? await confirmOrAnswer(ctx.ui.confirm.bind(ctx.ui), "Allow this command?", prompt)
+        : { yes: await ctx.ui.confirm("Allow this command?", decision.reason) };
+      if (asked.answer?.answer === "no")
+        return refuse(
+          `Answered No from outside the desk (bercail desk answer): ${redactUrls(asked.answer.reason)} It asked: ${redactUrls(decision.reason)} Leave it for the person.`,
+        );
+      if (!asked.yes) return refuse(`The person said no to: ${decision.reason} Leave it for them.`);
+      if (asked.answer) {
+        logApproval(logged, [answeredYes], guardInput);
+        decision = { ...decision, warnings: [...(decision.warnings ?? []), answeredYes] };
+      }
     } else if (decision.action === "allow") {
       if (decision.approved?.length) logApproval(logged, decision.approved, guardInput);
     } else if (decision.action === "block") {

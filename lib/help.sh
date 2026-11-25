@@ -18,7 +18,9 @@ Post-install CLI (bercail):
   config        A config.toml value as bercail reads it: config get <section> <key> |
                 set <section> <key> <value> | unset <section> <key> [--dry-run] (change that key alone, and print the diff)
   desk          Desk agents: restore [--dry-run] (bring back what a reboot took) |
-                model DESK PROVIDER/MODEL[:thinking] (switch a live desk's model)
+                model DESK PROVIDER/MODEL[:thinking] (switch a live desk's model) |
+                prompt DESK (the guard prompt it waits on, as JSON) |
+                answer DESK yes|no --prompt ID [--reason TEXT] [--dry-run] (answer that prompt; no needs a reason)
   update        Re-sync configs, Herdr layout and mod, helper, and skills (a client: the
                 Herdr layout, mods and keys, and the CLI; from a clone, only a clean
                 checkout of the latest release, or BERCAIL_REF=<tag>|HEAD); then names each
