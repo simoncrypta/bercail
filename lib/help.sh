@@ -93,7 +93,9 @@ Post-install CLI (bercail):
                 describe check, commits the staged tree with its text, and starts a
                 background wait for the commit's CI that ends in one land event in Shep's
                 inbox (ready, failed, moved or timeout); in an Entire repo no wait, as the
-                trail's gates decide. It never pushes; desks are refused, and so, where the
+                trail's gates decide. It never pushes. Use its printed refspec: for a direct
+                land in bercail's own GitHub repo the full CI must pass on a land-only ref.
+                Desks are refused, and so, where the
                 policy says integrate = "direct", is a trunk that moved past HEAD, before
                 any commit (the desk reruns /validate); a PR branch gets a warning.
                 land ask WORKTREE puts up one land card where the repo's trusted policy says

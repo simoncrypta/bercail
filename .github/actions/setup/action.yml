@@ -1,7 +1,8 @@
 name: Setup
 description: >-
   The setup the CI jobs share, after checkout: Node with the npm devDependencies
-  (bats, vite-plus), then the pinned mise tools the job names.
+  (bats, vite-plus), then the pinned mise tools the job names, and what the bats
+  suite needs besides.
 
 inputs:
   tools:
@@ -9,6 +10,13 @@ inputs:
       mise tool specs, space-separated, installed with `mise use -g` the way
       bercail installs them for users (lib/deps.sh). Empty: no mise.
     default: ''
+  bats:
+    description: >-
+      'true' when the job runs .bats files with GNU parallel.
+    default: 'false'
+  statechart:
+    description: Install tla-ts for the statechart suite.
+    default: 'false'
 
 runs:
   using: composite
@@ -44,3 +52,19 @@ runs:
         # Unquoted on purpose: one argument per tool spec.
         # shellcheck disable=SC2086
         mise use -g $TOOLS
+    # With GNU parallel, tests/run.sh spreads tests over two jobs per core;
+    # without it, it falls back to one bats run per file. The runner image
+    # ships it; fail here if that changes.
+    - if: inputs.bats == 'true'
+      shell: bash
+      run: command -v parallel
+    # tla-ts, from bercail's lockfile as lib/deps.sh installs it, for the test
+    # that runs the Shep inbox's check.sh (tests/statechart.bats). No Java.
+    - if: inputs.statechart == 'true'
+      shell: bash
+      run: |
+        d="$RUNNER_TEMP/statechart"
+        mkdir -p "$d"
+        cp lib/statechart/package.json lib/statechart/package-lock.json "$d/"
+        npm ci --prefix "$d" --ignore-scripts --omit=dev --no-audit --no-fund --no-update-notifier
+        echo "TLA_TS=$d/node_modules/tla-ts/dist/cli.js" >>"$GITHUB_ENV"

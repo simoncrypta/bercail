@@ -19,12 +19,9 @@ all_items() {
   printf '%s\n' tests/*.bats vitest
 }
 
-# The tests a changed path needs, when that is less than everything: the docs
-# and prose no code reads, and the few docs a test reads, each with its
-# readers. Kept by hand and short on purpose: code reaches other code through
-# functions and `bercail <command>` calls a name cannot show (land runs
-# describe stamp), so any other path runs everything. Prints nothing for a
-# path that needs no test, and fails for one that needs everything.
+# Reviewed readers, including indirect CLI calls (e.g. a land runs cleanup).
+# Don't guess from matching filenames: unknown paths and shared helpers need
+# the full suite. A .bats file is a standalone suite, not a shared .bash file.
 readers() {
   case "$1" in
     docs/config.md) printf '%s\n' tests/layout_config.bats tests/desk_mod.bats ;;
@@ -32,6 +29,21 @@ readers() {
     docs/keys.md) printf '%s\n' tests/spaces_mod.bats ;;
     docs/shep.md) printf '%s\n' vitest ;;
     docs/*.md | AGENTS.md | LICENSE) ;;
+    tests/*.bats)
+      [[ "$1" =~ ^tests/[[:alnum:]_]+\.bats$ && -f "$1" ]] || return 1
+      printf '%s\n' "$1" ;;
+    tests/*.test.ts) [[ -f "$1" ]] || return 1; printf '%s\n' vitest ;;
+    skills/handoff/scripts/handoff-spawn)
+      printf '%s\n' tests/{bstack,handoff_beads,handoff_spawn,skills_deploy,usage_limit_reason,worktrunk_live}.bats ;;
+    skills/handoff/SKILL.md) printf '%s\n' tests/{doctor_stale,skills_deploy}.bats ;;
+    lib/routine/cleanup.sh | lib/routine/deps.sh | lib/routine/mistakes.sh | lib/routine/rules.sh)
+      local name="${1##*/}"
+      printf '%s\n' tests/routine.bats "tests/routine_${name%.sh}.bats" ;;
+    lib/cleanup.sh)
+      printf '%s\n' tests/{cleanup,routine_cleanup,shep_task,trail_jobs,land_card,land_card_stops}.bats ;;
+    lib/shep-task.ts) printf '%s\n' tests/{shep,shep_task,trail_jobs}.bats vitest ;;
+    lib/shep-context.sh) printf '%s\n' tests/{shep,shep_context,todo,trail_jobs,routine_rules,routine_mistakes,routine_cleanup,routine_deps}.bats vitest ;;
+    shep/SHEP.md | shep/pi/compaction.ts) printf '%s\n' tests/shep.bats vitest ;;
     *) return 1 ;;
   esac
 }

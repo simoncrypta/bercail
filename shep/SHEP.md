@@ -562,7 +562,9 @@ and `--issue` when there is one, and say so in one line with its link:
   (none with git backend `entire`: the trail's gates decide, below). On trunk or detached HEAD,
   stop and identify the desk branch. If the waiter could not start after
   the commit, rerun `bercail land` on the same worktree.
-- Push the named branch for CI. Where land started a waiter, only its `land`
+- For CI, use the exact refspec `bercail land` prints. For a direct land in
+  bercail's own GitHub repo that is a land-only ref, not the work branch.
+  Where land started a waiter, only its `land`
   event with `ready` lets you push to trunk, or open the PR or trail the
   policy names, and only for its exact commit. With git backend `entire` no
   event comes: link that commit's branch to its trail and let its gates

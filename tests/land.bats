@@ -27,12 +27,25 @@ shift
 "$@" >>"$LOG" 2>&1 || exit 1
 printf '{"address":"t1","name":"land-x"}\n'
 EOF
-  # gh: run list prints $RUNS, and logs what it was asked.
+  # gh: run list prints the runs in $RUNS that match its --branch and --workflow
+  # (a run with no branch matches any), with the commit and branch asked for
+  # unless the run names its own, and logs what it was asked.
   cat >"$BATS_TEST_TMPDIR/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 printf 'gh %s\n' "$*" >>"$LOG"
 [[ "$1 $2" == "run list" ]] || exit 1
-cat "$RUNS"
+branch="" workflow="" commit=""
+while (($#)); do
+  case "$1" in
+    --commit) commit="$2" ;;
+    --branch) branch="$2" ;;
+    --workflow) workflow="$2" ;;
+  esac
+  shift
+done
+jq --arg b "$branch" --arg w "$workflow" --arg c "$commit" \
+  'if type == "array" then map(select((.branch == "" or .branch == $b) and ($w == "" or .workflow == $w))
+    | .headBranch = (.headBranch // $b) | .headSha = (.headSha // $c)) else . end' "$RUNS"
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/"*
   INBOX="$XDG_STATE_HOME/bercail/shep/inbox"
@@ -57,13 +70,16 @@ described() {
   "$ROOT/bin/bercail" describe stamp >/dev/null || fail "stamp"
 }
 
-# CI runs for the commit, one per argument: name:status:conclusion.
+# CI runs for the commit, one per argument:
+# name:status:conclusion[:workflow file[:branch[:headBranch:headSha]]].
 runs() {
   local spec
   for spec in "$@"; do
-    IFS=: read -r name status conclusion <<<"$spec"
-    jq -nc --arg n "$name" --arg s "$status" --arg c "$conclusion" \
-      '{databaseId: 1, name: $n, status: $s, conclusion: $c, url: "https://github.com/o/r/actions/runs/1"}'
+    IFS=: read -r name status conclusion workflow branch head_branch head_sha <<<"$spec"
+    jq -nc --arg n "$name" --arg s "$status" --arg c "$conclusion" --arg w "$workflow" --arg b "$branch" \
+      --arg hb "$head_branch" --arg hs "$head_sha" '
+      {databaseId: 1, attempt: 1, name: $n, status: $s, conclusion: $c, workflow: $w, branch: $b, url: "https://github.com/o/r/actions/runs/1"}
+      + (if $hs == "" then {} else {headBranch: $hb, headSha: $hs} end)'
   done | jq -s . >"$RUNS"
 }
 
@@ -72,6 +88,17 @@ direct() {
   mkdir -p .bercail
   printf 'integrate = "direct"\n' >.bercail/policy.toml
   git add -f .bercail/policy.toml && git commit -qm policy
+}
+
+# bercail's own repo landing straight to its trunk: integrate direct, origin
+# pushes to bercail's GitHub repo, and its ci.yml on the trunk.
+gated() {
+  mkdir -p .bercail .github/workflows
+  printf 'integrate = "direct"\n' >.bercail/policy.toml
+  printf 'name: CI\non: push\n' >.github/workflows/ci.yml
+  git add -f .bercail/policy.toml .github/workflows/ci.yml && git commit -qm gated
+  git branch -f main HEAD
+  git remote add origin "${1:-https://github.com/simoncrypta/bercail.git}"
 }
 
 # The one event in Shep's inbox.
@@ -330,4 +357,145 @@ GIT
   [[ "$output" == *"no new commit"* ]] || fail "$output"
   [ "$(git rev-parse HEAD)" = "$head" ] || fail "a second commit was made"
   jq -e '.land.status == "ready"' <<<"$(event)" >/dev/null || fail "no ready event on the rerun"
+}
+
+@test "in bercail's own direct repo, land prints a push of the exact commit to its own land ref and waits for ci.yml there" {
+  gated
+  described
+  runs CI:completed:success:ci.yml
+  run land "$REPO"
+  [ "$status" -eq 0 ] || fail "land: $output"
+  sha="$(git rev-parse HEAD)"
+  ref="bercail-land/feature/$sha"
+  [[ "$output" == *"git -C $REPO push origin $sha^{commit}:refs/heads/$ref"* ]] || fail "no land ref push: $output"
+  [[ "$output" != *"push origin feature"* ]] || fail "told to push the work branch: $output"
+  grep -q -- "land --wait $sha --full feature $REPO" "$LOG" || fail "the wait is not pinned: $(cat "$LOG")"
+  grep -q "gh run list --repo github.com/simoncrypta/bercail --commit $sha --branch $ref --event push" "$LOG" || fail "all runs not read on the land ref: $(cat "$LOG")"
+  grep -q "gh run list --repo github.com/simoncrypta/bercail --workflow ci.yml --commit $sha --branch $ref --event push" "$LOG" || fail "ci.yml not read on the land ref: $(cat "$LOG")"
+  ! grep -q -- "--branch feature" "$LOG" || fail "read the work branch's runs: $(cat "$LOG")"
+  ev="$(event)" || return 1
+  jq -e --arg sha "$sha" '.land.status == "ready" and .land.head == $sha and .land.branch == "feature"' <<<"$ev" >/dev/null || fail "event: $ev"
+}
+
+@test "in bercail's own direct repo, only ci.yml passing on the land ref is ready: not the work branch's subset, another workflow, a run of another commit or branch, or ci.yml absent, queued or red" {
+  gated
+  git commit -q --allow-empty -m change
+  sha="$(git rev-parse HEAD)"
+  ref="bercail-land/feature/$sha"
+  for spec in "timeout CI:completed:success:ci.yml:feature" \
+    "timeout Deps:completed:success:deps.yml:$ref" \
+    "timeout CI:completed:success:other.yml:$ref" \
+    "timeout Deps:completed:success:deps.yml:$ref CI:queued::ci.yml:$ref" \
+    "timeout CI:completed:success:ci.yml:$ref:$ref:$(git rev-parse HEAD^)" \
+    "timeout CI:completed:success:ci.yml:$ref:feature:$sha" \
+    "failed Deps:completed:success:deps.yml:$ref CI:completed:failure:ci.yml:$ref"; do
+    rm -f "$INBOX"/*.json
+    want="${spec%% *}"
+    # shellcheck disable=SC2086 # one run per word
+    runs ${spec#* }
+    run land --wait "$sha" --full feature "$REPO"
+    [ "$status" -eq 0 ] || fail "$spec wait: $output"
+    ev="$(event)" || return 1
+    jq -e --arg want "$want" '.land.status == $want' <<<"$ev" >/dev/null || fail "$spec: $ev"
+  done
+  # A branch that moved past the green commit is moved, as on the branch wait.
+  rm -f "$INBOX"/*.json
+  runs "CI:completed:success:ci.yml:$ref"
+  git commit -q --allow-empty -m later
+  run land --wait "$sha" --full feature "$REPO"
+  jq -e '.land.status == "moved"' <<<"$(event)" >/dev/null || fail "moved: $(event)"
+}
+
+@test "in bercail's own direct repo, a candidate that deletes ci.yml or says integrate = pr still waits for ci.yml on its land ref" {
+  gated
+  # The desk's own copy of the policy, in a worktree of its own.
+  git checkout -q main
+  git worktree add -q "$BATS_TEST_TMPDIR/desk" feature
+  cd "$BATS_TEST_TMPDIR/desk" || return 1
+  git rm -q .github/workflows/ci.yml
+  printf 'integrate = "pr"\n' >.bercail/policy.toml
+  git add -f .bercail/policy.toml
+  described
+  runs Deps:completed:success:deps.yml
+  run land "$BATS_TEST_TMPDIR/desk"
+  [ "$status" -eq 0 ] || fail "land: $output"
+  [[ "$output" == *"push origin $(git rev-parse HEAD)^{commit}:refs/heads/bercail-land/feature/"* ]] || fail "no land ref push: $output"
+  jq -e '.land.status == "timeout"' <<<"$(event)" >/dev/null || fail "not gated on ci.yml: $(event)"
+}
+
+@test "in bercail's own direct repo, a wait without --full is refused, never an ordinary green; --full anywhere else is refused" {
+  gated
+  git commit -q --allow-empty -m change
+  sha="$(git rev-parse HEAD)"
+  runs CI:completed:success
+  run land --wait "$sha" "$REPO"
+  [ "$status" -ne 0 ] || fail "waited on the work branch: $output"
+  [[ "$output" == *"--full"* ]] || fail "$output"
+  for args in "--full ../x" "--full -x" "--full"; do
+    # shellcheck disable=SC2086 # the options as words
+    run land --wait "$sha" $args "$REPO"
+    [ "$status" -ne 0 ] || fail "took $args: $output"
+  done
+  run land --full feature "$REPO"
+  [ "$status" -ne 0 ] || fail "took --full without --wait: $output"
+  git remote set-url origin https://github.com/acme/widgets.git
+  run land --wait "$sha" --full feature "$REPO"
+  [ "$status" -ne 0 ] || fail "took --full in another repo: $output"
+  [[ -z "$(ls -A "$INBOX")" ]] || fail "an event: $(ls -A "$INBOX")"
+  ! grep -q '^gh ' "$LOG" || fail "gh was asked: $(cat "$LOG")"
+}
+
+@test "another direct repo, or bercail fetched from but pushed elsewhere, keeps the branch wait" {
+  for remote in https://github.com/acme/widgets.git fork; do
+    git reset -q --hard "$(git rev-list --max-parents=0 HEAD)"
+    git remote remove origin 2>/dev/null || true
+    rm -f "$INBOX"/*.json
+    : >"$LOG"
+    if [[ "$remote" == fork ]]; then
+      gated
+      git remote set-url --push origin git@github.com:someone/bercail.git
+    else
+      gated "$remote"
+    fi
+    described
+    runs CI:completed:success
+    run land "$REPO"
+    [ "$status" -eq 0 ] || fail "$remote land: $output"
+    [[ "$output" == *"git -C $REPO push origin feature"* && "$output" != *bercail-land* ]] || fail "$remote: $output"
+    ! grep -q -- "--workflow\|--repo" "$LOG" || fail "$remote gated: $(cat "$LOG")"
+    jq -e '.land.status == "ready"' <<<"$(event)" >/dev/null || fail "$remote: $(event)"
+  done
+}
+
+@test "an origin that pushes to bercail and to another URL is refused before any commit, never a branch wait" {
+  gated git@github.com:simoncrypta/bercail
+  git remote set-url --add --push origin git@github.com:simoncrypta/bercail
+  git remote set-url --add --push origin https://example.com/mirror.git
+  described
+  head="$(git rev-parse HEAD)"
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "landed: $output"
+  [[ "$output" == *"origin pushes to 2 URLs"*"nothing was committed"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "a commit was made"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "where git cannot read origin's push URL, land refuses before any commit, never a branch wait" {
+  gated
+  described
+  head="$(git rev-parse HEAD)"
+  cat >"$BATS_TEST_TMPDIR/bin/git" <<'GIT'
+#!/usr/bin/env bash
+[[ "$*" != *"remote get-url --push"* ]] || { echo "fatal: bad config line 9" >&2; exit 128; }
+exec /usr/bin/git "$@"
+GIT
+  chmod +x "$BATS_TEST_TMPDIR/bin/git"
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "landed: $output"
+  [[ "$output" == *"could not read origin's push URL"*"bad config line 9"*"nothing was committed"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "a commit was made"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+  run land --wait "$head" --full feature "$REPO"
+  [ "$status" -ne 0 ] || fail "waited: $output"
+  [[ -z "$(ls -A "$INBOX")" ]] || fail "an event: $(ls -A "$INBOX")"
 }
