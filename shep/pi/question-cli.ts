@@ -36,9 +36,13 @@ import {
   expireDue,
   openDiscussion,
   pick,
+  reask,
   settle,
   unsettled,
 } from "./discuss.ts";
+
+const rebaseNote = (check: { status: string; rebased?: unknown }) =>
+  check.status === "fresh" && check.rebased ? "fresh (rebased: patch unchanged)" : null;
 
 async function main() {
   const state = process.env.BERCAIL_SHEP_STATE;
@@ -92,7 +96,12 @@ async function main() {
     const check = await checkQuestion(question);
     // A reversible question's door with the policy just read: act on its default only
     // while it is fresh and still two-way.
-    result = question.reversible ? { ...check, door: door(question, () => mergesIn(check)) } : check;
+    const note = rebaseNote(check);
+    result = {
+      ...check,
+      ...(note ? { note } : {}),
+      ...(question.reversible ? { door: door(question, () => mergesIn(check)) } : {}),
+    };
   } else if (op === "push-approval") {
     // The guard's: the answer that approves this push, spent on it.
     const [dir, remote, ...refspecs] = args;
@@ -189,9 +198,12 @@ async function main() {
       // A pick names its choice; the person's OK or Reverse on a default names its
       // outcome, and a Reverse may name another choice. Their Close on any card is
       // here too: like an answer, it is the person's, so the guard blocks it for agents.
+      // So is their Ask again on a stale card, which answers nothing: Shep hears of it.
       const keys = Object.keys(input).sort().join();
       if (keys === "outcome,requestId,source,token" && input.outcome === "closed")
         result = close(state, input.requestId, input.token, input.source);
+      else if (keys === "outcome,requestId,source,token" && input.outcome === "reask")
+        result = await reask(state, input.token, input.source);
       else if (keys === "outcome,requestId,source,token" && ["ok", "reversed"].includes(input.outcome))
         result = await settle(state, input.requestId, input.token, input.outcome, null, input.source);
       else if (keys === "choice,outcome,requestId,source,token" && input.outcome === "reversed")
@@ -200,7 +212,7 @@ async function main() {
         result = await pick(state, input.requestId, input.token, input.choice, input.source);
       else
         throw new Error(
-          'answer fields must be requestId, token, choice and source, or requestId, token, source and outcome "ok", "reversed" (which may add choice) or "closed"',
+          'answer fields must be requestId, token, choice and source, or requestId, token, source and outcome "ok", "reversed" (which may add choice), "closed" or "reask"',
         );
     } else if (op === "reply") {
       if (Object.keys(input).sort().join() !== "answer,requestId,source,token")
@@ -352,11 +364,12 @@ async function panel(store: QuestionStore, state: string) {
       } catch {}
     }
     const { repo, topic, worktree, space, url } = q.target;
+    const note = rebaseNote(check);
     cards.push({
       token: tokenOf(q),
       kind: q.kind,
       prompt: q.prompt,
-      brief: q.brief ?? null,
+      brief: note ? [q.brief, note].filter(Boolean).join("\n") : (q.brief ?? null),
       options: q.options,
       recommendation: q.recommendation ?? null,
       push: q.push ?? null,
@@ -365,7 +378,7 @@ async function panel(store: QuestionStore, state: string) {
       discussed: discussionOf(state, q) !== null,
       createdAt: q.createdAt,
       // A deadline only while it is still a two-way door, with the policy just read.
-      deadline: q.answer || door(q, () => mergesIn(check)).door === "two-way" ? (q.deadline ?? null) : null,
+      deadline: q.answer || (!note && door(q, () => mergesIn(check)).door === "two-way") ? (q.deadline ?? null) : null,
       defaulted: q.answer ? { choice: q.answer.choice, at: q.answer.at } : null,
       reversed: q.settled ? { choice: q.settled.choice, at: q.settled.at } : null,
       target: { repo, topic, worktree, space, url: url ?? null },
@@ -466,7 +479,7 @@ export async function decisions(snapshot: { questions: Question[] }, state: stri
     if (check.status !== "fresh")
       parts.push(check.status + (check.reasons.length ? `: ${cut(check.reasons.join(", "), 80)}` : ""));
     if (unsettled(q)) parts.push(`defaulted to ${cut(q.answer!.choice, 40)}, waits for your OK or Reverse`);
-    else if (q.deadline && door(q, () => mergesIn(check)).door === "two-way") {
+    else if (q.deadline && !rebaseNote(check) && door(q, () => mergesIn(check)).door === "two-way") {
       // The panel's countdown (bercail-shep's countdown()): a card that is not fresh never defaults.
       const ms = Date.parse(q.deadline) - now;
       const min = Math.floor(ms / 60000);

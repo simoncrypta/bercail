@@ -27,6 +27,7 @@
 //   each with Shep's brief and a picker, Shep's recommendation chosen to start with.
 //   A two-way door counts down to its deadline; one that defaulted stays until the person
 //   OKs it, or reverses it and Shep withdraws it. Close takes any card off but a landing one.
+//   Ask again on a stale card tells Shep to refresh it and revise it; it answers nothing.
 // - "discuss": the bar of a Discuss dialog: a read-only Pi on a branch of the session
 //   the question came from (`bercail shep discuss`). props.token is the question.
 // - "routines": the Routines panel under Shep's terminal (`shep-routines`, hidden until
@@ -102,7 +103,7 @@ const ASK = `${BERCAIL_PATH}; exec bercail routine ask "$1" <<<"$2"`;
 const ROUTINES_ID = "shep-routines";
 const DISCUSS_ROLE = "shep-discuss";
 const KEYS_HINT =
-  "↑↓ card · ←→ or 1-9 choice · Enter answers · o OKs a default · r reverses it · x closes a card · d discusses";
+  "↑↓ card · ←→ or 1-9 choice · Enter answers · o OKs a default · r reverses it · x closes a card · a asks again on a stale one · d discusses";
 
 export function find(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -215,7 +216,7 @@ function readBackend() {
 
 // Shared by every copy: the last panel JSON, its error, the load in flight (and whether
 // the ledger changed during it), and the copies waiting to redraw.
-const D = { view: null, error: null, loading: null, again: false, waiters: [], note: null };
+const D = { view: null, error: null, loading: null, again: false, waiters: [], note: null, done: null };
 
 function decisionsChanged() {
   const waiting = D.waiters;
@@ -432,6 +433,11 @@ export const confirmable = (card) => Boolean(card.defaulted) && !card.reversed &
 // A card the person can close: any but a land card whose chain runs, which a close would
 // only hide. Whatever its live check says, so none sits stuck.
 const closable = (card) => !card.landing;
+// A card the person can have Shep ask again: a stale one waiting on their pick, of a kind
+// Shep revises in place (a guard card follows its worker; a land card is made anew). It
+// answers nothing; the backend checks it live and tells Shep once per revision.
+export const reaskable = (card) =>
+  card.status === "stale" && !card.defaulted && !card.landing && ["planning", "review", "action"].includes(card.kind);
 // A guard card's Deny grants nothing, so the ledger takes it with no live check while the
 // card waits (bercail-mdfb): stale, unknown or past its deadline, it is still offered.
 const vetoable = (card) => Boolean(card.guard) && card.options?.includes("Deny");
@@ -1212,6 +1218,7 @@ export default class BercailShep extends View {
       )
       .when(Boolean(D.error), (el) => el.child(say(`Can't read Shep's questions: ${D.error}`, t.blocked)))
       .when(Boolean(D.note), (el) => el.child(say(D.note, t.blocked)))
+      .when(Boolean(D.done), (el) => el.child(say(D.done)))
       .when(!cards.length && !D.error, (el) => el.child(say(D.view ? "Nothing waits on you." : "Loading…")))
       .child(list.children(cards.map((c, i) => this.card(t, c, i === this.sel, i))));
   }
@@ -1243,6 +1250,7 @@ export default class BercailShep extends View {
     else if (k === "o" && c) this.confirm(c, cx);
     else if (k === "r" && c) this.reverse(c, cx);
     else if (k === "x" && c) this.closeCard(c, cx);
+    else if (k === "a" && c) this.reask(c, cx);
     else if (k === "d" && c) this.discuss(c, cx);
     else return;
     cx.stop_propagation();
@@ -1331,6 +1339,16 @@ export default class BercailShep extends View {
               this.discuss(c, cx),
             ),
           )
+          .when(reaskable(c), (el) =>
+            el.child(
+              button(
+                `decision-reask-${c.token}`,
+                this.busy.has(c.token) ? "Asking…" : "Ask again",
+                !this.busy.has(c.token),
+                (_e, cx) => this.reask(c, cx),
+              ),
+            ),
+          )
           .when(closable(c), (el) =>
             el.child(
               button(`decision-close-${c.token}`, "Close", !this.busy.has(c.token), (_e, cx) => this.closeCard(c, cx)),
@@ -1391,9 +1409,20 @@ export default class BercailShep extends View {
     if (closable(c)) this.record(c, { outcome: "closed" }, cx);
   }
 
-  // A pick, an OK, a Reverse or a Close: once per card at a time, recorded on the machine
-  // with the ledger.
-  record(c, fields, cx) {
+  // The person's Ask again on a stale card: Shep hears what changed, and nothing is answered.
+  reask(c, cx) {
+    if (reaskable(c))
+      this.record(
+        c,
+        { outcome: "reask" },
+        cx,
+        "Shep was asked to refresh the card and ask again; this answered nothing.",
+      );
+  }
+
+  // A pick, an OK, a Reverse, a Close or an Ask again: once per card at a time, recorded
+  // on the machine with the ledger. `done`: what the panel says once it is accepted.
+  record(c, fields, cx, done = null) {
     if (this.busy.has(c.token)) return;
     this.busy.add(c.token);
     const input = JSON.stringify({
@@ -1421,6 +1450,7 @@ export default class BercailShep extends View {
           : out?.accepted
             ? null
             : `Not recorded: ${out?.reason ?? "no answer from bercail"}.`;
+      D.done = r.code === 0 && out?.accepted ? done : null;
       this.busy.delete(c.token);
       await loadDecisions();
       cx.notify();

@@ -113,6 +113,7 @@ policy pr_draft
 policy release
 policy agent_may_release
 policy merge_reversible
+policy rebase_keeps_pick
 policy rules
 desk_secrets op_service_account
 routine run

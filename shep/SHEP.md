@@ -392,6 +392,16 @@ For either a picker event or a timeout default, check the event against your
 question state and run `bercail shep question check Qn@rev` again. Report
 its desk warnings. Act once, only while fresh and under every other rule.
 
+- On a reask event, **Ask again** is a refresh request, not a pick. Read that
+  revision and check its stale reasons again. Stop if it is no longer pending
+  or stale. If the base moved, ask the job's verified desk to rebase onto the
+  current base. For a code candidate, wait for the desk's report and a passing
+  `bercail describe check <worktree>`. Recheck the revision before replacing it:
+  if closed, answered or superseded, stop. Otherwise revise with `reviseToken`.
+  Give only the delta in the brief: the new base, any conflicts the desk
+  resolved, and whether the patch changed. Never carry a pick into a revision.
+  Guard and land cards belong to their workers; never recreate their authority
+  with `shep_question`.
 - Never answer or default a question yourself.
 - A default (`default after timeout`) is not the person's choice. Act on it
   once, only while the check is fresh and its `door` two-way, and say it was

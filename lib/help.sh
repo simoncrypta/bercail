@@ -52,7 +52,7 @@ Post-install CLI (bercail):
                   still landing; --all: the whole ledger) |
                 question create|revise|reply|answer|withdraw (JSON on stdin) | get TOKEN (one revision) |
                 check TOKEN | thread TOPIC |
-                panel (the Decisions panel's JSON) | expire (record due defaults and sweep land
+                panel (Decisions JSON; Ask again requests a refresh without answering) | expire (record due defaults and sweep land
                   chains; Shep's runtime runs it) |
                 waiting (the board's Decisions block: the cards and defaults waiting on you) |
                 discuss TOKEN (make or find its branch) | closed TOKEN OPENING |

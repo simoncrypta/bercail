@@ -294,6 +294,34 @@ export function close(state: string, requestId: string, token: string, source: "
   return { question: store.snapshot().questions.find((x) => tokenOf(x) === token)!, accepted: true };
 }
 
+// The kinds Shep can revise in place: a guard card follows its worker, and a land card
+// is made anew from its desk, not revised.
+const REASK_KINDS: Question["kind"][] = ["planning", "review", "action"];
+
+// Only the inbox changes. A retry after Shep claimed the event must not send another.
+export async function reask(state: string, token: string, source: string): Promise<AnswerResult> {
+  const q =
+    new QuestionStore(state).snapshot().questions.find((x) => tokenOf(x) === token) ??
+    fail("unknown question revision");
+  const refused = (reason: string) => ({ question: q, accepted: false, reason });
+  if (source !== PUSH_SOURCE) return refused("only the panel card asks again");
+  if (q.status !== "pending") return refused(`question is ${q.status}`);
+  if (!REASK_KINDS.includes(q.kind)) return refused(`a ${q.kind} card is not asked again`);
+  const check = await checkQuestion(q);
+  if (check.status !== "stale") return refused(`it is ${check.status}: only a stale card is asked again`);
+  const name = `${q.id}-${q.revision}-reask`;
+  if (["inbox", "delivered"].some((dir) => existsSync(join(state, dir, `decision-${name}.json`))))
+    return { question: q, accepted: true };
+  decisionEvent(
+    state,
+    q,
+    name,
+    { choice: null, by: source, decision: { kind: "reask", reasons: check.reasons } },
+    false,
+  );
+  return { question: q, accepted: true };
+}
+
 // What the card was when the person closed it, for Shep: pending, defaulted, or a
 // default they had reversed, whose Reverse event still says what Shep owes.
 function tellClosed(state: string, store: QuestionStore, q: Question) {

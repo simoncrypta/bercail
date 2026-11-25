@@ -620,10 +620,10 @@ if (!all.some((x) => /^asked (2026-11-14 )?\d\d:\d\d$/.test(x)) || !all.some((x)
   fail(`no asked/checked times in ${JSON.stringify(all)}`);
 // Tokens are the ledger's keys, never something to read.
 if (all.some((x) => /Q\d+@\d+/.test(x))) fail(`a token is shown: ${all.filter((x) => /Q\d+@/.test(x))}`);
-// Only the fresh card's choices and answer click; a stale or unknown card discusses or closes only.
+// Only the fresh card's choices and answer click; a stale card discusses, asks again or closes, an unknown one discusses or closes.
 const buttons = els.filter((e) => e.click).map((e) => e.id);
 eq(buttons, ["decision-choice-Q1@1-0", "decision-choice-Q1@1-1", "decision-discuss-Q1@1", "decision-close-Q1@1", "decision-accept-Q1@1",
-  "decision-discuss-Q2@3", "decision-close-Q2@3", "decision-discuss-Q3@1", "decision-close-Q3@1"], "card buttons");
+  "decision-discuss-Q2@3", "decision-reask-Q2@3", "decision-close-Q2@3", "decision-discuss-Q3@1", "decision-close-Q3@1"], "card buttons");
 // A space Herdr no longer shows is said so.
 eq(cardWords(card("Q4@1"), []).title, "bercail.guard (its space is closed), 347 lines, high-stakes", "closed space");
 // A desk problem is a warning on a card that can still be answered.
@@ -960,6 +960,55 @@ d.render(cx);
 els.find((e) => e.id === "decision-close-Q4@1").click(null, cx);
 await tick();
 eq(answers().map((a) => [a.token, a.outcome]), [["Q4@1", "closed"]], "the button's Close");
+EOF
+}
+
+@test "a stale card offers Ask again beside Close, which sends Shep a reask and answers nothing" {
+  mod_case <<'EOF'
+const stale = { status: "stale", reasons: ["base changed"], deadline: null, defaulted: null };
+const view = { ...PANEL_VIEW, cards: [
+  card("Q1@1", stale),
+  card("Q2@1", { ...stale, kind: "planning" }),
+  card("Q3@1", { deadline: null, defaulted: null }),
+  card("Q4@1", { ...stale, defaulted: { choice: "LGTM", at: "2026-11-14T20:31:00.000Z" } }),
+  card("Q5@1", { ...stale, kind: "guard", options: ["Allow", "Deny"], guard: { expires: "2026-11-14T22:00:00.000Z", defaults: false } }),
+  card("Q6@1", { ...stale, kind: "land", options: ["Ship it", "Not yet"] }),
+  card("Q7@1", { ...stale, status: "unavailable", reasons: ["policy unavailable; not checked"] }),
+] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+els.length = 0;
+d.render(cx);
+// Ask again sits next to Close on a pending stale card Shep revises in place, and on no other:
+// not fresh or unknown, not a default, not a guard or land card.
+const ids = els.filter((e) => /^decision-(reask|close)-/.test(e.id ?? "")).map((e) => e.id);
+eq(ids.filter((id) => id.startsWith("decision-reask-")), ["decision-reask-Q1@1", "decision-reask-Q2@1"], "Ask again buttons");
+eq(ids.indexOf("decision-reask-Q1@1") + 1, ids.indexOf("decision-close-Q1@1"), "Ask again beside Close");
+// The click sends the reask through the answer op, with no choice, and says it answered nothing.
+els.find((e) => e.id === "decision-reask-Q1@1").click(null, cx);
+for (let i = 0; i < 5; i++) await tick();
+eq(answers().map(({ requestId, ...a }) => a), [{ token: "Q1@1", outcome: "reask", source: "panel picker" }], "the button's Ask again");
+els.length = 0;
+d.render(cx);
+if (!texts().includes("Shep was asked to refresh the card and ask again; this answered nothing."))
+  fail(`no note after Ask again: ${JSON.stringify(texts())}`);
+// a on the keys does the same, and only on the cards that offer it.
+globalThis.herdr.execs = [];
+press(d, "a", ...Array(6).fill(["down", "a"]).flat());
+await tick();
+eq(answers().map((a) => [a.token, a.outcome]), [["Q1@1", "reask"], ["Q2@1", "reask"]], "a on each card");
+// A refusal from the backend's live check says why, and no note claims Shep was asked.
+setup({ terminals: [shep], exec: panelExec(view, { accepted: false, reason: "it is fresh: only a stale card is asked again" }) });
+const d2 = copy("decisions");
+await tick();
+press(d2, "a");
+for (let i = 0; i < 5; i++) await tick();
+els.length = 0;
+d2.render(cx);
+const all = texts();
+if (!all.includes("Not recorded: it is fresh: only a stale card is asked again.") || all.some((x) => x.startsWith("Shep was asked")))
+  fail(`refused Ask again: ${JSON.stringify(all)}`);
 EOF
 }
 

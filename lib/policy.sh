@@ -30,7 +30,9 @@ POLICY_FILE=".bercail/policy.toml"
 # required_ci: the workflow files whose push runs gate a landing from one pick; a
 # repo opts in by naming them. shep_may_run: what Shep runs here with no guard card,
 # while the repo reads private: any of cleanup, trail link and trail merge (docs/shep.md).
-POLICY_DEFAULTS='{"push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"merge_reversible":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000,"required_ci":[],"shep_may_run":[]}'
+# rebase_keeps_pick: whether a commit or merge card asked here keeps its pick through a
+# clean rebase onto the moved trunk, the patch unchanged (docs/config.md).
+POLICY_DEFAULTS='{"push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"merge_reversible":false,"rebase_keeps_pick":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000,"required_ci":[],"shep_may_run":[]}'
 
 _policy_err() {
   printf 'bercail policy: %s\n' "$*" >&2
@@ -60,7 +62,7 @@ _policy_object() {
     def ok($k; $v):
       if $k == "push" then $v == "ask" or $v == "branch" or $v == "main"
       elif $k == "integrate" then $v == "pr" or $v == "direct"
-      elif $k == "pr_draft" or $k == "agent_may_release" or $k == "merge_reversible" then ($v | type) == "boolean"
+      elif $k == "pr_draft" or $k == "agent_may_release" or $k == "merge_reversible" or $k == "rebase_keeps_pick" then ($v | type) == "boolean"
       elif $k == "release" or $k == "rules" then ($v | type) == "string"
       elif $k == "provenance" then $v == "line" or $v == "trailer" or $v == "none"
       elif $k == "pr_template" then ($v | type) == "string" and ($v | test("^/|(^|/)\\.\\.(/|$)") | not)
@@ -133,7 +135,7 @@ policy_json() {
     --argjson repo "$repo" --argjson local "$local_" --argjson defaults "$POLICY_DEFAULTS" '
     def looser($k; $v):
       ($k == "push" and $v != "ask") or ($k == "agent_may_release" and $v == true)
-      or ($k == "merge_reversible" and $v == true) or ($k == "review" and $v == "none") or (($k == "diff_budget" or $k == "review_budget") and $v > $defaults[$k])
+      or ($k == "merge_reversible" and $v == true) or ($k == "rebase_keeps_pick" and $v == true) or ($k == "review" and $v == "none") or (($k == "diff_budget" or $k == "review_budget") and $v > $defaults[$k])
       or ($k == "required_ci" and $v != []) or ($k == "shep_may_run" and $v != []);
     ($defaults | keys_unsorted) as $keys
     | [ $keys[] as $k

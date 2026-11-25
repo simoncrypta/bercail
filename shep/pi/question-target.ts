@@ -1,9 +1,15 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import type { Question, QuestionLand, QuestionPush, QuestionTarget } from "./questions.ts";
+import {
+  DEFAULT_SOURCE,
+  type Question,
+  type QuestionLand,
+  type QuestionPush,
+  type QuestionTarget,
+} from "./questions.ts";
 
 export interface TargetInput {
   kind: "planning" | "review" | "action";
@@ -45,28 +51,37 @@ function run(command: string, args: string[], cwd: string, timeout = 5000): stri
 }
 const git = (cwd: string, ...args: string[]) => run("git", args, cwd);
 const gitPath = (cwd: string, name: string) => git(cwd, "rev-parse", "--path-format=absolute", "--git-path", name);
-// A git run whose writes go to objects of its own, the repo's only read: a check only reads.
-function scratch(cwd: string, args: string[], env: (dir: string) => NodeJS.ProcessEnv = () => ({})) {
+type Run = (args: string[], env?: NodeJS.ProcessEnv, input?: string) => SpawnSyncReturns<string>;
+// git runs whose writes go to objects of their own, the repo's only read: a check only
+// reads. One run can read what an earlier one of the same session wrote; nothing stays.
+function session<T>(cwd: string, use: (run: Run, dir: string) => T): T {
   const dir = mkdtempSync(join(tmpdir(), "bercail-check-"));
   try {
     mkdirSync(join(dir, "objects"));
-    return spawnSync("git", args, {
-      cwd,
-      env: {
-        ...targetEnv(),
-        ...env(dir),
-        GIT_OBJECT_DIRECTORY: join(dir, "objects"),
-        // One entry of a colon-separated list: quoted, as git reads a path with a colon.
-        GIT_ALTERNATE_OBJECT_DIRECTORIES: JSON.stringify(gitPath(cwd, "objects")),
-      },
-      encoding: "utf8",
-      timeout: 5000,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const objects = {
+      GIT_OBJECT_DIRECTORY: join(dir, "objects"),
+      // One entry of a colon-separated list: quoted, as git reads a path with a colon.
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: JSON.stringify(gitPath(cwd, "objects")),
+    };
+    return use(
+      (args, env = {}, input) =>
+        spawnSync("git", args, {
+          cwd,
+          env: { ...targetEnv(), ...env, ...objects },
+          input,
+          encoding: "utf8",
+          timeout: 5000,
+          maxBuffer: 16 * 1024 * 1024,
+          stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+        }),
+      dir,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+const scratch = (cwd: string, args: string[], env: (dir: string) => NodeJS.ProcessEnv = () => ({})) =>
+  session(cwd, (run, dir) => run(args, env(dir)));
 // The staged tree, from a copy of the index: git write-tree rewrites the index it reads.
 function stagedTree(cwd: string): string {
   const index = gitPath(cwd, "index");
@@ -282,17 +297,117 @@ function committedOnce(cwd: string, old: string, now: string, tree: string | nul
 function mergesCleanAhead(cwd: string, pinned: string, base: string, head: string): boolean {
   const ok = (args: string[]) =>
     scratch(cwd, ["--no-replace-objects", ...args], (dir) => ({ GIT_GRAFT_FILE: join(dir, "none") })).status === 0;
-  const drivers = spawnSync("git", ["config", "--get-regexp", "^merge\\.(default|renormalize|.*\\.driver)$"], {
+  return (
+    noMergeDrivers(cwd) &&
+    ok(["merge-base", "--is-ancestor", pinned, base]) &&
+    ok([`--attr-source=${base}`, "merge-tree", "--write-tree", "--quiet", base, head])
+  );
+}
+const noMergeDrivers = (cwd: string) =>
+  spawnSync("git", ["config", "--get-regexp", "^merge\\.(default|renormalize|.*\\.driver)$"], {
     cwd,
     env: targetEnv(),
     stdio: "ignore",
     timeout: 5000,
+  }).status === 1;
+
+// A pinned commit or merge card's proof of a clean rebase onto the moved trunk (docs/config.md):
+// one patch, staged or one commit, before and after (staged may become committed, never
+// back), with the same patch-id, and git's merge of the asked tree onto the new trunk is
+// exactly the live tree. An asked tree gone from the objects is rebuilt by that merge run
+// back, to its exact hash. The live tree, or null when anything fails or cannot be read.
+function rebasedClean(question: Question, now: QuestionTarget, keepsPick: boolean): string | null {
+  const asked = question.target;
+  const { branch, baseRef, action, worktree: cwd, base: b0, head: h0, stagedTree: t0 } = asked;
+  const { base: b1, head: h1 } = now;
+  if (
+    !keepsPick ||
+    question.rebaseKeepsPick !== true ||
+    // A default the person has not said OK to is no pick of theirs to keep.
+    (question.answer?.source === DEFAULT_SOURCE && question.settled?.outcome !== "ok") ||
+    (question.kind !== "review" && question.kind !== "action") ||
+    (action !== "commit" && action !== "merge") ||
+    question.push ||
+    !cwd ||
+    typeof branch !== "string" ||
+    !branch.startsWith("refs/heads/") ||
+    branch !== now.branch ||
+    !trunkBase(cwd, branch, baseRef, b1) ||
+    asked.mergeHead ||
+    now.mergeHead ||
+    !b0 ||
+    !h0 ||
+    !t0 ||
+    !b1 ||
+    !h1 ||
+    b0 === b1 ||
+    !noMergeDrivers(cwd)
+  )
+    return null;
+  return session(cwd, (run, dir) => {
+    const env = { GIT_GRAFT_FILE: join(dir, "none"), GIT_INDEX_FILE: join(dir, "index") };
+    const git = (args: string[], input?: string) => {
+      const r = run(["--no-replace-objects", `--attr-source=${b1}`, ...args], env, input);
+      return r.error || r.status !== 0 ? null : r.stdout;
+    };
+    const tree = (out: string | null) => out?.split("\n")[0] || null;
+    // The live tree: the index while the change is still staged on the trunk; once it is
+    // one commit on it, that commit's tree, and for a commit card the index must still be
+    // it (a merge card merges HEAD: what is staged next is its next job). A change asked
+    // as a commit never counts again as staged.
+    const commit = h1 === b1 ? null : headers(cwd, h1);
+    if (h1 === b1 ? h0 !== b0 : JSON.stringify(commit?.parents) !== JSON.stringify([b1])) return null;
+    // The live index, written again here: the check's own write of it is gone.
+    copyFileSync(gitPath(cwd, "index"), env.GIT_INDEX_FILE);
+    const index = tree(git(["write-tree"]));
+    const t1 = commit?.tree ?? index;
+    if (!t1 || index !== now.stagedTree || (action === "commit" && index !== t1)) return null;
+    if (git(["merge-base", "--is-ancestor", b0, b1]) === null) return null;
+    if (
+      git(["cat-file", "-e", `${t0}^{tree}`]) === null &&
+      tree(git(["merge-tree", "--write-tree", `--merge-base=${b1}`, b0, t1])) !== t0
+    )
+      return null;
+    // The one patch, from the base to its tree: staged on the asked base itself, or one
+    // ordinary commit on it with nothing more staged. Its patch-id, or null.
+    if (h0 !== b0) {
+      const asked = headers(cwd, h0);
+      if (asked?.tree !== t0 || JSON.stringify(asked.parents) !== JSON.stringify([b0])) return null;
+    }
+    const patch = (base: string, top: string) => {
+      const diff = git([
+        "diff-tree",
+        "-p",
+        "--no-renames",
+        "--full-index",
+        "--binary",
+        "--no-ext-diff",
+        "--no-textconv",
+        base,
+        top,
+      ]);
+      return (diff && git(["patch-id", "--stable"], diff)?.split(" ")[0]) || null;
+    };
+    const before = patch(b0, t0);
+    if (!before || before !== patch(b1, t1)) return null;
+    return tree(git(["merge-tree", "--write-tree", `--merge-base=${b0}`, b1, t0])) === t1 ? t1 : null;
   });
-  return (
-    drivers.status === 1 &&
-    ok(["merge-base", "--is-ancestor", pinned, base]) &&
-    ok([`--attr-source=${base}`, "merge-tree", "--write-tree", "--quiet", base, head])
-  );
+}
+
+// The base names the trunk (trunkOf), as a local or origin branch, and is that branch's
+// commit now, not a tag or another ref of the same name; the asking branch is not the trunk.
+function trunkBase(cwd: string, branch: string, baseRef: string | null, base: string | null): boolean {
+  const trunk = trunkOf(cwd);
+  const full = [trunk, `refs/heads/${trunk}`].includes(baseRef!)
+    ? `refs/heads/${trunk}`
+    : [`origin/${trunk}`, `refs/remotes/origin/${trunk}`].includes(baseRef!)
+      ? `refs/remotes/origin/${trunk}`
+      : null;
+  try {
+    return !!full && branch !== `refs/heads/${trunk}` && commit(cwd, full) === base;
+  } catch {
+    return false;
+  }
 }
 
 // The repo a folder belongs to, as a question's target names it.
@@ -354,8 +469,8 @@ export function pushUrl(dir: string, remote: string): string {
 export function withTarget(
   target: QuestionTarget,
   push: Omit<QuestionPush, "url"> | null | undefined,
-): { target: QuestionTarget; push?: QuestionPush } {
-  if (push == null) return { target };
+): { target: QuestionTarget; push?: QuestionPush; rebaseKeepsPick?: true } {
+  if (push == null) return { target, ...(pinsRebase(target) ? { rebaseKeepsPick: true as const } : {}) };
   const worktree = target.worktree;
   if (typeof push !== "object" || !worktree) return fail("push needs an object and the target's worktree");
   return {
@@ -461,6 +576,22 @@ function policyOf(worktree: string, repo: string, bin = bercail()) {
   )
     fail("policy does not describe the target repo/worktree");
   return value;
+}
+
+// [policy] rebase_keeps_pick as policy show reads it: unset, untrusted or unreadable is false.
+const keepsPick = (policy: { policy?: { rebase_keeps_pick?: unknown } } | undefined) =>
+  policy?.policy?.rebase_keeps_pick === true;
+
+// A commit or merge card, asked with no push where the repo's policy says rebase_keeps_pick,
+// is pinned to it: a card asked before the repo opted in never keeps a pick through a rebase.
+function pinsRebase(target: QuestionTarget): boolean {
+  if (target.head === null || !target.worktree || (target.action !== "commit" && target.action !== "merge"))
+    return false;
+  try {
+    return keepsPick(policyOf(target.worktree, target.repo));
+  } catch {
+    return false;
+  }
 }
 
 // The trunk as git_backend_trunk names it: origin's HEAD, else init.defaultBranch, master
@@ -588,6 +719,9 @@ export function landFacts(dir: string, issue: string) {
     baseRef: trunk,
     base,
   };
+  // The default adds no permission. Keep the policy hash of land cards already in flight.
+  const pinnedPolicy = { ...policy.policy };
+  if (pinnedPolicy.rebase_keeps_pick === false) delete pinnedPolicy.rebase_keeps_pick;
   const land = {
     url,
     github,
@@ -595,7 +729,7 @@ export function landFacts(dir: string, issue: string) {
     clean: !dirty,
     handoffBranch: typeof task?.branch === "string" ? task.branch : null,
     description: { tree: described?.tree ?? null, message: message.status === 0 ? sha256(message.stdout) : null },
-    policy: { file: policy.sha256, trusted: policy.trusted === true, hash: sha256(JSON.stringify(policy.policy)) },
+    policy: { file: policy.sha256, trusted: policy.trusted === true, hash: sha256(JSON.stringify(pinnedPolicy)) },
     requiredCi: required.map((path) => ({
       path,
       id: Array.isArray(workflows) ? (workflows.find((w) => w?.path === path)?.id ?? null) : null,
@@ -685,6 +819,15 @@ export async function checkQuestion(question: Question, { beads = true } = {}) {
   // An answer is acted on after it: only a revision that no longer applies is stale.
   if (question.status === "superseded" || question.status === "withdrawn")
     reasons.push(`question is ${question.status}`);
+  let policy: { status: "checked"; current: unknown } | { status: "unavailable"; reason: string };
+  try {
+    text(target.worktree, "worktree");
+    policy = { status: "checked", current: policyOf(target.worktree, target.repo) };
+  } catch (error) {
+    policy = { status: "unavailable", reason: (error as Error).message };
+  }
+  // The live tree a clean rebase carried the pick to, when that is what keeps it fresh.
+  let rebased: string | null = null;
   try {
     text(target.worktree, "worktree");
     ({ target: current, warnings } = inspectTarget(
@@ -727,8 +870,15 @@ export async function checkQuestion(question: Question, { beads = true } = {}) {
       holds &&
       current.base !== target.base &&
       mergesCleanAhead(target.worktree, target.base!, current.base!, current.head!);
+    if (current.base !== target.base && !ahead && !(committed && followsHead))
+      rebased = rebasedClean(
+        question,
+        current,
+        policy.status === "checked" && keepsPick(policy.current as Parameters<typeof keepsPick>[0]),
+      );
     for (const key of Object.keys(target) as (keyof QuestionTarget)[]) {
       if (UNBOUND.has(key) || key === "mergeHead" || target[key] === current[key]) continue;
+      if (rebased && (key === "head" || key === "stagedTree" || key === "base")) continue;
       if (key === "head" && committed) continue;
       if (key === "stagedTree" && holds) continue;
       if (key === "base" && ((committed && followsHead) || ahead)) continue;
@@ -744,13 +894,8 @@ export async function checkQuestion(question: Question, { beads = true } = {}) {
     unavailable = true;
     reasons.push(`target unavailable: ${(error as Error).message}`);
   }
-  let policy: { status: "checked"; current: unknown } | { status: "unavailable"; reason: string };
-  try {
-    text(target.worktree, "worktree");
-    policy = { status: "checked", current: policyOf(target.worktree, target.repo) };
-  } catch (error) {
+  if (policy.status === "unavailable") {
     unavailable = true;
-    policy = { status: "unavailable", reason: (error as Error).message };
     reasons.push("policy unavailable; not checked");
   }
   return {
@@ -762,5 +907,6 @@ export async function checkQuestion(question: Question, { beads = true } = {}) {
     warnings,
     current,
     policy,
+    ...(rebased && current ? { rebased: { base: target.base!, onto: current.base!, tree: rebased } } : {}),
   };
 }

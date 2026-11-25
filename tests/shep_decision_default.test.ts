@@ -668,6 +668,15 @@ test("Shep's rules say what it does on an OK and on a Reverse, and the docs list
   expect(docs).toContain("| x | Close the card: off the panel, with no answer; a default stays Shep's |");
 });
 
+test("Shep waits for desk proof before revising a stale card on Ask again", () => {
+  const rules = readFileSync(new URL("../shep/SHEP.md", import.meta.url), "utf8").replace(/\s+/g, " ");
+  const reask = rules.match(/- On a reask event, (.*?) - /)?.[1];
+  expect(reask).toMatch(
+    /not a pick.*rebase onto the current base.*desk's report.*`bercail describe check <worktree>`.*`reviseToken`/,
+  );
+  expect(reask).toMatch(/new base.*conflicts.*patch changed/);
+});
+
 test("Shep records a desk's Brain memory without a card, and the desks are told so", () => {
   const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\s+/g, " ");
   const rules = read("../shep/SHEP.md");

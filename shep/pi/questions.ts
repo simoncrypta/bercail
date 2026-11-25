@@ -58,6 +58,9 @@ export interface QuestionSpec {
   guard?: QuestionGuard;
   /** A land card's facts beyond its target, pinned when it was asked. */
   land?: QuestionLand;
+  /** A commit or merge card's, with no push, asked where the repo's policy said
+   * rebase_keeps_pick: a clean rebase onto the moved trunk may keep its pick. */
+  rebaseKeepsPick?: true;
 }
 /** What a land card pins beside its target, whose baseRef is the trunk and base the
  * trunk's commit on the remote. Read again at the pick and before each effect. */
@@ -299,7 +302,7 @@ function spec(value: unknown): asserts value is QuestionSpec {
     "options",
     "origin",
     "target",
-    ...optional(v ?? {}, ["brief", "recommendation", "reversible", "push", "guard", "land"]),
+    ...optional(v ?? {}, ["brief", "recommendation", "reversible", "push", "guard", "land", "rebaseKeepsPick"]),
   ]);
   if (!["planning", "review", "action", "guard", "land"].includes(value.kind as string)) fail("invalid kind", "kind");
   text(value.prompt, "prompt");
@@ -312,6 +315,15 @@ function spec(value: unknown): asserts value is QuestionSpec {
     if (!value.options.includes(value.recommendation.choice)) fail("recommendation must be one of the options");
   }
   if (value.reversible !== undefined && value.reversible !== true) fail("reversible is true or absent");
+  if (
+    value.rebaseKeepsPick !== undefined &&
+    (value.rebaseKeepsPick !== true ||
+      (value.kind !== "review" && value.kind !== "action") ||
+      !object(value.target) ||
+      !["commit", "merge"].includes((value.target as QuestionTarget).action as string) ||
+      value.push !== undefined)
+  )
+    fail("rebaseKeepsPick is true, on a commit or merge card with no push, or absent", "rebaseKeepsPick");
   shape(value.origin, ["event", "session", "entry"], "origin");
   text(value.origin.event, "origin.event");
   text(value.origin.session, "origin.session");
@@ -488,6 +500,7 @@ function question(value: unknown): asserts value is Question {
       "push",
       "guard",
       "land",
+      "rebaseKeepsPick",
       "deadline",
       "told",
       "answer",
@@ -857,6 +870,8 @@ type Check = {
   reasons: string[];
   current: Pick<QuestionTarget, "head" | "stagedTree"> | null;
   policy?: { status: string; current?: unknown };
+  /** Fresh through a clean rebase onto the moved trunk: the live tree it carried the pick to. */
+  rebased?: { tree: string };
 };
 
 // This module's source and its sha256 when it loaded, if it could be read. A deploy that
@@ -1135,7 +1150,7 @@ export class QuestionStore {
                   ? `it expired at ${q.guard.expires}, which counts as ${q.guard.defaults ? "an Allow if it still reads private or local" : "a Deny"}`
                   : check.status !== "fresh" || !check.current
                     ? `changed since Shep asked: ${check.reasons.join(", ") || "not checked"}`
-                    : isDue(q) && door(q, () => mergesIn(check)).door === "two-way"
+                    : isDue(q) && !check.rebased && door(q, () => mergesIn(check)).door === "two-way"
                       ? `past its deadline: it takes Shep's recommendation, ${q.recommendation!.choice}`
                       : undefined;
       if (reason) return { question: q, accepted: false, reason };
@@ -1146,8 +1161,9 @@ export class QuestionStore {
         source,
         at: new Date().toISOString(),
         head: check.current?.head ?? null,
-        // Fresh, the live tree is the asked one, or a merge card's index moved on past it.
-        stagedTree: check.current ? q.target.stagedTree : null,
+        // Fresh, the live tree is the asked one, or a merge card's index moved on past it,
+        // or the asked patch a clean rebase carried onto the trunk.
+        stagedTree: check.current ? (check.rebased?.tree ?? q.target.stagedTree) : null,
       };
       return { question: q, accepted: true };
     });
@@ -1165,6 +1181,8 @@ export class QuestionStore {
       if (!isDue(q)) return { question: q, accepted: false, reason: `question is ${q.status} or not due` };
       if (check.status !== "fresh" || !check.current)
         return { question: q, accepted: false, reason: `changed since Shep asked: ${check.reasons.join(", ")}` };
+      // A default takes only the asked candidate: a rebased one waits for the person.
+      if (check.rebased) return { question: q, accepted: false, reason: "rebased since Shep asked: it waits for you" };
       const d = door(q, () => mergesIn(check));
       if (d.door === "one-way") return { question: q, accepted: false, reason: `now a one-way door: ${d.row}` };
       q.status = "answered";

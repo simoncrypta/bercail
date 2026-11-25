@@ -135,6 +135,25 @@ scratch_repo() {
   [[ "$(policy show --json "$REPO" 2>&1 >/dev/null)" == *'merge_reversible = "yes" is not allowed'* ]] || fail "a non-boolean passed"
 }
 
+@test "rebase_keeps_pick: unset is false, true counts only once trusted or set locally" {
+  local REPO WT
+  init_repo
+  [[ "$(field "$REPO" '.policy.rebase_keeps_pick')" == false ]] || fail "unset is not false"
+  mkdir -p "$REPO/.bercail"
+  printf 'rebase_keeps_pick = true\n' >"$REPO/.bercail/policy.toml"
+  [[ "$(field "$REPO" '.policy.rebase_keeps_pick')" == false ]] || fail "an untrusted true counted"
+  [[ "$(field "$REPO" '.untrusted | join(",")')" == rebase_keeps_pick ]] || fail "the untrusted true is not named"
+  policy trust "$REPO" >/dev/null
+  [[ "$(field "$REPO" '.policy.rebase_keeps_pick')" == true ]] || fail "a trusted true did not count"
+  policy untrust "$REPO" >/dev/null
+  "$ROOT/bin/bercail" config set "policy.\"$REPO\"" rebase_keeps_pick true >/dev/null || fail "config set does not know the key"
+  [[ "$(field "$REPO" '[.policy.rebase_keeps_pick, .sources.rebase_keeps_pick] | join(" ")')" == "true local" ]] \
+    || fail "your own override needs no trust"
+  rm "$CONFIG"
+  printf 'rebase_keeps_pick = "yes"\n' >"$REPO/.bercail/policy.toml"
+  [[ "$(policy show --json "$REPO" 2>&1 >/dev/null)" == *'rebase_keeps_pick = "yes" is not allowed'* ]] || fail "a non-boolean passed"
+}
+
 @test "shep_may_run: what Shep runs with no card counts only once trusted or set locally, and only the three it knows" {
   local REPO WT
   init_repo

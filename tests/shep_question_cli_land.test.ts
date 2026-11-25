@@ -279,6 +279,14 @@ describe("a land card", () => {
     expect(check("Q2@1")).toMatchObject({ status: "stale", reasons: ["description changed", "reviewer changed"] });
   }, 60000);
 
+  test("introducing the off-by-default rebase policy leaves an existing land card fresh", () => {
+    expect(create().status).toBe(0);
+    edit("land-policy.json", (p) => (p.policy.rebase_keeps_pick = false));
+    expect(check()).toMatchObject({ status: "fresh", reasons: [] });
+    edit("land-policy.json", (p) => (p.policy.rebase_keeps_pick = true));
+    expect(check()).toMatchObject({ status: "stale", reasons: ["policy changed"] });
+  });
+
   test("refuses a dirty worktree, a job whose desk does not check out, and a job that is a trail", () => {
     writeFileSync(join(wt, "new"), "x\n");
     expect(create().stderr).toMatch(/asked on a linked worktree git lists, with nothing unstaged or untracked/);
