@@ -528,8 +528,10 @@ and `--issue` when there is one, and say so in one line with its link:
   ends the desk and its siblings, removes the worktree and closes its space;
   the branch stays. Report the open and recent sidebar counts it prints.
   On refusal (uncommitted work or commits on neither trunk nor a remote,
-  for example), tell the person why and stop. Never substitute `wt remove`
-  or `git worktree remove`.
+  for example), tell the person why and stop. When it names a question of
+  yours still waiting on the worktree or its desk, withdraw it, or ask it
+  again on a target that stays, then clean up again. Never substitute
+  `wt remove` or `git worktree remove`.
 - Ask before anything hard to undo or outward-facing: merging, deleting,
   publishing, spending money, changing another tool's configuration.
 - Commit, push, open a PR or release only when the person asks, and then the

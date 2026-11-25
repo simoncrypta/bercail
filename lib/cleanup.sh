@@ -5,12 +5,13 @@
 # siblings and what they started, parents first, removes the worktree and
 # closes its Herdr space. The branch stays. It refuses work nobody reviewed,
 # and commits on neither trunk nor a remote branch, and a terminal it would end
-# that is working or blocked, and stops partway when one changes. The guard
-# asks the person before it runs. --check makes every refusal and changes
-# nothing: the cleanup routine reads it. Exit 1 is a refusal; 2, that it could
-# not read the Herdr app, hc or its helpers. Once the worktree is gone it adds a
-# line to retired.jsonl, which tells dispatch the job's desk went on purpose, so
-# the job may get a new one; --gone records one removed some other way.
+# that is working or blocked, and a question to the person still about it, and
+# stops partway when a terminal changes. The guard asks the person before it
+# runs. --check makes every refusal and changes nothing: the cleanup routine
+# reads it. Exit 1 is a refusal; 2, that it could not read the Herdr app, hc,
+# its helpers or Shep's questions. Once the worktree is gone it adds a line to
+# retired.jsonl, which tells dispatch the job's desk went on purpose, so the
+# job may get a new one; --gone records one removed some other way.
 
 # bercail's Herdr helpers, as the worktrunk hooks use them. False when absent.
 _cleanup_herdr_helpers() {
@@ -24,9 +25,10 @@ _cleanup_herdr_helpers() {
 # Dies unless linked worktree $1 has nothing a removal would lose, nor anything
 # git worktree remove refuses: no uncommitted work, no commit that trunk or a
 # remote branch does not hold, no lock, no submodule, and evidence it can copy.
-# A commit whose patch trunk already holds (git cherry -) landed as another commit.
+# A commit whose patch trunk already holds (git cherry -), or a replay of it,
+# landed as another commit.
 _cleanup_check() {
-  local wt="$1" main="$2" common="$3" gd trunk changed n subs up c out landed=""
+  local wt="$1" main="$2" common="$3" gd trunk changed n subs up c out landed="" ids="" scanned=0
   local -a keep=(--remotes) ups=() held=()
   gd="$(git -C "$wt" rev-parse --absolute-git-dir)"
   [[ "$gd" != "$common" ]] || die "refusing to clean up $wt: it is the repo's main checkout"
@@ -50,11 +52,19 @@ _cleanup_check() {
     || die "refusing to clean up $wt: git cannot list the commits only it holds; nothing was removed"
   [[ -z "$out" ]] || mapfile -t held <<<"$out"
   n=0
-  for c in "${held[@]}"; do [[ "$landed " == *" $c "* ]] || n=$((n + 1)); done
+  for c in "${held[@]}"; do
+    [[ "$landed " != *" $c "* ]] || continue
+    if ((!scanned && ${#ups[@]})); then
+      ids="$(_cleanup_patch_ids "$wt" "${ups[@]}" --not HEAD)" \
+        || die "refusing to clean up $wt: git cannot read the patches on $trunk; nothing was removed"
+    fi
+    scanned=1
+    _cleanup_replayed "$wt" "$c" "$ids" || n=$((n + 1))
+  done
   [[ "$n" -eq 0 ]] \
     || die "refusing to clean up $wt: $n commits are on neither $trunk nor the remote (git -C $wt log HEAD --not ${keep[*]}); land or push them, then clean up again"
   [[ "${#held[@]}" -eq 0 ]] \
-    || info "${#held[@]} commits are on $trunk as the same patch under another id (git cherry); they count as landed"
+    || info "${#held[@]} commits are on $trunk under another id, as the same patch or replayed; they count as landed"
   # An uninitialized one (-) has no checkout to lose.
   subs="$(git -C "$wt" submodule status 2>&1)" \
     || die "refusing to clean up $wt: git cannot read its submodules ($subs); remove it by hand"
@@ -62,6 +72,53 @@ _cleanup_check() {
     || die "refusing to clean up $wt: git worktree remove refuses a worktree with initialized submodules; remove it by hand"
   [[ ! -L "$wt/.bercail" ]] \
     || die "refusing to clean up $wt: its .bercail is a link, so the archive would hold only the link; copy what it points to by hand"
+}
+
+# "<patch id> <commit>" for each commit but a merge that git log lists from
+# worktree $1 with $2..., from its added and removed lines alone (-U0).
+_cleanup_patch_ids() {
+  local wt="$1"
+  shift
+  git -C "$wt" log --no-merges --no-color --no-ext-diff --no-textconv -p -U0 --format=%H "$@" | git -C "$wt" patch-id --stable
+}
+
+# True when a trunk commit among the patch ids $3 is commit $2 of worktree $1
+# replayed: the same -U0 patch id, and $2 merged cleanly onto its parent gives
+# its tree. A replay onto a moved trunk changes the context git cherry
+# compares; the same lines changed in another place merge to another tree.
+# The merges write to scratch objects, so --check changes nothing.
+_cleanup_replayed() {
+  local wt="$1" c="$2" ids="$3" id t tree objs scratch rc=1
+  id="$(_cleanup_patch_ids "$wt" -1 "$c")" && id="${id%% *}" && [[ -n "$id" ]] || return 1
+  # One entry of a colon-separated list: quoted, as git reads a path with a colon.
+  objs="$(jq -rn --arg p "$(git -C "$wt" rev-parse --path-format=absolute --git-path objects)" '$p | tojson')"
+  scratch="$(mktemp -d)" || return 1
+  while read -r t; do
+    tree="$(GIT_OBJECT_DIRECTORY="$scratch" GIT_ALTERNATE_OBJECT_DIRECTORIES="$objs" \
+      git -C "$wt" merge-tree --write-tree --merge-base="$c^" "$t^" "$c" 2>/dev/null)" || continue
+    [[ "$tree" != "$(git -C "$wt" rev-parse "$t^{tree}")" ]] || { rc=0; break; }
+  done < <(awk -v id="$id" '$1 == id { print $2 }' <<<"$ids")
+  rm -rf "$scratch"
+  return "$rc"
+}
+
+# Dies while a question Shep asked the person still waits on worktree $1, a
+# folder in it, or a desk in its owner tree $2: once they are gone, its card
+# shows its target as unavailable. Shep withdraws it, or asks it again, first.
+# A land chain under way waits on no one; its worker runs this cleanup. With
+# no ledger there is no question, and reading would make its lock. One stat
+# cannot reach (a folder it may not search) is unread, not absent.
+_cleanup_questions() {
+  local wt="$1" tree="$2" out
+  out="$(LC_ALL=C stat -L -- "$(shep_state_dir)/questions.json" 2>&1 >/dev/null)" \
+    || [[ "$out" != *"No such file or directory" ]] || return 0
+  out="$(shep_question pending 2>/dev/null)" && jq -e '.pending | type == "array"' <<<"$out" >/dev/null 2>&1 \
+    || _cleanup_unread "could not read Shep's questions (bercail shep questions --json); nothing was removed"
+  out="$(jq -r --arg wt "$wt" --argjson tree "$tree" '[.pending[]
+    | select((.target.worktree // "" | . == $wt or startswith($wt + "/")) or (.target.desk // "" | IN($tree.end[], $tree.close[])))
+    | "\(.id)@\(.revision) (\(.kind))"] | join(", ")' <<<"$out")"
+  [[ -z "$out" ]] \
+    || die "refusing to clean up $wt: Shep's question $out still waits on it; withdraw it or ask it again (bercail shep question withdraw), then clean up again; nothing was removed"
 }
 
 # The archive's folder for repo $1, ~/Work/worktree-archives/<repo>.
@@ -354,6 +411,7 @@ cmd_cleanup() {
       and (.status | IN("working", "blocked", "unknown"))) | "terminal \(.address) is \(.status)"] + $tree.problems | join("; ")' <<<"$snap")"
     [[ -z "$out" ]] || die "refusing to clean up $wt: $out; nothing was removed"
   fi
+  _cleanup_questions "$wt" "$tree"
 
   [[ ! -d "$wt/.bercail" ]] || _cleanup_archive_check "$wt" "$(_cleanup_archive_root "$repo")"
   if ((check)); then

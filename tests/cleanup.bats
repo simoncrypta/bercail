@@ -9,7 +9,7 @@ assert_has() { grep -qF -- "$2" <<<"$1" || fail "$3: no '$2' in:"$'\n'"$1"; }
 setup() {
   load test_helper
   isolate
-  need git jq
+  need git jq node
   FAKE_BIN="$BATS_TEST_TMPDIR/bin"
   export HERDR_APP_BIN="$FAKE_BIN/herdr-app" HC_BIN="$FAKE_BIN/hc"
   export BERCAIL_HERDR_LAYOUT="$ROOT/config/worktrunk/herdr-layout.sh"
@@ -314,7 +314,49 @@ assert_kept() {
   assert_kept alpha "one patch not landed"
   git -C "$wt" reset -q --hard HEAD~1
   out="$("$BERCAIL" cleanup "$wt" 2>&1)" || fail "a landed patch is refused: $out"
-  assert_has "$out" "1 commits are on master as the same patch under another id (git cherry); they count as landed" \
+  assert_has "$out" "1 commits are on master under another id, as the same patch or replayed; they count as landed" \
+    "the report says why it counts"
+  [[ ! -e "$wt" ]] || fail "the worktree is removed"
+}
+
+@test "cleanup takes a commit replayed onto trunk with shifted context, not the same lines changed elsewhere" {
+  local out wt c before
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  printf '%s\n' one two three four five six seven '[camera]' 'on = no' '[speaker]' 'on = no' >"$wt/lines.txt"
+  git -C "$wt" add lines.txt
+  git -C "$wt" commit -qm lines
+  git -C "$wt" push -q origin alpha
+  git -C "$WORK/widgets" merge -q --ff-only origin/alpha
+  # The camera's line, while trunk changes the speaker's the same way: one patch id with -U0.
+  sed -i '9s/no/yes/' "$wt/lines.txt"
+  git -C "$wt" commit -qam camera
+  printf 'moved\n' >"$WORK/widgets/moved.txt"
+  git -C "$WORK/widgets" add moved.txt
+  git -C "$WORK/widgets" commit -qm moved
+  sed -i '11s/no/yes/' "$WORK/widgets/lines.txt"
+  git -C "$WORK/widgets" commit -qam speaker
+  git -C "$WORK/widgets" push -q origin master
+  [[ "$(git -C "$wt" show -U0 HEAD | git patch-id --stable | cut -d' ' -f1)" == \
+    "$(git -C "$wt" show -U0 origin/master | git patch-id --stable | cut -d' ' -f1)" ]] || fail "the setup is not one -U0 patch id"
+  before="$(git -C "$WORK/widgets" count-objects -v | grep -E '^(count|in-pack):')"
+  if out="$("$BERCAIL" cleanup --check "$wt" 2>&1)"; then fail "the same lines changed elsewhere count as landed: $out"; fi
+  assert_has "$out" "1 commits are on neither master nor the remote" "the camera's change is not landed"
+  assert_eq "$before" "$(git -C "$WORK/widgets" count-objects -v | grep -E '^(count|in-pack):')" "--check writes no object"
+  git -C "$wt" reset -q --hard HEAD~1
+  sed -i 's/^five$/five\nnew/' "$wt/lines.txt"
+  git -C "$wt" commit -qam "add new"
+  c="$(git -C "$wt" rev-parse HEAD)"
+  # Trunk changes a line beside the new one, then takes the replay (bercail-aywz).
+  sed -i 's/^four$/FOUR/' "$WORK/widgets/lines.txt"
+  git -C "$WORK/widgets" commit -qam "four, loud"
+  git -C "$WORK/widgets" cherry-pick "$c" >/dev/null
+  git -C "$WORK/widgets" push -q origin master
+  # Only the remote's trunk holds the replay.
+  git -C "$WORK/widgets" reset -q --hard HEAD~2
+  git -C "$wt" cherry origin/master HEAD | grep -qx -- "+ $c" || fail "the setup is not a replay git cherry misses"
+  out="$("$BERCAIL" cleanup "$wt" 2>&1)" || fail "a replayed commit is refused: $out"
+  assert_has "$out" "1 commits are on master under another id, as the same patch or replayed; they count as landed" \
     "the report says why it counts"
   [[ ! -e "$wt" ]] || fail "the worktree is removed"
 }
@@ -548,6 +590,11 @@ check_agrees() {
   assert_has "$out" "close Herdr space sp-alpha" "it names the space it would close"
   assert_kept alpha "--check"
   if grep -q 'space.close\|^hc kill\|^hc rm' "$CALLS"; then fail "--check ends or closes nothing"; fi
+  [[ ! -e "$XDG_STATE_HOME/bercail/shep" ]] || fail "--check makes no question ledger"
+  # Shep's inbox, and no ledger yet.
+  mkdir -p "$XDG_STATE_HOME/bercail/shep/inbox"
+  "$BERCAIL" cleanup --check "$WORK/widgets.alpha" >/dev/null 2>&1 || fail "--check refuses with no ledger"
+  [[ ! -e "$XDG_STATE_HOME/bercail/shep/questions.lock" ]] || fail "--check makes no lock beside the inbox"
   # A file touched since the index was written: git status would refresh the index.
   touch -d '+1 hour' "$WORK/widgets.alpha/alpha.txt"
   index="$(git -C "$WORK/widgets.alpha" rev-parse --path-format=absolute --git-path index)"
@@ -842,4 +889,77 @@ check_agrees() {
   local out
   if out="$("$BERCAIL" cleanup --check 2>&1)"; then fail "--check with no worktree passes: $out"; fi
   assert_has "$out" "usage: bercail cleanup [--check] <worktree>" "the usage names --check"
+}
+
+# card REPO TOPIC [DESK]: a planning card Shep asks about REPO; prints its token.
+card() {
+  jq -nc --arg repo "$1" --arg t "$2" --arg d "${3:-}" '{requestId: "r-\($t)", kind: "planning", prompt: "Which first for \($t)?",
+      options: ["auth", "search"], origin: {event: "chat", session: "shep-1", entry: null},
+      repo: $repo, issue: null, topic: $t, desk: (if $d == "" then null else $d end), base: null, action: null}' \
+    | "$BERCAIL" shep question create | jq -r '"\(.id)@\(.revision)"'
+}
+
+@test "cleanup refuses, and changes nothing, while a question to the person is about the worktree or its desk" {
+  local out check wt token rc=0 ledger="$XDG_STATE_HOME/bercail/shep/questions.json"
+  desk_space alpha
+  wt="$WORK/widgets.alpha"
+  token="$(card "$wt" plan)"
+  [[ "$token" == Q1@1 ]] || fail "no card: $token"
+  card "$WORK/widgets" elsewhere >/dev/null
+  check="$("$BERCAIL" cleanup --check "$wt" 2>&1)" || rc=$?
+  assert_eq 1 "$rc" "--check refuses under a pending card: $check"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "cleanup takes a worktree a card is about: $out"; fi
+  assert_has "$out" "refusing to clean up $wt: Shep's question Q1@1 (planning) still waits on it" "the refusal names the card"
+  assert_eq "$(grep '^error:' <<<"$out")" "$(grep '^error:' <<<"$check")" "--check gives cleanup's reason"
+  assert_kept alpha "a pending card"
+  # A guard card binds the folder it acts in.
+  jq --arg sub "$wt/sub" '.questions[0].target.worktree = $sub' "$ledger" >"$ledger.tmp" && mv "$ledger.tmp" "$ledger"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "cleanup takes a worktree a card on its folder is about: $out"; fi
+  assert_has "$out" "Shep's question Q1@1 (planning) still waits on it" "the refusal names the folder's card"
+  jq -nc --arg t "$token" '{requestId: "w-1", token: $t, reason: "moot"}' | "$BERCAIL" shep question withdraw >/dev/null \
+    || fail "the card is not withdrawn"
+  # A card about its desk, asked from another checkout.
+  token="$(card "$WORK/widgets" desk d-alpha)"
+  jq -e --arg w "$WORK/widgets" '.questions[-1].target | .desk == "d-alpha" and .worktree == $w' "$ledger" >/dev/null \
+    || fail "the card is not on the desk alone: $(jq -c '.questions[-1].target' "$ledger")"
+  rc=0
+  check="$("$BERCAIL" cleanup --check "$wt" 2>&1)" || rc=$?
+  assert_eq 1 "$rc" "--check refuses under a card on its desk: $check"
+  if out="$("$BERCAIL" cleanup "$wt" 2>&1)"; then fail "cleanup takes a desk a card is about: $out"; fi
+  assert_has "$out" "Shep's question $token (planning) still waits on it" "the refusal names the desk's card"
+  assert_kept alpha "a card on its desk"
+  jq -nc --arg t "$token" '{requestId: "w-2", token: $t, reason: "moot"}' | "$BERCAIL" shep question withdraw >/dev/null \
+    || fail "the desk's card is not withdrawn"
+  out="$("$BERCAIL" cleanup "$wt" 2>&1)" || fail "cleanup refuses once the card is withdrawn: $out"
+  [[ ! -e "$wt" ]] || fail "the worktree is removed"
+}
+
+# unreached DIR: with DIR unsearchable, cleanup --check on alpha cannot read the ledger and exits 2.
+unreached() {
+  local out rc=0
+  chmod 000 "$1"
+  out="$("$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>&1)" || rc=$?
+  chmod 700 "$1"
+  assert_eq 2 "$rc" "a ledger it cannot reach under $1 is not a refusal or a pass: $out"
+  assert_has "$out" "could not read Shep's questions" "the error names the ledger"
+}
+
+@test "cleanup removes nothing, and --check exits 2, when Shep's questions cannot be read" {
+  local out rc=0
+  desk_space alpha
+  card "$WORK/widgets" elsewhere >/dev/null
+  printf '#!/bin/sh\nexit 1\n' >"$FAKE_BIN/node"
+  "$BERCAIL" cleanup --check "$WORK/widgets.alpha" 2>/dev/null || rc=$?
+  assert_eq 2 "$rc" "an unread ledger is not a refusal"
+  if out="$("$BERCAIL" cleanup "$WORK/widgets.alpha" 2>&1)"; then fail "cleanup went on without the questions: $out"; fi
+  assert_has "$out" "could not read Shep's questions (bercail shep questions --json); nothing was removed" "the error"
+  assert_kept alpha "an unread ledger"
+  # A folder on the ledger's way it may not search, there or behind a link, is not one with no ledger.
+  [[ "$(id -u)" != 0 ]] || return 0
+  need_node
+  unreached "$XDG_STATE_HOME/bercail"
+  mkdir "$BATS_TEST_TMPDIR/private"
+  mv "$XDG_STATE_HOME/bercail" "$BATS_TEST_TMPDIR/private/state"
+  ln -s "$BATS_TEST_TMPDIR/private/state" "$XDG_STATE_HOME/bercail"
+  unreached "$BATS_TEST_TMPDIR/private"
 }
