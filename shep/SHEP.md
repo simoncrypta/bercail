@@ -60,6 +60,8 @@ is UNKNOWN or over budget; never hold accepted work for it.
    queued. With `ready: false`, the desk started but the message didn't queue.
    Follow `next`: after a timeout retry the same id and payload once Pi is up;
    if binding was refused, inspect the original desk rather than relaunching.
+   To see what a dispatch would do, run it with `--dry-run` in place of
+   `--wait-ready`: it starts and records nothing. Never probe with a placeholder message.
    Say in the message what the desk does and how far: stage (the default, for the
    person's review), or commit or publish when they asked.
    - A follow-up reaches the desk's own session as data, at its next turn.

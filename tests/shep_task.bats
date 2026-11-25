@@ -134,7 +134,8 @@ task() { "$ROOT/bin/bercail" shep task "$@"; }
   out="$(request | jq '.outcome="publish" | .authoring="gt m -a"' | task dispatch 2>&1)" && fail "$out"
   [[ "$out" == *"unknown task field outcome, authoring"* ]] || fail "$out"
   out="$(request | task dispatch --wait 2>&1)" && fail "$out"
-  [[ "$out" == *"unknown flag --wait; dispatch takes --wait-ready"* ]] || fail "$out"
+  [[ "$out" == *"unknown flag --wait; dispatch takes --wait-ready, --dry-run"* ]] || fail "$out"
+  [[ ! -e "$LOG" ]] || fail "a refused flag still ran: $(cat "$LOG")"
   [[ ! -d "$XDG_STATE_HOME/bercail/desk-follow-ups" ]]
 }
 
@@ -1108,4 +1109,76 @@ SPAWN
   out="$(job r2 | task dispatch)" || fail "$out"
   jq -e '.status == "started" and .creation.desk == "t10"' <<<"$out" || fail "$out"
   jq -e '.metadata.bercail_task | .creation.id == "r2" and (.retired | index("half")) and (has("pending") | not)' "$TASK_DATA/app-1.json" || fail "$(jq .metadata "$TASK_DATA/app-1.json")"
+}
+
+# The issue, every entry under bercail's state with each file's contents, and
+# each checkout's git index, as they are now, to show a dry run left them.
+snapshot() {
+  jq -S . "$TASK_DATA/app-1.json"
+  find "$XDG_STATE_HOME/bercail" | sort
+  find "$XDG_STATE_HOME/bercail" -type f -exec sha256sum {} + | sort
+  find "$REPO/.git" -name index -exec sha256sum {} + | sort
+}
+
+@test "--dry-run names the live owner a follow-up would reach, and queues and records nothing" {
+  local out before
+  before="$(snapshot)"
+  out="$(request | task dispatch --dry-run)" || fail "$out"
+  jq -e '.dry_run and .status == "would-queue" and .owner.desk == "t9" and .owner.session == "s1" and .authority == false and (has("path") | not)' <<<"$out" || fail "$out"
+  [[ "$(snapshot)" == "$before" ]] || fail "the dry run changed state"
+  ! grep -q '^bd update' "$LOG" || fail "$(cat "$LOG")"
+  [[ ! -e "$REPO/.git/bercail-task.lock" ]]
+}
+
+@test "--dry-run says which desk, branch and adoption a real run would start, and starts none" {
+  local out before
+  orphan
+  echo draft >"$REPO.fix/draft.txt"
+  git -C "$REPO.fix" add draft.txt
+  before="$(snapshot)"
+  out="$(request | task dispatch --dry-run)" || fail "$out"
+  jq -e '.dry_run and .status == "would-start" and .branch == "fix" and (.spawn | index("--adopt-reason")) and .adopted.from[0].desk == "t9" and .adopted.staged == 1 and (.warning | startswith("Adopted: desk t9 is gone"))' <<<"$out" || fail "$out"
+  [[ "$(snapshot)" == "$before" ]] || fail "the dry run changed state"
+  ! grep -Eq '^(spawn |bd update)' "$LOG" || fail "$(cat "$LOG")"
+  out="$(request | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .creation.desk == "t10"' <<<"$out" || fail "$out"
+}
+
+@test "--dry-run of a first desk gives the handoff-spawn argv, and of an UNKNOWN creation's retry finishes nothing" {
+  local out before
+  slow_launch
+  before="$(snapshot)"
+  out="$(create | task dispatch --dry-run)" || fail "$out"
+  jq -e '.dry_run and .status == "would-start" and .branch == "fresh" and .spawn[0:4] == ["--branch","fresh","--stage","bstack"]' <<<"$out" || fail "$out"
+  [[ "$(snapshot)" == "$before" ]] || fail "the dry run changed state"
+  create | task dispatch >/dev/null 2>&1 && fail "the slow spawn should time out"
+  # A stat change git status would write back to the worktree's index.
+  touch -d '-1 hour' "$REPO.fresh/file.txt"
+  before="$(snapshot)"
+  out="$(create | task dispatch --dry-run)" || fail "$out"
+  jq -e '.dry_run and .status == "would-start" and .retry and (.spawn | index("--reuse-worktree"))' <<<"$out" || fail "$out"
+  [[ "$(snapshot)" == "$before" ]] || fail "the dry run changed state"
+  jq -e '.metadata.bercail_task.creation.status == "unknown"' "$TASK_DATA/app-1.json"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
+}
+
+@test "--dry-run refuses what a real run refuses, with the same words" {
+  local dry real before lock="$REPO/.git/bercail-task.lock"
+  owner t8 s2
+  before="$(snapshot)"
+  dry="$(request | task dispatch --dry-run 2>&1)" && fail "$dry"
+  [[ "$(snapshot)" == "$before" ]] || fail "the dry run changed state"
+  real="$(request | task dispatch 2>&1)" && fail "$real"
+  [[ "$dry" == *"ambiguous owners t8, t9"* && "$dry" == "$real" ]] || fail "dry: $dry; real: $real"
+  rm "$TASK_DATA/t8.hc"
+  # Another dispatch's lock, and a dangling link where it goes: mkdir fails on both.
+  for held in dir link; do
+    if [[ $held == dir ]]; then mkdir "$lock"; else ln -s "$BATS_TEST_TMPDIR/nowhere" "$lock"; fi
+    dry="$(request | task dispatch --dry-run 2>&1)" && fail "$held: $dry"
+    real="$(request | task dispatch 2>&1)" && fail "$held: $real"
+    [[ "$dry" == *"dispatch lock held"* && "$dry" == "$real" ]] || fail "$held: dry: $dry; real: $real"
+    [[ -L "$lock" || -d "$lock" ]] || fail "the dry run removed another dispatch's lock"
+    rm -r "$lock"
+  done
+  [[ ! -d "$XDG_STATE_HOME/bercail/desk-follow-ups" ]]
 }

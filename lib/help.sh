@@ -30,9 +30,10 @@ Post-install CLI (bercail):
   shep          Shep, the orchestrator on Pi: status (queued, awaiting persistence, persisted) | run |
                 Each ISSUE or ID below is a beads id, or trail:N in an Entire repo (bercail job).
                 bg --issue ID [--cwd DIR] (waits and reports: bash under the guard, no commit, push or edit) |
-                task dispatch [--wait-ready] (JSON stdin; a first visible desk, or a follow-up into the original desk's session,
+                task dispatch [--wait-ready] [--dry-run] (JSON stdin; a first visible desk, or a follow-up into the original desk's session,
                   shown at its next turn even while it works; a gone owner's checkout gets a new desk, unasked;
-                  --wait-ready: return once a new desk's Pi is up, with the message queued) |
+                  --wait-ready: return once a new desk's Pi is up, with the message queued;
+                  --dry-run: dispatch's checks, then would-start or would-queue, and nothing created or recorded) |
                 runtime (source/installed fingerprints and actual startup evidence; read-only) |
                 discuss TOKEN (a read-only Pi on the question's branch: what Discuss runs) |
                 repos [--json] (your known repos) | board (open jobs, what waits on you) |

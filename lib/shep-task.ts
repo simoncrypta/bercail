@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -102,6 +103,9 @@ function same(stored: Request, request: Request): boolean {
     : stored.message === request.message && (stored.stage || "bstack") === request.stage;
 }
 const state = () => join(process.env.XDG_STATE_HOME || join(process.env.HOME!, ".local/state"), "bercail");
+// --dry-run: save, queue and create write nothing; dispatch's checks around
+// them run as in a real dispatch.
+let dry = false;
 const bin = (name: string) => process.env[`${name.toUpperCase()}_BIN`] || name;
 // bd's time limit: 10 s on an idle machine, growing with the load per core
 // up to a minute. bd answers in a second alone, and in several while test
@@ -189,6 +193,7 @@ function issue(repo: string, id: string): any {
 // its queue file sees anything; a retry reads that reservation first. A
 // trail's task is its local job record; the trail itself is not touched.
 function save(repo: string, value: any, task: Task, reopen = true): void {
+  if (dry) return;
   delete task.requests;
   task.v = 2;
   if (isTrail(value.id)) return writeRecord(repo, value.id, task);
@@ -534,7 +539,8 @@ function queued(repo: string, id: string, request: Request): { path: string; fil
 // Write the follow-up for owner's desk; dispatch looked for an earlier one first.
 // Its name starts with a number above the desk's others (the time, unless the
 // clock went back), so the desk takes them in dispatch order.
-function queue(repo: string, id: string, owner: Owner, request: Request): string {
+function queue(repo: string, id: string, owner: Owner, request: Request): string | null {
+  if (dry) return null;
   const dir = join(state(), "desk-follow-ups", owner.desk);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const last = Math.max(0, ...readdirSync(dir).map((f) => Number(/^(\d+)-/.exec(f)?.[1] || 0)));
@@ -546,6 +552,8 @@ function queue(repo: string, id: string, owner: Owner, request: Request): string
   );
   return path;
 }
+// What a follow-up answers once queue ran: a dry run wrote no file.
+const delivered = (path: string | null) => (path ? { status: "queued", path } : { status: "would-queue" });
 
 // The issue's handoffs.jsonl lines when each is of a spawn that ended partial.
 // Null when there are none, or when one may have started a desk.
@@ -587,7 +595,8 @@ function leftover(repo: string, id: string, branch: string, history: any[], prHe
   if (!path) return null;
   if (path === repo) throw new Error(`${branch} is checked out in the main checkout; inspect it`);
   if (!existsSync(path)) throw new Error(`the worktree of ${branch}, ${path}, is gone; run git worktree prune`);
-  if (git(path, "status", "--porcelain", "--untracked-files=all"))
+  // No optional locks: a plain status writes the checkout's refreshed index.
+  if (git(path, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all"))
     throw new Error(`${path} has changes; inspect them before a desk starts there`);
   const head = git(path, "rev-parse", "HEAD");
   if (prHead && head !== prHead)
@@ -626,31 +635,28 @@ function create(repo: string, value: any, task: Task, opts: Spawn): any {
   const spawn =
     process.env.BERCAIL_HANDOFF_SPAWN || join(process.env.HOME!, ".agents/skills/handoff/scripts/handoff-spawn");
   const secs = spawnTimeout();
+  const args = [
+    "--branch",
+    task.branch,
+    "--stage",
+    creation.stage,
+    "--issue",
+    value.id,
+    "--target",
+    task.target,
+    "--clean",
+    ...(opts.forkReason ? ["--fork-reason", opts.forkReason] : []),
+    ...(opts.adoption ? ["--adopt-reason", opts.adoptReason!] : []),
+    ...(opts.reuse ? ["--reuse-worktree"] : opts.existing ? ["--existing-branch"] : []),
+    ...[...opts.released].flatMap((id) => ["--released", id]),
+  ];
+  if (dry) return { status: "would-start", branch: task.branch, spawn: args, authority: false };
   try {
     let out: string;
     try {
       out = run(
         "timeout",
-        [
-          "--kill-after=10",
-          String(secs),
-          "env",
-          "BERCAIL_TASK_RESERVED=1",
-          spawn,
-          "--branch",
-          task.branch,
-          "--stage",
-          creation.stage,
-          "--issue",
-          value.id,
-          "--target",
-          task.target,
-          "--clean",
-          ...(opts.forkReason ? ["--fork-reason", opts.forkReason] : []),
-          ...(opts.adoption ? ["--adopt-reason", opts.adoptReason!] : []),
-          ...(opts.reuse ? ["--reuse-worktree"] : opts.existing ? ["--existing-branch"] : []),
-          ...[...opts.released].flatMap((id) => ["--released", id]),
-        ],
+        ["--kill-after=10", String(secs), "env", "BERCAIL_TASK_RESERVED=1", spawn, ...args],
         repo,
         (secs + 30) * 1000,
       );
@@ -720,11 +726,16 @@ function dispatch(op: string, input: any): any {
   const repo = mainOf(input.repo);
   const common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir");
   const lock = join(common, "bercail-task.lock");
+  // A dry run takes no lock, so it never makes a real dispatch wait. Any entry
+  // there, a dangling link too, refuses it as it makes mkdir fail.
+  let held = dry && !!lstatSync(lock, { throwIfNoEntry: false });
   try {
-    mkdirSync(lock, { mode: 0o700 });
+    if (!dry) mkdirSync(lock, { mode: 0o700 });
   } catch {
-    throw new Error(`dispatch lock held: ${lock}; inspect the previous invocation before removing a stale lock`);
+    held = true;
   }
+  if (held)
+    throw new Error(`dispatch lock held: ${lock}; inspect the previous invocation before removing a stale lock`);
   try {
     const value = issue(repo, input.issue);
     let task = migrated(value.metadata?.bercail_task);
@@ -944,9 +955,8 @@ function dispatch(op: string, input: any): any {
         // A retry of an adoption tells the person again, in case the first answer was lost.
         const adopted = task!.adoptions?.find((a) => a.request === prior.id);
         return {
-          status: "queued",
+          ...delivered(path),
           owner: original,
-          path,
           authority: false,
           retry: true,
           ...(adopted ? told(adopted, original.desk) : {}),
@@ -1068,7 +1078,7 @@ function dispatch(op: string, input: any): any {
       delete task.pending[request.id];
       if (!Object.keys(task.pending).length) delete task.pending;
       save(repo, value, task, false); // The issue may be closed meanwhile: leave its status.
-      return { status: "queued", owner, path, authority: false };
+      return { ...delivered(path), owner, authority: false };
     }
     task.creation = { ...request, status: "creating", next: "Inspect visible creation result" };
     reserve(repo, value, task);
@@ -1082,11 +1092,11 @@ function dispatch(op: string, input: any): any {
     });
     if (!record) return done;
     // An adoption goes on with the gone desk's work, blocked or not; the person hears what it waits on.
-    const adopted = told(record, done.creation.desk);
+    const adopted = told(record, dry ? "(new)" : done.creation.desk);
     if (value.waiting?.length) adopted.warning += ` ${blocked(value)}.`;
     return { ...done, ...adopted };
   } finally {
-    rmSync(lock, { recursive: true });
+    if (!dry) rmSync(lock, { recursive: true });
   }
 }
 
@@ -1124,9 +1134,11 @@ const READY_SECONDS = 60;
 // request, which binds that session as the owner and queues the message there.
 // Shep gets one answer instead of sleeping and retrying.
 export function taskCommand(op: string, input: any, flags: string[] = []): any {
-  const unknown = flags.filter((flag) => flag !== "--wait-ready");
-  if (unknown.length) throw new Error(`unknown flag ${unknown.join(", ")}; dispatch takes --wait-ready`);
+  const unknown = flags.filter((flag) => !["--wait-ready", "--dry-run"].includes(flag));
+  if (unknown.length) throw new Error(`unknown flag ${unknown.join(", ")}; dispatch takes --wait-ready, --dry-run`);
+  dry = flags.includes("--dry-run");
   const done = dispatch(op, input);
+  if (dry) return { dry_run: true, ...done };
   if (!flags.includes("--wait-ready") || done.status !== "started") return done;
   const until = Date.now() + READY_SECONDS * 1000;
   while (!up(done.creation.desk, done.creation.session)) {
