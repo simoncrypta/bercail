@@ -378,7 +378,7 @@ rollover = false      # true: a fresh session instead of a threshold compaction,
 
 ### The summary
 
-`compaction.ts` builds it from the job board (`bercail shep board` then), the standing rules, the durable questions reloaded from the ledger, and the narrative, which the model is told not to rebuild question state or approval from. If a part fails, Pi compacts its default way. Each compaction, fallback and failure is logged in `~/.local/state/bercail/shep/compaction.log`.
+`compaction.ts` builds it from the job board (`bercail shep board` then), the standing rules, the durable questions reloaded from the ledger, and the narrative, which the model is told not to rebuild question state or approval from. An incomplete board is still used: what answered, under a line naming the sources that were UNKNOWN and, when it ran out of time, saying its end is missing. A board with no output at all, or any other part failing, makes Pi compact its default way. Each compaction, fallback and failure is logged in `~/.local/state/bercail/shep/compaction.log`; a compaction's line gives the summary's size in characters and the tokens before and after (Pi's estimate).
 
 ### Rollover
 

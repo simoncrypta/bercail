@@ -17,9 +17,14 @@ import register, {
 } from "../shep/pi/compaction.ts";
 
 // No Pi to serialize with, as in a Shep test outside Pi: the real handler falls back.
-vi.mock("@earendil-works/pi-coding-agent", () => {
-  throw new Error("no Pi package");
-});
+// Pi's token estimate is there, at 100 tokens a message.
+vi.mock("@earendil-works/pi-coding-agent", () => ({
+  convertToLlm: () => {
+    throw new Error("no Pi to serialize with");
+  },
+  serializeConversation: () => "",
+  estimateTokens: () => 100,
+}));
 
 const BOARD =
   "~/Work/app: 1 job\n- app-1: Fix the login · desk t9 blocked · login\nWaiting on the person:\n- nothing\n";
@@ -293,13 +298,79 @@ describe("registration, the log, and the rollover switch, through the default ex
       aborted: false,
       fromExtension: false,
     });
-    pi.handlers.session_compact!({ reason: "manual", fromExtension: true });
+    const kept = { sessionManager: { buildSessionProjection: () => ({ messages: [{}, {}, {}] }) } };
+    await pi.handlers.session_compact!(
+      { reason: "manual", fromExtension: true, compactionEntry: { summary: "s".repeat(1234), tokensBefore: 180000 } },
+      kept,
+    );
+    await pi.handlers.session_compact!(
+      { reason: "threshold", fromExtension: false, compactionEntry: { summary: "p", tokensBefore: 9 } },
+      {},
+    );
     const log = logLines();
     expect(out).toBeUndefined();
-    expect(log).toHaveLength(3);
+    expect(log).toHaveLength(4);
     expect(log[0]).toMatch(/^\d{4}-\d\d-\d\dT[^ ]+ threshold compaction: Pi's default summary instead of Shep's/);
     expect(log[1]).toMatch(/overflow compaction failed: context too long$/);
-    expect(log[2]).toMatch(/manual compaction: Shep's summary \(board, rules, decisions\)$/);
+    expect(log[2]).toMatch(
+      /manual compaction: Shep's summary \(board, rules, decisions\), 1234 characters, tokens 180000 before, ~300 after$/,
+    );
+    expect(log[3], "no session to estimate from").toMatch(
+      /threshold compaction: Pi's default summary, 1 characters, tokens 9 before, unknown after$/,
+    );
+  });
+
+  // A stand-in `bercail shep board` run by /shep-rollover, which seeds the new session with its board.
+  const rollover = async (script: string) => {
+    writeFileSync(join(dir, "bercail"), `#!/bin/sh\n${script}\n`);
+    const pi = shep("0");
+    const seeded: string[] = [];
+    const notes: string[] = [];
+    await (pi.commands["shep-rollover"] as any).handler("", {
+      waitForIdle: async () => {},
+      sessionManager: { getSessionFile: () => "/s/old.jsonl" },
+      ui: { notify: (text: string) => notes.push(text) },
+      newSession: async (o: any) => {
+        await o.setup({ appendMessage: (m: any) => seeded.push(m.content[0].text) });
+        return { cancelled: false };
+      },
+    });
+    return { seeded, notes, log: logLines() };
+  };
+
+  test("an incomplete board is used, headed by the sources its status rows call UNKNOWN", async () => {
+    const { seeded } = await rollover(
+      `printf '%s\\n' '- app-1: Say demo (UNKNOWN (beads unavailable)) · desk t9 blocked' 'Other repos: ~/Work/a (2 open), ~/Work/Client Apps (UNKNOWN (beads or Entire unavailable)), ~/Work/Client, Inc (UNKNOWN (Entire unavailable))' 'Decisions: UNKNOWN (the ledger could not be read)'\necho 'Board incomplete: UNKNOWN (status sources failed or exceeded 10s)' >&2\nexit 1`,
+    );
+    expect(seeded).toHaveLength(1);
+    expect(seeded[0]).toContain(
+      "## Job board\nBoard incomplete: UNKNOWN ~/Work/Client Apps (beads or Entire unavailable); ~/Work/Client, Inc (Entire unavailable); Decisions.\n- app-1: Say demo",
+    );
+    expect(seeded[0]).not.toContain("ran out of time");
+  });
+
+  test("a board that exits 0 gets the header only when a status row is UNKNOWN", async () => {
+    const partial = await rollover(
+      `echo '- app-1: Fix the login'\necho 'Decisions: UNKNOWN (cards not checked within 4s)'`,
+    );
+    expect(partial.seeded[0]).toContain("## Job board\nBoard incomplete: UNKNOWN Decisions.\n- app-1: Fix the login");
+    const whole = await rollover(`echo '- app-1: Fix the login'\necho 'Decisions:'`);
+    expect(whole.seeded[0]).toContain("## Job board\n- app-1: Fix the login\nDecisions:");
+    expect(whole.seeded[0]).not.toContain("incomplete");
+  });
+
+  test("a board that ran out of time says its end is missing", async () => {
+    const { seeded } = await rollover(`echo '- app-1: Fix the login'\nexit 124`);
+    expect(seeded[0]).toContain(
+      "Board incomplete: UNKNOWN not named in its output. It ran out of time, so the sections after its last line are missing.\n- app-1: Fix the login",
+    );
+  });
+
+  test("a board with no output still fails, with its last error line", async () => {
+    const { seeded, notes, log } = await rollover(`echo 'hc: not running' >&2\nexit 1`);
+    expect(seeded).toHaveLength(0);
+    expect(notes[0]).toMatch(/bercail shep board failed: hc: not running/);
+    expect(log.at(-1)).toMatch(/rollover failed, compaction resumes: bercail shep board failed: hc: not running$/);
   });
 
   test("rollover on: a threshold compaction is skipped for a rollover, once per session; /compact still compacts", async () => {

@@ -2,8 +2,9 @@
 // built from what is true now instead of from the old transcript: a fresh job
 // board (`bercail shep board`), the person's standing rules (preferences.md),
 // the durable question ledger, and a short narrative of the conversation.
-// If any of that fails, Pi compacts the default way, so the session is never lost. Failures go to
-// compaction.log in Shep's state folder.
+// If any of that fails, Pi compacts the default way, so the session is never lost. An
+// incomplete board is not a failure: it keeps what answered and says what did not.
+// Each compaction and failure goes to compaction.log in Shep's state folder.
 //
 // Rollover (BERCAIL_SHEP_ROLLOVER=1, off by default): instead of a threshold
 // compaction, and on the first turn of a new day, Shep moves to a fresh session
@@ -147,13 +148,50 @@ export function newDay(started: string | undefined, now: Date): boolean {
   return !Number.isNaN(t.getTime()) && t.toDateString() !== now.toDateString();
 }
 
+// The board, headed by a line naming its UNKNOWN sources when it is incomplete.
+// It prints every source that answered: a source that failed reads UNKNOWN in its
+// status row, and the board exits nonzero when its queue failed or it ran out of
+// time (124, or killed by our own timeout) and stopped early. Only the status rows
+// are read: a job title can say anything. Other repos' entries are split where
+// the next path starts, since a folder name can hold a comma.
+function headed(stdout: string, failed: boolean, timedOut: boolean): string {
+  const unknown = stdout.split("\n").flatMap((line) => {
+    const repos = line.startsWith("Other repos: ") ? line.slice("Other repos: ".length).split(/, (?=[~/])/) : [];
+    const row = line.match(/^(\w[\w ]*): UNKNOWN\b/);
+    return [
+      ...repos.flatMap((repo) => {
+        const m = repo.match(/^(.+) \(UNKNOWN \((.*)\)\)$/);
+        return m ? [`${m[1]} (${m[2]})`] : [];
+      }),
+      ...(row ? [row[1]] : []),
+    ];
+  });
+  if (!failed && !unknown.length) return stdout;
+  return [
+    `Board incomplete: UNKNOWN ${unknown.length ? unknown.join("; ") : "not named in its output"}.` +
+      (timedOut ? " It ran out of time, so the sections after its last line are missing." : ""),
+    stdout,
+  ].join("\n");
+}
+
 function runBoard(bin: string): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(bin, ["shep", "board"], { timeout: 60000, maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(`bercail shep board failed: ${(stderr || err.message).trim().split("\n").pop()}`));
-      else resolve(stdout);
+      if (!err || stdout.trim()) resolve(headed(stdout, !!err, !!err && (err.killed || err.code === 124)));
+      else reject(new Error(`bercail shep board failed: ${(stderr || err.message).trim().split("\n").pop()}`));
     });
   });
+}
+
+// Pi's own estimate of the context a compaction left, as it computes it after one.
+async function tokensAfter(ctx: any): Promise<string> {
+  try {
+    const { estimateTokens } = await import("@earendil-works/pi-coding-agent");
+    const messages = ctx.sessionManager.buildSessionProjection().messages;
+    return `~${messages.reduce((n: number, m: any) => n + estimateTokens(m), 0)}`;
+  } catch {
+    return "unknown";
+  }
 }
 
 export default function (pi: ExtensionAPI) {
@@ -216,9 +254,11 @@ export default function (pi: ExtensionAPI) {
     }
     return compact(event, ctx);
   });
-  pi.on("session_compact", (event) => {
+  pi.on("session_compact", async (event, ctx) => {
+    const { summary, tokensBefore } = event.compactionEntry;
     log(
-      `${event.reason} compaction: ${event.fromExtension ? "Shep's summary (board, rules, decisions)" : "Pi's default summary"}`,
+      `${event.reason} compaction: ${event.fromExtension ? "Shep's summary (board, rules, decisions)" : "Pi's default summary"}` +
+        `, ${summary.length} characters, tokens ${tokensBefore} before, ${await tokensAfter(ctx)} after`,
     );
   });
   pi.on("session_compact_failed", (event) => {
