@@ -22,7 +22,7 @@
     "source": "herdr:app",
     "min": null,
     "why": null,
-    "known": "0.1.16",
+    "known": "0.1.18",
     "pinned_in": [],
     "notes": "It updates itself. bercail/mods/bercail-spaces and bercail-agents are copies of its mods: they need the Herdr in their mod.json's cloned_from, or newer, and a changed mod upstream means a rebase (docs/development.md)."
   },
@@ -31,7 +31,7 @@
     "source": "herdr:core",
     "min": null,
     "why": null,
-    "known": "0.1.21",
+    "known": "0.1.22",
     "pinned_in": [],
     "notes": "hc: desks, siblings and notify."
   },

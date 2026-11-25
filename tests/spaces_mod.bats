@@ -479,6 +479,16 @@ for (const [key, raw] of [["machines.reconnecting", "{"], ["machines.reconnectin
 EOF
 }
 
+@test "a space's avatar is its leading emoji, whole, else its first letter" {
+  mod_case <<'EOF'
+herdr.spaces = [S("s0", "🚀 deploy"), S("s1", "👍🏽 ok"), S("s2", "🇨🇦 flag"), S("s3", "work")];
+const v = new Spaces();
+v.init({}, cx());
+const shown = text(v.render());
+for (const avatar of ["🚀", "👍🏽", "🇨🇦", "W"]) if (!shown.includes(avatar)) fail(`no avatar ${avatar}: ${JSON.stringify(shown)}`);
+EOF
+}
+
 @test "active space is revealed on selection and list resize but unchanged renders keep scroll position" {
   mod_case <<'EOF'
 herdr.spaces = [{ ...S("s0", "home"), active: true }, S("s1", "work")];

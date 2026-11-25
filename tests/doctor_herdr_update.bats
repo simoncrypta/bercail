@@ -44,7 +44,7 @@ state() {
 
 @test "doctor hints when Herdr's mod is no longer the one bercail's copy was made from" {
   local out mod
-  printf '0.1.16\n' >"$BATS_TEST_TMPDIR/version"
+  printf '0.1.18\n' >"$BATS_TEST_TMPDIR/version"
   for mod in bercail-spaces bercail-agents; do
     mkdir -p "$HERDR_APP_CONFIG_DIR/mods/$mod"
     cp "$ROOT/bercail/mods/$mod/mod.json" "$HERDR_APP_CONFIG_DIR/mods/$mod/"
@@ -58,12 +58,12 @@ state() {
   jq '.agents["main.js"] = "0000000000000000"' "$HERDR_APP_CONFIG_DIR/installed.json" >"$BATS_TEST_TMPDIR/installed.json"
   mv "$BATS_TEST_TMPDIR/installed.json" "$HERDR_APP_CONFIG_DIR/installed.json"
   out="$(doctor_mod_copies)"
-  [[ "$out" == "  hint  Herdr's agents mod changed after 0.1.16; bercail-agents is bercail's copy of that one and lacks the change until bercail updates it" ]] \
+  [[ "$out" == "  hint  Herdr's agents mod changed after 0.1.18; bercail-agents is bercail's copy of that one and lacks the change until bercail updates it" ]] \
     || fail "a newer agents mod should hint, and only it: $out"
 
   printf '0.1.14\n' >"$BATS_TEST_TMPDIR/version"
   out="$(doctor_mod_copies)"
-  [[ "$out" == "  hint  bercail-agents is bercail's copy of Herdr 0.1.16's agents mod and this Herdr is 0.1.14; update Herdr" ]] \
+  [[ "$out" == "  hint  bercail-agents is bercail's copy of Herdr 0.1.18's agents mod and this Herdr is 0.1.14; update Herdr" ]] \
     || fail "an older Herdr is the one to update: $out"
 
   rm "$HERDR_APP_CONFIG_DIR/installed.json"
@@ -71,18 +71,18 @@ state() {
   [[ -z "$out" ]] || fail "no installed.json is nothing to compare: $out"
 }
 
-@test "doctor has no mod-copy hint with Herdr 0.1.16's installed mods" {
+@test "doctor has no mod-copy hint with Herdr 0.1.18's installed mods" {
   local out mod
-  printf '0.1.16\n' >"$BATS_TEST_TMPDIR/version"
+  printf '0.1.18\n' >"$BATS_TEST_TMPDIR/version"
   for mod in bercail-spaces bercail-agents; do
     mkdir -p "$HERDR_APP_CONFIG_DIR/mods/$mod"
     cp "$ROOT/bercail/mods/$mod/mod.json" "$HERDR_APP_CONFIG_DIR/mods/$mod/"
   done
-  # Herdr 0.1.16's installed.json fingerprints, not derived from our copies.
-  printf '%s\n' '{"spaces":{"main.js":"bbcc823778bd7475"},"agents":{"main.js":"44dae8af5090bc74"}}' \
+  # Herdr 0.1.18's installed.json fingerprints, not derived from our copies.
+  printf '%s\n' '{"spaces":{"main.js":"8067902d05d475e4"},"agents":{"main.js":"1cf79c0c5f578fcd"}}' \
     >"$HERDR_APP_CONFIG_DIR/installed.json"
   out="$(doctor_mod_copies)"
-  [[ -z "$out" ]] || fail "the copies should include Herdr 0.1.16's changes: $out"
+  [[ -z "$out" ]] || fail "the copies should include Herdr 0.1.18's changes: $out"
 }
 
 @test "doctor stays silent when the versions are equal" {

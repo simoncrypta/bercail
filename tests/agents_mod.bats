@@ -93,11 +93,12 @@ mod_case() {
   node "$BATS_TEST_TMPDIR/test.mjs"
 }
 
-@test "agent titles keep opening brackets and quotes while dropping spinner and Codex status marks" {
+@test "agent titles keep opening brackets, quotes and a leading emoji while dropping spinner and Codex status marks" {
   mod_case <<'EOF'
 for (const [raw, want] of [["✦  Working", "Working"], ["⠋ - Thinking", "Thinking"],
   ["[ ! ] Fix login", "Fix login"], ["[ . ] Fix login", "Fix login"],
-  ["[web] login", "[web] login"], ["“Quoted task”", "“Quoted task”"]]) {
+  ["[web] login", "[web] login"], ["“Quoted task”", "“Quoted task”"],
+  ["🔴 login", "🔴 login"], ["✋ Waiting", "Waiting"]]) {
   const got = deskRows([], [{ ...desk("t2", "s1", "t1"), title: raw }], spaces, null)[0].title;
   if (got !== want) fail(`title ${JSON.stringify(raw)} became ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
 }

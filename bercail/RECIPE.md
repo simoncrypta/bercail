@@ -219,7 +219,7 @@ is which of `shep` and `work` is hidden.
   one-child stacks.
 - Shipped mods used: `workspace-chrome`, `tabs`, `pane`, `files`,
   `changes`, `workspace-status`.
-- `mods/bercail-spaces`: Herdr's `spaces` mod (0.1.16) copied with
+- `mods/bercail-spaces`: Herdr's `spaces` mod (0.1.18) copied with
   `mod.clone {"name":"spaces","as":"bercail-spaces"}`. Changed only so a
   click on a space, + or a machine's + also runs `layout.hide {id: "shep"}`
   and `layout.show {id: "work"}` (in a layout with both), and so no space
@@ -258,7 +258,7 @@ is which of `shep` and `work` is hidden.
   "bercail-shep", props: {role: "modal", terminal, back: {pane,
   terminal}}}}, {content: {terminal}, padding: [6, 6]}]}})`. Its `close()`
   runs `pane.focus` back to `back`.
-- `mods/bercail-agents`: Herdr's `agents` mod (0.1.16) copied with
+- `mods/bercail-agents`: Herdr's `agents` mod (0.1.18) copied with
   `mod.clone {"name":"agents","as":"bercail-agents"}`, in the `agents`
   block. Changed only so it lists desks: a live terminal labelled
   `bercail.role=agent` that is not in `agents()` and whose parent is not
