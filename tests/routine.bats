@@ -93,6 +93,45 @@ hold() {
   rm "$Q/$1.hold"
 }
 
+@test "routine enable declares a built-in at its documented schedule in one write, --at replaces its schedule, and disable takes the entry out" {
+  local out rc=0
+  printf '[shep]\ncompact_at = 1\n' >"$CONFIG"
+  routine enable mistakes >/dev/null
+  [[ "$(cat "$CONFIG")" == $'[shep]\ncompact_at = 1\n\n[routine.mistakes]\nrun = "mistakes"\nat = "Mon 08:00"' ]] || fail "its documented schedule: $(cat "$CONFIG")"
+  printf '[routine.deps]\nrun = "deps"\nevery = "4h"\n' >>"$CONFIG"
+  routine enable deps >/dev/null
+  [[ "$("$ROOT/bin/bercail" config get routine.deps every)" == '4h' ]] || fail "the schedule it has stays: $("$ROOT/bin/bercail" config get routine.deps every)"
+  out="$(routine enable deps --at 08:00)"
+  [[ "$out" == *$'\n-every = "4h"\n+at = "08:00"'* ]] || fail "one diff: $out"
+  out="$(routine enable deps --at 25:00 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$out" == *"at must be HH:MM"* ]] || fail "a bad time: rc=$rc out=$out"
+  [[ "$("$ROOT/bin/bercail" config get routine.deps at)" == '08:00' ]] || fail "a bad time writes nothing: $("$ROOT/bin/bercail" config get routine.deps at)"
+  routine disable mistakes >/dev/null
+  routine disable deps --dry-run >/dev/null
+  [[ "$(routine list)" == *deps* && "$(routine list)" != *mistakes* ]] || fail "list: $(routine list)"
+  routine disable deps >/dev/null
+  [[ "$(cat "$CONFIG")" == $'[shep]\ncompact_at = 1' ]] || fail "both entries gone: $(cat "$CONFIG")"
+  # Every built-in has the schedule enable gives it.
+  for name in "$ROOT"/lib/routine/*.sh; do
+    name="${name##*/}"
+    routine enable "${name%.sh}" --dry-run >/dev/null || fail "no schedule for the ${name%.sh} built-in"
+  done
+}
+
+@test "routine enable takes no name that is not a built-in nor declared, and disable leaves your own command, which only its entry holds" {
+  local out rc=0
+  declare_routine mine
+  cp "$CONFIG" "$BATS_TEST_TMPDIR/before"
+  out="$(routine enable nope 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$out" == *"no built-in nope"* ]] || fail "enable: rc=$rc out=$out"
+  rc=0
+  out="$(routine disable mine 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$out" == *"bercail routine pause mine stops it"* ]] || fail "disable: rc=$rc out=$out"
+  diff "$BATS_TEST_TMPDIR/before" "$CONFIG" || fail "changed"
+  routine enable mine --at 07:00 >/dev/null
+  [[ "$("$ROOT/bin/bercail" config get routine.mine at)" == '07:00' ]] || fail "your own routine takes a schedule: $("$ROOT/bin/bercail" config get routine.mine at)"
+}
+
 @test "a command routine's new findings are emitted: the run is logged with its counts, and the hashes kept" {
   declare_routine check
   findings check '{"key":"a","title":"A is stale"}' '{"key":"b","title":"B","detail":"why","repo":"~/Work/x","issue":"x-1"}'

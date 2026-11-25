@@ -28,6 +28,8 @@ at = "12:30"
 - Each has one of `at = "HH:MM"` (a daily local slot), `at = "Mon HH:MM"` (a weekly one; `Mon` to `Sun`), or `every = "<n>h"` or `"<n>d"` (at least `1h`).
 - A name is letters, digits, `-` and `_`, at most 64 of them.
 
+`bercail routine enable <name>` declares a built-in at the schedule this page gives it (cleanup `07:30`, deps `08:00`, mistakes `Mon 08:00`, rules `12:30`), or keeps the one it has; `--at <when>` sets it, in place of an `every` too, and a routine that ran already keeps the next due time it has. `bercail routine disable <name>` takes a built-in's entry out of `config.toml`; its state stays, paused or not, for the next `enable`. It refuses your own command routine, which only its entry holds: pause it, or remove it by hand. Each prints the lines it changed, and takes `--dry-run`. Shep's goes to a [guard card](shep.md#guard-asks) that shows them.
+
 `bercail doctor` names a bad entry, such as `invalid  routine nowhen: no at or every`, and a key nothing reads. Neither counts as a failure. `bercail routine list` names a bad entry too, and `bercail routine run` refuses one.
 
 Your own command is your code, like a cron job: nothing sandboxes it, the guard never sees it, and `--dry-run` cannot stop it from acting. Naming it in your config is what enrolls it. It runs in your home folder with nothing on stdin.
@@ -213,4 +215,4 @@ A source that fails fails the run, as in the cleanup routine: `hc`, the ledger, 
 
 The panel runs nothing itself: no run, pause or resume. **Ask Shep** opens a field on the card. Write what should change (its schedule, what it runs, pause it, resume it) and press Enter or **Send**: `bercail routine ask <name>` puts your words in Shep's inbox, and the card says `Sent to Shep at 08:01`. When it fails, such as before Shep's first start, the card says why and keeps your words.
 
-Shep gets one line: the routine, and your words quoted as data. The event does not prove who wrote it, so [SHEP.md](../shep/SHEP.md#routine-requests) keeps what Shep does with it small. It pauses or resumes the routine with `bercail routine`, and asks a card before it runs one now. Your `config.toml` is yours, and the guard blocks Shep from writing it, so for a schedule or command change Shep tells you the lines to change. A request approves nothing else.
+Shep gets one line: the routine, and your words quoted as data. The event does not prove who wrote it, so [SHEP.md](../shep/SHEP.md#routine-requests) keeps what Shep does with it small. It pauses or resumes the routine with `bercail routine`, and asks a card before it runs one now. Your `config.toml` is yours: for a schedule, Shep runs `bercail routine enable`, which the guard puts on a [Decisions card](shep.md#guard-asks) that shows each line it changes, and nothing changes until you Allow it. For your own command's argv, Shep tells you the lines to change. A request approves nothing else.

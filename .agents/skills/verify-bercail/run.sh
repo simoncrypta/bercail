@@ -205,6 +205,13 @@ check "a dry run prints the changed finding" \
   grep -qx '  changed  verify  one finding, changed' "$evidence/routine-dry-run.out"
 step routine-list 0 "$bercail" routine list
 check "list shows its last outcome" grep -qE '^verify +every 1d +next .* skipped \(quiet\) +active$' "$evidence/routine-list.out"
+# A built-in turns on at its documented time, and off, as the diff each prints.
+step routine-enable 0 "$bercail" routine enable deps
+check "enable prints the lines it adds" grep -qx '+at = "08:00"' "$evidence/routine-enable.out"
+step config-get 0 "$bercail" config get routine.deps at
+check "bercail reads the schedule it wrote" grep -qx '08:00' "$evidence/config-get.out"
+step routine-disable 0 "$bercail" routine disable deps
+check "disable takes its entry out" absent "$XDG_CONFIG_HOME/bercail/config.toml" 'routine.deps'
 # The cleanup built-in, on a HOME with nothing to retire: quiet, and a dry run
 # keeps no state of its own. It reads the question ledger with Node, which
 # this HOME's PATH finds only by its own folder, and spaces with the Herdr

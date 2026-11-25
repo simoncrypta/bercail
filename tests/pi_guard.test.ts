@@ -2727,6 +2727,64 @@ test("bercail cleanup asks the person in every role that can write, and nowhere 
     assertEqual(decision(command, tui).action, "ask", command);
 });
 
+test("a config.toml change is Shep's, on a card; every other role is refused, and a --dry-run or a read runs", () => {
+  const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
+  const edits = [
+    "bercail config set shep rollover true",
+    "~/.local/bin/bercail config unset shep rollover",
+    "bercail routine enable deps --at 08:00",
+    "env X=1 bercail routine disable deps",
+    "bercail config set shep rollover true && echo done",
+    "x=$(bercail config set shep rollover true",
+    // A redirect is bash's, not an argument: no --dry-run in it, and no gap between the words.
+    "bercail config set shep rollover true > --dry-run",
+    "bercail config set shep rollover true <<< --dry-run",
+    "bercail config > /dev/null set shep rollover true",
+    "bercail config 2>&1 set shep rollover true",
+    "bercail config set>/dev/null shep rollover true",
+    "bercail config >| /dev/null set shep rollover true",
+    // A --dry-run counts only in one argv as written: not in a comment, nor after a redirect.
+    "bercail config set shep rollover true # --dry-run",
+    "bercail config set shep rollover true --dry-run 2>&1",
+  ];
+  for (const command of edits) {
+    const got = decision(command, shep);
+    if (command.startsWith("x=")) assertEqual(got.action, "block", command);
+    else {
+      assertEqual(got.action, "ask", `${command} → ${JSON.stringify(got)}`);
+      assertMatch(got.reason ?? "", /The card shows each line it adds or removes/, command);
+    }
+    for (const input of [tui, headless, auto, judge, { ...tui, role: "lead" }, { ...tui, role: "shep-bg" }])
+      // A redirect's own write, or an unclosed $(, may be refused first, for its own reason.
+      blocked(command, input, /x=|>|2>&1$/.test(command) ? undefined : /only Shep changes it/);
+  }
+  const reads = [
+    "bercail config set shep rollover true --dry-run",
+    "bercail routine enable deps --dry-run --at 08:00",
+    "bercail config get shep rollover",
+    "bercail routine list",
+  ];
+  for (const command of reads) for (const input of [shep, tui, headless]) allowed(command, input);
+});
+
+test("a write to the config.toml bercail config set edits is refused, wherever XDG_CONFIG_HOME points", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "guard-config-"));
+  vi.stubEnv("HOME", dir);
+  vi.stubEnv("XDG_CONFIG_HOME", join(dir, "xdg"));
+  vi.stubEnv("BERCAIL_ROLE", "");
+  const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
+  const exec = vi.fn(async () => ({ code: 1, stdout: "", stderr: "" }));
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  try {
+    for (const path of [join(dir, ".config/bercail/config.toml"), join(dir, "xdg/bercail/config.toml")])
+      expect(
+        await handlers.tool_call({ toolName: "write", input: { path, content: "" } }, { hasUI: false, cwd: dir }),
+      ).toMatchObject({ block: true, reason: expect.stringMatching(/decides what bercail's guard lets through/) });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("closing a Herdr space asks the person in every role that can write, and nowhere runs unasked", () => {
   const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
   const closes = [

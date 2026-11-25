@@ -15,7 +15,8 @@ Post-install CLI (bercail):
   scratch       Each agent's TMPDIR (~/.cache/bercail/scratch/<pid>, leased by .<pid>): sweep [--dry-run] [--days N]
                 (remove the folders of runs that ended, and your /tmp entries unchanged and unread for N
                 days, 2 by default, that nothing holds; each recorded desk's start and end runs it) | run -- CMD | dir PID
-  config        A config.toml value as bercail reads it: config get <section> <key>
+  config        A config.toml value as bercail reads it: config get <section> <key> |
+                set <section> <key> <value> | unset <section> <key> [--dry-run] (change that key alone, and print the diff)
   desk          Desk agents: restore [--dry-run] (bring back what a reboot took) |
                 model DESK PROVIDER/MODEL[:thinking] (switch a live desk's model)
   update        Re-sync configs, Herdr layout and mod, helper, and skills (a client: the
@@ -105,7 +106,9 @@ Post-install CLI (bercail):
   routine       Your [routine.<name>] queries (docs/routines.md): list [--json] | show <name> [--run <id>] |
                 run <name> [--dry-run] (now, under its locks; new findings or a pause send Shep one event;
                 --dry-run prints what it found and writes nothing) |
-                pause <name> | resume <name> | ask <name> (your request on stdin, to Shep's inbox;
+                pause <name> | resume <name> | enable <name> [--at <when>] | disable <name> [--dry-run]
+                (declare a built-in in config.toml, or take it out; prints the diff) |
+                ask <name> (your request on stdin, to Shep's inbox;
                 the Routines panel's Ask Shep) | tick (start each one that is due) |
                 loop (a tick a minute; the hidden terminal bercail-routines runs it) | start (that terminal)
   cleanup       Retire a finished worktree: cleanup <worktree> copies its .bercail/ to

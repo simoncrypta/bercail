@@ -120,17 +120,229 @@ routine command
 routine at
 routine every'
 
+# The name BERCAIL_CONFIG_KEYS lists a section's keys under, from its JSON path: a
+# bare [policy] names no repo, nor a bare [routine] a routine, so nothing reads their keys.
+# shellcheck disable=SC2016 # jq, not the shell
+CONFIG_TABLE_JQ='def table: if IN(["policy"], ["desk_secrets"], ["routine"]) then ""
+  elif length == 2 and (.[0] | IN("policy", "desk_secrets", "routine")) then .[0]
+  else join(".") end;'
+
 # bercail config get SECTION KEY: the value as bercail reads it. No output and
-# status 1 when it is not set.
+# status 1 when it is not set. set and unset change that one key (_config_edit).
 cmd_config() {
-  local status=0
-  [[ $# -eq 3 && "$1" == get ]] || die "usage: bercail config get <section> <key>"
+  local status=0 usage="usage: bercail config get <section> <key> | set <section> <key> <value> [--dry-run] | unset <section> <key> [--dry-run]"
   # shellcheck source=lib/toml.sh
   source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
-  toml_get "$BERCAIL_USER_CONFIG" "$2" "$3" >/dev/null 2>&1 || status=$?
-  [[ "$status" -ne 1 ]] || return 1
-  toml_value "$BERCAIL_USER_CONFIG" "$2" "$3"
-  printf '\n'
+  if [[ "${1:-}" == get ]]; then
+    [[ $# -eq 3 ]] || die "$usage"
+    toml_get "$BERCAIL_USER_CONFIG" "$2" "$3" >/dev/null 2>&1 || status=$?
+    [[ "$status" -ne 1 ]] || return 1
+    toml_value "$BERCAIL_USER_CONFIG" "$2" "$3"
+    printf '\n'
+    return 0
+  fi
+  [[ "${1:-}" == set || "${1:-}" == unset ]] || die "$usage"
+  config_flags "$usage" "$@"
+  case "${CONFIG_ARGS[0]}:${#CONFIG_ARGS[@]}" in
+    set:4 | unset:3) ;;
+    *) die "$usage" ;;
+  esac
+  config_copy
+  _config_edit "$CONFIG_COPY" "${CONFIG_ARGS[@]}"
+  config_keep
+}
+
+# A config edit's flags, after its verb: --dry-run anywhere, as the guard reads it
+# (never a value), and last, --expect SHA, which a guard card's worker adds.
+# CONFIG_ARGS: the rest.
+config_flags() {
+  local usage="$1" arg
+  local -a words=("${@:2}")
+  local n=${#words[@]}
+  CONFIG_DRY=0 CONFIG_EXPECT="" CONFIG_ARGS=()
+  if ((n >= 2)) && [[ "${words[n - 2]}" == --expect ]]; then
+    [[ "${words[n - 1]}" =~ ^[0-9a-f]{64}$ ]] || die "$usage"
+    CONFIG_EXPECT="${words[n - 1]}"
+    words=("${words[@]:0:n-2}")
+  fi
+  for arg in "${words[@]}"; do
+    case "$arg" in
+      --dry-run) CONFIG_DRY=1 ;;
+      --expect) die "$usage" ;;
+      *) CONFIG_ARGS+=("$arg") ;;
+    esac
+  done
+}
+
+# CONFIG_TARGET, the file config.toml is through any links; CONFIG_COPY, to edit,
+# and CONFIG_WAS, as it was read (empty when there is none yet), gone when the
+# command ends. Unless a dry run, one writer at a time from this read to its
+# write, under flock; a card's write (--expect) does not go without it.
+config_copy() {
+  local fd
+  if [[ "$CONFIG_DRY" -eq 0 ]] && command -v flock >/dev/null 2>&1; then
+    mkdir -p "$BERCAIL_CONFIG_DIR"
+    exec {fd}>>"$BERCAIL_CONFIG_DIR/config.lock"
+    flock -x "$fd"
+  elif [[ "$CONFIG_DRY" -eq 0 && -n "$CONFIG_EXPECT" ]]; then
+    die "a card's config change needs flock, so no other bercail writes between its check and its write (util-linux on Linux, brew install flock on macOS)"
+  fi
+  # Nothing there, nor its folder: no link to follow yet.
+  CONFIG_TARGET="$BERCAIL_USER_CONFIG"
+  if [[ -e "$BERCAIL_USER_CONFIG" || -L "$BERCAIL_USER_CONFIG" ]]; then
+    CONFIG_TARGET="$(realpath "$BERCAIL_USER_CONFIG" 2>/dev/null)" ||
+      die "could not tell which file $BERCAIL_USER_CONFIG is through its links; nothing written"
+  elif [[ -d "$BERCAIL_CONFIG_DIR" ]]; then
+    CONFIG_TARGET="$(cd -P "$BERCAIL_CONFIG_DIR" && pwd -P)/config.toml"
+  fi
+  CONFIG_COPY="$(mktemp)" CONFIG_WAS="$(mktemp)" CONFIG_EXISTED=0
+  # shellcheck disable=SC2064 # the copies' names now
+  trap "rm -f '$CONFIG_COPY' '$CONFIG_WAS'" EXIT
+  if [[ -f "$CONFIG_TARGET" ]]; then
+    CONFIG_EXISTED=1
+    cat "$CONFIG_TARGET" >"$CONFIG_WAS"
+  fi
+  cp "$CONFIG_WAS" "$CONFIG_COPY"
+}
+
+# Print how the edit changes config.toml, and write it unless a dry run. With
+# --expect, only when the lines it adds and removes (or its unchanged line), under
+# the file's name and the one it is through its links, hash to the ones a guard
+# card showed (guard.ts pinConfigEdit). Not when the file changed or went since it
+# was read; an editor that saves in the instant between that check and the write
+# still loses its save. In place, not a rename: a link stays one, the mode stays.
+config_keep() {
+  local label="$BERCAIL_USER_CONFIG" out lines rc=0
+  [[ "$CONFIG_TARGET" == "$label" ]] || label+=" -> $CONFIG_TARGET"
+  if cmp -s "$CONFIG_WAS" "$CONFIG_COPY"; then
+    out="unchanged: $label"
+  else
+    out="$(diff -u -L "$label" -L "$label" "$CONFIG_WAS" "$CONFIG_COPY")" || rc=$?
+    [[ "$rc" -eq 1 ]] || die "could not diff the edit of $label"
+  fi
+  lines="$(grep '^[-+]' <<<"$out")" || lines="$out"
+  [[ -z "$CONFIG_EXPECT" || "$(printf '%s' "$lines" | _skill_sha256 /dev/stdin)" == "$CONFIG_EXPECT" ]] ||
+    die "$BERCAIL_USER_CONFIG changed since its card: this edit is now $lines; nothing written"
+  log "$out"
+  [[ "$CONFIG_DRY" -eq 0 ]] && ! cmp -s "$CONFIG_WAS" "$CONFIG_COPY" || return 0
+  if [[ -f "$CONFIG_TARGET" ]] && ! cmp -s "$CONFIG_TARGET" "$CONFIG_WAS" ||
+    [[ "$CONFIG_EXISTED" -eq 1 && ! -f "$CONFIG_TARGET" ]]; then
+    die "$BERCAIL_USER_CONFIG changed while bercail edited it; nothing written, run it again"
+  fi
+  mkdir -p "$(dirname "$CONFIG_TARGET")"
+  cat "$CONFIG_COPY" >"$CONFIG_TARGET"
+}
+
+# Rewrite FILE's lines: delete LINE, put TEXT in its place, or add TEXT after it.
+# TEXT through ENVIRON, since awk -v reads its backslashes.
+_config_lines() {
+  local file="$1" op="$2" line="$3" new
+  new="$(mktemp)"
+  CONFIG_TEXT="${4-}" awk -v op="$op" -v at="$line" '
+    NR == at && op == "delete" { next }
+    NR == at && op == "replace" { print ENVIRON["CONFIG_TEXT"]; next }
+    { print }
+    NR == at && op == "after" { print ENVIRON["CONFIG_TEXT"] }
+  ' "$file" >"$new"
+  cat "$new" >"$file"
+  rm -f "$new"
+}
+
+# Drop the empty table whose header is line H (N: the next header's, 0 at the end):
+# the header and the blank lines under it, and at the end the blank lines above
+# it too, which a set put there. A comment in it, or on its header, keeps it.
+_config_drop_table() {
+  local file="$1" new
+  new="$(mktemp)"
+  awk -v h="$2" -v n="$3" '
+    { l[NR] = $0 }
+    END {
+      to = n ? n - 1 : NR
+      keep = l[h] ~ /#/
+      for (i = h + 1; i <= to; i++) if (l[i] ~ /[^ \t]/) keep = 1
+      from = h
+      if (!n) while (from > 1 && l[from - 1] !~ /[^ \t]/) from--
+      for (i = 1; i <= NR; i++) if (keep || i < from || i > to) print l[i]
+    }' "$file" >"$new"
+  cat "$new" >"$file"
+  rm -f "$new"
+}
+
+# One line's key and value, as toml_records reads it alone; status 1 when it is
+# no key = value line (a multi-line string's first line).
+_config_line_record() {
+  local got
+  got="$(printf '%s\n' "$1" | _toml_awk records /dev/stdin | jq -c 'select(has("key")) | del(.line, .section)')"
+  [[ -n "$got" ]] && printf '%s' "$got"
+}
+
+# What follows the value on LINE: the # comment the person wrote, and the space before it.
+_config_comment() {
+  local line="$1" whole i
+  whole="$(_config_line_record "$line")" || return 0
+  for ((i = 1; i < ${#line}; i++)); do
+    [[ "${line:i:1}" == "#" ]] || continue
+    if [[ "$(_config_line_record "${line:0:i}")" == "$whole" ]]; then
+      [[ "${line:0:i}" =~ [[:blank:]]*$ ]]
+      printf '%s' "${BASH_REMATCH[0]}${line:i}"
+      return 0
+    fi
+  done
+}
+
+# Set (VALUE given) or unset one key of FILE, a copy of config.toml: only a key
+# bercail reads, and only its line. true, false and whole numbers go in bare,
+# anything else as a string. A new key goes at the end of its table, a new table
+# at the end of the file; an unset drops a table left with nothing in it. It
+# dies, naming the fix, on a key it cannot place, or when the file would read
+# differently anywhere else.
+_config_edit() {
+  local file="$1" op="$2" section="$3" key="$4" value="${5-}"
+  local path name want="" keytext valtext before after headers lines text last next
+  path="$(toml_section "$section")" && [[ "$path" != "[]" ]] ||
+    die "$section is not a table name; write it as a header names it: shep, routine.deps, 'policy.\"~/Work/a\"'"
+  name="$(jq -r --arg key "$key" "$CONFIG_TABLE_JQ"' if . == ["git"] then "git" else "\(table) \($key)" end' <<<"$path")"
+  [[ "$name" == git ]] || grep -qxF -- "$name" <<<"$BERCAIL_CONFIG_KEYS" ||
+    die "bercail reads no [$section] $key; docs/config.md lists the keys it reads"
+  if [[ "$key" =~ ^[A-Za-z0-9_-]+$ ]]; then keytext="$key"; else keytext="$(jq -nj --arg k "$key" '$k | tojson')"; fi
+  if [[ "$op" == set ]]; then
+    if [[ "$value" =~ ^(true|false|-?(0|[1-9][0-9]*))$ ]]; then valtext="$value"; else valtext="$(jq -nj --arg v "$value" '$v | tojson')"; fi
+    want="$valtext"
+  fi
+  before="$(toml_records "$file" | jq -c --argjson s "$path" --arg k "$key" 'select(.section != $s or .key != $k) | del(.line)')"
+  headers="$(toml_tables "$file" | jq -r --argjson s "$path" 'select(.section == $s) | .line')"
+  lines="$(toml_records "$file" | jq -r --argjson s "$path" --arg k "$key" 'select(.section == $s and .key == $k) | .line')"
+  [[ "$(wc -l <<<"$headers")" -le 1 && "$(wc -l <<<"$lines")" -le 1 ]] ||
+    die "[$section] or its $key appears twice in $BERCAIL_USER_CONFIG; remove one by hand first"
+  if [[ -n "$lines" ]]; then
+    text="$(sed -n "${lines}p" "$file")"
+    [[ "$(_config_line_record "$text" | jq -r .key)" == "$key" ]] ||
+      die "[$section] $key is a multi-line value in $BERCAIL_USER_CONFIG; change it by hand"
+    [[ "$op" == unset ]] || ! _config_line_record "$text" | jq -e '.value | type == "array"' >/dev/null ||
+      die "[$section] $key is an array in $BERCAIL_USER_CONFIG; change it by hand"
+    if [[ "$op" == set ]]; then
+      [[ "$text" =~ ^[[:blank:]]* ]]
+      _config_lines "$file" replace "$lines" "${BASH_REMATCH[0]}$keytext = $valtext$(_config_comment "$text")"
+    else
+      _config_lines "$file" delete "$lines"
+    fi
+  elif [[ "$op" == set && -n "$headers" ]]; then
+    last="$(toml_records "$file" | jq -r --argjson s "$path" 'select(.section == $s) | .line' | tail -n 1)"
+    _config_lines "$file" after "${last:-$headers}" "$keytext = $valtext"
+  elif [[ "$op" == set ]]; then
+    [[ ! -s "$file" || -z "$(tail -c 1 "$file")" ]] || printf '\n' >>"$file"
+    [[ ! -s "$file" ]] || printf '\n' >>"$file"
+    printf '[%s]\n%s = %s\n' "$(jq -r 'map(if test("^[A-Za-z0-9_-]+$") then . else tojson end) | join(".")' <<<"$path")" \
+      "$keytext" "$valtext" >>"$file"
+  fi
+  if [[ "$op" == unset && -n "$headers" ]] &&
+    ! toml_records "$file" | jq -e --argjson s "$path" 'select(.section == $s)' >/dev/null; then
+    next="$(toml_tables "$file" | jq -r --argjson h "$headers" 'select(.line > $h) | .line' | head -n 1)"
+    _config_drop_table "$file" "$headers" "${next:-0}"
+  fi
+  after="$(toml_records "$file" | jq -c --argjson s "$path" --arg k "$key" 'select(.section != $s or .key != $k) | del(.line)')"
+  [[ "$before" == "$after" && "$(toml_get "$file" "$section" "$key" 2>/dev/null)" == "$want" ]] ||
+    die "could not change [$section] $key alone in $BERCAIL_USER_CONFIG; change it by hand"
 }
 
 # config.toml keys that nothing reads (a key from an older release, a typo),
@@ -143,7 +355,7 @@ doctor_config() {
   source "$(dirname "${BASH_SOURCE[0]}")/toml.sh"
   while IFS= read -r line; do
     log "  $line"
-  done < <(toml_records "$BERCAIL_USER_CONFIG" | jq -r --arg known "$BERCAIL_CONFIG_KEYS" '
+  done < <(toml_records "$BERCAIL_USER_CONFIG" | jq -r --arg known "$BERCAIL_CONFIG_KEYS" "$CONFIG_TABLE_JQ"'
     def name: if test("^[A-Za-z0-9_-]+$") then . else tojson end;
     ($known | split("\n")) as $known
     | if has("error") then "unread  config.toml line \(.line): \(.error)"
@@ -152,11 +364,7 @@ doctor_config() {
         | select($v | IN("gh", "gt", "origin", "entire") | not)
         | "unknown  [git] \(.key | name) = \($v) (use gh, gt, origin, or entire)"
       else
-        # A bare [policy] names no repo, nor a bare [routine] a routine, so nothing reads their keys.
-        (if .section | IN(["policy"], ["desk_secrets"], ["routine"]) then ""
-         elif (.section | length) == 2 and (.section[0] | IN("policy", "desk_secrets", "routine")) then .section[0]
-         else .section | join(".") end) as $table
-        | "\($table) \(.key)" as $name
+        "\(.section | table) \(.key)" as $name
         | select($known | index($name) | not)
         | "unknown  [\(.section | map(name) | join("."))] \(.key) (nothing reads it)"
       end' | awk '!seen[$0]++')

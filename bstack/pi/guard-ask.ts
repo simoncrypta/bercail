@@ -108,7 +108,8 @@ function brief(ticket: GuardTicket, cls: GuardDefault): string {
           : f.kind === "trail merge"
             ? `${f.job ? `bercail job merge ${f.job} --change` : "entire trail merge"} ${f.change} in ${f.checkout}: trail ${f.trailId}, head ${f.head}, into ${f.base}${f.job ? `, then closes ${f.job} once no change is open` : ""}`
             : `git push from ${f.dir} (git dir ${f.gitDir}) to ${urlText(f.url)}: ${f.refspecs.join(", ")}`;
-  return `Shep ran: ${ticket.command}. On Allow, its worker guard-ask-${ticket.id} runs ${facts}, once, and only if none of that has changed. ${atDeadline(ticket, cls)}`;
+  const diff = f.kind === "command" && "diff" in f ? `It changes config.toml so:\n${f.diff}\n` : "";
+  return `Shep ran: ${ticket.command}. On Allow, its worker guard-ask-${ticket.id} runs ${facts}, once, and only if none of that has changed. ${diff}${atDeadline(ticket, cls)}`;
 }
 
 // The facts the operation pins to now, and what changed, or why it no longer pins.
@@ -135,6 +136,7 @@ async function decideNow(ticket: Pick<GuardTicket, "command" | "cwd">) {
     cwd: ticket.cwd,
     home,
     protectedFiles: [
+      join(home ?? "", ".config/bercail/config.toml"),
       join(stateDir(), "policy-trust.json"),
       join(stateDir(), "shep/questions.json"),
       join(stateDir(), "shep/questions.lock"),

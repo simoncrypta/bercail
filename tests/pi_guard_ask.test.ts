@@ -1,6 +1,7 @@
 // Shep's guard asks (docs/plans/shep-free-guard.md): which command is one operation the
 // guard can hand off, and what it pins. Real git in a temp HOME; entire is a stand-in.
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -374,6 +375,43 @@ test("any other one command is its words as written, quoted text and all, run in
   rmSync(join(dir, "here"));
   symlinkSync(dir, join(dir, "here"));
   expect(changedFacts(facts, await pin(`cd ${join(dir, "here")} && ${quoted}`))).toStrictEqual(["dir changed"]);
+});
+
+test("a config change pins bercail itself, the lines its --dry-run changes and their hash, writes nothing, and is stale once they read otherwise", async () => {
+  const cli = join(process.cwd(), "bin/bercail");
+  vi.stubEnv("BERCAIL_BIN", cli);
+  const config = join(dir, ".config/bercail/config.toml");
+  mkdirSync(join(dir, ".config/bercail"), { recursive: true });
+  writeFileSync(config, "[shep]\nrollover = false # mine\n");
+  const facts = await pin("/elsewhere/bercail config set shep rollover true", repo);
+  const diff = `--- ${config}\n+++ ${config}\n-rollover = false # mine\n+rollover = true # mine`;
+  const argv = [
+    cli,
+    "config",
+    "set",
+    "shep",
+    "rollover",
+    "true",
+    "--expect",
+    createHash("sha256").update(diff).digest("hex"),
+  ];
+  expect(facts).toStrictEqual({ kind: "command", dir: repo, argv, diff });
+  expect(runOf(facts)).toStrictEqual({ argv, cwd: repo });
+  expect(readFileSync(config, "utf8")).toBe("[shep]\nrollover = false # mine\n");
+  expect(await pin(`cd ${repo} && bercail routine enable deps`)).toMatchObject({
+    diff: `--- ${config}\n+++ ${config}\n+\n+[routine.deps]\n+run = "deps"\n+at = "08:00"`,
+  });
+  // The person changed it meanwhile; the program Shep named is never the one that runs.
+  writeFileSync(config, "[shep]\nrollover = true\n");
+  const now = await pin("bercail config set shep rollover true", repo);
+  expect(changedFacts(facts, now)).toStrictEqual(["argv changed", "diff changed"]);
+  expect(now).toMatchObject({ diff: `unchanged: ${config}` });
+  // What bercail refuses is refused before any card, in its words, and a hash is the guard's to give.
+  await expect(pin("bercail config set shep nope 1", repo)).rejects.toThrow(/bercail reads no \[shep\] nope/);
+  await expect(pin("bercail -v config set shep rollover true", repo)).rejects.toThrow(/handed off only as bercail/);
+  await expect(pin(`bercail config set shep rollover true --expect ${"0".repeat(64)}`, repo)).rejects.toThrow(
+    /handed off only as bercail/,
+  );
 });
 
 test("a push to an entire:// remote pins its URL, and the card names the Entire project", async () => {

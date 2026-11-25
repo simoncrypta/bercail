@@ -16,6 +16,13 @@
 #   JSON value. SECTION is the same dotted name as a header (layout,
 #   policy."~/Work/a.b"). Status 1 if the file, section, or key is missing.
 #   Status 2 for a raw value, which is printed as written.
+# toml_tables FILE
+#   One JSON line per table header, in file order: {"section":[...],"line":N}.
+#   A malformed header is left out (toml_records names it). Status 1 if FILE
+#   is missing.
+# toml_section SECTION
+#   SECTION, a dotted name as toml_get takes it, as a JSON array. Status 1 if
+#   it is not one.
 # toml_value FILE SECTION KEY [DEFAULT]
 #   toml_get decoded: strings, numbers, and bools raw; arrays compact JSON; a
 #   raw value as written, for the caller's own check to name. Missing prints
@@ -158,10 +165,11 @@ _toml_awk() {
     BEGIN {
       for (i = 1; i < 32; i++) ctl[sprintf("%c", i)] = sprintf("\\u%04x", i)
       section_json = "[]"; skip = 0; found = 0
-      if (mode == "get") {
+      if (mode == "get" || mode == "section") {
         if (!section_ok(section_arg)) exit 1
         want_section = name_json
       }
+      if (mode == "section") { print want_section; exit 0 }
     }
     { sub(/\r$/, "") }
     NR == 1 { sub(/^\357\273\277/, "") }
@@ -181,6 +189,7 @@ _toml_awk() {
         skip = 1; bad("malformed table"); next
       }
       section_json = name_json; skip = 0
+      if (mode == "tables") print "{\"section\":" section_json ",\"line\":" NR "}"
       next
     }
     {
@@ -237,6 +246,16 @@ toml_records() {
   local file="$1"
   [[ -n "$file" && -f "$file" ]] || _toml_die "no such file: ${file:-}" || return 1
   _toml_awk records "$file"
+}
+
+toml_tables() {
+  local file="$1"
+  [[ -n "$file" && -f "$file" ]] || _toml_die "no such file: ${file:-}" || return 1
+  _toml_awk tables "$file"
+}
+
+toml_section() {
+  _toml_awk section /dev/null "$1"
 }
 
 toml_get() {

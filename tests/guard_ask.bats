@@ -318,7 +318,8 @@ wait
   BERCAIL_BIN="$BATS_TEST_TMPDIR/bin/bercail-job" worker "$id"
   token="$(card "$id")"
   bercail shep question json | jq -e --arg t "$token" '.questions[] | select("\(.id)@\(.revision)" == $t)
-    | .brief | contains("bercail job merge trail:41 --change repo/7") and contains("then closes trail:41")' >/dev/null \
+    | .brief | contains("bercail job merge trail:41 --change repo/7") and contains("then closes trail:41")
+      and (contains("config.toml") | not)' >/dev/null \
     || fail "brief: $(bercail shep question json | jq -c '.questions[-1].brief')"
   pick "$token" Allow >/dev/null
   jq -e '.outcome == "ran" and .operation == "trail merge" and .target == "repo/7"' <<<"$(event "$id")" >/dev/null \
@@ -403,6 +404,38 @@ arg[--json]" ]] || fail "argv: $(cat "$LOG")"
   [[ -z "$(find "$BATS_TEST_TMPDIR" -name pwned -o -name out)" ]] || fail "a quoted metacharacter ran"
   run bercail guard ask "$id"
   [[ "$output" == *"not run: its Allow was already claimed"* && "$(grep -c '^entire ' "$LOG")" -eq 1 ]] || fail "rerun: $output"
+}
+
+@test "Shep's config change shows each line on its card, runs as bercail on an Allow, and a Deny or a change by the person writes nothing" {
+  export BERCAIL_BIN="$ROOT/bin/bercail"
+  config="$HOME/.config/bercail/config.toml"
+  mkdir -p "${config%/*}"
+  printf '[shep]\nrollover = false\n' >"$config"
+  id="$(ticket "cd $REPO && bercail config set shep rollover true")"
+  worker "$id"
+  token="$(card "$id")"
+  bercail shep question json | jq -e --arg t "$token" --arg c "$config" --arg r "$ROOT" '.questions[] | select("\(.id)@\(.revision)" == $t)
+    | .brief | contains("runs \($r)/bin/bercail config set shep rollover true --expect ")
+      and contains("It changes config.toml so:\n--- \($c)\n+++ \($c)\n-rollover = false\n+rollover = true\n")' \
+    >/dev/null || fail "brief: $(bercail shep question json | jq -c '.questions[-1].brief')"
+  [[ "$(cat "$config")" == $'[shep]\nrollover = false' ]] || fail "written before the Allow: $(cat "$config")"
+  pick "$token" Allow >/dev/null
+  jq -e '.outcome == "ran" and .exit == 0' <<<"$(event "$id")" >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(cat "$config")" == $'[shep]\nrollover = true' ]] || fail "after the Allow: $(cat "$config")"
+
+  id="$(ticket "cd $REPO && bercail routine enable deps")"
+  worker "$id"
+  pick "$(card "$id")" Deny >/dev/null
+  jq -e '.outcome == "denied"' <<<"$(event "$id")" >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(cat "$config")" == $'[shep]\nrollover = true' ]] || fail "after the Deny: $(cat "$config")"
+
+  id="$(ticket "cd $REPO && bercail config unset shep rollover")"
+  BERCAIL_GUARD_ASK_POLL_MS=200 worker "$id"
+  token="$(card "$id")"
+  printf '[shep]\nrollover = true # the person\n' >"$config"
+  jq -e '.outcome == "changed" and .why == "argv changed, diff changed"' <<<"$(event "$id")" >/dev/null \
+    || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(cat "$config")" == $'[shep]\nrollover = true # the person' ]] || fail "written: $(cat "$config")"
 }
 
 @test "a command whose argument changed after its card runs nothing on an Allow" {

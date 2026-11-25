@@ -2,7 +2,7 @@
 // tool_call and tool_result, the repo's git policy (bercail policy show), the
 // approval log, and the log of warnings and refusals.
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   accessSync,
   constants as fsConstants,
@@ -136,6 +136,9 @@ const protectedFile = "This file decides what bercail's guard lets through. Ask 
 const answerCommand =
   "Answering one of Shep's questions is the person's pick, on a Decisions card or in Discuss. Leave it to them.";
 const routineAsk = "A request about a routine is the person's, sent from the Routines panel. Leave it to them.";
+const configEditRefused =
+  "config.toml is the person's: only Shep changes it, on a Decisions card they answer. Say in your report what should change (bercail config set <section> <key> <value>, or bercail routine enable <name>), and Shep asks.";
+const configEditAsk = "Change your config.toml? The card shows each line it adds or removes.";
 const syntheticInput =
   "Typing or clicking for the person (wtype, ydotool, xdotool, /dev/uinput, hyprctl's key dispatchers) is blocked: it could answer for them.";
 const discussOnly =
@@ -1550,6 +1553,40 @@ function isRoutineAsk(words: string[]): boolean {
   return plain.some((word, i) => basename(word) === "bercail" && plain[i + 1] === "routine" && plain[i + 2] === "ask");
 }
 
+// A redirect: bash takes it, and the word after a bare one, so the program never sees them.
+const redirectOp = /^(\d*|&)?(<<<|<<-?|<>|<&|>&|>>|<|>)/;
+
+// bercail config set or unset, or routine enable or disable: a write to the person's
+// config.toml. Its area and verb anywhere after it, each word cut at a redirect, which
+// bash takes even glued on: a command that only looks odd asks too.
+function editsConfig(words: string[]): boolean {
+  const plain = plainWords(words.map((word) => (redirectOp.test(word) ? "" : word.split(/&?[<>]/)[0])));
+  const rest = plain.slice(plain.findIndex((word) => basename(word) === "bercail") + 1 || plain.length);
+  const has = (...any: string[]) => rest.some((word) => any.includes(word));
+  return (has("config") && has("set", "unset")) || (has("routine") && has("enable", "disable"));
+}
+
+// Each command's words, as commandsOf reads them, with the | of a >| put back too: the
+// tokenizer ends a segment there, as if it were a pipe.
+function configCommands(command: string): string[][] {
+  const out: string[][] = [];
+  let clobber = false;
+  for (const segment of commandsOf(command)) {
+    const words = unparen(segment.words, segment.quoted);
+    if (clobber) out[out.length - 1].push(...words);
+    else out.push(words);
+    clobber = segment.after === "|" && /[>]$/.test(segment.words.at(-1) ?? "");
+  }
+  return out;
+}
+
+// Its --dry-run, which writes nothing, only in a command the guard reads word for word
+// as one argv (guardOperation): no comment, redirect or expansion bash could take it from.
+function dryConfigRun(command: string, input: GuardInput): boolean {
+  const op = guardOperation(command, input.cwd, input.home);
+  return typeof op !== "string" && op.kind === "command" && op.argv.includes("--dry-run");
+}
+
 function isPolicyTrust(words: string[]): boolean {
   const plain = plainWords(words);
   return plain.some((word, i) => word === "policy" && plain[i + 1] === "trust");
@@ -1690,7 +1727,7 @@ function protectedTarget(
 const refusalTriggers = new RegExp(
   [
     String.raw`\b(git|gh|gt|origin|entire(-brain|-graph)?|push|op|basecamp|wtype|ydotool|dotoolc?|xdotool|evemu-\w+|hyprctl|uinput)\b`,
-    String.raw`question\s+answer|policy\s+trust|bercail\s+todo`,
+    String.raw`question\s+answer|policy\s+trust|bercail\s+(todo|config\s+(set|unset)|routine\s+(enable|disable))`,
     String.raw`config\.toml|policy-trust\.json|questions\.(json|lock)|todo\.json|bercail/shep`,
   ].join("|"),
 );
@@ -2497,6 +2534,10 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
   if (secret && (/\$\{?OP_SERVICE_ACCOUNT_TOKEN/.test(command) || /\/proc\/\S*environ/.test(command)))
     return block(printsToken);
   let decision: GuardDecision = mktempInTmp(command, input.tmpdir) ? warn(tmpWrite(input.tmpdir!)) : allow;
+  // Over commandsOf's commands: segmentsOf ends one at the & of a 2>&1 before its program's last words.
+  const configEdit = configCommands(command).some((words) => editsConfig(commandWords(words)));
+  if (configEdit && !(depth === 0 && dryConfigRun(command, input)))
+    decision = input.role === "shep" ? ask(configEditAsk) : block(configEditRefused);
   // Each dir the shell may be in; git and forges use it only when there is one.
   let cwds = input.cwds ?? [input.cwd];
   const cwdOf = () => (cwds.length === 1 ? cwds[0] : undefined);
@@ -2971,6 +3012,8 @@ export type GuardOp =
 
 /** What it acts on, read from disk, git and entire: the worker runs on these alone. */
 export type GuardFacts =
+  // A config.toml edit: the lines its --dry-run adds and removes.
+  | { kind: "command"; dir: string; argv: string[]; diff: string }
   | { kind: "cleanup"; worktree: string; branch: string | null; head: string }
   // The gone checkout's path as its handoffs name it, their one repo, the last one's branch,
   // and how many there are.
@@ -3368,6 +3411,7 @@ export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<G
   if (op.kind === "trail merge") return pinTrail(read, op.dir, op.trail, op.job);
   if (op.kind === "cleanup" && op.gone) return pinGone(read, op.path);
   // Its folder by its real path, so a symlink moved later cannot send it elsewhere.
+  if (op.kind === "command" && editsConfig(op.argv)) return pinConfigEdit(read, realpathSync(op.dir), op.argv);
   if (op.kind === "command") return { kind: "command", dir: realpathSync(op.dir), argv: op.argv };
   if (op.kind === "cleanup") {
     const worktree = realpathSync(op.path);
@@ -3388,6 +3432,26 @@ export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<G
   if (new Set(refspecs.map((spec) => spec.split(":")[1])).size !== refspecs.length)
     fail("it pushes to the same branch twice");
   return { kind: "push", dir, gitDir, url: await pinUrl(read, dir, op.remote), refspecs };
+}
+
+// A config.toml edit, run by bercail itself, never the program Shep named: the lines
+// its --dry-run adds and removes now, under the file's name. The card shows them. The
+// worker runs it with --expect and their hash, so bercail writes only that edit, under
+// its lock; the card is stale once they read otherwise.
+async function pinConfigEdit(read: Read, dir: string, words: string[]) {
+  const [, area, verb] = words;
+  if (
+    basename(words[0]) !== "bercail" ||
+    !["config set", "config unset", "routine enable", "routine disable"].includes(`${area} ${verb}`) ||
+    words.includes("--expect")
+  )
+    fail("a config change is handed off only as bercail config set|unset … or bercail routine enable|disable …");
+  const bin = process.env.BERCAIL_BIN || "bercail";
+  const shown = await read(bin, [...words.slice(1), "--dry-run"], dir);
+  const lines = shown.split("\n").filter((line) => /^[-+]/.test(line));
+  const diff = lines.length ? lines.join("\n") : shown;
+  const argv = [bin, ...words.slice(1), "--expect", createHash("sha256").update(diff).digest("hex")];
+  return { kind: "command" as const, dir, argv, diff };
 }
 
 // The fixed argv the worker runs, and where: never the text Shep wrote. A push goes
@@ -3938,6 +4002,8 @@ export default function (pi: ExtensionAPI) {
     process.env.BERCAIL_CONFIG ||
     join(process.env.XDG_CONFIG_HOME || join(home ?? "", ".config"), "bercail/config.toml");
   const protectedFiles = [
+    // The one bercail config set writes, wherever BERCAIL_CONFIG or XDG_CONFIG_HOME point.
+    join(home ?? "", ".config/bercail/config.toml"),
     join(stateDir(), "policy-trust.json"),
     // Shep's question ledger: an answered question in it is the person's pick.
     join(stateDir(), "shep/questions.json"),

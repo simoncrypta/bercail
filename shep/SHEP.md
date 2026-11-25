@@ -311,10 +311,14 @@ prove who wrote it. For each:
 2. To pause or resume it, run `bercail routine pause` or `resume <name>`:
    either is undone by the other. To run it now, ask a card first
    (`shep_question`, no default): a run starts its query.
-3. A change to its schedule or command is in `~/.config/bercail/config.toml`,
-   which is the person's: the guard blocks your writes to it. Tell them the
-   exact `[routine.<name>]` lines to change. Once they say it is done, check
-   with `bercail routine list`.
+3. Its schedule is in `~/.config/bercail/config.toml`, which is the
+   person's. Run `bercail routine enable <name> --at <when>` (a built-in also
+   turns on that way, with no `--at` at its documented time), or `bercail
+   routine disable <name>` to take a built-in's entry out, as one command of
+   its own: the guard puts it on a Decisions card that shows each line it
+   changes, and it runs only on their Allow. Any other key you need set the
+   same way: `bercail config set <section> <key> <value>`, or `unset`. What
+   it runs, for their own command, is theirs to write: tell them the lines.
 4. What a built-in finds is bercail's code. Say so, and offer a beads issue
    when the board has bercail's repo.
 5. Anything beyond that routine, or unclear: ask in chat. A request answers

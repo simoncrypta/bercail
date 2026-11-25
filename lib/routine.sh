@@ -981,10 +981,62 @@ routine_restart_loop() {
   return 0
 }
 
+# The schedule docs/routines.md gives each built-in, which enable sets when it is given none.
+declare -A ROUTINE_BUILTIN_AT=([cleanup]="07:30" [deps]="08:00" [mistakes]="Mon 08:00" [rules]="12:30")
+
+# bercail routine enable NAME [--at WHEN]: declare it in config.toml, in one
+# write. A built-in runs itself unless it runs something already. --at replaces
+# its schedule, every too; with none, it keeps its own or takes the built-in's.
+routine_enable() {
+  local name="$1" at="$2" entry errors section
+  section="routine.$(_routine_label "$name")"
+  config_copy
+  entry="$(BERCAIL_USER_CONFIG="$CONFIG_WAS" routine_entries | jq -c --arg n "$name" 'select(.name == $n)')"
+  if ! jq -e '.run or .command' <<<"${entry:-null}" >/dev/null; then
+    # Not grep -q: it stops reading, and the list's printf dies of SIGPIPE under pipefail.
+    routine_builtins | grep -xF -- "$name" >/dev/null ||
+      die "no built-in $name (lib/routine/<name>.sh); declare [routine.$name] with its command by hand (docs/routines.md)"
+    _config_edit "$CONFIG_COPY" set "$section" run "$name"
+  fi
+  if [[ -n "$at" ]]; then
+    _config_edit "$CONFIG_COPY" unset "$section" every
+    _config_edit "$CONFIG_COPY" set "$section" at "$at"
+  elif ! jq -e '.at or .every' <<<"${entry:-null}" >/dev/null; then
+    _config_edit "$CONFIG_COPY" set "$section" at "${ROUTINE_BUILTIN_AT[$name]:-}"
+  fi
+  errors="$(BERCAIL_USER_CONFIG="$CONFIG_COPY" routine_entries | jq -r --arg n "$name" 'select(.name == $n) | .errors | join("; ")')"
+  [[ -z "$errors" ]] || die "routine $(_routine_label "$name"): $errors"
+  config_keep
+}
+
+# bercail routine disable NAME: take its entry out of config.toml; its state
+# stays, so enable brings it back where it was. Your own command lives only in
+# the entry, so that one stays: pause it, or remove it by hand.
+routine_disable() {
+  local name="$1" key
+  config_copy
+  ! BERCAIL_USER_CONFIG="$CONFIG_WAS" routine_entries | jq -e --arg n "$name" 'select(.name == $n) | .command' >/dev/null ||
+    die "routine $(_routine_label "$name") runs your own command, which only its entry holds; bercail routine pause $name stops it, or remove [routine.$name] by hand"
+  for key in run at every; do
+    _config_edit "$CONFIG_COPY" unset "routine.$(_routine_label "$name")" "$key"
+  done
+  config_keep
+}
+
 cmd_routine() {
   local sub="${1:-}" name="${2:-}"
-  local usage="usage: bercail routine list [--json] | show <name> [--run <id>] | run <name> [--dry-run] | pause <name> | resume <name> | ask <name> (the request on stdin) | tick | loop | start"
+  local usage="usage: bercail routine list [--json] | show <name> [--run <id>] | run <name> [--dry-run] | pause <name> | resume <name> | enable <name> [--at <when>] [--dry-run] | disable <name> [--dry-run] | ask <name> (the request on stdin) | tick | loop | start"
+  if [[ "$sub" == enable || "$sub" == disable ]]; then
+    config_flags "$usage" "$@"
+    set -- "${CONFIG_ARGS[@]}"
+    name="${2:-}"
+  fi
   case "$sub" in
+    enable)
+      [[ $# -eq 2 || ($# -eq 4 && "$3" == --at && -n "$4") ]] || die "$usage"
+      routine_enable "$name" "${4:-}"
+      ;;
+    disable) [[ $# -eq 2 ]] || die "$usage"; routine_disable "$name" ;;
     list)
       if [[ $# -eq 1 ]]; then routine_list
       elif [[ $# -eq 2 && "$2" == --json ]]; then routine_list_json

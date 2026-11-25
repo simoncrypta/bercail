@@ -202,6 +202,91 @@ EOF
   [[ "$rc" -eq 1 && "$out" == *"usage: bercail config get <section> <key>"* ]] || fail "usage: rc=$rc out=$out"
 }
 
+@test "bercail config set changes its key's line alone, comment kept, or adds the key or its table; each unset puts the file back" {
+  local out cfg="$BERCAIL_USER_CONFIG" real="$BATS_TEST_TMPDIR/dotfiles/config.toml"
+  mkdir -p "$BERCAIL_CONFIG_DIR" "${real%/*}"
+  sed 's/^compact_at = 250000$/&#no space/' "$ROOT/tests/fixtures/config-hard.toml" >"$real"
+  cp "$real" "$BATS_TEST_TMPDIR/before"
+  chmod 600 "$real"
+  ln -s "$real" "$cfg"
+  out="$(bash "$ROOT/bin/bercail" config set layout review tuicr)"
+  [[ "$out" == "--- $cfg -> $real"$'\n'* ]] || fail "the diff names the link and its file: $out"
+  [[ "$out" == *$'\n-review = "hunk" # comment after\n+review = "tuicr" # comment after\n'* ]] || fail "the diff: $out"
+  bash "$ROOT/bin/bercail" config set bstack claude 'x"y#z' >/dev/null
+  assert_eq 'claude = "x\"y#z"   # keeps the variant' "$(grep '^claude' "$cfg")" "a quote and a # in the value, the comment after it kept"
+  bash "$ROOT/bin/bercail" config set shep compact_at 1 >/dev/null
+  assert_eq 'compact_at = 1#no space' "$(grep '^compact_at' "$cfg")" "a comment right after its value"
+  bash "$ROOT/bin/bercail" config set shep compact_at 250000 >/dev/null
+  bash "$ROOT/bin/bercail" config set shep rollover true >/dev/null
+  bash "$ROOT/bin/bercail" config set git '/Work/x y' entire >/dev/null
+  bash "$ROOT/bin/bercail" config set routine.deps at 08:00 >/dev/null
+  assert_eq true "$(bash "$ROOT/bin/bercail" config get shep rollover)" "a bool, bare"
+  assert_eq entire "$(bash "$ROOT/bin/bercail" config get git '/Work/x y')" "a quoted key"
+  assert_eq $'[routine.deps]\nat = "08:00"' "$(tail -n 2 "$cfg")" "a new table at the end"
+  # A dry run prints the same diff, and writes nothing.
+  out="$(bash "$ROOT/bin/bercail" config set --dry-run shep compact_at 1)"
+  [[ "$out" == *$'\n-compact_at = 250000#no space\n+compact_at = 1#no space\n'* ]] || fail "dry run: $out"
+  assert_eq 250000 "$(bash "$ROOT/bin/bercail" config get shep compact_at)" "the dry run wrote nothing"
+  bash "$ROOT/bin/bercail" config unset routine.deps at >/dev/null
+  bash "$ROOT/bin/bercail" config unset git '/Work/x y' >/dev/null
+  bash "$ROOT/bin/bercail" config unset shep rollover >/dev/null
+  bash "$ROOT/bin/bercail" config set bstack claude 'claude-bridge/claude-opus-5-5#high' >/dev/null
+  bash "$ROOT/bin/bercail" config set layout review hunk >/dev/null
+  diff "$BATS_TEST_TMPDIR/before" "$cfg" || fail "the file is not as it was"
+  [[ -L "$cfg" && "$(stat -c %a "$real")" == 600 ]] || fail "the link or its mode changed"
+  assert_eq "unchanged: $cfg -> $real" "$(bash "$ROOT/bin/bercail" config unset shep rollover)" "an unset key"
+}
+
+@test "bercail config set --expect writes only the edit its card showed, to the file it showed, and never over a change made since" {
+  local out rc=0 links="$BATS_TEST_TMPDIR/links"
+  # The hash a card's worker passes: of the lines a dry run adds and removes.
+  card() { printf '%s' "$(bash "$ROOT/bin/bercail" config set shep rollover true --dry-run | grep '^[-+]')" | sha256sum | cut -c1-64; }
+  apply() { rc=0; out="$(bash "$ROOT/bin/bercail" config set shep rollover true --expect "$1" 2>&1)" || rc=$?; }
+  mkdir -p "$BERCAIL_CONFIG_DIR" "$links/a" "$links/b"
+  printf '[shep]\nrollover = false\n' >"$links/a/config.toml"
+  cp "$links/a/config.toml" "$links/b/config.toml"
+  ln -s "$links/a" "$links/profile"
+  ln -s "$links/profile/config.toml" "$BERCAIL_USER_CONFIG"
+  hash="$(card)"
+  # The person edits it, or switches the profile the link goes through: the card is stale.
+  printf '[shep]\nrollover = false # the person\n' >"$links/a/config.toml"
+  apply "$hash"
+  [[ "$rc" -eq 1 && "$out" == *"changed since its card"*"nothing written"* ]] || fail "an edit: rc=$rc out=$out"
+  hash="$(card)"
+  ln -sfn "$links/b" "$links/profile"
+  apply "$hash"
+  [[ "$rc" -eq 1 && "$out" == *"changed since its card"* ]] || fail "a switched profile: rc=$rc out=$out"
+  assert_eq $'[shep]\nrollover = false' "$(cat "$links/b/config.toml")" "a stale card wrote"
+  apply "$(card)"
+  [[ "$rc" -eq 0 && "$(cat "$links/b/config.toml")" == $'[shep]\nrollover = true' && -L "$BERCAIL_USER_CONFIG" ]] ||
+    fail "the card's edit: rc=$rc out=$out"
+  # --expect is the worker's, last; anywhere else it is no flag bercail takes.
+  for args in "config --expect $hash set shep rollover true" "config set shep rollover true --expect $hash --dry-run" \
+    "config set shep rollover true --expect nothex"; do
+    rc=0
+    read -r -a words <<<"$args"
+    out="$(bash "$ROOT/bin/bercail" "${words[@]}" 2>&1)" || rc=$?
+    [[ "$rc" -eq 1 && "$out" == *usage* ]] || fail "$args: rc=$rc out=$out"
+  done
+}
+
+@test "bercail config set refuses a key bercail does not read, a table it cannot name, a multi-line value, an array or a key written twice" {
+  local out rc
+  mkdir -p "$BERCAIL_CONFIG_DIR"
+  cp "$ROOT/tests/fixtures/config-hard.toml" "$BERCAIL_USER_CONFIG"
+  printf '[tests]\nslots = 1\nslots = 2\n\n[routine.mine]\ncommand = ["x"]\n' >>"$BERCAIL_USER_CONFIG"
+  cp "$BERCAIL_USER_CONFIG" "$BATS_TEST_TMPDIR/before"
+  for args in "shep session 1|bercail reads no [shep] session" "a..b x 1|a..b is not a table name" \
+    "policy push main|bercail reads no [policy] push" "routine.mine command x|[routine.mine] command is an array" \
+    'policy."~/Work/a.b" rules x|[policy."~/Work/a.b"] rules is a multi-line value' "tests slots 3|appears twice"; do
+    IFS=' ' read -r -a words <<<"${args%%|*}"
+    rc=0
+    out="$(bash "$ROOT/bin/bercail" config set "${words[@]}" 2>&1)" || rc=$?
+    [[ "$rc" -eq 1 && "$out" == *"${args#*|}"* ]] || fail "${args%%|*}: rc=$rc out=$out"
+  done
+  diff "$BATS_TEST_TMPDIR/before" "$BERCAIL_USER_CONFIG" || fail "a refusal changed the file"
+}
+
 @test "a command bercail does not know prints the commands as bercail help lists them, each dispatched command among them" {
   local out help rc=0 cmd line
   out="$(bash "$ROOT/bin/bercail" nope 2>&1 >/dev/null)" || rc=$?
