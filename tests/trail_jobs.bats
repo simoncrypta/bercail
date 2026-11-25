@@ -10,6 +10,7 @@ setup() {
   need node
   set -o pipefail
   unset HC_BIN BERCAIL_HANDOFF_SPAWN BERCAIL_ROLE
+  export ENTIRE_BIN="$BATS_TEST_TMPDIR/bin/entire"
   export HERDR_APP_BIN="$BATS_TEST_TMPDIR/no-herdr-app" BERCAIL_SHEP_QUEUE_WAIT=120
   export PATH="$BATS_TEST_TMPDIR/bin:/usr/bin:/bin"
   export LOG="$BATS_TEST_TMPDIR/log" TRAILS="$BATS_TEST_TMPDIR/trails" HC_DATA="$BATS_TEST_TMPDIR/hc"
@@ -105,23 +106,24 @@ desk() {
   mv "$HC_DATA/ls.tmp" "$HC_DATA/ls.json"
 }
 
-# A handoff-spawn that starts desk t21 in a new worktree of the branch, as the
-# real one reports it, and adds its handoff comment through bercail job.
+# A handoff-spawn that starts desk t21 ($SPAWN_DESK) in a new worktree of the
+# branch, as the real one reports it, and adds its handoff comment through bercail job.
 spawn_ok() {
   export BERCAIL_HANDOFF_SPAWN="$BATS_TEST_TMPDIR/bin/spawn" ROOT REPO
   cat >"$BERCAIL_HANDOFF_SPAWN" <<'EOF'
 #!/usr/bin/env bash
 printf 'spawn %s\n' "$*" >>"$LOG"
 while (($#)); do case "$1" in --issue) issue="$2" ;; --branch) branch="$2" ;; esac; shift; done
+desk="${SPAWN_DESK:-t21}"
 [[ -d "$REPO.$branch" ]] || git -C "$REPO" worktree add -q "$REPO.$branch" "$branch" 2>/dev/null \
   || git -C "$REPO" worktree add -qb "$branch" "$REPO.$branch"
 printf 'bercail handoff: stage bstack, linked worktree %s' "$REPO.$branch" | "$ROOT/bin/bercail" job comment "$issue" --repo "$REPO.$branch" >/dev/null
-jq -n --arg p "$REPO.$branch" --arg i "$issue" '{address:"t21",cwd:$p,state:"live",status:{app:"pi",state:"working"},
-  labels:{"bercail.role":"agent","bercail.space":"sp-new","bercail.issue":$i}}' >"$HC_DATA/t21.json"
-jq --arg cwd "$REPO.$branch" '.terminals += [{address: "t21", cwd: $cwd, state: "live"}]' "$HC_DATA/ls.json" >"$HC_DATA/ls.tmp"
+jq -n --arg d "$desk" --arg p "$REPO.$branch" --arg i "$issue" '{address:$d,cwd:$p,state:"live",status:{app:"pi",state:"working"},
+  labels:{"bercail.role":"agent","bercail.space":"sp-new","bercail.issue":$i}}' >"$HC_DATA/$desk.json"
+jq --arg d "$desk" --arg cwd "$REPO.$branch" '.terminals += [{address: $d, cwd: $cwd, state: "live"}]' "$HC_DATA/ls.json" >"$HC_DATA/ls.tmp"
 mv "$HC_DATA/ls.tmp" "$HC_DATA/ls.json"
-jq -nc --arg p "$REPO.$branch" --arg i "$issue" --arg b "$branch" \
-  '{ok:true,agent_started:true,path:$p,branch:$b,space:"sp-new",desk:"t21",session:"s-new",issue:$i}' \
+jq -nc --arg d "$desk" --arg p "$REPO.$branch" --arg i "$issue" --arg b "$branch" \
+  '{ok:true,agent_started:true,path:$p,branch:$b,space:"sp-new",desk:$d,session:"s-\($d)",issue:$i}' \
   | tee -a "$XDG_STATE_HOME/bercail/handoffs.jsonl"
 EOF
   chmod +x "$BERCAIL_HANDOFF_SPAWN"
@@ -129,7 +131,7 @@ EOF
 
 dispatch() {
   jq -nc --arg repo "$REPO" '{repo:$repo,target:"trail:1",requestId:"r1",stage:"bstack",message:"Do the research",branch:"login"}' \
-    | jq -c "${1:-.}" | bercail shep task dispatch
+    | jq -c "${1:-.}" | bercail shep task dispatch "${@:2}"
 }
 
 record_file() { printf '%s' "$XDG_STATE_HOME/bercail/jobs/app-$(printf '%s' "$REPO" | sha256sum | cut -c1-12)/$1"; }
@@ -373,6 +375,301 @@ trail:1: Research the login flow · planning · blocked by #2" ]] || fail "list:
   out="$(dispatch)" || fail "retry: $out"
   jq -e '.status == "unknown" and (.next | startswith("Not finished: trail:1 is blocked by #2"))' <<<"$out" >/dev/null || fail "retry: $out"
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]] || fail "the retry spawned: $(cat "$LOG")"
+}
+
+# parent N BRANCH DESK: trail N gets desk DESK in a worktree of BRANCH, which
+# stages its work there. gone DESK: the desk ends; its checkout stays.
+parent() {
+  SPAWN_DESK="$3" dispatch ".target = \"trail:$1\" | .requestId = \"p$1\" | .branch = \"$2\"" >/dev/null || fail "dispatch of parent trail:$1"
+  printf 'work of trail %s\n' "$1" >"$REPO.$2/work-$1.txt"
+  git -C "$REPO.$2" add "work-$1.txt"
+}
+gone() {
+  rm "$HC_DATA/$1.json"
+  jq --arg a "$1" '.terminals |= map(select(.address != $a))' "$HC_DATA/ls.json" >"$HC_DATA/ls.tmp"
+  mv "$HC_DATA/ls.tmp" "$HC_DATA/ls.json"
+}
+stacked() { dispatch ".stackedOn = $1 | .stackReason = \"Simon: start on the staged work\" | ${2:-.}" "${@:3}"; }
+
+teardown() {
+  local pid
+  for pid in "${PI_PIDS[@]}"; do
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+  done
+}
+
+# live_pi DESK DIR ISSUE: what dispatch verifies of a live desk spawn_ok
+# started. A Pi stand-in runs in DIR (bash blocked in read, as in
+# tests/shep_task.bats), with its desk record, session file and session claim.
+PI_PIDS=()
+live_pi() {
+  local n pid ticks file="$BATS_TEST_TMPDIR/$1.jsonl"
+  mkdir -p "$BATS_TEST_TMPDIR/pi" "$XDG_STATE_HOME/bercail/desk-sessions" "$XDG_RUNTIME_DIR/bercail/open-sessions"
+  [[ -e "$BATS_TEST_TMPDIR/pi/pi" ]] || cp "$BASH" "$BATS_TEST_TMPDIR/pi/pi"
+  mkfifo "$BATS_TEST_TMPDIR/pi/$1.hold"
+  (cd "$2" && exec "$BATS_TEST_TMPDIR/pi/pi" -c 'read -rt 120 <>"$0"' "$BATS_TEST_TMPDIR/pi/$1.hold") >/dev/null 2>&1 &
+  pid=$!
+  PI_PIDS+=("$pid")
+  for ((n = 0; n < 200; n++)); do
+    [[ "$(basename "$(readlink "/proc/$pid/exe")")" == pi ]] && break
+    sleep 0.01
+  done
+  [[ "$n" -lt 200 ]] || fail "the Pi stand-in did not exec"
+  ticks="$(awk '{print $22}' "/proc/$pid/stat")"
+  jq -nc --arg s "s-$1" --arg cwd "$2" '{type:"session",version:3,id:$s,cwd:$cwd}' >"$file"
+  jq -n --arg s "s-$1" --arg ticks "$ticks" --argjson pid "$pid" '{pid:$pid,start_ticks:$ticks,sessions:[$s]}' \
+    >"$XDG_RUNTIME_DIR/bercail/open-sessions/$pid.json"
+  jq -n --arg a "$1" --arg cwd "$2" --arg i "$3" --arg f "$file" --arg ticks "$ticks" --argjson pid "$pid" \
+    '{address:$a,cwd:$cwd,session:"s-\($a)",session_file:$f,space:"sp-new",issue:$i,harness:"pi",pid:$pid,start_ticks:$ticks,follow_up:1}' \
+    >"$XDG_STATE_HOME/bercail/desk-sessions/$1.json"
+  jq --argjson pid "$pid" '.foreground = {pid: $pid}' "$HC_DATA/$1.json" >"$HC_DATA/tmp" && mv "$HC_DATA/tmp" "$HC_DATA/$1.json"
+}
+
+@test "a blocked trail starts on its blocker's staged checkout with stackedOn, the trail stays as it was, and a dispatch without it still refuses" {
+  local out reason="Simon: start on the staged work"
+  spawn_ok
+  trail 2 "Ship the schema" open review
+  parent 2 schema t22
+  gone t22
+  trail 1 "Research the login flow" open planning $'Find where it expires.\nBlocked by: #2'
+  cp "$TRAILS/1.json" "$BATS_TEST_TMPDIR/before.json"
+  : >"$LOG"
+  out="$(dispatch 2>&1)" && fail "a blocked trail took a desk: $out"
+  [[ "$out" == *"trail:1 is blocked by #2"*"stackedOn"*"stackReason"* && "$out" != *"entire trail update"* ]] || fail "refusal: $out"
+  # A dry run verifies the same, and starts and records nothing.
+  out="$(stacked '["trail:2"]' . --dry-run)" || fail "dry run: $out"
+  jq -e --arg p "$REPO.schema" '.dry_run and .status == "would-start" and .stacked.parents[0].path == $p' <<<"$out" >/dev/null || fail "dry run: $out"
+  ! grep -q '^spawn ' "$LOG" || fail "a refusal or a dry run spawned: $(cat "$LOG")"
+  [[ ! -e "$(record_file 1.json)" ]] || fail "a refusal or a dry run wrote a record"
+
+  out="$(stacked '["trail:2"]')" || fail "stacked dispatch: $out"
+  jq -e --arg p "$REPO.schema" --arg r "$reason" '.status == "started" and .creation.desk == "t21" and .authority == false
+    and .stacked == {reason: $r, parents: [{trail: "trail:2", path: $p, branch: "schema", staged: 1}]}' <<<"$out" >/dev/null \
+    || fail "stacked dispatch: $out"
+  [[ "$(grep -c '^spawn --branch login --stage bstack --issue trail:1 --target trail:1 ' "$LOG")" == 1 ]] || fail "spawn argv: $(cat "$LOG")"
+  jq -e --arg p "$REPO.schema" --arg r "$reason" '.creation.status == "started"
+    and .stack == {reason: $r, parents: [{trail: "trail:2", path: $p, branch: "schema", staged: 1}]}' "$(record_file 1.json)" >/dev/null \
+    || fail "job record: $(cat "$(record_file 1.json)")"
+  # Nothing was written to a trail, and no parent's work was copied into the new checkout.
+  ! grep -Eq '^entire trail (update|comment|link|create|merge)' "$LOG" || fail "dispatch wrote to a trail: $(cat "$LOG")"
+  cmp "$TRAILS/1.json" "$BATS_TEST_TMPDIR/before.json" || fail "the trail changed"
+  [[ ! -e "$REPO.login/work-2.txt" && -z "$(git -C "$REPO.login" status --porcelain)" ]] || fail "the parent's work was copied in"
+  out="$(bercail job list --repo "$REPO")" || fail "list: $out"
+  grep -qx 'trail:1: Research the login flow · planning · blocked by #2 · dispatched' <<<"$out" || fail "the trail no longer reads blocked: $out"
+
+  # The desk's first prompt is bercail job show: it names where the parent's work is.
+  out="$(cd "$REPO.login" && bercail job show trail:1)" || fail "show: $out"
+  [[ "$out" == *"
+blocked: waits on #2
+Parent worktrees at dispatch ($reason):
+- trail:2: $REPO.schema · branch schema · 1 staged file, desk gone
+
+Find where it expires."* ]] || fail "show: $out"
+  # The same request without stackedOn is another request.
+  out="$(dispatch 2>&1)" && fail "a retry without stackedOn passed: $out"
+  [[ "$out" == *"requestId payload changed; this is not a retry"* ]] || fail "changed payload: $out"
+  # Once #2 has merged, its work is on main: the path is no longer named.
+  trail 2 "Ship the schema" open complete
+  out="$(cd "$REPO.login" && bercail job show trail:1)" || fail "show once merged: $out"
+  [[ "$out" == *"ready: #2 closed or merged"* && "$out" != *"$REPO.schema"* ]] || fail "show once merged: $out"
+}
+
+@test "a stacked dispatch reads a blocker's work from its live desk once that desk verifies, never from its label alone" {
+  local out
+  spawn_ok
+  trail 2 "Ship the schema" open review
+  SPAWN_DESK=t22 dispatch '.target = "trail:2" | .requestId = "p2" | .branch = "schema"' >/dev/null || fail "dispatch of the parent"
+  trail 1 "Research the login flow" open planning 'Blocked by: #2'
+  : >"$LOG"
+  # A live terminal labelled for trail:2, with no desk record behind it.
+  out="$(stacked '["trail:2"]' 2>&1)" && fail "a label alone was taken as the parent's desk: $out"
+  [[ "$out" == *"cannot stack trail:1 on trail:2: missing desk record for t22"*"No desk was started" ]] || fail "label alone: $out"
+  ! grep -q '^spawn ' "$LOG" || fail "the refusal spawned: $(cat "$LOG")"
+  live_pi t22 "$REPO.schema" trail:2
+  out="$(stacked '["trail:2"]')" || fail "stacked on a live desk: $out"
+  jq -e --arg p "$REPO.schema" '.status == "started" and .stacked.parents == [{trail: "trail:2", path: $p, branch: "schema", desk: "t22"}]' \
+    <<<"$out" >/dev/null || fail "stacked on a live desk: $out"
+  out="$(cd "$REPO.login" && bercail job show trail:1)" || fail "show: $out"
+  grep -qxF -- "- trail:2: $REPO.schema · branch schema · desk t22 live" <<<"$out" || fail "show: $out"
+  # Once the new desk's Pi is up, a retry queues its message there; a follow-up takes no stackedOn.
+  live_pi t21 "$REPO.login" trail:1
+  out="$(stacked '["trail:2"]')" || fail "retry: $out"
+  jq -e '.status == "queued" and .owner.desk == "t21" and .retry' <<<"$out" >/dev/null || fail "retry: $out"
+  out="$(stacked '["trail:2"]' '.requestId = "r2"' 2>&1)" && fail "a follow-up took stackedOn: $out"
+  [[ "$out" == *"stackedOn starts a blocked trail's new desk, and trail:1 has live desk t21; dispatch without stackedOn"* ]] || fail "follow-up: $out"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]] || fail "a second desk started: $(cat "$LOG")"
+}
+
+@test "a stacked dispatch refuses unless stackedOn names exactly the open blockers and each one's recorded work is there to read" {
+  local out other="$HOME/Work/web" both=$'Find where it expires.\nBlocked by: #2, #3'
+  spawn_ok
+  trail 2 "Ship the schema" open review
+  trail 3 "Ship the API" open review
+  trail 4 "Unrelated" open review
+  parent 2 schema t22
+  gone t22
+  trail 1 "Research the login flow" open planning "$both"
+  : >"$LOG"
+  refused() {
+    out="$(stacked "$1" "${3:-.}" 2>&1)" && fail "$1 started a desk: $out"
+    [[ "$out" == *"$2"* ]] || fail "$1: $out"
+  }
+  # The two fields go together, on a trail, with trails named once.
+  out="$(dispatch '.stackedOn = ["trail:2", "trail:3"]' 2>&1)" && fail "no reason: $out"
+  [[ "$out" == *"stackedOn and stackReason go together, on a trail"* ]] || fail "no reason: $out"
+  refused '["trail:2", "trail:3"]' "stackedOn and stackReason go together" '.stackReason = "  "'
+  refused '["trail:1"]' "stackedOn and stackReason go together"
+  refused '["#2", "trail:3"]' "stackedOn and stackReason go together"
+  refused '["trail:2", "trail:2"]' "stackedOn and stackReason go together"
+  refused '"trail:2"' "stackedOn and stackReason go together"
+  refused '["trail:2", "trail:3"]' "stackedOn and stackReason go together" '.target = "task:app-1" | .issue = "app-1"'
+  # Every open blocker, and no other trail.
+  refused '["trail:2"]' "stackedOn must name exactly what trail:1 still waits on (#2, #3)"
+  refused '["trail:2", "trail:3", "trail:4"]' "stackedOn must name exactly what trail:1 still waits on (#2, #3)"
+  # trail:3 was never dispatched: no desk, no record.
+  refused '["trail:2", "trail:3"]' "cannot stack trail:1 on trail:3: it has no live desk, and no record of one that started"
+  # A line that names a staged checkout but no desk that started, and one of another repo.
+  git -C "$REPO" worktree add -qb api "$REPO.api"
+  printf 'x\n' >"$REPO.api/x" && git -C "$REPO.api" add x
+  jq -nc --arg p "$REPO.api" '{path:$p,branch:"api",issue:"trail:3"}' >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  refused '["trail:2", "trail:3"]' "cannot stack trail:1 on trail:3: it has no live desk, and no record of one that started"
+  git init -q -b main "$other"
+  git -C "$other" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m init
+  git -C "$other" worktree add -qb api "$other.api"
+  printf 'x\n' >"$other.api/x" && git -C "$other.api" add x
+  jq -nc --arg p "$other.api" '{ok:true,agent_started:true,path:$p,branch:"api",desk:"t30",issue:"trail:3"}' >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  refused '["trail:2", "trail:3"]' "cannot stack trail:1 on trail:3: it has no live desk, and no record of one that started"
+  # A desk that started and is gone, with nothing staged in its checkout.
+  jq -nc --arg p "$REPO.api" '{ok:true,agent_started:true,path:$p,branch:"api",desk:"t23",issue:"trail:3"}' >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  git -C "$REPO.api" rm -q --cached x
+  refused '["trail:2", "trail:3"]' "cannot stack trail:1 on trail:3: its desk is gone, and $REPO.api has nothing staged"
+  # Staged, but the checkout is no longer on the recorded branch.
+  git -C "$REPO.api" add x
+  git -C "$REPO.api" switch -qc other
+  refused '["trail:2", "trail:3"]' "cannot stack trail:1 on trail:3: $REPO.api is no longer api in this repo"
+  git -C "$REPO.api" switch -q api
+  out="$(stacked '["trail:2", "trail:3"]' . --dry-run)" || fail "both parents staged: $out"
+  jq -e '.status == "would-start" and (.stacked.parents | map(.trail) == ["trail:2", "trail:3"])' <<<"$out" >/dev/null || fail "both parents staged: $out"
+  # A folder inside the worktree is on its branch, and is not the worktree.
+  mkdir "$REPO.api/sub"
+  grep -v '"trail:3"' "$XDG_STATE_HOME/bercail/handoffs.jsonl" >"$BATS_TEST_TMPDIR/h"
+  jq -nc --arg p "$REPO.api/sub" '{ok:true,agent_started:true,path:$p,branch:"api",desk:"t23",issue:"trail:3"}' >>"$BATS_TEST_TMPDIR/h"
+  cp "$BATS_TEST_TMPDIR/h" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  refused '["trail:2", "trail:3"]' "cannot stack trail:1 on trail:3: $REPO.api/sub is not the worktree of api"
+  # The job still names the owner of a checkout bercail cleanup retired, and
+  # someone made a worktree of that branch at that path again, with staged files.
+  grep -v '"trail:3"' "$BATS_TEST_TMPDIR/h" >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  jq -nc --arg p "$REPO.api" '{ok:true,agent_started:true,path:$p,branch:"api",desk:"t23",issue:"trail:3"}' >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  out="$(stacked '["trail:2", "trail:3"]' . --dry-run)" || fail "the recorded checkout, before its retirement: $out"
+  jq -n --arg r "$REPO" --arg p "$REPO.api" '{v:2,repo:$r,target:"trail:3",branch:"api",
+    owner:{desk:"t23",space:"sp-new",cwd:$p,branch:"api",session:"s-t23",session_file:"/x",pid:1,start_ticks:"1"}}' >"$(record_file 3.json)"
+  jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg p "$REPO.api" --arg r "$REPO" \
+    '{v:1,at:$at,path:$p,repo:$r,branch:"api"}' >"$XDG_STATE_HOME/bercail/retired.jsonl"
+  refused '["trail:2", "trail:3"]' "cannot stack trail:1 on trail:3: it has no live desk, and no record of one that started in a checkout still kept"
+
+  # A blocker of another repo of the project, one Entire does not have, and an unreadable line.
+  trail 5 "Web work" open review "" web
+  trail 1 "Research the login flow" open planning 'Blocked by: #2, #5'
+  refused '["trail:2", "trail:5"]' "cannot stack trail:1 on trail:5: trail:5 is not a trail of $REPO"
+  trail 1 "Research the login flow" open planning 'Blocked by: #2, #99'
+  refused '["trail:2", "trail:99"]' "stackedOn must name exactly what trail:1 still waits on (#2, #99 (no such trail)); a missing trail or an unreadable line cannot be stacked on"
+  trail 1 "Research the login flow" open planning $'Blocked by: #2\nBlocked by: 3 and more'
+  refused '["trail:2"]' "a missing trail or an unreadable line cannot be stacked on"
+  # A trail that waits on nothing takes no stackedOn.
+  trail 1 "Research the login flow" open planning "Find where it expires."
+  refused '["trail:2"]' "stackedOn must name exactly what trail:1 still waits on (nothing)"
+  ! grep -q '^spawn ' "$LOG" || fail "a refused dispatch spawned: $(cat "$LOG")"
+  [[ ! -e "$(record_file 1.json)" ]] || fail "a refused dispatch wrote a record"
+  ! grep -Eq '^entire trail (update|comment|link|create|merge)' "$LOG" || fail "a refusal wrote to a trail: $(cat "$LOG")"
+
+  # A gone desk's checkout is adopted, blocked or not: stackedOn is not for it.
+  dispatch >/dev/null || fail "first dispatch"
+  gone t21
+  trail 1 "Research the login flow" open planning "$both"
+  : >"$LOG"
+  refused '["trail:2", "trail:3"]' "trail:1 has its gone desk's checkout $REPO.login, which a new desk adopts; dispatch without stackedOn" '.requestId = "r2"'
+  ! grep -q '^spawn ' "$LOG" || fail "the refused adoption spawned: $(cat "$LOG")"
+  jq -e '.creation.id == "r1" and (has("adoptions") | not) and (has("stack") | not)' "$(record_file 1.json)" >/dev/null \
+    || fail "the refused adoption was recorded: $(cat "$(record_file 1.json)")"
+}
+
+@test "a gone parent with an unresolved index has no staged tree to build on" {
+  spawn_ok
+  trail 1 Child open planning 'Blocked by: #2'
+  trail 2 Schema open review
+  parent 2 schema t22
+  gone t22
+  git -C "$REPO.schema" -c user.email=t@example.invalid commit -qm schema
+  printf 'other\n' >"$REPO/work-2.txt"
+  git -C "$REPO" add work-2.txt
+  git -C "$REPO" -c user.email=t@example.invalid commit -qm other
+  run git -C "$REPO.schema" -c user.email=t@example.invalid merge main
+  [[ "$status" == 1 && -n "$(git -C "$REPO.schema" ls-files -u)" ]] || fail "expected a conflicted index: $output"
+  run stacked '["trail:2"]' . --dry-run
+  [[ "$status" != 0 && "$output" == *"trail:2:"*"unmerged entries"* ]] || fail "$output"
+}
+
+@test "a handoff in the same second as retirement cannot vouch for a gone parent's checkout" {
+  spawn_ok
+  trail 1 Child open planning 'Blocked by: #2'
+  trail 2 Schema open review
+  parent 2 schema t22
+  gone t22
+  local at=2026-01-15T12:00:00Z log="$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  jq -c --arg at "$at" '.at = $at' "$log" >"$BATS_TEST_TMPDIR/line" && mv "$BATS_TEST_TMPDIR/line" "$log"
+  git -C "$REPO" worktree remove --force "$REPO.schema"
+  jq -nc --arg at "$at" --arg p "$REPO.schema" '{path:$p,at:$at}' >"$XDG_STATE_HOME/bercail/retired.jsonl"
+  git -C "$REPO" worktree add -q "$REPO.schema" schema
+  touch "$REPO.schema/unrelated" && git -C "$REPO.schema" add unrelated
+  run stacked '["trail:2"]' . --dry-run
+  [[ "$status" != 0 && "$output" == *"cannot stack trail:1 on trail:2"* ]] || fail "$output"
+}
+
+@test "a retry of a stacked creation that left no desk reads again where the open blockers are, and goes on once one has landed" {
+  local out
+  spawn_ok
+  trail 2 "Ship the schema" open review
+  trail 3 "Ship the API" open review
+  trail 4 "Added later" open review
+  parent 2 schema t22
+  gone t22
+  parent 3 api t23
+  gone t23
+  trail 1 "Research the login flow" open planning 'Blocked by: #2, #3'
+  printf '#!/bin/sh\nprintf "spawn %%s\\n" "$*" >>"$LOG"\nexit 1\n' >"$BERCAIL_HANDOFF_SPAWN"
+  : >"$LOG"
+  out="$(stacked '["trail:2", "trail:3"]' 2>&1)" && fail "a failed spawn passed: $out"
+  jq -e '.creation.status == "unknown" and (.stack.parents | map(.trail) == ["trail:2", "trail:3"])' "$(record_file 1.json)" >/dev/null \
+    || fail "record: $(cat "$(record_file 1.json)")"
+  spawn_ok
+  # A blocker added since is not one the person chose to stack on.
+  trail 1 "Research the login flow" open planning 'Blocked by: #2, #3, #4'
+  out="$(stacked '["trail:2", "trail:3"]')" || fail "retry with a new blocker: $out"
+  jq -e '.status == "unknown" and (.next | startswith("Not finished: stackedOn must name exactly what trail:1 still waits on (#2, #3, #4)"))' <<<"$out" >/dev/null \
+    || fail "retry with a new blocker: $out"
+  [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]] || fail "the retry spawned: $(cat "$LOG")"
+  # #2 landed and its checkout is gone: the retry needs only #3's work, and names no path of #2.
+  trail 1 "Research the login flow" open planning 'Blocked by: #2, #3'
+  trail 2 "Ship the schema" open complete
+  git -C "$REPO" worktree remove --force "$REPO.schema"
+  out="$(stacked '["trail:2", "trail:3"]')" || fail "retry once #2 landed: $out"
+  jq -e '.status == "started" and .retry' <<<"$out" >/dev/null || fail "retry once #2 landed: $out"
+  jq -e --arg p "$REPO.api" '.creation.status == "started" and .stack.parents == [{trail: "trail:3", path: $p, branch: "api", staged: 1}]' \
+    "$(record_file 1.json)" >/dev/null || fail "record after the retry: $(cat "$(record_file 1.json)")"
+  out="$(cd "$REPO.login" && bercail job show trail:1)" || fail "show: $out"
+  [[ "$out" == *"- trail:3: $REPO.api · branch api · 1 staged file, desk gone"* && "$out" != *"$REPO.schema"* ]] || fail "show: $out"
+}
+
+@test "a creation recorded without a payload hash is not retried with stackedOn" {
+  local out
+  trail 2 "Ship the schema" open review
+  trail 1 "Research the login flow" open planning 'Blocked by: #2'
+  mkdir -p "$(dirname "$(record_file 1.json)")"
+  jq -n --arg r "$REPO" '{v:2,repo:$r,target:"trail:1",branch:"login",owner:null,
+    creation:{id:"r1",payload:"",stage:"bstack",message:"Do the research",status:"unknown",next:""}}' >"$(record_file 1.json)"
+  out="$(stacked '["trail:2"]' 2>&1)" && fail "stackedOn rode a request that had none: $out"
+  [[ "$out" == *"requestId payload changed; this is not a retry"* ]] || fail "$out"
 }
 
 @test "two repos of one Entire project keep their trails apart on the board, in dispatch and in a desk's report" {

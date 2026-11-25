@@ -360,8 +360,19 @@ function supersedeJob(repo: string, id: string, by: string): string {
 function showText(value: any): string {
   const changes = value.changes.map((c: any) => `- change ${c.change}: ${c.branch} into ${c.base}, ${c.status}`);
   const notes = value.comments.map((c: any) => `--- ${c.author} at ${c.created_at}\n${c.text}`);
+  // A parent that no longer blocks the child needs no worktree reference.
+  const on = (value.record?.stack?.parents || []).filter((p: any) =>
+    value.waiting_on.includes(`#${trailNumber(p.trail)}`),
+  );
   const deps = value.waiting_on.length
-    ? [`blocked: waits on ${value.waiting_on.join(", ")}`]
+    ? [
+        `blocked: waits on ${value.waiting_on.join(", ")}`,
+        ...(on.length ? [`Parent worktrees at dispatch (${value.record.stack.reason}):`] : []),
+        ...on.map(
+          (p: any) =>
+            `- ${p.trail}: ${p.path} · branch ${p.branch} · ${p.desk ? `desk ${p.desk} live` : `${p.staged} staged file${p.staged === 1 ? "" : "s"}, desk gone`}`,
+        ),
+      ]
     : value.blocked_by.length
       ? [`ready: ${value.blocked_by.join(", ")} closed or merged`]
       : [];

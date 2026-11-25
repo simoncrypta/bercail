@@ -57,6 +57,7 @@ type Task = {
   pending?: Record<string, string>;
   forkReason?: string;
   adoptions?: Adoption[];
+  stack?: Stack;
   // A v0.17 request ledger; save drops it.
   requests?: any[];
 };
@@ -96,13 +97,21 @@ type Adoption = {
   staged: number;
   from: { desk: string; session: string; space: string }[];
 };
+// Parent worktrees as verified at dispatch, not a claim about their current state.
+type Stack = {
+  reason: string;
+  parents: { trail: string; path: string; branch: string; desk?: string; staged?: number }[];
+};
 // A retry asks for the same work: the same payload, or, for a v0.17 request
 // whose payload was hashed another way, the same message and stage, and no
-// model, which v0.17 had not.
-function same(stored: Request, request: Request, model?: string): boolean {
+// model or stackedOn, which v0.17 had not.
+function same(stored: Request, request: Request, input: any): boolean {
   return stored.payload
     ? stored.payload === request.payload
-    : !model && stored.message === request.message && (stored.stage || "bstack") === request.stage;
+    : !input.model &&
+        !input.stackedOn &&
+        stored.message === request.message &&
+        (stored.stage || "bstack") === request.stage;
 }
 const state = () => join(process.env.XDG_STATE_HOME || join(process.env.HOME!, ".local/state"), "bercail");
 // --dry-run: save, queue and create write nothing; dispatch's checks around
@@ -259,6 +268,8 @@ function records(repo: string): any[] {
       if (!record.path) return [];
       if (retired.some((r) => r.path === record.path && (record.at || "") < r.at))
         return !record.repo || record.repo === repo ? [{ ...record, retired: true }] : [];
+      // A tied timestamp cannot prove that the handoff saw the current worktree.
+      record.retirementTied = retired.some((r) => r.path === record.path && record.at === r.at);
       try {
         return mainOf(record.path) === repo ? [record] : [];
       } catch {
@@ -525,6 +536,57 @@ function findOwner(
     );
   return owner;
 }
+// Verify the same checkout a follow-up would reach or an adoption could continue.
+function parentWork(repo: string, parent: string, history: any[]): Stack["parents"][number] {
+  ownTrail(repo, parent);
+  const task: Task | undefined = readRecord(repo, parent) ?? undefined;
+  const fork = !!task?.forkReason;
+  const owner = findOwner(repo, parent, parent, task?.owner, fork, history);
+  let work: Stack["parents"][number];
+  if (owner) work = { trail: parent, path: owner.cwd, branch: owner.branch, desk: owner.desk };
+  else {
+    // A saved owner is not enough: history has no line of a checkout cleanup retired.
+    if (
+      !owned(history, parent, parent, fork).some(
+        (r) => !r.retirementTied && r.desk && r.ok !== false && r.agent_started !== false,
+      )
+    )
+      throw new Error("it has no live desk, and no record of one that started in a checkout still kept");
+    const left = adoptable(repo, parent, parent, task, history, {});
+    if (git(left.path, "ls-files", "--unmerged"))
+      throw new Error(`${left.path} has unmerged entries, not a staged tree`);
+    if (!left.staged) throw new Error(`its desk is gone, and ${left.path} has nothing staged`);
+    work = { trail: parent, path: left.path, branch: left.branch, staged: left.staged };
+  }
+  // The worktree itself: a folder inside one is on its branch too.
+  if (worktreeOf(repo, work.branch) !== work.path)
+    throw new Error(`${work.path} is not the worktree of ${work.branch || "a branch"}`);
+  return work;
+}
+// A retry may need fewer parents because one has landed, but never a new one.
+function stacked(repo: string, value: any, input: any, history: any[], retry = false): Stack | undefined {
+  const waiting: string[] = value.waiting || [];
+  if (!input.stackedOn) {
+    if (waiting.length) throw new Error(blocked(value));
+    return undefined;
+  }
+  const named = new Set<string>(input.stackedOn);
+  const open = waiting.map((w) => w.replace(/^#(\d+)$/, "trail:$1"));
+  if (open.some((parent) => !named.has(parent)) || (!retry && open.length !== named.size))
+    throw new Error(
+      `stackedOn must name exactly what ${value.id} still waits on (${waiting.join(", ") || "nothing"}); a missing trail or an unreadable line cannot be stacked on. No desk was started`,
+    );
+  return {
+    reason: input.stackReason.trim(),
+    parents: open.map((parent) => {
+      try {
+        return parentWork(repo, parent, history);
+      } catch (error) {
+        throw new Error(`cannot stack ${value.id} on ${parent}: ${(error as Error).message}. No desk was started`);
+      }
+    }),
+  };
+}
 // A follow-up's file name ends in a hash of the request, so a retry finds it
 // under whichever desk it went to, after an adoption too.
 const sentAs = (repo: string, id: string, request: Request) =>
@@ -736,6 +798,8 @@ function dispatch(op: string, input: any): any {
     "forkReason",
     "adoptReason",
     "model",
+    "stackedOn",
+    "stackReason",
   ]);
   const unknown = Object.keys(input).filter((key) => !allowed.has(key));
   if (unknown.length)
@@ -745,6 +809,21 @@ function dispatch(op: string, input: any): any {
   if (input.model !== undefined && !/^[^/\s]+\/\S+$/.test(typeof input.model === "string" ? input.model : ""))
     throw new Error(
       "model takes PROVIDER/MODEL[:thinking], as pi --list-models names it (claude-bridge/claude-opus-5-5:high)",
+    );
+  if (
+    (input.stackedOn !== undefined || input.stackReason !== undefined) &&
+    !(
+      isTrail(input.issue) &&
+      Array.isArray(input.stackedOn) &&
+      input.stackedOn.length &&
+      input.stackedOn.every((p: unknown) => typeof p === "string" && isTrail(p) && p !== input.issue) &&
+      new Set(input.stackedOn).size === input.stackedOn.length &&
+      typeof input.stackReason === "string" &&
+      input.stackReason.trim()
+    )
+  )
+    throw new Error(
+      'stackedOn and stackReason go together, on a trail: stackedOn lists once each trail it still waits on (["trail:59","trail:60"]), and stackReason says why the person wants it started on their unmerged work',
     );
   const repo = mainOf(input.repo);
   const common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir");
@@ -853,6 +932,7 @@ function dispatch(op: string, input: any): any {
             adoptReason: input.adoptReason || "",
             // Only when set, so the payloads recorded before model existed still match.
             ...(input.model ? { model: input.model } : {}),
+            ...(input.stackedOn ? { stackedOn: input.stackedOn, stackReason: input.stackReason } : {}),
           }),
         )
         .digest("hex"),
@@ -874,13 +954,7 @@ function dispatch(op: string, input: any): any {
     // A retry of a follow-up: it was queued once, and is never sent again.
     const sent = queued(repo, value.id, request);
     if (sent) {
-      if (
-        !same(
-          { ...sent.file.request, payload: sent.file.v === 2 ? sent.file.request.payload : "" },
-          request,
-          input.model,
-        )
-      )
+      if (!same({ ...sent.file.request, payload: sent.file.v === 2 ? sent.file.request.payload : "" }, request, input))
         throw new Error("requestId payload changed; this is not a retry");
       const adopted = task?.adoptions?.find((a) => a.request === input.requestId);
       return {
@@ -905,7 +979,7 @@ function dispatch(op: string, input: any): any {
       throw new Error("requestId payload changed; this is not a retry");
     const prior = task?.creation?.id === input.requestId ? task?.creation : undefined;
     if (prior) {
-      if (!same(prior, request, input.model)) throw new Error("requestId payload changed; this is not a retry");
+      if (!same(prior, request, input)) throw new Error("requestId payload changed; this is not a retry");
       // The spawn of an UNKNOWN creation has ended. When it ended partial and
       // its desk came up after all, bind that desk. When it left no desk,
       // finish it in its clean worktree, or start it again.
@@ -926,7 +1000,8 @@ function dispatch(op: string, input: any): any {
               throw new Error(
                 `stage autopilot starts a desk only on ${target}'s own branch, and ${task!.branch} is not it`,
               );
-            if (value.waiting?.length) throw new Error(blocked(value));
+            const stack = stacked(repo, value, input, history, true);
+            if (stack) task!.stack = stack;
             path = leftover(repo, value.id, task!.branch, history, existing ? pr!.headRefOid : "");
           }
         } catch (error) {
@@ -1039,8 +1114,13 @@ function dispatch(op: string, input: any): any {
         `creation outcome UNKNOWN; retry its own requestId${task.creation ? ` (${task.creation.id})` : ""} to finish a partial creation, or inspect the worktree/space facts; do not launch another`,
       );
     const adoption = adopting ? adoptable(repo, value.id, target, task, history, input) : null;
-    // A new desk waits for the trails a "Blocked by:" line names; a live or adopted one goes on.
-    if (!owner && !adoption && value.waiting?.length) throw new Error(blocked(value));
+    if (input.stackedOn && (owner || adoption))
+      throw new Error(
+        `stackedOn starts a blocked trail's new desk, and ${value.id} has ${owner ? `live desk ${owner.desk}` : `its gone desk's checkout ${adoption!.path}, which a new desk adopts`}; dispatch without stackedOn`,
+      );
+    // A new desk waits for the trails a "Blocked by:" line names, unless it is
+    // stacked on them; a live or adopted one goes on.
+    const stack = owner || adoption ? undefined : stacked(repo, value, input, history);
     task ||= {
       v: 2,
       repo,
@@ -1116,6 +1196,7 @@ function dispatch(op: string, input: any): any {
       return { ...delivered(path), owner, authority: false };
     }
     if (input.model) checkModel(repo, input.model);
+    if (!adoption) task.stack = stack;
     task.creation = {
       ...request,
       ...(input.model ? { model: input.model } : {}),
@@ -1131,7 +1212,7 @@ function dispatch(op: string, input: any): any {
       forkReason: input.forkReason ? String(input.forkReason) : undefined,
       adoptReason: record?.reason,
     });
-    if (!record) return done;
+    if (!record) return stack ? { ...done, stacked: stack } : done;
     // An adoption goes on with the gone desk's work, blocked or not; the person hears what it waits on.
     const adopted = told(record, dry ? "(new)" : done.creation.desk);
     if (value.waiting?.length) adopted.warning += ` ${blocked(value)}.`;
@@ -1141,9 +1222,11 @@ function dispatch(op: string, input: any): any {
   }
 }
 
-// Why a trail takes no new desk yet: what its "Blocked by:" line still waits on.
 function blocked(value: any): string {
-  return `${value.id} is blocked by ${value.waiting.join(", ")}; dispatch it once they are closed or merged, or change its Blocked by line (entire trail update ${trailNumber(value.id)} --body …)`;
+  const why = `${value.id} is blocked by ${value.waiting.join(", ")}`;
+  return value.waiting.every((w: string) => /^#\d+$/.test(w))
+    ? `${why}; dispatch it once they are closed or merged, or name the open parents in stackedOn with a stackReason to start on their work`
+    : `${why}; check the Blocked by line before dispatching`;
 }
 
 // The person is told of an adoption, not asked: warning is the line Shep repeats.

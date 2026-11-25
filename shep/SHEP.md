@@ -129,7 +129,11 @@ main checkout, and pass `--repo <checkout>` to `bercail job`.
   its body (at create, or `entire trail update <n> --body`). `bercail job list
   --repo <checkout>` shows each open trail as ready or blocked. When dispatch
   refuses a blocked trail, tell the person what it waits on, and dispatch
-  again once those are closed or merged. Rewrite a line it cannot read as
+  again once those are closed or merged. If the person wants a new desk to
+  build on the parents now, dispatch with `stackedOn` naming every outstanding
+  blocker (`["trail:12", "trail:15"]`) and `stackReason` saying why. Each needs
+  a live desk or a staged worktree in this repo. Leave the line in place so
+  the board still shows what must land first. Rewrite a line it cannot read as
   `Blocked by: #12, #15`. For a number no trail has, ask the person which
   trail was meant; drop a blocker only when they say so. A closed trail is
   refused too: reopen it with the command dispatch gives only when the person
