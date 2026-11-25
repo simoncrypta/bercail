@@ -3963,6 +3963,9 @@ const handoffsAt = (path: string) => journal("handoffs.jsonl").filter((handoff) 
 // at its path, and handoffs that name it, all of one repo whose top folder git no longer
 // lists it in. Dispatch retires every handoff at the path, so the repo whose policy speaks
 // for it must own them all; their count pins them, so a later handoff there moves it.
+// A handoff from before records carried repo proposes one by its path, as worktrunk puts
+// a checkout beside the main one (<repo>.<branch, / and \ as ->), and the job's issue in
+// that repo's beads binds it: handoff-spawn commented the checkout's path and branch there.
 async function pinGone(read: Read, path: string) {
   // The journal bercail reads from /, as its shell spells it: join() would resolve a
   // relative root against Pi's folder, and collapse a .. that bash follows after a symlink.
@@ -3981,7 +3984,13 @@ async function pinGone(read: Read, path: string) {
   if (there) fail(`${path} is still there; bercail cleanup ${path} retires it`);
   const named = handoffsAt(path);
   if (!named.length) fail(`no handoff names ${path}, so no job waits on it`);
-  const repos = new Set(named.map((handoff) => handoff.repo));
+  const repoOf = (handoff: { repo?: unknown; branch?: unknown }) => {
+    if (handoff.repo !== undefined && handoff.repo !== null) return handoff.repo;
+    if (typeof handoff.branch !== "string" || !handoff.branch) return undefined;
+    const suffix = `.${handoff.branch.replace(/[/\\]/g, "-")}`;
+    return path.endsWith(suffix) && basename(path) !== suffix ? path.slice(0, -suffix.length) : undefined;
+  };
+  const repos = new Set(named.map(repoOf));
   const [recorded] = repos;
   if (repos.size !== 1 || typeof recorded !== "string" || !isAbsolute(recorded))
     fail(`the handoffs of ${path} name no one repo, whose policy could speak for them all`);
@@ -3992,6 +4001,25 @@ async function pinGone(read: Read, path: string) {
   if (realpathSync(await read("git", ["-C", repo, "rev-parse", "--show-toplevel"], repo)) !== repo)
     fail(`the handoffs of ${path} name ${recorded}, which is not a repo's top folder`);
   const worktrees = await read("git", ["-C", repo, "worktree", "list", "--porcelain"], repo);
+  const unrecorded = named.filter((handoff) => handoff.repo === undefined || handoff.repo === null);
+  if (unrecorded.length && realpathSync(worktrees.split("\n")[0].slice("worktree ".length)) !== repo)
+    fail(`the handoffs of ${path} name ${recorded}, which is not a repo's main checkout`);
+  const bd = (...args: string[]) => read(process.env.HANDOFF_BD_BIN || "bd", [...args, "--json", "--readonly"], repo);
+  // bd may read another store than the folder's own (BEADS_DIR, a redirect): only its own vouches.
+  if (unrecorded.length && JSON.parse(await bd("context"))?.beads_dir !== join(repo, ".beads"))
+    fail(
+      `bd in ${recorded} reads another store than ${join(repo, ".beads")}, so its issues cannot say it owns ${path}`,
+    );
+  for (const { issue, branch } of unrecorded) {
+    if (typeof issue !== "string" || !/^[a-z0-9][\w.-]*$/i.test(issue))
+      fail(`a handoff of ${path} names no repo and no issue whose beads could say which repo owns it`);
+    const said = `linked worktree ${path} (branch ${branch})`;
+    const comments = JSON.parse(await bd("comments", issue));
+    const intro = (c: { text?: unknown }) =>
+      typeof c?.text === "string" && c.text.startsWith("bercail handoff: ") && c.text.includes(said);
+    if (!Array.isArray(comments) || !comments.some(intro))
+      fail(`no comment on ${issue} in ${recorded}'s beads says "${said}", so ${recorded} is not known to own it`);
+  }
   if (worktrees.split("\n").includes(`worktree ${path}`))
     fail(`git still lists ${path} as a worktree; run git -C ${repo} worktree prune first`);
   return {

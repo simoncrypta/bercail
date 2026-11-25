@@ -73,6 +73,15 @@ beforeEach(() => {
     { mode: 0o755 },
   );
   vi.stubEnv("ENTIRE_BIN", join(bin, "entire"));
+  writeFileSync(
+    join(bin, "bd"),
+    // As bd resolves its store: BEADS_DIR, else the folder's own .beads.
+    `#!/bin/sh\nprintf '%s|%s\\n' "$PWD" "$*" >> '${dir}/bd.argv'\n` +
+      `[ "$1" = context ] && { printf '{"beads_dir":"%s"}\\n' "\${BEADS_DIR:-$PWD/.beads}"; exit; }\n` +
+      `cat '${dir}/comments.json'\n`,
+    { mode: 0o755 },
+  );
+  vi.stubEnv("HANDOFF_BD_BIN", join(bin, "bd"));
   repo = join(dir, "repo");
   origin = join(dir, "origin.git");
   execFileSync("git", ["init", "-q", "-b", "main", repo]);
@@ -386,10 +395,120 @@ test("a cleanup --gone pins the path, its handoffs' one repo, the last one's bra
   expect(changedFacts(facts, await pinOperation(gonePath))).toStrictEqual(["handoffs changed"]);
 });
 
+// The comments bd prints for an issue, as handoff-spawn left them.
+const comments = (...texts: string[]) =>
+  writeFileSync(join(dir, "comments.json"), JSON.stringify(texts.map((text) => ({ issue_id: "bc-1", text }))));
+
+// A handoff from before records carried repo: worktrunk put its checkout beside the main one,
+// and handoff-spawn said so on the job's issue in that repo's beads.
+test("a cleanup --gone of a handoff with no repo pins the main checkout its path is <repo>.<branch> of, once the issue there names the checkout", async () => {
+  vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
+  const gone = join(dir, "repo.simon-topic");
+  comments(
+    "started",
+    `bercail handoff: stage bstack, desk agent pi, linked worktree ${gone} (branch simon/topic). Stay.`,
+  );
+  handoffs(
+    { path: gone, repo: null, branch: "simon/topic", issue: "bc-1" },
+    { path: gone, branch: "simon/topic", issue: "bc-1" },
+  );
+  expect(await pin(`bercail cleanup --gone ${gone}`)).toStrictEqual({
+    kind: "cleanup",
+    gone: true,
+    path: gone,
+    repo,
+    branch: "simon/topic",
+    handoffs: 2,
+  });
+  expect(readFileSync(join(dir, "bd.argv"), "utf8").trim().split("\n")).toStrictEqual([
+    `${repo}|context --json --readonly`,
+    `${repo}|comments bc-1 --json --readonly`,
+    `${repo}|comments bc-1 --json --readonly`,
+  ]);
+  // Beside a later handoff that names the repo, it is of that one repo.
+  handoffs({ path: gone, branch: "simon/topic", issue: "bc-1" }, { path: gone, repo, branch: "simon/topic" });
+  expect(await pin(`bercail cleanup --gone ${gone}`)).toMatchObject({ repo, handoffs: 2 });
+});
+
+test.each([
+  ["no issue", { branch: "feature" }, () => {}, /names no repo and no issue/],
+  ["an issue that reads as a flag", { branch: "feature", issue: "--db=x" }, () => {}, /names no repo and no issue/],
+  // A path of another layout can share a repo's prefix; that repo's beads never saw it.
+  [
+    "an issue whose comments there name no checkout",
+    { branch: "feature", issue: "bc-1" },
+    () => comments("started"),
+    /no comment on bc-1 in .*repo's beads says "linked worktree .*repo\.feature \(branch feature\)"/,
+  ],
+  [
+    "an issue whose comment names another checkout",
+    { branch: "feature", issue: "bc-1" },
+    () => comments(`bercail handoff: stage bstack, linked worktree ${join(dir, "repo.feature2")} (branch feature)`),
+    /no comment on bc-1/,
+  ],
+  // A note that quotes the path is not the handoff that made the checkout.
+  [
+    "an issue whose only mention of the checkout is not a handoff's",
+    { branch: "feature", issue: "bc-1" },
+    () => comments(`saw linked worktree ${join(dir, "repo.feature")} (branch feature) go`),
+    /no comment on bc-1/,
+  ],
+  // The comment is right, but bd read it from another repo's store.
+  [
+    "a bd that reads another store",
+    { branch: "feature", issue: "bc-1" },
+    () => {
+      comments(`bercail handoff: stage bstack, linked worktree ${join(dir, "repo.feature")} (branch feature).`);
+      vi.stubEnv("BEADS_DIR", join(dir, "other/.beads"));
+    },
+    /bd in .*repo reads another store than .*repo\/\.beads/,
+  ],
+  ["an issue bd cannot read", { branch: "feature", issue: "bc-1" }, () => {}, /comments\.json/],
+  // A bare repo lists itself first, as a main checkout does, and has no top folder.
+  [
+    "a prefix that is a bare repo",
+    { branch: "feature", issue: "bc-1" },
+    () => {
+      rmSync(repo, { recursive: true });
+      execFileSync("git", ["init", "-q", "--bare", repo]);
+    },
+    /must be run in a work tree/,
+  ],
+])("a cleanup --gone of a handoff with no repo and %s does not pin", async (_name, handoff, setup, why) => {
+  vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
+  const gone = join(dir, "repo.feature");
+  handoffs({ path: gone, ...handoff });
+  setup();
+  await expect(pin(`bercail cleanup --gone ${gone}`)).rejects.toThrow(why);
+});
+
 test.each([
   ["a path that is still there", () => mkdirSync(join(dir, "repo.gone")), /repo\.gone is still there/],
   ["a path no handoff names", () => handoffs({ path: join(dir, "other"), repo }), /no handoff names/],
-  ["a handoff with no repo", () => handoffs({ path: join(dir, "repo.gone") }), /name no one repo/],
+  ["a handoff with no repo or branch", () => handoffs({ path: join(dir, "repo.gone") }), /name no one repo/],
+  [
+    "a handoff with no repo whose path is not <repo>.<branch>",
+    () => handoffs({ path: join(dir, "repo.gone"), branch: "feature" }),
+    /name no one repo/,
+  ],
+  [
+    "a handoff with no repo whose path is <branch> alone",
+    () => {
+      handoffs({ path: join(dir, ".feature"), branch: "feature" });
+      return join(dir, ".feature");
+    },
+    /name no one repo/,
+  ],
+  // The folder its path names is a linked worktree, not the main checkout handoff-spawn records.
+  [
+    "a handoff with no repo whose path names a linked worktree",
+    () => {
+      git("worktree", "add", "-q", join(dir, "repo.other"), "feature");
+      handoffs({ path: join(dir, "repo.other.gone"), branch: "gone" });
+      return join(dir, "repo.other.gone");
+    },
+    /name .*repo\.other, which is not a repo's main checkout/,
+  ],
   // Dispatch retires every handoff at the path: one repo's policy cannot speak for another's.
   [
     "handoffs of two repos",
