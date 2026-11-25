@@ -456,6 +456,13 @@ EOF
   [[ "$(grep -c '^spawn ' "$LOG")" == 2 ]]
 }
 
+@test "an issues card token is the first desk's request id" {
+  rm "$TASK_DATA/t9.hc" "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  spawn_ok t21 "$REPO.fresh"
+  create Q12@3 | jq '.target="task:app-1"' | task dispatch >/dev/null
+  jq -e '.metadata.bercail_task.creation.id == "Q12@3"' "$TASK_DATA/app-1.json"
+}
+
 @test "a new desk on a PR's own branch starts at its head, and stage autopilot starts an autopilot" {
   local out
   rm "$TASK_DATA/t9.hc" "$XDG_STATE_HOME/bercail/handoffs.jsonl"

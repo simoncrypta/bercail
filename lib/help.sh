@@ -116,6 +116,7 @@ Post-install CLI (bercail):
                 ask <name> (your request on stdin, to Shep's inbox;
                 the Routines panel's Ask Shep) | tick (start each one that is due) |
                 loop (a tick a minute; the hidden terminal bercail-routines runs it) | start (that terminal)
+                The issues built-in offers one ready, labelled issue from beads or a command. Only Start opens a desk.
   cleanup       Retire a finished worktree: cleanup <worktree> copies its .bercail/ to
                 ~/Work/worktree-archives/<repo>/, ends its desk and what it started,
                 parents first, removes the worktree, closes its space, and keeps the

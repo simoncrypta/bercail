@@ -51,9 +51,12 @@ routine_builtins() {
 
 # Each [routine.<name>] in config.toml, a JSON line each in file order:
 # {name, run, command, at, every, errors}. errors says what is wrong, in words.
+# run = "issues" adds {repo, label, source, source_command}, with their defaults.
 routine_entries() {
   [[ -f "$BERCAIL_USER_CONFIG" ]] || return 0
   toml_records "$BERCAIL_USER_CONFIG" | jq -sc --arg builtins "$(routine_builtins)" '
+    def argv: type == "array" and length > 0 and all(.[]; type == "string");
+    def given($k; $d): if has($k) then .[$k] else $d end;
     ($builtins | split("\n")) as $builtins
     | reduce (.[] | select(has("key") and (.section | length) == 2 and .section[0] == "routine")) as $r
         ({}; .[$r.section[1]][$r.key] = ($r.value // $r.raw))
@@ -66,10 +69,28 @@ routine_entries() {
            elif $v | has("run") then
              if ($v.run | type) != "string" or ($v.run | IN($builtins[]) | not)
              then "no built-in \($v.run) (lib/routine/<name>.sh)" else empty end
-           elif ($v.command | type) != "array" or ($v.command | length) == 0
-                or any($v.command[]; type != "string")
+           elif $v.command | argv | not
            then "command must be a list of strings, like [\"~/bin/check\", \"--json\"]"
            else empty end),
+          (if $v.run == "issues" then
+             (if $v | has("repo") and ($v.repo | type != "string" or . == "")
+              then "repo must be a path, like \"~/Work/bercail\"" else empty end),
+             (if $v | has("label") and ($v.label | type != "string" or . == "")
+              then "label must be a label, like \"routine\"" else empty end),
+             (if $v | given("source"; "beads") | IN("beads", "command") | not
+              then "source must be beads or command, not \($v.source)"
+              elif $v.source == "command" then
+                if $v | has("source_command") | not
+                then "source = \"command\" needs source_command, like [\"~/bin/issues\", \"--json\"]"
+                elif $v.source_command | argv | not
+                then "source_command must be a list of strings, like [\"~/bin/issues\", \"--json\"]"
+                else empty end
+              elif $v | has("source_command") then "source_command is read only with source = \"command\""
+              else empty end)
+           else
+             ("repo", "label", "source", "source_command") as $k
+             | select($v | has($k)) | "\($k) is read only with run = \"issues\""
+           end),
           (if $v | has("at") and has("every") then "at and every are both set"
            elif ($v | has("at") or has("every")) | not then "no at or every"
            elif $v | has("at") then
@@ -78,7 +99,11 @@ routine_entries() {
            elif ($v.every | type) == "string" and ($v.every | test("^[1-9][0-9]*[hd]$")) then empty
            else "every must be <n>h or <n>d, at least 1h, not \($v.every)" end)
         end ] as $errors
-    | {name: $name, run: $v.run, command: $v.command, at: $v.at, every: $v.every, errors: $errors}'
+    | {name: $name, run: $v.run, command: $v.command, at: $v.at, every: $v.every, errors: $errors}
+      + if $v.run == "issues" then
+          $v | {repo: given("repo"; "~/Work/bercail"), label: given("label"; "routine"), source: given("source"; "beads"),
+                source_command}
+        else {} end'
 }
 
 # The routine's name as config.toml writes it.
@@ -382,7 +407,9 @@ _routine_finish() {
     | def event($o; $counts): {source: "bercail", schema: "bercail.routine/v1", kind: "routine", sink: "shep",
         at: $c.end, event_id: $eid, routine: $c.name, run: $c.id, outcome: $o, counts: $counts,
         show: "bercail routine show \($c.name) --run \($c.id)"};
-    if $f == null then
+    if $c.load != "" then
+        {state: ($s + {next_due: $next}), run: ($run + {outcome: "skipped", reason: "load", detail: $c.load, counts: null, event: null, error: null})}
+      elif $f == null then
         ($s.failures + 1) as $n
         | (($s.paused | not) and $n >= 3) as $now
         | {state: ($s + {failures: $n, paused: ($s.paused or $n >= 3), next_due: $next}),
@@ -430,7 +457,7 @@ _routine_said() {
   jq -r 'if .outcome == "emitted" then "emitted, \(.counts.found) found (\(.counts.new) new, \(.counts.changed) changed)"
     elif .outcome == "failed" then "failed: \(.error)"
     elif .reason == "quiet" then "skipped (quiet), \(.counts.found) found, nothing new or changed"
-    else "skipped (\(.reason))" end' <<<"$1"
+    else "skipped (\(.reason))" + (if .detail then ": " + .detail else "" end) end' <<<"$1"
 }
 
 # bercail routine run NAME [--dry-run]: run it now, under the same locks and
@@ -443,7 +470,7 @@ _routine_said() {
 # read or write its state or its event.
 routine_run() {
   local name="$1" dry="${2:-0}" slot="${3:-}" entry dir start id micro="${EPOCHREALTIME:-}" state
-  local lfd="" sfd="" n slots out err rc=0 error="" findings
+  local lfd="" sfd="" n slots out err rc=0 error="" findings load=""
   local limit="${BERCAIL_ROUTINE_TIMEOUT:-600}" end ctx tail result line wrote=1 _routine_result
   local _routine_waiting="" _routine_flush_failed=""
   local -a argv
@@ -542,6 +569,9 @@ routine_run() {
     error="timed out after ${limit}s"
   elif (($(wc -c <"$out") > ROUTINE_OUTPUT_MAX)); then
     error="output over 64 KB"
+  elif ((rc == 75)) && [[ ! -s "$out" && -s "$err" && $(jq -r .run <<<"$entry") == issues ]]; then
+    # No selection was made: keep the previous offer's hash, but meet this slot.
+    load="$(tail -n 1 "$err" | cut -c1-300)" findings=""
   elif ((rc != 0)); then
     tail="$(grep -v '^[[:space:]]*$' "$err" | tail -n 1 | cut -c1-300 || true)"
     error="exit $rc${tail:+: $tail}"
@@ -554,8 +584,8 @@ routine_run() {
   end="$(_routine_now)"
   ctx="$(jq -nc --arg name "$name" --arg id "$id" --arg start "$(_routine_iso "$start")" --arg end "$(_routine_iso "$end")" \
     --arg due "$(_routine_iso "${slot:-$start}")" --arg slot "$slot" --arg ss "${slot:+$(_routine_stamp "$slot")}" \
-    --argjson start_s "$start" --argjson entry "$entry" \
-    '{name: $name, id: $id, due: $due, start: $start, end: $end, start_s: $start_s, entry: $entry,
+    --argjson start_s "$start" --argjson entry "$entry" --arg load "$load" \
+    '{name: $name, id: $id, due: $due, start: $start, end: $end, start_s: $start_s, entry: $entry, load: $load,
       slot: (if $slot == "" then null else ($slot | tonumber) end), slot_stamp: (if $ss == "" then null else $ss end)}')"
   if [[ "$dry" == 1 ]]; then
     _routine_finish "$name" 1 "$ctx" "$findings" "$error" || wrote=0
@@ -983,6 +1013,7 @@ routine_restart_loop() {
 
 # The schedule docs/routines.md gives each built-in, which enable sets when it is given none.
 declare -A ROUTINE_BUILTIN_AT=([cleanup]="07:30" [deps]="08:00" [mistakes]="Mon 08:00" [rules]="12:30")
+declare -A ROUTINE_BUILTIN_EVERY=([issues]="4h")
 
 # bercail routine enable NAME [--at WHEN]: declare it in config.toml, in one
 # write. A built-in runs itself unless it runs something already. --at replaces
@@ -1002,7 +1033,11 @@ routine_enable() {
     _config_edit "$CONFIG_COPY" unset "$section" every
     _config_edit "$CONFIG_COPY" set "$section" at "$at"
   elif ! jq -e '.at or .every' <<<"${entry:-null}" >/dev/null; then
-    _config_edit "$CONFIG_COPY" set "$section" at "${ROUTINE_BUILTIN_AT[$name]:-}"
+    if [[ -n "${ROUTINE_BUILTIN_EVERY[$name]:-}" ]]; then
+      _config_edit "$CONFIG_COPY" set "$section" every "${ROUTINE_BUILTIN_EVERY[$name]}"
+    else
+      _config_edit "$CONFIG_COPY" set "$section" at "${ROUTINE_BUILTIN_AT[$name]:-}"
+    fi
   fi
   errors="$(BERCAIL_USER_CONFIG="$CONFIG_COPY" routine_entries | jq -r --arg n "$name" 'select(.name == $n) | .errors | join("; ")')"
   [[ -z "$errors" ]] || die "routine $(_routine_label "$name"): $errors"
@@ -1011,13 +1046,14 @@ routine_enable() {
 
 # bercail routine disable NAME: take its entry out of config.toml; its state
 # stays, so enable brings it back where it was. Your own command lives only in
-# the entry, so that one stays: pause it, or remove it by hand.
+# the entry, so that one stays: pause it, or remove it by hand. So does an
+# issues routine's own source command.
 routine_disable() {
   local name="$1" key
   config_copy
-  ! BERCAIL_USER_CONFIG="$CONFIG_WAS" routine_entries | jq -e --arg n "$name" 'select(.name == $n) | .command' >/dev/null ||
+  ! BERCAIL_USER_CONFIG="$CONFIG_WAS" routine_entries | jq -e --arg n "$name" 'select(.name == $n) | .command or .source_command' >/dev/null ||
     die "routine $(_routine_label "$name") runs your own command, which only its entry holds; bercail routine pause $name stops it, or remove [routine.$name] by hand"
-  for key in run at every; do
+  for key in run at every repo label source; do
     _config_edit "$CONFIG_COPY" unset "routine.$(_routine_label "$name")" "$key"
   done
   config_keep

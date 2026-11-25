@@ -139,6 +139,114 @@ hold() {
   [[ "$("$ROOT/bin/bercail" config get routine.mine at)" == '07:00' ]] || fail "your own routine takes a schedule: $("$ROOT/bin/bercail" config get routine.mine at)"
 }
 
+@test "routine enable issues runs it every 4h, and disable keeps an entry whose source command only it holds" {
+  local out rc=0
+  routine enable issues >/dev/null
+  [[ "$(cat "$CONFIG")" == $'[routine.issues]\nrun = "issues"\nevery = "4h"' ]] || fail "every 4h: $(cat "$CONFIG")"
+  out="$(routine enable issues --at 09:00)"
+  [[ "$out" == *$'\n-every = "4h"\n+at = "09:00"'* ]] || fail "--at replaces it: $out"
+  printf 'repo = "~/src/a"\nlabel = "night"\nsource = "beads"\n' >>"$CONFIG"
+  routine disable issues >/dev/null
+  [[ "$(cat "$CONFIG")" == "" ]] || fail "the whole entry goes: $(cat "$CONFIG")"
+  printf '[routine.issues]\nrun = "issues"\nsource = "command"\nsource_command = ["~/bin/issues", "--json"]\n' >"$CONFIG"
+  routine enable issues >/dev/null
+  [[ "$(cat "$CONFIG")" == $'[routine.issues]\nrun = "issues"\nsource = "command"\nsource_command = ["~/bin/issues", "--json"]\nevery = "4h"' ]] \
+    || fail "enable keeps the source command: $(cat "$CONFIG")"
+  cp "$CONFIG" "$BATS_TEST_TMPDIR/before"
+  out="$(routine disable issues 2>&1)" || rc=$?
+  [[ "$rc" -eq 1 && "$out" == *"bercail routine pause issues stops it"* ]] || fail "disable: rc=$rc out=$out"
+  diff "$BATS_TEST_TMPDIR/before" "$CONFIG" || fail "changed"
+}
+
+@test "an issues routine reads its repo, label and source, beads by default, and a source command as its list" {
+  cat >"$CONFIG" <<'EOF'
+[routine.issues]
+run = "issues"
+every = "4h"
+
+[routine.mine]
+run = "issues"
+every = "1d"
+repo = "~/src/a"
+label = "night"
+source = "command"
+source_command = ["~/bin/issues", "--json"]
+EOF
+  declare_routine other
+  out="$(routine list --json)"
+  jq -e '.routines | map({(.name): .}) | add
+    | .issues.errors == [] and .issues.repo == "~/Work/bercail" and .issues.label == "routine"
+      and .issues.source == "beads" and .issues.source_command == null
+    and .mine.errors == [] and .mine.repo == "~/src/a" and .mine.label == "night"
+      and .mine.source == "command" and .mine.source_command == ["~/bin/issues", "--json"]
+    and .other.errors == [] and ([.other | has("repo", "label", "source", "source_command")] | any | not)' <<<"$out" \
+    || fail "$out"
+}
+
+@test "an issues routine names each bad repo, label, source and source command, and no other routine takes them" {
+  local name want
+  cat >"$CONFIG" <<'EOF'
+[routine.norepo]
+run = "issues"
+every = "4h"
+repo = ""
+
+[routine.numlabel]
+run = "issues"
+every = "4h"
+label = 1
+
+[routine.github]
+run = "issues"
+every = "4h"
+source = "github"
+
+[routine.nocommand]
+run = "issues"
+every = "4h"
+source = "command"
+
+[routine.emptycommand]
+run = "issues"
+every = "4h"
+source = "command"
+source_command = []
+
+[routine.strcommand]
+run = "issues"
+every = "4h"
+source = "command"
+source_command = "~/bin/issues"
+
+[routine.beadscommand]
+run = "issues"
+every = "4h"
+source_command = ["~/bin/issues"]
+
+[routine.notissues]
+run = "deps"
+every = "4h"
+label = "night"
+source_command = ["~/bin/issues"]
+EOF
+  out="$(routine list --json)"
+  while IFS='|' read -r name want; do
+    jq -e --arg n "$name" --arg w "$want" '.routines[] | select(.name == $n) | .errors == ($w | split("; "))' <<<"$out" >/dev/null \
+      || fail "$name: want $want; $(jq -c --arg n "$name" '.routines[] | select(.name == $n) | .errors' <<<"$out")"
+  done <<'EOF'
+norepo|repo must be a path, like "~/Work/bercail"
+numlabel|label must be a label, like "routine"
+github|source must be beads or command, not github
+nocommand|source = "command" needs source_command, like ["~/bin/issues", "--json"]
+emptycommand|source_command must be a list of strings, like ["~/bin/issues", "--json"]
+strcommand|source_command must be a list of strings, like ["~/bin/issues", "--json"]
+beadscommand|source_command is read only with source = "command"
+notissues|label is read only with run = "issues"; source_command is read only with run = "issues"
+EOF
+  run routine run github
+  [[ "$status" -eq 1 && "$output" == *"routine github: source must be beads or command, not github"* ]] || fail "$output"
+}
+
 @test "a command routine's new findings are emitted: the run is logged with its counts, and the hashes kept" {
   declare_routine check
   findings check '{"key":"a","title":"A is stale"}' '{"key":"b","title":"B","detail":"why","repo":"~/Work/x","issue":"x-1"}'
@@ -897,6 +1005,14 @@ evry = "1d"
 [routine."has.dot"]
 command = ["true"]
 every = "1d"
+
+[routine.issues]
+run = "issues"
+every = "4h"
+repo = "~/Work/bercail"
+label = "routine"
+source = "command"
+source_command = ["true"]
 EOF
   # shellcheck source=/dev/null
   source "$ROOT/lib/common.sh"
@@ -916,6 +1032,7 @@ EOF
   grep -qx '  ok  routine good: every 2h' <<<"$out" || fail "$out"
   grep -q 'unknown  \[routine.typo\] evry (nothing reads it)' <<<"$out" || fail "$out"
   ! grep -q 'unknown  \[routine.good\]' <<<"$out" || fail "$out"
+  ! grep -q 'unknown  \[routine.issues\]' <<<"$out" || fail "$out"
 }
 
 @test "the statechart was last checked on the spec, configs and view as they are" {

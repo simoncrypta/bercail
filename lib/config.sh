@@ -119,7 +119,11 @@ desk_secrets op_service_account
 routine run
 routine command
 routine at
-routine every'
+routine every
+routine repo
+routine label
+routine source
+routine source_command'
 
 # The name BERCAIL_CONFIG_KEYS lists a section's keys under, from its JSON path: a
 # bare [policy] names no repo, nor a bare [routine] a routine, so nothing reads their keys.

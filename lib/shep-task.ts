@@ -854,7 +854,11 @@ function dispatch(op: string, input: any): any {
       if (!slug || origin !== slug)
         throw new Error("PR URL belongs to another repository; ownership cannot be inferred from its number");
     }
-    if (!/^[a-z0-9][a-z0-9._-]{0,99}$/i.test(input.requestId || ""))
+    if (
+      typeof input.requestId !== "string" ||
+      input.requestId.length > 100 ||
+      !/^([A-Za-z0-9][A-Za-z0-9._-]*|Q[1-9]\d*@[1-9]\d*)$/.test(input.requestId)
+    )
       throw new Error("requestId is required; reuse it after an uncertain response, never mint a retry");
     if (
       !["bstack", "autopilot"].includes(input.stage || "bstack") ||

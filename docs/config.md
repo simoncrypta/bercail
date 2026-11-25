@@ -39,6 +39,13 @@ slots = 2                            # tests/run.sh and verify-bercail runs at o
 command = ["~/bin/my-check", "--json"]   # or run = "<built-in>"
 every = "1d"                         # or at = "07:30"
 
+[routine.issues]                     # optional: the issues built-in, with its defaults
+run = "issues"
+every = "4h"
+repo = "~/Work/bercail"              # the main checkout whose issues it reads
+label = "routine"                    # only issues with this label
+source = "beads"                     # bd; or "command", with source_command = ["~/bin/my-issues"]
+
 [herdr]                              # optional: bercail on another Herdr machine
 backend = ""                         # its name in `hc machine ls`; empty: this computer
 ```

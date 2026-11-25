@@ -287,6 +287,26 @@ bercail onto that version and use what it adds, with `--external-ref
 gh-<number>`. Then ask a card before you dispatch it. `deps:tracker` is the
 tracker failing: tell the person in one line, with its URL.
 
+For an `issue:<id>` finding, verify that the named routine still has
+`run = "issues"`. Run `bercail routine run <name> --dry-run`: continue only
+if it prints that same repo and issue. If no card for that offer is pending,
+ask “Start a desk on <id>: <title>?” with `shep_question`: `kind: planning`,
+`topic: routine:<name>`, the finding's repo and issue, no desk or action,
+`reversible: false`. Use the event ID for `originEvent` and the options
+`Start`, `Not now`, `Skip this issue`. Never default or take a standing rule
+as the answer. Not now holds it for seven days; Skip holds it indefinitely.
+The routine reads those answers from the question ledger. Neither changes
+the issue.
+
+Only on the person's **Start** on that revision (not a proposal), confirm
+the routine still runs `issues` and repeat the dry run. It must still offer
+the card's repo and issue, even if marked `same` under `skipped (quiet)`.
+That checks the label, readiness, desk and handoff ownership, and current
+load. A failed check or no matching finding means stop; never substitute
+another job. Dispatch that job as under **A job**, using the exact card token
+(`Q12@3`, for example) as `requestId`. The token deduplicates a retry; it
+is not permission by itself.
+
 The mistakes routine's `mistake:<group>` finding is a group of your mistakes
 ledger that grew with no open issue, or that came back after its fix (the
 finding's issue) closed. Recheck with `bercail shep mistake list` and

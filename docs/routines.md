@@ -1,6 +1,6 @@
 # routines
 
-A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, the built-in [cleanup](#the-cleanup-routine), [deps](#the-deps-routine), [mistakes](#the-mistakes-routine) and [rules](#the-rules-routine) routines, and [the Routines panel](#the-routines-panel) in Shep's view. `bercail routine run` runs one now, and `--dry-run` prints what a run would find, without keeping it. The plan is bercail-2qig.
+A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, the built-in [cleanup](#the-cleanup-routine), [deps](#the-deps-routine), [issues](#the-issues-routine), [mistakes](#the-mistakes-routine) and [rules](#the-rules-routine) routines, and [the Routines panel](#the-routines-panel) in Shep's view. `bercail routine run` runs one now, and `--dry-run` prints what a run would find, without keeping it. The plan is bercail-2qig.
 
 ## Declare one
 
@@ -28,7 +28,7 @@ at = "12:30"
 - Each has one of `at = "HH:MM"` (a daily local slot), `at = "Mon HH:MM"` (a weekly one; `Mon` to `Sun`), or `every = "<n>h"` or `"<n>d"` (at least `1h`).
 - A name is letters, digits, `-` and `_`, at most 64 of them.
 
-`bercail routine enable <name>` declares a built-in at the schedule this page gives it (cleanup `07:30`, deps `08:00`, mistakes `Mon 08:00`, rules `12:30`), or keeps the one it has; `--at <when>` sets it, in place of an `every` too, and a routine that ran already keeps the next due time it has. `bercail routine disable <name>` takes a built-in's entry out of `config.toml`; its state stays, paused or not, for the next `enable`. It refuses your own command routine, which only its entry holds: pause it, or remove it by hand. Each prints the lines it changed, and takes `--dry-run`. Shep's goes to a [guard card](shep.md#guard-asks) that shows them.
+`bercail routine enable <name>` declares a built-in at the schedule this page gives it (cleanup `07:30`, deps `08:00`, issues every `4h`, mistakes `Mon 08:00`, rules `12:30`), or keeps the one it has; `--at <when>` sets it, in place of an `every` too, and a routine that ran already keeps the next due time it has. `bercail routine disable <name>` takes a built-in's entry out of `config.toml`; its state stays, paused or not, for the next `enable`. It refuses your own command routine or command issue source, which only its entry holds: pause it, or remove it by hand. Each prints the lines it changed, and takes `--dry-run`. Shep's goes to a [guard card](shep.md#guard-asks) that shows them.
 
 `bercail doctor` names a bad entry, such as `invalid  routine nowhen: no at or every`, and a key nothing reads. Neither counts as a failure. `bercail routine list` names a bad entry too, and `bercail routine run` refuses one.
 
@@ -68,7 +68,7 @@ A run comes to one of these outcomes, as in the [statechart](../tests/statechart
 
 - **Skipped (paused):** the routine was paused when the run had taken its locks. Its query does not run.
 - **Skipped (overlap):** another run of it holds its lock.
-- **Skipped (load):** 2 routines are already running.
+- **Skipped (load):** 2 routines are already running, or the [issues routine](#the-issues-routine) found no room for another desk.
 - **Skipped (done):** a scheduled run's slot is no longer the routine's next due: a run met it already, by hand too.
 - **Skipped (early):** the clock went back after the tick chose the slot, and the run's own clock says it is not due yet. The slot stays due.
 - **Skipped (tried):** another run of the slot ran its query under 15 minutes ago and could not write its state; see [the scheduler](#the-scheduler).
@@ -173,6 +173,32 @@ A job bd or Entire cannot read is not closed, and gives no finding. Each bd call
 Each open issue with a `deps:<name>` label is a finding keyed `deps:<name>`; when two have the label, the newest counts. Its title is the issue's (`deps: tuicr 0.30.0`), its `repo` is your bercail checkout, and its detail gives the issue's URL, the version (the title's last word: a release, a date, or a vendored copy's commit), and the beads issues there that link it, an open one first: `https://github.com/simoncrypta/bercail/issues/71; version 0.30.0; linked by bercail-12 (open)`, or `no beads issue links it`. A beads issue links it when its external ref is `gh-71` or the URL, or its title or description holds the URL; a bare `#71` or `tuicr 0.30.0` does not, since any issue that mentions the version reads so. The first one that links it is the finding's `issue`. A new version retitles the tracker's issue, so the finding counts as changed; a beads issue that links it, or one that closes, changes it too. `deps:tracker` is the tracker's own `deps: tracker failing` issue, with no version. [SHEP.md](../shep/SHEP.md#routine-events) says what Shep does with each.
 
 The run fails when no bercail checkout is among Shep's repos (add its path to `~/.local/state/bercail/shep/repos`), when there are two (each has its own beads, so a finding could not say which links it), when that checkout has no beads, or when `gh` or `bd` does not answer.
+
+## The issues routine
+
+To offer one issue every four hours without starting work automatically, add this to your own config:
+
+```toml
+[routine.bercail-issues]
+run = "issues"
+every = "4h"
+repo = "~/Work/bercail"
+source = "beads"
+label = "routine"
+```
+
+Beads reads `bd ready --json -l routine` in that repo. The routine leaves out issues already in progress, those with a live desk or handoff record, and those you declined. It offers the highest priority left (P0 first), oldest first on a tie. It skips for load if two desks are working, the repo's review queue exceeds its `review_budget`, a desk this routine offered is still open, or a test run is waiting for a slot. That skip sends no event and keeps the previous offer's hash.
+
+Shep asks **Start**, **Not now** (hold for seven days), or **Skip this issue** (do not offer again). Nothing defaults. Even on Start, Shep checks the same repo and issue again: if it lost its label, is no longer ready, gained an owner, or load is too high, no desk starts.
+
+For your own source, replace `source = "beads"` with:
+
+```toml
+source = "command"
+source_command = ["~/bin/ready-issues", "--json"]
+```
+
+The script runs in the repo. It must filter for **ready items carrying `BERCAIL_ROUTINE_LABEL`** and print one JSON object per line, for example `{"id":"app-7","title":"Document the importer","priority":1,"url":"https://example.org/issues/7","created":"2026-11-20T08:00:00Z"}`. Return no rows for no matches, nonzero for a failed lookup. Use IDs that Shep can bind to jobs in that checkout; a URL alone is not a dispatch target. As with a command routine, your script runs even on `--dry-run`: use a read-only query.
 
 ## The mistakes routine
 
