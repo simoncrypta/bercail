@@ -1047,6 +1047,50 @@ EOF
   grep -q 'gh stack' "$BD_COMMENTS" || fail "the desk is told to use gh stack: $(cat "$BD_COMMENTS")"
 }
 
+@test "a gh --base that is a commit, a remote branch or a tag is a plain base, not a stack parent" {
+  local bin="$BATS_TEST_TMPDIR/sp-ghsha-bin" log="$BATS_TEST_TMPDIR/sp-ghsha.log" repo base start out i=0
+  _fake_logger "$bin" gh "$log"
+  for base in sha origin/master feat; do
+    i=$((i + 1))
+    repo="$BATS_TEST_TMPDIR/sp-ghsha$i"
+    git_init "$repo"
+    start="$(git -C "$repo" rev-parse HEAD)"
+    git -C "$repo" update-ref refs/remotes/origin/master "$start"
+    git -C "$repo" tag feat "$start"
+    git -C "$repo" commit -q --allow-empty -m later
+    [[ "$base" != sha ]] || base="$start"
+    out="$(_spawn_branch "sp-ghsha$i" "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-ghsha$i-home" "$base" 2>"$BATS_TEST_TMPDIR/sp-ghsha.err")" \
+      || fail "spawn --base $base failed: $out $(cat "$BATS_TEST_TMPDIR/sp-ghsha.err")"
+    printf '%s' "$out" | jq -e --arg b "$base" '.git == "gh" and .agent_started == true and .base == $b' >/dev/null \
+      || fail "spawn json: $out"
+    [[ "$(git -C "$repo.feat" rev-parse HEAD)" == "$start" ]] || fail "--base $base is where feat starts"
+    ! grep -q ' stack ' "$log" || fail "--base $base must not call gh stack: $(cat "$log")"
+    ! grep -q 'gh stack' "$BD_COMMENTS" || fail "--base $base tells the desk to stack: $(cat "$BD_COMMENTS")"
+  done
+}
+
+@test "a gh --base given as refs/heads/x stacks on x" {
+  local repo="$BATS_TEST_TMPDIR/sp-ghref" bin="$BATS_TEST_TMPDIR/sp-ghref-bin" log="$BATS_TEST_TMPDIR/sp-ghref.log" out
+  git_init "$repo"
+  git -C "$repo" branch layer
+  _fake_logger "$bin" gh "$log"
+  out="$(_spawn_branch sp-ghref "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-ghref-home" refs/heads/layer 2>/dev/null)" || fail "spawn failed: $out"
+  grep -q 'stack init --base master layer feat$' "$log" || fail "the parent is the short name; log=$(cat "$log")"
+  grep -q 'Stack feat on layer ' "$BD_COMMENTS" || fail "the desk hears the short name: $(cat "$BD_COMMENTS")"
+}
+
+@test "a gt --base that is a commit tracks the branch on trunk, as with no --base" {
+  local repo="$BATS_TEST_TMPDIR/sp-gtsha" bin="$BATS_TEST_TMPDIR/sp-gtsha-bin" log="$BATS_TEST_TMPDIR/sp-gtsha.log" sha out
+  git_init "$repo"
+  graphite_auto_init "$repo"
+  git -C "$repo" update-ref refs/branch-metadata/other HEAD
+  sha="$(git -C "$repo" rev-parse HEAD)"
+  _fake_gt "$bin" "$log" "case \"\$args\" in *' parent --no-interactive '*) exit 1 ;; esac"
+  out="$(_spawn_branch sp-gtsha "$repo" "$bin" "$BATS_TEST_TMPDIR/sp-gtsha-home" "$sha" 2>/dev/null)" || fail "spawn failed: $out"
+  [[ "$(grep ' track ' "$log")" == "--cwd $repo.feat track --parent master --no-interactive" ]] \
+    || fail "a commit base is tracked on trunk, never as a parent; log=$(cat "$log")"
+}
+
 @test "an entire --base spawn tracks no stack and tells the desk to name the base on the trail" {
   local repo="$BATS_TEST_TMPDIR/sp-et" bin="$BATS_TEST_TMPDIR/sp-et-bin" log="$BATS_TEST_TMPDIR/sp-et.log" out
   git_init "$repo"
