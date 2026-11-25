@@ -281,6 +281,19 @@ finding's issue) closed. Recheck with `bercail shep mistake list` and
 `bd list --label mistake:<group> --all`, then file its issue as under
 Mistakes below, and tell the person in one line.
 
+The rules routine's `rules:<hash>` finding is a standing rule that may no
+longer apply; its detail is the rule as `bercail shep list` prints it after
+the number, and its title says why. Recheck each reason: drop a finding
+whose rule still applies, such as a date that starts a rule rather than
+ends it. A `may be covered by a later rule` reason only names a pair: drop
+it unless the later rule says all the earlier one does. Put the rest on one
+planning card, each rule with its reason, with the options `Forget these`
+and `Keep them` and no default; ask none when nothing is left. On `Forget
+these`, run `bercail shep list`, find each rule's number by its text, skip
+one no longer there or whose covering rule is gone, and `bercail shep
+forget N` from the highest number down. A kept rule stays `same` while its
+reasons do, so it does not come back.
+
 When `show` says what the run found is no longer kept, tell the person in
 one line that the routine's run expired before you read it, and go on; a
 later run's findings are not what that one found. A paused routine failed 3 times in a row: read why

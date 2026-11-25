@@ -210,7 +210,7 @@ bercail shep list        # 1. 2026-11-11 [bercail] Merge finished desk work stra
 bercail shep forget 1
 ```
 
-They are `- DATE [SCOPE] RULE` lines in `~/.local/state/bercail/shep/preferences.md` (`--scope` is a repo, issue, desk, or `all`, the default; a repeat is kept once), in the start context and every compaction summary. A rule for everyone belongs in [`shep/SHEP.md`](../shep/SHEP.md) or a repo's [policy](config.md#git-policy-per-repo).
+They are `- DATE [SCOPE] RULE` lines in `~/.local/state/bercail/shep/preferences.md` (`--scope` is a repo, issue, desk, or `all`, the default; a repeat is kept once), in the start context and every compaction summary. A rule for everyone belongs in [`shep/SHEP.md`](../shep/SHEP.md) or a repo's [policy](config.md#git-policy-per-repo). The [rules routine](routines.md#the-rules-routine) finds the ones that no longer apply: a past night or day, a desk that is gone, a once-only permission already used, or one a later rule may cover. Shep asks you before it forgets any.
 
 In a repo with Entire's Brain, a desk proposes a memory about the code as `Memory: "<text>" --path <p>` and never records one. Shep records it with `entire brain remember` from the repo's main checkout without asking you, and its report shows the text, the path and the fact ID; `entire brain memories retract <id>` takes one back. Brain takes only a taxonomy path, `category.subcategory.type` under `architecture`, `constraints`, `preferences`, `project` or `workflow` (such as `workflow.testing.rules`), so Shep maps a desk's file path to one and names the file in the text as its locus.
 

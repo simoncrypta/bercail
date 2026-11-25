@@ -1,6 +1,6 @@
 # routines
 
-A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, the built-in [cleanup](#the-cleanup-routine), [deps](#the-deps-routine) and [mistakes](#the-mistakes-routine) routines, and [the Routines panel](#the-routines-panel) in Shep's view. `bercail routine run` runs one now, and `--dry-run` prints what a run would find, without keeping it. The plan is bercail-2qig.
+A routine is a query that runs outside Shep's session. It reads something, prints what it found, and only what is new or changed counts. A run that found something new or changed sends Shep one event, and Shep decides what each finding becomes. This page covers the runner, its state and its locks, the event, [the scheduler](#the-scheduler) that runs each routine when it is due, the built-in [cleanup](#the-cleanup-routine), [deps](#the-deps-routine), [mistakes](#the-mistakes-routine) and [rules](#the-rules-routine) routines, and [the Routines panel](#the-routines-panel) in Shep's view. `bercail routine run` runs one now, and `--dry-run` prints what a run would find, without keeping it. The plan is bercail-2qig.
 
 ## Declare one
 
@@ -18,6 +18,10 @@ at = "07:30"
 [routine.mistakes]
 run = "mistakes"
 at = "Mon 08:00"                         # a local time each week, on that day
+
+[routine.rules]
+run = "rules"
+at = "12:30"
 ```
 
 - Each routine has one of `run` (a built-in's name) or `command` (an argv, not a shell line).
@@ -180,6 +184,22 @@ The run fails when no bercail checkout is among Shep's repos (add its path to `~
 Its `detail` lists the group's keys and their counts. An entry's beads issue with no repo is looked up in every repo; one in a repo without beads, or that bd does not have, is not open. A trail with no repo may be open, so it holds its group back. Keys in no group are left out. [SHEP.md](../shep/SHEP.md#routine-events) has Shep file the issue the group counts against, in the repo that owns the fix, labelled `mistake:<group>` and `routine`, so the issues routine can offer it.
 
 `routines/<name>/counts.json` keeps each group's count and the run that saw it, so a group that did not grow is not found again, even once the issue that held it back has closed. A run counts from the last run the runner kept (`kept` in its `state.json`): when the runner could not write its state, the next run finds the same groups again. A source that fails fails the run, as in the cleanup routine: a bd list, or a trail Entire could not show, which may be open. A dry run reads `counts.json` and writes nothing.
+
+## The rules routine
+
+`run = "rules"` finds the [standing rules](shep.md#standing-rules) that may no longer apply, on the schedule you give it, such as `at = "12:30"`: after noon, last night's rules are past. It only reads: `~/.local/state/bercail/shep/preferences.md`, the terminals `hc ls` lists, and the question ledger. Each rule it finds is one finding, keyed `rules:<hash>` from the rule's line, titled with every reason that holds, and with the rule's line as `bercail shep list` prints it (`2026-11-22 [repo] Night of 2026-11-22: …`) as its detail:
+
+| Reason | Found when |
+|--------|------------|
+| `for the night of 2026-11-22, now past` | The rule names its night (`Night of 2026-11-22`, `2026-11-21 night`) or, with no date, says `tonight`, `going to sleep`, `during the night` or `for the night`, which is the night of the day it was added. A night is past at noon the next day |
+| `for 2026-11-14, now past` | The rule names its day (`On 2026-11-14`, or it starts `2026-11-24:`) or, with no date, says `for today`, `today only` or `just today`, the day it was added. A day is past the next day |
+| `for desk t1d7, which hc no longer has` | Its scope is a desk, or it says `desk` and names desks (`on desks t2wp and t2wr`), and `hc ls` lists none of them. A rule that names a desk on another machine (`vps/t1aa`) is not read as for gone desks: that one may be live |
+| `names Q71@1, a once-only permission used on 2026-11-16` | It allows something once (`once`, `one-time`, `a single`; not `once Q71@1 is answered`) and names a card whose push, guard Allow or land chain was claimed |
+| `may be covered by a later rule of the same or wider scope: <that rule>` | A later rule, scoped the same or `all`, says the same or shares most of its words, and is not found itself |
+
+These are word patterns, not a reading of the rule, so a finding is a candidate: one you pick to forget is forgotten, right or wrong. A rule with several dates is past once the last is, and a bare date (`back online (2026-11-23)`) dates nothing. Titles and details hold no list number, since a forget renumbers the rules after it: a rule you keep stays `same` while its reasons do, and is not raised again. [SHEP.md](../shep/SHEP.md#routine-events) has Shep recheck each, ask one card with no default for the ones that hold, and forget those you pick.
+
+A source that fails fails the run, as in the cleanup routine: `hc`, the ledger, or a `preferences.md` it cannot read. No `preferences.md` is no rules, and a quiet run.
 
 ## The Routines panel
 
