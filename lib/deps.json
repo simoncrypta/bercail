@@ -168,7 +168,7 @@
     "source": "npm:wrangler",
     "min": null,
     "why": null,
-    "known": "4.165.0",
+    "known": "4.168.0",
     "pinned_in": ["package-lock.json"],
     "notes": "package.json allows ^4.0.0; the lockfile holds the version. site/wrangler.jsonc's compatibility_date can move with it."
   },
@@ -235,7 +235,7 @@
     "source": "action:jdx/mise-action",
     "min": null,
     "why": null,
-    "known": "5.2.10",
+    "known": "5.3.0",
     "pinned_in": [".github/actions/setup/action.yml:jdx/mise-action"],
     "notes": null
   },
@@ -253,7 +253,7 @@
     "source": "workerd:package-lock.json",
     "min": null,
     "why": null,
-    "known": "2026-07-01",
+    "known": "2026-11-23",
     "pinned_in": ["site/wrangler.jsonc:compatibility_date"],
     "notes": "The date wrangler gives as the latest, the one in the version of the workerd it locks, so it moves when wrangler does. Read the flags it turns on (https://developers.cloudflare.com/workers/configuration/compatibility-flags/) before you move it."
   }
