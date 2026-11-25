@@ -33,6 +33,13 @@ EOF
   chmod +x "$Q/query"
 }
 
+# A query's child that a test lets outlive its run writes its pid to $MEET/child.
+teardown() {
+  local pid
+  [[ -f "$MEET/child" ]] || return 0
+  while read -r pid; do kill "$pid" 2>/dev/null || true; done <"$MEET/child"
+}
+
 routine() { "$ROOT/bin/bercail" routine "$@"; }
 
 # declare NAME [SCHEDULE]: a command routine running the stand-in query.
@@ -648,11 +655,12 @@ GATE
 }
 
 @test "a child the query leaves behind does not keep the routine's lock" {
-  printf '[routine.leaves]\ncommand = ["bash", "-c", "sleep 30 >/dev/null 2>&1 & echo $! >%s"]\nevery = "1h"\n' "$MEET/child" >"$CONFIG"
+  # Both runs leave one; each adds its pid, for teardown to stop (bercail-oniw).
+  printf '[routine.leaves]\ncommand = ["bash", "-c", "sleep 30 >/dev/null 2>&1 & echo $! >>%s"]\nevery = "1h"\n' "$MEET/child" >"$CONFIG"
   routine run leaves >/dev/null
-  child="$(cat "$MEET/child")"
+  read -r child <"$MEET/child"
+  kill -0 "$child" || fail "the query left no child"
   out="$(routine run leaves)"
-  kill "$child" 2>/dev/null || true
   [[ "$out" == "leaves: skipped (quiet), "* ]] || fail "second run: $out"
 }
 

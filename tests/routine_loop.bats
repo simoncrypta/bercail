@@ -53,7 +53,7 @@ EOF
 }
 
 teardown() {
-  [[ -z "${LOOP:-}" ]] || kill "$LOOP" 2>/dev/null || true
+  [[ -z "${LOOP:-}" ]] || kill -- -"$LOOP" 2>/dev/null || true
   touch "$MEET"/release.a "$MEET"/release.b "$MEET"/release.c 2>/dev/null || true
 }
 
@@ -410,16 +410,19 @@ monday() { "$REAL_DATE" -d '2026-11-23 07:30:00' +%s; }
   at 1800000000
   loop_line() { bercail shep status | grep '^routine loop: '; }
   [[ "$(loop_line)" == "routine loop: not running (never ticked); "* ]] || fail "$(loop_line)"
+  # Its own process group, for teardown to stop its sleep too (bercail-oniw).
+  set -m
   "$ROOT/bin/bercail" routine loop >"$MEET/loop.out" 2>&1 3>&- &
   LOOP=$!
+  set +m
   await "[[ -f '$STATE/tick.json' ]]"
   await_run a 1
   out="$(bercail routine loop 2>&1)" && fail "a second loop ran: $out"
   [[ "$out" == *"already running"* ]] || fail "$out"
   [[ "$(loop_line)" == "routine loop: running, last tick $("$REAL_DATE" -d @1800000000 '+%Y-%m-%d %H:%M')" ]] || fail "$(loop_line)"
+  # The loop alone: its sleep lives on, and must not hold the lock.
   kill "$LOOP"
   wait "$LOOP" 2>/dev/null || true
-  LOOP=""
   await "flock -n '$STATE/.loop.lock' true"
   [[ "$(loop_line)" == "routine loop: not running (last tick "*"); "* ]] || fail "$(loop_line)"
 }

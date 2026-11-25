@@ -42,6 +42,7 @@ setup() {
   install_hc
   install_journalctl
   install_notify_send
+  install_ps
 
   SHUTDOWN=1000000
   fresh=$((SHUTDOWN - 60))
@@ -163,6 +164,19 @@ install_journalctl() {
 printf '%s.612821 omarchy systemd[1]: Unmounted.\n' "\$(cat "$BATS_TEST_TMPDIR/shutdown")"
 EOF
   chmod +x "$BATS_TEST_TMPDIR/bin/journalctl"
+}
+
+# The gather asks ps whether a process names a session. The real one lists the
+# whole machine, where another run of this file names the same sessions (bercail-alnd).
+# This one lists $PS_ARGS, a line per process.
+install_ps() {
+  PS_ARGS="$BATS_TEST_TMPDIR/ps-args"
+  cat >"$BATS_TEST_TMPDIR/bin/ps" <<EOF
+#!/usr/bin/env bash
+[[ "\$*" == "-eo args=" ]] || { echo "ps stand-in: unexpected \$*" >&2; exit 2; }
+cat "$PS_ARGS" 2>/dev/null || true
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/ps"
 }
 
 # Captures boot notifications so a passing restore never calls the real notify-send.
@@ -454,6 +468,16 @@ restore_profile() {
   [[ ! -e "$SENT" ]] || fail "resumed a session an ordinary terminal already holds: $(cat "$SENT")"
   [[ "$out" == *"t1     skip: session is open elsewhere"* ]] || fail "records duplicate: $out"
   [[ "$out" != *"t9"* ]] || fail "acted on a non-desk terminal: $out"
+}
+
+@test "a process that names the session keeps its desk from being resumed" {
+  local out
+  reset_pass
+  terminal t1 "$bare"; put_record t1 ses_ps 60
+  printf 'bash\npi --session-id ses_ps\n' >"$PS_ARGS"
+  out="$(cmd_desk restore)"
+  [[ ! -e "$SENT" ]] || fail "resumed a session a process has open: $(cat "$SENT")"
+  [[ "$out" == *"t1     skip: session is open elsewhere"* ]] || fail "in ps: $out"
 }
 
 @test "a live claim blocks restore; a dead pid does not" {
