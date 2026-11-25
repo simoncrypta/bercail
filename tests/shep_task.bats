@@ -172,6 +172,21 @@ task() { "$ROOT/bin/bercail" shep task "$@"; }
   [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json' | wc -l)" == 1 ]]
 }
 
+@test "a desk restored onto its same session with a new pid takes the follow-up, and its record moves to that pid" {
+  local out old="$PID"
+  request | task dispatch >/dev/null
+  # A reboot and bercail desk restore: the same desk and session, a new Pi process.
+  kill "$PID"; wait "$PID" 2>/dev/null || true
+  rm "$XDG_RUNTIME_DIR/bercail/open-sessions/$PID.json"
+  start_pi PID
+  TICKS="$(awk '{print $22}' "/proc/$PID/stat")"
+  owner t9 s1
+  [[ "$PID" != "$old" ]] || fail "the restored Pi kept pid $old"
+  out="$(request r2 | task dispatch)" || fail "$out"
+  jq -e --argjson pid "$PID" '.status == "queued" and .owner.desk == "t9" and .owner.session == "s1" and .owner.pid == $pid' <<<"$out" || fail "$out"
+  jq -e --argjson pid "$PID" --arg ticks "$TICKS" '.metadata.bercail_task.owner | .pid == $pid and .start_ticks == $ticks' "$TASK_DATA/app-1.json"
+}
+
 @test "repo path aliases deduplicate; issue aliases and a foreign PR URL cannot take a target" {
   local out
   ln -s "$REPO" "$BATS_TEST_TMPDIR/alias"
@@ -582,6 +597,30 @@ EOF
   request | jq '.branch="fix"' | task dispatch >/dev/null
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]]
   [[ "$(find "$XDG_STATE_HOME/bercail/desk-follow-ups" -name '*.json' | wc -l)" == 1 ]]
+}
+
+@test "a retry of the creation, once its desk is restored onto its session with a new pid, queues there and saves that pid" {
+  local out
+  partial_launch
+  export TASK_ORIGINAL="$BATS_TEST_TMPDIR/original.hc" TASK_REPO="$REPO"
+  owner t9 s1
+  mv "$TASK_DATA/t9.hc" "$TASK_ORIGINAL"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'EOF'
+#!/usr/bin/env bash
+cp "$TASK_ORIGINAL" "$TASK_DATA/t9.hc"
+jq -nc --arg p "$TASK_REPO.fix" '{ok:true,agent_started:true,path:$p,branch:"fix",space:"sp1",desk:"t9",session:"s1",issue:"app-1",target:"pr:12"}' | tee "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+EOF
+  request | jq '.branch="fix"' | task dispatch >/dev/null
+  # A follow-up binds the owner before the creation's own message is queued.
+  request r2 | task dispatch >/dev/null
+  kill "$PID"; wait "$PID" 2>/dev/null || true
+  rm "$XDG_RUNTIME_DIR/bercail/open-sessions/$PID.json"
+  start_pi PID
+  TICKS="$(awk '{print $22}' "/proc/$PID/stat")"
+  owner t9 s1
+  out="$(request | jq '.branch="fix"' | task dispatch)" || fail "$out"
+  jq -e --argjson pid "$PID" '.status == "queued" and .retry and .owner.pid == $pid' <<<"$out" || fail "$out"
+  jq -e --argjson pid "$PID" --arg ticks "$TICKS" '.metadata.bercail_task.owner | .pid == $pid and .start_ticks == $ticks' "$TASK_DATA/app-1.json"
 }
 
 @test "a competing exact-session process is ambiguous even without a coding role label" {

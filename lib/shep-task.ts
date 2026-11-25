@@ -416,7 +416,10 @@ function verify(repo: string, terminal: any, id: string, saved?: Owner | null): 
     pid: r.pid,
     start_ticks: r.start_ticks,
   };
-  if (saved && (Object.keys(owner) as (keyof Owner)[]).some((key) => owner[key] !== saved[key]))
+  // A desk restored onto its own session (after a reboot, say) is the same
+  // owner in a new process, checked live above.
+  const identity = ["desk", "space", "cwd", "branch", "session", "session_file"] as const;
+  if (saved && identity.some((key) => owner[key] !== saved[key]))
     throw new Error(
       "original owner/session/branch changed; no request or authority transfers to a replacement session",
     );
@@ -1057,6 +1060,10 @@ function dispatch(op: string, input: any): any {
           throw new Error(
             `original owner ${task!.owner.desk} is gone; this request was for it. Dispatch the work with a new requestId, which adopts its checkout`,
           );
+        if (original.pid !== task!.owner.pid || original.start_ticks !== task!.owner.start_ticks) {
+          task!.owner = original;
+          save(repo, value, task!, false);
+        }
         const path = queue(repo, value.id, original, request);
         // A retry of an adoption tells the person again, in case the first answer was lost.
         const adopted = task!.adoptions?.find((a) => a.request === prior.id);
