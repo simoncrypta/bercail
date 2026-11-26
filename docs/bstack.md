@@ -2,7 +2,7 @@
 
 **bstack is bercail's opinionated Pi.** [Pi](https://pi.dev) signs in with a Claude plan (through Claude Code) and a ChatGPT plan, so one agent runs both, on subscriptions you already pay for. bstack sets Pi up the way bercail works: the job is a beads issue, agents stage and leave changes uncommitted for tuicr, Claude Opus does the work and makes the calls, and GPT judges as a second opinion.
 
-It borrows from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (rigor, playbooks, roles by model strength, `how`/`why`/`unslop`), [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit) (babysit-pr and CI loops, which became autopilot), and [gstack](https://github.com/garrytan/gstack), on top of [Shep](shep.md)'s handoff workflow.
+It borrows from [pstack](https://github.com/cursor/plugins/tree/main/pstack) (rigor, playbooks, roles by model strength, `how`/`why`/`unslop`), [cursor-team-kit](https://github.com/cursor/plugins/tree/main/cursor-team-kit) (babysit-pr and CI loops, which became autopilot), and [gstack](https://github.com/garrytan/gstack), on top of [Shep](shep.md)'s handoff workflow ([credits](credits.md)).
 
 Every install runs bstack: the desk agent is its Pi lead.
 
@@ -11,6 +11,27 @@ bercail bstack setup     # installs Pi and the Claude bridge; models are picked 
 bercail bstack status    # what is logged in, which model each role uses
 dev                      # the desk starts Pi as the bstack lead
 ```
+
+## Roles and models
+
+The lead is the Pi on the desk. It reads the job, picks a [playbook](bstack/02-the-bstack-agent.md#the-playbooks), and hands steps to the other roles, which run as `hc` sibling agents from templates in `~/.config/herdr-core/templates/`. A sibling knows only the brief the lead writes it, and the lead checks what comes back before it passes it on.
+
+| Role | Runs as | Default model | Does |
+|------|---------|-------|------|
+| lead | the desk | Claude Opus | plans, routes, decides, runs `/validate`, reports on the issue |
+| build | `bstack-builder` | Claude Opus | writes code from the lead's brief |
+| judge | `bstack-judge` | GPT | a second opinion from another provider: hard design calls, prose, and the check at `/validate`. It changes nothing; the lead decides, and says why when it goes against it |
+| autopilot | `bstack-autopilot` | Claude Opus | gets an open PR green: CI, review threads, conflicts. It may commit and push the PR's branch, never merge |
+| Shep | its own terminal | Claude Opus | the [orchestrator](shep.md): jobs, desks, cards |
+| background Shep | a worker with no space | Claude Fable | waits on CI, a desk or a trail, reports, and stops |
+
+Discuss, a card's side conversation, runs on Claude Opus, and `bercail review-pr`'s reviewer on GPT. Through 2026-11-30 a lead starts the builder on Claude Fable for a job that touches no high-stakes path ([the builder trial](bstack/02-the-bstack-agent.md#the-roles)). The models are picked at setup and on each update: the newest of each plan, unless you pin one ([Make it yours](bstack/08-make-it-yours.md)). Without a ChatGPT login the judge runs on Claude. A rate limit pauses a role until it resets, or moves it to Claude Fable ([below](#how-it-runs)).
+
+## How a desk finishes: `/validate`
+
+A desk ends every build with `/validate` ([Review it](bstack/05-review.md#validate)). It re-reads the job, runs the tests that cover the diff and the repo's `verify-<repo>` skill, runs `unslop` on the diff, and stages everything with `git add`. It writes what it ran, with exit codes and evidence, to `.bercail/validate.json`, and the change's description to `.bercail/description.md`, which `bercail describe check` holds against the staged tree. Then the judge reads the diff, the description and the issue: does the diff do what the issue asks, is every claim backed, and what could be removed. The lead fixes what holds up and reports.
+
+`/validate` never commits, pushes or opens a PR. Shep reads the result in the issue's brief (the staged change's size, its [stakes](config.md#review-by-stakes-and-size), and whether its description checks out), and lands the change only with a description that does.
 
 ## How it runs
 

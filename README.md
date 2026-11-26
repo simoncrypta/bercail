@@ -1,28 +1,60 @@
 # bercail
 
-**an ADE on [herdr](https://herdr.dev).**
+**An agentic development environment on [Herdr](https://herdr.dev).** You ask for
+something. Shep, the orchestrator, writes it down as a job and gives it to a desk:
+a coding agent in its own git worktree, in plain view beside your work. A desk
+stages its change and leaves the commit to you or Shep. You read each change,
+answer the questions only you can answer, and Shep lands what you approve.
 
-Run a handful of coding agents at once and never lose one. Bercail is an agentic development environment on the [Herdr app](https://herdr.dev) and herdr-core (`hc`), built for working in parallel with control and observability.
+![Shep's view: the Decisions and Routines panels left of Shep's terminal, and the spaces and agents on the right, with one desk done, one working and one blocked](bercail/preview.png)
 
-One git worktree, one Herdr space. Each space has a desk: one agent that stays on the left while you switch between shell, review, and files. You can see when each agent is working, blocked, or done.
+Bercail is French for the sheepfold, so of course there's a shepherd.
 
-Agents stage their changes and leave them uncommitted. When the desk agent goes `done`, [tuicr](https://github.com/agavra/tuicr) opens that work and watches further edits. You review in the terminal, comments stay human vs AI, and nothing goes to GitHub until you ask.
+## Why use it
 
-**Built to be herded.** Bercail is French for the sheepfold, so of course there's a shepherd. [Shep](docs/shep.md) is the orchestrator that ships with bercail: it runs on Pi out of the box. It writes the job as a [beads](https://beads.gascity.com/) issue, hands it to an agent, and tells you when a desk is ready. Bercail does the local work; Shep decides what happens next. You can also do Shep's part by hand.
+- **Every agent in sight.** One job, one worktree, one Herdr space, one desk. The
+  sidebar shows which desks are working, which wait on you, and which are done.
+  Shep writes no code itself: every coding job is a desk you can open.
+- **Review comes first.** Desks stop at a staged change. When one is done,
+  [tuicr](https://github.com/agavra/tuicr) opens it in a Review tab the next time
+  you look at its space. A change to a path the repo marks high-stakes waits for
+  your LGTM before it lands.
+- **Questions come as cards.** Shep puts what it needs from you in the Decisions
+  panel: the question, the choices and, when there is one, Shep's recommendation
+  and why. A plan Shep marks cheap to undo can take its recommendation if you
+  don't pick in time (30 minutes by default), and you can reverse it after. An
+  LGTM always waits for you.
+- **Proof with each change.** A desk finishes with `/validate`: the tests, the
+  repo's verify skill, a description of the change checked against the staged
+  tree, and a second opinion from the judge, on GPT by default.
+- **Your own plans.** Every agent runs on [Pi](https://pi.dev), signed in to your
+  Claude and ChatGPT subscriptions, not API keys. By default Claude Opus does the
+  work and makes the calls, and GPT judges ([bstack](docs/bstack.md)).
 
-**Every agent runs on [Pi](https://pi.dev).** Every install runs [bstack](docs/bstack.md), bercail's Pi setup, on your own Claude, ChatGPT, and X subscriptions. A handoff's whole prompt is one line pointing at its beads issue.
+## Built for one setup
 
-Omarchy, Ubuntu/Debian, macOS. Installer and CLI: `bercail`.
+bercail is Simon's own setup, published as it runs: Omarchy and Hyprland, the
+Herdr app, Pi on Claude Max and ChatGPT Pro, Basecamp for todos, 1Password for
+desk secrets, and Entire on some repos. It expects the Herdr app and a Claude
+plan. ChatGPT, Basecamp, 1Password and Entire are optional, and bercail also runs
+on Ubuntu, Debian and macOS. [What it assumes](docs/stack.md) lists each piece,
+what works without it, and why each tool was picked. If it doesn't fit how you
+work, fork it and make it your own.
 
-<img width="2150" height="1410" alt="screenshot-2026-11-09_19-40-33-herdr-app" src="https://github.com/user-attachments/assets/32613335-3b96-43ee-9bd2-f24143a01d32" />
-<img width="2150" height="1410" alt="screenshot-2026-11-09_19-40-37-herdr-app" src="https://github.com/user-attachments/assets/756efe57-4310-4382-900b-a131ce985a12" />
+## How it works
 
-## What you get
+ask → job (a [beads](https://beads.gascity.com/) issue, or a trail on Entire) →
+desk → staged change → review → land. Meanwhile [routines](docs/routines.md)
+watch for work to clean up or start, and background Sheps wait on CI so Shep
+doesn't.
+[How a job flows](docs/workflow.md) follows one job from start to end, with a
+chart.
 
-- **The desk.** Each space's agent is pinned beside the tabs and keeps running when the window closes. Supported sessions [come back after a reboot](docs/config.md#desks-after-a-reboot).
-- **Review on `done`.** tuicr opens the uncommitted work the agent left you. `Ctrl+Shift+R` opens it anytime.
-- **Parallel handoff.** One beads issue per job, run headless or in a sibling worktree with its own desk.
-- **Your keyboard, your mouse.** `Ctrl+Shift` keys like the rest of the Herdr app, plus a file tree you can click.
+**What your agents care about:** their desk, the guard that checks each command,
+the repo's git policy, and `/validate`.
+
+**What you care about:** cards to answer, changes to review and LGTM, todos only
+you can do, and the standing rules you give Shep.
 
 ## Quick start
 
@@ -44,29 +76,30 @@ mise waits 24 hours before it takes a new release. Can't wait? Pin it: `mise use
 curl -fsSL https://bercail.dev/install.sh | bash
 ```
 
-Found bercail on [herdr.dev](https://herdr.dev/layouts/)? Its recipe walks your agent through these same commands. Switch the Herdr app to the bercail layout once (`Ctrl+Shift+L` → bercail). Then, in a repo:
+Then connect your plans with `bercail bstack setup`, and switch the Herdr app to the bercail layout once (`Ctrl+Shift+L` → bercail). In a repo:
 
 ```bash
 dev          # this directory's space, with its desk agent
 ```
 
-The layout opens on Shep, your orchestrator (on Pi), with your spaces beside it: click one to work in it (or find it with `Ctrl+Space`), `Ctrl+Shift+H` to come back. `Ctrl+Shift+A` focuses the desk, `Ctrl+Shift+R` opens Review, and `bercail doctor` tells you if anything is missing. Something else? `bercail help`.
+The layout opens on Shep, with your spaces beside it: click one to work in it (or find it with `Ctrl+Space`), `Ctrl+Shift+H` to come back. `Ctrl+Shift+A` focuses the desk, `Ctrl+Shift+R` opens Review, and `bercail doctor` tells you if anything is missing. Something else? `bercail help`.
 
 ## Docs
 
-- [install](docs/install.md): every install path, what it touches, upgrading from 0.8.
+- [How a job flows](docs/workflow.md): from your ask to a landed change, cards, routines, and who cares about what.
+- [What bercail assumes](docs/stack.md): the setup it is built for, and why each tool.
+- [install](docs/install.md): every install path, what it touches, upgrading.
 - [commands](docs/cli.md): the `bercail` CLI, shell helpers, and skills.
 - [keys](docs/keys.md): the layout at a glance and every key.
-- [config](docs/config.md): `config.toml` and the files bercail manages.
-- [review](docs/review.md): tuicr, and how Review opens and closes.
-- [handoff](docs/handoff.md): stages, headless runs, result files.
-- [bstack](docs/bstack.md): Pi on your own plans, roles, autopilot. Then [the bstack guide](docs/bstack/README.md).
-- [Shep](docs/shep.md): the orchestrator on Pi, the Shep view, and desk events.
-- [development](docs/development.md): tests, dependencies, platforms.
-- [Herdr agents and subagents](docs/herdr-agents-subagents.md): a proposal for Herdr's agents list.
+- [config](docs/config.md): `config.toml`, each repo's git policy, and the files bercail manages.
+- [Shep](docs/shep.md): the orchestrator, the Shep view, Decisions, and desk events.
+- [bstack](docs/bstack.md): Pi on your own plans, the roles and models, `/validate`. Then [the bstack guide](docs/bstack/README.md).
+- [review](docs/review.md), [handoff](docs/handoff.md), [routines](docs/routines.md), [Entire](docs/entire.md), [development](docs/development.md).
 
 The index lives in [docs/README.md](docs/README.md).
 
-## license
+## Credits and license
 
-MIT — [LICENSE](LICENSE).
+bercail ships copies of [pi-emphasis](https://github.com/johnlindquist/pi-emphasis), pstack's statechart skill, [herdr-focus-to-hover](https://github.com/jankeesvw/herdr-focus-to-hover) and Herdr's own mods, each under its license, and borrows from pstack and gstack. [Credits](docs/credits.md) has the list.
+
+MIT: [LICENSE](LICENSE).

@@ -54,7 +54,7 @@ It also installs what bercail needs, and does a little extra on Omarchy, Linux, 
 
 ## From herdr.dev
 
-The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/layouts/): [`bercail/`](../bercail) holds the layout, its two mods, its keys, and a [RECIPE.md](../bercail/RECIPE.md). When you ask your agent to add it, the recipe tells it to ask you, install bercail with the commands above, switch to the layout, and then tell you the keys and commands to start with.
+The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/layouts/): [`bercail/`](../bercail) holds the layout, its mods, its keys, and a [RECIPE.md](../bercail/RECIPE.md). When you ask your agent to add it, the recipe tells it to ask you, install bercail with the commands above, switch to the layout, and then tell you the keys and commands to start with.
 
 If you'd rather add only the layout, you get the desk and Review, but the desk runs plain `pi` instead of bstack, Review needs tuicr installed separately, and there are no worktree spaces, handoff, skills, or Shep. It needs the Herdr app (`herdr-app`, `~/.config/herdr-app`), not the `herdr` terminal and its `herdr plugin` system.
 

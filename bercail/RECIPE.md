@@ -1,8 +1,19 @@
 # bercail
 
-Built for Shep: the window opens on Shep, the orchestrator on Pi, beside your spaces and agents. Hand off the jobs, let agents work side by side in their own worktrees, and review each one as it lands.
+Run several coding agents at once and see every one of them. The window opens on
+Shep, the orchestrator, beside your spaces and agents. You ask Shep for a job, and
+it starts a desk for it: a coding agent in its own worktree and Herdr space,
+pinned in a column beside the space's tabs. A desk stages its work and leaves
+the commit to you or Shep. When one is done, Review opens on its change in tuicr
+the next time you look at its space. What Shep needs from you waits as a card
+in the Decisions panel, with Shep's recommendation and why when it has one.
 
-![bercail](preview.png)
+![Shep's view: the Decisions and Routines panels left of Shep's terminal, and the spaces and agents on the right, with one desk done, one working and one blocked](preview.png)
+
+bercail is built for its author's setup: Omarchy, Pi on Claude and ChatGPT
+plans, Basecamp for todos. It expects the Herdr app and a Claude plan, and runs on
+Ubuntu, Debian and macOS too. [What it assumes](https://github.com/simoncrypta/bercail/blob/master/docs/stack.md)
+says what else is optional. To start, install bercail as below.
 
 ## Needs
 
@@ -42,12 +53,13 @@ Second choice, the layout on its own, when the person says no:
   herdr-core (`hc`). Its installer brings both and the app keeps them
   updated: `curl -fsSL https://releases.herdr.dev/app/install.sh | sh`
   (see [herdr.dev](https://herdr.dev)). Built and checked with herdr-app
-  0.1.9 and hc 0.1.14; no older version has been tried.
+  0.1.18 and hc 0.1.22; its copies of Herdr's mods need herdr-app 0.1.18 or
+  newer.
 - Not the `herdr` terminal (`~/.config/herdr`, `herdr plugin install`,
   `herdr-plugin.toml`): it has no layouts or mods, and this layout does not
   run in it.
 - Copy `layouts/bercail.json`, `mods/bercail-desk/`, `mods/bercail-shep/`,
-  `mods/bercail-spaces/` and `mods/bercail-agents/` into
+  `mods/bercail-spaces/`, `mods/bercail-agents/` and `mods/bercail-pane/` into
   `~/.config/herdr-app/`, merge the `layout:bercail` and `terminal` sections
   of `keys.json` into `~/.config/herdr-app/keys.json` without replacing the
   person's keys (when that file is missing, start it from
@@ -56,8 +68,8 @@ Second choice, the layout on its own, when the person says no:
   `layout:bercail`'s: Herdr reads a keys.json it did not write as the whole
   keymap), run `herdr-app check` on each mod
   (`~/.config/herdr-app/mods/bercail-desk`, `.../bercail-shep`,
-  `.../bercail-spaces`, `.../bercail-agents`), then switch with
-  `ctrl-shift-l`.
+  `.../bercail-spaces`, `.../bercail-agents`, `.../bercail-pane`), then
+  switch with `ctrl-shift-l`.
 - Tell the person what they won't have. The desk runs plain `pi`, which must
   be on PATH; there is no bstack. Review needs
   [tuicr](https://github.com/agavra/tuicr) (≥ 0.29) installed separately,
@@ -417,7 +429,7 @@ is which of `shep` and `work` is hidden.
 ## Done when
 
 - `herdr-app check` passes on `mods/bercail-desk`, `mods/bercail-shep`,
-  `mods/bercail-spaces` and `mods/bercail-agents`, and `layout.switch
+  `mods/bercail-spaces`, `mods/bercail-agents` and `mods/bercail-pane`, and `layout.switch
   {"name":"bercail"}` shows the Shep view: Shep's terminal running
   `bercail shep run` (one hc terminal `bercail-shep`) and the sidebar on
   the right.

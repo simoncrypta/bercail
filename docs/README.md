@@ -2,6 +2,8 @@
 
 The [README](../README.md) is the tour. These pages are the reference.
 
+- [How a job flows](workflow.md): from your ask to a landed change, with a chart; cards, routines and background Sheps; what your agents care about and what you do.
+- [What bercail assumes](stack.md): the setup it is built for, what is optional, and why each tool.
 - [install](install.md): mise + packslip, curl, what the installer touches, a laptop with bercail on another machine, coming from 0.8, first run.
 - [commands](cli.md): the `bercail` CLI, the shell helpers (`dev`, `wtc`, …), and the skills.
 - [keys](keys.md): the layout's two views at a glance and every key.
@@ -9,13 +11,14 @@ The [README](../README.md) is the tour. These pages are the reference.
 - [review](review.md): tuicr when the desk is done, and `bercail review-pr` for someone else's PR.
 - [handoff](handoff.md): one beads issue per job, headless or in a sibling desk.
 - [Entire](entire.md): capturing desks' sessions, repos hosted on Entire, and what the guard allows.
-- [bstack](bstack.md): Pi on your own Claude, ChatGPT, and X plans.
+- [bstack](bstack.md): Pi on your own Claude and ChatGPT plans, the roles and their models, and `/validate`.
   - [the bstack guide](bstack/README.md): a walk-through, with prompts to copy.
 - [Shep](shep.md): the orchestrator on Pi, the Shep view, what Shep knows (repos, briefs, standing rules), its compaction, and desk events.
 - [routines](routines.md): queries you declare in `config.toml`, run outside Shep's session; only new or changed findings count.
 - [development](development.md): hacking on bercail, dependencies and the tracker that watches them, platforms.
 - [investigations](investigations/README.md): durable findings, historical evidence and unresolved limits.
 - [Herdr agents and subagents](herdr-agents-subagents.md): a proposal for Herdr, so desks get their own row in the agents list.
+- [credits](credits.md): the code bercail copies, under its licenses, and the projects it borrows from.
 
 ## Principles
 
