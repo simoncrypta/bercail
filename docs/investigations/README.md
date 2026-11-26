@@ -26,6 +26,11 @@ usage.
 - [Mulroy's tools](mulroy-tools.md): research. From dmmulroy's dotfiles only
   `GIT_EDITOR=true`; a staged switch from pi-claude-bridge to pi-claude-cli,
   with rollback; web fetch and search options, their costs and guard rules.
+- [Shep's panels](shep-panels-ux.md): proposal. A UI/UX review of the
+  Decisions and Routines panels in an isolated Herdr: the keys can answer a
+  card the person never chose, nothing shows that the panel has the keyboard,
+  and less than one card fits. Seven fixes, sized, with before and after
+  mockups.
 - [Worktree tool](worktree-tool.md): research. Keep worktrunk, and have a
   desk's spawn call it with `--no-hooks` and run each step itself. The worktree
   bugs on record are bercail's glue, not worktrunk's. Why plain `git worktree`,
