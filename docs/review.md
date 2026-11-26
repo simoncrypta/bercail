@@ -6,7 +6,7 @@ Review is a tab in the space. Own work → `tuicr -w` (everything uncommitted: s
 
 It opens when the desk agent finishes a turn (done, or working → idle) and the checkout has uncommitted changes, the next time you look at that space. A clean tree does not auto-open. `Ctrl+Shift+R` opens it anytime; `auto_review = false` keeps only the key and the agent action. A live Review tab is not restarted: tuicr's diff watch, which bercail turns on, keeps a `-w` review current. A Review tab whose tool has quit opens fresh. An agent opens and closes it with `herdr-app do bercail-desk.review:$HC_TERMINAL_ID` and `bercail-desk.close-review:$HC_TERMINAL_ID`.
 
-The desk mod reads `config.toml` when it loads, so a change to `review` or `auto_review` reaches it after the mod reloads (an app restart does it).
+The desk mod reads `config.toml` when it loads, so a change to `review` or `auto_review` reaches it after the mod reloads (an app restart does it). With [focus follows the mouse](config.md#focus-follows-the-mouse) on, the keyboard goes to the desk or the Review tab, whichever is under the pointer.
 
 Inside tuicr, `j`/`k` move around. tuicr exports your comments to the clipboard, to paste to the desk agent, or to the GitHub PR.
 

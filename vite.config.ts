@@ -25,6 +25,7 @@ export default defineConfig({
       // Copies of Herdr's own mods (mod.json `cloned_from`): kept diffable against upstream.
       "bercail/mods/bercail-agents/**",
       "bercail/mods/bercail-spaces/**",
+      "bercail/mods/bercail-pane/**",
       // Written by `entire enable --agent pi` and overwritten on each install: not ours to format.
       ".pi/extensions/entire/**",
       ...UPSTREAM_COPIES,

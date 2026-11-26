@@ -23,6 +23,10 @@
 // Across machines: a desk in a space on another machine runs there (hc run --on), its
 // labels naming that machine's ids, and git and gh for a space run on its machine. The
 // notifier and the routine loop run on the backend ([herdr] backend in config.toml), or here without one.
+//
+// Focus follows the mouse ([layout] focus_follows_mouse): a desk is a terminal block,
+// which has no pointer hook and no pane header, so the header watches every pointer
+// move in the window (followDesk).
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import {
@@ -104,24 +108,62 @@ function restorePanel(tree) {
   return true;
 }
 
-// Tiny TOML reader for the keys bercail needs: [layout] review and auto_review.
-export function readConfig(text) {
-  const cfg = { review: "tuicr", autoReview: true };
-  let section = "";
-  for (const raw of text.split("\n")) {
-    const line = raw.replace(/#.*$/, "").trim();
-    const sec = line.match(/^\[(.+)\]$/);
-    if (sec) {
-      section = sec[1];
+// config.toml's key lines as bercail's TOML reader (lib/toml.sh) sees them: [table, line],
+// the line without its comment. A value that opens a """ or ''' string runs to its closing
+// delimiter: the lines between are text, and whatever follows the delimiter is dropped.
+// Line ends may be CRLF. Table and key names are read bare, as `bercail config set` writes them.
+export function tomlLines(text) {
+  const out = [];
+  let table = "";
+  let ml = "";
+  for (const raw of String(text ?? "").split(/\r?\n/)) {
+    if (ml) {
+      if (raw.includes(ml)) ml = "";
       continue;
     }
+    const open = raw.match(/^\s*(?:"[^"]*"|'[^']*'|[\w-]+)\s*=\s*('''|""")(.*)$/);
+    if (open && !open[2].includes(open[1])) {
+      ml = open[1];
+      continue;
+    }
+    const line = raw.replace(/"(?:[^"\\]|\\.)*"|'[^']*'|#.*$/g, (m) => (m[0] === "#" ? "" : m)).trim();
+    const sec = line.match(/^\[(.+)\]$/);
+    if (sec) table = sec[1].trim();
+    else if (line) out.push([table, line]);
+  }
+  return out;
+}
+
+// The keys bercail needs from config.toml: [layout] review, auto_review and focus_follows_mouse.
+export function readConfig(text) {
+  const cfg = { review: "tuicr", autoReview: true, follow: false };
+  for (const [table, line] of tomlLines(text)) {
     const kv = line.match(/^(\w+)\s*=\s*(.+)$/);
-    if (!kv) continue;
+    if (table !== "layout" || !kv) continue;
     const value = kv[2].trim().replace(/^"(.*)"$/, "$1");
-    if (section === "layout" && kv[1] === "review" && value) cfg.review = value === "hunk" ? "hunk diff" : value;
-    if (section === "layout" && kv[1] === "auto_review") cfg.autoReview = value !== "false";
+    if (kv[1] === "review" && value) cfg.review = value === "hunk" ? "hunk diff" : value;
+    if (kv[1] === "auto_review") cfg.autoReview = value !== "false";
+    if (kv[1] === "focus_follows_mouse") cfg.follow = kv[2].trim() === "true";
   }
   return cfg;
+}
+
+// Where pointer move `e`, seen by a header block's on_window_mouse_move, went: "enter"
+// when it moved into the column below that header (above `bottom`), the terminal block
+// under it, "in" when it moved within it, else "". `last` holds the last position, so a
+// still pointer (a layout change under it) moves no keyboard. Only a move while Herdr is
+// the active window and no button is held counts.
+export function overBlock(e, last, bottom = Infinity) {
+  const p = e.position,
+    b = e.bounds,
+    at = `${p.x},${p.y}`;
+  if (last.at === at) return "";
+  last.at = at;
+  const inside = p.x >= b.x && p.x < b.x + b.width && p.y >= b.y + b.height && p.y < bottom;
+  const was = last.inside;
+  last.inside = inside;
+  if (!inside || e.pressed_button || !window.is_window_active()) return "";
+  return was ? "in" : "enter";
 }
 
 function deskFor(spaceId) {
@@ -640,6 +682,19 @@ export default class BercailDesk extends View {
     return desk;
   }
 
+  // A pointer move into the desk's block (the column below this header, down to the
+  // window's edge) gives the desk the keyboard, as a click on it does; so does a move
+  // within it while another pane has it. Only while the block shows that desk. Entering
+  // also takes the keyboard back from a mod that took it (Herdr still reports the desk
+  // focused then). A dialog keeps the keyboard while it is open.
+  followDesk(e, desk) {
+    if (!this.cfg.follow || !desk) return;
+    const at = overBlock(e, (this.lastMove ??= {}));
+    if (!at) return;
+    if (findNode(layout(), "agent-stack")?.active !== `desk-${desk.address}`) return;
+    if (at === "enter" || focused()?.terminal !== desk.address) run("pane.focus", { terminal: desk.address });
+  }
+
   render(cx) {
     if (this.role === "keys") return div();
     const t = theme();
@@ -678,6 +733,7 @@ export default class BercailDesk extends View {
     const status = info?.status ?? desk?.status ?? null;
     const color = { working: t.working, blocked: t.blocked, done: t.done, idle: t.idle }[status] ?? t.dim;
     return h_flex()
+      .id("desk-head")
       .size_full()
       .px(12)
       .gap(8)
@@ -685,6 +741,7 @@ export default class BercailDesk extends View {
       .bg(t.chrome)
       .text_size(12.5)
       .text_color(t.muted)
+      .on_window_mouse_move((e) => this.followDesk(e, desk))
       .border_b_2()
       .border_color(this.deskFocused ? t.accent : t.chrome)
       .child(div().size(7).rounded(4).bg(color))

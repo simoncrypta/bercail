@@ -4,6 +4,9 @@
 review = "tuicr"
 # Open Review when the desk agent finishes. Set false to open it only with Ctrl+Shift+R.
 auto_review = true
+# true: the terminal under the pointer gets the keyboard (the desk, Shell, Review, Shep).
+# Read when the Herdr app starts.
+focus_follows_mouse = false
 
 [bstack]
 # Pi with your own Claude and ChatGPT subscriptions. Setup installs the Claude

@@ -263,7 +263,7 @@
                 "pane": {
                   "header": {
                     "content": {
-                      "mod": "pane"
+                      "mod": "bercail-pane"
                     },
                     "reveal": "always",
                     "height": 30,

@@ -210,8 +210,64 @@ function readBackend() {
     .catch(() => null)
     .then((text) => {
       S.backend = backendOf(text);
+      F.follow = followsMouse(text);
     });
   return S.config;
+}
+
+// Focus follows the mouse ([layout] focus_follows_mouse): Shep is a terminal block, which
+// has no pointer hook and no pane header, so the header watches every pointer move in the
+// window (followShep). The Decisions and Routines panels below Shep's block report where
+// they start (tops, by role), so the header knows where the block ends.
+const F = { follow: false, tops: {} };
+
+// config.toml's key lines as bercail's TOML reader (lib/toml.sh) sees them: [table, line],
+// the line without its comment. A value that opens a """ or ''' string runs to its closing
+// delimiter: the lines between are text, and whatever follows the delimiter is dropped.
+// Line ends may be CRLF. Table and key names are read bare, as `bercail config set` writes them.
+export function tomlLines(text) {
+  const out = [];
+  let table = "";
+  let ml = "";
+  for (const raw of String(text ?? "").split(/\r?\n/)) {
+    if (ml) {
+      if (raw.includes(ml)) ml = "";
+      continue;
+    }
+    const open = raw.match(/^\s*(?:"[^"]*"|'[^']*'|[\w-]+)\s*=\s*('''|""")(.*)$/);
+    if (open && !open[2].includes(open[1])) {
+      ml = open[1];
+      continue;
+    }
+    const line = raw.replace(/"(?:[^"\\]|\\.)*"|'[^']*'|#.*$/g, (m) => (m[0] === "#" ? "" : m)).trim();
+    const sec = line.match(/^\[(.+)\]$/);
+    if (sec) table = sec[1].trim();
+    else if (line) out.push([table, line]);
+  }
+  return out;
+}
+
+// [layout] focus_follows_mouse from config.toml's text: true only when it says true.
+export function followsMouse(text) {
+  return tomlLines(text).some(([table, line]) => table === "layout" && /^focus_follows_mouse\s*=\s*true$/.test(line));
+}
+
+// Where pointer move `e`, seen by a header block's on_window_mouse_move, went: "enter"
+// when it moved into the column below that header (above `bottom`), the terminal block
+// under it, "in" when it moved within it, else "". `last` holds the last position, so a
+// still pointer (a layout change under it) moves no keyboard. Only a move while Herdr is
+// the active window and no button is held counts.
+export function overBlock(e, last, bottom = Infinity) {
+  const p = e.position,
+    b = e.bounds,
+    at = `${p.x},${p.y}`;
+  if (last.at === at) return "";
+  last.at = at;
+  const inside = p.x >= b.x && p.x < b.x + b.width && p.y >= b.y + b.height && p.y < bottom;
+  const was = last.inside;
+  last.inside = inside;
+  if (!inside || e.pressed_button || !window.is_window_active()) return "";
+  return was ? "in" : "enter";
 }
 
 // Shared by every copy: the last panel JSON, its error, the load in flight (and whether
@@ -836,13 +892,13 @@ export default class BercailShep extends View {
     const t = theme();
     switch (this.role) {
       case "header":
-        return this.header(t);
+        return this.header(t).on_window_mouse_move((e) => this.followShep(e));
       case "empty":
         return this.empty(t);
       case "decisions":
-        return this.decisions(t);
+        return this.decisions(t).on_window_mouse_move((e) => (F.tops.decisions = e.bounds.y));
       case "routines":
-        return this.routines(t);
+        return this.routines(t).on_window_mouse_move((e) => (F.tops.routines = e.bounds.y));
       case "modal":
         return this.modal(t);
       case "discuss":
@@ -908,11 +964,29 @@ export default class BercailShep extends View {
       );
   }
 
+  // A pointer move into Shep's block (below this header, above a shown panel) gives Shep
+  // the keyboard, as a click on it does; so does a move within it while another pane has
+  // it. Only while the stack shows Shep's terminal. Entering also takes the keyboard back
+  // from the Decisions panel, which keeps Shep focused in Herdr's eyes. A panel shown
+  // before it said where it starts is not guessed at: nothing moves.
+  followShep(e) {
+    if (!F.follow) return;
+    const tree = layout();
+    const shown = [decisionsShown(tree) && "decisions", routinesShown(tree) && "routines"].filter(Boolean);
+    const bottom = Math.min(Infinity, ...shown.map((role) => F.tops[role] ?? -Infinity));
+    const at = overBlock(e, (this.lastMove ??= {}), bottom);
+    if (!at) return;
+    const shep = shepTerminal();
+    if (!shep || find(tree, "shep-stack")?.active !== `shep-${shep.address}`) return;
+    if (at === "enter" || focused()?.terminal !== shep.address) run("pane.focus", { terminal: shep.address });
+  }
+
   header(t) {
     const shep = shepTerminal();
     const word = shep ? "running" : S.found === false ? "bercail missing" : S.starting ? "starting" : "stopped";
     const color = shep ? t.ansi2 : S.found === false ? t.blocked : t.dim;
     return h_flex()
+      .id("shep-head")
       .size_full()
       .px(12)
       .gap(8)

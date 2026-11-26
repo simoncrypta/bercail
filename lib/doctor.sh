@@ -117,14 +117,14 @@ doctor_herdr_app_update() {
   log "  hint  Herdr $newest is downloaded (running $running); restart the Herdr window to apply it"
 }
 
-# bercail-spaces and bercail-agents are copies of Herdr's mods, and Herdr never
-# updates a copy. Each mod.json records the main.js it was copied from, as
+# bercail-spaces, bercail-agents and bercail-pane are copies of Herdr's mods, and
+# Herdr never updates a copy. Each mod.json records the main.js it was copied from, as
 # Herdr's installed.json names it; a different one there means Herdr's mod has
 # moved on and the copy has not, or that Herdr is older than the copy.
 doctor_mod_copies() {
   local mod json name version base now running
   running="$(herdr-app --version 2>/dev/null </dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | sed -n 1p || true)"
-  for mod in bercail-spaces bercail-agents; do
+  for mod in bercail-spaces bercail-agents bercail-pane; do
     json="$HERDR_APP_CONFIG_DIR/mods/$mod/mod.json"
     IFS=$'\t' read -r name version base < <(jq -r '.cloned_from | [.name, .version, .main_js] | @tsv' "$json" 2>/dev/null) || continue
     now="$(jq -r --arg name "$name" '.[$name]["main.js"] // empty' "$HERDR_APP_CONFIG_DIR/installed.json" 2>/dev/null || true)"

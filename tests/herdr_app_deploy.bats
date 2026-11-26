@@ -81,6 +81,10 @@ app_edits_then_update() {
   cmp -s "$ROOT/bercail/mods/bercail-review/main.js" "$APP/mods/bercail-review/main.js" || fail "review mod not installed"
   cmp -s "$ROOT/bercail/mods/bercail-shep/main.js" "$APP/mods/bercail-shep/main.js" || fail "Shep mod not installed"
   cmp -s "$ROOT/bercail/mods/bercail-spaces/main.js" "$APP/mods/bercail-spaces/main.js" || fail "spaces mod not installed"
+  local f
+  for f in main.js mod.json follow.js LICENSE LICENSE-APACHE; do
+    cmp -s "$ROOT/bercail/mods/bercail-pane/$f" "$APP/mods/bercail-pane/$f" || fail "pane header mod's $f not installed"
+  done
   jq -e '.global["ctrl-shift-t"] == "tab.new"' "$APP/keys.json" >/dev/null || fail "the person's keys must stay"
   jq -e --slurpfile ours "$ROOT/bercail/keys.json" '.["layout:bercail"] == ($ours[0]["layout:bercail"] + {"x":"y"})' \
     "$APP/keys.json" >/dev/null || fail "layout:bercail must get bercail's keys and keep the person's: $(cat "$APP/keys.json")"
@@ -223,6 +227,12 @@ app_edits_then_update() {
   fi
   grep -q 'stale  Herdr mod file' <<<"$out" || fail "stale mod message: $out"
   deploy_herdr_app >/dev/null
+  rm -f "$APP/mods/bercail-pane/follow.js"
+  if out="$(doctor_herdr_app)"; then
+    fail "doctor should flag the pane header's missing follow.js: $out"
+  fi
+  grep -qF "missing  Herdr mod file $APP/mods/bercail-pane/follow.js" <<<"$out" || fail "missing follow.js message: $out"
+  deploy_herdr_app >/dev/null
   jq 'del(.["layout:bercail"])' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
   if out="$(doctor_herdr_app)"; then
     fail "doctor should flag missing keys: $out"
@@ -361,7 +371,7 @@ app_edits_then_update() {
   jq '.global = {"ctrl-shift-t":"tab.new"}' "$APP/keys.json" >"$K" && mv "$K" "$APP/keys.json"
   uninstall_bercail >/dev/null 2>&1
   [[ ! -e "$APP/layouts/bercail.json" && ! -e "$APP/mods/bercail-desk" && ! -e "$APP/mods/bercail-agents" && ! -e "$APP/mods/bercail-review"
-    && ! -e "$APP/mods/bercail-shep" && ! -e "$APP/mods/bercail-spaces" ]] \
+    && ! -e "$APP/mods/bercail-shep" && ! -e "$APP/mods/bercail-spaces" && ! -e "$APP/mods/bercail-pane" ]] \
     || fail "uninstall leaves layout or mods"
   jq -e 'has("layout:bercail") | not' "$APP/keys.json" >/dev/null || fail "uninstall leaves layout:bercail keys"
   jq -e '.global["ctrl-shift-t"] == "tab.new"' "$APP/keys.json" >/dev/null || fail "uninstall must keep the person's keys"

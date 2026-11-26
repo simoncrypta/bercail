@@ -56,6 +56,7 @@ const el = () => {
       if (k === "on_key_down") t.key = a[0];
       if (k === "child" && typeof a[0] === "string") (t.text ??= []).push(a[0]);
       if (k === "on_mouse_down" || k === "on_mouse_up") t[`${k}:${a[0]}`] = a[1];
+      if (k === "on_window_mouse_move") t.windowMove = a[0];
       if (k === "when" && a[0]) a[1](p);
       return p;
     },
@@ -1029,6 +1030,85 @@ if (!texts().includes("Decisions 3")) fail(`header after a new decision: ${JSON.
 eq(globalThis.herdr.calls, [], "commands run by a data change");
 if (!find(globalThis.herdr.layout, "shep-decisions")?.hidden) fail("the panel must start hidden");
 EOF
+}
+
+@test "focus follows the mouse into Shep's block: on entering it, or on a move there while a pane has the keyboard, never below it" {
+  mod_case <<'EOF'
+let active = true;
+globalThis.window = { is_window_active: () => active };
+const CONFIG = "/home/me/.config/bercail/config.toml";
+// The Shep view with Shep's block shown, and the header copy, once it read config.toml.
+async function header(text, focus) {
+  setup({ terminals: [shep], exec: panelExec(PANEL_VIEW), files: text ? { [CONFIG]: text } : {}, focused: focus });
+  const stack = find(globalThis.herdr.layout, "shep-stack");
+  stack.children.push({ id: "shep-t9", type: "block", content: { terminal: "t9" } });
+  stack.active = "shep-t9";
+  const h = copy("header");
+  await tick();
+  return h;
+}
+// The header block's bounds, as Herdr reports them with every pointer move in the window.
+const head = { x: 8, y: 8, width: 1000, height: 32 };
+const moveOver = (h, x, y, extra = {}) => {
+  globalThis.herdr.calls = [];
+  els.length = 0;
+  h.render(cx);
+  els.find((e) => e.id === "shep-head").windowMove({ position: { x, y }, bounds: head, ...extra }, cx);
+  return calls("pane.focus").map(([, a]) => a.terminal).join(" ") || "none";
+};
+const h = await header("[layout]\nfocus_follows_mouse = true\n", f({ terminal: "t9" }));
+const move = (x, y, extra) => moveOver(h, x, y, extra);
+// Entering takes the keyboard back even while Herdr reports Shep focused (the Decisions panel had it).
+eq(move(100, 300), "t9", "entering Shep's block");
+eq(move(120, 320), "none", "a move within it, Shep focused");
+globalThis.herdr.focused = f({ pane: "p1", terminal: "t1" });
+eq(move(130, 330), "t9", "a move within it while a pane has the keyboard");
+eq(move(130, 330), "none", "a still pointer");
+eq(move(100, 20), "none", "the header itself");
+eq(move(100, 300), "t9", "entering again");
+eq(move(1200, 300), "none", "beside the column");
+eq(move(110, 310, { pressed_button: "left" }), "none", "a drag");
+active = false;
+eq(move(140, 340), "none", "another app active");
+active = true;
+
+// The Decisions panel below Shep's block: nothing until it says where it starts, then only above it.
+find(globalThis.herdr.layout, "shep-decisions").hidden = false;
+eq(move(100, 600), "none", "a shown panel that has not said where it starts");
+const d = copy("decisions");
+els.length = 0;
+d.render(cx);
+els.find((e) => e.id === "decisions-root").windowMove({ position: { x: 100, y: 600 }, bounds: { x: 8, y: 551, width: 1000, height: 260 } }, cx);
+eq(move(100, 700), "none", "over the panel");
+eq(move(100, 400), "t9", "above the panel");
+
+find(globalThis.herdr.layout, "shep-stack").active = "shep-empty";
+eq(move(100, 650), "none", "out over the panel");
+eq(move(100, 300), "none", "the stack not showing Shep");
+EOF
+}
+
+@test "focus does not follow the mouse into Shep's block without [layout] focus_follows_mouse = true" {
+  local text
+  # One process each: every copy shares the config.toml the first one read.
+  for text in "" $'[layout]\nfocus_follows_mouse = false\n' $'[policy."~/w"]\nrules = """\n[layout]\nfocus_follows_mouse = true\n"""\n' \
+    $'# Policy strings use """.\n[policy."~/w"]\nrules = """\n[layout]\nfocus_follows_mouse = true\n"""\n'; do
+    CONFIG_TEXT="$text" mod_case <<'EOF' || fail "config: $text"
+globalThis.window = { is_window_active: () => true };
+const text = process.env.CONFIG_TEXT;
+setup({ terminals: [shep], exec: panelExec(PANEL_VIEW), files: text ? { "/home/me/.config/bercail/config.toml": text } : {},
+  focused: f({ pane: "p1", terminal: "t1" }) });
+const stack = find(globalThis.herdr.layout, "shep-stack");
+stack.children.push({ id: "shep-t9", type: "block", content: { terminal: "t9" } });
+stack.active = "shep-t9";
+const h = copy("header");
+await tick();
+els.length = 0;
+h.render(cx);
+els.find((e) => e.id === "shep-head").windowMove({ position: { x: 100, y: 300 }, bounds: { x: 8, y: 8, width: 1000, height: 32 } }, cx);
+eq(calls("pane.focus"), [], "a move into Shep's block");
+EOF
+  done
 }
 
 @test "the header's Decisions toggle shows and hides the panel on a click" {

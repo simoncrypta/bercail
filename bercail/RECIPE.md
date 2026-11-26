@@ -32,7 +32,7 @@ these files.
    the copy and merge steps of the Herdr app's guide: copying again would
    add a renamed second copy. Run `herdr-app check` on
    `~/.config/herdr-app/mods/bercail-desk`, `.../bercail-shep`,
-   `.../bercail-spaces`, `.../bercail-agents` and `.../bercail-review`, then
+   `.../bercail-spaces`, `.../bercail-agents`, `.../bercail-review` and `.../bercail-pane`, then
    `herdr-app do layout.switch --name bercail`.
 4. Tell the person what [After the install](#after-the-install) says.
 
@@ -125,7 +125,7 @@ is which of `shep` and `work` is hidden.
     desk", a "Start the agent" button filled with `solid`, and a hint line.
   - **The tabs**, weight 1, so desk and tabs split the width evenly: the
     shown tab's panes as cards (radius 10, 1px `border`, `accent` on focus,
-    8px gaps, a 30px `pane` header always shown, also on a lone pane).
+    8px gaps, a 30px `bercail-pane` header always shown, also on a lone pane).
   - **Files / Changes**, a 280px `panel` (280–900px, Herdr's limits)
     showing Herdr's `files` or `changes` panel.
 - Terminal text padding is 14×12px. Colors come from the user's theme; the
@@ -217,8 +217,18 @@ is which of `shep` and `work` is hidden.
   (the ids Herdr's `tabs` mod shows and hides). `panel` is a stack: Herdr
   has saved the layout with the one-child `panel` column gone, keeping the
   one-child stacks.
-- Shipped mods used: `workspace-chrome`, `tabs`, `pane`, `files`,
-  `changes`, `workspace-status`.
+- Shipped mods used: `workspace-chrome`, `tabs`, `files`, `changes`,
+  `workspace-status`, and `pane`'s icons.
+- `mods/bercail-pane` (`place: "none"`): Herdr's `pane` mod (0.1.18), the
+  header on each pane of the tab block. Changed only to read
+  `[layout] focus_follows_mouse` from `~/.config/bercail/config.toml` when it
+  loads; when that is `true`, the header is wrapped in `follow` from
+  `follow.js`, [jankeesvw/herdr-focus-to-hover](https://github.com/jankeesvw/herdr-focus-to-hover)'s
+  (MIT, `LICENSE`), byte for byte: an invisible layer behind the header,
+  clipped to the pane by its frame, runs `pane.focus` for that pane when the
+  pointer moves in while the window is active. Off, or without bercail, it
+  is Herdr's header. The desk and Shep blocks have no pane header: their
+  own headers follow the pointer for them (below).
 - `mods/bercail-spaces`: Herdr's `spaces` mod (0.1.18) copied with
   `mod.clone {"name":"spaces","as":"bercail-spaces"}`. Changed only so a
   click on a space, + or a machine's + also runs `layout.hide {id: "shep"}`
@@ -382,6 +392,13 @@ is which of `shep` and `work` is hidden.
 - Without a Shell terminal in the space's first tab, no desk can start (the
   desk is its sub-agent); the mod says so.
 - The desk follower is only started when `bercail` is on PATH.
+- Focus follows the mouse (`[layout] focus_follows_mouse = true`) into the
+  desk and Shep blocks too: a terminal block has no pointer hook, so the
+  `bercail-desk` header and the `bercail-shep` header take
+  `on_window_mouse_move` and run `pane.focus {terminal}` when the pointer
+  moves into the column below them (Shep's ends where a shown Decisions or
+  Routines panel starts, which those panels report from their own moves).
+  A dialog keeps the keyboard while it is open.
 
 ## Done when
 

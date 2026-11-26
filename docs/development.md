@@ -9,6 +9,7 @@ herdr-app check bercail/mods/bercail-shep
 herdr-app check bercail/mods/bercail-spaces
 herdr-app check bercail/mods/bercail-agents
 herdr-app check bercail/mods/bercail-review
+herdr-app check bercail/mods/bercail-pane
 npm ci && bash tests/run.sh   # the unit suite: bats, then vp test; or name files: bash tests/run.sh tests/notify.bats
 bash tests/run.sh --affected origin/master   # only what your change needs, as CI runs a branch (tests/plan.sh)
 bash tests/run.sh --live      # the live proofs: real Pi, offline, with a stand-in model
@@ -21,7 +22,7 @@ npm ci && npm run deploy   # build and deploy bercail.dev (CI does this for a v*
 npm run build:site && npx wrangler dev --config site/wrangler.jsonc   # the bercail.dev site locally
 ```
 
-`bercail-spaces` and `bercail-agents` are copies of Herdr's `spaces` and `agents` mods, and Herdr never updates a copy. Each file's header lists bercail's changes, all of them, and its `mod.json` records the Herdr version and the `main.js` it was copied from (`cloned_from.main_js`, the hash in `~/.config/herdr-app/installed.json`). The copies need the Herdr they were made from, or newer. When `bercail doctor` hints that Herdr's mod has changed, rebase: start from Herdr's file in `~/.config/herdr-app/mods/`, put the listed changes back, update `cloned_from`, then run `herdr-app check` and `tests/agents_mod.bats` or `tests/shep_mod.bats`, and look at the list in Herdr.
+`bercail-spaces`, `bercail-agents` and `bercail-pane` are copies of Herdr's `spaces`, `agents` and `pane` mods, and Herdr never updates a copy. Each file's header lists bercail's changes, all of them, and its `mod.json` records the Herdr version and the `main.js` it was copied from (`cloned_from.main_js`, the hash in `~/.config/herdr-app/installed.json`). The copies need the Herdr they were made from, or newer. When `bercail doctor` hints that Herdr's mod has changed, rebase: start from Herdr's file in `~/.config/herdr-app/mods/`, put the listed changes back, update `cloned_from`, then run `herdr-app check` and `tests/agents_mod.bats`, `tests/shep_mod.bats` or `tests/pane_mod.bats`, and look at the list in Herdr. `bercail-pane` also holds `follow.js` from [jankeesvw/herdr-focus-to-hover](https://github.com/jankeesvw/herdr-focus-to-hover), byte for byte; its `UPSTREAM.md` says how to move it, and the [dependency tracker](#dependency-tracker) opens an issue when upstream moves.
 
 The tree has no shellcheck warning and passes `vp check`, and [CI](#ci) keeps it that way. Each test runs under a 5-minute `BATS_TEST_TIMEOUT`, so one hung test fails itself instead of the whole job. `tests/run.sh` runs files and tests side by side, two jobs per core of its [slot's](#test-slots) share (`BATS_JOBS=N` sets the count). With [GNU parallel](https://www.gnu.org/software/parallel/) installed, bats spreads the tests over them. Without it, a quarter that many files run at once, each in its own bats run (`xargs -P`) with its tests 4 at a time (fewer when the count is under 4), and a file's output shows once it is done, the full log only when it failed. That run takes under 2 minutes on 16 cores. The live proofs always run one at a time.
 

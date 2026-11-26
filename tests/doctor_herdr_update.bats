@@ -71,15 +71,26 @@ state() {
   [[ -z "$out" ]] || fail "no installed.json is nothing to compare: $out"
 }
 
+@test "doctor hints when Herdr's pane mod is no longer the one the bercail-pane header was copied from" {
+  local out
+  printf '0.1.18\n' >"$BATS_TEST_TMPDIR/version"
+  mkdir -p "$HERDR_APP_CONFIG_DIR/mods/bercail-pane"
+  cp "$ROOT/bercail/mods/bercail-pane/mod.json" "$HERDR_APP_CONFIG_DIR/mods/bercail-pane/"
+  printf '%s\n' '{"pane":{"main.js":"0000000000000000"}}' >"$HERDR_APP_CONFIG_DIR/installed.json"
+  out="$(doctor_mod_copies)"
+  [[ "$out" == "  hint  Herdr's pane mod changed after 0.1.18; bercail-pane is bercail's copy of that one and lacks the change until bercail updates it" ]] \
+    || fail "a newer pane mod should hint: $out"
+}
+
 @test "doctor has no mod-copy hint with Herdr 0.1.18's installed mods" {
   local out mod
   printf '0.1.18\n' >"$BATS_TEST_TMPDIR/version"
-  for mod in bercail-spaces bercail-agents; do
+  for mod in bercail-spaces bercail-agents bercail-pane; do
     mkdir -p "$HERDR_APP_CONFIG_DIR/mods/$mod"
     cp "$ROOT/bercail/mods/$mod/mod.json" "$HERDR_APP_CONFIG_DIR/mods/$mod/"
   done
   # Herdr 0.1.18's installed.json fingerprints, not derived from our copies.
-  printf '%s\n' '{"spaces":{"main.js":"8067902d05d475e4"},"agents":{"main.js":"1cf79c0c5f578fcd"}}' \
+  printf '%s\n' '{"spaces":{"main.js":"8067902d05d475e4"},"agents":{"main.js":"1cf79c0c5f578fcd"},"pane":{"main.js":"319ae828b1629cd2"}}' \
     >"$HERDR_APP_CONFIG_DIR/installed.json"
   out="$(doctor_mod_copies)"
   [[ -z "$out" ]] || fail "the copies should include Herdr 0.1.18's changes: $out"

@@ -1,0 +1,4 @@
+[policy."~/w"]
+rules = """one line"""
+[layout] # """ here
+focus_follows_mouse = true # not """

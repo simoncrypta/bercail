@@ -196,6 +196,80 @@ check("switching");
 EOF
 }
 
+@test "readConfig reads [layout] focus_follows_mouse and auto_review as bercail's TOML reader does" {
+  local f cli="" js follow auto
+  # shellcheck source=/dev/null
+  source "$ROOT/lib/toml.sh"
+  # Each fixture as written (LF) and with CRLF line ends: lib/toml.sh reads both alike.
+  export FIXTURES="$BATS_TEST_TMPDIR/fixtures"
+  mkdir -p "$FIXTURES"
+  for f in "$ROOT"/tests/fixtures/focus-follows-mouse/*.toml; do
+    cp "$f" "$FIXTURES/"
+    sed 's/$/\r/' "$f" >"$FIXTURES/crlf-$(basename "$f")"
+  done
+  for f in "$FIXTURES"/*.toml; do
+    follow=false
+    [[ "$(toml_get "$f" layout focus_follows_mouse 2>/dev/null)" != true ]] || follow=true
+    auto="$(toml_value "$f" layout auto_review true)"
+    cli+="$(basename "$f") $follow $auto"$'\n'
+  done
+  js="$(mod_case <<'EOF'
+import { readdirSync } from "node:fs";
+const dir = process.env.FIXTURES;
+for (const f of readdirSync(dir).filter((n) => n.endsWith(".toml")).sort()) {
+  const cfg = readConfig(readFileSync(`${dir}/${f}`, "utf8"));
+  console.log(`${f} ${cfg.follow} ${cfg.autoReview}`);
+}
+EOF
+)"
+  [[ "$js"$'\n' == "$cli" ]] || fail "the desk and lib/toml.sh disagree:"$'\n'"$(diff <(printf '%s' "$cli") <(printf '%s\n' "$js"))"
+}
+
+@test "focus follows the mouse into the desk's block: on entering it, or on a move there while a pane has the keyboard" {
+  mod_case <<'EOF'
+let active = true;
+globalThis.window = { is_window_active: () => active };
+const on = "[layout]\nfocus_follows_mouse = true\n";
+
+const desk = D("t7", "s1");
+d = setup({ terminals: [desk] });
+show(d, "s1");
+d.cfg = readConfig(on);
+// The header block's bounds, as Herdr reports them with every pointer move in the window.
+const head = { x: 280, y: 50, width: 340, height: 32 };
+const move = (x, y, extra = {}) => {
+  globalThis.herdr.calls = [];
+  d.followDesk({ position: { x, y }, bounds: head, ...extra }, desk);
+  return calls("pane.focus").map(([, a]) => a.terminal).join(" ") || "none";
+};
+globalThis.herdr.focused = { space: "s1", pane: "p1", terminal: "t1" };
+expect(move(400, 400), "t7", "entering the desk's block");
+globalThis.herdr.focused = { space: "s1", pane: null, terminal: "t7" };
+expect(move(410, 410), "none", "a move within it, the desk focused");
+globalThis.herdr.focused = { space: "s1", pane: "p1", terminal: "t1" };
+expect(move(420, 420), "t7", "a move within it while a pane has the keyboard");
+expect(move(420, 420), "none", "a still pointer");
+// A mod that takes the keyboard leaves Herdr reporting the desk focused: entering takes it back.
+expect(move(900, 420), "none", "out of the column");
+globalThis.herdr.focused = { space: "s1", pane: null, terminal: "t7" };
+expect(move(430, 430), "t7", "entering while Herdr reports the desk focused");
+globalThis.herdr.focused = { space: "s1", pane: "p1", terminal: "t1" };
+expect(move(400, 60), "none", "the header itself");
+expect(move(900, 400), "none", "beside the column");
+expect(move(400, 450, { pressed_button: "left" }), "none", "a drag");
+active = false;
+expect(move(400, 500), "none", "another app active");
+active = true;
+expect(move(900, 410), "none", "out");
+d.cfg = readConfig("");
+expect(move(400, 410), "none", "switched off");
+d.cfg = readConfig(on);
+stack().active = "empty";
+expect(move(900, 420), "none", "out again");
+expect(move(400, 420), "none", "the stack not showing the desk");
+EOF
+}
+
 @test "a new desk block is set already shown" {
   mod_case <<'EOF'
 // A layout.set carries the shown child, so the file never says empty beside a live desk.

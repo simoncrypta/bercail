@@ -119,6 +119,16 @@
     "notes": "Pills and icons in Pi replies, vendored from johnlindquist/pi-emphasis (MIT) byte for byte; every bstack role loads it (lib/bstack.sh:BSTACK_PI_EMPHASIS). Upstream has no releases or tags: a newer commit is copied in whole, after reading its diff (bstack/pi/extensions/pi-emphasis/UPSTREAM.md)."
   },
   {
+    "name": "herdr-focus-to-hover",
+    "source": "git:jankeesvw/herdr-focus-to-hover",
+    "paths": ["mods/focus-to-hover/follow.js", "LICENSE"],
+    "min": null,
+    "why": null,
+    "known": "f5584d20d3e3ce26ba8446f5306496bb41ef88c0",
+    "pinned_in": ["bercail/mods/bercail-pane/UPSTREAM.md"],
+    "notes": "Focus follows the mouse in bercail's pane header ([layout] focus_follows_mouse), vendored from jankeesvw/herdr-focus-to-hover (MIT) byte for byte: follow.js and LICENSE only, beside bercail's copy of Herdr's pane mod. Upstream has no releases or tags: a newer commit is copied in whole, after reading its diff (bercail/mods/bercail-pane/UPSTREAM.md)."
+  },
+  {
     "name": "jq",
     "source": "github:jqlang/jq",
     "min": null,

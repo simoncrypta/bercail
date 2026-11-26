@@ -88,6 +88,7 @@ statechart_enabled() {
 # and each [policy."<repo>"] and [desk_secrets."<repo>"] takes its own keys.
 BERCAIL_CONFIG_KEYS='layout review
 layout auto_review
+layout focus_follows_mouse
 bstack claude
 bstack fable
 bstack gpt
@@ -379,16 +380,18 @@ doctor_config() {
 RECONFIGURE=0
 
 # The Herdr app half of bercail: the bercail layout, its mods (the desk, Shep's
-# view, the spaces list that switches to a space, and the agents list, which also
-# lists each desk and opens agents in a dialog), and its keys.
+# view, the spaces list that switches to a space, the agents list, which also
+# lists each desk and opens agents in a dialog, and the pane header that can make
+# focus follow the mouse), and its keys.
 # Paths are relative to bercail/ (the shared layout folder) in the source and to the app's home.
 HERDR_APP_LAYOUT="layouts/bercail.json"
-HERDR_APP_MODS=(bercail-desk bercail-shep bercail-spaces bercail-agents bercail-review)
+HERDR_APP_MODS=(bercail-desk bercail-shep bercail-spaces bercail-agents bercail-review bercail-pane)
 HERDR_APP_MOD_FILES=(mods/bercail-desk/main.js mods/bercail-desk/mod.json
   mods/bercail-shep/main.js mods/bercail-shep/mod.json
   mods/bercail-spaces/main.js mods/bercail-spaces/mod.json
   mods/bercail-agents/main.js mods/bercail-agents/mod.json
-  mods/bercail-review/main.js mods/bercail-review/mod.json)
+  mods/bercail-review/main.js mods/bercail-review/mod.json
+  mods/bercail-pane/main.js mods/bercail-pane/mod.json mods/bercail-pane/follow.js mods/bercail-pane/LICENSE mods/bercail-pane/LICENSE-APACHE)
 HERDR_APP_KEYS_SECTION="layout:bercail"
 
 # The app rewrites its layout file (the desk mod adds a block per desk with

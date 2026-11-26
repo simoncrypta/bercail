@@ -6,6 +6,7 @@
 [layout]
 review = "tuicr"                     # or a command of yours
 auto_review = true
+focus_follows_mouse = false        # true: the terminal under the pointer gets the keyboard
 
 [bstack]
 claude = ""
@@ -50,7 +51,7 @@ source = "beads"                     # bd; or "command", with source_command = [
 backend = ""                         # its name in `hc machine ls`; empty: this computer
 ```
 
-After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing, and tla-ts when `statechart` is on. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles), and `statechart` in [statecharts](bstack.md#statecharts); `review` and `auto_review` in [review](review.md); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start, except `spawn_timeout`, read by each [task dispatch](shep.md#dispatch), and `decision_timeout` in [reversible questions](shep.md#reversible-questions), read by Shep at its next start and by each `bercail shep question`; `[tests] slots` in [test slots](development.md#test-slots), read by each test run; `[routine.<name>]` in [routines](routines.md), read by each `bercail routine` command; the old `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
+After you edit it, `bercail reconfigure` re-reads it, refreshes the skills and bstack, and installs Pi and the review tool if they are missing, and tla-ts when `statechart` is on. The desk always runs bstack's Pi lead. What the `[bstack]` keys do (pins, `effort`, roles) is in [Make it yours](bstack/08-make-it-yours.md#models-and-roles), and `statechart` in [statecharts](bstack.md#statecharts); `review` and `auto_review` in [review](review.md), `focus_follows_mouse` in [focus follows the mouse](#focus-follows-the-mouse); `[git]` in [handoff](handoff.md#git-backend); `[policy."<path>"]` in [git policy per repo](#git-policy-per-repo); `[desk_secrets."<path>"]` in [a desk secret per repo](#a-desk-secret-per-repo); `[shep]` in [Shep's compaction](shep.md#compaction), read at Shep's next start, except `spawn_timeout`, read by each [task dispatch](shep.md#dispatch), and `decision_timeout` in [reversible questions](shep.md#reversible-questions), read by Shep at its next start and by each `bercail shep question`; `[tests] slots` in [test slots](development.md#test-slots), read by each test run; `[routine.<name>]` in [routines](routines.md), read by each `bercail routine` command; the old `[todo]` in [todos](#todos); `[herdr]` in [bercail on another machine](#bercail-on-another-machine), read by the layout's mods when the window opens.
 
 Those are all the keys bercail reads. `bercail doctor` names any other key in the file (`unknown  [shep] session (nothing reads it)`), a `[git]` value that is not a backend, and a line it cannot read; none of them counts as a failure. `bercail config get <section> <key>` prints one value as bercail reads it. `bercail config set <section> <key> <value>` and `unset <section> <key>` change one of those keys and print the lines they changed ([cli](cli.md)); Shep's goes to a [guard card](shep.md#guard-asks) that waits for your Allow, and other agents may not run them. The file is read as a subset of TOML: quoted and `"""` strings, `true` and `false`, whole numbers, and one-line arrays.
 
@@ -311,9 +312,30 @@ A desk's labels are written on its own machine and name that machine's ids: `ber
 
 Not yet: the worktrunk hook and `handoff-spawn --branch` open a new space only in a window on bercail's machine; a desk does not start on its own in a space on another machine; and `bercail review-pr` needs a window on bercail's machine.
 
+## Focus follows the mouse
+
+`[layout] focus_follows_mouse = true` gives the keyboard to the terminal under the pointer, like Hyprland's `follow_mouse`, without a click: the desk, Shell, Review and any split of them in a space, and Shep in the Shep view. It is off by default.
+
+```sh
+bercail config set layout focus_follows_mouse true
+```
+
+The layout's mods read it when they load, so it takes effect when the app restarts. Two hooks do it:
+
+- **Panes** (Shell, Review): the pane header, `bercail-pane`, runs [jankeesvw/herdr-focus-to-hover](https://github.com/jankeesvw/herdr-focus-to-hover)'s `follow.js`, vendored at a commit (`bercail/mods/bercail-pane/UPSTREAM.md`), in bercail's copy of Herdr's own pane header.
+- **The desk and Shep** are terminal blocks, which have no header and no pointer hook of their own. The header above each (`bercail-desk`, `bercail-shep`) watches every pointer move in the window (Herdr's `on_window_mouse_move`) and gives the keyboard to its block when the pointer moves into the column below it. For Shep, the column ends where the Decisions or Routines panel starts. For the desk, it runs to the window's bottom edge, so the status bar under the desk counts as the desk.
+
+What it does and does not do:
+
+- Only a real pointer move counts, and only while Herdr is the active window. A terminal chosen with the keyboard, or one that grows under a still pointer, keeps the keyboard until the mouse moves again, so the desk mod's own focus changes (a space switch, the agent keys) are not undone.
+- An open dialog or popup (Go to…, Add machine, an agent opened from the list) keeps the keyboard while it is open.
+- It types nothing. It runs `pane.focus`, as a click does: a program that asked for focus reports (Pi does) gets the same focus-in and focus-out events it gets on a click, and no key.
+- The Decisions and Routines panels and the sidebar take the keyboard only on a click.
+- Dragging a selection from one pane into another moves the keyboard to that pane: the pane header cannot see a held button. The desk and Shep ignore a move with a button held.
+
 ## Files bercail manages
 
-- `~/.config/herdr-app/layouts/bercail.json`, `mods/bercail-desk/`, `mods/bercail-shep/`, `mods/bercail-spaces/`, `mods/bercail-agents/` and `mods/bercail-review/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), and in `keys.json` the `layout:bercail` section, Herdr's own default keys and the `terminal` section's `Ctrl+Shift+C`/`V` (see [keys](keys.md#herdrs-default-keys)).
+- `~/.config/herdr-app/layouts/bercail.json`, `mods/bercail-desk/`, `mods/bercail-shep/`, `mods/bercail-spaces/`, `mods/bercail-agents/`, `mods/bercail-review/` and `mods/bercail-pane/` (the app rewrites the layout as you use it, so `bercail update` replaces it only when bercail ships a new one), and in `keys.json` the `layout:bercail` section, Herdr's own default keys and the `terminal` section's `Ctrl+Shift+C`/`V` (see [keys](keys.md#herdrs-default-keys)).
 - `~/.config/bercail/` (`config.toml`, `shell/`, `config.toml.example`), and the marker block in your `~/.bashrc` or `~/.zshrc` that sources the shell helpers.
 - worktrunk hooks (`~/.config/worktrunk/config.toml`, `herdr-layout.sh`).
 - `~/.local/bin/{bercail,bercail-desk-agent}` (a mise or packslip install keeps its own `bercail`), and `~/.local/share/bercail/` (in it, `release/` is the release a curl install unpacked).
