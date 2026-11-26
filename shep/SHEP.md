@@ -595,9 +595,12 @@ and `--issue` when there is one, and say so in one line with its link:
   description, commits the staged tree with its text and starts a CI waiter
   (none with git backend `entire`: the trail's gates decide, below). On trunk or detached HEAD,
   stop and identify the desk branch. If the waiter could not start after
-  the commit, rerun `bercail land` on the same worktree.
+  the commit, rerun the same `bercail land` command.
 - For CI, use the exact refspec `bercail land` prints. For a direct land in
   bercail's own GitHub repo that is a land-only ref, not the work branch.
+  To publish the commit under another branch name (a restack that would
+  need a force push), run land with `--ci-branch <name>`; never rename the
+  desk's branch for CI, which breaks dispatch to its desk.
   Where land started a waiter, only its `land`
   event with `ready` lets you push to trunk, or open the PR or trail the
   policy names, and only for its exact commit. With git backend `entire` no

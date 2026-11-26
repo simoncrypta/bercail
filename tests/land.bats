@@ -70,15 +70,18 @@ described() {
   "$ROOT/bin/bercail" describe stamp >/dev/null || fail "stamp"
 }
 
-# CI runs for the commit, one per argument:
+# CI runs for the commit, one per argument, each newer than the one before; runs
+# of one name (or workflow file) are one workflow's:
 # name:status:conclusion[:workflow file[:branch[:headBranch:headSha]]].
 runs() {
-  local spec
+  local spec id=0
   for spec in "$@"; do
     IFS=: read -r name status conclusion workflow branch head_branch head_sha <<<"$spec"
+    id=$((id + 1))
     jq -nc --arg n "$name" --arg s "$status" --arg c "$conclusion" --arg w "$workflow" --arg b "$branch" \
-      --arg hb "$head_branch" --arg hs "$head_sha" '
-      {databaseId: 1, attempt: 1, name: $n, status: $s, conclusion: $c, workflow: $w, branch: $b, url: "https://github.com/o/r/actions/runs/1"}
+      --arg hb "$head_branch" --arg hs "$head_sha" --argjson id "$id" '
+      {databaseId: $id, attempt: 1, workflowDatabaseId: (if $w == "" then $n else $w end), name: $n, status: $s,
+       conclusion: $c, workflow: $w, branch: $b, url: "https://github.com/o/r/actions/runs/\($id)"}
       + (if $hs == "" then {} else {headBranch: $hb, headSha: $hs} end)'
   done | jq -s . >"$RUNS"
 }
@@ -175,6 +178,97 @@ event() {
   ev="$(event)" || return 1
   jq -e '.land.status == "moved"' <<<"$ev" >/dev/null || fail "$ev"
   [[ "$(jq -r .text <<<"$ev")" != *"is ready"* && "$(jq -r .text <<<"$ev")" == *"Do not land it"* ]] || fail "text: $ev"
+}
+
+@test "a run that a newer run of its workflow on the commit superseded does not decide; a cancelled run with nothing newer fails" {
+  sha="$(git rev-parse HEAD)"
+  for spec in "ready CI:completed:cancelled CI:completed:success" \
+    "timeout CI:completed:cancelled CI:in_progress:" \
+    "failed CI:completed:cancelled Lint:completed:success" \
+    "failed CI:completed:success CI:completed:failure"; do
+    rm -f "$INBOX"/*.json
+    # shellcheck disable=SC2086 # one run per word
+    runs ${spec#* }
+    run land --wait "$sha" "$REPO"
+    [ "$status" -eq 0 ] || fail "$spec wait: $output"
+    ev="$(event)" || return 1
+    jq -e --arg want "${spec%% *}" '.land.status == $want' <<<"$ev" >/dev/null || fail "$spec: $ev"
+  done
+  # The event names the run that decided, not the one it superseded.
+  rm -f "$INBOX"/*.json
+  runs CI:completed:cancelled CI:completed:success
+  run land --wait "$sha" "$REPO"
+  jq -e '[.land.runs[].url] == ["https://github.com/o/r/actions/runs/2"]' <<<"$(event)" >/dev/null || fail "runs: $(event)"
+}
+
+@test "a commit pushed for CI under another branch name lands with --ci-branch, and the desk's branch keeps its name" {
+  described
+  runs "CI:completed:success::feature-restacked"
+  run land "$REPO" --ci-branch feature-restacked
+  [ "$status" -eq 0 ] || fail "land: $output"
+  sha="$(git rev-parse HEAD)"
+  [ "$(git symbolic-ref --short HEAD)" = feature ] || fail "the desk's branch changed"
+  [[ "$output" == *"git -C $REPO push origin $sha^{commit}:refs/heads/feature-restacked"* ]] || fail "no push to the named branch: $output"
+  grep -q -- "land --wait $sha --branch feature --ci-branch feature-restacked $REPO" "$LOG" || fail "the wait is not pinned: $(cat "$LOG")"
+  grep -q "gh run list --commit $sha --branch feature-restacked --event push" "$LOG" || fail "not read on the named branch: $(cat "$LOG")"
+  ev="$(event)" || return 1
+  jq -e --arg sha "$sha" '.land.status == "ready" and .land.head == $sha and .land.branch == "feature"' <<<"$ev" >/dev/null || fail "event: $ev"
+  # The moved check reads the desk's branch land named, not the named CI branch or HEAD.
+  rm -f "$INBOX"/*.json
+  git checkout -qb elsewhere
+  git branch -f feature "$(git commit-tree -p "$sha" -m later "$sha^{tree}")"
+  run land --wait "$sha" --branch feature --ci-branch feature-restacked "$REPO"
+  jq -e '.land.status == "moved" and .land.branch == "feature"' <<<"$(event)" >/dev/null || fail "moved: $(event)"
+}
+
+@test "--ci-branch on the trunk or in an Entire repo is refused before any commit or wait" {
+  described
+  head="$(git rev-parse HEAD)"
+  run land "$REPO" --ci-branch main
+  [ "$status" -ne 0 ] && [[ "$output" == *"is the trunk"* ]] || fail "took the trunk: $output"
+  run land --wait "$head" --ci-branch main "$REPO"
+  [ "$status" -ne 0 ] || fail "waited on the trunk: $output"
+  git checkout -q main && git checkout -q feature
+  for name in -x '@{-1}' ''; do
+    run land "$REPO" --ci-branch "$name"
+    [ "$status" -ne 0 ] || fail "took $name: $output"
+  done
+  git remote add origin entire://aws-us-east-2.entire.io/et/acme/widgets
+  run land "$REPO" --ci-branch elsewhere
+  [ "$status" -ne 0 ] && [[ "$output" == *"Entire"* ]] || fail "took it in an Entire repo: $output"
+  runs CI:completed:success
+  run land --wait "$head" --ci-branch elsewhere "$REPO"
+  [ "$status" -ne 0 ] && [[ "$output" == *"Entire"* ]] || fail "waited in an Entire repo: $output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "a commit was made"
+  [[ -z "$(ls -A "$INBOX")" ]] || fail "an event: $(ls -A "$INBOX")"
+  ! grep -q '^hc \|^gh ' "$LOG" || fail "a wait was started or gh asked: $(cat "$LOG")"
+}
+
+@test "in bercail's own direct repo, --ci-branch outside bercail-land/ is refused before any commit or wait" {
+  gated
+  described
+  head="$(git rev-parse HEAD)"
+  run land "$REPO" --ci-branch feature-restacked
+  [ "$status" -ne 0 ] && [[ "$output" == *"not under bercail-land/"* ]] || fail "took a work branch for the full wait: $output"
+  run land --wait "$head" --full feature --ci-branch feature-restacked "$REPO"
+  [ "$status" -ne 0 ] || fail "waited on a work branch for the full wait: $output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "a commit was made"
+  [[ -z "$(ls -A "$INBOX")" ]] || fail "an event: $(ls -A "$INBOX")"
+  ! grep -q '^hc \|^gh ' "$LOG" || fail "a wait was started or gh asked: $(cat "$LOG")"
+}
+
+@test "in bercail's own direct repo, --ci-branch under bercail-land/ waits for ci.yml on the exact commit there" {
+  gated
+  described
+  ref=bercail-land/feature
+  runs "CI:completed:success:ci.yml:$ref"
+  run land "$REPO" --ci-branch "$ref"
+  [ "$status" -eq 0 ] || fail "land: $output"
+  sha="$(git rev-parse HEAD)"
+  [[ "$output" == *"git -C $REPO push origin $sha^{commit}:refs/heads/$ref, so the full CI"* ]] || fail "no push to the named ref: $output"
+  grep -q "gh run list --repo github.com/simoncrypta/bercail --workflow ci.yml --commit $sha --branch $ref --event push" "$LOG" \
+    || fail "ci.yml not read on the named ref: $(cat "$LOG")"
+  jq -e '.land.status == "ready" and .land.branch == "feature"' <<<"$(event)" >/dev/null || fail "event: $(event)"
 }
 
 @test "a run still going, none at all, or no list from gh when time is up times out, never ready" {
