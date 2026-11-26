@@ -74,14 +74,29 @@ plan() {
   [[ "$(plan --affected base)" == tests/suite.bats ]] || fail "guide only: $(plan --affected base)"
 }
 
-@test "a change to code, a test, or a new file anywhere but docs runs everything" {
+@test "changed unit tests run themselves alongside the smoke test" {
+  printf 'more\n' >>"$tree/tests/a.bats"
+  touch "$tree/tests/new.bats" "$tree/tests/foo.test.ts"
+  [[ "$(plan --affected base)" == $'tests/a.bats\ntests/new.bats\ntests/suite.bats\nvitest' ]]
+}
+
+@test "production changes include indirect readers, even when none of their tests changed" {
+  mkdir -p "$tree/skills/handoff/scripts"
+  touch "$tree/skills/handoff/scripts/handoff-spawn"
+  [[ "$(plan --affected base)" == $'tests/bstack.bats\ntests/handoff_beads.bats\ntests/handoff_spawn.bats\ntests/skills_deploy.bats\ntests/suite.bats\ntests/usage_limit_reason.bats\ntests/worktrunk_live.bats' ]]
+}
+
+@test "an unmapped change, a shared fixture, or a removed test runs everything" {
   local path
-  for path in lib/land.sh tests/a.bats tests/new.bats; do
-    git -C "$tree" checkout -q -- .
-    rm -f "$tree/tests/new.bats"
+  # help.sh also supplies installation and upgrade summaries, not just help.
+  for path in lib/land.sh lib/help.sh tests/test_helper.bash; do
     printf 'more\n' >>"$tree/$path"
-    [[ "$(plan --affected base)" == "$(plan)" ]] || fail "$path: $(plan --affected base | paste -sd ' ')"
+    [[ "$(plan --affected base)" == "$(plan)" ]] || fail "$path did not run everything"
+    rm "$tree/$path"
+    git -C "$tree" restore .
   done
+  rm "$tree/tests/a.bats"
+  [[ "$(plan --affected base)" == "$(plan)" ]]
 }
 
 @test "a committed change counts, and so do both sides of a rename" {
