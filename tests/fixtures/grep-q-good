@@ -4,3 +4,4 @@ grep -q x <<<"$out"
 note="printf | grep -q under pipefail"
 printf '%s\n' "$out" | grep -c x
 printf '%s' "$out" || grep -q x file
+cat "$a" | grep -c x

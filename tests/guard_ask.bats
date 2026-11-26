@@ -322,7 +322,7 @@ wait
   jq -e '.outcome == "ran"' <<<"$(event "$id")" >/dev/null || fail "ran"
   wait "${WORKERS[@]}"
   [[ "$(pushes)" -eq 1 ]] || fail "pushed $(pushes) times"
-  cat "$BATS_TEST_TMPDIR/worker-$id.1" "$BATS_TEST_TMPDIR/worker-$id.2" | grep -q "not run: its Allow was already claimed" \
+  grep -qsF "not run: its Allow was already claimed" "$BATS_TEST_TMPDIR/worker-$id.1" "$BATS_TEST_TMPDIR/worker-$id.2" \
     || fail "both claimed: $(cat "$BATS_TEST_TMPDIR"/worker-"$id".*)"
   [[ "$(bercail shep question json | jq '[.questions[] | select(.kind == "guard")] | length')" -eq 1 ]] || fail "two cards"
 }
