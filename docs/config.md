@@ -252,7 +252,7 @@ bercail doctor                                                             # ok 
 `bercail todo` puts what only you can do on a to-do list of yours ([how Shep uses it](shep.md#todos-for-the-person)). You can have several, one per project or repo. Each is a **target**: a name for one list. A **route** sends a repo's todos to a target, and the **default** target takes the rest. Shep sets them from the CLI when you name a list, so you never paste numbers into a file:
 
 ```sh
-bercail todo target add lesentiel https://app.basecamp.com/6317829/buckets/49568764/todolists/10511639538
+bercail todo target add lesentiel https://app.basecamp.com/1234567/buckets/7654321/todolists/1111111
 # added lesentiel: basecamp, to-do list "Lesentiel" in Show the vision · https://3.basecamp.com/…
 bercail todo route ~/Work/lesentiel lesentiel   # todos for jobs in that repo go there
 bercail todo route --default home               # and the rest to home

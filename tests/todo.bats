@@ -18,8 +18,8 @@ setup() {
   printf '[]\n' >"$BC_DATA/todos.json"
   jq -n '[{id: 333, title: "bercail", bucket: {id: 222, name: "Home"}, app_url: "https://3.basecamp.com/111/buckets/222/todolists/333"},
           {id: 334, title: "Errands", bucket: {id: 222, name: "Home"}, app_url: "https://3.basecamp.com/111/buckets/222/todolists/334"},
-          {id: 10511639538, title: "Lesentiel", bucket: {id: 49568764, name: "Show the vision"},
-           app_url: "https://3.basecamp.com/6317829/buckets/49568764/todolists/10511639538"}]' >"$BC_DATA/lists.json"
+          {id: 1111111, title: "Lesentiel", bucket: {id: 7654321, name: "Show the vision"},
+           app_url: "https://3.basecamp.com/1234567/buckets/7654321/todolists/1111111"}]' >"$BC_DATA/lists.json"
   printf '{"ok":true,"data":{"authenticated":true,"base_url":"https://3.basecampapi.com","token":"SECRET-TOKEN-123"}}\n' >"$BC_DATA/auth.json"
   printf '{"terminals":[]}\n' >"$HC_DATA/ls.json"
 
@@ -71,7 +71,7 @@ case "$1 $2" in
     id=$((700 + $(jq length "$lists")))
     jq --arg t "$3" --argjson p "$(val --in "$@")" --argjson id "$id" \
       '. + [{id: $id, title: $t, bucket: {id: $p, name: "Show the vision"},
-             app_url: "https://3.basecamp.com/6317829/buckets/\($p)/todolists/\($id)"}]' "$lists" >"$lists.tmp" && mv "$lists.tmp" "$lists"
+             app_url: "https://3.basecamp.com/1234567/buckets/\($p)/todolists/\($id)"}]' "$lists" >"$lists.tmp" && mv "$lists.tmp" "$lists"
     jq -c --argjson id "$id" '{ok: true, data: (.[] | select(.id == $id))}' "$lists" ;;
   *) exit 2 ;;
 esac
@@ -114,10 +114,10 @@ todolist = "333"
 EOF
 }
 
-# Two targets: home (Errands, account 111) and lesentiel (account 6317829).
+# Two targets: home (Errands, account 111) and lesentiel (account 1234567).
 two_targets() {
   todo target add home https://3.basecamp.com/111/buckets/222/todolists/334 >/dev/null || fail "add home"
-  todo target add lesentiel https://app.basecamp.com/6317829/buckets/49568764/todolists/10511639538 >/dev/null || fail "add lesentiel"
+  todo target add lesentiel https://app.basecamp.com/1234567/buckets/7654321/todolists/1111111 >/dev/null || fail "add lesentiel"
 }
 
 # A main checkout at ~/Work/$1 with beads issue $2 titled $3.
@@ -180,15 +180,15 @@ Log in at the admin page" ]] || fail "show: $out"
   out="$(todo target add home https://3.basecamp.com/111/buckets/222/todolists/334)" || fail "add: $out"
   [[ "$out" == 'added home: basecamp, to-do list "Errands" in Home · https://3.basecamp.com/111/buckets/222/todolists/334' ]] || fail "add: $out"
   grep -qx 'basecamp todolists show 334 --in 222 --account 111 --json' "$LOG" || fail "the list was not read: $(cat "$LOG")"
-  out="$(todo target add lesentiel 'https://app.basecamp.com/6317829/buckets/49568764/todolists/10511639538?tab=open#top')" || fail "add: $out"
-  [[ "$out" == 'added lesentiel: basecamp, to-do list "Lesentiel" in Show the vision · https://3.basecamp.com/6317829/buckets/49568764/todolists/10511639538' ]] \
+  out="$(todo target add lesentiel 'https://app.basecamp.com/1234567/buckets/7654321/todolists/1111111?tab=open#top')" || fail "add: $out"
+  [[ "$out" == 'added lesentiel: basecamp, to-do list "Lesentiel" in Show the vision · https://3.basecamp.com/1234567/buckets/7654321/todolists/1111111' ]] \
     || fail "app.basecamp.com: $out"
-  [[ "$(jq -c '.targets.lesentiel | {backend, account, project, todolist}' "$TARGETS")" == '{"backend":"basecamp","account":"6317829","project":"49568764","todolist":"10511639538"}' ]] \
+  [[ "$(jq -c '.targets.lesentiel | {backend, account, project, todolist}' "$TARGETS")" == '{"backend":"basecamp","account":"1234567","project":"7654321","todolist":"1111111"}' ]] \
     || fail "todo.json: $(cat "$TARGETS")"
 
   out="$(todo target list)" || fail "list: $out"
   [[ "$out" == '- home: basecamp, to-do list "Errands" in Home · https://3.basecamp.com/111/buckets/222/todolists/334
-- lesentiel: basecamp, to-do list "Lesentiel" in Show the vision · https://3.basecamp.com/6317829/buckets/49568764/todolists/10511639538
+- lesentiel: basecamp, to-do list "Lesentiel" in Show the vision · https://3.basecamp.com/1234567/buckets/7654321/todolists/1111111
 no default: a todo with no route needs --target (bercail todo route --default <target>)' ]] || fail "list: $out"
 
   repo_with_issue lesentiel les-1 "Show the vision"
@@ -196,7 +196,7 @@ no default: a todo with no route needs --target (bercail todo route --default <t
   todo route --default home >/dev/null || fail "default"
   [[ "$(todo target list --json | jq -c 'map({name, default, routes})')" == "[{\"name\":\"home\",\"default\":true,\"routes\":[]},{\"name\":\"lesentiel\",\"default\":false,\"routes\":[\"$WORK/lesentiel\"]}]" ]] \
     || fail "list --json: $(todo target list --json)"
-  [[ "$(todo target show lesentiel)" == '- lesentiel: basecamp, to-do list "Lesentiel" in Show the vision · https://3.basecamp.com/6317829/buckets/49568764/todolists/10511639538 · routes ~/Work/lesentiel' ]] \
+  [[ "$(todo target show lesentiel)" == '- lesentiel: basecamp, to-do list "Lesentiel" in Show the vision · https://3.basecamp.com/1234567/buckets/7654321/todolists/1111111 · routes ~/Work/lesentiel' ]] \
     || fail "show: $(todo target show lesentiel)"
   [[ "$(todo target show home --json | jq -c '{name, default, todolist}')" == '{"name":"home","default":true,"todolist":"334"}' ]] || fail "show --json"
 
@@ -213,12 +213,12 @@ no default: a todo with no route needs --target (bercail todo route --default <t
 }
 
 @test "todo target add writes nothing for a URL that is not one list it can read; a todoset's error lists its lists, and --create makes one" {
-  local out todoset=https://app.basecamp.com/6317829/buckets/49568764/todosets/77
+  local out todoset=https://app.basecamp.com/1234567/buckets/7654321/todosets/77
   out="$(todo target add lesentiel "$todoset" 2>&1)" && fail "a todoset passed: $out"
   [[ "$out" == "bercail todo: $todoset is a project's to-dos, not one list. Its lists:
-- Lesentiel: https://3.basecamp.com/6317829/buckets/49568764/todolists/10511639538
+- Lesentiel: https://3.basecamp.com/1234567/buckets/7654321/todolists/1111111
 Pass one of those URLs, or --create \"<list name>\" to make one there" ]] || fail "todoset: $out"
-  grep -qx 'basecamp todolists list --in 49568764 --todoset 77 --all --account 6317829 --json' "$LOG" || fail "list argv: $(cat "$LOG")"
+  grep -qx 'basecamp todolists list --in 7654321 --todoset 77 --all --account 1234567 --json' "$LOG" || fail "list argv: $(cat "$LOG")"
   out="$(todo target add errands https://3.basecamp.com/111/projects/999 2>&1)" && fail "an empty project passed: $out"
   [[ "$out" == *"is a project's to-dos, not one list. It has no list yet; pass --create \"<list name>\" to make one there" ]] || fail "empty project: $out"
   out="$(todo target add home https://3.basecamp.com/111/buckets/222/todolists/999 2>&1)" && fail "a list the login cannot see passed: $out"
@@ -237,8 +237,8 @@ Pass one of those URLs, or --create \"<list name>\" to make one there" ]] || fai
   ! grep -q 'todolists create' "$LOG" || fail "a list was made: $(cat "$LOG")"
 
   out="$(todo target add lesentiel "$todoset" --create "Simon's todos")" || fail "--create: $out"
-  [[ "$out" == "added lesentiel: basecamp, to-do list \"Simon's todos\" in Show the vision · https://3.basecamp.com/6317829/buckets/49568764/todolists/703" ]] || fail "--create: $out"
-  grep -qx "basecamp todolists create Simon's todos --in 49568764 --todoset 77 --account 6317829 --json" "$LOG" || fail "create argv: $(cat "$LOG")"
+  [[ "$out" == "added lesentiel: basecamp, to-do list \"Simon's todos\" in Show the vision · https://3.basecamp.com/1234567/buckets/7654321/todolists/703" ]] || fail "--create: $out"
+  grep -qx "basecamp todolists create Simon's todos --in 7654321 --todoset 77 --account 1234567 --json" "$LOG" || fail "create argv: $(cat "$LOG")"
   [[ "$(jq -r '.targets.lesentiel.todolist' "$TARGETS")" == 703 ]] || fail "todo.json: $(cat "$TARGETS")"
 }
 
@@ -260,7 +260,7 @@ Pass one of those URLs, or --create \"<list name>\" to make one there" ]] || fai
   todo route "$HOME/Work/lesentiel" lesentiel >/dev/null || fail "route lesentiel"
   out="$(todo add "Approve the vision deck" --repo "$HOME/Work/lesentiel.deck")" || fail "by repo: $out"
   [[ "$out" == "added to lesentiel: Approve the vision deck · https://3.basecamp.com/1/buckets/2/todos/900" ]] || fail "by repo: $out"
-  grep -qx 'basecamp todos create - --in 49568764 --list 10511639538 --account 6317829 --json' "$LOG" || fail "lesentiel argv: $(cat "$LOG")"
+  grep -qx 'basecamp todos create - --in 7654321 --list 1111111 --account 1234567 --json' "$LOG" || fail "lesentiel argv: $(cat "$LOG")"
   # The repo of --issue, asked from its checkout.
   todo route "$HOME/Work/app" home >/dev/null || fail "route app"
   out="$(cd "$HOME/Work/app" && todo add "Create the tailnet login" --issue app-7)" || fail "by issue: $out"
@@ -405,7 +405,7 @@ EOF
   ! grep -q 'Create the tailnet login' <<<"$out" || fail "a todo Shep marked done is still on the board: $out"
   ! grep -q 'basecamp todos complete' "$LOG" || fail "done completed a todo the person had already done: $(cat "$LOG")"
   # One target that does not answer is one line; the others still show.
-  printf 'Access denied' >"$BC_DATA/fail-10511639538"
+  printf 'Access denied' >"$BC_DATA/fail-1111111"
   out="$("$ROOT/bin/bercail" shep board)" || fail "board with one failing target: $out"
   [[ "$(sed -n '/^Waiting on the person:/,/^Decisions/{/^Decisions/!p}' <<<"$out")" == "Waiting on the person:
 - todo: Plug in the Zigbee stick · due 2026-11-20 · open in home · https://3.basecamp.com/1/buckets/2/todos/901
@@ -445,15 +445,15 @@ EOF
   out="$("$ROOT/bin/bercail" doctor 2>&1)" || true
   grep -qx '  --  todos: no target (bercail todo target add <name> <to-do list URL>; docs/config.md#todos)' <<<"$out" || fail "no target: $out"
   basecamp_config
-  todo target add lesentiel https://app.basecamp.com/6317829/buckets/49568764/todolists/10511639538 >/dev/null || fail "add"
+  todo target add lesentiel https://app.basecamp.com/1234567/buckets/7654321/todolists/1111111 >/dev/null || fail "add"
   out="$("$ROOT/bin/bercail" doctor 2>&1)" || true
   [[ "$(grep 'todos' <<<"$out")" == '  ok  todos config: basecamp, logged in; to-do list "bercail" in Home
   ok  todos lesentiel: basecamp, logged in; to-do list "Lesentiel" in Show the vision
   hint  todos: "config" is [todo] in config.toml; move it: bercail todo target add <name> <its URL>, bercail todo route --default <name>, then delete [todo] and [todo.basecamp] from config.toml' ]] \
     || fail "two targets: $out"
-  printf 'Access denied' >"$BC_DATA/fail-10511639538"
+  printf 'Access denied' >"$BC_DATA/fail-1111111"
   out="$("$ROOT/bin/bercail" doctor 2>&1)" || true
-  grep -qx '  unreachable  todos lesentiel: basecamp, logged in, but to-do list 10511639538 does not answer: basecamp todolists show failed: Access denied' <<<"$out" \
+  grep -qx '  unreachable  todos lesentiel: basecamp, logged in, but to-do list 1111111 does not answer: basecamp todolists show failed: Access denied' <<<"$out" \
     || fail "unreachable: $out"
   ! grep -q 'SECRET-TOKEN' <<<"$out" || fail "doctor printed the token"
   printf '{"ok":true,"data":{"authenticated":false},"notice":"Run: basecamp auth login"}\n' >"$BC_DATA/auth.json"

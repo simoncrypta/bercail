@@ -3318,7 +3318,7 @@ test("only Shep sets where the person's todos go, and no role writes todo.json b
     "bercail todo route ~/Work/lesentiel lesentiel",
     "bercail todo route --default lesentiel",
     "bercail todo route --rm ~/Work/app",
-    "bercail todo target add lesentiel https://app.basecamp.com/6317829/buckets/49568764/todolists/10511639538",
+    "bercail todo target add lesentiel https://app.basecamp.com/1234567/buckets/7654321/todolists/1111111",
     "bin/bercail todo target rm lesentiel",
     "cd /tmp && bercail todo target add x https://3.basecamp.com/1/buckets/2/todosets/3 --create Errands",
   ];
