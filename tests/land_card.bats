@@ -204,7 +204,7 @@ setup() {
   jq 'del(.questions[0].landing)' "$SHEP/questions.json" >"$SHEP/q.tmp" && mv "$SHEP/q.tmp" "$SHEP/questions.json"
   question expire | jq -e --arg t "$token" '. == ["\($t) started"]' >/dev/null || fail "no start after a crash"
   # A worker hc reports live, or hc that cannot answer: the sweep waits.
-  jq '. + [{address: "land-q1-1", state: "live", cwd: "/", labels: {}}]' "$STATE/hc.json" >"$STATE/hc.tmp" && mv "$STATE/hc.tmp" "$STATE/hc.json"
+  jq '. + [{address: "land-q1-1", state: "live", pid: (length + 101), cwd: "/", labels: {}}]' "$STATE/hc.json" >"$STATE/hc.tmp" && mv "$STATE/hc.tmp" "$STATE/hc.json"
   question expire | jq -e '. == []' >/dev/null || fail "it started a second worker beside a live one"
   question land-claim "$token" | jq -e .accepted >/dev/null || fail "claim"
   : >"$STATE/hc-down"

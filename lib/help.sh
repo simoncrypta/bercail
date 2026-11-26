@@ -119,7 +119,8 @@ Post-install CLI (bercail):
                 The issues built-in offers one ready, labelled issue from beads or a command. Only Start opens a desk.
   cleanup       Retire a finished worktree: cleanup <worktree> copies its .bercail/ to
                 ~/Work/worktree-archives/<repo>/, ends its desk and what it started,
-                parents first, removes the worktree, closes its space, and keeps the
+                parents first, stops your processes still running in it (a detached
+                dev server), removes the worktree, closes its space, and keeps the
                 branch. Refuses uncommitted work, commits on neither trunk nor a remote
                 branch, submodules, a terminal at work, and a question Shep asked you
                 about it that still waits; stops, with every reason, when a terminal
