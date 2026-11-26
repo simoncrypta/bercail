@@ -1142,7 +1142,7 @@ function session(role: string, hc: (args: string[]) => { code: number; stderr?: 
     return { code: 0, stdout: "{}", stderr: "" };
   });
   const confirm = vi.fn(async () => false);
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   const ctx = { hasUI: true, cwd: repo, ui: { confirm }, sessionManager: { getSessionId: () => "shep-session" } };
   let calls = 0;
   // The input Pi runs, as the last tool_call left it.

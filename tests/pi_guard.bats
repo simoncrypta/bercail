@@ -27,3 +27,13 @@ setup() {
   need git jq flock
   node "$ROOT/tests/pi_guard_ask_live.ts" "$ROOT" "$pi"
 }
+
+# bats test_tags=live
+@test "live: a real Pi whose guard changed on disk refuses the next call, reloads it and goes on" {
+  local pi
+  pi="${PI_GUARD_BIN:-}"
+  [[ -n "$pi" ]] || pi="$(real_pi)"
+  [[ -n "$pi" ]] || skip "Pi not found; guard reload live proof not run"
+  need script
+  node "$ROOT/tests/pi_guard_reload_live.ts" "$ROOT" "$pi"
+}

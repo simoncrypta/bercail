@@ -19,7 +19,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /** The part of a repo's effective policy (lib/policy.sh) the guard enforces. */
@@ -160,6 +160,18 @@ const syntheticInput =
   "Typing or clicking for the person (wtype, ydotool, xdotool, /dev/uinput, hyprctl's key dispatchers) is blocked: it could answer for them.";
 const discussOnly =
   "A Discuss branch is for talking a question over: it runs no commands and changes nothing. Say what you would do instead.";
+const staleGuard =
+  "bercail's guard changed on disk after this Pi loaded it (bercail update or an install), so the rules it runs are not the installed ones. Nothing runs until Pi reloads it, which it does once this turn ends; then it tells you, and you run this again if it still fits the task.";
+const staleGuardHeadless =
+  "bercail's guard changed on disk after this headless run loaded it (bercail update or an install), so the rules it runs are not the installed ones, and nothing runs. Stop and report that; a new run gets the installed guard.";
+const guardGone =
+  "bercail's guard cannot read its own file, so it cannot tell whether bercail update replaced it, and nothing runs. Tell the person: once bercail is installed again, restart this Pi.";
+const guardBroken =
+  "bercail's guard changed on disk after this Pi loaded it, and the new one does not load, so Pi keeps the old one and nothing runs. Tell the person: reinstall bercail; the guard reloads once its file loads.";
+const guardLost =
+  "bercail's guard changed on disk and Pi did not load the new one, so Pi exits rather than run without a guard. Reinstall bercail, then start this Pi again: its session is kept.";
+const guardReloaded =
+  "bercail's guard reloaded from disk with the installed rules: Pi reloaded every extension and kept this session. Run again what the old guard held back, if it still fits the task.";
 const pushAllEntire =
   "In an Entire repo, pushing every branch (--all, --branches, a refs/heads/* glob) would also push Entire's shadow branches, which hold unredacted snapshots. Push the branch by name.";
 const entireMerge =
@@ -4820,7 +4832,79 @@ function whyNotAlone(
     : `it was one of ${count} tool calls in its message, which Pi runs together; send it alone`;
 }
 
+// The guard file's sha256, or "" when it cannot be read.
+function fileHash(file: string): string {
+  try {
+    return createHash("sha256").update(readFileSync(file)).digest("hex");
+  } catch {
+    return "";
+  }
+}
+
+// Set by the reload this guard asks for, read by the guard the reload loads: one process.
+// True: the turn ended on its own, so the agent goes on; false: the person stopped it.
+const reloadedKey = Symbol.for("bercail.guard.reloaded");
+// Set by each guard once it has registered its handlers.
+const registeredKey = Symbol.for("bercail.guard.registered");
+
+// Why the guard in FILE does not load and register its tool_call handler, or undefined
+// when it does. Under a name of its own beside it, since a loader caches a module by
+// its path, and against a stand-in for Pi, in this process.
+async function whyNotLoads(file: string): Promise<string | undefined> {
+  const probe = join(dirname(file), `.guard-probe-${process.pid}-${randomUUID()}.ts`);
+  try {
+    writeFileSync(probe, readFileSync(file));
+    const next = (await import(pathToFileURL(probe).href)) as { default?: unknown };
+    if (typeof next.default !== "function") return "it exports no extension";
+    const events = new Set<string>();
+    next.default(new Proxy({}, { get: (_, key) => (key === "on" ? (name: string) => events.add(name) : () => {}) }));
+    return events.has("tool_call") ? undefined : "it registers no tool_call handler";
+  } catch (error) {
+    return String(error);
+  } finally {
+    rmSync(probe, { force: true });
+  }
+}
+
 export default function (pi: ExtensionAPI) {
+  // Pi holds the guard it loaded at start; bercail update replaces the file, not that
+  // code. A guard whose file changed refuses every call and reloads Pi once it is idle.
+  const self = fileURLToPath(import.meta.url);
+  const loaded = fileHash(self);
+  let reload = false;
+  let resume = false;
+  // The hash of a guard file that does not load: this guard stays, refusing, until it changes.
+  let broken = "";
+  pi.registerCommand("bercail-guard-reload", {
+    description: "Reload Pi's extensions: bercail's guard changed on disk",
+    handler: async (_args, ctx) => {
+      // A reload drops this guard before it loads the next, and a desk's follow-ups
+      // still start turns: so the next must load here first.
+      const now = fileHash(self);
+      const why = await whyNotLoads(self);
+      if (why) {
+        broken = now;
+        ctx.ui.notify(`${guardBroken} ${why}`, "error");
+        return;
+      }
+      const globals = globalThis as Record<symbol, unknown>;
+      globals[reloadedKey] = resume;
+      delete globals[registeredKey];
+      await ctx.reload();
+      // Pi did not load the guard that loaded here: it exits rather than run without one.
+      if (globals[registeredKey]) return;
+      process.once("exit", () => console.error(guardLost));
+      process.kill(process.pid, "SIGTERM");
+    },
+  });
+  // Messages sent here run once every settled handler is done, with the agent idle.
+  pi.on("agent_settled", (event) => {
+    if (!reload) return;
+    reload = false;
+    resume = (event as { aborted?: boolean }).aborted !== true;
+    pi.sendUserMessage("/bercail-guard-reload", { expandPromptTemplates: true });
+  });
+
   const home = process.env.HOME;
   const config =
     process.env.BERCAIL_CONFIG ||
@@ -4858,7 +4942,13 @@ export default function (pi: ExtensionAPI) {
   pi.on("project_trust", async (event) => ({ trusted: isReviewWorktree(event.cwd) ? "no" : "undecided" }));
 
   // Before the first command: Pi's bash tool runs with this process's environment.
-  pi.on("session_start", async (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
+    const globals = globalThis as Record<symbol, unknown>;
+    if (event.reason === "reload" && reloadedKey in globals) {
+      const triggerTurn = globals[reloadedKey] === true;
+      delete globals[reloadedKey];
+      pi.sendMessage({ customType: "bercail-guard", display: true, content: guardReloaded }, { triggerTurn });
+    }
     const note = useDeskSecret(await startJson(ctx.cwd), process.env.BERCAIL_ROLE ?? "", process.env, shim);
     if (!note) return;
     if (ctx.hasUI) ctx.ui.notify(note, "warning");
@@ -4890,6 +4980,19 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("tool_call", async (event, ctx) => {
     const input = event.input as { command?: string; path?: string };
+    const now = fileHash(self);
+    if (!loaded || now !== loaded) {
+      // A guard file that is gone or unreadable would reload into no guard at all.
+      reload = loaded !== "" && now !== "" && now !== broken && ctx.hasUI;
+      const reason =
+        !loaded || !now ? guardGone : now === broken ? guardBroken : reload ? staleGuard : staleGuardHeadless;
+      logWarning(event.toolName, String(input.command ?? input.path ?? ""), "refusal", [reason], {
+        role: process.env.BERCAIL_ROLE ?? "",
+        hasUI: ctx.hasUI,
+        cwd: ctx.cwd,
+      });
+      return { block: true, reason };
+    }
     const command = event.toolName === "bash" ? String(input.command ?? "") : undefined;
     const notAlone = whyNotAlone(event, counts);
     const json = await startJson(ctx.cwd);
@@ -4992,4 +5095,5 @@ export default function (pi: ExtensionAPI) {
       ...(event.structuredContent === undefined ? {} : { structuredContent: event.structuredContent }),
     };
   });
+  (globalThis as Record<symbol, unknown>)[registeredKey] = true;
 }

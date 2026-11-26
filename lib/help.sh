@@ -16,7 +16,8 @@ Post-install CLI (bercail):
                 (remove the folders of runs that ended, and your /tmp entries unchanged and unread for N
                 days, 2 by default, that nothing holds; each recorded desk's start and end runs it) | run -- CMD | dir PID
   config        A config.toml value as bercail reads it: config get <section> <key> |
-                set <section> <key> <value> | unset <section> <key> [--dry-run] (change that key alone, and print the diff)
+                set <section> <key> <value> | unset <section> <key> [--dry-run] (change that key alone, and print the diff;
+                a write needs your terminal or Shep's card)
   desk          Desk agents: restore [--dry-run] (bring back what a reboot took) |
                 model DESK PROVIDER/MODEL[:thinking] (switch a live desk's model) |
                 prompt DESK (the guard prompt it waits on, as JSON) |
@@ -114,7 +115,7 @@ Post-install CLI (bercail):
                 run <name> [--dry-run] (now, under its locks; new findings or a pause send Shep one event;
                 --dry-run prints what it found and writes nothing) |
                 pause <name> | resume <name> | enable <name> [--at <when>] | disable <name> [--dry-run]
-                (declare a built-in in config.toml, or take it out; prints the diff) |
+                (declare a built-in in config.toml, or take it out; prints the diff; a write needs your terminal) |
                 ask <name> (your request on stdin, to Shep's inbox;
                 the Routines panel's Ask Shep) | tick (start each one that is due) |
                 loop (a tick a minute; the hidden terminal bercail-routines runs it) | start (that terminal)

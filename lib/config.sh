@@ -231,6 +231,10 @@ config_keep() {
     die "$BERCAIL_USER_CONFIG changed since its card: this edit is now $lines; nothing written"
   log "$out"
   [[ "$CONFIG_DRY" -eq 0 ]] && ! cmp -s "$CONFIG_WAS" "$CONFIG_COPY" || return 0
+  # A write comes from the person's terminal or a card's worker, never an agent's shell:
+  # an agent's guard can predate the rule that puts its write on a card.
+  [[ -n "$CONFIG_EXPECT" || -t 0 ]] ||
+    die "config.toml is the person's: bercail changes it only from their terminal or on Shep's Decisions card, and this has no terminal; nothing written. An agent says in its report what should change, and Shep asks."
   if [[ -f "$CONFIG_TARGET" ]] && ! cmp -s "$CONFIG_TARGET" "$CONFIG_WAS" ||
     [[ "$CONFIG_EXISTED" -eq 1 && ! -f "$CONFIG_TARGET" ]]; then
     die "$BERCAIL_USER_CONFIG changed while bercail edited it; nothing written, run it again"

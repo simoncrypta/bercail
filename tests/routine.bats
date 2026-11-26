@@ -40,7 +40,13 @@ teardown() {
   while read -r pid; do kill "$pid" 2>/dev/null || true; done <"$MEET/child"
 }
 
-routine() { "$ROOT/bin/bercail" routine "$@"; }
+# enable and disable write config.toml, which takes the person's terminal.
+routine() {
+  case "$1" in
+    enable | disable) on_tty "$ROOT/bin/bercail" routine "$@" ;;
+    *) "$ROOT/bin/bercail" routine "$@" ;;
+  esac
+}
 
 # declare NAME [SCHEDULE]: a command routine running the stand-in query.
 declare_routine() {

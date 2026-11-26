@@ -500,7 +500,7 @@ for (const toolName of ["bash", "read"]) {
     const script = `import guard from ${JSON.stringify(guardUrl)};
       const handlers = {};
       guard({on: (name, handler) => handlers[name] = handler,
-        registerTool() {},
+        registerCommand() {},
         exec: async () => ({code: 1, stdout: "", stderr: ""})});
       const result = await handlers.tool_call(${JSON.stringify({ toolName, input: { command: "gt submit --help", path: "/work/a.ts" } })},
         {hasUI: false, cwd: "/work"});
@@ -522,6 +522,121 @@ for (const toolName of ["bash", "read"]) {
     }
   }, 10000);
 }
+
+test("a guard whose file changed on disk refuses every call and reloads Pi once idle; the reloaded one says so, and a reload without one ends Pi", () => {
+  const dir = mkdtempSync(join(tmpdir(), "guard-stale-"));
+  const copy = join(dir, "guard.ts");
+  writeFileSync(copy, readFileSync(new URL("../bstack/pi/extensions/guard.ts", import.meta.url)));
+  const env = { PATH: "/usr/bin:/bin", HOME: dir, XDG_STATE_HOME: join(dir, "state"), TMPDIR: dir };
+  // One process, as Pi's reload is: the second load is the guard the reload brings.
+  const script = `import { appendFileSync, readdirSync, rmSync } from "node:fs";
+    const load = async (n) => {
+      const handlers = {}, commands = {}, sent = [];
+      (await import(${JSON.stringify(new URL(`file://${copy}`).href)} + "?" + n)).default({
+        on: (name, handler) => (handlers[name] = handler),
+        registerCommand: (name, command) => (commands[name] = command),
+        sendUserMessage: (text, options) => sent.push([text, options]),
+        sendMessage: (message, options) => sent.push([message.content, options]),
+        exec: async () => ({ code: 1, stdout: "", stderr: "" }),
+      });
+      return { handlers, commands, sent };
+    };
+    const kills = [];
+    process.kill = (pid, signal) => kills.push([pid === process.pid, signal]);
+    const ctx = { hasUI: true, cwd: "/work" };
+    const call = { toolName: "bash", toolCallId: "c", input: { command: "ls" } };
+    const old = await load(1);
+    const settled = (aborted) => old.handlers.agent_settled?.({ aborted });
+    // Pi's reload, as the asked command runs it: the guard it loads, then session_start.
+    // N 0: the new guard does not load.
+    const reload = async (n) => {
+      let sent = [];
+      await old.commands[old.sent.at(-1)?.[0].slice(1)]?.handler("", {
+        reload: async () => {
+          if (!n) return;
+          const fresh = await load(n);
+          await fresh.handlers.session_start({ reason: "reload" }, ctx);
+          await fresh.handlers.session_start({ reason: "reload" }, ctx);
+          sent = fresh.sent;
+        },
+      });
+      return sent;
+    };
+    await old.handlers.message_end({ message: { role: "assistant", content: [{ type: "toolCall", id: "c" }] } });
+    const before = await old.handlers.tool_call(call, ctx);
+    settled(false);
+    const idle = old.sent.length;
+    appendFileSync(${JSON.stringify(copy)}, "\\n// a newer guard\\n");
+    const stale = await old.handlers.tool_call(call, ctx);
+    const headless = await old.handlers.tool_call(call, { ...ctx, hasUI: false });
+    settled(false);
+    const afterHeadless = old.sent.length;
+    await old.handlers.tool_call(call, ctx);
+    settled(false);
+    const ended = await reload(2);
+    // Escape: the reload still comes, and the agent waits for the person.
+    await old.handlers.tool_call(call, ctx);
+    settled(true);
+    const stopped = await reload(3);
+    const killed = kills.length;
+    // Pi loads no guard though this one loaded here: Pi ends.
+    await old.handlers.tool_call(call, ctx);
+    settled(false);
+    await reload(0);
+    // A replacement that does not load: no reload, and the old guard says why it refuses.
+    appendFileSync(${JSON.stringify(copy)}, "\\nthis is not a guard {\\n");
+    await old.handlers.tool_call(call, ctx);
+    settled(false);
+    let reloads = 0;
+    const notes = [];
+    await old.commands["bercail-guard-reload"]?.handler("", {
+      reload: async () => reloads++,
+      ui: { notify: (text) => notes.push(text) },
+    });
+    const refused = await old.handlers.tool_call(call, ctx);
+    settled(false);
+    const probes = readdirSync(${JSON.stringify(dir)}).filter((name) => name.startsWith(".guard-probe"));
+    // Gone: a reload would load no guard at all.
+    rmSync(${JSON.stringify(copy)});
+    const asked = old.sent.length;
+    const gone = await old.handlers.tool_call(call, ctx);
+    settled(false);
+    console.log(JSON.stringify({ before: before ?? null, idle, stale, headless, afterHeadless, sent: old.sent, ended, stopped,
+      killed, kills, reloads, notes, refused, probes, gone, later: old.sent.length - asked }));`;
+  try {
+    const child = spawnSync(process.execPath, ["--input-type=module", "-e", script], {
+      env,
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    assertEqual(child.status, 0, child.stderr);
+    const got = JSON.parse(child.stdout);
+    assertEqual(got.before, null, "an unchanged guard lets ls through");
+    assertEqual(got.idle, 0, "an unchanged guard asks no reload");
+    expect(got.stale).toMatchObject({
+      block: true,
+      reason: expect.stringMatching(/changed on disk.*once this turn ends/),
+    });
+    expect(got.headless).toMatchObject({ block: true, reason: expect.stringMatching(/headless run.*Stop and report/) });
+    assertEqual(got.afterHeadless, 0, "a headless refusal leaves the reload off");
+    const command = ["/bercail-guard-reload", { expandPromptTemplates: true }];
+    assertDeepEqual(got.sent, [command, command, command, command]);
+    assertEqual(got.ended.length, 1, "the reloaded guard speaks once, for its own reload");
+    assertMatch(got.ended[0][0], /reloaded from disk with the installed rules/);
+    assertDeepEqual(got.ended[0][1], { triggerTurn: true }, "a turn that ended on its own goes on");
+    assertDeepEqual(got.stopped[0][1], { triggerTurn: false }, "a turn the person stopped stays stopped");
+    assertEqual(got.killed, 0, "a reload whose guard loads keeps Pi running");
+    assertDeepEqual(got.kills, [[true, "SIGTERM"]], "a reload Pi loads no guard from ends Pi");
+    assertEqual(got.reloads, 0, "a replacement that does not load is not reloaded into");
+    assertMatch(got.notes[0], /the new one does not load/);
+    expect(got.refused).toMatchObject({ block: true, reason: expect.stringMatching(/the new one does not load/) });
+    assertDeepEqual(got.probes, [], "the load check leaves no copy behind");
+    expect(got.gone).toMatchObject({ block: true, reason: expect.stringMatching(/cannot read its own file/) });
+    assertEqual(got.later, 0, "no reload into a guard file that does not load or is gone");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 15000);
 
 test("genuine CLI help reaches the extension without write policy lookup, confirmation or approval logging", async () => {
   const dir = mkdtempSync(join(tmpdir(), "guard-help-"));
@@ -546,7 +661,7 @@ test("genuine CLI help reaches the extension without write policy lookup, confir
     stderr: "",
   }));
   const confirm = vi.fn(async () => false);
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   const ctx = { hasUI: true, cwd: "/work", ui: { confirm } };
   try {
     // Secret discovery is independent of git-write policy lookup and happens for every tool.
@@ -627,7 +742,7 @@ test("the extension shows a warning in the tool's result, and logs warnings and 
     stderr: "",
   }));
   const confirm = vi.fn(async () => false);
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   const headlessCtx = { hasUI: false, cwd: "/work", ui: { confirm } };
   const deskCtx = { ...headlessCtx, hasUI: true };
   const bash = (toolCallId: string, command: string, ctx: unknown) =>
@@ -790,7 +905,7 @@ test("the extension spends the person's answer on the push it would ask about, a
     return { code: 0, stdout: JSON.stringify(out), stderr: "" };
   });
   const confirm = vi.fn(async () => false);
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   const ctx = { hasUI: true, cwd: "/work", ui: { confirm } };
   // Pi ends the assistant message, then checks each of its tool calls.
   const bash = async (toolCallId: string, command: string, siblings: string[] = []) => {
@@ -1282,7 +1397,7 @@ test("the guard extension lets a judge write in TMPDIR and a new file in the wor
   const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
   const policyJson = { repo: root, root, policy: { push: "ask" } };
   const exec = async () => ({ code: 0, stdout: JSON.stringify(policyJson), stderr: "" });
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   // The judge works in a folder below the worktree: .bercail/ is the worktree's.
   const ctx = { hasUI: true, cwd: join(root, "lib"), ui: {} };
   const call = (toolName: string, path: string) => handlers.tool_call({ toolName, input: { path } }, ctx);
@@ -1359,7 +1474,7 @@ test("the guard extension warns on a /tmp write only while TMPDIR points elsewhe
   vi.stubEnv("BERCAIL_ROLE", "");
   const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
   const exec = async () => ({ code: 1, stdout: "", stderr: "" });
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   const ctx = { hasUI: true, cwd: "/work", ui: {} };
   const run = async (id: string, command: string) => {
     expect(await handlers.tool_call({ toolName: "bash", toolCallId: id, input: { command } }, ctx)).toBeUndefined();
@@ -2019,7 +2134,7 @@ test("reading the guard's files is not a write: the refusals from the v0.18 plan
   const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
   vi.stubEnv("HOME", "/h");
   for (const key of ["XDG_STATE_HOME", "XDG_CONFIG_HOME", "BERCAIL_CONFIG", "BERCAIL_ROLE"]) vi.stubEnv(key, undefined);
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {} } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {} } as never);
   for (const command of [
     // Refused while the plan was written, as run, with its long URL list cut to two.
     `mkdir -p /tmp/v1plan/web && cd /tmp/v1plan/web && for u in https://www.agentbehavior.dev/ https://docs.entire.com/learn/skills; do f=$(echo "$u" | sed 's#https://##; s#[/.]#_#g'); curl -sSL -m 30 -A 'bercail-plan-reader' "$u" -o "$f.html"; echo "$(wc -c <"$f.html") $f"; done`,
@@ -2723,7 +2838,7 @@ test("a review worktree's project files are never trusted; other folders are lef
   const handlers: Record<string, (event: { cwd: string }) => Promise<unknown>> = {};
   guard({
     on: (name: string, handler: (event: { cwd: string }) => Promise<unknown>) => (handlers[name] = handler),
-    registerTool() {},
+    registerCommand() {},
   } as never);
   assertDeepEqual(await handlers.project_trust({ cwd: "/home/u/Work/app.review-3" }), { trusted: "no" });
   assertDeepEqual(await handlers.project_trust({ cwd: "/home/u/Work/app" }), { trusted: "undecided" });
@@ -2839,7 +2954,7 @@ test("Shep's question ledger, the answer command and typing for the person are n
   const saved = process.env.XDG_STATE_HOME;
   process.env.XDG_STATE_HOME = "/s";
   try {
-    guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {} } as never);
+    guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {} } as never);
   } finally {
     if (saved === undefined) delete process.env.XDG_STATE_HOME;
     else process.env.XDG_STATE_HOME = saved;
@@ -2885,7 +3000,7 @@ test("Shep's question ledger, the answer command and typing for the person are n
 
 test("the guard adds no tool of its own: publishing goes through the policy and its ask", () => {
   const registerTool = vi.fn();
-  guard({ on() {}, registerTool } as never);
+  guard({ on() {}, registerTool, registerCommand() {} } as never);
   expect(registerTool).not.toHaveBeenCalled();
 });
 
@@ -2896,7 +3011,7 @@ test("Shep's ledger stays protected through a symlinked state folder, a dangling
   mkdirSync(state, { recursive: true });
   vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
   try {
-    guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {} } as never);
+    guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {} } as never);
     const call = (toolName: string, input: object) =>
       handlers.tool_call({ toolName, input }, { hasUI: false, cwd: join(dir, "work") });
     symlinkSync(state, join(dir, "alias"));
@@ -3113,7 +3228,7 @@ test("a write to the config.toml bercail config set edits is refused, wherever X
   vi.stubEnv("BERCAIL_ROLE", "");
   const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
   const exec = vi.fn(async () => ({ code: 1, stdout: "", stderr: "" }));
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   try {
     for (const path of [join(dir, ".config/bercail/config.toml"), join(dir, "xdg/bercail/config.toml")])
       expect(
@@ -3471,7 +3586,7 @@ test("the guard extension sets the shim at session start and keeps the secret fo
     ++calls === 1
       ? { code: 1, stdout: "", stderr: "" }
       : { code: 0, stdout: JSON.stringify(secretPolicy()), stderr: "" };
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   const ctx = { hasUI: false, cwd: "/work.feature", ui: { notify: () => {} } };
   try {
     delete process.env.BERCAIL_ROLE;
@@ -3513,7 +3628,7 @@ test("the guard extension keeps the first policy lookup that works, for a read-o
   let calls = 0;
   const exec = async () =>
     ++calls === 1 ? { code: 1, stdout: "", stderr: "" } : { code: 0, stdout: JSON.stringify(policy), stderr: "" };
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   // Started in a subfolder: only the lookup knows the checkout's root.
   const ctx = { hasUI: false, cwd: "/work.feature/sub", ui: { notify: () => {} } };
   const write = { toolName: "write", input: { path: "/work.feature/.bercail/judge-notes.md" } };

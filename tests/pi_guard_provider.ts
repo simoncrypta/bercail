@@ -2,12 +2,13 @@
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-// PI_GUARD_COMMANDS: a JSON list of bash commands, one tool call each. The last
-// message says whether the repo's git policy reached the system prompt.
-const commands: string[] = JSON.parse(process.env.PI_GUARD_COMMANDS || '["git push --force"]');
+// PI_GUARD_COMMANDS: a JSON list of bash commands, one tool call each; null ends the
+// turn there. The last message says whether the repo's git policy reached the system
+// prompt. Counted by the replies in the session, so a reload, which loads this again,
+// goes on where it was.
+const commands: (string | null)[] = JSON.parse(process.env.PI_GUARD_COMMANDS || '["git push --force"]');
 
 export default function (pi: ExtensionAPI) {
-  let calls = 0;
   pi.registerProvider("fake-guard", {
     api: "pi-guard-test",
     baseUrl: "http://invalid.invalid",
@@ -26,7 +27,7 @@ export default function (pi: ExtensionAPI) {
     streamSimple(model, context) {
       const stream = createAssistantMessageEventStream();
       queueMicrotask(() => {
-        calls++;
+        const calls = context.messages.filter((message) => message.role === "assistant").length + 1;
         const usage = {
           input: 0,
           output: 0,
@@ -43,7 +44,7 @@ export default function (pi: ExtensionAPI) {
           usage,
           timestamp: Date.now(),
         };
-        if (calls <= commands.length) {
+        if (calls <= commands.length && commands[calls - 1] !== null) {
           stream.push({
             type: "done",
             reason: "toolUse",

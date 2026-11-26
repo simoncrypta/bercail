@@ -112,6 +112,16 @@ unavailable() {
   skip "$1"
 }
 
+# Run a command as from the person's terminal, on a pty from util-linux script(1):
+# its stdout and stderr together, line ends as the command wrote them, and its status.
+on_tty() {
+  local rc=0 out
+  need script
+  out="$(SHELL=/bin/bash script -qec "$(printf '%q ' "$@")" /dev/null </dev/null)" || rc=$?
+  printf '%s\n' "${out//$'\r'/}"
+  return "$rc"
+}
+
 # The installed Pi for a live proof, or nothing. Never a mise shim: one
 # reinstalls Pi once HOME has moved. Only a test tagged live may run it, so the
 # unit run (tests/run.sh) never does.

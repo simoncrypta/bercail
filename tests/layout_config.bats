@@ -209,17 +209,17 @@ EOF
   cp "$real" "$BATS_TEST_TMPDIR/before"
   chmod 600 "$real"
   ln -s "$real" "$cfg"
-  out="$(bash "$ROOT/bin/bercail" config set layout review tuicr)"
+  out="$(on_tty bash "$ROOT/bin/bercail" config set layout review tuicr)"
   [[ "$out" == "--- $cfg -> $real"$'\n'* ]] || fail "the diff names the link and its file: $out"
   [[ "$out" == *$'\n-review = "hunk" # comment after\n+review = "tuicr" # comment after\n'* ]] || fail "the diff: $out"
-  bash "$ROOT/bin/bercail" config set bstack claude 'x"y#z' >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config set bstack claude 'x"y#z' >/dev/null
   assert_eq 'claude = "x\"y#z"   # keeps the variant' "$(grep '^claude' "$cfg")" "a quote and a # in the value, the comment after it kept"
-  bash "$ROOT/bin/bercail" config set shep compact_at 1 >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config set shep compact_at 1 >/dev/null
   assert_eq 'compact_at = 1#no space' "$(grep '^compact_at' "$cfg")" "a comment right after its value"
-  bash "$ROOT/bin/bercail" config set shep compact_at 250000 >/dev/null
-  bash "$ROOT/bin/bercail" config set shep rollover true >/dev/null
-  bash "$ROOT/bin/bercail" config set git '/Work/x y' entire >/dev/null
-  bash "$ROOT/bin/bercail" config set routine.deps at 08:00 >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config set shep compact_at 250000 >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config set shep rollover true >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config set git '/Work/x y' entire >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config set routine.deps at 08:00 >/dev/null
   assert_eq true "$(bash "$ROOT/bin/bercail" config get shep rollover)" "a bool, bare"
   assert_eq entire "$(bash "$ROOT/bin/bercail" config get git '/Work/x y')" "a quoted key"
   assert_eq $'[routine.deps]\nat = "08:00"' "$(tail -n 2 "$cfg")" "a new table at the end"
@@ -227,14 +227,32 @@ EOF
   out="$(bash "$ROOT/bin/bercail" config set --dry-run shep compact_at 1)"
   [[ "$out" == *$'\n-compact_at = 250000#no space\n+compact_at = 1#no space\n'* ]] || fail "dry run: $out"
   assert_eq 250000 "$(bash "$ROOT/bin/bercail" config get shep compact_at)" "the dry run wrote nothing"
-  bash "$ROOT/bin/bercail" config unset routine.deps at >/dev/null
-  bash "$ROOT/bin/bercail" config unset git '/Work/x y' >/dev/null
-  bash "$ROOT/bin/bercail" config unset shep rollover >/dev/null
-  bash "$ROOT/bin/bercail" config set bstack claude 'claude-bridge/claude-opus-5-5#high' >/dev/null
-  bash "$ROOT/bin/bercail" config set layout review hunk >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config unset routine.deps at >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config unset git '/Work/x y' >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config unset shep rollover >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config set bstack claude 'claude-bridge/claude-opus-5-5#high' >/dev/null
+  on_tty bash "$ROOT/bin/bercail" config set layout review hunk >/dev/null
   diff "$BATS_TEST_TMPDIR/before" "$cfg" || fail "the file is not as it was"
   [[ -L "$cfg" && "$(stat -c %a "$real")" == 600 ]] || fail "the link or its mode changed"
   assert_eq "unchanged: $cfg -> $real" "$(bash "$ROOT/bin/bercail" config unset shep rollover)" "an unset key"
+}
+
+@test "with no terminal and no card, config set and unset and routine enable and disable write nothing, as from an agent's shell" {
+  local out rc args cfg="$BERCAIL_USER_CONFIG"
+  mkdir -p "$BERCAIL_CONFIG_DIR"
+  printf '[shep]\nrollover = false\n\n[routine.deps]\nrun = "deps"\nat = "08:00"\n' >"$cfg"
+  cp "$cfg" "$BATS_TEST_TMPDIR/before"
+  for args in "config set shep rollover true" "config unset shep rollover" "routine enable mistakes" "routine disable deps"; do
+    rc=0
+    # shellcheck disable=SC2086 # the words of each command
+    out="$(bash "$ROOT/bin/bercail" $args </dev/null 2>&1)" || rc=$?
+    [[ "$rc" -eq 1 && "$out" == *"only from their terminal or on Shep's Decisions card"* ]] || fail "$args: rc=$rc out=$out"
+    diff "$BATS_TEST_TMPDIR/before" "$cfg" || fail "$args wrote"
+    # shellcheck disable=SC2086
+    bash "$ROOT/bin/bercail" $args --dry-run </dev/null >/dev/null || fail "$args --dry-run needs no terminal"
+  done
+  on_tty bash "$ROOT/bin/bercail" config set shep rollover true >/dev/null
+  assert_eq true "$(bash "$ROOT/bin/bercail" config get shep rollover)" "from a terminal it writes"
 }
 
 @test "bercail config set --expect writes only the edit its card showed, to the file it showed, and never over a change made since" {

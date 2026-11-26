@@ -146,7 +146,7 @@ scratch_repo() {
   policy trust "$REPO" >/dev/null
   [[ "$(field "$REPO" '.policy.rebase_keeps_pick')" == true ]] || fail "a trusted true did not count"
   policy untrust "$REPO" >/dev/null
-  "$ROOT/bin/bercail" config set "policy.\"$REPO\"" rebase_keeps_pick true >/dev/null || fail "config set does not know the key"
+  on_tty "$ROOT/bin/bercail" config set "policy.\"$REPO\"" rebase_keeps_pick true >/dev/null || fail "config set does not know the key"
   [[ "$(field "$REPO" '[.policy.rebase_keeps_pick, .sources.rebase_keeps_pick] | join(" ")')" == "true local" ]] \
     || fail "your own override needs no trust"
   rm "$CONFIG"

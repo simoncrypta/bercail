@@ -83,6 +83,8 @@ step() {
     failed=1
   fi
 }
+# on_tty CMD...: as from the person's terminal, which a write to config.toml takes.
+on_tty() { SHELL=/bin/bash script -qec "$(printf '%q ' "$@")" /dev/null | tr -d '\r'; }
 # check NAME COMMAND...: a claim about the state the run left.
 check() {
   local name="$1"
@@ -206,11 +208,11 @@ check "a dry run prints the changed finding" \
 step routine-list 0 "$bercail" routine list
 check "list shows its last outcome" grep -qE '^verify +every 1d +next .* skipped \(quiet\) +active$' "$evidence/routine-list.out"
 # A built-in turns on at its documented time, and off, as the diff each prints.
-step routine-enable 0 "$bercail" routine enable deps
+step routine-enable 0 on_tty "$bercail" routine enable deps
 check "enable prints the lines it adds" grep -qx '+at = "08:00"' "$evidence/routine-enable.out"
 step config-get 0 "$bercail" config get routine.deps at
 check "bercail reads the schedule it wrote" grep -qx '08:00' "$evidence/config-get.out"
-step routine-disable 0 "$bercail" routine disable deps
+step routine-disable 0 on_tty "$bercail" routine disable deps
 check "disable takes its entry out" absent "$XDG_CONFIG_HOME/bercail/config.toml" 'routine.deps'
 # The cleanup built-in, on a HOME with nothing to retire: quiet, and a dry run
 # keeps no state of its own. It reads the question ledger with Node, which

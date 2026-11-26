@@ -331,7 +331,7 @@ test("the extension publishes a desk's prompt and takes an answer: a No refuses 
     stderr: "",
   }));
   const { confirm } = dialog();
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   const ctx = { hasUI: true, cwd: "/work", ui: { confirm }, sessionManager: { getSessionId: () => "s1" } };
   const reply = async (body: (prompt: DeskPrompt) => object) => {
     await until(() => existsSync(join(deskPrompts(), "t1.json")));
@@ -376,7 +376,7 @@ test("no agent writes a desk's prompt or answer files, or the handoff records, b
   vi.stubEnv("BERCAIL_ROLE", "shep");
   const handlers: Record<string, (event: unknown, ctx: unknown) => Promise<unknown>> = {};
   const exec = vi.fn(async () => ({ code: 0, stdout: "{}", stderr: "" }));
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   const ctx = { hasUI: false, cwd: "/work", ui: {} };
   const state = join(process.env.XDG_STATE_HOME!, "bercail");
   for (const role of ["shep", ""]) {
@@ -431,7 +431,7 @@ test("the extension reads a desk's own branch from its handoff record, and not w
     };
   });
   const confirm = vi.fn(async () => false);
-  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerTool() {}, exec } as never);
+  guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   const ctx = { hasUI: true, cwd: "/work", ui: { confirm } };
   // Each push is the one tool call of its message, as Pi reports it first, unless told how many.
   const push = async (command: string, calls = 1) => {
