@@ -22,7 +22,7 @@
 //   launch view, Shep's block in `shep-stack`, where the keyboard is, key commands.
 // - "header": the bar above Shep's terminal.
 // - "empty": the placeholder in `shep-stack` while Shep isn't running.
-// - "decisions": the Decisions panel under Shep's terminal (`shep-decisions`, hidden
+// - "decisions": the Decisions panel left of Shep's terminal (`shep-decisions`, hidden
 //   until the header's Decisions toggle shows it): Shep's pending questions as cards,
 //   each with Shep's brief and a picker, Shep's recommendation chosen to start with.
 //   A two-way door counts down to its deadline; one that defaulted stays until the person
@@ -30,7 +30,7 @@
 //   Ask again on a stale card tells Shep to refresh it and revise it; it answers nothing.
 // - "discuss": the bar of a Discuss dialog: a read-only Pi on a branch of the session
 //   the question came from (`bercail shep discuss`). props.token is the question.
-// - "routines": the Routines panel under Shep's terminal (`shep-routines`, hidden until
+// - "routines": the Routines panel left of Shep's terminal (`shep-routines`, hidden until
 //   the header's Routines toggle shows it): each [routine.<name>] with its schedule and
 //   state, its last run and what it last found, and Ask Shep, which sends Shep the
 //   person's words about one. It reads `bercail routine list --json` and runs nothing else.
@@ -101,6 +101,8 @@ const PANEL_ID = "shep-decisions";
 const ROUTINES = `${BERCAIL_PATH}; exec bercail routine list --json`;
 const ASK = `${BERCAIL_PATH}; exec bercail routine ask "$1" <<<"$2"`;
 const ROUTINES_ID = "shep-routines";
+// The column left of Shep's terminal that holds both panels.
+const SIDE_ID = "shep-side";
 const DISCUSS_ROLE = "shep-discuss";
 const KEYS_HINT =
   "↑↓ card · ←→ or 1-9 choice · Enter answers · o OKs a default · r reverses it · x closes a card · a asks again on a stale one · d discusses";
@@ -217,9 +219,9 @@ function readBackend() {
 
 // Focus follows the mouse ([layout] focus_follows_mouse): Shep is a terminal block, which
 // has no pointer hook and no pane header, so the header watches every pointer move in the
-// window (followShep). The Decisions and Routines panels below Shep's block report where
-// they start (tops, by role), so the header knows where the block ends.
-const F = { follow: false, tops: {} };
+// window (followShep). The Decisions and Routines panels left of Shep's block report where
+// they end (edges: their right edge, by role), so the header knows where the block starts.
+const F = { follow: false, edges: {} };
 
 // config.toml's key lines as bercail's TOML reader (lib/toml.sh) sees them: [table, line],
 // the line without its comment. A value that opens a """ or ''' string runs to its closing
@@ -253,17 +255,17 @@ export function followsMouse(text) {
 }
 
 // Where pointer move `e`, seen by a header block's on_window_mouse_move, went: "enter"
-// when it moved into the column below that header (above `bottom`), the terminal block
+// when it moved into the column below that header (right of `left`), the terminal block
 // under it, "in" when it moved within it, else "". `last` holds the last position, so a
 // still pointer (a layout change under it) moves no keyboard. Only a move while Herdr is
 // the active window and no button is held counts.
-export function overBlock(e, last, bottom = Infinity) {
+export function overBlock(e, last, left = -Infinity) {
   const p = e.position,
     b = e.bounds,
     at = `${p.x},${p.y}`;
   if (last.at === at) return "";
   last.at = at;
-  const inside = p.x >= b.x && p.x < b.x + b.width && p.y >= b.y + b.height && p.y < bottom;
+  const inside = p.x >= Math.max(b.x, left) && p.x < b.x + b.width && p.y >= b.y + b.height;
   const was = last.inside;
   last.inside = inside;
   if (!inside || e.pressed_button || !window.is_window_active()) return "";
@@ -289,9 +291,31 @@ function counts(n, m) {
   return [n ? `${n} waiting on you` : "", m ? `${m} defaulted` : ""].filter(Boolean).join(" · ");
 }
 
-function decisionsShown(tree = layout()) {
-  const node = find(tree, PANEL_ID);
-  return viewOf(tree) === "shep" && Boolean(node) && !node.hidden;
+// A panel shows when it and the column that holds it do.
+function panelShown(id, tree = layout()) {
+  const node = find(tree, id);
+  return viewOf(tree) === "shep" && Boolean(node) && !node.hidden && !find(tree, SIDE_ID)?.hidden;
+}
+
+const decisionsShown = (tree) => panelShown(PANEL_ID, tree);
+
+// The header's click on a panel's toggle. The column shows with the first panel and hides
+// with the last: with neither panel shown, it would still take its width. A panel left
+// shown in the hidden column (one shown under Shep before an update) stays hidden.
+function togglePanel(id, open) {
+  const tree = layout();
+  const side = find(tree, SIDE_ID);
+  const other = id === PANEL_ID ? ROUTINES_ID : PANEL_ID;
+  if (open) {
+    run("layout.hide", { id });
+    if (side && !panelShown(other, tree)) run("layout.hide", { id: SIDE_ID });
+  } else {
+    run("layout.show", { id });
+    if (side?.hidden) {
+      if (!find(tree, other)?.hidden) run("layout.hide", { id: other });
+      run("layout.show", { id: SIDE_ID });
+    }
+  }
 }
 
 export function loadDecisions() {
@@ -582,10 +606,7 @@ async function openDiscuss(card) {
 const R = { view: null, error: null, loading: null, waiters: [] };
 const nextRoutines = () => new Promise((wake) => R.waiters.push(wake));
 
-function routinesShown(tree = layout()) {
-  const node = find(tree, ROUTINES_ID);
-  return viewOf(tree) === "shep" && Boolean(node) && !node.hidden;
-}
+const routinesShown = (tree) => panelShown(ROUTINES_ID, tree);
 
 // The routines are where bercail runs: on the backend when there is one.
 function loadRoutines() {
@@ -896,9 +917,9 @@ export default class BercailShep extends View {
       case "empty":
         return this.empty(t);
       case "decisions":
-        return this.decisions(t).on_window_mouse_move((e) => (F.tops.decisions = e.bounds.y));
+        return this.decisions(t).on_window_mouse_move((e) => (F.edges.decisions = e.bounds.x + e.bounds.width));
       case "routines":
-        return this.routines(t).on_window_mouse_move((e) => (F.tops.routines = e.bounds.y));
+        return this.routines(t).on_window_mouse_move((e) => (F.edges.routines = e.bounds.x + e.bounds.width));
       case "modal":
         return this.modal(t);
       case "discuss":
@@ -964,17 +985,17 @@ export default class BercailShep extends View {
       );
   }
 
-  // A pointer move into Shep's block (below this header, above a shown panel) gives Shep
+  // A pointer move into Shep's block (below this header, right of a shown panel) gives Shep
   // the keyboard, as a click on it does; so does a move within it while another pane has
   // it. Only while the stack shows Shep's terminal. Entering also takes the keyboard back
   // from the Decisions panel, which keeps Shep focused in Herdr's eyes. A panel shown
-  // before it said where it starts is not guessed at: nothing moves.
+  // before it said where it ends is not guessed at: nothing moves.
   followShep(e) {
     if (!F.follow) return;
     const tree = layout();
     const shown = [decisionsShown(tree) && "decisions", routinesShown(tree) && "routines"].filter(Boolean);
-    const bottom = Math.min(Infinity, ...shown.map((role) => F.tops[role] ?? -Infinity));
-    const at = overBlock(e, (this.lastMove ??= {}), bottom);
+    const left = Math.max(-Infinity, ...shown.map((role) => F.edges[role] ?? Infinity));
+    const at = overBlock(e, (this.lastMove ??= {}), left);
     if (!at) return;
     const shep = shepTerminal();
     if (!shep || find(tree, "shep-stack")?.active !== `shep-${shep.address}`) return;
@@ -1028,7 +1049,7 @@ export default class BercailShep extends View {
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .on_click(() => {
           if (!find(layout(), ROUTINES_ID)) return;
-          run(open ? "layout.hide" : "layout.show", { id: ROUTINES_ID });
+          togglePanel(ROUTINES_ID, open);
           if (!open) loadRoutines();
         })
         .child("Routines")
@@ -1044,8 +1065,6 @@ export default class BercailShep extends View {
       .id("routines-root")
       .size_full()
       .bg(t.background)
-      .border_t(1)
-      .border_color(t.border)
       .text_size(12.5)
       .text_color(t.muted)
       .child(
@@ -1246,7 +1265,7 @@ export default class BercailShep extends View {
         .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
         .on_click(() => {
           if (!find(layout(), PANEL_ID)) return;
-          run(open ? "layout.hide" : "layout.show", { id: PANEL_ID });
+          togglePanel(PANEL_ID, open);
           if (!open) loadDecisions();
         })
         .child(n || m ? `Decisions ${[n || "", m ? `${m} defaulted` : ""].filter(Boolean).join(" · ")}` : "Decisions")
@@ -1266,8 +1285,6 @@ export default class BercailShep extends View {
       .id("decisions-root")
       .size_full()
       .bg(t.background)
-      .border_t(1)
-      .border_color(t.border)
       .text_size(12.5)
       .text_color(t.muted)
       .track_focus(this.h)
@@ -1399,12 +1416,16 @@ export default class BercailShep extends View {
       .children(w.warnings.map((x) => div().text_color(t.unknown).child(x)))
       .child(
         h_flex()
+          .flex_wrap()
+          .justify_end()
           .gap(8)
           .items_center()
-          .child(div().flex_1().text_size(11).text_color(t.dim).child(w.asked))
+          .child(div().flex_none().text_size(11).text_color(t.dim).child(w.asked))
           .when(Boolean(w.timer), (el) =>
             el.child(div().flex_none().text_size(11).text_color(t.foreground).child(w.timer)),
           )
+          // The buttons sit right; in a narrow panel they wrap under the time.
+          .child(div().flex_1())
           .when(Boolean(c.target?.url), (el) =>
             el.child(button(`decision-trail-${c.token}`, "Open trail", true, (_e, cx) => cx.open_url(c.target.url))),
           )

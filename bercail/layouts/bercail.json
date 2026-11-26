@@ -29,51 +29,80 @@
               "window_drag": true
             },
             {
-              "id": "shep-stack",
-              "type": "stack",
+              "id": "shep-body",
+              "type": "row",
               "children": [
                 {
-                  "id": "shep-empty",
-                  "type": "block",
-                  "content": {
-                    "mod": "bercail-shep",
-                    "props": {
-                      "role": "empty"
+                  "id": "shep-side",
+                  "type": "column",
+                  "children": [
+                    {
+                      "id": "shep-decisions",
+                      "type": "block",
+                      "content": {
+                        "mod": "bercail-shep",
+                        "props": {
+                          "role": "decisions"
+                        }
+                      },
+                      "size": {
+                        "weight": 1
+                      },
+                      "min": 120,
+                      "hidden": true
+                    },
+                    {
+                      "id": "shep-routines",
+                      "type": "block",
+                      "content": {
+                        "mod": "bercail-shep",
+                        "props": {
+                          "role": "routines"
+                        }
+                      },
+                      "size": {
+                        "weight": 1
+                      },
+                      "min": 120,
+                      "hidden": true
                     }
+                  ],
+                  "size": {
+                    "weight": 2
+                  },
+                  "min": 280,
+                  "max": 520,
+                  "divider": {
+                    "width": 1,
+                    "color": "border"
+                  },
+                  "hidden": true
+                },
+                {
+                  "id": "shep-stack",
+                  "type": "stack",
+                  "children": [
+                    {
+                      "id": "shep-empty",
+                      "type": "block",
+                      "content": {
+                        "mod": "bercail-shep",
+                        "props": {
+                          "role": "empty"
+                        }
+                      }
+                    }
+                  ],
+                  "active": "shep-empty",
+                  "size": {
+                    "weight": 3
                   }
                 }
               ],
-              "active": "shep-empty"
-            },
-            {
-              "id": "shep-decisions",
-              "type": "block",
-              "content": {
-                "mod": "bercail-shep",
-                "props": {
-                  "role": "decisions"
-                }
-              },
-              "size": {
-                "px": 260
-              },
-              "min": 120,
-              "hidden": true
-            },
-            {
-              "id": "shep-routines",
-              "type": "block",
-              "content": {
-                "mod": "bercail-shep",
-                "props": {
-                  "role": "routines"
-                }
-              },
-              "size": {
-                "px": 220
-              },
-              "min": 120,
-              "hidden": true
+              "divider": {
+                "width": 1,
+                "color": "border"
+              }
             }
           ],
           "background": "background",

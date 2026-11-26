@@ -85,20 +85,26 @@ is which of `shep` and `work` is hidden.
   "Check again" button, and "Your spaces work without it".
   The header also has **Decisions** (with the count, "Decisions 2", in
   `foreground` when any wait; `selected` fill while the panel shows): a click
-  shows or hides `shep-decisions`, 260px (min 120) under the terminal, hidden
-  at first. It has a 1px `border` top, a 32px row ("Decisions", "N waiting on
-  you" with the keys hint, "checked HH:MM"), then a card per pending question
+  shows or hides `shep-decisions`, hidden at first, in `shep-side`: a column
+  left of the terminal, 2 shares of the width to the terminal's 3 (min 280,
+  max 520), with a 1px `border` divider beside it and between its panels.
+  The column shows with the first panel and hides with the last, so with
+  neither Shep's terminal takes the full width. Decisions has a 32px row
+  ("Decisions", "N waiting on you" with the keys hint, "checked HH:MM"),
+  then a card per pending question
   (`chrome` fill, 1px `border`, `solid` border on the card the keys are on,
   radius 8): the space's name with lines and "high-stakes", "open", "stale"
   (`blocked`) or "unknown" (`unknown`), the question, Shep's brief in `muted`,
   "Shep recommends X: why" in `dim`, the choices as numbered chips ("1 LGTM ★",
   the picked one filled `solid`; dimmed on a stale card), why a card is stale or
   unknown, "asked HH:MM", a **Discuss** (or **Continue discussion**) button and
-  an **Answer X** button (`raised`; "Pick a choice" until one is picked).
+  an **Answer X** button (`raised`; "Pick a choice" until one is picked), which
+  wrap under the time when the panel is narrow.
   Discuss opens a modal dialog (86%): a 34px bar ("Discuss", the question in
   `dim`, "read-only branch · /pick answers", ✕) over the branch's terminal.
   Before Decisions, **Routines** (`dim`; `selected` fill while shown) shows or
-  hides `shep-routines`, 220px (min 120) under it, hidden at first: a 32px
+  hides `shep-routines`, under Decisions in the same column (each min 120,
+  sharing its height evenly when both show), hidden at first: a 32px
   row ("Routines", the counts, "scheduler ticked HH:MM" or, in `blocked`,
   that it is not running), then a card per routine (`chrome` fill, 1px
   `border`, radius 8): the name semibold, the schedule in `dim`, the state
@@ -200,10 +206,12 @@ is which of `shep` and `work` is hidden.
 - `layouts/bercail.json`, cloned from Herdr's `main` (0.1.6). Node tree:
   `root` row → `shep` column (padding 8; `shep-card` column: `shep-header`
   block = `bercail-shep` with `props: {role: "header"}`, `window_drag`;
+  `shep-body` row: the hidden `shep-side` column of the hidden blocks
+  `shep-decisions` and `shep-routines`, `bercail-shep` with
+  `props: {role: "decisions"}` and `{role: "routines"}`, then the
   `shep-stack` stack of `shep-empty`, `bercail-shep` with
   `props: {role: "empty"}`, plus the `{terminal: …}` block `shep-<address>`
-  the mod adds; the hidden blocks `shep-decisions` and `shep-routines`,
-  `bercail-shep` with `props: {role: "decisions"}` and `{role: "routines"}`;
+  the mod adds;
   `shep-keys` block, 0px = `bercail-desk` with
   `props: {role: "keys"}`), `sidebar` column (`brand` workspace-chrome, `shep-nav`
   block = `bercail-shep` with `props: {role: "nav"}`, `sidebar-lists` column
@@ -396,8 +404,8 @@ is which of `shep` and `work` is hidden.
   desk and Shep blocks too: a terminal block has no pointer hook, so the
   `bercail-desk` header and the `bercail-shep` header take
   `on_window_mouse_move` and run `pane.focus {terminal}` when the pointer
-  moves into the column below them (Shep's ends where a shown Decisions or
-  Routines panel starts, which those panels report from their own moves).
+  moves into the column below them (Shep's starts right of a shown Decisions
+  or Routines panel, where those panels report they end from their own moves).
   A dialog keeps the keyboard while it is open.
 
 ## Done when

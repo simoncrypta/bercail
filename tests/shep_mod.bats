@@ -1032,7 +1032,7 @@ if (!find(globalThis.herdr.layout, "shep-decisions")?.hidden) fail("the panel mu
 EOF
 }
 
-@test "focus follows the mouse into Shep's block: on entering it, or on a move there while a pane has the keyboard, never below it" {
+@test "focus follows the mouse into Shep's block: on entering it, or on a move there while a pane has the keyboard, never over a panel left of it" {
   mod_case <<'EOF'
 let active = true;
 globalThis.window = { is_window_active: () => active };
@@ -1072,19 +1072,33 @@ active = false;
 eq(move(140, 340), "none", "another app active");
 active = true;
 
-// The Decisions panel below Shep's block: nothing until it says where it starts, then only above it.
+// A panel in the column left of Shep's block: nothing until it says where it ends, then only right of it.
+const panel = (role, bounds) => {
+  const p = copy(role);
+  els.length = 0;
+  p.render(cx);
+  els.find((e) => e.id === `${role}-root`).windowMove({ position: { x: 100, y: 600 }, bounds }, cx);
+};
+find(globalThis.herdr.layout, "shep-side").hidden = false;
 find(globalThis.herdr.layout, "shep-decisions").hidden = false;
-eq(move(100, 600), "none", "a shown panel that has not said where it starts");
-const d = copy("decisions");
-els.length = 0;
-d.render(cx);
-els.find((e) => e.id === "decisions-root").windowMove({ position: { x: 100, y: 600 }, bounds: { x: 8, y: 551, width: 1000, height: 260 } }, cx);
-eq(move(100, 700), "none", "over the panel");
-eq(move(100, 400), "t9", "above the panel");
+eq(move(600, 300), "none", "a shown panel that has not said where it ends");
+panel("decisions", { x: 9, y: 41, width: 400, height: 380 });
+eq(move(300, 300), "none", "over the panel");
+eq(move(600, 300), "t9", "right of the panel");
+find(globalThis.herdr.layout, "shep-routines").hidden = false;
+eq(move(300, 600), "none", "over a second panel that has not said where it ends");
+eq(move(600, 600), "none", "right of it");
+panel("routines", { x: 9, y: 422, width: 400, height: 389 });
+eq(move(300, 610), "none", "over the second panel");
+eq(move(600, 610), "t9", "right of both panels");
+// The panels' column hidden: they take no room, whatever their own blocks say.
+find(globalThis.herdr.layout, "shep-side").hidden = true;
+eq(move(100, 300), "t9", "where the panels were");
+find(globalThis.herdr.layout, "shep-side").hidden = false;
 
 find(globalThis.herdr.layout, "shep-stack").active = "shep-empty";
-eq(move(100, 650), "none", "out over the panel");
-eq(move(100, 300), "none", "the stack not showing Shep");
+eq(move(300, 650), "none", "out over the panel");
+eq(move(600, 300), "none", "the stack not showing Shep");
 EOF
 }
 
@@ -1128,7 +1142,45 @@ toggle().click();
 if (find(globalThis.herdr.layout, "shep-decisions").hidden) fail("a click must show the panel");
 toggle().click();
 if (!find(globalThis.herdr.layout, "shep-decisions").hidden) fail("a second click must hide it");
-eq(globalThis.herdr.calls.map(([n, a]) => `${n} ${a.id}`), ["layout.show shep-decisions", "layout.hide shep-decisions"], "toggle commands");
+eq(globalThis.herdr.calls.map(([n, a]) => `${n} ${a.id}`),
+  ["layout.show shep-decisions", "layout.show shep-side", "layout.hide shep-decisions", "layout.hide shep-side"], "toggle commands");
+EOF
+}
+
+@test "Decisions and Routines share a column left of Shep's terminal, shown with the first panel and hidden with the last" {
+  mod_case <<'EOF'
+const body = find(shipped, "shep-body");
+eq([body?.type, ...(body?.children ?? []).map((c) => c.id)], ["row", "shep-side", "shep-stack"], "Shep's body: the panels' column, then Shep");
+const side = find(shipped, "shep-side");
+eq([side.type, side.hidden, ...side.children.map((c) => `${c.id} ${c.hidden}`)],
+  ["column", true, "shep-decisions true", "shep-routines true"], "the panels' column");
+if (!(side.min >= 280) || "px" in side.size) fail(`the column takes a share of the width, with a min that keeps cards readable: ${JSON.stringify(side)}`);
+setup({ terminals: [shep], exec: panelExec(PANEL_VIEW) });
+const h = copy("header");
+await tick();
+const click = (id) => {
+  els.length = 0;
+  h.render(cx);
+  els.find((e) => e.id === `shep-${id}-toggle`).click();
+};
+const shown = () => ["shep-side", "shep-decisions", "shep-routines"].filter((id) => !find(globalThis.herdr.layout, id).hidden).join(" ");
+click("decisions");
+eq(shown(), "shep-side shep-decisions", "Decisions shown");
+click("routines");
+eq(shown(), "shep-side shep-decisions shep-routines", "both shown");
+click("decisions");
+eq(shown(), "shep-side shep-routines", "Routines left");
+click("routines");
+eq(shown(), "", "neither: Shep takes the full width");
+// A panel left shown in a hidden column (an install that showed it under Shep) counts as hidden:
+// one click on its toggle shows it, and a click on the other toggle shows only that one.
+find(globalThis.herdr.layout, "shep-routines").hidden = false;
+click("routines");
+eq(shown(), "shep-side shep-routines", "one click shows it");
+click("routines");
+find(globalThis.herdr.layout, "shep-routines").hidden = false;
+click("decisions");
+eq(shown(), "shep-side shep-decisions", "the other toggle shows only its panel");
 EOF
 }
 
@@ -1354,7 +1406,8 @@ if (find(globalThis.herdr.layout, "shep-routines").hidden) fail("a click must sh
 if (lists() !== before + 1) fail(`opening the panel must read the routines: ${before} then ${lists()}`);
 toggle().click();
 if (!find(globalThis.herdr.layout, "shep-routines").hidden) fail("a second click must hide it");
-eq(globalThis.herdr.calls.map(([n, a]) => `${n} ${a.id}`), ["layout.show shep-routines", "layout.hide shep-routines"], "toggle commands");
+eq(globalThis.herdr.calls.map(([n, a]) => `${n} ${a.id}`),
+  ["layout.show shep-routines", "layout.show shep-side", "layout.hide shep-routines", "layout.hide shep-side"], "toggle commands");
 EOF
 }
 

@@ -323,7 +323,7 @@ bercail config set layout focus_follows_mouse true
 The layout's mods read it when they load, so it takes effect when the app restarts. Two hooks do it:
 
 - **Panes** (Shell, Review): the pane header, `bercail-pane`, runs [jankeesvw/herdr-focus-to-hover](https://github.com/jankeesvw/herdr-focus-to-hover)'s `follow.js`, vendored at a commit (`bercail/mods/bercail-pane/UPSTREAM.md`), in bercail's copy of Herdr's own pane header.
-- **The desk and Shep** are terminal blocks, which have no header and no pointer hook of their own. The header above each (`bercail-desk`, `bercail-shep`) watches every pointer move in the window (Herdr's `on_window_mouse_move`) and gives the keyboard to its block when the pointer moves into the column below it. For Shep, the column ends where the Decisions or Routines panel starts. For the desk, it runs to the window's bottom edge, so the status bar under the desk counts as the desk.
+- **The desk and Shep** are terminal blocks, which have no header and no pointer hook of their own. The header above each (`bercail-desk`, `bercail-shep`) watches every pointer move in the window (Herdr's `on_window_mouse_move`) and gives the keyboard to its block when the pointer moves into the column below it. For Shep, the column starts right of a shown Decisions or Routines panel. For the desk, it runs to the window's bottom edge, so the status bar under the desk counts as the desk.
 
 What it does and does not do:
 

@@ -231,7 +231,7 @@ A source that fails fails the run, as in the cleanup routine: `hc`, the ledger, 
 
 ## The Routines panel
 
-**Routines** in Shep's header shows or hides the panel under Shep's terminal. It reads `bercail routine list --json` when it opens and every 30 seconds while shown, on the [`[herdr] backend`](config.md#bercail-on-another-machine) when one is set. The header says how many routines there are, how many are paused, running, invalid or unreadable, and when the scheduler last ticked, or that it is not running. A card per routine shows:
+**Routines** in Shep's header shows or hides the panel left of Shep's terminal, under the Decisions panel when both show. It reads `bercail routine list --json` when it opens and every 30 seconds while shown, on the [`[herdr] backend`](config.md#bercail-on-another-machine) when one is set. The header says how many routines there are, how many are paused, running, invalid or unreadable, and when the scheduler last ticked, or that it is not running. A card per routine shows:
 
 - Its name, schedule, and state: `active`, `running` (a run holds its lock), `paused`, `invalid` (with what is wrong), or `unreadable` (its `state.json`).
 - Its failures in a row, or `paused after 3 failures in a row`.
