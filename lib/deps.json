@@ -4,7 +4,7 @@
     "source": "npm:@earendil-works/pi-coding-agent",
     "min": "1.5.1",
     "why": "pi-claude-bridge 0.13.0 declares it in its peerDependencies.",
-    "known": "1.6.0",
+    "known": "1.6.1",
     "pinned_in": ["package.json"],
     "notes": "mise installs it as pi. @earendil-works/pi-ai, also a devDependency for the extensions' types, moves with it. docs/bstack.md, docs/bstack/01-setup.md, docs/development.md and lib/help.sh name the minimum."
   },
