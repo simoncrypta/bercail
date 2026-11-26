@@ -8,7 +8,8 @@ each under its own license, and borrows ideas from a few more projects.
 The copies of pi-emphasis, the statechart skill and focus-to-hover keep
 upstream's `LICENSE` beside them, with an `UPSTREAM.md` that records the commit
 they were taken at and how to compare them with upstream. The copies of Herdr's
-mods name the Herdr version they came from in `mod.json` (`cloned_from`). The
+mods keep Herdr's Apache license beside them as `LICENSE-APACHE` and name the
+Herdr version they came from in `mod.json` (`cloned_from`). The
 [dependency tracker](development.md#dependency-tracker) opens an issue when one
 of these upstreams moves.
 

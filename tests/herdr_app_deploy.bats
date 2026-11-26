@@ -78,9 +78,13 @@ app_edits_then_update() {
   cmp -s "$ROOT/bercail/layouts/bercail.json" "$APP/layouts/bercail.json" || fail "layout not installed"
   cmp -s "$ROOT/bercail/mods/bercail-desk/main.js" "$APP/mods/bercail-desk/main.js" || fail "mod not installed"
   cmp -s "$ROOT/bercail/mods/bercail-agents/main.js" "$APP/mods/bercail-agents/main.js" || fail "agents mod not installed"
+  cmp -s "$ROOT/bercail/herdr-keys/LICENSE" "$APP/mods/bercail-agents/LICENSE-APACHE" \
+    || fail "agents mod must install with Herdr's Apache license"
   cmp -s "$ROOT/bercail/mods/bercail-review/main.js" "$APP/mods/bercail-review/main.js" || fail "review mod not installed"
   cmp -s "$ROOT/bercail/mods/bercail-shep/main.js" "$APP/mods/bercail-shep/main.js" || fail "Shep mod not installed"
   cmp -s "$ROOT/bercail/mods/bercail-spaces/main.js" "$APP/mods/bercail-spaces/main.js" || fail "spaces mod not installed"
+  cmp -s "$ROOT/bercail/herdr-keys/LICENSE" "$APP/mods/bercail-spaces/LICENSE-APACHE" \
+    || fail "spaces mod must install with Herdr's Apache license"
   local f
   for f in main.js mod.json follow.js LICENSE LICENSE-APACHE; do
     cmp -s "$ROOT/bercail/mods/bercail-pane/$f" "$APP/mods/bercail-pane/$f" || fail "pane header mod's $f not installed"

@@ -392,8 +392,8 @@ HERDR_APP_LAYOUT="layouts/bercail.json"
 HERDR_APP_MODS=(bercail-desk bercail-shep bercail-spaces bercail-agents bercail-review bercail-pane)
 HERDR_APP_MOD_FILES=(mods/bercail-desk/main.js mods/bercail-desk/mod.json
   mods/bercail-shep/main.js mods/bercail-shep/mod.json
-  mods/bercail-spaces/main.js mods/bercail-spaces/mod.json
-  mods/bercail-agents/main.js mods/bercail-agents/mod.json
+  mods/bercail-spaces/main.js mods/bercail-spaces/mod.json mods/bercail-spaces/LICENSE-APACHE
+  mods/bercail-agents/main.js mods/bercail-agents/mod.json mods/bercail-agents/LICENSE-APACHE
   mods/bercail-review/main.js mods/bercail-review/mod.json
   mods/bercail-pane/main.js mods/bercail-pane/mod.json mods/bercail-pane/follow.js mods/bercail-pane/LICENSE mods/bercail-pane/LICENSE-APACHE)
 HERDR_APP_KEYS_SECTION="layout:bercail"
