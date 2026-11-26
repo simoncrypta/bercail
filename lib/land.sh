@@ -7,11 +7,15 @@
 # never pushes: Shep pushes the branch, and on a ready event lands it the way
 # the repo's policy says, with plain git, gh or entire under its guard.
 #
-#   bercail land <worktree> [--reviewed-by NAME]
-#   bercail land --wait SHA [--full BRANCH] <worktree>   what the background terminal runs
+#   bercail land <worktree> [--reviewed-by NAME] [--ci-branch NAME]
+#   bercail land --wait SHA [--full BRANCH | --branch BRANCH] [--ci-branch NAME] <worktree>
+#                                          what the background terminal runs
 #
 # bercail's own repo selects its tests on a branch push, so there land waits for
 # its full CI run on a land-only ref of the exact commit instead (_land_full).
+# --ci-branch names the branch of origin the commit is pushed to for CI, when it
+# is not the desk's (a restacked commit published under a new name): the wait
+# follows that commit there, and the desk's branch keeps its name.
 #
 # In a repo that commits straight to its trunk with a trusted push = "main" and
 # a required_ci gate (docs/plans/one-pick-landing.md), one land card does all of
@@ -25,7 +29,7 @@
 # shellcheck source=lib/describe.sh
 source "$(dirname "${BASH_SOURCE[0]}")/describe.sh"
 
-LAND_USAGE="usage: bercail land <worktree> [--reviewed-by NAME] | bercail land ask <worktree>"
+LAND_USAGE="usage: bercail land <worktree> [--reviewed-by NAME] [--ci-branch NAME] | bercail land ask <worktree>"
 
 _land_err() {
   printf 'bercail land: %s\n' "$*" >&2
@@ -57,12 +61,33 @@ _land_full() {
   [[ "$backend" == gh && "$(jq -r .policy.integrate <<<"$policy")" == direct ]] || return 1
 }
 
+# Whether NAME is a branch name as written: check-ref-format --branch also
+# expands @{-1}, which a push destination cannot.
+_land_branch_ok() {
+  local out
+  out="$(git check-ref-format --branch "$1" 2>/dev/null)" && [[ "$1" != -* && "$out" == "$1" ]]
+}
+
+# Why the wait cannot read CI on branch CI, or nothing: an Entire repo's trail
+# gates decide, a push to TRUNK would be the land itself, and a full wait
+# (FULL 1) reads only land-only refs.
+_land_ci_bad() {
+  local ci="$1" full="$2" trunk="$3" backend="$4"
+  if [[ "$backend" == entire ]]; then
+    printf -- "--ci-branch is for a CI wait, and an Entire repo's trail gates decide"
+  elif [[ "$ci" == "$trunk" ]]; then
+    printf -- '--ci-branch %s is the trunk: pushing the commit there lands it before its CI' "$ci"
+  elif ((full)) && [[ "$ci" != bercail-land/* ]]; then
+    printf -- '--ci-branch %s is not under bercail-land/, where the full CI runs' "$ci"
+  fi
+}
+
 # Commit the described tree, unless HEAD already is it (a land rerun after its
 # commit), then start the wait on that commit. Where the policy integrates
 # straight to the trunk, not once it moved past HEAD: the trunk takes no merge,
 # so that commit could not land as it is. A PR's merge is the forge's to check.
 land_run() {
-  local dir="$1" reviewer="$2" root branch trunk msg sha described name backend moved why full=0 rc=0
+  local dir="$1" reviewer="$2" ci="${3:-}" root branch trunk msg sha described name backend moved why full=0 rc=0 ref what
   local hc="${HC_BIN:-hc}"
   local -a wait=()
   root="$(_desc_root "$dir")" || return 1
@@ -82,7 +107,14 @@ land_run() {
   backend="$(git_backend "$root")" || return $?
   why="$(_land_full "$root" "$backend")" || rc=$?
   ((rc != 2)) || { _land_err "$why; nothing was committed"; return 1; }
+  # The desk's branch goes with the wait, so it never reads HEAD again.
+  wait=(--branch "$branch")
   ((rc != 0)) || { full=1 wait=(--full "$branch"); }
+  if [[ -n "$ci" ]]; then
+    why="$(_land_ci_bad "$ci" "$full" "$trunk" "$backend")"
+    [[ -z "$why" ]] || { _land_err "$why; nothing was committed"; return 1; }
+    wait+=(--ci-branch "$ci")
+  fi
   # A merge under way is committed even when its tree is HEAD's: its trunk parent is the point.
   if [[ -z "$(_desc_merge_heads "$root")" ]] && git -C "$root" diff --cached --quiet; then
     described="$(_desc_meta "$root/$DESC_FILE" tree)"
@@ -107,32 +139,37 @@ land_run() {
     --label bercail.land=wait --label "bercail.land_head=$sha" -- \
     env BERCAIL_ROLE=shep "XDG_STATE_HOME=${XDG_STATE_HOME:-$HOME/.local/state}" \
     "${BERCAIL_SELF:-bercail}" land --wait "$sha" "${wait[@]}" "$root" </dev/null >/dev/null \
-    || { _land_err "committed ${sha:0:12} on $branch, but hc could not start the CI wait (its error is above); rerun bercail land $root"; return 1; }
+    || { _land_err "committed ${sha:0:12} on $branch, but hc could not start the CI wait (its error is above); rerun the same bercail land command"; return 1; }
   printf 'committed %s on %s: %s\n' "${sha:0:12}" "$branch" "$(head -n 1 <<<"$msg")"
   printf 'waiting for CI on it in hc terminal %s; the result comes to Shep as a land event\n' "$name"
-  if ((full)); then
-    printf 'next: git -C %q push origin %s^{commit}:refs/heads/bercail-land/%q/%s, so the full CI runs on that exact commit\n' \
-      "$root" "$sha" "$branch" "$sha"
+  ref="$ci" what=its
+  ((!full)) || ref="${ci:-bercail-land/$branch/$sha}" what="the full"
+  if [[ -n "$ref" ]]; then
+    printf 'next: git -C %q push origin %s^{commit}:refs/heads/%q, so %s CI runs on that exact commit\n' \
+      "$root" "$sha" "$ref" "$what"
   else
     printf 'next: git -C %q push origin %q, so its CI runs\n' "$root" "$branch"
   fi
 }
 
-# The push runs of BRANCH at SHA as {status, runs, note}: ready once they all
-# finished and at least one passed (skipped and neutral alone are not a pass),
-# failed once any finished otherwise or none passed, else pending. With the
-# GitHub repo REPO (host/owner/name), read there, and ready only once the
-# latest run of the workflow file ci.yml on exactly SHA and BRANCH passed too.
+# The push runs of BRANCH at SHA as {status, runs, note}, the latest run of each
+# workflow only, so a run that a newer run of the same commit cancelled does not
+# count: ready once they all finished and at least one passed (skipped and
+# neutral alone are not a pass), failed once any finished otherwise or none
+# passed, else pending. With the GitHub repo REPO (host/owner/name), read there,
+# and ready only once the latest run of the workflow file ci.yml on exactly SHA
+# and BRANCH passed too.
 _land_ci() {
   local root="$1" sha="$2" branch="$3" repo="${4:-}" raw ci
   local -a pin=()
   [[ -z "$repo" ]] || pin=(--repo "$repo")
   raw="$(cd "$root" && gh run list "${pin[@]}" --commit "$sha" --branch "$branch" --event push \
-    --json name,status,conclusion,url --limit 50 2>&1)" \
+    --json databaseId,attempt,workflowDatabaseId,name,status,conclusion,url --limit 50 2>&1)" \
     || { jq -nc --arg e "${raw//$'\n'/ }" '{status: "pending", runs: [], note: "gh run list failed: \($e)"}'; return 0; }
   ci="$(jq -ec '
     def ok: . == "success" or . == "skipped" or . == "neutral";
-    select(type == "array") | map({name, conclusion, url}) as $runs
+    select(type == "array") | group_by(.workflowDatabaseId) | map(max_by([.databaseId, .attempt]))
+    | map({name, conclusion, url}) as $runs
     | if length == 0 then {status: "pending", runs: [], note: "no CI run for it yet: is the branch pushed to origin?"}
       elif any(.[]; .status == "completed" and (.conclusion | ok | not)) then {status: "failed", runs: $runs}
       elif all(.[]; .status == "completed") and any(.[]; .conclusion == "success") then {status: "ready", runs: $runs}
@@ -193,8 +230,11 @@ _land_enqueue() {
 # one event. A ready commit the branch has moved past is moved, never ready.
 # With --full BRANCH, where _land_full says so and only there: ci.yml's run on
 # SHA's land ref, bercail-land/BRANCH/SHA, read from bercail's GitHub repo.
+# Otherwise the push runs on --branch BRANCH, the desk's branch land committed
+# on (HEAD, for a wait started by hand). With --ci-branch NAME, SHA's CI on
+# origin's NAME instead; BRANCH stays the desk's, for the event and the moved check.
 land_wait() {
-  local sha="$1" dir="$2" full="${3:-}" root branch ci start now event backend why rc=0 ref repo=""
+  local sha="$1" dir="$2" full="${3:-}" named="${4:-}" desk="${5:-}" root branch ci start now event backend why rc=0 ref repo=""
   local poll="${BERCAIL_LAND_POLL:-30}" limit="${BERCAIL_LAND_TIMEOUT:-7200}"
   root="$(_desc_root "$dir")" || return 1
   backend="$(git_backend "$root")" || return $?
@@ -206,9 +246,14 @@ land_wait() {
     branch="$full" ref="bercail-land/$full/$sha" repo="${BERCAIL_UPSTREAM#https://}"
   else
     [[ -z "$full" ]] || { _land_err "--full is for bercail's own repo landing straight to its trunk on gh, and $root is not that"; return 1; }
-    branch="$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null)" \
+    branch="${desk:-$(git -C "$root" symbolic-ref --quiet --short HEAD 2>/dev/null)}" \
       || { _land_err "$root is on no branch: the wait reads the CI of the branch land committed on"; return 1; }
     ref="$branch"
+  fi
+  if [[ -n "$named" ]]; then
+    why="$(_land_ci_bad "$named" "$((rc == 0))" "$(git_backend_trunk "$root")" "$backend")"
+    [[ -z "$why" ]] || { _land_err "$why; no wait started"; return 1; }
+    ref="$named"
   fi
   start="$(date +%s)"
   while :; do
@@ -594,7 +639,7 @@ land_chain() {
 }
 
 cmd_land() {
-  local dir="" reviewer="" sha="" full=""
+  local dir="" reviewer="" sha="" full="" ci="" desk=""
   [[ "${BERCAIL_ROLE:-}" == shep ]] || {
     _land_err "landing is Shep's (BERCAIL_ROLE=shep): a desk stages its change and finishes with /validate, and Shep lands it"
     return 1
@@ -621,8 +666,17 @@ cmd_land() {
         shift ;;
       --full)
         full="${2:-}"
-        [[ "$full" != -* ]] && git check-ref-format --branch "$full" >/dev/null 2>&1 \
+        _land_branch_ok "$full" \
           || { _land_err "--full takes the branch land committed on"; return 1; }
+        shift ;;
+      --branch)
+        desk="${2:-}"
+        _land_branch_ok "$desk" || { _land_err "--branch takes the branch land committed on"; return 1; }
+        shift ;;
+      --ci-branch)
+        ci="${2:-}"
+        _land_branch_ok "$ci" \
+          || { _land_err "--ci-branch takes the name of the branch of origin the commit is pushed to for CI"; return 1; }
         shift ;;
       -*) _land_err "unknown option: $1; $LAND_USAGE"; return 1 ;;
       *) [[ -z "$dir" ]] || { _land_err "$LAND_USAGE"; return 1; }; dir="$1" ;;
@@ -630,10 +684,11 @@ cmd_land() {
     shift
   done
   [[ -n "$dir" ]] || { _land_err "$LAND_USAGE"; return 1; }
-  [[ -z "$full" || -n "$sha" ]] || { _land_err "--full goes with --wait SHA"; return 1; }
+  [[ -z "$full$desk" || -n "$sha" ]] || { _land_err "--full and --branch go with --wait SHA"; return 1; }
+  [[ -z "$full" || -z "$desk" ]] || { _land_err "--full names the branch already; drop --branch"; return 1; }
   if [[ -n "$sha" ]]; then
-    land_wait "$sha" "$dir" "$full"
+    land_wait "$sha" "$dir" "$full" "$ci" "$desk"
   else
-    land_run "$dir" "$reviewer"
+    land_run "$dir" "$reviewer" "$ci"
   fi
 }
