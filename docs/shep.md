@@ -306,11 +306,11 @@ Each question Shep asks is also a card. **Decisions N** in Shep's header counts 
 
 #### Answering
 
-The picker on a fresh card starts on Shep's recommendation (★). Click in the panel to give it the keyboard; showing the panel from the header does not. While the panel has the keyboard, its top edge is the accent color, the selected card has a solid border, and the hint under the header lists only the keys that card takes now. Then:
+The picker on a fresh card starts on Shep's recommendation (★), unless its pick is hard to undo (below). Click in the panel to give it the keyboard; showing the panel from the header does not. While the panel has the keyboard, its top edge is the accent color, the chosen card has a solid border, and the hint under the header lists only the keys that card takes now. Then:
 
 | Key | Does |
 |-----|------|
-| ↑ ↓ (or k j) | move between cards |
+| ↑ ↓ (or k j) | choose the next or previous card and scroll it into view; with none chosen, ↓ chooses the first and ↑ the last |
 | ← → or 1-9 | pick another choice |
 | Enter | answer with the picked choice |
 | o | OK a defaulted card: keep its default as your pick |
@@ -321,6 +321,8 @@ The picker on a fresh card starts on Shep's recommendation (★). Click in the p
 | Esc | give the keyboard back to Shep's terminal |
 
 A click picks a choice and **Answer** records it; on a defaulted card, **OK** or **Reverse** records yours. A card with no recommendation waits for a pick; stale and unknown cards have none; a question with no choices is discussed in chat, which records no answer.
+
+The keys act only on the card you chose, with ↑ ↓ or a click anywhere on it, and no card is chosen until you choose one. A reload never moves the keys to another card: when the chosen card leaves, none is chosen. Enter, o, r, x and a record only on a card that shows, by where the panel laid out its cards, where the list is scrolled, and whether the window cuts the panel off. When it does not show (after the wheel or the scrollbar, or a reload that moved it), the first press scrolls it into view and records nothing; press again to record. A card taller than the panel counts as shown once its title and prompt do, even with its choices below; Enter then records the picked choice. These keys act when you release them, after one short press (under 300 ms) with no modifier, on the card and choice you pressed them for. A key held long enough to repeat does nothing, and a held arrow or number moves once. When the panel gets the keyboard back (a click into it, or the window coming back to the front), the first key you press and release does nothing, Esc aside: it may be the repeat of a key held down elsewhere, which Herdr does not mark on every system. A card whose pick is hard to undo starts on no choice, with ★ still on Shep's recommendation: a push the answer approves, a guard card, a land card, and a review that is not known to be low stakes. Pick its choice (a click, a number or an arrow), then Enter.
 
 The picker records an answer once per revision, only while the live check is fresh, with its source (`panel picker` or `discuss picker`), time, head and tree. A second pick is refused. Shep gets one [decision event](#desk-events) per pick.
 

@@ -38,7 +38,7 @@
 // - "modal": the bar of an agent's terminal opened over either view (bercail-agents
 //   opens it); props.terminal is the agent, props.back where the keyboard was.
 import { View, div, image, svg } from "gpui-kit";
-import { Input, InputState, h_flex, v_flex } from "gpui-base";
+import { Input, InputState, ScrollHandle, h_flex, v_flex } from "gpui-base";
 import {
   agents,
   closeOverlay,
@@ -104,6 +104,11 @@ const ROUTINES_ID = "shep-routines";
 // The column left of Shep's terminal that holds both panels.
 const SIDE_ID = "shep-side";
 const DISCUSS_ROLE = "shep-discuss";
+// The Decisions cards' gap and padding, in px: where a card and its prompt start follow from them.
+const CARD_GAP = 8;
+const CARD_PAD = 10;
+const REPEAT_MS = 50; // a key pressed again this soon after its release is a repeat, not a person
+const HOLD_MS = 300; // a key down this long is held: autorepeat starts later, a press ends sooner
 
 export function find(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -544,8 +549,15 @@ function cardKeys(card, at, busy) {
   ];
 }
 
+// A card whose pick is hard to undo: a choice that approves a push, a guard card's Allow,
+// a land card's Ship it, a review not known to be low stakes.
+const weighty = (card) =>
+  Boolean(card.push || card.guard) || card.kind === "land" || (card.kind === "review" && card.change?.stakes !== "low");
+
 // The choice a card starts on: Shep's recommendation, else none (Enter waits for a pick).
+// A weighty card starts on none, its ★ still shown: the person picks it.
 export function startChoice(card) {
+  if (weighty(card)) return null;
   const i = card.options?.indexOf(card.recommendation?.choice) ?? -1;
   return i >= 0 ? i : null;
 }
@@ -809,14 +821,33 @@ export default class BercailShep extends View {
     }
     if (this.role === "decisions") {
       this.h = cx.focus_handle();
-      this.sel = 0; // the card the keys act on
+      // The keys act on the card the person chose, by token: a reload never moves it to
+      // another, and when the card leaves nothing is chosen.
+      this.sel = null;
+      this.reveal = false; // the chosen card is to be scrolled into view on the next render
+      this.scroll = ScrollHandle.new();
+      this.heights = {}; // token -> its card's height, as Herdr last laid it out
+      this.heads = {}; // token -> the height of its card's title and prompt
+      this.at = { x: 0, y: 0 }; // where the panel starts in the window, from the pointer's last move or press
+      this.size = null; // the panel's size, as Herdr last laid it out
+      // key -> { down, up, pressed }: whether it is down, when it was last released, and for a
+      // key that records, what its press was for (key, release)
+      this.presses = {};
+      // Whether the panel has seen a key pressed and released since it last got the keyboard.
+      this.settled = false;
       this.picked = {}; // token -> the choice's index, once the person moved it
       this.busy = new Set(); // tokens whose answer is on its way
       this.keys = false; // whether the last render had the keyboard
+      this.pointer = false; // whether the left button went down in the panel and is still down
+      this.pressed = null; // the card that press went down on
+      this.frame = null; // what the panel last drew from (drawn), kept while the button is down
       // Herdr redraws a mod on its data, not when the keyboard leaves it (a click in
-      // Shep, a key that switches views): look, so the cue never says keys work here.
-      cx.timer.every(250, (cx) => {
-        if (this.h.is_focused() !== this.keys) cx.notify();
+      // Shep, a key that switches views), and reports no window activation: look, so the
+      // cue never says keys work here, and the keys start over (unsettle).
+      cx.timer.every(50, (cx) => {
+        const focused = this.h.is_focused();
+        if (this.settled && (!focused || !window.is_window_active())) this.unsettle();
+        if (focused !== this.keys && !this.pointer) cx.notify();
       });
     }
     if (this.role !== "nav") return;
@@ -941,7 +972,10 @@ export default class BercailShep extends View {
       case "empty":
         return this.empty(t);
       case "decisions":
-        return this.decisions(t).on_window_mouse_move((e) => (F.edges.decisions = e.bounds.x + e.bounds.width));
+        return this.decisions(t).on_window_mouse_move((e) => {
+          F.edges.decisions = e.bounds.x + e.bounds.width;
+          this.at = e.bounds;
+        });
       case "routines":
         return this.routines(t).on_window_mouse_move((e) => (F.edges.routines = e.bounds.x + e.bounds.width));
       case "modal":
@@ -1300,17 +1334,28 @@ export default class BercailShep extends View {
   // from the header leaves the keyboard where it was. Keys never come from a command
   // (nextCommand): only this panel.
   decisions(t) {
-    const cards = D.view?.cards ?? [];
-    this.sel = Math.max(0, Math.min(cards.length - 1, this.sel));
-    const checked = D.view?.at ? `checked ${clock(D.view.at)}` : D.loading ? "checking…" : "";
-    const open = counts(waiting().length, defaults().length);
-    const keys = (this.keys = this.h.is_focused());
-    const c = cards[this.sel];
-    const [mine, any] = c ? cardKeys(c, this.choiceOf(c), this.busy.has(c.token)) : [[], []];
-    const hints = keys
-      ? [mine, [...any, cards.length > 1 && "↑↓ card", Boolean(shepTerminal()) && "Esc Shep"]]
-      : [[cards.length > 0 && "Click a card to use keys"]];
-    const list = v_flex().id("decision-list").flex_1().min_h(0).px(10).pb(10).gap(8).overflow_y_scrollbar();
+    // While the left button is down nothing here moves: a reload's cards and lines, and the
+    // cue and its hints, wait for the release, so the chip or button pressed stays under the
+    // pointer.
+    if (!this.pointer || !this.frame) this.frame = this.drawn();
+    const { view, error, note, done, open, keys, hints } = this.frame;
+    const cards = view?.cards ?? [];
+    const at = cards.findIndex((c) => c.token === this.sel);
+    if (at < 0) this.sel = null;
+    // Herdr scrolls the least that shows the card, and a card taller than the list to its top.
+    if (this.reveal && at >= 0) this.scroll.scroll_to_item(at);
+    this.reveal = false;
+    const checked = view?.at ? `checked ${clock(view.at)}` : D.loading ? "checking…" : "";
+    this.keys = keys;
+    const list = v_flex()
+      .id("decision-list")
+      .flex_1()
+      .min_h(0)
+      .px(10)
+      .pb(10)
+      .gap(CARD_GAP)
+      .overflow_y_scrollbar()
+      .track_scroll(this.scroll);
     const say = (text, color = t.dim) => div().px(12).py(6).text_color(color).child(text);
     return v_flex()
       .id("decisions-root")
@@ -1322,8 +1367,21 @@ export default class BercailShep extends View {
       .border_color(keys ? t.accent : t.background)
       .track_focus(this.h)
       .on_key_down((e, cx) => this.key(e, cx))
-      .on_mouse_down("left", (_e, cx) => {
+      .on_key_up((e, cx) => this.release(e, cx))
+      .on_size_change((size) => (this.size = size))
+      .on_mouse_down("left", (e) => {
+        // Nothing moves while the button is down: the cue and a reveal wait for the release,
+        // so the chip or button pressed is still under the pointer when its click lands.
+        this.at = e.bounds ?? this.at;
+        if (!this.h.is_focused()) this.unsettle();
         this.h.focus();
+        this.pointer = true;
+      })
+      .on_window_mouse_up("left", (_e, cx) => {
+        if (!this.pointer) return;
+        this.pointer = false;
+        if (this.pressed !== null) this.choose(this.pressed);
+        this.pressed = null;
         cx.notify();
       })
       .child(
@@ -1349,11 +1407,52 @@ export default class BercailShep extends View {
           .filter(Boolean)
           .map((x) => div().px(12).pb(4).text_color(t.dim).child(x)),
       )
-      .when(Boolean(D.error), (el) => el.child(say(`Can't read Shep's questions: ${D.error}`, t.blocked)))
-      .when(Boolean(D.note), (el) => el.child(say(D.note, t.blocked)))
-      .when(Boolean(D.done), (el) => el.child(say(D.done)))
-      .when(!cards.length && !D.error, (el) => el.child(say(D.view ? "Nothing waits on you." : "Loading…")))
-      .child(list.children(cards.map((c, i) => this.card(t, c, keys && i === this.sel, i))));
+      .when(Boolean(error), (el) => el.child(say(`Can't read Shep's questions: ${error}`, t.blocked)))
+      .when(Boolean(note), (el) => el.child(say(note, t.blocked)))
+      .when(Boolean(done), (el) => el.child(say(done)))
+      .when(!cards.length && !error, (el) => el.child(say(view ? "Nothing waits on you." : "Loading…")))
+      .child(list.children(cards.map((c) => this.card(t, c, keys && c.token === this.sel))));
+  }
+
+  // What the Decisions panel draws from: the ledger as loaded, and the cue with the keys the
+  // chosen card takes when the panel has the keyboard.
+  drawn() {
+    const view = D.view;
+    const cards = view?.cards ?? [];
+    const keys = this.h.is_focused();
+    const c = cards.find((x) => x.token === this.sel);
+    const [mine, any] = c ? cardKeys(c, this.choiceOf(c), this.busy.has(c.token)) : [[], []];
+    const hints = keys
+      ? [mine, [...any, cards.length > (c ? 1 : 0) && "↑↓ card", Boolean(shepTerminal()) && "Esc Shep"]]
+      : [[cards.length > 0 && "Click a card to use keys"]];
+    const open = counts(waiting().length, defaults().length);
+    return { view, error: D.error, note: D.note, done: D.done, open, keys, hints };
+  }
+
+  // The person chose a card (a key, a click on it): the keys act on it, once it shows.
+  choose(token) {
+    this.sel = token;
+    this.reveal = true;
+  }
+
+  // Whether a key may record on the card at `at`: only while it shows, by the cards'
+  // heights and where the list is scrolled. A card taller than the list shows once its top,
+  // title and prompt do. Else it is revealed, and the next press records. In a window too
+  // small for the panel, which Herdr then cuts off on either side, nothing shows.
+  inView(cards, at) {
+    let top = 0;
+    for (const c of cards.slice(0, at)) top += (this.heights[c.token] ?? Infinity) + CARD_GAP;
+    const { token } = cards[at];
+    const h = this.heights[token];
+    const y = this.scroll.offset().y;
+    const view = this.scroll.viewport_size().height;
+    const end = y + view + 1;
+    const win = window.viewport_size();
+    const cut =
+      !this.size || this.at.x + this.size.width > win.width + 1 || this.at.y + this.size.height > win.height + 1;
+    const shows = !cut && top >= y - 1 && (top + h <= end || (h > view && top + CARD_PAD + this.heads[token] <= end));
+    if (!shows) this.choose(token);
+    return shows;
   }
 
   choiceOf(c) {
@@ -1366,35 +1465,80 @@ export default class BercailShep extends View {
     return c.defaulted && at !== null && c.options[at] !== c.defaulted.choice ? c.options[at] : null;
   }
 
-  key(e, cx) {
+  // What key `k` does on the panel now: `run`, and whether it records (it then acts on its
+  // release; see release). With no card chosen, ↓ chooses the first and ↑ the last.
+  action(k, cx) {
     const cards = D.view?.cards ?? [];
-    const c = cards[this.sel];
-    const k = e.keystroke;
+    const at = cards.findIndex((x) => x.token === this.sel);
+    const c = cards[at];
     const n = c?.options?.length ?? 0;
-    const choose = (i) => {
-      if (c && pickable(c)) this.picked[c.token] = i;
-    };
-    if (k === "down" || k === "j") this.sel = Math.min(cards.length - 1, this.sel + 1);
-    else if (k === "up" || k === "k") this.sel = Math.max(0, this.sel - 1);
-    else if (k === "right" && n) choose(((this.choiceOf(c) ?? -1) + 1) % n);
-    else if (k === "left" && n) choose(((this.choiceOf(c) ?? 0) - 1 + n) % n);
-    else if (/^[1-9]$/.test(k) && Number(k) <= n) choose(Number(k) - 1);
-    else if (k === "enter" && c) this.accept(c, cx);
-    else if (k === "o" && c) this.confirm(c, cx);
-    else if (k === "r" && c) this.reverse(c, cx);
-    else if (k === "x" && c) this.closeCard(c, cx);
-    else if (k === "a" && c) this.reask(c, cx);
-    else if (k === "d" && c) this.discuss(c, cx);
-    else if (k === "escape") {
+    const does = (run, records = false) => ({ run, records });
+    const pick = (i) => does(() => pickable(c) && (this.picked[c.token] = i));
+    const move = (to) => does(() => this.choose(cards[to].token));
+    const record = (f) => does(() => this.inView(cards, at) && f.call(this, c, cx), true);
+    if ((k === "down" || k === "j") && cards.length) return move(at < 0 ? 0 : Math.min(cards.length - 1, at + 1));
+    if ((k === "up" || k === "k") && cards.length) return move(at < 0 ? cards.length - 1 : Math.max(0, at - 1));
+    if (k === "escape") {
       const shep = shepTerminal();
-      if (!shep) return;
-      run("pane.focus", { terminal: shep.address });
-    } else return;
+      return shep ? does(() => run("pane.focus", { terminal: shep.address })) : null;
+    }
+    if (!c) return null;
+    if (k === "right" && n) return pick(((this.choiceOf(c) ?? -1) + 1) % n);
+    if (k === "left" && n) return pick(((this.choiceOf(c) ?? 0) - 1 + n) % n);
+    if (/^[1-9]$/.test(k) && Number(k) <= n) return pick(Number(k) - 1);
+    if (k === "d") return does(() => this.discuss(c, cx));
+    const f = { enter: this.accept, o: this.confirm, r: this.reverse, x: this.closeCard, a: this.reask }[k];
+    return f ? record(f) : null;
+  }
+
+  // The card and choice a key that records would act on now.
+  aim() {
+    const c = (D.view?.cards ?? []).find((x) => x.token === this.sel);
+    return c ? `${c.token} ${this.choiceOf(c)}` : null;
+  }
+
+  // A key held down repeats onto whatever it reaches next, so a repeat does nothing: one
+  // Herdr marks held, a press with no release since the last, or one right after a release
+  // (X11's autorepeat can send a release and a press together; a person takes longer).
+  // Until the panel is settled no key but Esc acts: a press may be the repeat of a key held
+  // down elsewhere, which Herdr does not mark under X11.
+  key(e, cx) {
+    const was = this.presses[e.key] ?? { down: false, up: 0 };
+    const repeat = e.is_held || was.down || Date.now() - was.up < REPEAT_MS;
+    const a = this.action(e.keystroke, cx);
+    const acts = a && !repeat && (this.settled || e.keystroke === "escape");
+    // A key that records waits for its release: what it was pressed for, to check then.
+    const pressed = acts && a.records ? { stroke: e.keystroke, aim: this.aim(), at: Date.now() } : null;
+    this.presses[e.key] = { down: true, up: was.up, pressed };
+    if (!a) return;
     cx.stop_propagation();
+    if (!acts || a.records) return;
+    a.run();
     cx.notify();
   }
 
-  card(t, c, on, i) {
+  // A key that records acts on its release: after one short press of it, with no modifier
+  // (Shift+Enter is not Enter), for the card and choice it was pressed for. A key held long
+  // enough to repeat does nothing.
+  release(e, cx) {
+    const was = this.presses[e.key];
+    this.presses[e.key] = { down: false, up: Date.now() };
+    if (was?.down) this.settled = true;
+    const p = was?.pressed;
+    if (!p || p.aim !== this.aim() || Date.now() - p.at >= HOLD_MS) return;
+    cx.stop_propagation();
+    this.action(p.stroke, cx).run();
+    cx.notify();
+  }
+
+  // The keys start over when the panel or the window loses the keyboard (init's timer looks):
+  // a key pressed elsewhere may still be down when it comes back.
+  unsettle() {
+    this.presses = {};
+    this.settled = false;
+  }
+
+  card(t, c, on) {
     const w = cardWords(c);
     const color = c.status === "fresh" ? t.dim : c.status === "stale" ? t.blocked : t.unknown;
     const can = pickable(c) && !this.busy.has(c.token);
@@ -1428,29 +1572,41 @@ export default class BercailShep extends View {
         .when(j !== at || !pickable(c), (el) => el.text_color(pickable(c) ? t.foreground : t.dim))
         .when(can, (el) =>
           el.cursor_pointer().on_click((_e, cx) => {
-            this.sel = i;
+            this.choose(c.token);
             this.picked[c.token] = j;
             this.h.focus();
             cx.notify();
           }),
         )
         .child(`${j + 1} ${o}${o === rec?.choice ? " ★" : ""}`);
+    // A press anywhere on the card chooses it, as a click on a choice or a button does: on the
+    // press, so the card under the pointer then is the one chosen; it is revealed on release.
     return v_flex()
       .id(`decision-${c.token}`)
+      .on_size_change((size) => (this.heights[c.token] = size.height))
       .flex_none()
-      .p(10)
+      .p(CARD_PAD)
       .gap(6)
       .rounded(8)
       .border(1)
       .border_color(on ? t.solid : t.border)
       .bg(t.chrome)
+      .on_mouse_down("left", () => {
+        this.sel = this.pressed = c.token;
+      })
       .child(
-        h_flex()
-          .gap(8)
-          .child(div().flex_1().truncate().font_semibold().text_color(t.foreground).child(w.title))
-          .child(div().flex_none().text_size(11).text_color(color).child(w.word)),
+        v_flex()
+          .id(`decision-head-${c.token}`)
+          .on_size_change((size) => (this.heads[c.token] = size.height))
+          .gap(6)
+          .child(
+            h_flex()
+              .gap(8)
+              .child(div().flex_1().truncate().font_semibold().text_color(t.foreground).child(w.title))
+              .child(div().flex_none().text_size(11).text_color(color).child(w.word)),
+          )
+          .child(div().text_color(t.foreground).child(c.prompt)),
       )
-      .child(div().text_color(t.foreground).child(c.prompt))
       .when(Boolean(c.brief), (el) => el.child(div().text_color(t.muted).child(c.brief)))
       .when(Boolean(rec), (el) => el.child(div().text_color(t.dim).child(`Shep recommends ${rec.choice}: ${rec.why}`)))
       .when(Boolean(w.push), (el) => el.child(div().text_color(t.foreground).child(w.push)))

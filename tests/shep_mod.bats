@@ -58,6 +58,9 @@ const el = () => {
       if (k === "child" && typeof a[0] === "string") (t.text ??= []).push(a[0]);
       if (k === "on_mouse_down" || k === "on_mouse_up") t[`${k}:${a[0]}`] = a[1];
       if (k === "on_window_mouse_move") t.windowMove = a[0];
+      if (k === "on_key_up") t.keyUp = a[0];
+      if (k === "on_window_mouse_up") t.windowUp = a[1];
+      if (k === "on_size_change") t.resized = a[0];
       if (k === "when" && a[0]) a[1](p);
       return p;
     },
@@ -65,7 +68,22 @@ const el = () => {
   return p;
 };
 export class View {}
-export const ScrollHandle = { new: () => ({ scroll_to_item() {} }) };
+// The Decisions list as Herdr lays it out (globalThis.herdr.list): where it is scrolled (y),
+// its height (view), and its cards' heights in order (laid). scroll_to_item scrolls the
+// least that shows the card, and a card taller than the list to its top, as Herdr does;
+// the items it was asked for go to globalThis.herdr.scrolls.
+const L = () => (globalThis.herdr.list ??= { y: 0, view: 1000, heights: {}, laid: [] });
+export const ScrollHandle = { new: () => ({
+  offset: () => ({ x: 0, y: L().y }),
+  viewport_size: () => ({ width: 300, height: L().view }),
+  scroll_to_item: (i) => {
+    (globalThis.herdr.scrolls ??= []).push(i);
+    const { laid, view } = L();
+    const top = laid.slice(0, i).reduce((sum, x) => sum + x + 8, 0);
+    if (top < L().y || laid[i] > view) L().y = top;
+    else if (top + laid[i] > L().y + view) L().y = top + laid[i] - view;
+  },
+}) };
 // A text field's state: its value, its handlers by event, and whether it was focused.
 export const InputState = { new: (o = {}) => {
   const s = { text: o.value ?? "", placeholder: o.placeholder, handlers: {}, focused: false, released: false };
@@ -130,11 +148,11 @@ const card = (token, extra = {}) => ({
   brief: "The guard now blocks empty secrets.", recommendation: { choice: "LGTM", why: "tests pass" }, discussed: false,
   createdAt: "2026-11-14T20:58:00.000Z", status: "fresh", reasons: [],
   target: { repo: "/w/bercail/.git", topic: `topic-${token}`, worktree: "/w/bercail.guard", space: "sp1" },
-  change: { lines: 347, stakes: "high" }, ...extra,
+  change: { lines: 347, stakes: "low" }, ...extra,
 });
 const PANEL_VIEW = { state: "/state/shep", at: "2026-11-14T21:00:00.000Z", cards: [
   card("Q1@1"),
-  card("Q2@3", { status: "stale", reasons: ["stagedTree changed", "base changed"],
+  card("Q2@3", { status: "stale", reasons: ["stagedTree changed", "base changed"], change: { lines: 347, stakes: "high" },
     warnings: ["desk t9 is gone or not live at its recorded address"] }),
   card("Q3@1", { kind: "planning", prompt: "Which job first?", options: [], change: null,
     target: { repo: "/w/app/.git", topic: "plan", worktree: "/w/app", space: null },
@@ -173,14 +191,66 @@ const routinesExec = (view, ask = { code: 0, stdout: "cleanup: your request is i
   : cmd === "bash" && /routine ask/.test(args[1]) ? ask
   : okExec();
 const asks = () => globalThis.herdr.execs.filter((e) => /routine ask/.test(e[2] ?? ""));
-// The panel's keyboard: a key pressed while it holds focus.
+const L = () => (globalThis.herdr.list ??= { y: 0, view: 1000, heights: {}, laid: [] });
+// The window: tall enough for the panel unless a test says otherwise.
+let windowWidth = 1280;
+let windowHeight = 10000;
+let windowActive = true;
+globalThis.window = { is_window_active: () => windowActive, viewport_size: () => ({ width: windowWidth, height: windowHeight }) };
+// A frame: the panel renders, then Herdr lays out its cards (100 px each unless the test
+// gives a card's height in globalThis.herdr.list.heights, each title and prompt 40 px) and
+// tells each its size.
+const draw = (d) => {
+  els.length = 0;
+  d.render(cx);
+  const cards = els.filter((e) => /^decision-Q\d+@\d+$/.test(e.id ?? ""));
+  L().laid = cards.map((e) => L().heights[e.id.slice(9)] ?? 100);
+  cards.forEach((e, i) => e.resized?.({ width: 300, height: L().laid[i] }, cx));
+  for (const e of els.filter((x) => /^decision-head-/.test(x.id ?? ""))) e.resized?.({ width: 280, height: 40 }, cx);
+  els.find((e) => e.id === "decisions-root")?.resized?.({ width: 300, height: L().view + 40 }, cx);
+};
+// Time stands still but for 50 ms per key event, as it passes for a person.
+const start = Date.now();
+let later = 0;
+Date.now = () => start + later;
+const root = () => els.find((e) => e.id === "decisions-root");
+const down = (d, k, held = false) => {
+  later += 50;
+  draw(d);
+  root().key({ key: k, keystroke: k, is_held: held }, cx);
+};
+const up = (d, k) => {
+  later += 50;
+  root().keyUp?.({ key: k, keystroke: k }, cx);
+};
+// The person's first key in the panel, which only settles it (a press may be a repeat of a
+// key held elsewhere until the panel has seen one pressed and released).
+const settle = (d) => press(d, "shift");
+// A click in the panel, anywhere: it takes the keyboard. clickOn: a click on one element (its
+// press reaches the panel after it, its click comes on the release). leave(): the keyboard
+// goes elsewhere.
+const clickIn = () => {
+  root()["on_mouse_down:left"]?.({}, cx);
+  root().windowUp?.({}, cx);
+};
+const clickOn = (id) => {
+  const e = els.find((x) => x.id === id);
+  e["on_mouse_down:left"]?.({}, cx);
+  root()["on_mouse_down:left"]?.({}, cx);
+  e.click?.(null, cx);
+  root().windowUp?.({}, cx);
+};
+const leave = () => (globalThis.herdr.panelFocused = false);
+// The panel's keyboard: keys pressed and released while it holds focus, and the frame after.
 const press = (d, ...keys) => {
   for (const k of keys) {
-    els.length = 0;
-    d.render(cx);
-    els.find((e) => e.id === "decisions-root").key({ keystroke: k }, cx);
+    down(d, k);
+    up(d, k);
   }
+  draw(d);
 };
+// What clicks on the cards: their choices and buttons, not a card itself (a click on it chooses it).
+const clicks = () => els.filter((e) => e.click && !/^decision-Q\d+@\d+$/.test(e.id)).map((e) => e.id);
 const answers = () => globalThis.herdr.execs.filter((e) => /question answer/.test(e[2] ?? "")).map((e) => JSON.parse(e[4]));
 const texts = () => els.flatMap((e) => e.text ?? []);
 const copy = (role) => {
@@ -607,6 +677,7 @@ EOF
 setup({ exec: panelExec(PANEL_VIEW), spaces: [{ id: "sp1", name: "Guard-empty-secret_Bercail", tabs: [] }] });
 const d = copy("decisions");
 await tick();
+settle(d);
 els.length = 0;
 d.render(cx);
 const all = texts();
@@ -623,11 +694,10 @@ if (!all.some((x) => /^asked (2026-11-14 )?\d\d:\d\d$/.test(x)) || !all.some((x)
 // Tokens are the ledger's keys, never something to read.
 if (all.some((x) => /Q\d+@\d+/.test(x))) fail(`a token is shown: ${all.filter((x) => /Q\d+@/.test(x))}`);
 // Only the fresh card's choices and answer click; a stale card discusses, asks again or closes, an unknown one discusses or closes.
-const buttons = els.filter((e) => e.click).map((e) => e.id);
-eq(buttons, ["decision-choice-Q1@1-0", "decision-choice-Q1@1-1", "decision-discuss-Q1@1", "decision-close-Q1@1", "decision-accept-Q1@1",
+eq(clicks(), ["decision-choice-Q1@1-0", "decision-choice-Q1@1-1", "decision-discuss-Q1@1", "decision-close-Q1@1", "decision-accept-Q1@1",
   "decision-discuss-Q2@3", "decision-reask-Q2@3", "decision-close-Q2@3", "decision-discuss-Q3@1", "decision-close-Q3@1"], "card buttons");
 // A space Herdr no longer shows is said so.
-eq(cardWords(card("Q4@1"), []).title, "bercail.guard (its space is closed), 347 lines, high-stakes", "closed space");
+eq(cardWords(card("Q4@1", { change: { lines: 347, stakes: "high" } }), []).title, "bercail.guard (its space is closed), 347 lines, high-stakes", "closed space");
 // A desk problem is a warning on a card that can still be answered.
 const warned = card("Q5@1", { warnings: ["no desk: bound to the repo and issue only"] });
 eq([cardWords(warned).word, cardWords(warned).warnings, answerable(warned)],
@@ -642,6 +712,7 @@ const view = { ...PANEL_VIEW, cards: [card("Q1@1", { target: { ...card("Q1@1").t
 setup({ terminals: [shep], exec: panelExec(view) });
 const d = copy("decisions");
 await tick();
+settle(d);
 els.length = 0;
 d.render(cx);
 eq(els.filter((e) => e.id?.startsWith("decision-trail-")).map((e) => e.id), ["decision-trail-Q1@1"], "trail links");
@@ -660,6 +731,7 @@ const view = { ...PANEL_VIEW, cards: [land("Q1@1", { step: null, detail: null, a
 setup({ terminals: [shep], exec: panelExec(view) });
 const d = copy("decisions");
 await tick();
+settle(d);
 els.length = 0;
 d.render(cx);
 const all = texts();
@@ -668,7 +740,7 @@ for (const want of ["You shipped it. Picked; waiting for its worker to start.",
   if (!all.includes(want)) fail(`missing "${want}" in ${JSON.stringify(all)}`);
 eq(cardWords(view.cards[1]).word, "landing", "its state");
 eq(answerable(view.cards[1]), false, "no pick on a landing card");
-eq(els.filter((e) => e.click).map((e) => e.id).filter((id) => /Q[12]@1/.test(id) && !id.includes("discuss")), [],
+eq(clicks().filter((id) => /Q[12]@1/.test(id) && !id.includes("discuss")), [],
   "no choice or answer button on a landing card");
 if (!all.some((x) => x.startsWith("1 waiting on you"))) fail(`a landing card counts as waiting: ${JSON.stringify(all)}`);
 EOF
@@ -681,6 +753,7 @@ const view = { ...PANEL_VIEW, cards: [card("Q1@1", { push }), card("Q2@1")] };
 setup({ terminals: [shep], exec: panelExec(view) });
 const d = copy("decisions");
 await tick();
+settle(d);
 els.length = 0;
 d.render(cx);
 const line = 'Picking "Push it" lets Shep push the answered commit to origin (git@example.invalid:team/app.git): refs/heads/master, once.';
@@ -694,6 +767,7 @@ EOF
 setup({ terminals: [shep], exec: panelExec(PANEL_VIEW) });
 const d = copy("decisions");
 await tick();
+settle(d);
 // A click on a choice selects it and puts the keyboard in the panel; it records nothing.
 els.length = 0;
 d.render(cx);
@@ -724,7 +798,8 @@ if (!run?.includes("bercail.question=Q3@1")) fail(`d did not discuss the selecte
 setup({ terminals: [shep], exec: panelExec(PANEL_VIEW, { accepted: false, reason: "question is answered" }) });
 const d2 = copy("decisions");
 await tick();
-press(d2, "enter");
+settle(d2);
+press(d2, "down", "enter");
 for (let i = 0; i < 5; i++) await tick();
 els.length = 0;
 d2.render(cx);
@@ -734,7 +809,7 @@ EOF
 
 @test "the Decisions panel shows when it has the keyboard and lists only the keys the selected card takes; Esc gives the keyboard to Shep" {
   mod_case <<'EOF'
-Date.now = () => Date.parse("2026-11-14T21:00:00.000Z"); // the default's deadline has passed
+Date.now = () => Date.parse("2026-11-14T21:00:00.000Z") + later; // the default's deadline has passed
 const past = "2026-11-14T20:30:00.000Z";
 const view = { ...PANEL_VIEW, cards: [
   card("Q1@1"),
@@ -768,9 +843,16 @@ const counting = { ...cx, notify: () => redraws++ };
 const look = () => globalThis.herdr.timers.forEach((f) => f(counting));
 look();
 eq(redraws, 0, "a redraw with nothing changed");
-els.find((e) => e.id === "decisions-root")["on_mouse_down:left"](null, counting);
-eq([globalThis.herdr.panelFocused, redraws], [true, 1], "a click in the panel");
-// With it: an accent top edge, the selected card solid, and its keys, then any card's.
+els.find((e) => e.id === "decisions-root")["on_mouse_down:left"]({}, counting);
+eq([globalThis.herdr.panelFocused, redraws], [true, 0], "a press in the panel: nothing moves yet");
+look();
+eq(redraws, 0, "no redraw while the button is down");
+els.find((e) => e.id === "decisions-root").windowUp({}, counting);
+eq(redraws, 1, "the release");
+// With it: an accent top edge, the chosen card solid (the first key only settles the
+// panel; ↓ chooses Q1), and its keys, then any card's.
+settle(d);
+press(d, "down");
 s = shown();
 eq([s.root, s.q1, s.q2], ["accent", "solid", "border"], "borders with the keyboard");
 if (!s.texts.includes("keys") || s.texts.includes("Click a card to use keys")) fail(`focused header: ${JSON.stringify(s.texts)}`);
@@ -827,7 +909,8 @@ const view = { ...PANEL_VIEW, cards: [card("Q1@1", { recommendation: null })] };
 setup({ terminals: [shep], exec: panelExec(view) });
 const d = copy("decisions");
 await tick();
-press(d, "enter");
+settle(d);
+press(d, "down", "enter");
 await tick();
 eq(answers(), [], "Enter with nothing picked");
 els.length = 0;
@@ -837,6 +920,296 @@ if (!texts().includes("Pick a choice") || els.some((e) => e.id === "decision-acc
 press(d, "2", "enter");
 await tick();
 eq(answers().map((a) => a.choice), ["Not yet"], "the picked choice");
+EOF
+}
+
+@test "no card is chosen until the person chooses one, and when the chosen card leaves none is" {
+  mod_case <<'EOF'
+const guard = card("Q2@1", { kind: "guard", options: ["Allow", "Deny"], recommendation: null, change: null,
+  guard: { expires: "2099-01-01T00:00:00.000Z", defaults: false } });
+const view = { ...PANEL_VIEW, cards: [card("Q1@1"), guard] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+settle(d);
+press(d, "enter", "x");
+await tick();
+eq(answers(), [], "keys with no card chosen");
+// Q1 is chosen, then leaves on a reload: the keys do not move on to the guard card.
+press(d, "down");
+globalThis.herdr.exec = panelExec({ ...view, cards: [guard] });
+await loadDecisions();
+press(d, "1", "enter", "x");
+await tick();
+eq(answers(), [], "keys after the chosen card left");
+EOF
+}
+
+@test "a card above the chosen one leaving keeps the keys on it; moved out of view, Enter reveals it first" {
+  mod_case <<'EOF'
+const plan = (token, choice) => card(token, { kind: "planning", prompt: `Plan ${token}?`, options: [choice, "Not yet"],
+  recommendation: { choice, why: "it unblocks the rest" }, change: null });
+const view = { ...PANEL_VIEW, cards: [plan("Q1@1", "auth"), plan("Q2@1", "search"), plan("Q3@1", "deploy")] };
+setup({ terminals: [shep], exec: panelExec(view), list: { y: 0, view: 300, heights: { "Q1@1": 200, "Q2@1": 200, "Q3@1": 200 }, laid: [] } });
+const d = copy("decisions");
+await tick();
+settle(d);
+press(d, "down", "down");
+// Q1 leaves on a reload. Q2 moves up, above where the list is scrolled.
+globalThis.herdr.exec = panelExec({ ...view, cards: view.cards.slice(1) });
+await loadDecisions();
+globalThis.herdr.scrolls = [];
+press(d, "enter");
+await tick();
+eq([answers(), globalThis.herdr.scrolls], [[], [0]], "the first Enter after Q1 left");
+press(d, "enter");
+await tick();
+eq(answers().map((a) => [a.token, a.choice]), [["Q2@1", "search"]], "the second Enter");
+EOF
+}
+
+@test "a move reveals the card it reaches; a recording key on a card out of view reveals it and records nothing" {
+  mod_case <<'EOF'
+const view = { ...PANEL_VIEW, cards: [card("Q1@1"), card("Q2@1"), card("Q3@1")] };
+setup({ terminals: [shep], exec: panelExec(view), list: { y: 0, view: 300, heights: { "Q1@1": 200, "Q2@1": 200, "Q3@1": 200 }, laid: [] } });
+const d = copy("decisions");
+await tick();
+settle(d);
+// ↓ chooses the first card, then the next, and asks Herdr to show each one.
+press(d, "down", "down", "enter");
+await tick();
+eq([globalThis.herdr.scrolls, globalThis.herdr.list.y, answers().map((a) => a.token)], [[0, 1], 108, ["Q2@1"]], "↓ ↓ Enter");
+// The wheel or the scrollbar moves the list off Q2: Enter, x, o, r and a only reveal it.
+for (const k of ["enter", "x", "o", "r", "a"]) {
+  globalThis.herdr.execs = [];
+  globalThis.herdr.scrolls = [];
+  globalThis.herdr.list.y = 0;
+  press(d, k);
+  await tick();
+  eq([answers(), globalThis.herdr.scrolls, globalThis.herdr.list.y], [[], [1], 108], `${k} with Q2 out of view`);
+}
+press(d, "enter");
+await tick();
+eq(answers().map((a) => a.token), ["Q2@1"], "Enter once Q2 shows");
+EOF
+}
+
+@test "a card taller than the list shows once its title and prompt do; a window that cuts the panel off shows none" {
+  mod_case <<'EOF'
+const view = { ...PANEL_VIEW, cards: [card("Q1@1"), card("Q2@1"), card("Q3@1")] };
+setup({ terminals: [shep], exec: panelExec(view), list: { y: 0, view: 300, heights: { "Q1@1": 200, "Q2@1": 500, "Q3@1": 200 }, laid: [] } });
+const d = copy("decisions");
+await tick();
+settle(d);
+// ↓ to the tall Q2 brings its top to the top: its title and prompt show, so Enter records.
+press(d, "down", "down", "enter");
+await tick();
+eq([globalThis.herdr.list.y, answers().map((a) => a.token)], [208, ["Q2@1"]], "the tall Q2 from its top");
+globalThis.herdr.execs = [];
+globalThis.herdr.list.y = 400;
+press(d, "enter");
+await tick();
+eq([answers(), globalThis.herdr.list.y], [[], 208], "Enter with the tall Q2's top scrolled away");
+// A list too short for the tall Q2's title and prompt (40 px under its 10 px padding):
+// Enter records nothing however often it is pressed, until the list grows.
+globalThis.herdr.list.view = 45;
+press(d, "enter", "enter");
+await tick();
+eq(answers(), [], "Enter with the list 45 px tall");
+globalThis.herdr.list.view = 300;
+// A window shorter or narrower than the panel cuts it off, whatever the list says.
+windowHeight = 200;
+press(d, "enter");
+await tick();
+windowHeight = 10000;
+windowWidth = 100;
+press(d, "enter");
+await tick();
+eq(answers(), [], "Enter in a window that cuts the panel off");
+windowWidth = 1280;
+press(d, "enter");
+await tick();
+eq(answers().map((a) => a.token), ["Q2@1"], "Enter once the list is 300 px again");
+EOF
+}
+
+@test "a press anywhere on a card chooses it and gives the panel the keyboard; nothing moves before the release" {
+  mod_case <<'EOF'
+const view = { ...PANEL_VIEW, cards: [card("Q1@1", { recommendation: { choice: "Not yet", why: "CI is red" } }), card("Q2@1")] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+settle(d);
+press(d, "down", "down");
+// A press on Q1's text, not a chip or a button, chooses Q1 then. The first key after it
+// only settles the panel.
+clickOn("decision-Q1@1");
+if (!globalThis.herdr.panelFocused) fail("a press on a card must give the panel the keyboard");
+settle(d);
+press(d, "enter");
+await tick();
+eq(answers().map((a) => [a.token, a.choice]), [["Q1@1", "Not yet"]], "Enter after the press");
+// From Shep's terminal, a click on Q2's chip 2: while the button is down, no redraw (the
+// cue) and no scroll move the chip. The first key after it only settles the panel.
+leave();
+draw(d);
+globalThis.herdr.execs = [];
+globalThis.herdr.scrolls = [];
+let redraws = 0;
+const counting = { ...cx, notify: () => redraws++ };
+const chip = els.find((e) => e.id === "decision-choice-Q2@1-1");
+const before = texts();
+els.find((e) => e.id === "decision-Q2@1")["on_mouse_down:left"]({}, counting);
+root()["on_mouse_down:left"]({}, counting);
+for (const f of globalThis.herdr.timers) f(counting);
+// A reload lands while the button is down, with a new card above: the panel draws as before.
+globalThis.herdr.exec = panelExec({ ...view, cards: [card("Q0@1"), ...view.cards] });
+await loadDecisions();
+draw(d);
+eq([redraws, globalThis.herdr.scrolls, texts()], [0, [], before], "while the button is down");
+chip.click(null, counting);
+root().windowUp({}, counting);
+draw(d);
+eq(globalThis.herdr.scrolls, [2], "Q2 revealed after the release, under the new card");
+if (!texts().includes("keys")) fail(`no cue after the release: ${JSON.stringify(texts())}`);
+settle(d);
+press(d, "enter");
+await tick();
+eq(answers().map((a) => [a.token, a.choice]), [["Q2@1", "Not yet"]], "Enter after the chip");
+EOF
+}
+
+@test "a held key does nothing: marked held, pressed again with no release, or right after its release" {
+  mod_case <<'EOF'
+const view = { ...PANEL_VIEW, cards: ["Q1@1", "Q2@1", "Q3@1", "Q4@1", "Q5@1"].map((t) => card(t)) };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+settle(d);
+const ticks = async () => { for (let i = 0; i < 5; i++) await tick(); };
+// One press held: Herdr marks a repeat held; under X11 a repeat is another press with no
+// release, or a release and a press at once.
+const held = async (k) => {
+  down(d, k);
+  await ticks();
+  down(d, k, true);
+  await ticks();
+  down(d, k);
+  await ticks();
+  root().keyUp?.({ key: k, keystroke: k }, cx);
+  root().key({ key: k, keystroke: k, is_held: false }, cx);
+  await ticks();
+  up(d, k);
+  draw(d);
+};
+press(d, "down");
+// A repeat of a key held since before the panel had the keyboard.
+down(d, "enter", true);
+await ticks();
+up(d, "enter");
+await held("down");
+await held("enter");
+eq(answers().map((a) => a.token), [], "↓ and Enter, each held");
+// A fresh press after a release still acts.
+press(d, "down", "enter");
+await ticks();
+eq(answers().map((a) => a.token), ["Q3@1"], "a press after the held keys");
+EOF
+}
+
+@test "a key that records acts on its release, after one short press in the panel, on the card it was pressed for" {
+  mod_case <<'EOF'
+const view = { ...PANEL_VIEW, cards: [card("Q1@1"), card("Q2@1")] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+settle(d);
+const ticks = async () => { for (let i = 0; i < 5; i++) await tick(); };
+press(d, "down");
+// Enter held in Shep's terminal; a click on Q2's text brings its repeats here, unmarked.
+leave();
+clickOn("decision-Q2@1");
+for (let i = 0; i < 4; i++) {
+  down(d, "enter");
+  await ticks();
+}
+up(d, "enter");
+await ticks();
+eq(answers(), [], "Enter held into the panel");
+// The same with one repeat only: it looks like a press, and the first after the click
+// does nothing. So does one repeat of ↑, which would move to Q1.
+for (const k of ["enter", "up"]) {
+  leave();
+  clickIn();
+  down(d, k);
+  up(d, k);
+  draw(d);
+}
+await ticks();
+eq(answers(), [], "one repeat after the click");
+// The window loses the keyboard and gets it back: the same.
+windowActive = false;
+for (const f of globalThis.herdr.timers) f(cx);
+windowActive = true;
+down(d, "enter");
+up(d, "enter");
+await ticks();
+eq(answers(), [], "one repeat after the window came back");
+// Pressed down here, then held for a while with no repeat seen: nothing.
+down(d, "enter");
+later += 400;
+up(d, "enter");
+await ticks();
+eq(answers(), [], "a long press");
+// Shift+Enter, Shift released first: the press was not Enter, so nothing.
+root().key({ key: "enter", keystroke: "shift-enter", is_held: false }, cx);
+up(d, "enter");
+await ticks();
+eq(answers(), [], "Shift+Enter released as Enter");
+// Enter down on Q2, ↑ to Q1, Enter up: the press was for Q2, so nothing.
+down(d, "enter");
+press(d, "up");
+up(d, "enter");
+await ticks();
+eq(answers(), [], "Enter released on another card");
+// Enter down does nothing yet; its release answers Q1, the card it was pressed for.
+down(d, "enter");
+await ticks();
+eq(answers(), [], "Enter down");
+up(d, "enter");
+await ticks();
+eq(answers().map((a) => a.token), ["Q1@1"], "Enter released");
+EOF
+}
+
+@test "a card whose pick is hard to undo starts on no choice, its star still shown, and Enter waits for a pick" {
+  mod_case <<'EOF'
+const push = { approves: "Push it", remote: "origin", refs: ["refs/tags/v1.0.0"], url: "git@example.invalid:team/app.git" };
+const weighty = [
+  card("Q1@1", { kind: "action", options: ["Push it", "Not yet"], recommendation: { choice: "Push it", why: "CI is green" }, push, change: null }),
+  card("Q2@1", { kind: "guard", options: ["Allow", "Deny"], recommendation: { choice: "Allow", why: "it reads local" }, change: null,
+    guard: { expires: "2099-01-01T00:00:00.000Z", defaults: true } }),
+  card("Q3@1", { kind: "land", options: ["Ship it", "Not yet"], recommendation: { choice: "Ship it", why: "reviewed" } }),
+  card("Q4@1", { change: { lines: 347, stakes: "high" } }),
+  card("Q5@1", { change: null }),
+];
+const view = { ...PANEL_VIEW, cards: [...weighty, card("Q6@1")] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+settle(d);
+els.length = 0;
+d.render(cx);
+const label = (token) => els.find((e) => e.id === `decision-accept-${token}`)?.text?.[0];
+eq(view.cards.map((c) => label(c.token)), ["Pick a choice", "Pick a choice", "Pick a choice", "Pick a choice", "Pick a choice", "Answer LGTM"], "answer buttons");
+for (const star of ["1 Push it ★", "1 Allow ★", "1 Ship it ★", "1 LGTM ★"]) if (!texts().includes(star)) fail(`no ${star}: ${JSON.stringify(texts())}`);
+// Enter on each records nothing; 1 then Enter records the person's pick.
+press(d, "down", "enter", ...Array(4).fill(["down", "enter"]).flat());
+await tick();
+eq(answers(), [], "Enter on a weighty card before a pick");
+press(d, "1", "enter");
+await tick();
+eq(answers().map((a) => [a.token, a.choice]), [["Q5@1", "LGTM"]], "1 then Enter");
 EOF
 }
 
@@ -858,6 +1231,7 @@ setup({ terminals: [shep], exec: panelExec(view) });
 const d = copy("decisions");
 const h = copy("header");
 await tick();
+settle(d);
 const render = () => { els.length = 0; d.render(cx); return texts(); };
 const timers = (all) => all.filter((x) => x.startsWith("two-way door: ") && !x.includes("nobody picked"));
 eq(timers(render()), [
@@ -872,9 +1246,9 @@ if (!all.includes("defaulted")) fail(`no defaulted word in ${JSON.stringify(all)
 if (!all.some((x) => /^two-way door: nobody picked by (\d{4}-\d\d-\d\d )?\d\d:\d\d, so it took Shep's recommendation, auth\. OK keeps it as your pick; Reverse tells Shep to undo it; Close leaves it Shep's default\.$/.test(x)))
   fail(`no defaulted line in ${JSON.stringify(all)}`);
 // Past its deadline a fresh card takes no pick: only Discuss and Close click.
-eq(els.filter((e) => e.click && e.id?.includes("Q3@1")).map((e) => e.id), ["decision-discuss-Q3@1", "decision-close-Q3@1"], "overdue card controls");
+eq(clicks().filter((id) => id.includes("Q3@1")), ["decision-discuss-Q3@1", "decision-close-Q3@1"], "overdue card controls");
 // The defaulted card: its choices (to reverse to), Discuss, Close, Reverse and OK, no answer button; counted apart from the 6 waiting on you.
-eq(els.filter((e) => e.id?.includes("Q5@1") && e.id !== "decision-Q5@1").map((e) => e.id),
+eq(els.filter((e) => e.id?.includes("Q5@1") && !["decision-Q5@1", "decision-head-Q5@1"].includes(e.id)).map((e) => e.id),
   ["decision-choice-Q5@1-0", "decision-choice-Q5@1-1", "decision-discuss-Q5@1", "decision-close-Q5@1", "decision-reverse-Q5@1", "decision-ok-Q5@1"], "defaulted card controls");
 if (!all.includes("OK auth")) fail(`no OK button: ${JSON.stringify(all)}`);
 if (!all.includes("6 waiting on you · 1 defaulted")) fail(`panel count: ${JSON.stringify(all)}`);
@@ -919,7 +1293,8 @@ eq([takes(stale, "Deny"), takes(stale, "Allow"), takes({ ...stale, status: "fres
 setup({ terminals: [shep], exec: panelExec({ ...PANEL_VIEW, cards: [stale] }) });
 const d = copy("decisions");
 await tick();
-press(d, "1", "enter");
+settle(d);
+press(d, "down", "1", "enter");
 await tick();
 eq(answers(), [], "Allow on a stale guard card");
 press(d, "2", "enter");
@@ -940,8 +1315,9 @@ const view = { ...PANEL_VIEW, cards: [
 setup({ terminals: [shep], exec: panelExec(view) });
 const d = copy("decisions");
 await tick();
+settle(d);
 // o on the fresh default records an OK, with no choice; Enter and the number keys pick nothing on it.
-press(d, "2", "enter", "o");
+press(d, "down", "2", "enter", "o");
 await tick();
 eq(answers().map(({ requestId, ...a }) => a), [{ token: "Q1@1", outcome: "ok", source: "panel picker" }], "the OK");
 // A stale default says why and takes no OK; o on a card that did not default records nothing.
@@ -982,8 +1358,9 @@ setup({ terminals: [shep], exec: panelExec(view) });
 const d = copy("decisions");
 const h = copy("header");
 await tick();
+settle(d);
 // On the default's own choice, r reverses with no other choice; on another, to it.
-press(d, "r");
+press(d, "down", "r");
 await tick();
 press(d, "2");
 els.length = 0;
@@ -1006,7 +1383,7 @@ const all = texts();
 if (!all.includes("reversed")) fail(`no reversed word: ${JSON.stringify(all)}`);
 if (!all.includes("You reversed its default, auth, to search. Shep undoes what it did on it; the card leaves once Shep has."))
   fail(`reversed line: ${JSON.stringify(all)}`);
-eq(els.filter((e) => e.id?.includes("Q3@1") && e.id !== "decision-Q3@1").map((e) => e.id), ["decision-discuss-Q3@1", "decision-close-Q3@1"], "reversed card controls");
+eq(els.filter((e) => e.id?.includes("Q3@1") && !["decision-Q3@1", "decision-head-Q3@1"].includes(e.id)).map((e) => e.id), ["decision-discuss-Q3@1", "decision-close-Q3@1"], "reversed card controls");
 // The header counts the two defaults still waiting on you, not the reversed one.
 els.length = 0;
 h.render(cx);
@@ -1031,15 +1408,16 @@ const view = { ...PANEL_VIEW, cards: [
 setup({ terminals: [shep], exec: panelExec(view) });
 const d = copy("decisions");
 await tick();
+settle(d);
 els.length = 0;
 d.render(cx);
 // The default its own commit moved says there is nothing to confirm, and Close is what clicks.
 if (!texts().some((x) => x.endsWith("Changed since: the branch, new commits. Nothing to confirm: OK and Reverse need it unchanged. Close leaves it Shep's default.")))
   fail(`stale default: ${JSON.stringify(texts())}`);
-eq(els.filter((e) => e.click && e.id?.includes("Q1@1")).map((e) => e.id), ["decision-discuss-Q1@1", "decision-close-Q1@1"], "stale default controls");
+eq(clicks().filter((id) => id.includes("Q1@1")), ["decision-discuss-Q1@1", "decision-close-Q1@1"], "stale default controls");
 if (els.find((e) => e.id === "decision-close-Q7@1")) fail("a land card whose chain runs has no Close");
 // x on each card: all but the landing one are closed.
-press(d, "x", ...Array(6).fill(["down", "x"]).flat());
+press(d, "down", "x", ...Array(6).fill(["down", "x"]).flat());
 await tick();
 eq(answers().map(({ requestId, ...a }) => a),
   ["Q1@1", "Q2@1", "Q3@1", "Q4@1", "Q5@1", "Q6@1"].map((token) => ({ token, outcome: "closed", source: "panel picker" })),
@@ -1069,6 +1447,7 @@ const view = { ...PANEL_VIEW, cards: [
 setup({ terminals: [shep], exec: panelExec(view) });
 const d = copy("decisions");
 await tick();
+settle(d);
 els.length = 0;
 d.render(cx);
 // Ask again sits next to Close on a pending stale card Shep revises in place, and on no other:
@@ -1086,14 +1465,15 @@ if (!texts().includes("Shep was asked to refresh the card and ask again; this an
   fail(`no note after Ask again: ${JSON.stringify(texts())}`);
 // a on the keys does the same, and only on the cards that offer it.
 globalThis.herdr.execs = [];
-press(d, "a", ...Array(6).fill(["down", "a"]).flat());
+press(d, "down", "a", ...Array(6).fill(["down", "a"]).flat());
 await tick();
 eq(answers().map((a) => [a.token, a.outcome]), [["Q1@1", "reask"], ["Q2@1", "reask"]], "a on each card");
 // A refusal from the backend's live check says why, and no note claims Shep was asked.
 setup({ terminals: [shep], exec: panelExec(view, { accepted: false, reason: "it is fresh: only a stale card is asked again" }) });
 const d2 = copy("decisions");
 await tick();
-press(d2, "a");
+settle(d2);
+press(d2, "down", "a");
 for (let i = 0; i < 5; i++) await tick();
 els.length = 0;
 d2.render(cx);
@@ -1279,6 +1659,7 @@ EOF
 setup({ terminals: [shep], exec: panelExec(PANEL_VIEW) });
 const d = copy("decisions");
 await tick();
+settle(d);
 globalThis.herdr.execs = [];
 els.length = 0;
 d.render(cx);
@@ -1378,6 +1759,7 @@ setup({
 });
 const d = copy("decisions");
 for (let i = 0; i < 5; i++) await tick();
+settle(d);
 const panels = () => globalThis.herdr.execs.filter((e) => /question panel/.test(e[2] ?? ""));
 if (!panels().length || panels().some((e) => e.on !== "box")) fail(`panel ran on ${panels().map((e) => e.on)}`);
 if ((globalThis.herdr.watched ?? []).length) fail(`watched ${globalThis.herdr.watched} here`);
@@ -1389,8 +1771,10 @@ const before = panels().length;
 for (const f of globalThis.herdr.timers) f(cx);
 for (let i = 0; i < 5; i++) await tick();
 if (panels().length !== before + 1) fail("the timer did not look at box's ledger with the panel hidden");
-// A pick is recorded where the ledger is.
-press(d, "enter");
+// A pick is recorded where the ledger is. (The timers ran with the panel unfocused, so it
+// settles again.)
+settle(d);
+press(d, "down", "enter");
 for (let i = 0; i < 5; i++) await tick();
 const answer = globalThis.herdr.execs.find((e) => /question answer/.test(e[2] ?? ""));
 if (answer?.on !== "box") fail(`the answer ran on ${answer?.on}`);
