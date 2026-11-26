@@ -196,7 +196,7 @@
     "source": "npm:@types/node",
     "min": null,
     "why": null,
-    "known": "26.6.10",
+    "known": "26.6.11",
     "pinned_in": ["package-lock.json"],
     "notes": "Follows the Node major CI runs."
   },
