@@ -4,7 +4,7 @@
 // [[Done]] is drawn as a pill. The bridge comes from npm and the lead's model needs
 // a login, so those two are swapped for the fake model; nothing else changes.
 // Usage: node tests/pi_emphasis_live.ts ROOT PI HOME
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Term, fail, fails, killAll, pass, waitFor } from "./live_term.ts";
 
@@ -25,6 +25,11 @@ async function body(): Promise<void> {
   const run = join(HOME, "pi-emphasis-live");
   const work = join(run, "work");
   mkdirSync(work, { recursive: true });
+  // A desk's TMPDIR sits under the real HOME, whose ~/.agents/skills is a project
+  // ancestor of WORK: a saved "do not trust" keeps Pi's trust dialog away and
+  // the real HOME's skills out, with the deployed argv unchanged.
+  mkdirSync(join(HOME, ".pi/agent"), { recursive: true });
+  writeFileSync(join(HOME, ".pi/agent/trust.json"), JSON.stringify({ [work]: false }));
   const probe = join(run, "context.json");
   const env: NodeJS.ProcessEnv = Object.fromEntries(
     Object.entries(process.env).filter(

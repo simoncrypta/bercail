@@ -252,6 +252,8 @@ try {
       "--no-context-files",
       "--no-builtin-tools",
       "--no-mcp",
+      // tmpdir() sits under the real HOME on a desk, and its ~/.agents/skills would ask for trust.
+      "--no-approve",
       "--mode",
       "json",
       "--session",
