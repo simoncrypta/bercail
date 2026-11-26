@@ -96,7 +96,8 @@ Post-install CLI (bercail):
                 inbox (ready, failed, moved or timeout); in an Entire repo no wait, as the
                 trail's gates decide. It never pushes. Use its printed refspec: for a direct
                 land in bercail's own GitHub repo the full CI must pass on a land-only ref.
-                Desks are refused, and so, where the
+                --ci-branch NAME: the commit goes to CI on origin's NAME, not the work
+                branch, which keeps its name. Desks are refused, and so, where the
                 policy says integrate = "direct", is a trunk that moved past HEAD, before
                 any commit (the desk reruns /validate); a PR branch gets a warning.
                 land ask WORKTREE puts up one land card where the repo's trusted policy says
