@@ -104,8 +104,6 @@ const ROUTINES_ID = "shep-routines";
 // The column left of Shep's terminal that holds both panels.
 const SIDE_ID = "shep-side";
 const DISCUSS_ROLE = "shep-discuss";
-const KEYS_HINT =
-  "↑↓ card · ←→ or 1-9 choice · Enter answers · o OKs a default · r reverses it · x closes a card · a asks again on a stale one · d discusses";
 
 export function find(node, id) {
   if (!node || typeof node !== "object") return null;
@@ -526,6 +524,26 @@ export const takes = (card, choice) => answerable(card) || (vetoable(card) && ch
 // A card whose choices the keys and clicks move: one to answer, or a default to reverse.
 const pickable = (card) => answerable(card) || confirmable(card) || vetoable(card);
 
+// The keys the card takes now, as the panel's hint: what picks or records on it, then
+// what any card takes. `at`: the picked choice's index; `busy`: a record on its way
+// (which takes no other). Short words, so it fits two lines: the card's chips and
+// buttons name the choices.
+function cardKeys(card, at, busy) {
+  const n = card.options?.length ?? 0;
+  const choice = at === null ? null : card.options[at];
+  const free = (key) => !busy && key;
+  return [
+    [
+      choice !== null && takes(card, choice) && free("Enter answer"),
+      pickable(card) && n > 0 && (n > 9 ? "←→ 1-9 choice" : n > 1 ? `1-${n} choice` : "1 choice"),
+      confirmable(card) && free("o OK"),
+      confirmable(card) && free("r reverse"),
+      reaskable(card) && free("a ask again"),
+    ],
+    ["d discuss", closable(card) && free("x close")],
+  ];
+}
+
 // The choice a card starts on: Shep's recommendation, else none (Enter waits for a pick).
 export function startChoice(card) {
   const i = card.options?.indexOf(card.recommendation?.choice) ?? -1;
@@ -794,6 +812,12 @@ export default class BercailShep extends View {
       this.sel = 0; // the card the keys act on
       this.picked = {}; // token -> the choice's index, once the person moved it
       this.busy = new Set(); // tokens whose answer is on its way
+      this.keys = false; // whether the last render had the keyboard
+      // Herdr redraws a mod on its data, not when the keyboard leaves it (a click in
+      // Shep, a key that switches views): look, so the cue never says keys work here.
+      cx.timer.every(250, (cx) => {
+        if (this.h.is_focused() !== this.keys) cx.notify();
+      });
     }
     if (this.role !== "nav") return;
     this.added = new Set(); // Shep block ids this copy added
@@ -1272,13 +1296,20 @@ export default class BercailShep extends View {
     );
   }
 
-  // The Decisions panel: the keyboard is here once the person clicks in it, or opens it
-  // from the header. Keys never come from a command (nextCommand): only this panel.
+  // The Decisions panel: the keyboard is here once the person clicks in it; showing it
+  // from the header leaves the keyboard where it was. Keys never come from a command
+  // (nextCommand): only this panel.
   decisions(t) {
     const cards = D.view?.cards ?? [];
     this.sel = Math.max(0, Math.min(cards.length - 1, this.sel));
     const checked = D.view?.at ? `checked ${clock(D.view.at)}` : D.loading ? "checking…" : "";
     const open = counts(waiting().length, defaults().length);
+    const keys = (this.keys = this.h.is_focused());
+    const c = cards[this.sel];
+    const [mine, any] = c ? cardKeys(c, this.choiceOf(c), this.busy.has(c.token)) : [[], []];
+    const hints = keys
+      ? [mine, [...any, cards.length > 1 && "↑↓ card", Boolean(shepTerminal()) && "Esc Shep"]]
+      : [[cards.length > 0 && "Click a card to use keys"]];
     const list = v_flex().id("decision-list").flex_1().min_h(0).px(10).pb(10).gap(8).overflow_y_scrollbar();
     const say = (text, color = t.dim) => div().px(12).py(6).text_color(color).child(text);
     return v_flex()
@@ -1287,9 +1318,14 @@ export default class BercailShep extends View {
       .bg(t.background)
       .text_size(12.5)
       .text_color(t.muted)
+      .border_t(2)
+      .border_color(keys ? t.accent : t.background)
       .track_focus(this.h)
       .on_key_down((e, cx) => this.key(e, cx))
-      .on_mouse_down("left", () => this.h.focus())
+      .on_mouse_down("left", (_e, cx) => {
+        this.h.focus();
+        cx.notify();
+      })
       .child(
         h_flex()
           .h(32)
@@ -1302,16 +1338,22 @@ export default class BercailShep extends View {
             div()
               .flex_1()
               .truncate()
-              .text_color(t.dim)
-              .child(open && `${open} · ${KEYS_HINT}`),
+              .text_color(keys ? t.accent : t.dim)
+              .child(keys ? "keys" : open),
           )
           .child(div().text_size(11).text_color(t.dim).child(checked)),
+      )
+      .children(
+        hints
+          .map((line) => line.filter(Boolean).join(" · "))
+          .filter(Boolean)
+          .map((x) => div().px(12).pb(4).text_color(t.dim).child(x)),
       )
       .when(Boolean(D.error), (el) => el.child(say(`Can't read Shep's questions: ${D.error}`, t.blocked)))
       .when(Boolean(D.note), (el) => el.child(say(D.note, t.blocked)))
       .when(Boolean(D.done), (el) => el.child(say(D.done)))
       .when(!cards.length && !D.error, (el) => el.child(say(D.view ? "Nothing waits on you." : "Loading…")))
-      .child(list.children(cards.map((c, i) => this.card(t, c, i === this.sel, i))));
+      .child(list.children(cards.map((c, i) => this.card(t, c, keys && i === this.sel, i))));
   }
 
   choiceOf(c) {
@@ -1343,7 +1385,11 @@ export default class BercailShep extends View {
     else if (k === "x" && c) this.closeCard(c, cx);
     else if (k === "a" && c) this.reask(c, cx);
     else if (k === "d" && c) this.discuss(c, cx);
-    else return;
+    else if (k === "escape") {
+      const shep = shepTerminal();
+      if (!shep) return;
+      run("pane.focus", { terminal: shep.address });
+    } else return;
     cx.stop_propagation();
     cx.notify();
   }

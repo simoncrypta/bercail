@@ -54,6 +54,7 @@ const el = () => {
       if (k === "id") t.id = a[0];
       if (k === "on_click") t.click = a[0];
       if (k === "on_key_down") t.key = a[0];
+      if (k === "border_color") t.border = a[0];
       if (k === "child" && typeof a[0] === "string") (t.text ??= []).push(a[0]);
       if (k === "on_mouse_down" || k === "on_mouse_up") t[`${k}:${a[0]}`] = a[1];
       if (k === "on_window_mouse_move") t.windowMove = a[0];
@@ -111,7 +112,7 @@ function setup(state = {}) {
 const cx = {
   spawn: (f) => f(cx), notify: () => {}, stop_propagation: () => {},
   timer: { every: (_ms, f) => (globalThis.herdr.timers ??= []).push(f) },
-  focus_handle: () => ({ focus: () => (globalThis.herdr.panelFocused = true), is_focused: () => false }),
+  focus_handle: () => ({ focus: () => (globalThis.herdr.panelFocused = true), is_focused: () => Boolean(globalThis.herdr.panelFocused) }),
 };
 function nav() {
   const v = new Shep();
@@ -731,6 +732,95 @@ if (!texts().includes("Not recorded: question is answered.")) fail(`no refusal s
 EOF
 }
 
+@test "the Decisions panel shows when it has the keyboard and lists only the keys the selected card takes; Esc gives the keyboard to Shep" {
+  mod_case <<'EOF'
+Date.now = () => Date.parse("2026-11-14T21:00:00.000Z"); // the default's deadline has passed
+const past = "2026-11-14T20:30:00.000Z";
+const view = { ...PANEL_VIEW, cards: [
+  card("Q1@1"),
+  card("Q2@3", { status: "stale", reasons: ["base changed"] }),
+  card("Q4@1", { kind: "planning", deadline: past, defaulted: { choice: "LGTM", at: past } }),
+  card("Q5@1", { kind: "guard", options: ["Allow", "Deny"], recommendation: null, status: "stale", guard: { expires: past, defaults: false } }),
+  card("Q6@1", { kind: "planning", options: [...Array(10)].map((_, i) => `o${i + 1}`), recommendation: { choice: "o1", why: "first" } }),
+] };
+setup({ terminals: [shep], exec: panelExec(view) });
+const d = copy("decisions");
+await tick();
+const shown = () => {
+  els.length = 0;
+  d.render(cx);
+  const by = (id) => els.find((e) => e.id === id).border;
+  return { root: by("decisions-root"), q1: by("decision-Q1@1"), q2: by("decision-Q2@3"), texts: texts() };
+};
+const hint = (first, label) => {
+  const all = shown().texts;
+  const want = [first, "d discuss · x close · ↑↓ card · Esc Shep"].filter(Boolean);
+  const at = all.indexOf("keys");
+  eq(all.slice(at + 2, at + 2 + want.length), want, label); // after "keys" and the checked time
+};
+// Without the keyboard: no accent, no solid card border, and how to get the keys.
+let s = shown();
+eq([s.root, s.q1, s.q2], ["background", "border", "border"], "borders without the keyboard");
+if (!s.texts.includes("Click a card to use keys") || s.texts.some((x) => /Esc|Enter /.test(x))) fail(`unfocused hint: ${JSON.stringify(s.texts)}`);
+// A click in the panel gives it the keyboard and redraws it at once.
+let redraws = 0;
+const counting = { ...cx, notify: () => redraws++ };
+const look = () => globalThis.herdr.timers.forEach((f) => f(counting));
+look();
+eq(redraws, 0, "a redraw with nothing changed");
+els.find((e) => e.id === "decisions-root")["on_mouse_down:left"](null, counting);
+eq([globalThis.herdr.panelFocused, redraws], [true, 1], "a click in the panel");
+// With it: an accent top edge, the selected card solid, and its keys, then any card's.
+s = shown();
+eq([s.root, s.q1, s.q2], ["accent", "solid", "border"], "borders with the keyboard");
+if (!s.texts.includes("keys") || s.texts.includes("Click a card to use keys")) fail(`focused header: ${JSON.stringify(s.texts)}`);
+// Enter names no choice: a label can be any length, and the card shows the pick.
+hint("Enter answer · 1-2 choice", "a fresh card");
+// A stale card takes no pick, only Ask again.
+press(d, "down");
+s = shown();
+eq([s.q1, s.q2], ["border", "solid"], "the selection moved");
+hint("a ask again", "a stale card");
+press(d, "down");
+hint("1-2 choice · o OK · r reverse", "a fresh default");
+// A stale guard card: Enter on Deny only.
+press(d, "down");
+hint("1-2 choice", "a guard card on no choice");
+press(d, "2");
+hint("Enter answer · 1-2 choice", "a guard card on Deny");
+press(d, "1");
+hint("1-2 choice", "a guard card on Allow");
+// Past nine choices, the digits reach the first nine and the arrows the rest.
+press(d, "down");
+hint("Enter answer · ←→ 1-9 choice", "ten choices");
+// While a record is on its way, nothing else records.
+press(d, "enter");
+s = shown().texts;
+if (!s.includes("←→ 1-9 choice") || !s.includes("d discuss · ↑↓ card · Esc Shep") || s.some((x) => x.startsWith("Enter")))
+  fail(`hint while recording: ${JSON.stringify(s)}`);
+for (let i = 0; i < 5; i++) await tick();
+// Esc puts the keyboard in Shep's terminal, as the Shep view does.
+globalThis.herdr.calls = [];
+press(d, "escape");
+eq(calls("pane.focus"), [["pane.focus", { terminal: "t9" }]], "Esc");
+// Herdr does not redraw a mod the keyboard left (a click in Shep, Esc): the panel looks.
+redraws = 0;
+look();
+eq(redraws, 0, "a redraw while the panel still has the keyboard");
+globalThis.herdr.panelFocused = false;
+look();
+eq(redraws, 1, "no redraw once the keyboard left");
+if (!shown().texts.includes("Click a card to use keys")) fail("the cue stays after the keyboard left");
+// With no Shep, Esc has nowhere to go and is not offered.
+globalThis.herdr.terminals = [];
+globalThis.herdr.panelFocused = true;
+globalThis.herdr.calls = [];
+press(d, "escape");
+eq(calls("pane.focus"), [], "Esc with no Shep");
+if (shown().texts.some((x) => x.includes("Esc"))) fail("Esc offered with no Shep");
+EOF
+}
+
 @test "a card with no recommendation waits for a pick before Enter answers" {
   mod_case <<'EOF'
 const view = { ...PANEL_VIEW, cards: [card("Q1@1", { recommendation: null })] };
@@ -787,7 +877,7 @@ eq(els.filter((e) => e.click && e.id?.includes("Q3@1")).map((e) => e.id), ["deci
 eq(els.filter((e) => e.id?.includes("Q5@1") && e.id !== "decision-Q5@1").map((e) => e.id),
   ["decision-choice-Q5@1-0", "decision-choice-Q5@1-1", "decision-discuss-Q5@1", "decision-close-Q5@1", "decision-reverse-Q5@1", "decision-ok-Q5@1"], "defaulted card controls");
 if (!all.includes("OK auth")) fail(`no OK button: ${JSON.stringify(all)}`);
-if (!all.some((x) => x.startsWith("6 waiting on you · 1 defaulted · "))) fail(`panel count: ${JSON.stringify(all)}`);
+if (!all.includes("6 waiting on you · 1 defaulted")) fail(`panel count: ${JSON.stringify(all)}`);
 els.length = 0;
 h.render(cx);
 if (!texts().includes("Decisions 6 · 1 defaulted")) fail(`header: ${JSON.stringify(texts())}`);

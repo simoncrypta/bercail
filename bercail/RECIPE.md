@@ -89,12 +89,18 @@ is which of `shep` and `work` is hidden.
   left of the terminal, 2 shares of the width to the terminal's 3 (min 280,
   max 520), with a 1px `border` divider beside it and between its panels.
   The column shows with the first panel and hides with the last, so with
-  neither Shep's terminal takes the full width. Decisions has a 32px row
-  ("Decisions", "N waiting on you" with the keys hint, "checked HH:MM"),
-  then a card per pending question
-  (`chrome` fill, 1px `border`, `solid` border on the card the keys are on,
-  radius 8): the space's name with lines and "high-stakes", "open", "stale"
-  (`blocked`) or "unknown" (`unknown`), the question, Shep's brief in `muted`,
+  neither Shep's terminal takes the full width. Decisions has a 2px top
+  edge, `accent` while the keyboard is in the panel, and a 32px row
+  ("Decisions", "N waiting on you" or, with the keyboard, "keys" in `accent`,
+  "checked HH:MM"). Under it, in `dim`, "Click a card to use keys"; with the
+  keyboard, two lines that wrap and never truncate: what picks or records on
+  the selected card now ("Enter answer · 1-2 choice", "1-2 choice · o OK · r
+  reverse"; the card's chips and buttons name the choices), then what any card takes ("d discuss · x close · ↑↓ card · Esc
+  Shep", Esc only while Shep runs). Then a card per pending question
+  (`chrome` fill, 1px `border`, `solid` border on the card the keys are on
+  while the panel has the keyboard, radius 8): the space's name with lines
+  and "high-stakes", "open", "stale" (`blocked`) or "unknown" (`unknown`),
+  the question, Shep's brief in `muted`,
   "Shep recommends X: why" in `dim`, the choices as numbered chips ("1 LGTM ★",
   the picked one filled `solid`; dimmed on a stale card), why a card is stale or
   unknown, "asked HH:MM", a **Discuss** (or **Continue discussion**) button and

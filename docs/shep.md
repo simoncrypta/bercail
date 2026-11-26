@@ -306,7 +306,7 @@ Each question Shep asks is also a card. **Decisions N** in Shep's header counts 
 
 #### Answering
 
-The picker on a fresh card starts on Shep's recommendation (★). Click in the panel to give it the keyboard, then:
+The picker on a fresh card starts on Shep's recommendation (★). Click in the panel to give it the keyboard; showing the panel from the header does not. While the panel has the keyboard, its top edge is the accent color, the selected card has a solid border, and the hint under the header lists only the keys that card takes now. Then:
 
 | Key | Does |
 |-----|------|
@@ -318,6 +318,7 @@ The picker on a fresh card starts on Shep's recommendation (★). Click in the p
 | x | Close the card: off the panel, with no answer; a default stays Shep's |
 | a | Ask again on a stale planning, review or action card |
 | d | open Discuss |
+| Esc | give the keyboard back to Shep's terminal |
 
 A click picks a choice and **Answer** records it; on a defaulted card, **OK** or **Reverse** records yours. A card with no recommendation waits for a pick; stale and unknown cards have none; a question with no choices is discussed in chat, which records no answer.
 
