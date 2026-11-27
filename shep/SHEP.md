@@ -117,9 +117,9 @@ branch, with `stackedOn: ["task:<parent>"]`, one task of this repo with a
 live desk or a kept worktree, and `stackReason` quoting their ask. Its branch
 is cut from the parent's branch head; handoff-spawn records the parent in gh
 stack when it can. Dispatch commits nothing and refuses a parent with staged
-files. Committing such a parent locally for the cut needs the person's yes,
-even when they asked for the stack (a standing rule can give it). With it:
-note its HEAD, commit (`git -C <parent worktree> commit -m "stack base:
+files. The person's ask for the stack, or a standing rule asking for stacks,
+authorizes one local commit of a parent whose work is only staged, for the
+cut: note its HEAD, commit (`git -C <parent worktree> commit -m "stack base:
 <title>, unreviewed"`), dispatch, then, while its HEAD is still that commit,
 put the work back staged with `git -C <parent worktree> reset --soft <noted
 HEAD>`. It is then as it was for tuicr and its land card, and nothing was
@@ -658,8 +658,8 @@ and `--issue` when there is one, and say so in one line with its link:
 - When `describe check --json` says `review: required`, tell the person why
   (the `high_stakes` paths it touches, or the policy's `review = "always"`)
   and its stakes, and wait for their LGTM before you commit or merge (a
-  stack's local commit they said yes to, undone after its dispatch, is not
-  that commit), even straight-to-main and under a rule to merge without
+  stack's temporary local commit, undone after its dispatch, is not that
+  commit), even straight-to-main and under a rule to merge without
   asking. On a land card,
   its "LGTM, ship it" is that LGTM. Only the repo's
   `review = "none"` waives it. It never holds other work.

@@ -687,6 +687,17 @@ test("Shep records a desk's Brain memory without a card, and the desks are told 
   expect(read("../bstack/pi/instructions.md")).not.toContain("once the person agrees");
 });
 
+test("Shep takes the ask for a stack as the yes to commit its staged parent, never as an LGTM", () => {
+  const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8").replace(/\s+/g, " ");
+  const rules = read("../shep/SHEP.md");
+  expect(rules).toContain("a standing rule asking for stacks, authorizes one local commit");
+  expect(rules).toContain("of a parent whose work is only staged");
+  expect(rules).toContain("a stack's temporary local commit, undone after its dispatch, is not that commit");
+  expect(read("../docs/shep.md")).toContain(
+    "your ask for the stack (or a standing rule asking for stacks) lets Shep commit it",
+  );
+});
+
 test("an OK or Reverse whose event could not be written is sent at Shep's next expire run, once", async () => {
   const token = ask();
   vi.setSystemTime("2026-11-19T12:30:00.000Z");
