@@ -147,8 +147,8 @@ assert_this_tree() {
   done
 }
 
-# The new CLI updating itself: the copy it runs from is detached too, and an
-# update that brings nothing new has nothing to restart on.
+# The new CLI updating itself: an update that brings nothing new has nothing
+# to restart on.
 assert_updates_itself() {
   local tag="$1"
   in_home "$home" bash "$home/.local/bin/bercail" update >"$box/update-2.log" 2>&1 \

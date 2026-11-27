@@ -703,17 +703,6 @@ record_install_source() {
   info "recorded install source: $src"
 }
 
-# The update copies bin/bercail over the running script in place, and once
-# main returns bash reads on from its old offset into the new file. Put a
-# fresh copy at the path and empty the old inode so that read hits EOF.
-detach_running_bercail() {
-  local bin="$LOCAL_BIN/bercail"
-  [[ -f "$bin" && ! -L "$bin" && "$DRY_RUN" -ne 1 ]] || return 0
-  cp -p "$bin" "$bin.new" && ln -f "$bin" "$bin.old" && mv -f "$bin.new" "$bin" \
-    && : >"$bin.old"
-  rm -f "$bin.new" "$bin.old"
-}
-
 # Remove the old switch. An off install (including --no-bstack, which wrote no
 # [bstack]) needs to know its next desk will run the guarded lead, not plain Pi.
 migrate_bstack_switch() {
@@ -918,7 +907,6 @@ _running_install_sum() {
 }
 
 deploy_finalize_permissions() {
-  detach_running_bercail
   deploy_install_file "config/pi/extensions/bercail-desk.ts" \
     "${BERCAIL_SHARE_DIR}/pi-extensions/bercail-desk.ts"
   deploy_desk_restore
@@ -1003,7 +991,6 @@ deploy_client() {
   else
     deploy_install_file bin/bercail "$LOCAL_BIN/bercail"
     run chmod +x "$LOCAL_BIN/bercail"
-    detach_running_bercail
   fi
   deploy_lib
   find "${BERCAIL_SHARE_DIR}/lib" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true

@@ -52,6 +52,8 @@ Bercail runs on the Herdr app. When it is missing, the installer runs [herdr.dev
 
 It also installs what bercail needs, and does a little extra on Omarchy, Linux, and macOS. See [development](development.md#dependencies) for the list and [platforms](development.md#platforms) for the details. Every file it writes is listed in [config](config.md#files-bercail-manages).
 
+The installer and `bercail update` replace a changed copy of the CLI, its libraries and its Pi modules by writing the new file beside it and renaming it over, so a `bercail` command or Pi that already opened it finishes reading the old file. Where a deploy keeps a symlink you put in place of a file, it writes through it, so the target (your dotfiles, say) is rewritten in place; bstack's and Shep's Pi folders replace such links with files.
+
 ## From herdr.dev
 
 The layout is also shared on its own at [herdr.dev/layouts](https://herdr.dev/layouts/): [`bercail/`](../bercail) holds the layout, its mods, its keys, and a [RECIPE.md](../bercail/RECIPE.md). When you ask your agent to add it, the recipe tells it to ask you, install bercail with the commands above, switch to the layout, and then tell you the keys and commands to start with.

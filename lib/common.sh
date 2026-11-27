@@ -95,7 +95,25 @@ copy_file() {
     info "[dry-run] cp $src -> $dest"
     return 0
   fi
-  cp "$src" "$dest"
+  # mv would put the file inside it and say it worked.
+  if [[ -d "$dest" ]]; then
+    printf 'error: %s is a folder where a file goes; move it away and run this again\n' "$dest" >&2
+    return 1
+  fi
+  # Written through, not moved over: the link may point into someone's dotfiles.
+  if [[ -L "$dest" ]]; then
+    cp "$src" "$dest"
+    return
+  fi
+  # A new file renamed over the old one, never a rewrite in place: a bash or
+  # node already reading DEST (a guard-ask worker during an update) keeps the
+  # whole old file, not the new one read on from its old offset. cp -p first
+  # keeps DEST's mode, as cp over it did; a new file gets cp's.
+  local tmp
+  tmp="$(mktemp -d "$dest.XXXXXX")" || return 1
+  { [[ ! -f "$dest" ]] || cp -p "$dest" "$tmp/f"; } && cp "$src" "$tmp/f" && mv -f "$tmp/f" "$dest" \
+    || { rm -rf "$tmp"; return 1; }
+  rm -rf "$tmp"
 }
 
 # Readies DIR for a deploy that copies RELS into it, as the remove-and-copy it
