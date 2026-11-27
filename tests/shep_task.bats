@@ -265,8 +265,8 @@ spawn_ok() {
   cat >"$BERCAIL_HANDOFF_SPAWN" <<'EOF'
 #!/usr/bin/env bash
 printf 'spawn %s\n' "$*" >>"$LOG"
-while (($#)); do case "$1" in --issue) issue="$2" ;; --branch) branch="$2" ;; esac; shift; done
-[[ -d "$TASK_PATH" ]] || git -C "$TASK_REPO" worktree add -qb "$branch" "$TASK_PATH"
+while (($#)); do case "$1" in --issue) issue="$2" ;; --branch) branch="$2" ;; --base) base="$2" ;; esac; shift; done
+[[ -d "$TASK_PATH" ]] || git -C "$TASK_REPO" worktree add -qb "$branch" "$TASK_PATH" ${base:+"$base"}
 jq -nc --arg d "$TASK_DESK" --arg p "$TASK_PATH" --arg i "$issue" '{address:$d,cwd:$p,state:"live",labels:{"bercail.role":"agent","bercail.space":"sp-new","bercail.issue":$i}}' >"$TASK_DATA/$TASK_DESK.hc"
 jq -nc --arg d "$TASK_DESK" --arg p "$TASK_PATH" --arg i "$issue" --arg b "$branch" '{ok:true,agent_started:true,path:$p,branch:$b,space:"sp-new",desk:$d,session:"s-new",issue:$i}' >>"$XDG_STATE_HOME/bercail/handoffs.jsonl"
 tail -1 "$XDG_STATE_HOME/bercail/handoffs.jsonl"
@@ -1297,4 +1297,239 @@ EOF
   ! grep -q '^bd update' "$LOG" || fail "$(cat "$LOG")"
   out="$(request | jq '.model="gpt-6.2-astra"' | task dispatch 2>&1)" && fail "$out"
   [[ "$out" == *"model takes PROVIDER/MODEL[:thinking]"* ]] || fail "$out"
+}
+
+# The issue app-2, open, with no task yet.
+child_issue() { jq -n '{id:"app-2",title:"Build on the login fix",status:"open",metadata:{}}' >"$TASK_DATA/app-2.json"; }
+# A first desk for app-2 on branch login, stacked on $1 (task:app-1 by default, whose desk t9 is live in $REPO.fix).
+child() {
+  jq -nc --arg repo "$REPO" --argjson on "${1:-[\"task:app-1\"]}" \
+    '{repo:$repo,issue:"app-2",target:"task:app-2",requestId:"c1",stage:"bstack",message:"Build on the fix",branch:"login",stackedOn:$on,stackReason:"Simon: start on the fix while it waits for his LGTM"}'
+}
+# Commits a new file $1 on branch fix, in $REPO.fix.
+commit_fix() {
+  printf 'fix\n' >"$REPO.fix/$1"
+  git -C "$REPO.fix" add "$1"
+  git -C "$REPO.fix" commit -qm "$1"
+}
+
+@test "a beads desk stacks on another task's committed branch: its branch is cut from that head, and the issue records the parent" {
+  local out head reason="Simon: start on the fix while it waits for his LGTM"
+  child_issue
+  spawn_ok t21 "$REPO.login"
+  commit_fix fix.txt
+  head="$(git -C "$REPO.fix" rev-parse HEAD)"
+  out="$(child | task dispatch)" || fail "$out"
+  jq -e --arg p "$REPO.fix" --arg h "$head" --arg r "$reason" '.status == "started" and .creation.desk == "t21"
+    and .stacked == {reason: $r, parents: [{task: "task:app-1", path: $p, branch: "fix", desk: "t9", head: $h}]}' <<<"$out" || fail "$out"
+  grep -q -- '^spawn --branch login --stage bstack --issue app-2 --target task:app-2 --clean --base fix$' "$LOG" || fail "$(cat "$LOG")"
+  [[ "$(git -C "$REPO.login" rev-parse HEAD)" == "$head" ]] || fail "the new branch is not on the parent's head"
+  jq -e --arg h "$head" '.metadata.bercail_task.stack.parents[0] | .task == "task:app-1" and .head == $h' "$TASK_DATA/app-2.json" \
+    || fail "$(jq .metadata "$TASK_DATA/app-2.json")"
+  # Nothing of the parent's moved: its branch and index are as they were.
+  [[ "$(git -C "$REPO.fix" rev-parse HEAD)" == "$head" && -z "$(git -C "$REPO.fix" status --porcelain)" ]] || fail "the parent changed"
+  # Once its desk is gone, the parent's checkout with the commit still serves.
+  rm "$TASK_DATA/t9.hc"
+  jq -n '{id:"app-3",title:"Next",status:"open",metadata:{}}' >"$TASK_DATA/app-3.json"
+  out="$(child | jq '.issue = "app-3" | .target = "task:app-3" | .branch = "next"' | task dispatch --dry-run)" || fail "$out"
+  jq -e --arg p "$REPO.fix" '.status == "would-start" and .stacked.parents[0].path == $p and (.stacked.parents[0] | has("desk") | not)
+    and (.spawn | index(["--base", "fix"]))' <<<"$out" || fail "$out"
+  # The child's desk goes too, after a commit of its own: adopting its checkout cuts nothing, and keeps the parent.
+  rm "$TASK_DATA/t21.hc"
+  printf 'child\n' >"$REPO.login/child.txt"
+  git -C "$REPO.login" add child.txt
+  git -C "$REPO.login" commit -qm child
+  : >"$LOG"
+  out="$(child | jq 'del(.stackedOn, .stackReason) | .requestId = "c2"' | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .adopted.branch == "login"' <<<"$out" || fail "$out"
+  grep -q -- '^spawn --branch login .*--adopt-reason' "$LOG" && ! grep -q -- '--base' "$LOG" || fail "$(cat "$LOG")"
+  jq -e --arg h "$head" '.metadata.bercail_task.stack.parents[0].head == $h' "$TASK_DATA/app-2.json" || fail "$(jq .metadata "$TASK_DATA/app-2.json")"
+}
+
+@test "a retry of a stacked creation keeps the head its branch was cut at, though the parent moved on and staged again" {
+  local out first
+  child_issue
+  spawn_ok t21 "$REPO.login"
+  # The first spawn cuts the branch, then fails before any desk.
+  mv "$BERCAIL_HANDOFF_SPAWN" "$BERCAIL_HANDOFF_SPAWN-desk"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'SPAWN'
+#!/usr/bin/env bash
+[[ -d "$TASK_PATH" ]] && exec "$0-desk" "$@"
+printf 'spawn %s\n' "$*" >>"$LOG"
+git -C "$TASK_REPO" worktree add -qb login "$TASK_PATH" fix
+exit 1
+SPAWN
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+  commit_fix fix.txt
+  first="$(git -C "$REPO.fix" rev-parse HEAD)"
+  child | task dispatch >/dev/null 2>&1 && fail "the first spawn should fail"
+  commit_fix more.txt
+  printf 'draft\n' >"$REPO.fix/draft.txt"
+  git -C "$REPO.fix" add draft.txt
+  out="$(child | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .retry' <<<"$out" || fail "$out"
+  grep -q -- '^spawn --branch login .*--reuse-worktree' "$LOG" || fail "$(cat "$LOG")"
+  jq -e --arg h "$first" '.metadata.bercail_task.stack.parents[0].head == $h' "$TASK_DATA/app-2.json" \
+    || fail "$(jq .metadata "$TASK_DATA/app-2.json")"
+}
+
+@test "a retry of a stacked creation does not finish in a checkout that lacks the parent's verified head" {
+  local out
+  child_issue
+  spawn_ok t21 "$REPO.login"
+  mv "$BERCAIL_HANDOFF_SPAWN" "$BERCAIL_HANDOFF_SPAWN-desk"
+  printf '#!/usr/bin/env bash\n[[ -d "$TASK_PATH" ]] && exec "$0-desk" "$@"\ngit -C "$TASK_REPO" worktree add -qb login "$TASK_PATH"\nexit 1\n' >"$BERCAIL_HANDOFF_SPAWN"
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+  commit_fix fix.txt
+  child | task dispatch >/dev/null 2>&1 && fail "the first spawn should fail"
+  out="$(child | task dispatch)" || fail "$out"
+  jq -e --arg p "$REPO.login" '.status == "unknown" and (.next | startswith("Not finished: \($p) does not hold task:app-1'"'"'s head"))' <<<"$out" || fail "$out"
+  [[ ! -e "$TASK_DATA/t21.hc" ]] || fail "the retry started a desk"
+}
+
+# app-1 is a new job on branch fix, stacked on app-5, whose gone desk left
+# its commit on branch par in $REPO.par. The first spawn cuts fix from the
+# main checkout's head instead, as after a rewind of par, and ends partial,
+# pinning session s1 in space sp1. t9's Pi is stopped; its checkout is gone.
+stacked_partial() {
+  kill "$PID" && wait "$PID" 2>/dev/null || true
+  PID=
+  rm "$TASK_DATA/t9.hc"
+  git -C "$REPO" worktree remove --force "$REPO.fix"
+  git -C "$REPO" branch -D -q fix
+  git -C "$REPO" worktree add -qb par "$REPO.par"
+  printf 'par\n' >"$REPO.par/par.txt" && git -C "$REPO.par" add par.txt && git -C "$REPO.par" commit -qm par
+  jq -n '{id:"app-5",title:"Parent",status:"open",metadata:{}}' >"$TASK_DATA/app-5.json"
+  jq -nc --arg p "$REPO.par" '{ok:true,agent_started:true,path:$p,branch:"par",desk:"t50",issue:"app-5"}' >"$XDG_STATE_HOME/bercail/handoffs.jsonl"
+  export BERCAIL_HANDOFF_SPAWN="$BATS_TEST_TMPDIR/bin/spawn" TASK_REPO="$REPO" TASK_MARK="$BATS_TEST_TMPDIR/partial-done"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'SPAWN'
+#!/usr/bin/env bash
+[[ -f "$TASK_MARK" ]] && exec "$(dirname "$0")/finish" "$@"
+touch "$TASK_MARK"
+printf 'spawn %s\n' "$*" >>"$LOG"
+git -C "$TASK_REPO" worktree add -qb fix "$TASK_REPO.fix"
+jq -nc --arg p "$TASK_REPO.fix" '{ok:false,agent_started:false,path:$p,branch:"fix",issue:"app-1",space:"sp1",session:"s1",target:"task:app-1"}' | tee -a "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+exit 1
+SPAWN
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+  job | jq '.branch = "fix" | .stackedOn = ["task:app-5"] | .stackReason = "Simon: start on the parent"' >"$BATS_TEST_TMPDIR/req"
+  task dispatch <"$BATS_TEST_TMPDIR/req" >/dev/null 2>&1 && fail "the partial spawn should fail"
+  jq -e '.metadata.bercail_task | .creation.status == "unknown" and .stack.parents[0].task == "task:app-5"' "$TASK_DATA/app-1.json" >/dev/null \
+    || fail "$(jq .metadata "$TASK_DATA/app-1.json")"
+}
+
+@test "a partial stacked creation's late desk is bound, and told it is not stacked when its checkout lacks the parent's head" {
+  local out
+  stacked_partial
+  start_pi PID
+  TICKS="$(awk '{print $22}' "/proc/$PID/stat")"
+  owner t9 s1
+  out="$(task dispatch <"$BATS_TEST_TMPDIR/req")" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t9" and .retry and (.warning | startswith("Not stacked: fix was cut without task:app-5"))' <<<"$out" || fail "$out"
+  jq -e '.metadata.bercail_task | .owner.desk == "t9" and (has("stack") | not)' "$TASK_DATA/app-1.json" || fail "$(jq .metadata "$TASK_DATA/app-1.json")"
+}
+
+@test "a follow-up that reaches a partial stacked creation's late desk first settles its stack the same way" {
+  local out
+  stacked_partial
+  start_pi PID
+  TICKS="$(awk '{print $22}' "/proc/$PID/stat")"
+  owner t9 s1
+  out="$(jq '.requestId = "r2" | del(.stackedOn, .stackReason)' "$BATS_TEST_TMPDIR/req" | task dispatch)" || fail "$out"
+  jq -e '.status == "queued" and .owner.desk == "t9" and (.warning | startswith("Not stacked: fix was cut without task:app-5"))' <<<"$out" || fail "$out"
+  jq -e '.metadata.bercail_task | .owner.desk == "t9" and (has("stack") | not)' "$TASK_DATA/app-1.json" || fail "$(jq .metadata "$TASK_DATA/app-1.json")"
+}
+
+@test "adopting a partial stacked creation's checkout that lacks the parent's head says it is not stacked" {
+  local out
+  stacked_partial
+  cat >"$BATS_TEST_TMPDIR/bin/finish" <<'SPAWN'
+#!/usr/bin/env bash
+printf 'spawn %s\n' "$*" >>"$LOG"
+jq -nc --arg p "$TASK_REPO.fix" '{address:"t10",cwd:$p,state:"live",labels:{"bercail.role":"agent","bercail.issue":"app-1","bercail.space":"sp1"}}' >"$TASK_DATA/t10.hc"
+jq -nc --arg p "$TASK_REPO.fix" '{ok:true,agent_started:true,path:$p,branch:"fix",space:"sp1",desk:"t10",session:"s2",issue:"app-1",target:"task:app-1",adoptReason:"x"}' | tee -a "$XDG_STATE_HOME/bercail/handoffs.jsonl"
+SPAWN
+  chmod +x "$BATS_TEST_TMPDIR/bin/finish"
+  out="$(jq '.requestId = "r2" | del(.stackedOn, .stackReason) | .adoptReason = "the partial creation left its checkout"' "$BATS_TEST_TMPDIR/req" | task dispatch)" || fail "$out"
+  jq -e '.status == "started" and .creation.desk == "t10" and (.warning | startswith("Adopted: ") and contains("Not stacked: fix was cut without task:app-5"))' <<<"$out" || fail "$out"
+  [[ "$(grep '^spawn ' "$LOG" | tail -1)" == *"--adopt-reason"* && "$(grep '^spawn ' "$LOG" | tail -1)" != *"--base"* ]] || fail "$(cat "$LOG")"
+  jq -e '.metadata.bercail_task | has("stack") | not' "$TASK_DATA/app-1.json" || fail "$(jq .metadata "$TASK_DATA/app-1.json")"
+}
+
+# A spawn that first moves the parent's branch ($MOVE: forward commits on it,
+# rewind resets it to the main checkout's head), then starts the desk.
+moving_spawn() {
+  mv "$BERCAIL_HANDOFF_SPAWN" "$BERCAIL_HANDOFF_SPAWN-desk"
+  cat >"$BERCAIL_HANDOFF_SPAWN" <<'SPAWN'
+#!/usr/bin/env bash
+if [[ $MOVE == forward ]]; then
+  printf late >"$TASK_REPO.fix/late.txt" && git -C "$TASK_REPO.fix" add late.txt && git -C "$TASK_REPO.fix" commit -qm late
+else
+  git -C "$TASK_REPO.fix" reset -q --soft "$(git -C "$TASK_REPO" rev-parse HEAD)"
+fi
+exec "$0-desk" "$@"
+SPAWN
+  chmod +x "$BERCAIL_HANDOFF_SPAWN"
+}
+
+@test "a parent that commits during the spawn still holds the stack; one rewound off its verified head leaves the desk up, not stacked" {
+  local out head
+  child_issue
+  spawn_ok t21 "$REPO.login"
+  moving_spawn
+  commit_fix fix.txt
+  head="$(git -C "$REPO.fix" rev-parse HEAD)"
+  out="$(child | MOVE=forward task dispatch)" || fail "$out"
+  jq -e --arg h "$head" '.status == "started" and .stacked.parents[0].head == $h and (has("warning") | not)' <<<"$out" || fail "$out"
+  git -C "$REPO.login" merge-base --is-ancestor "$head" HEAD || fail "the new branch lacks the verified head"
+  # A second child, whose spawn sees the parent rewound.
+  jq -n '{id:"app-3",title:"Next",status:"open",metadata:{}}' >"$TASK_DATA/app-3.json"
+  spawn_ok t22 "$REPO.next"
+  moving_spawn
+  head="$(git -C "$REPO.fix" rev-parse HEAD)"
+  out="$(child | jq '.issue = "app-3" | .target = "task:app-3" | .branch = "next"' | MOVE=rewind task dispatch)" || fail "$out"
+  jq -e --arg h "$head" '.status == "started" and .creation.desk == "t22" and (has("stacked") | not)
+    and (.warning | startswith("Not stacked: next was cut without task:app-1'"'"'s head \($h)"))' <<<"$out" || fail "$out"
+  jq -e '.metadata.bercail_task | .creation.status == "started" and (has("stack") | not)' "$TASK_DATA/app-3.json" \
+    || fail "$(jq .metadata "$TASK_DATA/app-3.json")"
+}
+
+@test "a beads stack is refused on a parent with nothing committed, with staged work, or with no desk, and names one task" {
+  local out
+  child_issue
+  spawn_ok t21 "$REPO.login"
+  refused() {
+    out="$(child "$1" | jq "${3:-.}" | task dispatch 2>&1)" && fail "$1 started a desk: $out"
+    [[ "$out" == *"$2"* ]] || fail "$1: $out"
+  }
+  refused '["task:app-1"]' "cannot stack app-2 on task:app-1: fix has no commit the main checkout lacks: nothing to start on, so dispatch without stackedOn. No desk was started"
+  # Staged only, then committed with more staged: dispatch commits nothing of it.
+  printf 'draft\n' >"$REPO.fix/draft.txt"
+  git -C "$REPO.fix" add draft.txt
+  refused '["task:app-1"]' "cannot stack app-2 on task:app-1: $REPO.fix has 1 staged file not committed on fix, whose head the new branch starts from; commit them first (Shep's land, or a local commit), then dispatch again"
+  commit_fix fix.txt
+  printf 'more\n' >>"$REPO.fix/draft.txt"
+  git -C "$REPO.fix" add draft.txt
+  refused '["task:app-1"]' "$REPO.fix has 1 staged file not committed on fix"
+  git -C "$REPO.fix" commit -qm more
+  # A branch already cut takes no base: a PR's own head.
+  export PR_HEAD=login
+  refused '["task:app-1"]' "stackedOn cuts a new branch from fix, and login is already cut (the head of pr:23); dispatch without stackedOn, or pass a new branch" '.target = "pr:23"'
+  out="$(child | jq '.target = "pr:23"' | task dispatch --dry-run 2>&1)" && fail "a dry run took the PR's head: $out"
+  [[ "$out" == *"login is already cut (the head of pr:23)"* ]] || fail "dry run: $out"
+  unset PR_HEAD
+  # A branch that is here already.
+  git -C "$REPO" branch login
+  refused '["task:app-1"]' "stackedOn cuts a new branch from fix, and login is already cut (a branch in this repo)"
+  git -C "$REPO" branch -D -q login
+  # A task no desk ever started.
+  jq -n '{id:"app-3",title:"Never dispatched",status:"open",metadata:{}}' >"$TASK_DATA/app-3.json"
+  refused '["task:app-3"]' "cannot stack app-2 on task:app-3: it has no live desk, and no record of one that started"
+  # One task, never itself, a trail or a bare id.
+  refused '["task:app-1", "task:app-3"]' "stackedOn and stackReason go together"
+  refused '["task:app-2"]' "stackedOn and stackReason go together"
+  refused '["trail:2"]' "stackedOn and stackReason go together"
+  refused '["app-1"]' "stackedOn and stackReason go together"
+  ! grep -q '^spawn ' "$LOG" || fail "a refused stack spawned: $(cat "$LOG")"
+  ! grep -q '^bd update app-2' "$LOG" || fail "a refused stack recorded: $(cat "$LOG")"
 }

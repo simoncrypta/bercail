@@ -497,7 +497,7 @@ Find where it expires."* ]] || fail "show: $out"
   out="$(stacked '["trail:2"]')" || fail "retry: $out"
   jq -e '.status == "queued" and .owner.desk == "t21" and .retry' <<<"$out" >/dev/null || fail "retry: $out"
   out="$(stacked '["trail:2"]' '.requestId = "r2"' 2>&1)" && fail "a follow-up took stackedOn: $out"
-  [[ "$out" == *"stackedOn starts a blocked trail's new desk, and trail:1 has live desk t21; dispatch without stackedOn"* ]] || fail "follow-up: $out"
+  [[ "$out" == *"stackedOn starts a new desk, and trail:1 has live desk t21; dispatch without stackedOn"* ]] || fail "follow-up: $out"
   [[ "$(grep -c '^spawn ' "$LOG")" == 1 ]] || fail "a second desk started: $(cat "$LOG")"
 }
 
@@ -517,7 +517,7 @@ Find where it expires."* ]] || fail "show: $out"
   }
   # The two fields go together, on a trail, with trails named once.
   out="$(dispatch '.stackedOn = ["trail:2", "trail:3"]' 2>&1)" && fail "no reason: $out"
-  [[ "$out" == *"stackedOn and stackReason go together, on a trail"* ]] || fail "no reason: $out"
+  [[ "$out" == *"stackedOn and stackReason go together: on a trail"* ]] || fail "no reason: $out"
   refused '["trail:2", "trail:3"]' "stackedOn and stackReason go together" '.stackReason = "  "'
   refused '["trail:1"]' "stackedOn and stackReason go together"
   refused '["#2", "trail:3"]' "stackedOn and stackReason go together"

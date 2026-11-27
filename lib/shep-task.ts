@@ -98,10 +98,18 @@ type Adoption = {
   from: { desk: string; session: string; space: string }[];
 };
 // Parent worktrees as verified at dispatch, not a claim about their current state.
-type Stack = {
-  reason: string;
-  parents: { trail: string; path: string; branch: string; desk?: string; staged?: number }[];
+// A trail names the trails it waits on; a beads issue, the one task whose
+// branch head its new branch starts from.
+type Parent = {
+  trail?: string;
+  task?: string;
+  path: string;
+  branch: string;
+  head?: string;
+  desk?: string;
+  staged?: number;
 };
+type Stack = { reason: string; parents: Parent[] };
 // A retry asks for the same work: the same payload, or, for a v0.17 request
 // whose payload was hashed another way, the same message and stage, and no
 // model or stackedOn, which v0.17 had not.
@@ -303,6 +311,24 @@ function live(repo: string): any[] {
   return terminalsIn(repo).filter(
     (t: any) => t.labels?.["bercail.role"] === "agent" && t.labels?.["bercail.shep"] !== "bg",
   );
+}
+// Whether branch is a local branch of repo.
+function hasBranch(repo: string, branch: string): boolean {
+  try {
+    git(repo, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+// Whether commit is in the history of the checkout at path.
+function holds(path: string, commit: string): boolean {
+  try {
+    git(path, "merge-base", "--is-ancestor", commit, "HEAD");
+    return true;
+  } catch {
+    return false;
+  }
 }
 // The checkout of branch, as git lists it (its folder may be gone), or null.
 function worktreeOf(repo: string, branch: string): string | null {
@@ -540,31 +566,54 @@ function findOwner(
   return owner;
 }
 // Verify the same checkout a follow-up would reach or an adoption could continue.
-function parentWork(repo: string, parent: string, history: any[]): Stack["parents"][number] {
-  ownTrail(repo, parent);
-  const task: Task | undefined = readRecord(repo, parent) ?? undefined;
+function parentWork(repo: string, parent: string, history: any[]): Parent {
+  const trail = isTrail(parent);
+  const id = trail ? parent : parent.slice("task:".length);
+  let task: Task | undefined;
+  if (trail) {
+    ownTrail(repo, parent);
+    task = readRecord(repo, parent) ?? undefined;
+  } else {
+    task = migrated(issue(repo, id).metadata?.bercail_task);
+    if (task && task.repo !== repo) throw new Error(`${id} is a task of ${task.repo}, not of this repo`);
+  }
+  const target = task?.target || parent;
   const fork = !!task?.forkReason;
-  const owner = findOwner(repo, parent, parent, task?.owner, fork, history);
-  let work: Stack["parents"][number];
-  if (owner) work = { trail: parent, path: owner.cwd, branch: owner.branch, desk: owner.desk };
+  const owner = findOwner(repo, id, target, task?.owner, fork, history);
+  const name = trail ? { trail: parent } : { task: parent };
+  let work: Parent;
+  if (owner) work = { ...name, path: owner.cwd, branch: owner.branch, desk: owner.desk };
   else {
     // A saved owner is not enough: history has no line of a checkout cleanup retired.
     if (
-      !owned(history, parent, parent, fork).some(
+      !owned(history, id, target, fork).some(
         (r) => !r.retirementTied && r.desk && r.ok !== false && r.agent_started !== false,
       )
     )
       throw new Error("it has no live desk, and no record of one that started in a checkout still kept");
-    const left = adoptable(repo, parent, parent, task, history, {});
+    const left = adoptable(repo, id, target, task, history, {});
     if (git(left.path, "ls-files", "--unmerged"))
       throw new Error(`${left.path} has unmerged entries, not a staged tree`);
-    if (!left.staged) throw new Error(`its desk is gone, and ${left.path} has nothing staged`);
-    work = { trail: parent, path: left.path, branch: left.branch, staged: left.staged };
+    if (trail && !left.staged) throw new Error(`its desk is gone, and ${left.path} has nothing staged`);
+    work = { ...name, path: left.path, branch: left.branch, ...(trail ? { staged: left.staged } : {}) };
   }
   // The worktree itself: a folder inside one is on its branch too.
   if (worktreeOf(repo, work.branch) !== work.path)
     throw new Error(`${work.path} is not the worktree of ${work.branch || "a branch"}`);
-  return work;
+  if (trail) return work;
+  // The new branch starts from the parent's branch head, and dispatch commits
+  // nothing: a staged change there would be missing from it.
+  const staged = git(work.path, "diff", "--cached", "--name-only").split("\n").filter(Boolean).length;
+  if (staged)
+    throw new Error(
+      `${work.path} has ${staged} staged file${staged === 1 ? "" : "s"} not committed on ${work.branch}, whose head the new branch starts from; commit them first (Shep's land, or a local commit), then dispatch again`,
+    );
+  const head = git(repo, "rev-parse", `refs/heads/${work.branch}`);
+  if (!git(repo, "rev-list", "--max-count=1", `HEAD..${head}`))
+    throw new Error(
+      `${work.branch} has no commit the main checkout lacks: nothing to start on, so dispatch without stackedOn`,
+    );
+  return { ...work, head };
 }
 // A retry may need fewer parents because one has landed, but never a new one.
 function stacked(repo: string, value: any, input: any, history: any[], retry = false): Stack | undefined {
@@ -574,7 +623,8 @@ function stacked(repo: string, value: any, input: any, history: any[], retry = f
     return undefined;
   }
   const named = new Set<string>(input.stackedOn);
-  const open = waiting.map((w) => w.replace(/^#(\d+)$/, "trail:$1"));
+  // A beads issue's dependencies do not gate dispatch: it names its one parent.
+  const open = isTrail(value.id) ? waiting.map((w) => w.replace(/^#(\d+)$/, "trail:$1")) : [...named];
   if (open.some((parent) => !named.has(parent)) || (!retry && open.length !== named.size))
     throw new Error(
       `stackedOn must name exactly what ${value.id} still waits on (${waiting.join(", ") || "nothing"}); a missing trail or an unreadable line cannot be stacked on. No desk was started`,
@@ -686,11 +736,24 @@ function spawnTimeout(): number {
   return Number(raw);
 }
 
+// A stacked creation whose checkout lacks the parent's head verified at
+// dispatch (the parent's branch moved off it before the cut) is no stack: drop
+// it, and say so. The desk is up either way.
+function unstack(task: Task, path: string, desk: string): { warning: string } | undefined {
+  const parent = task.stack?.parents.find((p) => p.task);
+  if (!parent || holds(path, parent.head!)) return undefined;
+  delete task.stack;
+  return {
+    warning: `Not stacked: ${task.branch} was cut without ${parent.task}'s head ${parent.head}, verified at dispatch (${parent.branch} moved meanwhile). Tell the person; desk ${desk} is up and needs that work brought in, or ending.`,
+  };
+}
 type Spawn = {
   existing: boolean;
   reuse: boolean;
   released: Set<string>;
   adoption: ReturnType<typeof adoptable> | null;
+  // An adoption of an UNKNOWN creation's checkout settles that creation's stack.
+  settles?: boolean;
   forkReason?: string;
   adoptReason?: string;
 };
@@ -715,6 +778,8 @@ function checkModel(repo: string, model: string): void {
 // started is still on its way to a desk when the creation turns UNKNOWN.
 function create(repo: string, value: any, task: Task, opts: Spawn): any {
   const creation = task.creation!;
+  // A beads stack cuts the new branch from its parent's, which gh stack then tracks.
+  const parent = opts.adoption ? undefined : task.stack?.parents.find((p) => p.task);
   const spawn = spawner();
   const secs = spawnTimeout();
   const args = [
@@ -727,6 +792,7 @@ function create(repo: string, value: any, task: Task, opts: Spawn): any {
     "--target",
     task.target,
     "--clean",
+    ...(parent && !opts.reuse && !opts.existing ? ["--base", parent.branch] : []),
     ...(creation.model ? ["--model", creation.model] : []),
     ...(opts.forkReason ? ["--fork-reason", opts.forkReason] : []),
     ...(opts.adoption ? ["--adopt-reason", opts.adoptReason!] : []),
@@ -767,8 +833,9 @@ function create(repo: string, value: any, task: Task, opts: Spawn): any {
     creation.result = result;
     // Startup may still be loading. Do not invent a session or call restore.
     task.branch = result.branch;
+    const lost = !opts.adoption || opts.settles ? unstack(task, result.path, result.desk) : undefined;
     save(repo, value, task);
-    return { status: creation.status, creation: result, authority: false };
+    return { status: creation.status, creation: result, authority: false, ...lost };
   } catch (error) {
     creation.status = "unknown";
     creation.reason = String(error);
@@ -813,20 +880,25 @@ function dispatch(op: string, input: any): any {
     throw new Error(
       "model takes PROVIDER/MODEL[:thinking], as pi --list-models names it (claude-bridge/claude-opus-5-5:high)",
     );
+  // A trail stacks on the trails it waits on; a beads issue on one task's branch.
+  const parent = (p: unknown) =>
+    typeof p === "string" &&
+    (isTrail(input.issue) ? isTrail(p) : /^task:[a-z0-9][a-z0-9._-]*$/i.test(p)) &&
+    ![input.issue, `task:${input.issue}`].includes(p);
   if (
     (input.stackedOn !== undefined || input.stackReason !== undefined) &&
     !(
-      isTrail(input.issue) &&
       Array.isArray(input.stackedOn) &&
       input.stackedOn.length &&
-      input.stackedOn.every((p: unknown) => typeof p === "string" && isTrail(p) && p !== input.issue) &&
+      (isTrail(input.issue) || input.stackedOn.length === 1) &&
+      input.stackedOn.every(parent) &&
       new Set(input.stackedOn).size === input.stackedOn.length &&
       typeof input.stackReason === "string" &&
       input.stackReason.trim()
     )
   )
     throw new Error(
-      'stackedOn and stackReason go together, on a trail: stackedOn lists once each trail it still waits on (["trail:59","trail:60"]), and stackReason says why the person wants it started on their unmerged work',
+      'stackedOn and stackReason go together: on a trail, stackedOn lists once each trail it still waits on (["trail:59","trail:60"]); on a beads issue, the one task whose branch the new desk starts from (["task:app-12"]); stackReason says why the person wants it started on their unmerged work',
     );
   const repo = mainOf(input.repo);
   const common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir");
@@ -908,15 +980,8 @@ function dispatch(op: string, input: any): any {
     );
     // A branch one of them had, kept here: a new desk checks it out as it is.
     // A PR's own branch starts at origin's head instead.
-    const kept = (branch: string) => {
-      if (target.startsWith("pr:") || !gone.some((r) => r.branch === branch)) return false;
-      try {
-        git(repo, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`);
-        return true;
-      } catch {
-        return false;
-      }
-    };
+    const kept = (branch: string) =>
+      !target.startsWith("pr:") && gone.some((r) => r.branch === branch) && hasBranch(repo, branch);
     if (target.startsWith("pr:") && history.some((r) => (!r.target || r.target.startsWith("task:")) && r.branch)) {
       const pr = prFacts(repo, target);
       if (!pr.headRefName || pr.isCrossRepository)
@@ -986,6 +1051,7 @@ function dispatch(op: string, input: any): any {
       throw new Error("requestId payload changed; this is not a retry");
     const prior = task?.creation?.id === input.requestId ? task?.creation : undefined;
     if (prior) {
+      let lost: { warning: string } | undefined;
       if (!same(prior, request, input)) throw new Error("requestId payload changed; this is not a retry");
       // The spawn of an UNKNOWN creation has ended. When it ended partial and
       // its desk came up after all, bind that desk. When it left no desk,
@@ -1007,9 +1073,16 @@ function dispatch(op: string, input: any): any {
               throw new Error(
                 `stage autopilot starts a desk only on ${target}'s own branch, and ${task!.branch} is not it`,
               );
-            const stack = stacked(repo, value, input, history, true);
+            // A beads child's branch, once cut, keeps the parent it was cut from.
+            const cut = !isTrail(value.id) && !!task!.stack && !!worktreeOf(repo, task!.branch);
+            const stack = cut ? task!.stack : stacked(repo, value, input, history, true);
             if (stack) task!.stack = stack;
             path = leftover(repo, value.id, task!.branch, history, existing ? pr!.headRefOid : "");
+            const parent = cut ? task!.stack!.parents[0]! : undefined;
+            if (parent && !holds(path!, parent.head!))
+              throw new Error(
+                `${path} does not hold ${parent.task}'s head ${parent.head}, which its branch was to be cut from; inspect it`,
+              );
           }
         } catch (error) {
           const why = (error as Error).message;
@@ -1041,6 +1114,7 @@ function dispatch(op: string, input: any): any {
         };
         delete prior.reason;
         task!.owner = late;
+        lost = unstack(task!, late.cwd, late.desk);
         save(repo, value, task!);
       }
       // Once the desk started, its own session gets the creation's message.
@@ -1077,6 +1151,7 @@ function dispatch(op: string, input: any): any {
           authority: false,
           retry: true,
           ...(adopted ? told(adopted, original.desk) : {}),
+          ...lost,
         };
       }
       return { status: prior.status, owner: task!.owner, next: prior.next, authority: false, retry: true };
@@ -1127,7 +1202,7 @@ function dispatch(op: string, input: any): any {
     const adoption = adopting ? adoptable(repo, value.id, target, task, history, input) : null;
     if (input.stackedOn && (owner || adoption))
       throw new Error(
-        `stackedOn starts a blocked trail's new desk, and ${value.id} has ${owner ? `live desk ${owner.desk}` : `its gone desk's checkout ${adoption!.path}, which a new desk adopts`}; dispatch without stackedOn`,
+        `stackedOn starts a new desk, and ${value.id} has ${owner ? `live desk ${owner.desk}` : `its gone desk's checkout ${adoption!.path}, which a new desk adopts`}; dispatch without stackedOn`,
       );
     // A new desk waits for the trails a "Blocked by:" line names, unless it is
     // stacked on them; a live or adopted one goes on.
@@ -1171,6 +1246,11 @@ function dispatch(op: string, input: any): any {
       const pr = prFacts(repo, target);
       existing = !pr.isCrossRepository && pr.headRefName === task.branch;
     }
+    const onTask = stack?.parents.find((p) => p.task);
+    if (onTask && (existing || hasBranch(repo, task.branch)))
+      throw new Error(
+        `stackedOn cuts a new branch from ${onTask.branch}, and ${task.branch} is already cut (${existing ? `the head of ${target}` : "a branch in this repo"}); dispatch without stackedOn, or pass a new branch`,
+      );
     if (!owner && request.stage === "autopilot" && !(adoption ? target.startsWith("pr:") : existing))
       throw new Error(
         "stage autopilot starts a desk only on an open PR's own branch: target pr:N, with branch set to that PR's head branch",
@@ -1197,6 +1277,8 @@ function dispatch(op: string, input: any): any {
     }
     task.owner = owner;
     if (owner) {
+      // A desk that came up for an UNKNOWN creation settles its stack too.
+      const lost = unsettled ? unstack(task, owner.cwd, owner.desk) : undefined;
       // Reopen before delivery, so the job is on the board while the desk works.
       task.pending = { ...task.pending, [request.id]: request.payload };
       save(repo, value, task);
@@ -1204,7 +1286,7 @@ function dispatch(op: string, input: any): any {
       delete task.pending[request.id];
       if (!Object.keys(task.pending).length) delete task.pending;
       save(repo, value, task, false); // The issue may be closed meanwhile: leave its status.
-      return { ...delivered(path), owner, authority: false };
+      return { ...delivered(path), owner, authority: false, ...lost };
     }
     if (input.model) checkModel(repo, input.model);
     if (!adoption) task.stack = stack;
@@ -1220,13 +1302,15 @@ function dispatch(op: string, input: any): any {
       reuse: false,
       released,
       adoption,
+      settles: !!ended,
       forkReason: input.forkReason ? String(input.forkReason) : undefined,
       adoptReason: record?.reason,
     });
-    if (!record) return stack ? { ...done, stacked: stack } : done;
+    if (!record) return task.stack ? { ...done, stacked: task.stack } : done;
     // An adoption goes on with the gone desk's work, blocked or not; the person hears what it waits on.
     const adopted = told(record, dry ? "(new)" : done.creation.desk);
     if (value.waiting?.length) adopted.warning += ` ${blocked(value)}.`;
+    if (done.warning) adopted.warning += ` ${done.warning}`;
     return { ...done, ...adopted };
   } finally {
     if (!dry) rmSync(lock, { recursive: true });

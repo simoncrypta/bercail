@@ -111,6 +111,25 @@ Resend only the gone desk's follow-ups still needed, with new ids, once any
 uncertain one is settled. `original owner missing/stale` (records of a spawn
 that started no desk, for one): tell the person what it names.
 
+When the person wants a beads job started on another task's unlanded work
+(it waits for their LGTM, say), stack it: dispatch its first desk, on a new
+branch, with `stackedOn: ["task:<parent>"]`, one task of this repo with a
+live desk or a kept worktree, and `stackReason` quoting their ask. Its branch
+is cut from the parent's branch head; handoff-spawn records the parent in gh
+stack when it can. Dispatch commits nothing and refuses a parent with staged
+files. Committing such a parent locally for the cut needs the person's yes,
+even when they asked for the stack (a standing rule can give it). With it:
+note its HEAD, commit (`git -C <parent worktree> commit -m "stack base:
+<title>, unreviewed"`), dispatch, then, while its HEAD is still that commit,
+put the work back staged with `git -C <parent worktree> reset --soft <noted
+HEAD>`. It is then as it was for tuicr and its land card, and nothing was
+pushed. A `Not stacked:` warning means the new branch missed the parent's
+work: tell the person. Land the parent first: land does not check the order
+yet, and the child's branch holds the parent's commit. Once the parent is on
+the trunk, send the child's desk a follow-up: its HEAD goes to the trunk's
+tip on origin with only its own change staged on top, then /validate. It
+lands as its own commit.
+
 In an Entire repo (git backend `entire`) there are no beads: the job is a
 trail, `trail:<n>`, wherever a step takes an issue id (dispatch, `shep bg
 --issue`, `brief`, questions, `todo add --issue`, `mistake --issue`).
@@ -621,8 +640,10 @@ and `--issue` when there is one, and say so in one line with its link:
   you to ship it. No beads ids in a commit or PR.
 - When `describe check --json` says `review: required`, tell the person why
   (the `high_stakes` paths it touches, or the policy's `review = "always"`)
-  and its stakes, and wait for their LGTM before you commit or merge, even
-  straight-to-main and under a rule to merge without asking. On a land card,
+  and its stakes, and wait for their LGTM before you commit or merge (a
+  stack's local commit they said yes to, undone after its dispatch, is not
+  that commit), even straight-to-main and under a rule to merge without
+  asking. On a land card,
   its "LGTM, ship it" is that LGTM. Only the repo's
   `review = "none"` waives it. It never holds other work.
 - With git backend `entire`, a trail is the PR. Merge it only when asked, with
