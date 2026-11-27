@@ -30,7 +30,7 @@ POLICY_FILE=".bercail/policy.toml"
 # required_ci: the workflow files whose push runs gate a landing from one pick; a
 # repo opts in by naming them. shep_may_run: what Shep runs here with no guard card,
 # while the repo reads private: any of cleanup, trail link and trail merge (docs/shep.md).
-# rebase_keeps_pick: whether a commit or merge card asked here keeps its pick through a
+# rebase_keeps_pick: whether a commit, merge or land card asked here keeps its pick through a
 # clean rebase onto the moved trunk, the patch unchanged (docs/config.md).
 POLICY_DEFAULTS='{"push":"ask","integrate":"","pr_draft":false,"release":"","agent_may_release":false,"merge_reversible":false,"rebase_keeps_pick":false,"rules":"","pr_template":"","provenance":"line","review":"by-stakes","high_stakes":[],"diff_budget":400,"review_budget":1000,"required_ci":[],"shep_may_run":[]}'
 

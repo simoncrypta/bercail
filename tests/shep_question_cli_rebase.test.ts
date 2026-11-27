@@ -139,6 +139,15 @@ describe("a staged change on the trunk, as the desk carries it", () => {
     expect(check()).toMatchObject({ status: "stale" });
   });
 
+  test("a land card committed once, then rebased, keeps its pick, until more is staged", () => {
+    const trunk = staged("land");
+    git("commit", "-qm", "the candidate");
+    git("rebase", "-q", trunk);
+    expect(check()).toMatchObject({ status: "fresh", rebased: { tree: git("rev-parse", "HEAD^{tree}") } });
+    nextJob();
+    expect(check()).toMatchObject({ status: "stale", reasons: ["head changed", "stagedTree changed", "base changed"] });
+  });
+
   test("a merge card's commit undone back to staged on the moved trunk is stale", () => {
     policy(true);
     const trunk = desk();
@@ -168,10 +177,10 @@ describe("one commit rebased onto the moved trunk", () => {
   }
   // The desk rebuilds its commit on the trunk's tip by hand, both changes in, as a rebase that
   // took every hunk would: same message, same patch.
-  function rebuilt(trunk: string, first = "one") {
+  function rebuilt(trunk: string, first = "one", ...message: string[]) {
     git("reset", "-q", "--hard", trunk);
     writeFileSync(join(repo, "lines"), ten(first, "ten"));
-    git("commit", "-qam", "the candidate");
+    git("commit", "-qa", ...(message.length ? message : ["-m", "the candidate"]));
   }
 
   test("with the same patch, replayed clean, keeps its pick, the person's LGTM as it was", () => {
@@ -182,6 +191,22 @@ describe("one commit rebased onto the moved trunk", () => {
     rebuilt(trunk);
     expect(check()).toMatchObject({ status: "fresh", rebased: { tree: git("rev-parse", "HEAD^{tree}") } });
     expect(ok("get", undefined, ["Q1@1"])).toMatchObject({ status: "answered", answer });
+  });
+
+  test("with the same patch under another message is stale", () => {
+    policy(true);
+    const trunk = committed();
+    land("lines", ten("1", "ten"));
+    rebuilt(trunk, "one", "-m", "the candidate, reworded");
+    expect(check()).toMatchObject({ status: "stale", reasons: ["head changed", "stagedTree changed", "base changed"] });
+  });
+
+  test("with a message that differs only after its last word is stale", () => {
+    policy(true);
+    const trunk = committed();
+    land("lines", ten("1", "ten"));
+    rebuilt(trunk, "one", "--cleanup=verbatim", "-m", "the candidate\u00a0");
+    expect(check()).toMatchObject({ status: "stale", reasons: ["head changed", "stagedTree changed", "base changed"] });
   });
 
   test("with only whitespace changed, which patch-id ignores, is stale", () => {

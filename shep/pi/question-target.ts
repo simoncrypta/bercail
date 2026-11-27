@@ -278,6 +278,23 @@ function headers(cwd: string, oid: string): { tree: string | undefined; parents:
   }
 }
 
+// A commit's message as its object holds it, byte for byte: nothing trimmed or decoded.
+function message(cwd: string, oid: string): Buffer | null {
+  try {
+    const raw = execFileSync("git", ["--no-replace-objects", "cat-file", "commit", oid], {
+      cwd,
+      env: targetEnv(),
+      timeout: 5000,
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const body = raw.indexOf("\n\n");
+    return body < 0 ? null : raw.subarray(body + 2);
+  } catch {
+    return null;
+  }
+}
+
 // The approved tree was committed: `now` is one commit, with `old` its only parent and
 // the approved tree its tree. On a merge or land card asked while the desk merged in the
 // asked base, the commit that finishes that merge has the base as second parent. Anything
@@ -311,11 +328,12 @@ const noMergeDrivers = (cwd: string) =>
     timeout: 5000,
   }).status === 1;
 
-// A pinned commit or merge card's proof of a clean rebase onto the moved trunk (docs/config.md):
-// one patch, staged or one commit, before and after (staged may become committed, never
-// back), with the same patch-id, and git's merge of the asked tree onto the new trunk is
-// exactly the live tree. An asked tree gone from the objects is rebuilt by that merge run
-// back, to its exact hash. The live tree, or null when anything fails or cannot be read.
+// A pinned commit, merge or land card's proof of a clean rebase onto the moved trunk
+// (docs/config.md): one patch, staged or one commit, before and after (staged may become
+// committed, never back; a commit keeps its message), with the same patch-id, and git's
+// merge of the asked tree onto the new trunk is exactly the live tree. An asked tree gone
+// from the objects is rebuilt by that merge run back, to its exact hash. The live tree, or
+// null when anything fails or cannot be read.
 function rebasedClean(question: Question, now: QuestionTarget, keepsPick: boolean): string | null {
   const asked = question.target;
   const { branch, baseRef, action, worktree: cwd, base: b0, head: h0, stagedTree: t0 } = asked;
@@ -326,7 +344,7 @@ function rebasedClean(question: Question, now: QuestionTarget, keepsPick: boolea
     // A default the person has not said OK to is no pick of theirs to keep.
     (question.answer?.source === DEFAULT_SOURCE && question.settled?.outcome !== "ok") ||
     (question.kind !== "review" && question.kind !== "action") ||
-    (action !== "commit" && action !== "merge") ||
+    !["commit", "merge", "land"].includes(action!) ||
     question.push ||
     !cwd ||
     typeof branch !== "string" ||
@@ -352,8 +370,8 @@ function rebasedClean(question: Question, now: QuestionTarget, keepsPick: boolea
     };
     const tree = (out: string | null) => out?.split("\n")[0] || null;
     // The live tree: the index while the change is still staged on the trunk; once it is
-    // one commit on it, that commit's tree, and for a commit card the index must still be
-    // it (a merge card merges HEAD: what is staged next is its next job). A change asked
+    // one commit on it, that commit's tree, and for a commit or land card the index must still
+    // be it (a merge card merges HEAD: what is staged next is its next job). A change asked
     // as a commit never counts again as staged.
     const commit = h1 === b1 ? null : headers(cwd, h1);
     if (h1 === b1 ? h0 !== b0 : JSON.stringify(commit?.parents) !== JSON.stringify([b1])) return null;
@@ -361,7 +379,7 @@ function rebasedClean(question: Question, now: QuestionTarget, keepsPick: boolea
     copyFileSync(gitPath(cwd, "index"), env.GIT_INDEX_FILE);
     const index = tree(git(["write-tree"]));
     const t1 = commit?.tree ?? index;
-    if (!t1 || index !== now.stagedTree || (action === "commit" && index !== t1)) return null;
+    if (!t1 || index !== now.stagedTree || (action !== "merge" && index !== t1)) return null;
     if (git(["merge-base", "--is-ancestor", b0, b1]) === null) return null;
     if (
       git(["cat-file", "-e", `${t0}^{tree}`]) === null &&
@@ -369,10 +387,13 @@ function rebasedClean(question: Question, now: QuestionTarget, keepsPick: boolea
     )
       return null;
     // The one patch, from the base to its tree: staged on the asked base itself, or one
-    // ordinary commit on it with nothing more staged. Its patch-id, or null.
+    // ordinary commit on it, whose message the rebase keeps byte for byte.
     if (h0 !== b0) {
       const asked = headers(cwd, h0);
       if (asked?.tree !== t0 || JSON.stringify(asked.parents) !== JSON.stringify([b0])) return null;
+      const was = message(cwd, h0);
+      const is = message(cwd, h1);
+      if (!was || !is || !was.equals(is)) return null;
     }
     const patch = (base: string, top: string) => {
       const diff = git([
@@ -582,11 +603,10 @@ function policyOf(worktree: string, repo: string, bin = bercail()) {
 const keepsPick = (policy: { policy?: { rebase_keeps_pick?: unknown } } | undefined) =>
   policy?.policy?.rebase_keeps_pick === true;
 
-// A commit or merge card, asked with no push where the repo's policy says rebase_keeps_pick,
+// A commit, merge or land card, asked with no push where the repo's policy says rebase_keeps_pick,
 // is pinned to it: a card asked before the repo opted in never keeps a pick through a rebase.
 function pinsRebase(target: QuestionTarget): boolean {
-  if (target.head === null || !target.worktree || (target.action !== "commit" && target.action !== "merge"))
-    return false;
+  if (target.head === null || !target.worktree || !["commit", "merge", "land"].includes(target.action!)) return false;
   try {
     return keepsPick(policyOf(target.worktree, target.repo));
   } catch {
