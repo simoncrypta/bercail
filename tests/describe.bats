@@ -330,6 +330,50 @@ SH
   [[ "$(<"$BATS_TEST_TMPDIR/commit.out")" == "file: add a line"$'\n\n'"$(plain_body)$NOBODY" ]] || fail "commit stdout"
 }
 
+# The documented forge commands that take the title or body from "$(bercail
+# describe ...)", one a line, ready to run: \| unescaped, <n> filled, and
+# origin/<base> as BASE (default main).
+forge_commands() {
+  grep -ho '`[^`]*\$(bercail describe [^`]*`' "$ROOT"/skills/describe/SKILL.md "$ROOT"/skills/autopilot/SKILL.md "$ROOT"/docs/entire.md \
+    | grep -E '(gh|origin|entire) (pr|trail) ' \
+    | sed -e 's/^`//' -e 's/`$//' -e 's/\\|/|/g' -e 's/<n>/7/g' -e "s#origin/<base>#${1:-main}#g"
+}
+
+# Each command in forge.cmds exits non-zero and never starts the forge.
+forge_never_runs() {
+  local cmd
+  while IFS= read -r cmd; do
+    : >"$BATS_TEST_TMPDIR/forge.log"
+    bash -c "$cmd" </dev/null >/dev/null 2>&1 && fail "$1 exited 0: $cmd"
+    [[ ! -s "$BATS_TEST_TMPDIR/forge.log" ]] || fail "the forge ran on $1 with: $(<"$BATS_TEST_TMPDIR/forge.log"), from: $cmd"
+  done <"$BATS_TEST_TMPDIR/forge.cmds"
+}
+
+@test "the documented forge commands hand the forge the text, and never run it when describe refuses" {
+  local cmd stub n=0
+  printf '#!/usr/bin/env bash\nexec "%s/bin/bercail" "$@"\n' "$ROOT" >"$BATS_TEST_TMPDIR/bin/bercail"
+  for stub in gh origin entire; do
+    printf '#!/usr/bin/env bash\n{ printf "%%s\\n" "$*"; cat; } >>"%s/forge.log"\n' "$BATS_TEST_TMPDIR" >"$BATS_TEST_TMPDIR/bin/$stub"
+  done
+  chmod +x "$BATS_TEST_TMPDIR"/bin/*
+  described
+  forge_commands >"$BATS_TEST_TMPDIR/forge.cmds"
+  while IFS= read -r cmd; do
+    n=$((n + 1))
+    : >"$BATS_TEST_TMPDIR/forge.log"
+    bash -c "$cmd" </dev/null >/dev/null 2>&1 || fail "a passing description: $cmd"
+    grep -qF 'Adds a line for readers' "$BATS_TEST_TMPDIR/forge.log" || fail "the forge got no body: $cmd"
+    [[ "$cmd" != *--title* && "$cmd" != *--subject* ]] || grep -qE -- '--(title|subject) file: add a line ' "$BATS_TEST_TMPDIR/forge.log" \
+      || fail "the forge got no title: $cmd"
+  done <"$BATS_TEST_TMPDIR/forge.cmds"
+  ((n == 11)) || fail "the docs hold 11 such commands, found $n: update this count when you add or remove one"
+  forge_commands no-such-base | grep -F -- '--checkpoints no-such-base' >"$BATS_TEST_TMPDIR/forge.cmds" || fail "no --checkpoints command"
+  forge_never_runs "a body whose --checkpoints names no commit"
+  change other
+  forge_commands >"$BATS_TEST_TMPDIR/forge.cmds"
+  forge_never_runs "a stale description"
+}
+
 @test "the staged tree comes from the index git uses, and an index it cannot read fails" {
   described
   local tree

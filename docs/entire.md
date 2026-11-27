@@ -74,8 +74,8 @@ The trail is the PR.
 
 | Step | Command |
 |------|---------|
-| Open | `bercail describe commit \| git commit -F -`, then `entire trail create --title "$(bercail describe title)" --body "$(bercail describe body)"`, which publishes the branch |
-| Update | commit, `git push`, then `entire trail update --body "$(bercail describe body)"` |
+| Open | `bercail describe commit \| git commit -F -`, then `title="$(bercail describe title)" && body="$(bercail describe body)" && entire trail create --title "$title" --body "$body"`, which publishes the branch |
+| Update | commit, `git push`, then `body="$(bercail describe body)" && entire trail update --body "$body"` |
 | Ready for review | `entire trail ready` |
 | Merge | you, or Shep when you ask: `bercail job merge trail:<n>`, once the trail's gates pass; it closes the trail once no change is open |
 

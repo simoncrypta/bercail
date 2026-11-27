@@ -84,7 +84,7 @@ After each fix, keep the description true. Rerun the checks the fix touched
 into `.bercail/validate.json` for the new tree, update the parts of
 `.bercail/description.md` the fix changed, run `bercail describe stamp` and
 `bercail describe check`, then update the PR body:
-`bercail describe body | gh pr edit <n> --title "$(bercail describe title)" --body-file -`
+`title="$(bercail describe title)" && body="$(bercail describe body)" && gh pr edit <n> --title "$title" --body "$body"`
 (`origin pr edit` on `origin`). With no description in the worktree, leave
 the body alone and say so in the report.
 
