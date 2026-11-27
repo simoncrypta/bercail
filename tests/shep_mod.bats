@@ -1703,6 +1703,47 @@ eq(calls("pane.focus"), [["pane.focus", { pane: "p1" }]], "the keyboard goes bac
 EOF
 }
 
+@test "the panel keeps reloading after Discuss closes, and Shep is told while the branch's Pi still runs" {
+  mod_case <<'EOF'
+// Herdr drops a dialog's copy as it closes: a call that copy started may never settle
+// (hanging). Seen in Herdr 0.1.18: a load started there stayed in flight, so no later load ran.
+setup({ terminals: [shep] });
+find(globalThis.herdr.layout, "shep-side").hidden = false;
+find(globalThis.herdr.layout, "shep-decisions").hidden = false;
+let hanging = null;
+const serve = panelExec(PANEL_VIEW);
+globalThis.herdr.exec = (cmd, args) => (hanging?.(cmd, args) ? new Promise(() => {}) : serve(cmd, args));
+copy("decisions");
+for (let i = 0; i < 5; i++) await tick();
+const panels = () => globalThis.herdr.execs.filter((e) => /question panel/.test(e[2] ?? "")).length;
+const bar = (token) => {
+  globalThis.herdr.props = { role: "discuss", terminal: "t30", token, opening: "o1", back: { pane: "p1" }, overlay: "o9" };
+  const b = new Shep();
+  b.init({}, cx);
+  return b;
+};
+const told = (token) => globalThis.herdr.execs.some((e) => /question closed/.test(e[2] ?? "") && e[4] === token);
+// Its Pi ended after /pick: hc kill and the close answer at once, and a load it starts hangs.
+const b1 = bar("Q1@1");
+hanging = (_cmd, args) => /question panel/.test(args[1]);
+b1.close();
+for (let i = 0; i < 5; i++) await tick();
+hanging = null;
+if (!told("Q1@1")) fail("Shep was not told of the close");
+const before = panels();
+for (const f of globalThis.herdr.timers) f(cx); // the panel's own 30-second look
+for (let i = 0; i < 5; i++) await tick();
+if (panels() <= before) fail("the panel stopped reloading after Discuss closed");
+// ✕ while its Pi still runs: hc kill hangs too, and Shep is still told.
+const b2 = bar("Q2@3");
+hanging = () => true;
+b2.close();
+for (let i = 0; i < 5; i++) await tick();
+hanging = null;
+if (!told("Q2@3")) fail("Shep was not told of the close while the branch's Pi ran");
+EOF
+}
+
 @test "no scripted command (keys.json, the palette, herdr-app do) answers or opens the Decisions panel" {
   mod_case <<'EOF'
 // keys.json, the palette, herdr-app do and toasts all arrive through nextCommand. The nav

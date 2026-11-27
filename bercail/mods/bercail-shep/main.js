@@ -1959,17 +1959,14 @@ export default class BercailShep extends View {
 
   // The Discuss dialog closed (✕, or its Pi ended after /pick): end the branch's Pi
   // (it continues on the next open) and tell Shep, which the closed op skips when a
-  // pick already did. Both run where the branch and the ledger are.
+  // pick already did. Both run where the branch and the ledger are. Herdr drops this
+  // copy as it closes, and a call it started then never settles: both start at once,
+  // and the panel's own copies reload it, or a load would stay in flight for good.
   async discussClosed() {
     const { terminal, token, opening } = props() ?? {};
     await readBackend();
-    try {
-      await exec("hc", ["kill", terminal], { timeout: 10000 });
-    } catch {}
-    try {
-      await exec("bash", ["-lc", CLOSED, NAME, token, opening], { timeout: 30000, on: S.backend });
-    } catch {}
-    loadDecisions();
+    exec("hc", ["kill", terminal], { timeout: 10000 }).catch(() => {});
+    exec("bash", ["-lc", CLOSED, NAME, token, opening], { timeout: 30000, on: S.backend }).catch(() => {});
     this.restoreFocus();
   }
 }
