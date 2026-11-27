@@ -72,7 +72,9 @@ The extension classifies provider failures as `provider_safety_block`,
 `auth_expired_or_denied`, `usage_limit`, `transient_transport`, `model_refusal`,
 or `unknown_provider_error`. Safety evidence wins over mixed 429, 402, quota
 text or rejected rate-limit headers. Auth failures and unknown errors stop the role;
-they do not pause it or move the judge. The pause on a limit is separate from
+they do not pause it or move the judge. pi-claude-cli's "Claude billing:" stop, a
+call charged or about to be charged to usage credits, is an unknown error, not a
+limit, so the fallback never waits it out or routes around it. The pause on a limit is separate from
 Pi's bounded transport retries.
 
 A safety block records an incomplete attempt in a `bercail-provider-error`

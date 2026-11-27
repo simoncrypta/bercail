@@ -132,6 +132,21 @@ it.each([
   );
 });
 
+// pi-claude-cli's two billing stops (src/usage-credits.ts), and a plan limit.
+it.each([
+  [
+    "Claude billing: this request was charged to Claude usage credits instead of your plan limits (rate limit status rejected, seven_day_opus). pi stopped so further requests are not charged. To stay on plan limits only, turn off usage credits at claude.ai/settings/usage. To allow usage credits, set PI_CLAUDE_CLI_ALLOW_USAGE_CREDITS=1.",
+    "unknown_provider_error",
+  ],
+  [
+    "Claude billing: Anthropic did not accept this request on your Claude plan limits and wants to charge it to usage credits. This happens when your plan limit is used up, or when Anthropic classifies the request as third-party app usage. pi will not retry it. Original error: 429 Third-party apps now draw from your extra usage, not your plan limits.",
+    "unknown_provider_error",
+  ],
+  ["You've hit your 5-hour limit · resets 3am (Europe/Paris)", "usage_limit"],
+])("stops on a Claude billing stop but waits out a plan limit: %s", (message, reason) => {
+  expect(classifyProviderError({ role: "assistant", stopReason: "error", errorMessage: message })).toBe(reason);
+});
+
 it("selects final assistant for recovered quota, but never erases an earlier safety block", () => {
   const line = (message: unknown) => JSON.stringify({ type: "message_end", message });
   const success = line({ role: "assistant", stopReason: "stop" });

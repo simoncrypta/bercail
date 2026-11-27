@@ -42,6 +42,8 @@ export function classifyProviderError(
     return "auth_expired_or_denied";
   if (response.reason === "model_refusal" || raw === "refusal" || /\bmodel_refusal\b/i.test(error))
     return "model_refusal";
+  // pi-claude-cli's billing stop: a call was or would be charged to usage credits, so waiting or switching may spend more.
+  if (/\bClaude billing:/.test(error)) return "unknown_provider_error";
   // Invalid requests and context overflow must not become quota opportunities through a wrapper/header.
   if (
     response.status === 400 ||
