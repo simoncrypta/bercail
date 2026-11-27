@@ -153,8 +153,11 @@ On top of the repo's policy, for every role:
   Anyone may run these.
 - **Help:** a last `--help` with no flag before it is a read for entire's own
   commands, Brain and Graph (`entire trail link --help`,
-  `entire brain remember --help`), when the words are bare, with no wrapper or
-  substitution. Another plugin is its own program, so its `--help` is not. Anywhere else, `--help` and
+  `entire brain remember --help 2>&1 | head`), when the words are bare, with
+  no wrapper, quote, backslash, substitution, or redirect other than one fd
+  joined to another. So is a last `-h` on a Brain or Graph command the guard
+  lists, other than setup (`entire brain remember -h`). Another plugin is its own program, so its
+  `--help` is not. Anywhere else, `--help` and
   `--dry-run` are not reads: a flag takes the next word as its value, so
   `trail approve 3 -m --help` approves.
 - **Publish:** `trail create`, `trail link`, `trail ci-pr`, `trail update-branch`

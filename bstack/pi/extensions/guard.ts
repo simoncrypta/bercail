@@ -205,7 +205,7 @@ const brainSpendAsk = "This Brain command calls a model on your tokens. Allow it
 const entireListed =
   "bercail does not know this entire command; it ran because entire agent-help lists it as read-only.";
 const brainRemember =
-  'A memory reaches every branch and desk at once. Propose it in your report as Memory: "<text>" --path <p>, and Shep records it once the person agrees.';
+  'A memory reaches every branch and desk at once. Propose it in your report as Memory: "<text>" --path <p>, and Shep records it.';
 const emptySecret =
   'A command fed by op read, op inject or op item get --fields still runs on an empty value when 1Password fails or its prompt is dismissed. Read the secret into a variable, check it is not empty, then use it: set -o pipefail; pw="$(op read \'op://…\')"; : "${pw:?op read failed}"; then pass "$pw". Or write a small script that starts with set -euo pipefail and does the same.';
 const secretFile =
@@ -841,6 +841,7 @@ type Segment = {
   words: string[];
   marked: string[];
   quoted: boolean[];
+  verbatim: boolean[];
   subs: string[];
   captured: boolean[];
   docs: string[];
@@ -891,12 +892,14 @@ function segmentsOf(command: string, tag = ""): Segment[] {
     pastFunction ||= head > 0;
     words = words.slice(head);
     quoted = quoted.slice(head);
+    verbatim = verbatim.slice(head);
     if (words.length || subs.length || docs.length || redirects.length || unclosed) {
       const plain = words.map((word) => word.replaceAll(literalDollar, "$"));
       out.push({
         words: plain,
         marked: words,
         quoted,
+        verbatim,
         subs,
         captured,
         docs,
@@ -1116,18 +1119,24 @@ const entireCommands = new Set(
   ),
 );
 
-function cliHelp(words: string[], graphiteAliases: readonly string[] | undefined): boolean {
+// strict: no redirect, and no backslash anywhere in the command. entire's help needs neither.
+function cliHelp(words: string[], strict: boolean, graphiteAliases: readonly string[] | undefined): boolean {
   const name = basename(words[0]);
   // entire's own commands, Brain and Graph parse flags anywhere: a last --help with no flag
-  // before it, which could take it as a value, prints help. Another plugin is its own program.
-  if (/^entire(-brain|-graph)?$/.test(name))
+  // before it, which could take it as a value, prints help. So does -h, kept to the Brain and
+  // Graph commands the guard lists, setup aside. Another plugin is its own program.
+  if (/^entire(-brain|-graph)?$/.test(name)) {
+    const last = words.at(-1);
+    const call = pluginCall([name, ...words.slice(1)]);
+    const shortHelp = call !== undefined && pluginKind.has(call.key) && pluginCallKind(call) !== "setup";
     return (
       words.length > 2 &&
       (name !== "entire" || entireCommands.has(words[1])) &&
-      words.at(-1) === "--help" &&
+      (last === "--help" || (last === "-h" && shortHelp)) &&
       words.slice(1, -1).every((word) => !word.startsWith("-"))
     );
-  if (words.length !== 3 || words[2] !== "--help") return false;
+  }
+  if (!strict || words.length !== 3 || words[2] !== "--help") return false;
   if (name === "git") return gitHelpBuiltins.has(words[1]);
   // bercail cleanup --help fails its argument check with the usage line and changes nothing.
   if (name === "bercail") return words[1] === "cleanup";
@@ -1602,7 +1611,7 @@ function decideEntire(
   if (kind === "destroy") return block(entireDestroy);
   if (kind === "setup") return block(brainSetup);
   if (kind === "spend") return askOr(input, brainSpendAsk, brainSpend);
-  // Memories go through Shep and the person, as standing rules do.
+  // Memories go through Shep.
   if (kind === "remember") return input.role === "shep" ? allow : block(brainRemember);
   if (readOnlyRole(input.role)) return block(readOnly);
   if (kind === "push") {
@@ -3120,12 +3129,18 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     }));
     if (straight) recordTemps(command, segment, raw, vars);
     // A substitution's output is not in raw and could add arguments that change help into a write.
-    const staticArgs =
-      !command.includes("\\") &&
-      !segment.quoted.some(Boolean) &&
-      !redirects.length &&
-      raw.every((word) => staticArg.test(word));
-    const help = depth === 0 && staticArgs && !segment.subs.length && raw.length > 0 && cliHelp(raw, graphiteAliases);
+    const plainArgs = !segment.verbatim.some(Boolean) && raw.every((word) => staticArg.test(word));
+    const strict = !command.includes("\\") && !redirects.length;
+    const staticArgs = plainArgs && strict;
+    // 2>&1 only joins the help to its pipe; a redirect to a file is no help.
+    const fdOnly = redirects.every(({ op, target }) => ["<&", ">&"].includes(op) && /^\d+$/.test(target ?? ""));
+    const help =
+      depth === 0 &&
+      plainArgs &&
+      fdOnly &&
+      !segment.subs.length &&
+      raw.length > 0 &&
+      cliHelp(raw, strict, graphiteAliases);
     // Only these bare reads and directory changes leave Graphite's alias proof intact.
     const bareRead =
       staticArgs &&

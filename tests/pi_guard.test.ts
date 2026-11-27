@@ -2440,6 +2440,12 @@ for (const command of [
   "entire trail link 32 --help",
   "entire brain remember --help",
   "entire-brain distill --help",
+  // -h is the same flag, and 2>&1 only joins the help to its pipe.
+  "entire brain remember -h",
+  "entire-brain distill x -h",
+  "entire brain remember --help 2>&1 | head -40",
+  // A backslash in another command changes nothing in this one.
+  'grep -n "brainSpend\\|brainRemember" guard.ts | head; entire brain remember --help 2>&1 | head -40',
 ]) {
   test(`entire read: ${command}`, () => {
     for (const role of roleNames) allowed(command, at(role, policies.default));
@@ -2779,7 +2785,7 @@ for (const command of [
   test(`only Shep records a memory; everyone else proposes it: ${command}`, () => {
     allowed(command, at("shep", policies.loosest));
     for (const role of roleNames.filter((r) => r !== "shep"))
-      blocked(command, at(role, policies.loosest), /Propose it/);
+      blocked(command, at(role, policies.loosest), /Propose it .*, and Shep records it\.$/);
   });
 }
 for (const command of [
@@ -2789,6 +2795,13 @@ for (const command of [
   "entire brain recall retry --expand",
   "entire-brain refresh seed --agent claude-code",
   "entire brain patterns skills form 3",
+  // Help only as the last word, unescaped, after no flag that could take it as a value.
+  "entire brain remember x -h y",
+  "entire brain remember \\--help",
+  "entire brain remember --kind -h",
+  "entire brain remember --help >$(entire brain distill)",
+  // A redirect to a file is no help: the guard may not know where it writes.
+  'entire brain remember --help >"$out"',
 ]) {
   test(`a Brain call on the person's tokens asks with a UI, and is refused headless: ${command}`, () => {
     for (const role of ["desk", "shep", "judge"] as const) asked(command, at(role, policies.loosest));
@@ -2805,6 +2818,9 @@ for (const [command, reason] of [
   ["entire brain brief x --graph-binary ./evil", /Suggest it/],
   ["entire brain recall x --agent command --agent-command sh", /Suggest it/],
   ["entire brain workspace watch", /Suggest it/],
+  // -h is help only off setup, which an agent never runs anyway.
+  ["entire brain init -h", /Suggest it/],
+  ["entire brain publish -h", /Suggest it/],
   ["entire plugin install brain --yes", /Suggest it/],
   ["entire plugin upgrade brain", /Suggest it/],
 ] as const) {
@@ -2821,9 +2837,19 @@ test("an unknown brain or graph command, or a flag before its subcommand, asks a
     "entire-brain --workspace status setup --backfill --yes",
     "entire brain --json status setup",
     "entire brain memories --json status sync",
+    // -h only for a command the guard knows: facts is an alias of memories it does not.
+    "entire brain facts sync -h",
   ]) {
     asked(command, at("desk", policies.loosest));
     for (const role of ["headless", "autopilot", "judge"] as const) blocked(command, at(role, policies.loosest));
+  }
+});
+// -h stays off entire's own commands, and help takes no redirect but one fd joined to another.
+test("entire's own -h, and help with a closed or moved fd, keep their usual decision", () => {
+  blocked("entire plugin frob -h", at("desk", policies.loosest), /person/);
+  for (const command of ["entire brain remember --help 2>&-", "entire brain remember --help 2>&1-"]) {
+    asked(command, at("desk", policies.loosest));
+    blocked(command, at("headless", policies.loosest), /tokens/);
   }
 });
 test("graph verify's --test and --setup are checked as bash, in its --repo", () => {
