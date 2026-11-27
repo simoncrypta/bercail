@@ -34,10 +34,11 @@ EOF
 }
 
 # A query's child that a test lets outlive its run writes its pid to $MEET/child.
+# KILL, as some ignore TERM.
 teardown() {
   local pid
   [[ -f "$MEET/child" ]] || return 0
-  while read -r pid; do kill "$pid" 2>/dev/null || true; done <"$MEET/child"
+  while read -r pid; do kill -KILL "$pid" 2>/dev/null || true; done <"$MEET/child"
 }
 
 # enable and disable write config.toml, which takes the person's terminal.
@@ -757,8 +758,13 @@ GATE
   [[ "$out" == "check: skipped (quiet), "* ]] || fail "$out"
 }
 
-@test "a query that ignores TERM is killed when its runner is stopped" {
-  printf '[routine.stubborn]\ncommand = ["bash", "-c", "trap \\"\\" TERM; echo $$ >%s; sleep 30"]\nevery = "1h"\n' "$MEET/pid.stubborn" >"$CONFIG"
+@test "a query that ignores TERM is killed, and gone before its stopped runner exits" {
+  need setsid
+  # Its sleep ignores TERM. Its shell leaves the group and reaps nothing for
+  # 3 s, so the KILLed sleep stays in the group as a zombie until then: a
+  # query slow to die, as on a loaded machine.
+  printf '[routine.stubborn]\ncommand = ["bash", "-c", "trap \\"\\" TERM; sleep 30 & echo $! >>%s; echo $$ >>%s; echo $! >%s; exec setsid sleep 3"]\nevery = "1h"\n' \
+    "$MEET/child" "$MEET/child" "$MEET/pid.stubborn" >"$CONFIG"
   "$ROOT/bin/bercail" routine run stubborn >/dev/null 2>&1 3>&- &
   pid=$!
   await "$MEET/pid.stubborn"
