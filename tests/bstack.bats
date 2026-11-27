@@ -416,11 +416,11 @@ claude-bridge/claude-opus-5-5 low,medium,high,xhigh,max'
     sed -n 3p "$t/$rel.md" | grep -q "managed by bercail (bstack)" || fail "marker in the description of $rel"
     sed -n 5p "$t/$rel.md" | grep -qx -- '---' || fail "frontmatter holds only key: value in $rel"
   done
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=builder [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder: $(cat "$t/bstack-builder.md")"
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=judge [^ ]*bercail scratch run -- pi --model openai/gpt-6.1-astra:high ' "$t/bstack-judge.md" || fail "judge"
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=autopilot [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-autopilot.md" || fail "autopilot"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_MERGE_AUTOEDIT=no BERCAIL_ROLE=builder [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-builder.md" || fail "builder: $(cat "$t/bstack-builder.md")"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_MERGE_AUTOEDIT=no BERCAIL_ROLE=judge [^ ]*bercail scratch run -- pi --model openai/gpt-6.1-astra:high ' "$t/bstack-judge.md" || fail "judge"
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_MERGE_AUTOEDIT=no BERCAIL_ROLE=autopilot [^ ]*bercail scratch run -- pi --model claude-bridge/claude-opus-5-5:high ' "$t/bstack-autopilot.md" || fail "autopilot"
   grep -q 'bstack-builder.md' "$t/bstack-builder.md" || fail "builder brief"
-  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN BERCAIL_ROLE=builder [^ ]*bercail scratch run -- pi --model claude-bridge/claude-fable-5-2:high .*agents/bstack-builder.md' \
+  grep -q '^command: env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_MERGE_AUTOEDIT=no BERCAIL_ROLE=builder [^ ]*bercail scratch run -- pi --model claude-bridge/claude-fable-5-2:high .*agents/bstack-builder.md' \
     "$t/bstack-builder-fable.md" || fail "the trial's builder runs the builder brief on Fable: $(cat "$t/bstack-builder-fable.md")"
 
   assert_eq 'mine' "$(jq -r .defaultModel "$HOME/.pi/agent/settings.json")" "unrelated settings preserved"
@@ -737,6 +737,12 @@ EOF
   launched "$(bstack_pi_command '' "$(bstack_role_model lead)")" lead
   _bstack_pi_claude_ready || fail "Claude auth probe also sanitizes env"
   unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN FAKE_PI_LAUNCH_LOG FAKE_PI_READY
+}
+
+@test "git in a role's Pi opens no editor: a commit with no -m returns at once" {
+  ln -s "$ROOT/bin/bercail" "$FAKE_BIN/bercail"
+  pi_runs_git_editors
+  no_git_editor_opened "$(export GIT_MERGE_AUTOEDIT=yes; eval "$(bstack_pi_command builder '')")"
 }
 
 @test "doctor catches missing bstack data files" {

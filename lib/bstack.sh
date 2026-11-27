@@ -316,12 +316,14 @@ _bstack_pi_review_argv() {
 }
 
 # The command line a bstack agent starts with. BERCAIL_ROLE identifies its role;
-# empty is the lead. `bercail scratch run` gives it a TMPDIR of its own and
-# removes it when the agent exits. A packaged bercail is the one on PATH: a
+# empty is the lead. Its git opens no editor: no one is there to close one.
+# `bercail scratch run` gives it a TMPDIR of its own and removes it when the
+# agent exits. A packaged bercail is the one on PATH: a
 # ~/.local/bin/bercail left from before may not know scratch.
 bstack_pi_command() {
   local role="$1" model="$2" brief="${3:-}" bercail="$LOCAL_BIN/bercail"
-  local -a argv=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN)
+  local -a argv=(env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL -u ANTHROPIC_AUTH_TOKEN
+    GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_MERGE_AUTOEDIT=no)
   [[ -z "$role" ]] || argv+=("BERCAIL_ROLE=$role")
   [[ -x "$bercail" && "${BERCAIL_PACKAGED:-0}" != 1 ]] || bercail=bercail
   argv+=("$bercail" scratch run --)

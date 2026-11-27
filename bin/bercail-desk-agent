@@ -220,6 +220,9 @@ if [[ "$(basename "${argv[0]}")" == pi ]]; then
   fi
   # bstack reaches Claude through pi-claude-bridge on the plan, not an API key.
   unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN
+  # No one is at an agent's git to close an editor: a commit with no -m, a
+  # rebase -i or a merge could wait on one forever.
+  export GIT_EDITOR=true GIT_SEQUENCE_EDITOR=true GIT_MERGE_AUTOEDIT=no
   # Pi's copy also goes out as OSC 52, so it reaches the Herdr window showing
   # the desk, a client on another computer included, not only this one's clipboard.
   export PI_CLIPBOARD_OSC52=1

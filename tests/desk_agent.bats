@@ -133,6 +133,11 @@ AGENT
   expect "$(PI_CLIPBOARD_OSC52='' desk pi)" "osc52=1" "Pi gets PI_CLIPBOARD_OSC52=1"
 }
 
+@test "git in the desk's Pi opens no editor: a commit with no -m returns at once" {
+  pi_runs_git_editors
+  no_git_editor_opened "$(GIT_MERGE_AUTOEDIT=yes desk pi)"
+}
+
 # A bstack lead with a model and a thinking level, as bercail update writes it.
 arrange_lead() {
   LEAD="$HOME/.local/share/bercail/pi/lead.json"

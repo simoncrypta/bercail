@@ -83,6 +83,43 @@ git_init() {
   git -C "$dir" commit -qm base
 }
 
+# A stand-in pi that runs the git an agent might where git asks for an
+# editor: a commit with no -m, a rebase -i and a merge. Its repo's editors
+# fail, and they and a merge message offered for editing leave
+# $BATS_TEST_TMPDIR/editor-opened, so a wait on one shows instead of hanging.
+# A caller sets GIT_MERGE_AUTOEDIT=yes, as a person's shell may.
+pi_runs_git_editors() {
+  local repo="$BATS_TEST_TMPDIR/editors" opened
+  opened="$(printf %q "$BATS_TEST_TMPDIR/editor-opened")"
+  git_init "$repo"
+  git -C "$repo" config core.editor "echo editor >>$opened && false"
+  git -C "$repo" config sequence.editor "echo sequence editor >>$opened && false"
+  git -C "$repo" switch -qc side
+  git -C "$repo" commit -q --allow-empty -m side
+  git -C "$repo" switch -q -
+  cat >"$repo/.git/hooks/prepare-commit-msg" <<HOOK
+#!/bin/sh
+! grep -q 'why this merge is necessary' "\$1" || echo merge edit >>$opened
+HOOK
+  cat >"$BATS_TEST_TMPDIR/bin/pi" <<PI
+#!/usr/bin/env bash
+cd $(printf %q "$repo") || exit 9
+git commit --allow-empty 2>&1
+git rebase -i --root 2>&1
+git merge --no-ff side 2>&1
+PI
+  chmod +x "$repo/.git/hooks/prepare-commit-msg" "$BATS_TEST_TMPDIR/bin/pi"
+}
+
+# What pi_runs_git_editors printed: git asked for no editor, so the commit with
+# no message stopped at once, and the rebase and the merge went through.
+no_git_editor_opened() {
+  [[ ! -e "$BATS_TEST_TMPDIR/editor-opened" ]] || fail "git asked for $(<"$BATS_TEST_TMPDIR/editor-opened"): $1" || return
+  [[ "$1" == *'Aborting commit due to empty commit message.'* ]] || fail "the commit with no -m: $1" || return
+  [[ "$1" == *'Successfully rebased'* ]] || fail "the rebase -i: $1" || return
+  [[ "$1" == *'Merge made by'* ]] || fail "the merge: $1"
+}
+
 # The tools a test cannot run without. CI installs them all, so there a missing
 # one fails the test; anywhere else the test skips and says which.
 need() {
