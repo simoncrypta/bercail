@@ -7,7 +7,9 @@
 # loosen bercail's guard on its own.
 #
 #   bercail policy show [--json] [repo]
+#   bercail policy preview [repo]
 #   bercail policy trust [repo]
+#   bercail policy trust-pinned SHA256 MAIN REPO
 #   bercail policy untrust [repo]
 
 # shellcheck source=lib/git-backend.sh
@@ -42,12 +44,12 @@ policy_trust_file() {
   printf '%s/bercail/policy-trust.json' "${XDG_STATE_HOME:-$HOME/.local/state}"
 }
 
-# sha256 of a file, hex. macOS has shasum, not sha256sum.
+# sha256 of a file, or of stdin with no file, hex. macOS has shasum, not sha256sum.
 _policy_hash() {
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" | cut -d' ' -f1
+    sha256sum "$@" | cut -d' ' -f1
   else
-    shasum -a 256 "$1" | cut -d' ' -f1
+    shasum -a 256 "$@" | cut -d' ' -f1
   fi
 }
 
@@ -218,17 +220,108 @@ policy_trust_hash() {
     '.[$m] = {file: $f, sha256: $h, trusted_at: $at}' "$trust" >"$tmp" && mv "$tmp" "$trust"
 }
 
-_policy_trust() {
-  local dir="${1:-.}" out file main hash
+# The newest commit on ROOT's HEAD whose policy file has sha256 HASH: where the
+# version last trusted is, since the trust records only its hash.
+_policy_commit_of() {
+  local root="$1" hash="$2" commit
+  while IFS= read -r commit; do
+    [[ "$(git -C "$root" cat-file blob "$commit:$POLICY_FILE" 2>/dev/null | _policy_hash)" != "$hash" ]] || {
+      printf '%s\n' "$commit"
+      return 0
+    }
+  done < <(git -C "$root" rev-list HEAD -- "$POLICY_FILE" 2>/dev/null)
+  return 1
+}
+
+# Whether ROOT's policy file or its folder is a link, whose text may be outside the checkout.
+_policy_linked() {
+  [[ -L "$1/.bercail" || -L "$1/$POLICY_FILE" ]]
+}
+
+# bercail policy preview [repo]: what bercail policy trust would trust there, for a
+# guard card to show. Its first line is the sha256, its second the main checkout
+# the trust is kept under; then the file and its diff against the version last
+# trusted (the whole file when there is none, or no commit holds it). All of it is
+# read from one copy of the file, so an edit meanwhile cannot show one version's
+# text beside another's hash. It refuses a linked file or folder, before and after
+# the copy. It writes nothing, and is its own verb so that an older bercail, whose
+# trust ignores extra words, refuses it.
+_policy_preview() {
+  local dir="${1:-.}" root main file snap hash trust last="" at="" commit="" old=/dev/null rc=0
+  root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || { _policy_err "$dir is not a git checkout"; return 1; }
+  root="$(_git_backend_realpath "$root")"
+  main="$(git_backend_main "$root")" || main="$root"
+  file="$root/$POLICY_FILE"
+  # The header is one path a line, read back by the guard.
+  [[ "$main$root" != *[$'\t\n']* ]] || { _policy_err "$root is under a path with a tab or newline; nothing to show"; return 1; }
+  ! _policy_linked "$root" || { _policy_err "$file is a link, so its text may be outside the checkout; nothing to show"; return 1; }
+  [[ -f "$file" ]] || { _policy_err "$file does not exist; nothing to trust"; return 1; }
+  snap="$(mktemp)"
+  cat "$file" >"$snap"
+  ! _policy_linked "$root" || { rm -f "$snap"; _policy_err "$file became a link; nothing to show"; return 1; }
+  hash="$(_policy_hash "$snap")"
+  trust="$(policy_trust_file)"
+  if [[ -f "$trust" ]]; then
+    last="$(jq -r --arg m "$main" '.[$m].sha256 // empty' "$trust" 2>/dev/null)"
+    at="$(jq -r --arg m "$main" '.[$m].trusted_at // empty' "$trust" 2>/dev/null)"
+  fi
+  printf 'sha256: %s\nrepo:   %s\nfile:   %s\n' "$hash" "$main" "$file"
+  if [[ "$last" == "$hash" ]]; then
+    printf 'It is trusted already, as this sha256 (%s); trusting it again changes nothing.\n' "$at"
+    rm -f "$snap"
+    return 0
+  fi
+  if [[ -z "$last" ]]; then
+    printf 'No version of it was trusted before; the whole file:\n'
+  elif commit="$(_policy_commit_of "$root" "$last")"; then
+    printf 'Its diff against the version last trusted (sha256 %s, %s, in commit %s):\n' "$last" "$at" "${commit:0:12}"
+    old="$(mktemp)"
+    git -C "$root" cat-file blob "$commit:$POLICY_FILE" >"$old"
+  else
+    printf 'The version last trusted (sha256 %s, %s) is in no commit on HEAD; the whole file:\n' "$last" "$at"
+  fi
+  # As text even when it is not, so a card's check sees every byte, never a "Binary
+  # files differ" in their place. 1 means they differ; more is trouble, which must not make a card.
+  diff -a -u -L "trusted" -L "$POLICY_FILE" "$old" "$snap" || rc=$?
+  rm -f "$snap"
+  [[ "$old" == /dev/null ]] || rm -f "$old"
+  ((rc <= 1)) || { _policy_err "diff failed (exit $rc); nothing to show"; return 1; }
+}
+
+# Trust DIR's policy file; with EXPECT and MAIN, only while its sha256 and the main
+# checkout its trust is kept under are still those.
+_policy_trust_apply() {
+  local dir="$1" expect="$2" expect_main="$3" out file main hash
   out="$(policy_json "$dir" 2>/dev/null)" || { _policy_err "$dir is not a git checkout"; return 1; }
   file="$(jq -r .file <<<"$out")"
   main="$(jq -r .repo <<<"$out")"
   hash="$(jq -r .sha256 <<<"$out")"
   [[ -n "$file" ]] || { _policy_err "$(jq -r .root <<<"$out")/$POLICY_FILE does not exist; nothing to trust"; return 1; }
+  [[ -z "$expect" || "$expect" == "$hash" ]] || {
+    _policy_err "$file is sha256 ${hash:0:12} now, not the ${expect:0:12} its card showed; nothing trusted"
+    return 1
+  }
+  [[ -z "$expect_main" || "$expect_main" == "$main" ]] || {
+    _policy_err "$dir is a checkout of $main now, not the $expect_main its card showed; nothing trusted"
+    return 1
+  }
   policy_trust_hash "$main" "$file" "$hash"
   printf 'trusted %s for %s (sha256 %s)\n' "$file" "$main" "${hash:0:12}"
   printf 'agents now: %s\n' "$(policy_json "$dir" 2>/dev/null | jq -r .brief)"
   printf 'An edit to the file goes back to asking until you trust it again.\n'
+}
+
+_policy_trust() {
+  _policy_trust_apply "${1:-.}" "" ""
+}
+
+# bercail policy trust-pinned SHA256 MAIN REPO: a guard card's worker's trust, of
+# the file and main checkout the card showed. Its own verb, so an older bercail
+# refuses it rather than trust whatever the repo holds by then.
+_policy_trust_pinned() {
+  [[ $# -eq 3 && "$1" =~ ^[0-9a-f]{64}$ && "$2" == /* ]] \
+    || { _policy_err "usage: bercail policy trust-pinned SHA256 MAIN_CHECKOUT REPO"; return 1; }
+  _policy_trust_apply "$3" "$1" "$2"
 }
 
 _policy_untrust() {
@@ -254,8 +347,10 @@ cmd_policy() {
       # shellcheck source=lib/policy-init.sh
       source "$(dirname "${BASH_SOURCE[0]}")/policy-init.sh"
       _policy_init "$@" ;;
+    preview) _policy_preview "$@" ;;
     trust) _policy_trust "$@" ;;
+    trust-pinned) _policy_trust_pinned "$@" ;;
     untrust) _policy_untrust "$@" ;;
-    *) _policy_err "usage: bercail policy show [--json] [repo] | trust [repo] | untrust [repo] | init --repo DIR --profile guarded|branch-pr|branch-trail --backend gh|entire [--verify NAME] [--write]"; return 1 ;;
+    *) _policy_err "usage: bercail policy show [--json] [repo] | preview [repo] | trust [repo] | untrust [repo] | init --repo DIR --profile guarded|branch-pr|branch-trail --backend gh|entire [--verify NAME] [--write]"; return 1 ;;
   esac
 }

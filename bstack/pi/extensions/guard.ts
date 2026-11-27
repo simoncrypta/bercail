@@ -148,7 +148,9 @@ const unknownBranchAsk =
 const tooManyRepos = "This command touches too many repos to check. Split it into one command per repo.";
 const tooManyReposAsk = "This command touches more repos than the guard checks. Allow it?";
 const trustCommand =
-  "Trusting a repo's policy is the person's call. Ask them to run bercail policy trust in their own shell.";
+  "Trusting a repo's policy is the person's call, on a Decisions card Shep puts up or in their own shell. Say in your report which repo's policy needs trusting, and Shep asks.";
+const trustAsk =
+  "Trust this repo's .bercail/policy.toml, so its looser values count? The card shows the repo, the file's sha256 and its diff against the version you last trusted.";
 const protectedFile = "This file decides what bercail's guard lets through. Ask the person to edit it.";
 const answerCommand =
   "Answering one of Shep's questions is the person's pick, on a Decisions card or in Discuss. Leave it to them.";
@@ -1952,9 +1954,10 @@ function dryConfigRun(command: string, input: GuardInput): boolean {
   return typeof op !== "string" && op.kind === "command" && op.argv.includes("--dry-run");
 }
 
+// bercail policy trust, or trust-pinned, which only a guard card's worker runs.
 function isPolicyTrust(words: string[]): boolean {
   const plain = plainWords(words);
-  return plain.some((word, i) => word === "policy" && plain[i + 1] === "trust");
+  return plain.some((word, i) => word === "policy" && ["trust", "trust-pinned"].includes(plain[i + 1]));
 }
 
 // The files a shell command writes: its redirect targets, and what a file writer
@@ -3234,7 +3237,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     }
     const refused = sync ? noChange(input.role) : undefined;
     if (refused) decision = worse(decision, refused);
-    if (isPolicyTrust(words)) decision = worse(decision, block(trustCommand));
+    if (isPolicyTrust(words)) decision = worse(decision, input.role === "shep" ? ask(trustAsk) : block(trustCommand));
     if (!help) decision = worse(decision, decideCleanup(words, here));
     decision = worse(decision, decideSpaceClose(words, here));
     decision = worse(decision, decideJob(words, here));
@@ -3645,6 +3648,8 @@ export type GuardFacts =
   | { kind: "command"; dir: string; argv: string[]; diff: string }
   // A desk answer's Yes, in the desk's worktree: what its --dry-run says it answers.
   | { kind: "command"; dir: string; argv: string[]; answer: string }
+  // A policy trust, in the repo it names: what bercail policy preview says it trusts.
+  | { kind: "command"; dir: string; argv: string[]; trust: string }
   | { kind: "cleanup"; worktree: string; branch: string | null; head: string }
   // The gone checkout's path as its handoffs name it, their one repo, the last one's branch,
   // and how many there are.
@@ -4084,6 +4089,7 @@ export async function pinOperation(op: GuardOp, read: Read = readOut): Promise<G
   if (op.kind === "trail merge") return pinTrail(read, op.dir, op.trail, op.job);
   if (op.kind === "cleanup" && op.gone) return pinGone(read, op.path);
   // Its folder by its real path, so a symlink moved later cannot send it elsewhere.
+  if (op.kind === "command" && isPolicyTrust(op.argv)) return pinPolicyTrust(read, realpathSync(op.dir), op.argv);
   if (op.kind === "command" && editsConfig(op.argv)) return pinConfigEdit(read, realpathSync(op.dir), op.argv);
   if (op.kind === "command" && answersDesk(op.argv)) return pinDeskAnswer(read, op.dir, op.argv);
   if (op.kind === "command") return { kind: "command", dir: realpathSync(op.dir), argv: op.argv };
@@ -4170,6 +4176,37 @@ async function pinConfigEdit(read: Read, dir: string, words: string[]) {
   const diff = lines.length ? lines.join("\n") : shown;
   const argv = [bin, ...words.slice(1), "--expect", createHash("sha256").update(diff).digest("hex")];
   return { kind: "command" as const, dir, argv, diff };
+}
+
+// A policy trust, run by bercail itself in the repo it names, by its real path: what
+// bercail policy preview says it trusts (the sha256, the main checkout, the file and
+// its diff against the version last trusted), which the card shows, only when it
+// decoded whole and holds no control, format (bidi) or line separator but tab and
+// newline. The worker runs bercail policy trust-pinned with that sha256 and main
+// checkout, so bercail trusts only the file and repo the card showed; an older bercail
+// refuses both verbs. Once the preview reads otherwise, the card is stale.
+async function pinPolicyTrust(read: Read, dir: string, words: string[]) {
+  const [program, area, verb, target, ...rest] = words;
+  if (
+    basename(program) !== "bercail" ||
+    area !== "policy" ||
+    verb !== "trust" ||
+    rest.length ||
+    target?.startsWith("-")
+  )
+    fail("a policy trust is handed off only as bercail policy trust [repo]");
+  const repo = realpathSync(placeIn(dir, target ?? ".") ?? fail("its repo names no one folder"));
+  const bin = process.env.BERCAIL_BIN || "bercail";
+  const trust = await read(bin, ["policy", "preview", repo], repo);
+  if (!trust.isWellFormed() || /\uFFFD|(?![\t\n])\p{Cc}|[\p{Cf}\p{Zl}\p{Zp}]/u.test(trust))
+    fail(
+      "bercail policy preview holds text a card cannot show as it is: a byte that is not UTF-8, or a control or bidi character",
+    );
+  const [first, second] = trust.split("\n");
+  const hash = /^sha256: ([0-9a-f]{64})$/.exec(first)?.[1];
+  const main = /^repo: {3}(\/.*)$/.exec(second ?? "")?.[1];
+  if (!hash || !main) fail("bercail policy preview did not start with the file's sha256 and its repo");
+  return { kind: "command" as const, dir: repo, argv: [bin, "policy", "trust-pinned", hash, main, repo], trust };
 }
 
 // A desk answer's Yes, run by bercail itself in the desk's worktree: the prompt as its
@@ -4654,6 +4691,8 @@ export async function guardDefault(facts: GuardFacts, read: Read = readOut): Pro
     return { defaults: true, why: "a cleanup --gone is local: it only records that the gone checkout is retired" };
   if (facts.kind === "cleanup")
     return { defaults: true, why: "a cleanup is local: the worktree goes, and its branch stays" };
+  if (facts.kind === "command" && "trust" in facts)
+    return waits("trusting a repo's policy file is the person's call, and only their Allow makes it");
   if (facts.kind === "command" && !plainLink(facts.argv))
     return waits("the guard does not class this command as private or local");
   if (facts.kind === "push" && facts.lease)

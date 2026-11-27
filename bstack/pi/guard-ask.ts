@@ -115,7 +115,9 @@ function brief(ticket: GuardTicket, cls: GuardDefault): string {
       ? `It changes config.toml so:\n${f.diff}\n`
       : f.kind === "command" && "answer" in f
         ? `${f.answer}\n`
-        : "";
+        : f.kind === "command" && "trust" in f
+          ? `It trusts this policy file:\n${f.trust}\n`
+          : "";
   return `Shep ran: ${ticket.command}. On Allow, its worker guard-ask-${ticket.id} runs ${facts}, once, and only if none of that has changed. ${diff}${atDeadline(ticket, cls)}`;
 }
 

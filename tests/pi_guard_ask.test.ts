@@ -750,6 +750,89 @@ test("a config change pins bercail itself, the lines its --dry-run changes and t
   );
 });
 
+test("a policy trust pins bercail itself in the repo's real path, the file's sha256, its main checkout and what its preview shows, never defaults, and is stale once the file changes", async () => {
+  const cli = join(process.cwd(), "bin/bercail");
+  vi.stubEnv("BERCAIL_BIN", cli);
+  vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
+  mkdirSync(join(repo, ".bercail"));
+  writeFileSync(join(repo, ".bercail/policy.toml"), 'push = "main"\n');
+  const hash = createHash("sha256").update('push = "main"\n').digest("hex");
+  symlinkSync(repo, join(dir, "here"));
+  const facts = await pin(`/elsewhere/bercail policy trust ${join(dir, "here")}`, dir);
+  const argv = [cli, "policy", "trust-pinned", hash, repo, repo];
+  expect(facts).toMatchObject({
+    kind: "command",
+    dir: repo,
+    argv,
+    trust: expect.stringMatching(
+      new RegExp(`^sha256: ${hash}\nrepo: +${repo}\nfile: +${repo}/\\.bercail/policy\\.toml\n[^]*\n\\+push = "main"$`),
+    ),
+  });
+  expect(runOf(facts)).toStrictEqual({ argv, cwd: repo });
+  expect(existsSync(join(dir, "state/bercail/policy-trust.json"))).toBe(false);
+  // Only the person's Allow trusts it: nobody answering is a Deny.
+  expect(await guardDefault(facts)).toStrictEqual({
+    defaults: false,
+    why: "trusting a repo's policy file is the person's call, and only their Allow makes it",
+  });
+  expect(await pin("bercail policy trust", repo)).toStrictEqual(facts);
+  // The file changed meanwhile: another hash, so the card is stale.
+  writeFileSync(join(repo, ".bercail/policy.toml"), 'push = "branch"\n');
+  expect(changedFacts(facts, await pin(`bercail policy trust ${repo}`, dir))).toStrictEqual([
+    "argv changed",
+    "trust changed",
+  ]);
+  // Any other shape is refused before any card, and a hash is the guard's to give.
+  for (const words of [
+    `trust --expect ${hash}`,
+    "trust --dry-run",
+    `trust ${repo} ${repo}`,
+    `trust-pinned ${hash} ${repo} ${repo}`,
+  ])
+    await expect(pin(`bercail policy ${words}`, repo)).rejects.toThrow(
+      /handed off only as bercail policy trust \[repo\]/,
+    );
+  await expect(pin("bercail policy init policy trust", repo)).rejects.toThrow(/handed off only as/);
+  // Text the card could not show as it is: no card, so nothing to approve unseen.
+  for (const text of [
+    'rules = "a\u001b[2Kb"\n',
+    'rules = "\u202eniam = hsup"\n',
+    Buffer.from([0x23, 0xff, 0x0a]),
+    // A NUL makes diff call the file binary: the card shows its bytes or nothing, never a summary.
+    'push = "main"\n\u0000\n',
+  ]) {
+    writeFileSync(join(repo, ".bercail/policy.toml"), text);
+    await expect(pin(`bercail policy trust ${repo}`, dir)).rejects.toThrow(/a card cannot show as it is/);
+  }
+  rmSync(join(repo, ".bercail"), { recursive: true });
+  await expect(pin(`bercail policy trust ${repo}`, dir)).rejects.toThrow(/does not exist; nothing to trust/);
+});
+
+test("a bercail from before the card trusts nothing when the guard pins a policy trust or its worker runs it", async () => {
+  vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
+  const store = join(dir, "state/bercail/policy-trust.json");
+  // As lib/policy.sh had it: trust takes its first word as the repo and ignores the rest.
+  const old = join(dir, "bin/old-bercail");
+  writeFileSync(
+    old,
+    `#!/bin/sh\n[ "$1 $2" = "policy trust" ] || { echo usage >&2; exit 1; }\n` +
+      `git -C "\${3:-.}" rev-parse --show-toplevel >/dev/null 2>&1 || { echo "\${3:-.} is not a git checkout" >&2; exit 1; }\n` +
+      `mkdir -p '${dir}/state/bercail' && echo '{}' > '${store}' && echo trusted\n`,
+    { mode: 0o755 },
+  );
+  mkdirSync(join(repo, ".bercail"));
+  writeFileSync(join(repo, ".bercail/policy.toml"), 'push = "main"\n');
+  vi.stubEnv("BERCAIL_BIN", old);
+  await expect(pin(`bercail policy trust ${repo}`, dir)).rejects.toThrow(/usage/);
+  // The worker's argv, pinned by this bercail, run by the old one.
+  vi.stubEnv("BERCAIL_BIN", join(process.cwd(), "bin/bercail"));
+  const { argv, cwd } = runOf(await pin(`bercail policy trust ${repo}`, dir));
+  // Refused by its verb, whatever folders the repo holds.
+  mkdirSync(join(repo, argv[3]));
+  expect(() => execFileSync(old, argv.slice(1), { cwd, stdio: "pipe" })).toThrow(/usage/);
+  expect(existsSync(store)).toBe(false);
+});
+
 test("a push to an entire:// remote pins its URL, and the card names the Entire project", async () => {
   const url = "entire://aws-us-east-2.entire.io/et/lesentiel/lesentiel";
   git("remote", "set-url", "origin", url);

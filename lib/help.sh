@@ -77,7 +77,9 @@ Post-install CLI (bercail):
                 target list|show NAME [--json] | target rm NAME |
                 route REPO TARGET | route --default TARGET | route --rm REPO|--default
   policy        A repo's git policy (.bercail/policy.toml): show [--json] [repo] |
+                preview [repo] (what trust would trust: its sha256 and its diff against the version last trusted) |
                 trust [repo] (its looser values count until the file changes) | untrust [repo] |
+                trust-pinned SHA256 MAIN REPO (a guard card's worker's: only that file, for that repo) |
                 init --repo DIR --profile guarded|branch-pr|branch-trail --backend gh|entire [--verify NAME] [--write]
                 init previews fixed repo-local files; --write creates absent files, never overwrites.
                 guarded supports both backends; branch-pr requires gh, branch-trail requires entire.

@@ -1831,8 +1831,10 @@ for (const role of roleNames) {
     blocked("git commit --no-verify -m x", input, /--no-verify/);
     blocked("git -c core.hooksPath=/dev/null commit -m x", input, /core.hooksPath/);
     blocked("gh pr merge 3 --squash", input, /gh pr merge/);
-    blocked("bercail policy trust .", input, /person's call/);
-    blocked("~/.local/bin/bercail policy trust", input, /person's call/);
+    // Shep's trust goes to a card (handOff), never runs on its own word.
+    for (const trust of ["bercail policy trust .", "~/.local/bin/bercail policy trust"])
+      if (role === "shep") asked(trust, input);
+      else blocked(trust, input, /person's call/);
     // eval joins its words and runs them, like bash -c.
     blocked("eval git push --force", input, /Force-push/);
     blocked("eval 'git push' --force", input, /Force-push/);
@@ -1859,7 +1861,9 @@ test.each(["branch-pr --backend gh", "branch-trail --backend entire"])(
         `eval '${init}; bercail policy trust /work'`,
         "bercail policy init policy trust /work",
       ]) {
-        blocked(command, input, /person's call/);
+        // Shep's asks, and its card refuses each of these shapes (pi_guard_ask.test.ts).
+        if (role === "shep") asked(command, input);
+        else blocked(command, input, /person's call/);
       }
       blocked(`${init} > /h/.config/bercail/config.toml`, input, /decides what bercail's guard/);
       blocked(`${init} | tee /h/.local/state/bercail/policy-trust.json`, input, /decides what bercail's guard/);
@@ -3273,6 +3277,23 @@ test("a config.toml change is Shep's, on a card; every other role is refused, an
     "bercail routine list",
   ];
   for (const command of reads) for (const input of [shep, tui, headless]) allowed(command, input);
+});
+
+test("a policy trust is Shep's to ask on a card that shows the hash and diff; every other role is refused", () => {
+  const shep = { role: "shep", hasUI: true, cwd: "/work", policies: none };
+  for (const command of ["bercail policy trust /work", "cd /work && bercail policy trust", "bercail policy trust"]) {
+    const got = decision(command, shep);
+    assertEqual(got.action, "ask", `${command} → ${JSON.stringify(got)}`);
+    assertMatch(got.reason ?? "", /The card shows the repo, the file's sha256 and its diff/, command);
+    for (const input of [tui, headless, auto, judge, { ...tui, role: "lead" }, { ...tui, role: "shep-bg" }])
+      blocked(command, input, /person's call, on a Decisions card Shep puts up/);
+  }
+  // A card's worker's own verb: Shep's goes to handOff, which refuses its shape (pi_guard_ask.test.ts).
+  const pinned = `bercail policy trust-pinned ${"0".repeat(64)} /work /work`;
+  asked(pinned, shep);
+  for (const input of [tui, headless, auto, judge]) blocked(pinned, input, /person's call/);
+  // What it would trust is a read anyone may run.
+  for (const input of [shep, tui, headless, judge]) allowed("bercail policy preview /work", input);
 });
 
 test("a write to the config.toml bercail config set edits is refused, wherever XDG_CONFIG_HOME points", async () => {

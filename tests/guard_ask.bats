@@ -471,6 +471,46 @@ arg[--json]" ]] || fail "argv: $(cat "$LOG")"
   [[ "$(cat "$config")" == $'[shep]\nrollover = true # the person' ]] || fail "written: $(cat "$config")"
 }
 
+@test "Shep's policy trust goes on a card with the repo, the sha256 and the diff, waits for the person, and trusts only that file on an Allow" {
+  export BERCAIL_BIN="$ROOT/bin/bercail"
+  mkdir -p "$REPO/.bercail"
+  printf 'push = "branch"\n' >"$REPO/.bercail/policy.toml"
+  git -C "$REPO" add .bercail && git -C "$REPO" commit -qm policy
+  bercail policy trust "$REPO" >/dev/null
+  printf 'push = "main"\n' >"$REPO/.bercail/policy.toml"
+  git -C "$REPO" commit -qam loosen
+  hash="$(bercail policy show --json "$REPO" | jq -r .sha256)"
+  id="$(ticket "bercail policy trust $REPO")"
+  worker "$id"
+  token="$(card "$id")"
+  bercail shep question json | jq -e --arg t "$token" --arg r "$(cd "$REPO" && pwd -P)" --arg h "$hash" --arg b "$ROOT/bin/bercail" \
+    '.questions[] | select("\(.id)@\(.revision)" == $t) | (.guard | has("defaults") | not) and (.brief
+      | contains("runs \($b) policy trust-pinned \($h) \($r) \($r) in \($r)")
+      and contains("It trusts this policy file:\nsha256: \($h)\nrepo:   \($r)\nfile:   \($r)/.bercail/policy.toml\n")
+      and contains("\n-push = \"branch\"\n+push = \"main\"\n")
+      and test("It waits for you: nobody answering by [0-9:]+ counts as a Deny, because trusting a repo.s policy file is the person.s call"))' \
+    >/dev/null || fail "brief: $(bercail shep question json | jq -c '.questions[-1] | {brief, guard}')"
+  [[ "$(bercail policy show --json "$REPO" | jq -r .trusted)" == false ]] || fail "trusted before the Allow"
+  pick "$token" Allow >/dev/null
+  jq -e '.outcome == "ran" and .exit == 0' <<<"$(event "$id")" >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(bercail policy show --json "$REPO" | jq -r .trusted)" == true ]] || fail "not trusted after the Allow"
+
+  bercail policy untrust "$REPO" >/dev/null
+  id="$(ticket "bercail policy trust $REPO")"
+  worker "$id"
+  pick "$(card "$id")" Deny >/dev/null
+  jq -e '.outcome == "denied"' <<<"$(event "$id")" >/dev/null || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(bercail policy show --json "$REPO" | jq -r .trusted)" == false ]] || fail "trusted after the Deny"
+
+  id="$(ticket "bercail policy trust $REPO")"
+  BERCAIL_GUARD_ASK_POLL_MS=200 worker "$id"
+  card "$id" >/dev/null
+  printf 'push = "main"\nagent_may_release = true\n' >"$REPO/.bercail/policy.toml"
+  jq -e '.outcome == "changed"' <<<"$(event "$id")" >/dev/null \
+    || fail "event: $(cat "$INBOX/guard-$id.json")"
+  [[ "$(bercail policy show --json "$REPO" | jq -r .trusted)" == false ]] || fail "trusted after a change"
+}
+
 @test "a command whose argument changed after its card runs nothing on an Allow" {
   argv_entire
   # Its ticket rewritten once the card is up, and before it: neither runs.

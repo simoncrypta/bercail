@@ -219,6 +219,67 @@ scratch_repo() {
   [[ "$(field "$REPO" '[.trusted, .policy.push] | join(" ")')" == "false ask" ]] || fail "untrust did not go back to asking"
 }
 
+@test "preview shows the sha256, the repo, the file and the diff against the version last trusted, and writes nothing" {
+  local REPO WT out old hash
+  commit_policy
+  hash="$(field "$REPO" .sha256)"
+  out="$(policy preview "$REPO")"
+  [[ "$out" == "sha256: $hash"$'\n'"repo:   $REPO"$'\n'"file:   $REPO/.bercail/policy.toml"$'\n'* ]] || fail "head: $out"
+  [[ "$out" == *"No version of it was trusted before; the whole file:"*"+push = 'main'   # no prompt"* ]] || fail "first: $out"
+  [[ ! -e "$TRUST" ]] || fail "a preview wrote $(cat "$TRUST")"
+  policy trust "$REPO" >/dev/null
+  old="$(git -C "$REPO" rev-parse HEAD)"
+  printf 'merge_reversible = true\n' >>"$REPO/.bercail/policy.toml"
+  git -C "$REPO" commit -qam loosen
+  out="$(policy preview "$REPO")"
+  [[ "$out" == *"against the version last trusted (sha256 $hash, "*", in commit ${old:0:12}):"* ]] || fail "last: $out"
+  [[ "$out" == *$'\n+merge_reversible = true'* && "$out" != *"+push"* ]] || fail "diff: $out"
+  [[ "$(field "$REPO" .trusted)" == false ]] || fail "a preview trusted it"
+  # A version trusted but never committed: the whole file, saying so.
+  printf 'pr_draft = false\n' >>"$REPO/.bercail/policy.toml"
+  policy trust "$REPO" >/dev/null
+  git -C "$REPO" checkout -q -- .bercail/policy.toml
+  out="$(policy preview "$REPO")"
+  [[ "$out" == *"is in no commit on HEAD; the whole file:"*"+push = 'main'"* ]] || fail "uncommitted: $out"
+  policy trust "$REPO" >/dev/null
+  [[ "$(policy preview "$REPO")" == *"It is trusted already, as this sha256"* ]] || fail "already"
+}
+
+@test "preview shows no text from a linked policy file or folder" {
+  local REPO WT err
+  commit_policy
+  printf 'secret = "kept-outside"\n' >"$BATS_TEST_TMPDIR/outside.toml"
+  ln -sf "$BATS_TEST_TMPDIR/outside.toml" "$WT/.bercail/policy.toml"
+  err="$(policy preview "$WT" 2>&1)" && fail "a linked file was shown: $err"
+  [[ "$err" == *"is a link, so its text may be outside the checkout"* && "$err" != *kept-outside* ]] || fail "error: $err"
+  rm -r "$WT/.bercail" && ln -s "$BATS_TEST_TMPDIR" "$WT/.bercail"
+  cp "$REPO/.bercail/policy.toml" "$BATS_TEST_TMPDIR/policy.toml"
+  err="$(policy preview "$WT" 2>&1)" && fail "a linked folder was shown: $err"
+  [[ "$err" == *"is a link"* ]] || fail "error: $err"
+}
+
+@test "trust-pinned trusts the file only while its sha256 and its main checkout are the ones given" {
+  local REPO WT err hash other
+  commit_policy
+  hash="$(field "$REPO" .sha256)"
+  err="$(policy trust-pinned "$(printf '0%.0s' {1..64})" "$REPO" "$REPO" 2>&1)" && fail "a stale hash trusted it"
+  [[ "$err" == *"is sha256 ${hash:0:12} now, not the 000000000000 its card showed; nothing trusted"* ]] || fail "error: $err"
+  # The same bytes in another repo: the hash alone would trust them there.
+  other="$BATS_TEST_TMPDIR/other"
+  git init -q "$other" && mkdir "$other/.bercail" && cp "$REPO/.bercail/policy.toml" "$other/.bercail/"
+  other="$(cd "$other" && pwd -P)"
+  err="$(policy trust-pinned "$hash" "$REPO" "$other" 2>&1)" && fail "another repo was trusted"
+  [[ "$err" == *"$other is a checkout of $other now, not the $REPO its card showed; nothing trusted"* ]] || fail "error: $err"
+  [[ ! -e "$TRUST" ]] || fail "trusted on a stale card: $(cat "$TRUST")"
+  for bad in "short $REPO $REPO" "$hash relative $REPO" "$hash $REPO"; do
+    # shellcheck disable=SC2086 # its words
+    err="$(policy trust-pinned $bad 2>&1)" && fail "$bad ran"
+    [[ "$err" == *"usage: bercail policy trust-pinned SHA256 MAIN_CHECKOUT REPO"* ]] || fail "error: $err"
+  done
+  [[ "$(policy trust-pinned "$hash" "$REPO" "$WT")" == "trusted $WT/.bercail/policy.toml"* ]] || fail "not trusted"
+  [[ "$(field "$REPO" .trusted)" == true ]] || fail "the right hash and repo did not trust it"
+}
+
 @test 'config.toml [policy."<main checkout>"] overrides without trust' {
   local REPO WT out
   commit_policy
