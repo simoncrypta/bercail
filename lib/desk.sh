@@ -94,21 +94,30 @@ desk_restore_plan() {
 # Pi takes --session-id: it creates the session when it was never written (Pi
 # writes one at its first message), where --session would exit.
 desk_resume_command() {
-  local record="$1" agent session cwd arg cmd args lead
+  local record="$1" agent session cwd arg cmd args lead bridge
   agent="$LOCAL_BIN/bercail-desk-agent"
   [[ -x "$agent" ]] || agent="bercail-desk-agent"
   session="$(jq -r .session <<<"$record")"
   cwd="$(jq -r .cwd <<<"$record")"
   args="$(jq -c '.args // []' <<<"$record")"
+  lead="$BERCAIL_SHARE_DIR/pi/lead.json"
   # Old plain-Pi records have no managed profile. Resume them on today's lead,
-  # but keep a guarded lead or read-only reviewer exactly as it was recorded.
+  # but keep a guarded lead or read-only reviewer as it was recorded, bar the bridge.
   if ! jq -e 'any(.[]; test("(^|/)(guard|review)\\.ts$"))' <<<"$args" >/dev/null; then
-    lead="$BERCAIL_SHARE_DIR/pi/lead.json"
     [[ -r "$lead" ]] || { die "$lead is missing; run bercail update"; return 1; }
     args="$(jq -c --argjson saved "$args" '
       .[1:] | if any($saved[]; . == "--model" or startswith("--model=")) then
         index("--model") as $i | if $i == null then . else .[:$i] + .[$i + 2:] end
       else . end | . + $saved' "$lead")" || return 1
+  fi
+  # The bridge the desk started on may be an older pin. Desks resumed together on
+  # two pins reinstall it over each other in Pi's one npm prefix, and a Pi that
+  # loads mid-install mixes the versions' files. Take today's.
+  bridge="$(jq -r 'first(.[] | select(startswith("npm:pi-claude-bridge@"))) // empty' "$lead" 2>/dev/null)" || true
+  if [[ -n "$bridge" ]]; then
+    args="$(jq -c --arg bridge "$bridge" '. as $a | [range(length) as $i | $a[$i]
+      | if $i > 0 and ($a[$i - 1] | IN("-e", "--extension")) and startswith("npm:pi-claude-bridge@")
+        then $bridge else . end]' <<<"$args")" || return 1
   fi
   printf -v cmd 'cd %q && TERM=xterm-256color COLORTERM=truecolor exec %q pi --session-id %q' \
     "$cwd" "$agent" "$session"

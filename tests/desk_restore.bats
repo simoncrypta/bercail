@@ -362,6 +362,18 @@ restore_profile() {
   done
 }
 
+@test "restoring a guarded lead swaps its recorded bridge pin for the deployed lead's" {
+  restore_profile
+  jq -n '["pi", "-e", "npm:pi-claude-bridge@0.13.0", "-e", "/profile/guard.ts"]' >"$BERCAIL_SHARE_DIR/pi/lead.json"
+  local rec cmd out
+  rec="$(jq -nc --arg cwd "$BATS_TEST_TMPDIR" \
+    '{session:"0199-managed", cwd:$cwd, args:["--model","saved/m:high","-e","npm:pi-claude-bridge@0.12.0","-e","/saved/guard.ts","--name","npm:pi-claude-bridge@0.12.0"]}')"
+  cmd="$(desk_resume_command "$rec")"
+  out="$(bash -c "$cmd")" || fail "restore: $out"
+  jq -e '. == ["--session-id","0199-managed","--model","saved/m:high","-e","npm:pi-claude-bridge@0.13.0","-e","/saved/guard.ts","--name","npm:pi-claude-bridge@0.12.0"]' \
+    <<<"$out" >/dev/null || fail "restore kept the bridge the desk started on: $out"
+}
+
 @test "restoring an old plain Pi record without a deployed lead fails with the update command" {
   rm "$BERCAIL_SHARE_DIR/pi/lead.json"
   local out
