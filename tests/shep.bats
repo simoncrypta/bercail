@@ -357,7 +357,7 @@ EOF
 @test "the shep usage names every subcommand" {
   local out
   out="$(shep unknown </dev/null 2>&1)" && fail "an unknown subcommand passed"
-  [[ "$out" == 'bercail shep: usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json [--all]] | question create|revise|reply|answer|withdraw|get|check|thread|panel|expire|waiting|discuss|closed|push-approval' ]] \
+  [[ "$out" == 'bercail shep: usage: bercail shep run | status | runtime | task dispatch (JSON stdin) | bg --issue ID [--cwd DIR] | discuss Qn@rev | repos [--json] | brief ISSUE [--repo DIR] [--budget CHARS] | board | queue [--repo DIR] [--json] | remember "RULE" [--scope SCOPE] | forget N | list | mistake KEY "WHAT" [--group ID] [--repo DIR] [--issue ID] | mistake group ID "NAME" --against process|tool|conduct [KEY...] | mistake list | diagram [FILE] | questions [--json [--all]] | question create|revise|reply|answer|withdraw|get|check|thread|panel|expire|waiting|discuss|closed|push-approval|policy-trust' ]] \
     || fail "shep usage: $out"
 }
 

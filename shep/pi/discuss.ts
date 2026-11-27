@@ -475,7 +475,11 @@ export function closed(state: string, token: string, opening: string): boolean {
 // What picking a push question's approving choice lets Shep do, for the card and Discuss.
 // Discuss says a pick there does not approve it: only the panel card's does.
 export const pushLine = (p: QuestionPush) =>
-  `Picking "${p.approves}" on the panel card lets Shep push the answered commit to ${p.remote} (${p.url}): ${p.refs.join(", ")}, once. A /pick here does not approve the push.`;
+  `Picking "${p.approves}" on the panel card lets Shep push the answered commit to ${p.remote} (${p.url}): ${p.refs.join(", ")}, once.` +
+  (p.policyTrust
+    ? ` Once it is on the trunk, it trusts the commit's .bercail/policy.toml, sha256 ${p.policyTrust}, as bercail policy trust would.`
+    : "") +
+  " A /pick here does not approve the push.";
 
 // A guard card is answered on the panel only: any agent can type into this terminal.
 export const guardLine =

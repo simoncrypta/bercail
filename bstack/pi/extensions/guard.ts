@@ -3539,6 +3539,26 @@ async function pushApproval(
   }
 }
 
+// After a push an answer approved: the policy file its card pinned, trusted once it is on
+// the trunk (bercail shep question policy-trust checks and writes it). What it did, as
+// warnings; none when the card pinned none.
+async function policyTrust(pi: ExtensionAPI, token: string, signal: AbortSignal | undefined): Promise<string[]> {
+  const retry = `Run bercail shep question policy-trust ${token} again once the push is on the trunk.`;
+  try {
+    const result = await pi.exec(process.env.BERCAIL_BIN || "bercail", ["shep", "question", "policy-trust", token], {
+      timeout: 90000,
+      signal,
+    });
+    const out = JSON.parse(result.stdout) as { trusted?: string | null; repo?: string; reason?: string };
+    if (result.code === 0 && typeof out.trusted === "string")
+      return [`Trusted ${out.repo}'s new .bercail/policy.toml (sha256 ${out.trusted.slice(0, 12)}), as ${token} said.`];
+    if (result.code === 0 && out.trusted === null && out.reason === undefined) return [];
+    return [`Did not trust the policy file ${token} pinned: ${out.reason ?? "its trust was not written"}. ${retry}`];
+  } catch {
+    return [`Did not trust the policy file ${token} pinned: bercail shep question policy-trust failed. ${retry}`];
+  }
+}
+
 /** What the guard looks up while it decides: reads only, in the order the decision asks. */
 export type Lookups = {
   branch: (dir: string) => Promise<string>;
@@ -4967,6 +4987,8 @@ export default function (pi: ExtensionAPI) {
   // entire agent-help's read-only lists, read once a session; warnings by tool call.
   const entireHelp: Record<string, string[]> = {};
   const warned = new Map<string, string[]>();
+  // The answer each push it let through spent: once it ran, the policy file that card pinned.
+  const pushed = new Map<string, string>();
   // How many tool calls the last assistant message held, by call ID: Pi checks every call
   // of a message before it runs any, then runs them together.
   const counts = new Map<string, number>();
@@ -5032,7 +5054,10 @@ export default function (pi: ExtensionAPI) {
     // is spent on it, and it runs with a warning naming the answer. None: it asks.
     if (decision.action === "ask" && decision.push) {
       const token = await pushApproval(pi, decision.push, ctx.signal);
-      if (token) decision = { action: "allow", warnings: [...(decision.warnings ?? []), pushApproved(token)] };
+      if (token) {
+        decision = { action: "allow", warnings: [...(decision.warnings ?? []), pushApproved(token)] };
+        pushed.set(event.toolCallId, token);
+      }
     }
     const logged = command ?? input.path ?? "";
     // Shep never waits on a confirm: an ask runs with no card where its repo opts in
@@ -5085,9 +5110,12 @@ export default function (pi: ExtensionAPI) {
   });
 
   // A warning goes at the top of the tool's result, where the agent reads it.
-  pi.on("tool_result", async (event) => {
-    const warnings = warned.get(event.toolCallId);
-    if (!warnings) return;
+  pi.on("tool_result", async (event, ctx) => {
+    const token = pushed.get(event.toolCallId);
+    pushed.delete(event.toolCallId);
+    const trust = token ? await policyTrust(pi, token, (ctx as { signal?: AbortSignal } | undefined)?.signal) : [];
+    const warnings = [...(warned.get(event.toolCallId) ?? []), ...trust];
+    if (!warnings.length) return;
     warned.delete(event.toolCallId);
     const text = warnings.map(warningLine).join("\n");
     return {

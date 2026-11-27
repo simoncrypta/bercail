@@ -58,7 +58,8 @@ Post-install CLI (bercail):
                   chains; Shep's runtime runs it) |
                 waiting (the board's Decisions block: the cards and defaults waiting on you) |
                 discuss TOKEN (make or find its branch) | closed TOKEN OPENING |
-                push-approval DIR REMOTE REFSPEC... (the guard's: spends the answer that approves this push)
+                push-approval DIR REMOTE REFSPEC... (the guard's: spends the answer that approves this push) |
+                policy-trust TOKEN (after that push: trusts the policy file its card pinned, once it is on the trunk)
   job           A trail job in an Entire repo, trail:N (its trail number) wherever an issue id goes:
                 show trail:N [--repo DIR] [--json] (the trail, its changes, and its comments) |
                 comment trail:N [--repo DIR] (text on stdin; the comment stays on this machine, where

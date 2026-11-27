@@ -499,7 +499,10 @@ export function cardWords(card, all = spaces(), backend = S.backend) {
     timer: countdown(card, state.word),
     // Discuss says the same, and that its /pick does not approve the push (shep/pi/discuss.ts pushLine).
     push: card.push
-      ? `Picking "${card.push.approves}" lets Shep push the answered commit to ${card.push.remote} (${card.push.url}): ${card.push.refs.join(", ")}, once.`
+      ? `Picking "${card.push.approves}" lets Shep push the answered commit to ${card.push.remote} (${card.push.url}): ${card.push.refs.join(", ")}, once.` +
+        (card.push.policyTrust
+          ? ` Once it is on the trunk, it trusts the commit's .bercail/policy.toml, sha256 ${card.push.policyTrust}, as bercail policy trust would.`
+          : "")
       : null,
     warnings: (card.warnings ?? []).map((x) => `Warning: ${x}.`),
   };

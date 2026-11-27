@@ -24,8 +24,10 @@ import {
   landFacts,
   mergeReversible,
   policyChange,
+  pushedPolicy,
   repoOf,
   withTarget,
+  writePolicyTrust,
 } from "./question-target.ts";
 import { sweepLand, tellLand } from "./land-chain.ts";
 import {
@@ -107,6 +109,29 @@ async function main() {
     const [dir, remote, ...refspecs] = args;
     if (!dir || !remote || !refspecs.length) throw new Error("push-approval requires DIR REMOTE REFSPEC...");
     result = await approvePush(state, { dir, remote, refspecs });
+  } else if (op === "policy-trust") {
+    // After a push the person's answer approved: the policy file it pinned, trusted once the
+    // trunk on origin is its commit, and recorded so the answer trusts it once.
+    const [token] = args;
+    if (args.length !== 1 || !/^Q[1-9]\d*@[1-9]\d*$/.test(token!))
+      throw new Error("policy-trust requires an explicit Qn@revision token");
+    const question = store.snapshot().questions.find((q) => tokenOf(q) === token);
+    if (!question?.push) throw new Error("policy-trust requires a push question's token");
+    if (!question.push.policyTrust) result = { trusted: null };
+    else {
+      const read = question.policyTrusted
+        ? { reason: `already trusted it, at ${question.policyTrusted.at}` }
+        : pushedPolicy(question);
+      if ("reason" in read) result = { trusted: null, reason: `${token} ${read.reason}` };
+      else {
+        const claim = store.claimPolicyTrust(token!, read.sha256, () =>
+          writePolicyTrust(state, read.main, read.sha256),
+        );
+        result = claim.accepted
+          ? { trusted: read.sha256, repo: read.main }
+          : { trusted: null, reason: `${token} ${claim.reason}` };
+      }
+    }
   } else if (op === "guard-claim") {
     // The guard's worker: the person's Allow on its card, claimed once.
     if (args.length !== 2 || !/^Q[1-9]\d*@[1-9]\d*$/.test(args[0]!))
@@ -243,7 +268,7 @@ async function main() {
     }
   } else
     throw new Error(
-      "usage: question-cli.ts list | json | pending | get Qn@revision | waiting | panel | expire | create | revise | reply | answer | withdraw | guard-create | land-create | land-result | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | guard-default Qn@revision TICKET | guard-claim Qn@revision TICKET | land-claim Qn@revision | land-step Qn@revision STEP [DETAIL] | land-check Qn@revision [COMMIT [--landed]] | land-tell Qn@revision",
+      "usage: question-cli.ts list | json | pending | get Qn@revision | waiting | panel | expire | create | revise | reply | answer | withdraw | guard-create | land-create | land-result | thread TOPIC | check Qn@revision | discuss Qn@revision | closed Qn@revision OPENING | push-approval DIR REMOTE REFSPEC... | policy-trust Qn@revision | guard-default Qn@revision TICKET | guard-claim Qn@revision TICKET | land-claim Qn@revision | land-step Qn@revision STEP [DETAIL] | land-check Qn@revision [COMMIT [--landed]] | land-tell Qn@revision",
     );
   console.log(JSON.stringify(result));
 }

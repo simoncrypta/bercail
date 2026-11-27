@@ -887,7 +887,7 @@ test("an approvable push keeps the refusals, and the policy that lets it through
     blocked(command, shep, /the guard's to check and spend/);
 });
 
-test("the extension spends the person's answer on the push it would ask about, and hands it off without one", async () => {
+test("the extension spends the person's answer on the push it would ask about, then trusts the policy file its card pinned, and hands it off without one", async () => {
   const dir = mkdtempSync(join(tmpdir(), "guard-claim-"));
   vi.stubEnv("HOME", dir);
   vi.stubEnv("XDG_STATE_HOME", join(dir, "state"));
@@ -901,9 +901,12 @@ test("the extension spends the person's answer on the push it would ask about, a
   const exec = vi.fn(async (_cmd: string, args: string[]) => {
     if (args[0] === "policy")
       return { code: 0, stdout: JSON.stringify({ repo: "/work", policy: { push: "ask" } }), stderr: "" };
+    if (args[2] === "policy-trust") return { code: 0, stdout: JSON.stringify(trust), stderr: "" };
     const out = answers-- > 0 ? { approved: "Q7@1" } : { approved: null, reason: "Q7@1 already approved a push" };
     return { code: 0, stdout: JSON.stringify(out), stderr: "" };
   });
+  // What policy-trust says after the push: the card pinned no policy file, then it did.
+  let trust: Record<string, unknown> = { trusted: null };
   const confirm = vi.fn(async () => false);
   guard({ on: (name: string, handler: never) => (handlers[name] = handler), registerCommand() {}, exec } as never);
   const ctx = { hasUI: true, cwd: "/work", ui: { confirm } };
@@ -922,12 +925,37 @@ test("the extension spends the person's answer on the push it would ask about, a
       { toolName: "bash", toolCallId: "p1", content: [{ type: "text", text: "out" }], isError: false },
       {},
     )) as { content: { text: string }[] };
+    assertEqual(shown.content[0].text.split("\n").length, 1);
     assertMatch(shown.content[0].text, /^bercail guard warning: Allowed this push without asking: .*Q7@1/);
+    assertDeepEqual(exec.mock.calls.at(-1)?.slice(0, 2), ["bercail", ["shep", "question", "policy-trust", "Q7@1"]]);
     const logged = readFileSync(join(dir, "state/bercail/guard-warnings.jsonl"), "utf8").trim().split("\n");
     assertDeepEqual(
       logged.map((line) => [JSON.parse(line).kind, JSON.parse(line).command]),
       [["warning", approvedPush]],
     );
+    // Once the push ran, the policy file its card pinned is trusted, or Shep hears why not.
+    const result = async (id: string) => {
+      answers = 1;
+      await bash(id, approvedPush);
+      return (
+        (await handlers.tool_result(
+          { toolName: "bash", toolCallId: id, content: [{ type: "text", text: "out" }], isError: false },
+          {},
+        )) as { content: { text: string }[] }
+      ).content[0].text.split("\n");
+    };
+    trust = { trusted: "ab".repeat(32), repo: "/work" };
+    assertEqual(
+      (await result("t1"))[1],
+      "bercail guard warning: Trusted /work's new .bercail/policy.toml (sha256 abababababab), as Q7@1 said.",
+    );
+    trust = { trusted: null, reason: "Q7@1 has another .bercail/policy.toml" };
+    assertEqual(
+      (await result("t2"))[1],
+      "bercail guard warning: Did not trust the policy file Q7@1 pinned: Q7@1 has another .bercail/policy.toml. Run bercail shep question policy-trust Q7@1 again once the push is on the trunk.",
+    );
+    trust = { trusted: null };
+    answers = 0;
     // The same answer again is spent, so the push goes to a Decisions card: here /work
     // is no checkout, so it is refused. Shep never gets a dialog.
     assertMatch(

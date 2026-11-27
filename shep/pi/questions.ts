@@ -160,6 +160,10 @@ export interface QuestionPush {
   refs: string[];
   /** The remote's one push URL when Shep asked, as git uses it; never one with credentials. */
   url: string;
+  /** The sha256 of the reviewed tree's .bercail/policy.toml when the change edits it and the
+   * push goes to the trunk: once the pushed commit is on the trunk, the pick trusts exactly
+   * that file. Read from the target, never Shep's; absent when the policy is untouched. */
+  policyTrust?: string;
 }
 /** The one push an answer approved: the guard claimed it, so no other push can. */
 export interface PushClaim {
@@ -245,6 +249,8 @@ export interface Question extends QuestionSpec {
   withdrawal?: QuestionWithdrawal;
   /** Present once the answer's push was claimed, and only then. */
   pushed?: PushClaim;
+  /** Present once the policy file its push pinned was trusted, and only then. */
+  policyTrusted?: { at: string; sha256: string };
   /** Present once a guard card's worker claimed its Allow, and only then. */
   guardClaim?: { at: string };
   /** A land card's chain, present from its first start reservation. */
@@ -473,7 +479,9 @@ const refName = /^refs\/(heads|tags)\/[\w./-]+$/;
 // default, with a tag only on a release question.
 function push(value: QuestionSpec) {
   const p = value.push;
-  shape(p, ["approves", "remote", "refs", "url"], "push");
+  shape(p, ["approves", "remote", "refs", "url", ...optional(p, ["policyTrust"])], "push");
+  if (p.policyTrust !== undefined && !/^[0-9a-f]{64}$/.test(p.policyTrust as string))
+    fail("a push trusts a policy file by its sha256, or none");
   if (!value.options.includes(p.approves as string)) fail("push.approves must be one of the options");
   if (value.kind === "planning") fail("a planning question binds to no commit, so it cannot approve a push");
   if (value.reversible) fail("a push is a one-way door: ask it without reversible");
@@ -507,6 +515,7 @@ function question(value: unknown): asserts value is Question {
       "settled",
       "withdrawal",
       "pushed",
+      "policyTrusted",
       "guardClaim",
       "landing",
     ]),
@@ -523,6 +532,7 @@ function question(value: unknown): asserts value is Question {
     settled,
     withdrawal,
     pushed,
+    policyTrusted,
     guardClaim,
     landing,
     ...fields
@@ -622,6 +632,11 @@ function question(value: unknown): asserts value is Question {
       canonical(refs.sort()) !== canonical([...fields.push.refs].sort())
     )
       fail("a push claim names the approved remote and refs");
+  }
+  if (policyTrusted !== undefined) {
+    shape(policyTrusted, ["at", "sha256"], "policyTrusted");
+    if (!pushed || policyTrusted.sha256 !== fields.push?.policyTrust || !when(policyTrusted.at))
+      fail("only a push that pinned a policy file trusts it, once it was pushed");
   }
   if (guardClaim !== undefined) {
     const a = answer as QuestionAnswer | undefined;
@@ -1257,6 +1272,24 @@ export class QuestionStore {
             : undefined;
       if (reason) return { question: q, accepted: false, reason };
       q.pushed = { at: new Date().toISOString(), ...structuredClone(claim) };
+      return { question: q, accepted: true };
+    }, true);
+  }
+
+  // The trust of the policy file a push pinned, once its commit is on the trunk (the caller
+  // read it just before): WRITE records it, then the ledger does, under its lock. One answer
+  // trusts one file, once; a write that fails spends nothing.
+  claimPolicyTrust(token: string, sha256: string, write: () => void): AnswerResult {
+    return this.locked((state) => {
+      const q = this.find(state, token);
+      const reason = q.policyTrusted
+        ? `already trusted it, at ${q.policyTrusted.at}`
+        : !q.pushed || q.push?.policyTrust !== sha256
+          ? "pinned no such policy file to a push it approved"
+          : undefined;
+      if (reason) return { question: q, accepted: false, reason };
+      write();
+      q.policyTrusted = { at: new Date().toISOString(), sha256 };
       return { question: q, accepted: true };
     }, true);
   }

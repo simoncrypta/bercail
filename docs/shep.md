@@ -343,6 +343,8 @@ After you pick it on the card, Shep's push runs with a [guard warning](config.md
 - Every ref gets the same commit: the answered HEAD, or the live HEAD when it is the one commit of the reviewed tree on it (read from the commit object, so replace refs and grafts cannot fake it). A tag is an annotated tag of that commit, or the commit.
 - The answer approved no push before. The claim is in the ledger (`pushed`, under its lock), so the same answer cannot approve a second push. A push that fails after its claim goes to a guard card next time.
 
+A push to origin's trunk of a reviewed change to `.bercail/policy.toml` carries its trust, as a [land card](#one-land-card) does. The card pins the sha256 of the reviewed tree's new policy file (`push.policyTrust`, read from the target, never from Shep) and adds `Once it is on the trunk, it trusts the commit's .bercail/policy.toml, sha256 <hash>, as bercail policy trust would.` A push to another branch or another remote pins nothing. After the push it let through, the guard runs `bercail shep question policy-trust Q42@1`. It trusts the file for the main checkout when origin still pushes to the card's URL, the trunk there is exactly the commit the answer pushed, and that commit holds the pinned file (read without replace refs). It writes the trust to the registry beside the ledger's state folder, so a copy of the ledger elsewhere trusts nothing here, and records it in the ledger (`policyTrusted`) under the ledger's lock: one answer trusts once, and a write that fails spends nothing. A guard warning says it trusted the file, or why not and to run the same command again.
+
 Force, `+` refspecs, `--no-verify` and deleting main stay refused. A policy that already lets the push through spends no answer. For agents the guard blocks `question push-approval`. A seatbelt: another process (a desk, or you) changing the repo's remote config in the seconds between the check and the push is not caught, since git reads the config again when it pushes.
 
 #### Discuss
@@ -365,6 +367,7 @@ bercail shep question expire        # record the defaults that are due
 bercail shep question discuss Q42@3 # make (or find) the question's branch; prints its session file
 bercail shep discuss Q42@3          # Pi on that branch, read-only: what the dialog runs
 bercail shep question push-approval DIR REMOTE REFSPEC...  # the guard's: spends the answer that approves this push
+bercail shep question policy-trust Q42@1  # after that push: trusts the policy file its card pinned, once it is on the trunk
 ```
 
 `question create`, `revise`, `reply`, `answer` and `withdraw` read JSON on stdin. `answer` is the panel's (`requestId`, `token`, `choice`, `source`, or on a default `requestId`, `token`, `source` and `"outcome"`: `"ok"`, or `"reversed"` with an optional `choice`; or the same with `"outcome": "closed"` to close a card, or `"reask"` to request a refresh of a stale question), and the guard blocks it for agents; `withdraw` takes `requestId`, `token` and `reason`. A planning topic without a desk:

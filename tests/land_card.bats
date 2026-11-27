@@ -5,9 +5,9 @@
 # cleans up the desk and fast-forwards the main checkout. This file covers the
 # chains that land: one pick, two chains on one trunk commit, two workers on
 # one pick, a cleanup that does not hold, a desk's merge of a moved trunk, the
-# sweep, a lost event, and the trust of a landed policy file. Where the chain
-# stops or refuses is in tests/land_card_stops.bats; the fixture is
-# tests/land_card.bash.
+# sweep, a lost event, and the trust of a landed policy file, from a land card or
+# a push card. Where the chain stops or refuses is in tests/land_card_stops.bats;
+# the fixture is tests/land_card.bash.
 
 setup() {
   load test_helper
@@ -315,4 +315,65 @@ setup() {
     "the trust of .bercail/policy.toml, sha256 \($h), could not be written (the log says why), so it is not trusted",
     "app-1 stays open until that is done"]' >/dev/null || fail "result: $(card "$token" | jq -c .landing.result)"
   [[ ! -e "$STATE/status-app-1" ]] || fail "the job was closed"
+}
+
+@test "a push card's pick trusts the policy file its commit pushes to origin's trunk, once, and only once it is there" {
+  local hash token other out sha spec base rc
+  [[ "$(id -u)" != 0 ]] || skip "root writes into a folder of mode 500"
+  base="$(trunk)"
+  hash="$(policy_change "Push with a card.")"
+  git -C "$WT" commit -qm "policy: push with a card"
+  sha="$(git -C "$WT" rev-parse HEAD)"
+  spec="$sha^{commit}:refs/heads/master"
+  git init -q --bare "$GH/fork.git"
+  git -C "$MAIN" remote add fork "$GH/fork.git"
+  push_card() {
+    jq -nc --arg wt "$WT" --arg remote "$1" --arg ref "$2" '{requestId: "push-\($remote)-\($ref)", kind: "action",
+        prompt: "Push it?", options: ["Push it", "Not yet"], origin: {event: "land:1", session: "shep", entry: null},
+        repo: $wt, issue: "app-1", topic: "app-1-push-\($remote)-\($ref)", desk: "t9", base: "origin/master",
+        action: "push", push: {approves: "Push it", remote: $remote, refs: [$ref]}}' \
+      | question create | jq -r '"\(.id)@\(.revision)"'
+  }
+  token="$(push_card origin refs/heads/master)"
+  # The card pins the reviewed tree's new policy file; a push to another branch, or to a fork's master, pins none.
+  card "$token" | jq -e --arg h "$hash" '.push.policyTrust == $h' >/dev/null || fail "not pinned: $(card "$token" | jq -c .push)"
+  for other in "$(push_card origin refs/heads/ci-login)" "$(push_card fork refs/heads/master)"; do
+    card "$other" | jq -e '.push | has("policyTrust") | not' >/dev/null || fail "pinned: $(card "$other" | jq -c .push)"
+    [[ "$(question policy-trust "$other")" == '{"trusted":null}' ]] || fail "a card with no pin: $(question policy-trust "$other")"
+  done
+  pick "$token" "Push it" >/dev/null
+  # Approved, but not pushed yet: the trunk is not the commit, so nothing is trusted or spent.
+  out="$(question push-approval "$WT" origin "$spec")"
+  jq -e --arg t "$token" '.approved == $t' >/dev/null <<<"$out" || fail "push-approval: $out"
+  out="$(question policy-trust "$token")" || fail "policy-trust: $out"
+  [[ "$out" == "{\"trusted\":null,\"reason\":\"$token refs/heads/master on git@github.com:o/app.git is ${base:0:12}, not ${sha:0:12}\"}" ]] \
+    || fail "before the push: $out"
+  [[ "$(trusted_hash)" != "$hash" ]] || fail "trusted before the push"
+  git -C "$WT" push -q origin "$spec"
+  # A trust that cannot be written spends nothing: the same command trusts it once it can.
+  chmod 500 "$XDG_STATE_HOME/bercail"
+  rc=0
+  out="$(question policy-trust "$token" 2>&1)" || rc=$?
+  chmod 700 "$XDG_STATE_HOME/bercail"
+  ((rc != 0)) || fail "a write that failed passed: $out"
+  card "$token" | jq -e 'has("policyTrusted") | not' >/dev/null || fail "spent on a failed write: $(card "$token" | jq -c .policyTrusted)"
+  # A copy of the ledger elsewhere trusts only in the registry beside it, never this one.
+  mkdir -p "$BATS_TEST_TMPDIR/elsewhere/shep"
+  cp "$SHEP/questions.json" "$BATS_TEST_TMPDIR/elsewhere/shep/"
+  BERCAIL_SHEP_STATE="$BATS_TEST_TMPDIR/elsewhere/shep" node "$ROOT/shep/pi/question-cli.ts" policy-trust "$token" >/dev/null \
+    || fail "the copy did not run"
+  [[ "$(trusted_hash)" != "$hash" ]] || fail "a ledger elsewhere trusted it here"
+  [[ "$(stat -c %a "$BATS_TEST_TMPDIR/elsewhere/policy-trust.json")" == 600 ]] || fail "the registry is not private"
+  out="$(question policy-trust "$token")" || fail "policy-trust: $out"
+  [[ "$out" == "{\"trusted\":\"$hash\",\"repo\":\"$MAIN\"}" ]] || fail "after the push: $out"
+  [[ "$(trusted_hash)" == "$hash" ]] || fail "trusts $(trusted_hash), not $hash"
+  card "$token" | jq -e --arg h "$hash" '.policyTrusted.sha256 == $h' >/dev/null || fail "not recorded: $(card "$token" | jq -c .)"
+  git -C "$MAIN" merge -q --ff-only "$sha"
+  "$BERCAIL" policy show --json "$MAIN" | jq -e '.trusted and .policy.rules == "Push with a card."' >/dev/null \
+    || fail "the main checkout's policy: $("$BERCAIL" policy show --json "$MAIN" | jq -c '{trusted, rules: .policy.rules}')"
+  # One answer trusts once: after an untrust, the same card trusts nothing again.
+  "$BERCAIL" policy untrust "$MAIN" >/dev/null
+  out="$(question policy-trust "$token")" || fail "policy-trust: $out"
+  [[ "$out" == "{\"trusted\":null,\"reason\":\"$token already trusted it, at "*'"}' ]] || fail "a second trust: $out"
+  "$BERCAIL" policy show --json "$MAIN" | jq -e '.trusted | not' >/dev/null || fail "trusted again"
 }

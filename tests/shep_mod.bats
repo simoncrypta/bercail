@@ -759,6 +759,10 @@ d.render(cx);
 const line = 'Picking "Push it" lets Shep push the answered commit to origin (git@example.invalid:team/app.git): refs/heads/master, once.';
 eq(texts().filter((x) => x.startsWith("Picking ")), [line], "only the push card says what it approves");
 eq(cardWords(card("Q2@1")).push, null, "no push line without a push");
+// A push of a policy change says it trusts the new file, by its hash.
+const trusts = cardWords(card("Q3@1", { push: { ...push, policyTrust: "ab".repeat(32) } })).push;
+eq(trusts, `${line} Once it is on the trunk, it trusts the commit's .bercail/policy.toml, sha256 ${"ab".repeat(32)}, as bercail policy trust would.`,
+  "the trust it carries");
 EOF
 }
 

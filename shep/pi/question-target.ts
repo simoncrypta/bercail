@@ -1,8 +1,17 @@
 import { execFileSync, spawnSync, type SpawnSyncReturns } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import {
   DEFAULT_SOURCE,
   type Question,
@@ -494,10 +503,102 @@ export function withTarget(
   if (push == null) return { target, ...(pinsRebase(target) ? { rebaseKeepsPick: true as const } : {}) };
   const worktree = target.worktree;
   if (typeof push !== "object" || !worktree) return fail("push needs an object and the target's worktree");
+  // Only the repo's own trunk on origin: a fork's master is not where the policy lands.
+  const policyTrust =
+    push.remote === "origin" && Array.isArray(push.refs) && push.refs.includes(`refs/heads/${trunkOf(worktree)}`)
+      ? policyEdit(worktree, target.base, target.stagedTree)
+      : null;
   return {
     target,
-    push: { approves: push.approves, remote: push.remote, refs: push.refs, url: pushUrl(worktree, push.remote) },
+    push: {
+      approves: push.approves,
+      remote: push.remote,
+      refs: push.refs,
+      url: pushUrl(worktree, push.remote),
+      ...(policyTrust ? { policyTrust } : {}),
+    },
   };
+}
+
+// The sha256 of TREE's policy file when it differs from BASE's, as bercail policy trust
+// hashes it; null when it is the same, TREE deletes it, or git cannot tell.
+function policyEdit(cwd: string, base: string | null, tree: string | null): string | null {
+  if (!base || !tree) return null;
+  const file = ".bercail/policy.toml";
+  const diff = ["--no-replace-objects", "-C", cwd, "diff", "--quiet", base, tree, "--", file];
+  if (spawnSync("git", diff, { env: targetEnv() }).status !== 1) return null;
+  return blobHash(cwd, `${tree}:${file}`);
+}
+
+// The sha256 of the blob git names SPEC (<tree-ish>:<path>), read without replace refs, or
+// null when there is none.
+function blobHash(cwd: string, spec: string): string | null {
+  const blob = spawnSync("git", ["--no-replace-objects", "-C", cwd, "cat-file", "blob", spec], { env: targetEnv() });
+  return blob.status === 0 ? createHash("sha256").update(blob.stdout).digest("hex") : null;
+}
+
+// What a push answer's pinned policy file needs before it is trusted: origin still pushes to
+// the card's URL, the trunk there is exactly the commit the answer pushed to it, and that
+// commit holds that file. The repo's main checkout, as bercail policy show names it, and
+// the hash; or why not.
+export function pushedPolicy(q: Question): { main: string; sha256: string } | { reason: string } {
+  const want = q.push?.policyTrust;
+  if (!want || !q.pushed) return { reason: "approved no push of a policy change yet" };
+  const url = q.push!.url;
+  let main: string;
+  try {
+    main = realpathSync(
+      git(q.target.repo, "worktree", "list", "--porcelain")
+        .split("\n")[0]!
+        .replace(/^worktree /, ""),
+    );
+    if (pushUrl(main, "origin") !== url) return { reason: `origin no longer pushes to ${url}` };
+  } catch {
+    return { reason: `its repo ${q.target.repo} or its origin cannot be read` };
+  }
+  const trunk = `refs/heads/${trunkOf(main)}`;
+  const spec = q.pushed.refspecs.find((s) => s.endsWith(`:${trunk}`));
+  if (!spec) return { reason: `pushed nothing to ${trunk}` };
+  const commit = spec.slice(0, spec.indexOf("^"));
+  let tip: string;
+  try {
+    const refs = run("git", ["ls-remote", "--end-of-options", url, trunk], main, 60000).split("\n");
+    tip = refs.find((line) => line.endsWith(`\t${trunk}`))?.split("\t")[0] ?? "";
+  } catch {
+    return { reason: `${url} cannot be read` };
+  }
+  if (tip !== commit)
+    return { reason: `${trunk} on ${url} is ${tip.slice(0, 12) || "missing"}, not ${commit.slice(0, 12)}` };
+  if (blobHash(main, `${commit}:.bercail/policy.toml`) !== want)
+    return { reason: `its commit ${commit.slice(0, 12)} has another .bercail/policy.toml` };
+  return { main, sha256: want };
+}
+
+// Trust HASH as main checkout MAIN's policy file, as bercail policy trust records it
+// (policy_trust_hash in lib/policy.sh): the whole registry written to a private temp file,
+// then renamed over it. The registry is the one beside the ledger's state dir STATE
+// (<state>/bercail/shep), so a ledger elsewhere never trusts a policy here.
+export function writePolicyTrust(state: string, main: string, sha256: string) {
+  const file = join(dirname(state), "policy-trust.json");
+  let raw = "";
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const trust = (raw.trim() ? JSON.parse(raw) : {}) as Record<string, unknown>;
+  trust[main] = {
+    file: join(main, ".bercail/policy.toml"),
+    sha256,
+    trusted_at: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"),
+  };
+  const tmp = `${file}.${process.pid}`;
+  try {
+    writeFileSync(tmp, JSON.stringify(trust, null, 2) + "\n", { mode: 0o600 });
+    renameSync(tmp, file);
+  } finally {
+    rmSync(tmp, { force: true });
+  }
 }
 
 // Why a push from dir to remote could send more, or elsewhere, than the card said: its
