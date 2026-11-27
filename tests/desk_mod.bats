@@ -11,6 +11,8 @@ const h = () => globalThis.herdr;
 export const layout = () => structuredClone(h().layout);
 export const run = (name, args) => {
   h().calls.push([name, args]);
+  // h().lose: how many layout.sets the app takes and never applies.
+  if (name === "layout.set" && h().lose > 0) return void h().lose--;
   if (name === "layout.set") h().layout = structuredClone(args.layout);
   if (name === "layout.show" || name === "layout.hide") {
     const find = (n) => n?.id === args.id ? n : (n?.children ?? []).map(find).find(Boolean);
@@ -42,8 +44,13 @@ export const nextCommand = () => h().keys?.length ? Promise.resolve(h().keys.shi
 // The files a test puts in h().files, by path; else an empty file.
 export const readTextFile = async (path) => h().files?.[path] ?? "";
 EOF
-  printf 'export class View {}\nexport const div = () => ({});\n' >"$BATS_TEST_TMPDIR/gpui-kit.mjs"
-  printf 'export const h_flex = () => ({});\nexport const v_flex = () => ({});\n' >"$BATS_TEST_TMPDIR/gpui-base.mjs"
+  # Elements take any chain of calls, so render() runs.
+  cat >"$BATS_TEST_TMPDIR/gpui-kit.mjs" <<'EOF'
+export const el = new Proxy(() => el, { get: (_t, k) => (k === "then" ? undefined : el), apply: () => el });
+export class View {}
+export const div = () => el;
+EOF
+  printf 'import { el } from "./gpui-kit.mjs";\nexport const h_flex = () => el;\nexport const v_flex = () => el;\n' >"$BATS_TEST_TMPDIR/gpui-base.mjs"
   sed -e 's|from "herdr"|from "./herdr.mjs"|' -e 's|from "gpui-kit"|from "./gpui-kit.mjs"|' \
     -e 's|from "gpui-base"|from "./gpui-base.mjs"|' "$ROOT/bercail/mods/bercail-desk/main.js" >"$BATS_TEST_TMPDIR/main.mjs"
   cp "$ROOT/bercail/layouts/bercail.json" "$BATS_TEST_TMPDIR/layout.json"
@@ -305,6 +312,87 @@ show(d, "s1");
 if (calls("layout.set").length) fail("re-set the layout in a loop for the same desk");
 if (stack().active !== "empty") fail("placeholder not shown for a dropped block");
 check("dropped");
+EOF
+}
+
+@test "a desk block whose layout.set did not land is sent again by the header's own wake-up" {
+  mod_case <<'EOF'
+// One render, its add lost, and nothing else happens: the timer it armed brings it back.
+let now = 1_000_000;
+Date.now = () => now;
+const timers = [];
+const cx = { timer: { after: (ms, fn) => timers.push({ ms, fn }) }, notify: () => d.render(cx) };
+d = setup({ terminals: [D("t7", "s1")] });
+globalThis.herdr.lose = 1;
+d.render(cx);
+expect(calls("layout.set").length, 1, "layout.sets on the first render");
+expect(stack().active, "empty", "shown while the add is lost");
+expect(timers.length, 1, "wake-ups armed");
+now += timers[0].ms;
+timers.shift().fn(cx);
+expect(calls("layout.set").length, 2, "layout.sets after the wake-up");
+expect(stack().active, "desk-t7", "shown after the wake-up");
+// The render that sent it again checks once more, then stops.
+now += timers[0].ms;
+timers.shift().fn(cx);
+expect(calls("layout.set").length, 2, "layout.sets once it landed");
+expect(timers.length, 0, "wake-ups armed once it landed");
+check("lost add");
+EOF
+}
+
+@test "a column change the app keeps losing is sent once per pause, then lands" {
+  mod_case <<'EOF'
+// A gone block and a new desk, every layout.set lost: renders don't each rewrite the layout.
+let now = 1_000_000;
+Date.now = () => now;
+d = setup({ terminals: [D("t7", "s1")] });
+stack().children.push({ id: "desk-t40p", type: "block", content: { terminal: "t40p" } });
+globalThis.herdr.lose = 100;
+show(d, "s1", 20);
+expect(calls("layout.set").length, 1, "layout.sets in 20 renders at one time");
+now += 5000;
+show(d, "s1", 20);
+expect(calls("layout.set").length, 2, "layout.sets after the pause");
+globalThis.herdr.lose = 0;
+now += 5000;
+show(d, "s1", 20);
+expect(calls("layout.set").length, 3, "layout.sets once they land");
+expect(ids().join(" "), "empty desk-t7", "blocks once they land");
+expect(stack().active, "desk-t7", "shown");
+check("kept losing");
+EOF
+}
+
+@test "blocks of desks gone from the core are pruned, but not before the core lists terminals" {
+  mod_case <<'EOF'
+const gone = (t) => ({ id: `desk-${t}`, type: "block", content: { terminal: t }, padding: [6, 6] });
+d = setup({ terminals: [] });
+stack().children.push(gone("t40p"), gone("t3yz"));
+show(d, "s1");
+expect(ids().join(" "), "empty desk-t40p desk-t3yz", "blocks while the core has listed nothing");
+globalThis.herdr.terminals = [D("t7", "s1")];
+show(d, "s1");
+expect(ids().join(" "), "empty desk-t7", "blocks once the core lists terminals");
+expect(stack().active, "desk-t7", "shown");
+check("gone");
+EOF
+}
+
+@test "Start the agent in a space whose desk is running starts no second desk" {
+  mod_case <<'EOF'
+const ran = [];
+d = setup({ terminals: [{ address: "t-sh", state: "live", labels: {} }, D("t7", "s1")] });
+Object.assign(globalThis.herdr, {
+  spaces: [{ id: "s1", tabs: [{ id: "tab1", named: true }], folder: "/w" }],
+  panes: [{ pane: "p1", tab: "tab1", terminal: "t-sh", cwd: "/w" }],
+  exec: (cmd, args) => { ran.push([cmd, ...args]); return { code: 0, stdout: "{}", stderr: "" }; },
+  notes: [],
+});
+d.starting = {};
+await d.start(globalThis.herdr.spaces[0]);
+if (ran.some(([c]) => c === "hc")) fail(`started a second desk: ${JSON.stringify(ran)}`);
+if (!globalThis.herdr.notes[0]?.body.includes("t7")) fail(`the person is not told which desk runs: ${JSON.stringify(globalThis.herdr.notes)}`);
 EOF
 }
 

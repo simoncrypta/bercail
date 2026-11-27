@@ -51,6 +51,8 @@ const DESK_AGENT = "/.local/bin/bercail-desk-agent";
 // The same wrapper in another machine's home: its path is never built here.
 const REMOTE_AGENT = 'test -x "$HOME/.local/bin/bercail-desk-agent"';
 const REMOTE_AGENT_RUN = 'exec "$HOME/.local/bin/bercail-desk-agent"';
+// How long a change this copy sent to the agent column may stay unapplied before it is sent again.
+const RETRY_MS = 5000;
 
 // [herdr] backend in this computer's config.toml: the Herdr machine bercail runs on
 // (a name from `hc machine ls`), or null for this computer.
@@ -507,6 +509,12 @@ export default class BercailDesk extends View {
   // it runs; without bercail (the layout on its own), plain pi.
   async start(space) {
     if (this.starting[space.id]) return;
+    // One desk per space: a second would never show (deskFor picks the first).
+    const desk = deskFor(space.id);
+    if (desk) {
+      notify({ title: "bercail", body: `This space's agent, ${desk.address}, is already running.`, level: "info" });
+      return;
+    }
     const shell = shellOf(space);
     if (!shell) {
       notify({ title: "bercail", body: "This space has no Shell terminal to start the agent from.", level: "warning" });
@@ -605,6 +613,7 @@ export default class BercailDesk extends View {
 
   // Runs on every render: Herdr re-renders on any live change.
   sync(space = this.space()) {
+    this.retry = false;
     if (!space) return null;
     const desk = deskFor(space.id);
     const f = focused();
@@ -626,8 +635,10 @@ export default class BercailDesk extends View {
     // Each desk has its own block in the agent column, `desk-<address>`, added the
     // first time its space is shown and kept: switching spaces only selects it, like
     // a tab. (One shared block repointed per space could show a desk blank until its
-    // agent redrew.) The app drops a block when its terminal ends. A block it drops
-    // for a live desk is not added again, so this can't loop: the placeholder shows.
+    // agent redrew.) The app drops a block when its terminal ends. A change to the
+    // column that did not land (an add, a prune, or a block the app dropped for a live
+    // desk) is sent again on a later wake-up while the column still differs: the same
+    // change at most once per RETRY_MS, not on every render.
     // Only children that exist are selected, since a failed layout.select is a toast,
     // not a throw, and this runs on every render.
     try {
@@ -635,24 +646,31 @@ export default class BercailDesk extends View {
       if (restorePanel(tree)) run("layout.set", { layout: tree });
       const stack = findNode(tree, "agent-stack");
       if (stack) {
-        this.added ??= new Set(); // desk block ids this copy added
         const id = desk ? `desk-${desk.address}` : null;
         const kids = stack.children ?? [];
-        // The shared block of older layouts, and blocks whose desk has finished.
+        const all = terminals();
+        const live = new Set(all.filter((t) => t.state === "live").map((t) => t.address));
+        // The shared block of older layouts, and blocks whose desk is not live: finished,
+        // or gone from the core (once it has listed its terminals at all).
         const ended = (c) =>
-          c.id === "agent" ||
-          (c.id.startsWith("desk-") &&
-            terminals().some((t) => t.address === c.content?.terminal && t.state !== "live"));
-        const add = Boolean(id) && !kids.some((c) => c.id === id) && !this.added.has(id);
-        const want = id && (add || kids.some((c) => c.id === id)) ? id : "empty";
-        if (add || kids.some(ended)) {
-          if (add) this.added.add(id);
-          stack.children = kids.filter((c) => !ended(c));
-          if (add) stack.children.push({ id, type: "block", content: { terminal: desk.address }, padding: [6, 6] });
+          c.id === "agent" || (c.id.startsWith("desk-") && all.length > 0 && !live.has(c.content?.terminal));
+        const shown = kids.some((c) => c.id === id);
+        const children = kids.filter((c) => !ended(c));
+        if (id && !shown) children.push({ id, type: "block", content: { terminal: desk.address }, padding: [6, 6] });
+        const want = id ?? "empty";
+        const change = children.length !== kids.length || children.some((c, i) => c !== kids[i]);
+        this.retry = change; // render() wakes this copy to see whether it landed
+        const goal = change && JSON.stringify([children.map((c) => c.id), want]);
+        const now = Date.now();
+        if (change && (goal !== this.lastSet?.goal || !(now - this.lastSet.at < RETRY_MS))) {
+          this.lastSet = { goal, at: now };
+          stack.children = children;
           stack.active = want; // set with the tree: a separate select can lose to the file
           run("layout.set", { layout: tree });
-        } else if (stack.active !== want && kids.some((c) => c.id === want)) {
-          run("layout.select", { stack: "agent-stack", child: want });
+        } else {
+          const show = shown ? id : "empty";
+          if (stack.active !== show && kids.some((c) => c.id === show))
+            run("layout.select", { stack: "agent-stack", child: show });
         }
       }
     } catch {
@@ -729,6 +747,13 @@ export default class BercailDesk extends View {
         .child(div().text_color(t.dim).text_size(12).child("Ctrl+Shift+A"));
     }
     const desk = this.sync();
+    // An idle window doesn't render: wake this copy when a change it sent is due again.
+    if (this.retry && !this.retryTimer) {
+      this.retryTimer = cx.timer.after(RETRY_MS, (cx) => {
+        this.retryTimer = null;
+        cx.notify();
+      });
+    }
     const info = desk ? agents().find((a) => a.address === desk.address) : null;
     const status = info?.status ?? desk?.status ?? null;
     const color = { working: t.working, blocked: t.blocked, done: t.done, idle: t.idle }[status] ?? t.dim;
