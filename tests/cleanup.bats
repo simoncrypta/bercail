@@ -131,14 +131,14 @@ SH
   echo '[]' >"$STATE/hc.json"
 }
 
-# The processes a test starts in a worktree, stopped after a failure too: each
-# still in this test's folder, so no other process with its pid since.
+# The processes a test starts in a worktree, and those they start (*.pid),
+# stopped after a failure too: each still in this test's folder, so no other
+# process with its pid since.
 teardown() {
   local pid
-  [[ -f "$BATS_TEST_TMPDIR/pids" ]] || return 0
-  while read -r pid; do
+  cat "$BATS_TEST_TMPDIR/pids" "$BATS_TEST_TMPDIR"/*.pid 2>/dev/null | while read -r pid; do
     [[ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" != "$BATS_TEST_TMPDIR"/* ]] || kill -KILL "$pid" 2>/dev/null || true
-  done <"$BATS_TEST_TMPDIR/pids"
+  done
 }
 
 # in_worktree DIR COMMAND...: starts the command in DIR, in the background, and
@@ -149,6 +149,15 @@ in_worktree() {
   (cd "$dir" && exec "$@") </dev/null >/dev/null 2>&1 3>&- &
   echo "$!" >>"$BATS_TEST_TMPDIR/pids"
   echo "$!"
+}
+
+# pid_of NAME: the pid a process started in the background wrote to
+# NAME.pid, once it has. Each its own file: in pids, its line and its
+# parent's land in either order.
+pid_of() {
+  local file="$BATS_TEST_TMPDIR/$1.pid"
+  for _ in {1..50}; do [[ ! -s "$file" ]] || break; sleep 0.1; done
+  [[ -s "$file" ]] && cat "$file" || fail "nothing wrote its pid to $file"
 }
 
 # True while process $1 runs: neither gone nor a zombie the test has not reaped.
@@ -643,7 +652,7 @@ check_agrees() {
 }
 
 @test "cleanup stops a dev server still writing in the worktree, which no terminal holds, and what the window's shell runs, names them but not their argv, and spares the shell and another space's desk" {
-  local out wt writer deaf shell job foreign leaf mine left pids="$BATS_TEST_TMPDIR/pids"
+  local out wt writer deaf shell job foreign leaf mine left
   desk_space alpha
   desk_space bravo
   wt="$WORK/widgets.alpha"
@@ -656,15 +665,16 @@ check_agrees() {
   deaf="$(in_worktree "$wt" timeout -s KILL 30 bash -c 'trap "" TERM; exec sleep 30')"
   # The window's shell runs a job there; another space's desk, from elsewhere,
   # runs one there two levels down.
-  shell="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >>"$1"; wait; exec sleep 30' sh "$pids")"
+  shell="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >"$1"; wait; exec sleep 30' sh "$BATS_TEST_TMPDIR/job.pid")"
   set_term s-sp-alpha "{pid: $shell}"
-  foreign="$(in_worktree "$BATS_TEST_TMPDIR" bash -c '( (cd "$1" && exec sleep 30) & echo $! >>"$2"; wait ); :' desk "$wt" "$pids")"
+  foreign="$(in_worktree "$BATS_TEST_TMPDIR" bash -c '( (cd "$1" && exec sleep 30) & echo $! >"$2"; wait ); :' desk "$wt" "$BATS_TEST_TMPDIR/leaf.pid")"
   set_term d-bravo "{pid: $foreign, status: {app: \"pi\", state: \"working\"}}"
   # The desk cleanup ends runs one there that outlives it, as a detached one does.
-  mine="$(in_worktree "$BATS_TEST_TMPDIR" bash -c '( (cd "$1" && exec sleep 30) & echo $! >>"$2"; wait ); :' desk "$wt" "$pids")"
+  mine="$(in_worktree "$BATS_TEST_TMPDIR" bash -c '( (cd "$1" && exec sleep 30) & echo $! >"$2"; wait ); :' desk "$wt" "$BATS_TEST_TMPDIR/left.pid")"
   set_term d-alpha "{pid: $mine}"
-  for _ in {1..50}; do [[ "$(wc -l <"$pids")" -lt 8 ]] || break; sleep 0.1; done
-  job="$(sed -n 4p "$pids")" leaf="$(sed -n 6p "$pids")" left="$(sed -n 8p "$pids")"
+  job="$(pid_of job)"
+  leaf="$(pid_of leaf)"
+  left="$(pid_of left)"
   for _ in {1..50}; do [[ ! -e "$wt/.vite/deps/x" ]] || break; sleep 0.1; done
   [[ -e "$wt/.vite/deps/x" ]] || fail "the dev server never wrote"
   out="$("$BERCAIL" cleanup --check "$wt" 2>&1)" || fail "--check: $out"
@@ -755,9 +765,8 @@ check_agrees() {
   wt="$WORK/widgets.alpha"
   export BERCAIL_PROC_DIR=/proc
   # The terminal runs a job of its own there.
-  late="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >>"$1"; wait' late "$BATS_TEST_TMPDIR/pids")"
-  for _ in {1..50}; do [[ "$(wc -l <"$BATS_TEST_TMPDIR/pids")" -lt 2 ]] || break; sleep 0.1; done
-  job="$(tail -1 "$BATS_TEST_TMPDIR/pids")"
+  late="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >"$1"; wait' late "$BATS_TEST_TMPDIR/job.pid")"
+  job="$(pid_of job)"
   # The first ls after the builder's record goes is the last look, before any
   # signal; the second, the look after the stop.
   touch "$STATE/arm-ls-b-alpha"
@@ -791,9 +800,8 @@ check_agrees() {
   wt="$WORK/widgets.alpha"
   touch "$STATE/down"
   export BERCAIL_PROC_DIR=/proc
-  late="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >>"$1"; wait' late "$BATS_TEST_TMPDIR/pids")"
-  for _ in {1..50}; do [[ "$(wc -l <"$BATS_TEST_TMPDIR/pids")" -lt 2 ]] || break; sleep 0.1; done
-  job="$(tail -1 "$BATS_TEST_TMPDIR/pids")"
+  late="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >"$1"; wait' late "$BATS_TEST_TMPDIR/job.pid")"
+  job="$(pid_of job)"
   set_term fresh "{cwd: \"$wt\", pid: $late, status: {state: \"working\"}}"
   # After the kept Shell's record goes, the last look reads the terminals,
   # then which space is on the worktree: the desk's labels come in between.
@@ -808,14 +816,12 @@ check_agrees() {
 }
 
 @test "cleanup signals nothing a terminal at work there runs once it joins the space by its last look, as its desk or in the window" {
-  local out wt late job mode n
+  local out wt late job mode
   for mode in desk window; do
     desk_space "$mode"
     wt="$WORK/widgets.$mode"
-    n="$(cat "$BATS_TEST_TMPDIR/pids" 2>/dev/null | wc -l)"
-    late="$(BERCAIL_PROC_DIR=/proc in_worktree "$wt" bash -c 'sleep 30 & echo $! >>"$1"; wait' late "$BATS_TEST_TMPDIR/pids")"
-    for _ in {1..50}; do [[ "$(wc -l <"$BATS_TEST_TMPDIR/pids")" -lt $((n + 2)) ]] || break; sleep 0.1; done
-    job="$(tail -1 "$BATS_TEST_TMPDIR/pids")"
+    late="$(BERCAIL_PROC_DIR=/proc in_worktree "$wt" bash -c 'sleep 30 & echo $! >"$1"; wait' late "$BATS_TEST_TMPDIR/job-$mode.pid")"
+    job="$(pid_of "job-$mode")"
     set_term "fresh-$mode" "{cwd: \"$wt\", pid: $late, status: {state: \"working\"}}"
     rm -f "$STATE/ls-armed" "$STATE"/on-ls-* "$STATE"/herdr-on-ls-* "$STATE"/arm-ls-*
     if [[ "$mode" == desk ]]; then
@@ -844,9 +850,8 @@ check_agrees() {
   git -C "$WORK/widgets" worktree add -q -b charlie "$wt" master
   touch "$STATE/down"
   export BERCAIL_PROC_DIR=/proc
-  late="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >>"$1"; wait' late "$BATS_TEST_TMPDIR/pids")"
-  for _ in {1..50}; do [[ "$(wc -l <"$BATS_TEST_TMPDIR/pids")" -lt 2 ]] || break; sleep 0.1; done
-  job="$(tail -1 "$BATS_TEST_TMPDIR/pids")"
+  late="$(in_worktree "$wt" bash -c 'sleep 30 & echo $! >"$1"; wait' late "$BATS_TEST_TMPDIR/job.pid")"
+  job="$(pid_of job)"
   # ls 1 finds no space on it; 2 and 3 are the last look: what to spare, then
   # which space is on it.
   echo 0 >"$STATE/ls-armed"
