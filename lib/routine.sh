@@ -255,15 +255,24 @@ _routine_skipped() {
   _routine_flush "$1" || _routine_flush_failed=1
 }
 
-# Stop process group PID: TERM, then KILL what is left after 2 seconds.
-_routine_stop() {
+# Waits up to 2 seconds for process group PID to be gone.
+_routine_gone() {
   local _
-  kill -TERM -- "-$1" 2>/dev/null || return 0
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     kill -0 -- "-$1" 2>/dev/null || return 0
     sleep 0.2
   done
-  kill -KILL -- "-$1" 2>/dev/null || true
+  return 1
+}
+
+# Stop process group PID: TERM, then KILL what is left after 2 seconds, and
+# wait for that to go too: a KILL takes a moment, and a runner that returned
+# before it would leave its query running behind it.
+_routine_stop() {
+  kill -TERM -- "-$1" 2>/dev/null || return 0
+  _routine_gone "$1" && return 0
+  kill -KILL -- "-$1" 2>/dev/null || return 0
+  _routine_gone "$1" || true
 }
 
 # Run CMD... in HOME, as its own process group with nothing on stdin, stdout capped to

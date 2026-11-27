@@ -46,7 +46,7 @@ A query prints one JSON object a line:
 
 The runner keeps a hash of each finding it counted, per key. A finding whose key is new counts as new, and one whose hash changed counts as changed. A run with neither is quiet. When a key is gone from a run, its hash is dropped, so it counts as new if it comes back.
 
-A run fails when the query exits non-zero, prints anything that is not findings, prints more than 64 KB, or runs past 10 minutes. A run past 10 minutes is killed with its whole process group: TERM, then KILL 2 seconds later. A runner stopped by Ctrl-C or a TERM stops its query the same way. Three failures in a row pause the routine.
+A run fails when the query exits non-zero, prints anything that is not findings, prints more than 64 KB, or runs past 10 minutes. A run past 10 minutes is killed with its whole process group: TERM, then KILL 2 seconds later, and the runner waits up to 2 more seconds for the group to be gone. A runner stopped by Ctrl-C or a TERM stops its query the same way. Three failures in a row pause the routine.
 
 ## Run, pause, see
 
