@@ -16,7 +16,6 @@ The [README](../README.md) is the tour. These pages are the reference.
 - [Shep](shep.md): the orchestrator on Pi, the Shep view, what Shep knows (repos, briefs, standing rules), its compaction, and desk events.
 - [routines](routines.md): queries you declare in `config.toml`, run outside Shep's session; only new or changed findings count.
 - [development](development.md): hacking on bercail, dependencies and the tracker that watches them, platforms.
-- [investigations](investigations/README.md): durable findings, historical evidence and unresolved limits.
 - [Herdr agents and subagents](herdr-agents-subagents.md): a proposal for Herdr, so desks get their own row in the agents list.
 - [credits](credits.md): the code bercail copies, under its licenses, and the projects it borrows from.
 

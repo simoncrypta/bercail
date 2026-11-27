@@ -46,6 +46,8 @@ The tests are [bats-core](https://github.com/bats-core/bats-core) (pinned in `pa
 
 `tests/handoff_beads.bats` checks that a handoff worktree writes to the main checkout's beads store in two ways. The tests on the real `bd` prove that bd follows the redirect bercail writes. CI installs bd with mise, as `bercail update` does, at the version pinned in `.github/workflows/ci.yml` (`BD_VERSION`). The tests on a fake bd check what bercail hands bd from the worktree and run everywhere.
 
+Bash is for process glue, the environment and `exec`. New logic that parses JSON in several places or keeps state goes in TypeScript under `lib/`, run by `node`. Existing bash and jq moves only when a change has its own reason to: a pilot port of autopilot's `pr-state.sh` (November 2026) ran slower and had to rebuild by hand the checks that jq gives for free on JSON of the wrong shape, so it did not land. dash and QuickJS were measured and not adopted: neither start time matters at bercail's rates, and each costs a rewrite or a second runtime.
+
 The TypeScript and JavaScript tooling is [Vite+](https://viteplus.dev) (`vite-plus`, pinned in `package.json`; the config is `vite.config.ts`). `vp check` formats with Oxfmt (TypeScript and JavaScript only; prose, data, and the two copies of Herdr's mods keep their own layout), lints with Oxlint, and type-checks against `tsconfig.json`, Pi extensions included: Pi's own packages are devDependencies for their types, and Pi still loads the `.ts` files as they are. Herdr loads the mods as plain JavaScript, so they stay JavaScript, and `tests/lint.sh` lints them with `bercail/mods/lint.config.ts`, which has no type pass: the `jsconfig.json` that `herdr-app check` writes beside a mod would otherwise make that pass differ between your checkout and CI.
 
 The Pi extensions' unit tests and the Worker's are Vitest (`tests/*.test.ts`, run by `vp test`, which `tests/run.sh` runs after bats when it is given no arguments). `tests/setup.ts` gives each test file the same cut-off as bats: no desk variables, `TZ=UTC`, and a `HOME` and `XDG_*` dirs of its own. Use Node 26. The live proofs (`desk_model_pi`, `desk_session_pi`, `pi_guard`, `pi_fallback`, `review_pi`, `shep_context`, `shep_pi`) are TypeScript files that Node runs as they are (`tests/*_live.ts`). They run the extension in the installed Pi, offline, with a stand-in model, without sending a model prompt or changing your sessions. They are tagged `live`: `tests/run.sh` leaves them out and `tests/run.sh --live` runs only them. `real_pi` fails a test that is not tagged `live`. A proof that drives Pi's TUI gets a terminal from util-linux `script` (`tests/live_term.ts`), so those proofs need Linux.
@@ -117,6 +119,8 @@ The [deps routine](routines.md#the-deps-routine) brings these issues to Shep: de
 
 `deps-track.sh pins` checks, offline, that each entry has every field (a `git:` entry's `known` a full commit) and that every `path:KEY` pin agrees with `known`. `tests/deps_track.bats` runs it on this tree, so CI fails when, say, `BD_VERSION` moves without `known`. `check` prints the same warnings. `check --dry-run` does the lookups and prints the issue writes instead of making them; with `GH_REPO=simoncrypta/bercail` and your gh login, it shows what the next run would do. To take a new version, read its notes, make the change it needs, then set `known` (and the pin, for a `path:KEY`) in the same commit.
 
+bercail vendors by copy, with a record beside each copy. A submodule would ship empty in the release and curl tarballs, and once initialized makes `bercail cleanup` refuse the worktree; a subtree commits before review; and a fetched pin keeps upstream's code out of the staged diff tuicr shows.
+
 `bstack/pi/extensions/pi-emphasis/` is [pi-emphasis](https://github.com/johnlindquist/pi-emphasis), vendored like the statechart skill below: `index.ts` and `LICENSE` are upstream's, byte for byte, at the commit in its `UPSTREAM.md` and in `lib/deps.json` (a `git:` entry on `index.ts` and `LICENSE`: upstream has no releases or tags). `tests/pi_emphasis.bats` checks that the copy, the record and the manifest agree, and that the copy imports only Pi's types and adds no fetch, key, command or tool. Its live test installs bercail fresh and as an update from v0.17.4, the last release without it, and checks that the deployed lead draws a pill on the installed Pi. Formatting and lint leave it alone (`vite.config.ts`).
 
 ## statecharts
@@ -135,7 +139,7 @@ To bump tla-ts: change its version in `lib/statechart/package.json`, run `npm in
 
 **Ubuntu.** mise first, else Homebrew if present, else apt (`git fzf jq curl`); worktrunk, beads, tuicr from upstream.
 
-**macOS.** mise first; Homebrew stays on PATH as fallback (`brew shellenv`, then mise shims prepended).
+**macOS.** mise first; Homebrew stays on PATH as fallback (`brew shellenv`, then mise shims prepended). bercail needs bash 4.4 or later (`local -A`, `mapfile -d`), and macOS's `/bin/bash` is 3.2.
 
 **Hyprland.** Optional `SUPER+ALT+RETURN` that launches the Herdr app (focus-if-open is Omarchy only).
 

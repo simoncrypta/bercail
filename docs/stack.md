@@ -47,8 +47,9 @@ without a fork ([config](config.md), [Make it yours](bstack/08-make-it-yours.md)
   made with `wt switch --create`. A desk's spawn runs it with `--no-hooks` and
   opens the space itself; for a worktree you make with `wt switch`, worktrunk's
   hooks open and close its Herdr space ([handoff](handoff.md#what-a---branch-spawn-does)).
-  The [worktree research](investigations/worktree-tool.md) compared it with plain
-  `git worktree` and Herdr's own worktree mod, and kept it.
+  It stays because it supplies each project's path template and hooks, which
+  plain `git worktree` and Herdr's worktree mod do not; the spawn's bugs were
+  fixed in bercail's own glue.
 - **[tuicr](https://github.com/agavra/tuicr).** Review in the terminal, on the
   uncommitted tree the desk left, watching it as the desk stages more. Comments
   stay marked human or AI, and you choose which go to GitHub ([review](review.md)).

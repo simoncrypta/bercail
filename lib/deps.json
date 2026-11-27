@@ -42,7 +42,7 @@
     "why": "`wt list --format=json` is {schema, items: [...]} from 0.80.0 on; the shell block reads that shape.",
     "known": "0.83.0",
     "pinned_in": [],
-    "notes": "The install fallback downloads releases/latest (lib/deps.sh)."
+    "notes": "The install fallback downloads releases/latest (lib/deps.sh). Before taking a version, run bash tests/run.sh --live tests/worktrunk_live.bats with it: that pins what handoff-spawn and the shipped hooks ask of wt."
   },
   {
     "name": "tuicr",

@@ -58,6 +58,10 @@ There is no build step for the CLI. The site build needs `npm ci` first (see
   may lean on another's state.
 - Docs speak plainly and match the code; update `docs/` and the help text in
   `lib/help.sh` together.
+- A research job's lasting findings go into the doc that owns the topic, in a
+  sentence or two; its open questions and follow-ups become proposed beads issues.
+  There is no `docs/investigations` folder. Raw reports, logs and artifacts go to a
+  private archive under `~/Work/worktree-archives/bercail/`, with a manifest, not Git.
 - `.bercail/policy.toml` is this repo's git and release policy (`bin/bercail policy show`);
   Pi desks get it in their prompt and the guard enforces it once trusted. It is
   the one versioned file under `.bercail/`.
