@@ -35,7 +35,8 @@ Post-install CLI (bercail):
                 bg --issue ID [--cwd DIR] (waits and reports: bash under the guard, no commit, push or edit) |
                 task dispatch [--wait-ready] [--dry-run] (JSON stdin; a first visible desk, or a follow-up into the original desk's session,
                   shown at its next turn even while it works; a gone owner's checkout gets a new desk, unasked;
-                  stackedOn plus stackReason: start a blocked trail on its open parents' work without changing merge order;
+                  stackedOn plus stackReason: start a blocked trail on its open parents' work without changing merge order,
+                  or cut a beads job's new branch from one task's committed branch (task:ID);
                   --wait-ready: return once a new desk's Pi is up, with the message queued;
                   --dry-run: dispatch's checks, then would-start or would-queue, and nothing created or recorded;
                   "model":"PROVIDER/MODEL[:thinking]" starts a new desk on it; a live desk takes bercail desk model) |
