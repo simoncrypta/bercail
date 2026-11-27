@@ -529,6 +529,28 @@ _bstack_install_pi() {
   _bstack_pi_bridge_present || run pi install "$BSTACK_PI_BRIDGE"
 }
 
+# Roles load the bridge with -e, from the one npm folder Pi shares between all
+# -e packages, apart from `pi install`'s. Pis that start together while it holds
+# another version each run npm install there, and one can start without the
+# bridge. One that finds the exact pin there skips installing it, so put it there.
+_bstack_pi_cache_bridge() {
+  _bstack_pi_bridge_cached && return 0
+  [[ "$DRY_RUN" -ne 1 ]] || { info "[dry-run] pi -ne -e $BSTACK_PI_BRIDGE --list-models"; return 0; }
+  # Pi exits 0 when the install fails.
+  pi -ne -e "$BSTACK_PI_BRIDGE" --list-models >/dev/null 2>&1 || true
+  _bstack_pi_bridge_cached \
+    || warn "could not install $BSTACK_PI_BRIDGE for -e; Pis started together may each install it and one start without it (retry: pi -ne -e $BSTACK_PI_BRIDGE --list-models)"
+}
+
+# Does Pi's -e cache hold the exact pin? Pi names the folder by the first 8 hex
+# digits of sha256("npm-").
+_bstack_pi_bridge_cached() {
+  local hash
+  hash="$(printf 'npm-' | sha256sum | cut -c1-8)"
+  jq -e --arg v "${BSTACK_PI_BRIDGE##*@}" '.version == $v' \
+    "${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}/tmp/extensions/npm/$hash/node_modules/pi-claude-bridge/package.json" >/dev/null 2>&1
+}
+
 # Is a model in Pi's catalog? It can carry a level either way: model#high or model:high.
 _bstack_pi_known() {
   local id="${1%%#*}"
@@ -714,6 +736,7 @@ deploy_bstack() {
   local work result=0
   bstack_warn_old_config
   _bstack_install_pi || return 1
+  _bstack_pi_cache_bridge
   bstack_load_state reload
   work="$(mktemp -d)"
   if ! cp -R "$(install_src_dir)/bstack" "$work/src"; then

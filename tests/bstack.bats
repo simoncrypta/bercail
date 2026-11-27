@@ -51,6 +51,17 @@ case "$1" in
       if [[ "$*" == *"--provider $id "* ]]; then printf '{"status":"ready","provider":"%s"}\n' "$id"; exit 0; fi
     done
     printf '{"status":"not_ready"}\n'; exit 1 ;;
+  -ne)
+    # Fills the -e cache, and lists the models even when that install fails, exiting 0.
+    [[ "$*" == '-ne -e npm:pi-claude-bridge@0.13.0 --list-models' ]] || exit 2
+    mkdir -p "$HOME/.pi"
+    printf '%s\n' "$*" >>"$HOME/.pi/cache-log"
+    printf 'claude-bridge claude-opus-5-5 1M 128K yes yes\n'
+    [[ -z "${FAKE_PI_CACHE_FAIL:-}" ]] || exit 0
+    cache="$HOME/.pi/agent/tmp/extensions/npm/f35b2129/node_modules/pi-claude-bridge"
+    mkdir -p "$cache"
+    printf '{"version":"0.13.0"}\n' >"$cache/package.json"
+    ;;
   --offline)
     [[ "$*" == '--offline -e npm:pi-claude-bridge@0.13.0 --list-models' ]] || exit 2
     [[ -f "$HOME/.pi/bridge-installed" && -z "${FAKE_PI_BRIDGE_MISSING:-}" ]] || exit 3
@@ -801,6 +812,24 @@ EOF
     || fail "counts: $out"
   grep -qF "(jq . $log)" <<<"$out" || fail "no pointer to the log: $out"
   unset FAKE_PI_READY
+}
+
+@test "deploy installs the pinned bridge in Pi's -e cache, and only warns when it cannot" {
+  reset_home
+  write_pi_config
+  export FAKE_PI_READY="claude-bridge openai"
+  local err="$BATS_TEST_TMPDIR/err"
+  local cache="$HOME/.pi/agent/tmp/extensions/npm/f35b2129/node_modules/pi-claude-bridge"
+  mkdir -p "$cache" "$HOME/.pi/agent/tmp/extensions/npm/0ld0ld00/node_modules/pi-claude-bridge"
+  printf '{"version":"0.12.0"}\n' >"$cache/package.json"
+  printf '{"version":"0.13.0"}\n' >"$HOME/.pi/agent/tmp/extensions/npm/0ld0ld00/node_modules/pi-claude-bridge/package.json"
+  deploy_bstack >/dev/null 2>"$err" || fail "deploy: $(cat "$err")"
+  ! grep -q 'could not install' "$err" || fail "warned after a good install: $(cat "$err")"
+  deploy_bstack >/dev/null 2>"$err" || fail "second deploy: $(cat "$err")"
+  assert_eq '-ne -e npm:pi-claude-bridge@0.13.0 --list-models' "$(cat "$HOME/.pi/cache-log")" "the old version in Pi's folder is replaced, once; another folder's pin does not count"
+  rm -rf "$HOME/.pi/agent/tmp"
+  FAKE_PI_CACHE_FAIL=1 deploy_bstack >/dev/null 2>"$err" || fail "a failed cache install stops deploy: $(cat "$err")"
+  grep -qF 'could not install npm:pi-claude-bridge@0.13.0 for -e' "$err" || fail "no warning: $(cat "$err")"
 }
 
 @test "Pi bridge install is required and idempotent; doctor verifies actual bridge, Claude Code auth and minimum Pi version" {
