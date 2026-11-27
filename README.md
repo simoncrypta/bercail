@@ -62,7 +62,7 @@ The easy way: add [Shep](https://x.ai/bot/Yber1TlDZinVy6FQZcPsF), our Grok Bot t
 
 ### Or install it yourself
 
-Current release: [v0.19.0](https://github.com/simoncrypta/bercail/releases/tag/v0.19.0).
+Current release: [v0.19.1](https://github.com/simoncrypta/bercail/releases/tag/v0.19.1).
 
 
 ```bash
@@ -70,7 +70,7 @@ mise use -g packslip:github.com/simoncrypta/bercail   # mise 2026.9.2+
 bercail install
 ```
 
-mise waits 24 hours before it takes a new release. Can't wait? Pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.19.0`. No mise? `packslip install github.com/simoncrypta/bercail` does the same job, or use curl:
+mise waits 24 hours before it takes a new release. Can't wait? Pin it: `mise use -g packslip:github.com/simoncrypta/bercail@0.19.1`. No mise? `packslip install github.com/simoncrypta/bercail` does the same job, or use curl:
 
 ```bash
 curl -fsSL https://bercail.dev/install.sh | bash
