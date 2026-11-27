@@ -96,8 +96,9 @@ Post-install CLI (bercail):
                 describe check, commits the staged tree with its text, and starts a
                 background wait for the commit's CI that ends in one land event in Shep's
                 inbox (ready, failed, moved or timeout); in an Entire repo no wait, as the
-                trail's gates decide. It never pushes. Use its printed refspec: for a direct
-                land in bercail's own GitHub repo the full CI must pass on a land-only ref.
+                trail's gates decide. It never pushes. Use its printed refspec: a direct
+                land goes to CI on a land-only ref, bercail-land/<branch>/<sha>, never the
+                work branch, and in bercail's own GitHub repo the full CI must pass there.
                 --ci-branch NAME: the commit goes to CI on origin's NAME, not the work
                 branch, which keeps its name. Desks are refused, and so, where the
                 policy says integrate = "direct", is a trunk that moved past HEAD, before

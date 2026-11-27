@@ -213,6 +213,7 @@ event() {
   grep -q "gh run list --commit $sha --branch feature-restacked --event push" "$LOG" || fail "not read on the named branch: $(cat "$LOG")"
   ev="$(event)" || return 1
   jq -e --arg sha "$sha" '.land.status == "ready" and .land.head == $sha and .land.branch == "feature"' <<<"$ev" >/dev/null || fail "event: $ev"
+  [[ "$ev" != *"--delete"* ]] || fail "a named CI branch is the person's to keep: $ev"
   # The moved check reads the desk's branch land named, not the named CI branch or HEAD.
   rm -f "$INBOX"/*.json
   git checkout -qb elsewhere
@@ -469,6 +470,7 @@ GIT
   ! grep -q -- "--branch feature" "$LOG" || fail "read the work branch's runs: $(cat "$LOG")"
   ev="$(event)" || return 1
   jq -e --arg sha "$sha" '.land.status == "ready" and .land.head == $sha and .land.branch == "feature"' <<<"$ev" >/dev/null || fail "event: $ev"
+  [[ "$(jq -r .text <<<"$ev")" == *"git push origin $sha:main), then delete its CI ref: git push origin --delete 'refs/heads/$ref'." ]] || fail "text: $ev"
 }
 
 @test "in bercail's own direct repo, only ci.yml passing on the land ref is ready: not the work branch's subset, another workflow, a run of another commit or branch, or ci.yml absent, queued or red" {
@@ -539,7 +541,7 @@ GIT
   ! grep -q '^gh ' "$LOG" || fail "gh was asked: $(cat "$LOG")"
 }
 
-@test "another direct repo, or bercail fetched from but pushed elsewhere, keeps the branch wait" {
+@test "another direct repo, or bercail fetched from but pushed elsewhere, waits on a land ref of the commit, never the desk's branch" {
   for remote in https://github.com/acme/widgets.git fork; do
     git reset -q --hard "$(git rev-list --max-parents=0 HEAD)"
     git remote remove origin 2>/dev/null || true
@@ -555,9 +557,39 @@ GIT
     runs CI:completed:success
     run land "$REPO"
     [ "$status" -eq 0 ] || fail "$remote land: $output"
-    [[ "$output" == *"git -C $REPO push origin feature"* && "$output" != *bercail-land* ]] || fail "$remote: $output"
+    sha="$(git rev-parse HEAD)"
+    ref="bercail-land/feature/$sha"
+    [[ "$output" == *"git -C $REPO push origin $sha^{commit}:refs/heads/$ref, so its CI runs on that exact commit"* ]] || fail "$remote: $output"
+    [[ "$output" != *"push origin feature"* ]] || fail "$remote: told to push the desk's branch: $output"
+    grep -q -- "land --wait $sha --branch feature --ci-branch $ref $REPO" "$LOG" || fail "$remote: the wait: $(cat "$LOG")"
+    grep -q "gh run list --commit $sha --branch $ref --event push" "$LOG" || fail "$remote: not read on the land ref: $(cat "$LOG")"
     ! grep -q -- "--workflow\|--repo" "$LOG" || fail "$remote gated: $(cat "$LOG")"
-    jq -e '.land.status == "ready"' <<<"$(event)" >/dev/null || fail "$remote: $(event)"
+    ev="$(event)" || return 1
+    jq -e '.land.status == "ready" and .land.branch == "feature"' <<<"$ev" >/dev/null || fail "$remote: $ev"
+    [[ "$(jq -r .text <<<"$ev")" == *"git push origin $sha:main), then delete its CI ref: git push origin --delete 'refs/heads/$ref'." ]] \
+      || fail "$remote: the ready text does not delete the land ref: $ev"
+  done
+}
+
+@test "a PR repo, with no policy or integrate = pr, still pushes the desk's branch and waits on it: its PR needs the branch" {
+  git remote add origin https://github.com/acme/widgets.git
+  for policy in "" 'integrate = "pr"'; do
+    git reset -q --hard "$(git rev-list --max-parents=0 HEAD)"
+    rm -f "$INBOX"/*.json
+    : >"$LOG"
+    mkdir -p .bercail
+    printf '%s\n' "$policy" >.bercail/policy.toml
+    described
+    runs CI:completed:success
+    run land "$REPO"
+    [ "$status" -eq 0 ] || fail "${policy:-default}: land: $output"
+    sha="$(git rev-parse HEAD)"
+    [[ "$output" == *"git -C $REPO push origin feature, so its CI runs"* && "$output" != *bercail-land* ]] || fail "${policy:-default}: $output"
+    grep -q -- "land --wait $sha --branch feature $REPO" "$LOG" || fail "${policy:-default}: the wait: $(cat "$LOG")"
+    grep -q "gh run list --commit $sha --branch feature --event push" "$LOG" || fail "${policy:-default}: not read on the branch: $(cat "$LOG")"
+    ev="$(event)" || return 1
+    jq -e '.land.status == "ready"' <<<"$ev" >/dev/null || fail "${policy:-default}: $ev"
+    [[ "$ev" != *"--delete"* ]] || fail "${policy:-default}: the PR's branch is not land's to delete: $ev"
   done
 }
 

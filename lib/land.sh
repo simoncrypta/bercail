@@ -13,9 +13,12 @@
 #
 # bercail's own repo selects its tests on a branch push, so there land waits for
 # its full CI run on a land-only ref of the exact commit instead (_land_full).
+# Any other repo that commits straight to its trunk waits on such a ref too,
+# bercail-land/<branch>/<sha>: a desk branch on origin could take a rebase only
+# by force. A PR repo pushes the desk's branch, which its PR needs.
 # --ci-branch names the branch of origin the commit is pushed to for CI, when it
-# is not the desk's (a restacked commit published under a new name): the wait
-# follows that commit there, and the desk's branch keeps its name.
+# is not the desk's or its land ref (a restacked commit published under a new
+# name): the wait follows that commit there, and the desk's branch keeps its name.
 #
 # In a repo that commits straight to its trunk with a trusted push = "main" and
 # a required_ci gate (docs/plans/one-pick-landing.md), one land card does all of
@@ -87,7 +90,7 @@ _land_ci_bad() {
 # straight to the trunk, not once it moved past HEAD: the trunk takes no merge,
 # so that commit could not land as it is. A PR's merge is the forge's to check.
 land_run() {
-  local dir="$1" reviewer="$2" ci="${3:-}" root branch trunk msg sha described name backend moved why full=0 rc=0 ref what
+  local dir="$1" reviewer="$2" ci="${3:-}" root branch trunk msg sha described name backend moved why full=0 rc=0 ref what style
   local hc="${HC_BIN:-hc}"
   local -a wait=()
   root="$(_desc_root "$dir")" || return 1
@@ -99,7 +102,8 @@ land_run() {
   msg="$(_desc_print commit "$root" "$reviewer")" || return 1
   # Read again after the print, whose check only warns of it, so a move seen
   # there or since is refused here.
-  if [[ "$(_desc_style "$root")" == commit ]]; then
+  style="$(_desc_style "$root")"
+  if [[ "$style" == commit ]]; then
     moved="$(_desc_base_moved "$root")"
     [[ -z "$moved" ]] || { _land_err "refusing to commit: $moved; send that to the desk; no commit was made"; return 1; }
   fi
@@ -132,6 +136,11 @@ land_run() {
     printf "no CI wait: in an Entire repo the trail's gates decide (entire trail show <n>, from the repo's main checkout)\n"
     printf 'next: git -C %q push origin %q, then link it to its trail\n' "$root" "$branch"
     return 0
+  fi
+  # Straight to the trunk: CI on a land ref of this commit, so the desk's branch stays off origin.
+  if [[ "$style" == commit && -z "$ci" ]] && ((!full)); then
+    ci="bercail-land/$branch/$sha"
+    wait+=(--ci-branch "$ci")
   fi
   name="land-${sha:0:12}"
   # hc run starts the wait from the Herdr server, so only this env prefix reaches it.
@@ -191,9 +200,10 @@ _land_ci() {
     || jq -c '.status = "pending" | .note = "gh run list --workflow ci.yml printed no list of runs"' <<<"$ci"
 }
 
-# What Shep reads, from facts only: no desk-authored text.
+# What Shep reads, from facts only: no desk-authored text. CI read on REF, land's
+# own bercail-land/BRANCH/SHA, makes a ready event say to delete that ref too.
 _land_event() {
-  local root="$1" sha="$2" branch="$3" ci="$4" minutes="$5" repo main info trunk moved
+  local root="$1" sha="$2" branch="$3" ci="$4" minutes="$5" ref="$6" repo main info trunk moved
   main="$(git_backend_main "$root" 2>/dev/null || printf '%s' "$root")"
   repo="$(basename "$main")"
   info="$(notify_desk_info "$root" "")"
@@ -201,7 +211,7 @@ _land_event() {
   moved="$(git -C "$root" rev-parse --verify --quiet "refs/heads/$branch" || true)"
   jq -nc --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg sha "$sha" --arg branch "$branch" \
     --arg repo "$repo" --arg root "$root" --argjson ci "$ci" --argjson desk "$info" --arg min "$minutes" \
-    --arg trunk "$trunk" --arg moved "$moved" '
+    --arg trunk "$trunk" --arg moved "$moved" --arg ref "$ref" '
     ($sha[0:12]) as $short
     | ([$ci.runs[] | select(.conclusion != "success") | "\(.name) \(.conclusion // "unfinished")"] | join(", ")) as $bad
     | (if $ci.status == "ready" and $moved != $sha then "moved" else $ci.status end) as $status
@@ -210,7 +220,8 @@ _land_event() {
        land: {status: $status, head: $sha, branch: $branch, runs: $ci.runs},
        space: {repo: $repo, checkout_path: $root}, desk: {issue: $desk.issue, issue_title: $desk.issue_title},
        text: (
-         if $status == "ready" then "\($branch) at \($short) in \($repo) is ready to land: CI passed. Land that commit the way the repo policy says (straight to main: git push origin \($sha):\($trunk))."
+         if $status == "ready" then "\($branch) at \($short) in \($repo) is ready to land: CI passed. Land that commit the way the repo policy says (straight to main: git push origin \($sha):\($trunk))"
+           + (if $ref == "bercail-land/\($branch)/\($sha)" then ", then delete its CI ref: git push origin --delete \("refs/heads/" + $ref | @sh)." else "." end)
          elif $status == "moved" then "CI passed on \($branch) at \($short) in \($repo), but the branch has moved on to \($moved[0:12]). Do not land it: the new commits need review and their own bercail land."
          elif $status == "failed" then "CI did not pass on \($branch) at \($short) in \($repo) (\($bad)). Do not land it: the desk fixes it."
          else "No CI result for \($branch) at \($short) in \($repo) after \($min) minutes (\($ci.note // "CI still running")). Do not land it yet." end)}'
@@ -264,7 +275,7 @@ land_wait() {
     sleep "$poll"
   done
   ci="$(jq -c 'if .status == "pending" then .status = "timeout" else . end' <<<"$ci")"
-  event="$(_land_event "$root" "$sha" "$branch" "$ci" "$(((limit + 59) / 60))")" \
+  event="$(_land_event "$root" "$sha" "$branch" "$ci" "$(((limit + 59) / 60))" "$ref")" \
     || { _land_err "could not write the land event for ${sha:0:12}; CI said: $ci"; return 1; }
   printf 'CI on %s: %s\n' "${sha:0:12}" "$(jq -r .land.status <<<"$event")"
   _land_enqueue "$event"

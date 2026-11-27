@@ -621,8 +621,14 @@ and `--issue` when there is one, and say so in one line with its link:
   (none with git backend `entire`: the trail's gates decide, below). On trunk or detached HEAD,
   stop and identify the desk branch. If the waiter could not start after
   the commit, rerun the same `bercail land` command.
-- For CI, use the exact refspec `bercail land` prints. For a direct land in
-  bercail's own GitHub repo that is a land-only ref, not the work branch.
+- For CI, use the exact refspec `bercail land` prints. Where the policy
+  integrates direct that is a land-only ref, `bercail-land/<branch>/<sha>`,
+  never the work branch: a rebase is then a new commit on a new ref, with no
+  force push. After the trunk push, delete that ref as the ready event
+  says, once `git ls-remote origin <ref>` shows it still at that commit.
+  When several desks' changes share a base, land them one at a time: once
+  one reaches the trunk, the others bring their change onto it and rerun
+  /validate before their own `bercail land`.
   To publish the commit under another branch name (a restack that would
   need a force push), run land with `--ci-branch <name>`; never rename the
   desk's branch for CI, which breaks dispatch to its desk.
