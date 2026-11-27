@@ -58,7 +58,7 @@ export interface QuestionSpec {
   guard?: QuestionGuard;
   /** A land card's facts beyond its target, pinned when it was asked. */
   land?: QuestionLand;
-  /** A commit or merge card's, with no push, asked where the repo's policy said
+  /** A commit, merge or land card's, with no push, asked where the repo's policy said
    * rebase_keeps_pick: a clean rebase onto the moved trunk may keep its pick. */
   rebaseKeepsPick?: true;
 }
@@ -320,10 +320,10 @@ function spec(value: unknown): asserts value is QuestionSpec {
     (value.rebaseKeepsPick !== true ||
       (value.kind !== "review" && value.kind !== "action") ||
       !object(value.target) ||
-      !["commit", "merge"].includes((value.target as QuestionTarget).action as string) ||
+      !["commit", "merge", "land"].includes((value.target as QuestionTarget).action as string) ||
       value.push !== undefined)
   )
-    fail("rebaseKeepsPick is true, on a commit or merge card with no push, or absent", "rebaseKeepsPick");
+    fail("rebaseKeepsPick is true, on a commit, merge or land card with no push, or absent", "rebaseKeepsPick");
   shape(value.origin, ["event", "session", "entry"], "origin");
   text(value.origin.event, "origin.event");
   text(value.origin.session, "origin.session");

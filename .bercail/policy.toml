@@ -2,6 +2,9 @@
 # the loosened values count once you run `bercail policy trust` on this checkout.
 push = "main"
 integrate = "direct"
+# master takes no merge commits, so every move of the trunk under a desk is a rebase:
+# a commit, merge or land card's pick survives one that replays the same patch exactly.
+rebase_keeps_pick = true
 release = "Bump the version in lib/common.sh, manifest.json, and the README's release link and pin, commit that on master, then tag it v<version> and push the tag (docs/development.md#releasing)."
 agent_may_release = false
 rules = """
