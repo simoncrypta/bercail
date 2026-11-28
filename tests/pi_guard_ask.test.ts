@@ -1357,6 +1357,66 @@ test("Shep's quoted Brain memory, its trail link, and an Entire repo create or g
   expect(shep.confirm).not.toHaveBeenCalled();
 });
 
+test("Shep's production write goes to a card as the op run argv it runs, and a git push through a runner does not", async () => {
+  const started: string[][] = [];
+  const shep = session("shep", (args) => {
+    started.push(args);
+    markStart(args.at(-1)!, "started");
+    return { code: 0 };
+  });
+  const tickets = () => (existsSync(asks()) ? readdirSync(asks()).filter((n) => n.endsWith(".json")) : []);
+  const script = `${repo}/apps/api/scripts/add-technician.ts`;
+  const argv = [
+    "op",
+    "run",
+    "--env-file=api.env",
+    "--",
+    "env",
+    "WRANGLER_SEND_METRICS=false",
+    "vpx",
+    script,
+    "--remote",
+  ];
+  const got = await shep.bash(`cd ${repo} && ${argv.join(" ")}`);
+  expect(got).toStrictEqual({
+    block: true,
+    reason: expect.stringContaining(`Handed off, not run: the person answers this command ${argvText(argv)} on`),
+  });
+  const [name] = tickets();
+  expect(JSON.parse(readFileSync(join(asks(), name), "utf8"))).toMatchObject({
+    reason: expect.stringMatching(/^This changes production or reads its secrets: a script run with --remote/),
+    op: { kind: "command", dir: repo, argv },
+    facts: { kind: "command", dir: repo, argv },
+  });
+  // Only the worker started, on the ticket: nothing ran the command.
+  expect(started.map((args) => args.slice(-3))).toStrictEqual([["guard", "ask", name.replace(".json", "")]]);
+  // As Shep wrote it on 2026-11-27, with ~ and ..: refused, with how to write it.
+  expect(await shep.bash("cd ~/w/apps/infra && op run -- vpx ../api/scripts/add-technician.ts --remote")).toStrictEqual(
+    {
+      block: true,
+      reason: expect.stringMatching(
+        /a script run with --remote.*could not go to a Decisions card: it is not one command as written/,
+      ),
+    },
+  );
+  // A push it starts would go to a card that pins none of the push's facts: refused.
+  expect(await shep.bash(`cd ${repo} && op run --env-file=gh.env -- git push origin feature`)).toStrictEqual({
+    block: true,
+    reason: expect.stringContaining("it starts git through op run or a runner"),
+  });
+  // So would a shell it starts, whose script the card would show only as text.
+  expect(await shep.bash(`cd ${repo} && op run -- bash -c 'git push origin feature'`)).toStrictEqual({
+    block: true,
+    reason: expect.stringContaining("it starts bash through op run or a runner"),
+  });
+  expect(await shep.bash("sudo docker build -t app .")).toStrictEqual({
+    block: true,
+    reason: expect.stringMatching(/^Shep does not run commands as root/),
+  });
+  expect(tickets()).toStrictEqual([name]);
+  expect(shep.confirm).not.toHaveBeenCalled();
+});
+
 test("an ask handed off writes its ticket and starts its worker, which Shep is told of", async () => {
   let argv: string[] = [];
   const shep = session("shep", (args) => {

@@ -177,6 +177,22 @@ scratch_repo() {
   done
 }
 
+@test "production_scripts: the scripts the guard asks before count untrusted, since they loosen nothing" {
+  local REPO WT
+  init_repo
+  [[ "$(field "$REPO" '.policy.production_scripts | length')" == 0 ]] || fail "unset is not empty"
+  mkdir -p "$REPO/.bercail"
+  printf 'production_scripts = ["apps/api/scripts/add-technician.ts", "bin/deploy"]\n' >"$REPO/.bercail/policy.toml"
+  [[ "$(field "$REPO" '[(.policy.production_scripts | join(",")), .sources.production_scripts, .trusted] | join(" ")')" \
+    == "apps/api/scripts/add-technician.ts,bin/deploy repo false" ]] || fail "an untrusted list did not count"
+  [[ "$(field "$REPO" '.prompt')" == *"Production: the guard asks the person before any agent runs these scripts: apps/api/scripts/add-technician.ts, bin/deploy."* ]] \
+    || fail "prompt: $(field "$REPO" '.prompt')"
+  for bad in '["/srv/deploy.sh"]' '["../other/deploy.sh"]' '[""]' '"bin/deploy"'; do
+    printf 'production_scripts = %s\n' "$bad" >"$REPO/.bercail/policy.toml"
+    [[ "$(policy show --json "$REPO" 2>&1 >/dev/null)" == *"production_scripts = "*" is not allowed"* ]] || fail "$bad passed"
+  done
+}
+
 @test "an untrusted policy cannot loosen the guard" {
   local REPO WT out
   commit_policy

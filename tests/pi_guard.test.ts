@@ -1,6 +1,15 @@
 // Decision table for bercail's Pi guard. No Pi process.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect, test, vi } from "vite-plus/test";
@@ -283,7 +292,6 @@ test("help values, extra arguments, selectors, dry runs and xargs keep existing 
     'gt submit --help"$(printf =false)"',
     "FOO=1 gt submit --help",
     "command env -u BAR /usr/bin/gt submit --help",
-    "sudo -u nobody git commit --help",
     "nohup setsid nice -n 5 timeout 5 gt submit --help",
     'env -S "gt submit --" gt submit --help',
     "xargs gt submit --help",
@@ -1053,6 +1061,9 @@ test("a $( or backtick the tokenizer can't close is blocked when it names a refu
     "echo `x; echo y > config.toml",
     "echo `x; op read op://v/i/p",
     "echo `x; basecamp todos create x",
+    "echo `x; sudo true",
+    "echo `x; npx wrangler deploy",
+    "echo `x; vpx scripts/seed.ts --remote",
   ];
   const got = decideInChild([
     ...unclosed.map((command): [string, GuardInput] => [command, auto]),
@@ -2714,12 +2725,12 @@ test("a trail link of a named branch follows the push rule for that branch, with
     `env -C /other ${link}`,
     `env --chdir=/other ${link}`,
     `GIT_DIR=/other/.git ${link}`,
-    `sudo ${link}`,
     `/tmp/x/${link}`,
     `env -C /other bash -c '${link}'`,
     `bash -c '${link}'`,
   ])
     asked(command, at("shep", policies.branch, "main"));
+  blocked(`sudo ${link}`, at("shep", policies.branch, "main"), /Shep does not run commands as root/);
   // Autopilot pushes only its own pull request's branch: a named one in another repo is not that.
   asked(`${link} --repo gh/acme/other`, { ...at("autopilot", policies.branch, "main"), hasUI: true });
   blocked(`${link} --repo gh/acme/other`, at("autopilot", policies.branch, "main"));
@@ -3793,4 +3804,209 @@ test("the guard extension keeps the first policy lookup that works, for a read-o
     if (role === undefined) delete process.env.BERCAIL_ROLE;
     else process.env.BERCAIL_ROLE = role;
   }
+});
+
+// Shep's 2026-11-27 write of production D1 (bercail-2lm3), as it ran: with no card.
+const technician =
+  "cd ~/Work/lesentiel/lesentiel/apps/infra && op run --env-file=api.env --env-file=technician.env -- env WRANGLER_SEND_METRICS=false vpx ../api/scripts/add-technician.ts --remote --yes-remote-import --password-env LESENTIEL_TECH_PASSWORD --email tech@example.com --login tech";
+
+test("a production write through op run, env and a package runner asks, and is refused where no one can say yes", () => {
+  const shep = { ...roles.shep, home: "/home/u" };
+  for (const input of [{ ...tui, home: "/home/u" }, shep, { ...tui, role: "builder", home: "/home/u" }]) {
+    const got = decision(technician, input);
+    assertEqual(got.action, "ask", JSON.stringify(got));
+    assertMatch(got.reason ?? "", /changes production or reads its secrets: a script run with --remote/);
+  }
+  blocked(technician, { ...headless, home: "/home/u" }, /headless run does not change production/);
+  blocked(technician, { ...auto, home: "/home/u" }, /headless run does not change production/);
+  blocked(technician, { ...judge, home: "/home/u" }, /read-only/);
+  blocked(technician, { ...headless, role: "shep-bg", home: "/home/u" }, /background Shep waits/);
+});
+
+test("wrangler asks when it acts on Cloudflare, through any runner; its local store runs unasked", () => {
+  const remote = [
+    "wrangler d1 execute DB --remote --command 'DELETE FROM users'",
+    "npx wrangler d1 execute DB --remote --file seed.sql",
+    "npx -y wrangler d1 migrations apply DB --remote",
+    "npx wrangler@4 deploy",
+    "npx -p wrangler@4.1.0 wrangler deploy",
+    "pnpm --filter api exec wrangler deploy",
+    "bun --cwd apps/api x wrangler deploy",
+    "bunx wrangler kv key put --binding KV k v --remote",
+    "vpx wrangler r2 object put b/k --file f --remote=true",
+    "pnpm exec wrangler deploy",
+    "pnpm dlx wrangler deploy",
+    "npm exec -- wrangler deploy",
+    "bun x wrangler deploy",
+    "node_modules/.bin/wrangler deploy",
+    "wrangler --env production deploy",
+    "wrangler -c wrangler.prod.toml publish",
+    "wrangler versions deploy",
+    "wrangler rollback",
+    "echo s3cret | wrangler secret put API_KEY",
+    "wrangler d1 delete DB",
+    "op run --env-file=.env -- npx wrangler deploy",
+    "env CLOUDFLARE_API_TOKEN=x timeout 60 npx wrangler deploy",
+    // The guard does not read which options wrangler takes, so these ask too.
+    "wrangler deploy --dry-run",
+    "npx wrangler deploy --help",
+  ];
+  for (const command of remote) {
+    const got = decision(command, tui);
+    assertEqual(got.action, "ask", `${command} → ${JSON.stringify(got)}`);
+    assertMatch(got.reason ?? "", /a wrangler deploy, delete, secret or --remote command/, command);
+    blocked(command, headless, /headless run does not change production/);
+  }
+  for (const command of [
+    "wrangler d1 execute DB --command 'SELECT 1'",
+    "wrangler d1 execute DB --remote=false --command 'SELECT 1'",
+    "npx wrangler dev",
+    "wrangler types",
+    "wrangler whoami",
+    "npm exec -- vp test",
+    "npx vitest run",
+  ])
+    allowed(command, tui);
+});
+
+test("a script run with --remote asks however it starts; another program's --remote does not", () => {
+  for (const command of [
+    "node scripts/import.js --remote",
+    "tsx --tsconfig tsconfig.json scripts/import.ts --remote",
+    "bun run scripts/import.ts --remote",
+    "bun scripts/import.ts --remote",
+    "bash scripts/import.sh --remote",
+    "bash -e -o pipefail scripts/import.sh --remote",
+    "python3 -u scripts/import.py --remote",
+    "./scripts/import --remote",
+    "vpx /srv/app/scripts/import.ts --remote",
+    "bash /srv/app/bin/import --remote",
+    "python3 import --remote",
+  ])
+    asked(command, tui);
+  for (const command of [
+    "git submodule update --remote",
+    "/usr/bin/git submodule update --remote",
+    "node scripts/import.js --local",
+    "bash -c 'echo --remote'",
+    "python3 -m pip --remote",
+  ])
+    allowed(command, tui);
+});
+
+test("a script its repo lists in production_scripts asks, matched by the file, however it is named or started", () => {
+  const top = realpathSync(mkdtempSync(join(tmpdir(), "guard-prod-")));
+  try {
+    for (const folder of [".git", "apps/api/scripts", "apps/infra", "bin"])
+      mkdirSync(join(top, folder), { recursive: true });
+    for (const file of ["apps/api/scripts/add-technician.ts", "apps/api/scripts/other.ts", "bin/deploy"])
+      writeFileSync(join(top, file), "");
+    symlinkSync(join(top, "bin/deploy"), join(top, "apps/infra/deploy"));
+    const listed = policy({
+      repo: top,
+      production: [join(top, "apps/api/scripts/add-technician.ts"), join(top, "bin/deploy")],
+    });
+    const input = { ...tui, cwd: join(top, "apps/infra"), home: "/h", policies: { [top]: listed } };
+    // The checkout that holds the file names the policy whose list counts.
+    assertDeepEqual(decision("vpx ../api/scripts/add-technician.ts", { ...input, policies: {} }), {
+      action: "need-policy",
+      dir: top,
+    });
+    for (const command of [
+      "vpx ../api/scripts/add-technician.ts --email a@b",
+      `op run --env-file=api.env -- env A=1 node ${top}/apps/api/scripts/add-technician.ts`,
+      `cd ${top}/apps/api && bun scripts/add-technician.ts`,
+      `env -C ${top}/apps/api npx tsx scripts/add-technician.ts`,
+      `pnpm -C ${top}/apps/api exec tsx scripts/add-technician.ts`,
+      `bun --cwd=${top}/apps/api scripts/add-technician.ts`,
+      "../../bin/deploy",
+      `${top}/bin/deploy`,
+      "./deploy",
+      "bash -e ../../bin/deploy",
+      `cd ${top}/bin && bash deploy`,
+      // npm -w runs it in a workspace's folder, which the guard does not place.
+      "npm -w api exec tsx scripts/add-technician.ts",
+      "npm -w api exec pnpm -C sub exec tsx scripts/add-technician.ts",
+      `npm -w api exec pnpm -C ${top}/apps/api exec tsx scripts/add-technician.ts`,
+    ]) {
+      const got = decision(command, input);
+      assertEqual(got.action, "ask", `${command} → ${JSON.stringify(got)}`);
+      assertMatch(got.reason ?? "", /production_scripts (may list it|lists)/, command);
+    }
+    for (const command of [
+      "vpx ../api/scripts/other.ts",
+      "cat ../api/scripts/add-technician.ts",
+      "vpx add-technician",
+      `env -C ${top} npx tsx scripts/add-technician.ts`,
+      `pnpm -C ${top} exec tsx scripts/add-technician.ts`,
+      `cd ${top}/bin && bash other`,
+      "npm -w api exec wrangler types",
+      `npm -w api exec pnpm -C ${top} exec tsx scripts/add-technician.ts`,
+      "node --check ../api/scripts/add-technician.ts",
+      "/usr/bin/env true",
+    ])
+      allowed(command, input);
+    // A checkout whose policy the guard could not read may list it.
+    const unread = { ...input, policies: { [top]: { ...defaultPolicy, unread: true as const } } };
+    assertMatch(
+      decision("vpx ../api/scripts/other.ts", unread).reason ?? "",
+      /whose production_scripts the guard could not read/,
+    );
+  } finally {
+    rmSync(top, { recursive: true, force: true });
+  }
+});
+
+test("policy show --json's production_scripts become paths in the checkout the guard matches", () => {
+  const json = { repo: "/m", root: "/m.feature", prompt: "", sources: {} };
+  const shown = { push: "ask", agent_may_release: false, production_scripts: ["bin/deploy", "apps/x.ts"] } as const;
+  assertDeepEqual(
+    policyFromJson({ ...json, policy: { ...shown, production_scripts: [...shown.production_scripts] } }).production,
+    ["/m.feature/bin/deploy", "/m.feature/apps/x.ts"],
+  );
+  assertDeepEqual(policyFromJson({ ...json, policy: { push: "ask", agent_may_release: false } }).production, []);
+});
+
+test("op run and the package runners do not hide the command they run from the other rules", () => {
+  asked("op run --env-file=.env -- git push origin feature", tui);
+  blocked("op run -- git push --force origin feature", tui, /Force-push/);
+  blocked("npx -y bash -c 'git push --force'", tui, /Force-push/);
+  blocked("doas git push --force", tui, /Force-push/);
+});
+
+test("a command run as root asks on a desk; Shep, headless and read-only roles are refused", () => {
+  const root = [
+    "sudo docker build -t app .",
+    "sudo -u nobody git commit --help",
+    "sudo -v",
+    "sudoedit /etc/hosts",
+    "doas pacman -S jq",
+    "pkexec systemctl restart bluetooth",
+    "run0 --setenv=A=1 systemctl daemon-reload",
+    "/usr/bin/sudo true",
+    "env LANG=C sudo true",
+    "timeout 30 sudo true",
+    "xargs sudo rm < files",
+    "echo x | sudo tee /etc/x",
+    "bash -c 'sudo true'",
+    "op run -- sudo true",
+  ];
+  for (const command of root) {
+    const got = decision(command, tui);
+    assertEqual(got.action, "ask", `${command} → ${JSON.stringify(got)}`);
+    assertMatch(got.reason ?? "", /runs as root/, command);
+    blocked(command, roles.shep, /Shep does not run commands as root/);
+    blocked(command, headless, /headless run does not run commands as root/);
+    blocked(command, judge, /read-only/);
+    blocked(command, { ...headless, role: "shep-bg" }, /background Shep/i);
+  }
+  for (const command of [
+    "which sudo",
+    "echo sudo",
+    "SUDO=sudo make -n",
+    "grep -rn sudoedit docs",
+    "man doas",
+    "env -u sudo true",
+  ])
+    allowed(command, tui);
 });

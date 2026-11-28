@@ -28,6 +28,10 @@ export type Policy = {
   agentMayRelease: boolean;
   /** Entire captures sessions here (.entire/settings.json, enabled). */
   entire: boolean;
+  /** production_scripts, as absolute paths in this checkout: the guard asks before one runs. */
+  production: string[];
+  /** bercail policy show failed here: the guard knows no production_scripts it may be missing. */
+  unread?: true;
   /** For the log: the main checkout, and where each value came from. */
   repo: string;
   from: Record<string, string>;
@@ -40,6 +44,7 @@ export const defaultPolicy: Policy = {
   push: "ask",
   agentMayRelease: false,
   entire: false,
+  production: [],
   repo: "",
   from: {},
 };
@@ -89,6 +94,11 @@ export type GuardInput = {
   tmpdir?: string;
   /** The whole command is this one plain command: no other part, substitution or quoting. */
   sole?: boolean;
+  /** Within one command: these words are what an interpreter (node, bash, python) was given,
+   *  so the first is a file, whatever its name. */
+  startedFile?: boolean;
+  /** Within one command: a runner moved to a folder the guard cannot place (npm -w, pnpm --filter). */
+  runnerLost?: boolean;
   /** The only tool call its assistant message made, so no other call of the session runs beside it. */
   alone?: boolean;
   /** A desk's worktree and the branch its handoff record names, when that is not the trunk.
@@ -257,6 +267,16 @@ const guardAskCommand =
   "A guard card and its worker are the guard's: it starts them when Shep runs a command it would ask about. Run the command, and the guard hands it off.";
 const landWorker =
   "A land card is bercail's to put up, and its chain (bercail land run and the ledger's land steps) runs only on the person's pick on the panel. No agent runs them, Shep included.";
+const productionAsk = (what: string) =>
+  `This changes production or reads its secrets: ${what}. Allow it? No leaves it for the person.`;
+const productionHeadless =
+  "A headless run does not change production or read its secrets (a wrangler deploy, delete, secret or --remote command, a script run with --remote, or one the repo's production_scripts lists). Put the command in your report, and Shep or the person runs it.";
+const rootAsk =
+  "This runs as root (sudo, sudoedit, doas, pkexec or run0). Allow it? No leaves it for the person to run in their own terminal.";
+const rootHeadless =
+  'A headless run does not run commands as root (sudo, sudoedit, doas, pkexec, run0). Put the command in your report as Todo: "<command>", and the person runs it.';
+const rootShep =
+  "Shep does not run commands as root (sudo, sudoedit, doas, pkexec, run0): only the person can give the password or key, in their own terminal, and a guard card's worker has none. Tell the person the command to run, or make it a todo for them.";
 const tmpWrite = (tmpdir: string) =>
   `This writes under /tmp, which holds RAM and keeps a file for days. Put scratch in $TMPDIR (${tmpdir}) or a mktemp -d folder instead: bercail removes it when you exit.`;
 
@@ -980,7 +1000,15 @@ function segmentsOf(command: string, tag = ""): Segment[] {
 
 const assign = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-function skipEnv(words: string[], i: number): number {
+/** What commandWords read past: each wrapper by name, and the last folder one moves to. */
+type Dropped = { names: string[]; dir?: string };
+
+// The folder a chdir option at words[i] names, as --chdir=DIR or the next word.
+function chdirValue(words: string[], i: number): string {
+  return words[i].includes("=") ? words[i].slice(words[i].indexOf("=") + 1) : (words[i + 1] ?? "");
+}
+
+function skipEnv(words: string[], i: number, dropped?: Dropped): number {
   i++;
   while (i < words.length) {
     const word = words[i];
@@ -991,13 +1019,14 @@ function skipEnv(words: string[], i: number): number {
     }
     if (!word.startsWith("-")) break;
     const name = word.split("=")[0];
+    if (dropped && (name === "-C" || name === "--chdir")) dropped.dir = chdirValue(words, i);
     i++;
     if (!word.includes("=") && ["-u", "--unset", "-C", "--chdir", "-S", "--split-string"].includes(name)) i++;
   }
   return i;
 }
 
-function skipSudo(words: string[], i: number): number {
+function skipSudo(words: string[], i: number, dropped?: Dropped): number {
   i++;
   while (i < words.length) {
     const word = words[i];
@@ -1007,10 +1036,11 @@ function skipSudo(words: string[], i: number): number {
     }
     if (!word.startsWith("-") || word === "-") break;
     const name = word.split("=")[0];
+    if (dropped && (name === "-D" || name === "--chdir")) dropped.dir = chdirValue(words, i);
     i++;
     if (
       !word.includes("=") &&
-      ["-u", "-g", "-h", "-p", "-C", "-D", "-T", "-R", "--user", "--group", "--host"].includes(name)
+      ["-u", "-g", "-h", "-p", "-C", "-D", "-T", "-R", "--user", "--group", "--host", "--chdir"].includes(name)
     )
       i++;
   }
@@ -1020,6 +1050,25 @@ function skipSudo(words: string[], i: number): number {
 const shellPrefixes = new Set(["if", "then", "else", "elif", "while", "until", "do", "{", "!", "time"]);
 const wrappers: Record<string, string[]> = {
   exec: ["-a"],
+  doas: ["-a", "-C", "-u"],
+  pkexec: ["--user"],
+  run0: [
+    "-u",
+    "--user",
+    "-g",
+    "--group",
+    "-D",
+    "--chdir",
+    "--unit",
+    "-p",
+    "--property",
+    "--description",
+    "--slice",
+    "--nice",
+    "--setenv",
+    "--machine",
+    "--background",
+  ],
   nohup: [],
   setsid: [],
   nice: ["-n", "--adjustment"],
@@ -1041,7 +1090,8 @@ const wrappers: Record<string, string[]> = {
   ],
 };
 
-function commandWords(words: string[]): string[] {
+// DROPPED, when given, gets what it read past.
+function commandWords(words: string[], dropped?: Dropped): string[] {
   // Keep legacy conservative classification; help recognition uses the full raw argv.
   words = words.filter((word) => word !== "");
   let i = 0;
@@ -1058,8 +1108,10 @@ function commandWords(words: string[]): string[] {
     }
     const name = basename(word);
     if (Object.hasOwn(wrappers, name)) {
+      dropped?.names.push(name);
       i++;
       while (i < words.length && words[i].startsWith("-")) {
+        if (dropped && name === "run0" && /^(-D|--chdir)(=|$)/.test(words[i])) dropped.dir = chdirValue(words, i);
         const option = words[i++];
         if (option === "--") break;
         if (wrappers[name].includes(option)) i++;
@@ -1068,16 +1120,19 @@ function commandWords(words: string[]): string[] {
       continue;
     }
     if (name === "command") {
+      dropped?.names.push(name);
       i++;
       if (words[i] === "-p" || words[i] === "--") i++;
       continue;
     }
     if (name === "env") {
-      i = skipEnv(words, i);
+      dropped?.names.push(name);
+      i = skipEnv(words, i, dropped);
       continue;
     }
     if (name === "sudo") {
-      i = skipSudo(words, i);
+      dropped?.names.push(name);
+      i = skipSudo(words, i, dropped);
       continue;
     }
     break;
@@ -2170,10 +2225,10 @@ function protectedTarget(
 
 // What could make the unparsed rest of a command one the guard refuses or asks
 // about: git and the forges, entire, a push, the person's commands, op,
-// basecamp, typing for the person, and the names of the files it protects.
+// basecamp, typing for the person, root, production, and the names of the files it protects.
 const refusalTriggers = new RegExp(
   [
-    String.raw`\b(git|gh|gt|origin|entire(-brain|-graph)?|push|op|basecamp|wtype|ydotool|dotoolc?|xdotool|evemu-\w+|hyprctl|uinput)\b`,
+    String.raw`\b(git|gh|gt|origin|entire(-brain|-graph)?|push|op|basecamp|wtype|ydotool|dotoolc?|xdotool|evemu-\w+|hyprctl|uinput|sudo(edit)?|doas|pkexec|run0|wrangler)\b|--remote\b`,
     String.raw`question\s+answer|policy\s+trust|bercail\s+(todo|config\s+(set|unset)|routine\s+(enable|disable))`,
     String.raw`config\.toml|policy-trust\.json|questions\.(json|lock)|todo\.json|bercail/shep`,
   ].join("|"),
@@ -3061,6 +3116,154 @@ function feedsEmptySecret(command: string): boolean {
   return false;
 }
 
+// The programs that run a command as root, on the person's password or key.
+const asRoot = new Set(["sudo", "sudoedit", "doas", "pkexec", "run0"]);
+
+// The command runs as root: one of asRoot leads WORDS, or is a wrapper commandWords read past.
+const runsAsRoot = (words: string[], dropped: Dropped) =>
+  [...dropped.names, basename(words[0] ?? "")].some((name) => asRoot.has(name));
+
+// Runners that start the program or script named after their own flags, and the flags
+// that take a value. npm, pnpm and bun start it from a subcommand (bun runs a file
+// with run or without), and op run after its --.
+const runners: Record<string, string[]> = {
+  npx: ["-p", "--package"],
+  bunx: ["-p", "--package"],
+  vpx: [],
+  node: ["-r", "--require", "--import", "--loader"],
+  tsx: ["-r", "--require", "--import", "--tsconfig"],
+  npm: ["-w", "--workspace", "--prefix"],
+  pnpm: ["-F", "--filter", "-C", "--dir"],
+  bun: ["--cwd", "-c", "--config"],
+};
+const runnerSubs: Record<string, string[]> = { npm: ["exec", "x"], pnpm: ["exec", "dlx"], bun: ["x", "run", "exec"] };
+// Options after which the runner does not run a file: a shell's -c script, python's -c
+// code or -m module, node's -e code or --check.
+const notRun: Record<string, RegExp> = {
+  bash: /^-[a-z]*c/,
+  sh: /^-[a-z]*c/,
+  python: /^-[a-zA-Z]*[cm]/,
+  python3: /^-[a-zA-Z]*[cm]/,
+  node: /^(-[ecp]|--eval|--print|--check)$/,
+  tsx: /^(-[ep]|--eval|--print)$/,
+};
+const shellValue = ["-o", "+o", "-O", "+O", "-W", "-X"];
+// Runner options that move the folder it starts the command in. A workspace, a filter or
+// a prefix picks one the guard cannot place.
+const runnerDirs: Record<string, string> = { "-C": "pnpm", "--dir": "pnpm", "--cwd": "bun" };
+const runnerLost: Record<string, string> = {
+  "-F": "pnpm",
+  "--filter": "pnpm",
+  "-w": "npm",
+  "--workspace": "npm",
+  "--prefix": "npm",
+};
+
+/** What op run or a runner starts: its words as written, the folder it moves to (null: one
+ *  the guard cannot place), and whether its first word is a file (an interpreter's). */
+type Started = { words: string[]; dir?: string | null; file?: true };
+
+// The command that WORDS (commandWords' own) starts through op run or one of the runners
+// above, past their flags; undefined when it starts none. The caller checks that command
+// as its own, so a runner it starts in turn is read there.
+function runWords(words: string[]): Started | undefined {
+  const name = basename(words[0] ?? "");
+  if (name === "op") {
+    const args = opArgs(words);
+    return args?.[0] === "run" && args.includes("--") ? { words: args.slice(args.indexOf("--") + 1) } : undefined;
+  }
+  if (!Object.hasOwn(runners, name) && !Object.hasOwn(notRun, name)) return undefined;
+  const valued = Object.hasOwn(runners, name) ? runners[name] : shellValue;
+  let i = 1;
+  let dir: string | null | undefined;
+  const flags = () => {
+    while (i < words.length && /^[-+]/.test(words[i])) {
+      const option = words[i++];
+      if (option === "--") break;
+      if (Object.hasOwn(notRun, name) && notRun[name].test(option)) return false;
+      const key = option.split("=")[0];
+      if (runnerDirs[key] === name) dir = option.includes("=") ? chdirValue(words, i - 1) : words[i];
+      if (runnerLost[key] === name) dir = null;
+      if (valued.includes(option)) i++;
+    }
+    return true;
+  };
+  if (!flags()) return undefined;
+  if (Object.hasOwn(runnerSubs, name)) {
+    if (runnerSubs[name].includes(words[i])) i++;
+    else if (name !== "bun") return undefined;
+    if (!flags()) return undefined;
+  }
+  return {
+    words: words.slice(i),
+    ...(dir === undefined ? {} : { dir }),
+    ...(Object.hasOwn(notRun, name) ? { file: true as const } : {}),
+  };
+}
+
+const scriptFile = /\.(?:[cm]?[jt]sx?|sh|bash|py)$/;
+const wranglerValue = new Set(["-c", "--config", "-e", "--env", "--cwd", "--env-file"]);
+
+// wrangler that acts on Cloudflare rather than its local store: a deploy, publish, rollback
+// or secret (versions deploy and pages deploy too), a delete of a resource, and any data
+// command with --remote (d1 execute, d1 migrations apply, kv, r2), which Wrangler 4 needs
+// to leave the local store. Its --help and --dry-run ask too: the guard does not read
+// which of its options wrangler takes.
+function wranglerWrites(args: string[]): boolean {
+  if (args.some((word) => word === "--remote" || (word.startsWith("--remote=") && word !== "--remote=false")))
+    return true;
+  const subs: string[] = [];
+  for (let i = 0; i < args.length && subs.length < 3; i++)
+    if (wranglerValue.has(args[i])) i++;
+    else if (!args[i].startsWith("-")) subs.push(args[i]);
+  const deploys = ["deploy", "publish", "rollback", "secret"];
+  return subs.slice(0, 2).some((sub) => deploys.includes(sub)) || subs.includes("delete");
+}
+
+// WORDS changes production or reads its secrets: wrangler acting on Cloudflare, a script
+// run with --remote, or a script its own repo lists in production_scripts. A script is a
+// file named like one, or one named by its path; a program found on PATH is not.
+function decideProduction(words: string[], input: GuardInput): GuardDecision {
+  const [program, ...args] = words;
+  const asks = (what: string) => noChange(input.role) ?? askOr(input, productionAsk(what), productionHeadless);
+  // npx wrangler@4 runs wrangler.
+  if (basename(program).replace(/@[^@]*$/, "") === "wrangler" && wranglerWrites(args))
+    return asks("a wrangler deploy, delete, secret or --remote command");
+  if (!input.startedFile && !program.includes("/") && !scriptFile.test(program)) return allow;
+  // /usr/bin/git ... --remote is a program, not a script; bash /srv/deploy's is a file.
+  const script = input.startedFile || scriptFile.test(program) || !isAbsolute(program);
+  if (script && args.some((word) => word === "--remote" || word.startsWith("--remote=")))
+    return asks("a script run with --remote");
+  const named = input.home && program.startsWith("~/") ? join(input.home, program.slice(2)) : program;
+  const path = /[*?[{~]/.test(named) ? undefined : placeIn(input.cwd, named);
+  if (path === undefined)
+    return input.runnerLost && !isAbsolute(named)
+      ? asks(`${program}, in a workspace folder the guard cannot place, whose production_scripts may list it`)
+      : allow;
+  let real = path;
+  try {
+    real = canonical(path);
+  } catch {} // A symlink loop: the path as written is all the guard can match.
+  // The checkout the path is in, and the one the file it opens is in, each list their own.
+  let listed: string | undefined;
+  for (const top of new Set([checkoutOf(path), checkoutOf(real)])) {
+    if (top === undefined) continue;
+    const policy = policyFor(top, input);
+    if (!isPolicy(policy)) return policy;
+    if (policy.unread) return asks(`${program}, in ${top}, whose production_scripts the guard could not read`);
+    if (policy.production.some((script) => script === path || script === real)) listed ??= policy.repo;
+  }
+  return listed ? asks(`${program}, which ${listed}'s production_scripts lists`) : allow;
+}
+
+// The checkout PATH is in: the nearest folder above it that holds a .git. None outside one.
+function checkoutOf(path: string): string | undefined {
+  for (let dir = dirname(path); ; dir = dirname(dir)) {
+    if (onDisk(join(dir, ".git"))) return dir;
+    if (dir === "/" || dir === ".") return undefined;
+  }
+}
+
 // What a segment's command and redirects write, and /dev/uinput.
 // subbed: the segment has a substitution, whose output may be a writer's destination.
 function decideWrites(
@@ -3196,6 +3399,9 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       branchMoved,
       graphiteAliases,
       sole: false,
+      // What a runner started is this command's first word alone: decideProduction reads it from input.
+      startedFile: undefined,
+      runnerLost: undefined,
     };
     // A >( )'s output is the command's: captured only when the command's is.
     segment.subs.forEach((sub, k) => {
@@ -3231,12 +3437,39 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     const bareCd =
       staticArgs && raw.length <= 2 && ["cd", "pushd", "popd"].includes(raw[0]) && !raw[1]?.startsWith("-");
     if (!help && !bareRead && !bareCd) graphiteAliases = undefined;
-    const words = commandWords(raw);
+    const dropped: Dropped = { names: [] };
+    const words = commandWords(raw, dropped);
     if (secret) {
       if (printsEnv(words, raw)) return block(printsToken);
       // The text check above stops at the & of 2>&1; the words have no redirect.
       if (basename(words[0] ?? "") === "systemd-creds" && words.includes("decrypt")) return block(secretFile);
       if (revealsVault(words, raw) || showsSecret(words, redirects, here)) return block(vaultShown);
+    }
+    if (runsAsRoot(words, dropped))
+      decision = worse(
+        decision,
+        input.role === "shep" ? block(rootShep) : (noChange(input.role) ?? askOr(here, rootAsk, rootHeadless)),
+      );
+    // Where the command runs: env -C, sudo -D or run0 -D moves it.
+    const runDir = dropped.dir === undefined ? here.cwd : placeIn(here.cwd, dropped.dir);
+    const runHere = dropped.dir === undefined ? here : { ...here, cwd: runDir, cwds: [runDir] };
+    if (words.length)
+      decision = worse(
+        decision,
+        decideProduction(words, { ...runHere, startedFile: input.startedFile, runnerLost: input.runnerLost }),
+      );
+    // op run, npx, node and the like run the command after their flags: it is checked as its own.
+    const inner = runWords(words);
+    if (inner?.words.length) {
+      const dir = inner.dir === undefined ? runDir : inner.dir === null ? undefined : placeIn(runDir, inner.dir);
+      const at = {
+        ...runHere,
+        startedFile: inner.file,
+        // Lost until a folder the runner names resolves: pnpm -C sub under npm -w stays lost.
+        runnerLost: inner.dir === null || (input.runnerLost && dir === undefined) || undefined,
+        ...(inner.dir === undefined ? {} : { cwd: dir, cwds: [dir] }),
+      };
+      decision = worse(decision, decideBash(argvText(inner.words), at, depth + 1));
     }
     // >file alone runs no command but writes.
     if (words.length === 0) {
@@ -3467,7 +3700,7 @@ type PolicyJson = {
   /** Entire captures sessions in this checkout (git_backend_entire_capture). */
   entire?: boolean;
   prompt: string;
-  policy: { push: Policy["push"]; agent_may_release: boolean };
+  policy: { push: Policy["push"]; agent_may_release: boolean; production_scripts?: string[] };
   sources: Record<string, string>;
 };
 
@@ -3488,13 +3721,16 @@ async function policyJson(
   }
 }
 
-// What the guard enforces of bercail policy show --json. No JSON: the default.
+// What the guard enforces of bercail policy show --json. No JSON: the default, unread.
 export function policyFromJson(json: PolicyJson | undefined): Policy {
-  if (!json) return defaultPolicy;
+  if (!json) return { ...defaultPolicy, unread: true };
   return {
     push: json.policy.push === "main" || json.policy.push === "branch" ? json.policy.push : "ask",
     agentMayRelease: json.policy.agent_may_release === true,
     entire: json.entire === true,
+    production: (Array.isArray(json.policy.production_scripts) ? json.policy.production_scripts : [])
+      .filter((script) => typeof script === "string" && script !== "")
+      .map((script) => resolve(json.root ?? json.repo, script)),
     repo: json.repo,
     from: json.sources ?? {},
   };
@@ -3833,6 +4069,24 @@ export function guardOperation(command: string, cwd: string | undefined, home: s
   // The worker runs the command itself: what an env prefix, a wrapper or a shell would run is not on the card.
   if (commandWords(words).length !== words.length || interpreters.has(basename(words[0])))
     return "it runs its command through an env prefix, a wrapper or a shell; run the command itself";
+  // What op run or a runner starts, the guard checked as its own command. git, bercail and
+  // entire have cards that pin what they act on, which a card for the runner's words would not.
+  // A shell it starts runs a script the card would show only as text.
+  let started = words;
+  let wrapped = false;
+  for (let n = 0; n < 8; n++) {
+    const plain = commandWords(started);
+    const next = runWords(plain);
+    started = next?.words ?? plain;
+    if (!next) break;
+    wrapped = true;
+  }
+  const program = basename(started[0] ?? "");
+  if (
+    wrapped &&
+    (["git", "bercail", "entire"].includes(program) || interpreters.has(program) || Object.hasOwn(notRun, program))
+  )
+    return `it starts ${program} through op run or a runner, so its card would not pin what that acts on; run ${program} itself, as one command`;
   // What the guard reads as a cleanup or a trail merge, in any shape: only the pinned one is handed off.
   const plain = plainWords(words);
   const named = [basename(words[0]), ...words.slice(1)];
