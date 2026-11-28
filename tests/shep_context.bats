@@ -467,7 +467,7 @@ EOF
     || fail "board, a desk on the lead names no model: $out"
 }
 
-@test "shep brief and board mark a desk whose own Pi runs bercail code older than what is installed" {
+@test "shep brief and board mark a desk whose own Pi runs bercail code older than what is installed, with the restart Shep runs" {
   local out share="$HOME/.local/share/bercail"
   repo app
   printf '%s\n' "$HOME/Work/app" >"$STATE/repos"
@@ -486,13 +486,15 @@ EOF
   fake_proc 4444 77 2000 pi t4 pi -e "$share/pi/extensions/guard.ts"
   out="$(shep brief app-1)" || fail "brief: $out"
   grep -qx 'desk t9 working, may run stale code · worktree ~/Work/app' <<<"$out" || fail "brief, desk line: $out"
-  grep -qx 'desk t9 may run bercail code older than what is installed; restart it: quit its Pi, press Ctrl+Shift+A in its space, then /resume its session' <<<"$out" \
+  grep -qx 'desk t9 may run bercail code older than what is installed; restart it: bercail desk restart t9 once it is idle' <<<"$out" \
     || fail "brief, restart: $out"
   out="$(shep board)" || fail "board: $out"
   grep -qx -- '- app-1: Fix the login \[in_progress\] · desk t9 working, may run stale code · -' <<<"$out" || fail "board, stale desk: $out"
   grep -qx -- '- app-3: Plain \[in_progress\] · desk t4 working · -' <<<"$out" || fail "board, fresh desk: $out"
-  grep -qx -- '- desk t9 may run bercail code older than what is installed; restart each: quit its Pi, press Ctrl+Shift+A in its space, then /resume its session' <<<"$out" \
-    || fail "board, waiting: $out"
+  # Shep's to restart, not the person's.
+  grep -qx -- 'desk t9 may run bercail code older than what is installed; restart it: bercail desk restart t9 once it is idle' <<<"$out" \
+    || fail "board, restart: $out"
+  [[ "$(sed -n '/^Waiting on the person:/,$p' <<<"$out")" != *"older than what is installed"* ]] || fail "board, waiting on the person: $out"
 }
 
 @test "shep remember, list and forget keep dated rules with their scope in Shep's preferences file" {

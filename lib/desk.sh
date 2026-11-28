@@ -92,9 +92,10 @@ desk_restore_plan() {
 # terminal as a quit desk does, instead of leaving a live labelled shell.
 # Same terminal settings as a desk's spawn; no prompt, the session has it.
 # Pi takes --session-id: it creates the session when it was never written (Pi
-# writes one at its first message), where --session would exit.
+# writes one at its first message), where --session would exit. PI: the Pi to
+# run, when the shell's own PATH may find another.
 desk_resume_command() {
-  local record="$1" agent session cwd arg cmd args lead bridge
+  local record="$1" pi="${2:-pi}" agent session cwd arg cmd args lead bridge
   agent="$LOCAL_BIN/bercail-desk-agent"
   [[ -x "$agent" ]] || agent="bercail-desk-agent"
   session="$(jq -r .session <<<"$record")"
@@ -119,8 +120,8 @@ desk_resume_command() {
       | if $i > 0 and ($a[$i - 1] | IN("-e", "--extension")) and startswith("npm:pi-claude-bridge@")
         then $bridge else . end]' <<<"$args")" || return 1
   fi
-  printf -v cmd 'cd %q && TERM=xterm-256color COLORTERM=truecolor exec %q pi --session-id %q' \
-    "$cwd" "$agent" "$session"
+  printf -v cmd 'cd %q && TERM=xterm-256color COLORTERM=truecolor exec %q %q --session-id %q' \
+    "$cwd" "$agent" "$pi" "$session"
   # NUL, not lines: a recorded flag may contain a newline, and a line split would
   # turn one argument into two.
   while IFS= read -r -d '' arg; do
@@ -452,6 +453,115 @@ _desk_model() {
   fi
 }
 
+# --- restart ---
+
+# How long `desk restart` waits for hc to give the desk its shell, then for the new Pi, in seconds.
+DESK_RESTART_WAIT="${BERCAIL_DESK_RESTART_WAIT:-60}"
+# How long one hc get may take: a core that stops answering must not hold up bercail update.
+DESK_RESTART_HC_WAIT="${BERCAIL_DESK_RESTART_HC_WAIT:-10}"
+
+_desk_restart_get() { _git_backend_bounded "$DESK_RESTART_HC_WAIT" _desk_hc get "$1" --json 2>/dev/null </dev/null; }
+
+# Why the desk in TERMINAL (hc get) may not be restarted now, or nothing: it must
+# be idle and run the Pi its record names (by start time too, when the record
+# has it), with no follow-up or model switch waiting for that Pi, and, where its
+# desk extension says so (runtime/PID.json), no unsent text or queued messages
+# in its last second. An older extension says nothing.
+_desk_restart_refusal() {
+  local terminal="$1" state address pid ticks record queued=0 model runtime
+  local -a ups
+  state="$(dirname "$(_desk_sessions_dir)")"
+  address="$(jq -r .address <<<"$terminal")"
+  pid="$(jq -r .pid <<<"$terminal")"
+  ticks="$(_desk_start_ticks "$pid" 2>/dev/null)" || ticks=""
+  record="$(jq -c 'objects' "$(_desk_sessions_dir)/$address.json" 2>/dev/null)" || record=""
+  ups=("$state/desk-follow-ups/$address"/*.json)
+  [[ ! -e "${ups[0]}" ]] || queued="$(jq -s 'map(select(.delivery == "queued")) | length' "${ups[@]}" 2>/dev/null)" || queued=-1
+  [[ ! -d "$state/desk-follow-ups/$address" || (-r "$state/desk-follow-ups/$address" && -x "$state/desk-follow-ups/$address") ]] \
+    || queued=-1
+  model="$(jq -c 'objects' "$state/desk-commands/$address.json" 2>/dev/null)" || model=""
+  runtime="$(jq -c --arg pid "$pid" --arg ticks "$ticks" 'select((.pid | tostring) == $pid and .start_ticks == $ticks)' \
+    "$state/runtime/$pid.json" 2>/dev/null)" || runtime=""
+  jq -r --argjson r "${record:-null}" --argjson q "$queued" --argjson m "${model:-null}" --argjson rt "${runtime:-null}" \
+    --arg ticks "$ticks" '
+    (.status.state // "unknown") as $s | "bercail desk restart \(.address) once it is idle" as $later
+    | if .state != "live" or .labels["bercail.role"] != "agent" then "it is not a live desk (label bercail.role=agent)"
+      elif .labels["bercail.shep"] == "bg" then "it is a background Shep: let it report, then start a new one with bercail shep bg"
+      elif .keep != true then "hc does not keep it, so ending its Pi would end the desk"
+      elif ($s | IN("idle", "done") | not) then "it is \($s); \($later)"
+      elif $r.harness != "pi" or $r.pid != .pid or ($r.session // "") == "" or $r.space != .labels["bercail.space"]
+        or $ticks == "" or (($r.start_ticks // "") != "" and $r.start_ticks != $ticks) then
+        "its desk record does not name the Pi running there"
+      elif any($r.args[]?; . == "--api-key" or startswith("--api-key=")) then
+        "its flags hold an API key, which the resume line would pass to hc; restart it by hand"
+      elif $q < 0 then "its follow-ups cannot be read"
+      elif $q > 0 then "a follow-up waits for its Pi; \($later)"
+      elif $m.pid == .pid then "a model switch waits for its Pi; \($later)"
+      elif $rt.draft == true then "its editor holds text not sent yet"
+      elif $rt.pending == true or $rt.idle == false then "Pi has messages queued; \($later)"
+      else empty end' <<<"$terminal"
+}
+
+# Ends an idle desk's Pi and starts Pi again on its session in the same
+# terminal, so it loads the code bercail update installed. SIGKILL, not TERM: Pi takes TERM as a quit and exits 0, which
+# finishes the terminal; a death by signal makes hc give a kept terminal a shell
+# in place, its labels kept, and that shell gets the restore's resume line. Done
+# only once the new Pi's desk extension wrote the record for that session file;
+# the restore's lock is held till then.
+_desk_restart() {
+  local desk="$1" file terminal address name pid why record path pi command written now i
+  local shell='.state == "live" and .reason == null and .pid != null and .foreground.pid == .pid
+    and (.foreground.name // "" | IN("bash", "zsh", "fish", "sh", "dash", "ksh"))'
+  terminal="$(_desk_restart_get "$desk")" || die "no live terminal $desk (hc ls lists them)"
+  address="$(jq -r .address <<<"$terminal")"
+  name="$(jq -r '.labels as $l | "desk \(.address)" + if ($l["bercail.issue"] // "") == "" then ""
+    else " (\($l["bercail.issue"])\($l["bercail.issue_title"] // "" | if . != "" then ": " + . else "" end))" end' <<<"$terminal")"
+  why="$(_desk_restart_refusal "$terminal")"
+  [[ -z "$why" ]] || die "$name is not restarted: $why"
+  pid="$(jq -r .pid <<<"$terminal")"
+  file="$(_desk_sessions_dir)/$address.json"
+  record="$(jq -c . "$file")" || die "$name is not restarted: cannot read $file"
+  [[ -d "$(jq -r .cwd <<<"$record")" ]] || die "$name is not restarted: its folder $(jq -r .cwd <<<"$record") is gone"
+  # The pi this desk's PATH found when it started: the new shell's rc files may put another first.
+  path="$(tr '\0' '\n' 2>/dev/null <"${BERCAIL_PROC_DIR:-/proc}/$pid/environ" | sed -n 's/^PATH=//p' | head -n 1)" || path=""
+  pi="$(PATH="$path" command -v pi)" || die "$name is not restarted: no pi on the PATH its Pi started with"
+  command="$(desk_resume_command "$record" "$pi")" || return 1
+  # The restore types into bare desk shells too: one at a time.
+  _desk_lock_acquire 2>/dev/null || die "$name is not restarted: a desk restore is running; try again when it ends"
+  # Again, just before the kill: the same Pi on the same session, still idle.
+  terminal="$(_desk_restart_get "$address")" || die "hc did not answer; $name is left alone"
+  why="$(_desk_restart_refusal "$terminal")"
+  [[ -n "$why" || ("$(jq -r .pid <<<"$terminal")" == "$pid" && "$(jq -c . "$file" 2>/dev/null)" == "$record") ]] \
+    || why="its Pi or session changed since bercail first looked"
+  [[ -z "$why" ]] || die "$name is not restarted: $why"
+  kill -KILL "$pid" 2>/dev/null || die "could not end $name's Pi (pid $pid)"
+  for ((i = 0; i < DESK_RESTART_WAIT * 5; i++)); do
+    if terminal="$(_desk_restart_get "$address")"; then
+      jq -e ".state != \"live\" or ($shell)" <<<"$terminal" >/dev/null && break
+    fi
+    sleep 0.2
+  done
+  jq -e "$shell" <<<"$terminal" >/dev/null \
+    || die "$name's Pi ended, but hc gave it no shell; start it again: Ctrl+Shift+A in its space, then /resume session $(jq -r .session <<<"$record")"
+  _git_backend_bounded "$DESK_RESTART_WAIT" _desk_hc send "$address" "$command" >/dev/null </dev/null \
+    || die "$name is at a shell, but bercail could not type its resume line; start it again: /resume session $(jq -r .session <<<"$record")"
+  # A session Pi never wrote (no message yet) has nothing to reopen, so another file for it is fine.
+  written=false
+  [[ ! -f "$(jq -r '.session_file // ""' <<<"$record")" ]] || written=true
+  for ((i = 0; i < DESK_RESTART_WAIT * 5; i++)); do
+    now="$(jq -c . "$file" 2>/dev/null)" && terminal="$(_desk_restart_get "$address")" \
+      && jq -en --argjson n "$now" --argjson t "$terminal" --argjson old "$record" --argjson written "$written" '
+        $n.pid == $t.pid and $n.pid != $old.pid and $t.state == "live" and $t.foreground.pid == $t.pid
+        and ($n.start_ticks // "") != "" and $n.session == $old.session
+        and (($written | not) or $n.session_file == $old.session_file)' >/dev/null && break
+    now=""
+    sleep 0.2
+  done
+  [[ -n "$now" ]] || die "$name got its resume line, but no new Pi opened its session; hc read $address shows why"
+  _desk_lock_release
+  log "$name restarted on session $(jq -r .session <<<"$record")"
+}
+
 # --- guard prompts ---
 
 # How long `desk answer` waits for the desk's guard to take an answer, in seconds.
@@ -595,8 +705,13 @@ cmd_desk() {
       _desk_answer "$@"
       return
       ;;
+    restart)
+      (($# == 1)) || die "usage: bercail desk restart DESK"
+      _desk_restart "$1"
+      return
+      ;;
   esac
-  [[ "$sub" == restore ]] || die "usage: bercail desk restore [--dry-run] | desk model DESK PROVIDER/MODEL[:thinking] | desk prompt DESK | desk answer DESK yes|no --prompt ID [--reason TEXT] [--dry-run]"
+  [[ "$sub" == restore ]] || die "usage: bercail desk restore [--dry-run] | desk restart DESK | desk model DESK PROVIDER/MODEL[:thinking] | desk prompt DESK | desk answer DESK yes|no --prompt ID [--reason TEXT] [--dry-run]"
   while (($#)); do
     case "$1" in
       --dry-run | --boot) mode="$1" ;;

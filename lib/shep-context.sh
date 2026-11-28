@@ -191,7 +191,7 @@ SHEP_JQ_DEFS='
     else "no beads" end;
   def stale_code: if .stale_code then ", may run stale code" else "" end;
   def restart: if .bg then "let it report, then start a new one with bercail shep bg"
-    else "quit its Pi, press Ctrl+Shift+A in its space, then /resume its session" end;'
+    else "bercail desk restart \(.address) once it is idle" end;'
 
 shep_repos() {
   local json=0 out
@@ -469,6 +469,7 @@ _shep_board_snapshot() {
        | "\(.path | tilde): \(.complete) complete trail\(if .complete == 1 then "" else "s" end) still open; close each with entire trail update N --status closed (bercail job list --repo \(.path | tilde))"),
       ([ $desks[] | select(.issue and ((.repo + "\u001f" + .issue) as $x | $open | index($x) | not)) | "\(who(.)) \(.state) (\(.issue))" ]
        | if length > 0 then "Desks on closed or unknown issues: " + join(", ") else empty end),
+      ($desks[] | select(.stale_code) | "\(who(.)) may run bercail code older than what is installed; restart it: \(restart)"),
       "Waiting on the person:",
       ([ ($jobs[] | select(.desk) | . as $j
            | if .desk.state == "blocked" then "- " + head($j) + ": \(who(.desk)) is blocked; \(brief($j)) shows what it asks"
@@ -476,8 +477,6 @@ _shep_board_snapshot() {
                "- " + head($j) + ": \(who(.desk)) finished; " + (if .desk.bg then "report it from \(brief($j)), then hc kill \(.desk.name // .desk.address)" else "read its report in \(brief($j)), then review its staged changes in its space" end)
              else empty end),
          ($desks[] | select((.issue | not) and .state == "blocked") | "- \(who(.)) (\(.cwd // "?" | tilde)) is blocked"),
-         ($desks | map(select(.stale_code)) | group_by(.bg)[] | select(length > 0)
-           | "- \(map(who(.)) | join(", ")) may run bercail code older than what is installed; restart each: \(.[0] | restart)"),
          ($todos // [] | .[] | . as $t | def tag: if .issue then " for \(.issue)" else "" end;
            if .error then "- todos\(if .target then " in \(.target)" else "" end): \(.error)"
            else (.open[] | "- todo\(tag): \(.title | flat | cut(70))" + (if .due then " · due \(.due)" else "" end)

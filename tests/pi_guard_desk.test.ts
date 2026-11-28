@@ -161,6 +161,13 @@ test("bercail desk prompt, even for a desk named answer, is a read any role runs
     expect(decided(command, { ...desk, deskBranch: undefined }), command).toStrictEqual({ action: "allow" });
 });
 
+// Shep restarts stale idle desks after an update without asking (lib/desk.sh refuses a busy one).
+test("Shep restarts a desk with bercail desk restart, and no card", () => {
+  expect(decided("bercail desk restart t1", { ...desk, role: "shep", deskBranch: undefined })).toStrictEqual({
+    action: "allow",
+  });
+});
+
 test("a desk answer's Yes goes to a card only as bercail desk answer DESK yes --prompt ID", () => {
   const id = "0b7f3c1e-2a4d-4e5f-8a9b-0c1d2e3f4a5b";
   expect(guardOperation(`bercail desk answer t1 yes --prompt ${id}`, "/work", "/home")).toStrictEqual({

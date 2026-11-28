@@ -414,6 +414,10 @@ function publishRuntime(ctx: ExtensionContext): void {
         generation: loadedGeneration,
         guard_generation: "UNKNOWN",
         effective_prompt_sha256: createHash("sha256").update(ctx.getSystemPrompt()).digest("hex"),
+        // What bercail desk restart must not lose: a run, queued messages, text not sent yet.
+        idle: ctx.isIdle(),
+        pending: ctx.hasPendingMessages(),
+        draft: ctx.hasUI && ctx.ui.getEditorText().trim() !== "",
       }),
     );
   } catch {}

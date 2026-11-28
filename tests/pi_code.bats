@@ -48,18 +48,31 @@ libs() {
   # Not Pi, though its argv names the file.
   fake_proc 701 1 2000 grep t7 grep -e "$SHARE/pi/extensions/guard.ts"
   echo '{"pid": 100, "labels": {"bercail.role": "shep"}}' >"$HC_DATA/t1.json"
-  echo '{"pid": 201, "labels": {"bercail.role": "agent", "bercail.issue": "app-1", "bercail.issue_title": "Fix it"}}' >"$HC_DATA/t2.json"
+  echo '{"pid": 201, "status": {"state": "working"}, "labels": {"bercail.role": "agent", "bercail.issue": "app-1", "bercail.issue_title": "Fix it"}}' >"$HC_DATA/t2.json"
   echo '{"pid": 401, "name": "bg-app-2", "cwd": "/w/app", "labels": {"bercail.role": "agent", "bercail.shep": "bg", "bercail.issue": "app-2"}}' >"$HC_DATA/t4.json"
-  mkdir -p "$XDG_STATE_HOME/bercail/desk-sessions"
-  echo '{"pid": 201, "session": "abcdef123456"}' >"$XDG_STATE_HOME/bercail/desk-sessions/t2.json"
   out="$(libs pi_code_report)" || fail "report: $out"
   want="
 Pi that may still run bercail code older than what is installed (restart each to load it):
   - Shep (t1): quit the Shep terminal, then Start Shep; it continues its session · changed: questions.ts
-  - desk t2 (app-1: Fix it): quit its Pi, press Ctrl+Shift+A in its space, then /resume and pick session abcdef12 · changed: guard.ts
+  - desk t2 (app-1: Fix it) is working; bercail desk restart t2 restarts it once it is idle · changed: guard.ts
   - background Shep bg-app-2 (t4): let it report, then start a new one if app-2 still needs it: bercail shep bg --issue app-2 --cwd /w/app · changed: provider-error.ts
   - pid 501 (started from t2): quit it and start it again · changed: guard.ts"
   [[ "$out" == "$want" ]] || fail "report: $out"
+}
+
+@test "update leaves an idle desk on older code running and names the restart, which is Shep's to run" {
+  local out desk
+  code pi/extensions/guard.ts 3000
+  sleep 300 >/dev/null 2>&1 3>&- &
+  desk=$!
+  fake_proc "$desk" 1 2000 pi t5 pi -e "$SHARE/pi/extensions/guard.ts"
+  jq -n --argjson pid "$desk" '{address: "t5", state: "live", keep: true, pid: $pid, status: {state: "done"},
+    labels: {"bercail.role": "agent", "bercail.issue": "app-5", "bercail.issue_title": "Ship it"}}' >"$HC_DATA/t5.json"
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >>"$HC_DATA/calls"\n[[ "$1" == get ]] && cat "$HC_DATA/$2.json"\n' >"$BATS_TEST_TMPDIR/bin/hc"
+  out="$(libs pi_code_report)" || { kill "$desk"; fail "report: $out"; }
+  kill "$desk" 2>/dev/null || fail "update ended the desk's Pi"
+  [[ "$out" == *"  - desk t5 (app-5: Ship it) is done; bercail desk restart t5 restarts it once it is idle · changed: guard.ts" ]] || fail "report: $out"
+  [[ "$(cat "$HC_DATA/calls")" == "get t5 --json" ]] || fail "hc calls: $(cat "$HC_DATA/calls")"
 }
 
 @test "update says nothing when every live Pi started after its code last changed" {

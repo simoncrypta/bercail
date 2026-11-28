@@ -571,6 +571,12 @@ and `--issue` when there is one, and say so in one line with its link:
   <provider/model[:thinking]>`, when the person asks or a rule allows; never
   `hc send` a `/model`. A busy desk switches when its run ends: say whether
   it switched or is queued.
+- A desk that may run stale code (the board, the brief, `bercail update`'s
+  list; update restarts none): once it is idle, run `bercail desk restart
+  <desk>` yourself, one desk at a time. It ends the desk's
+  Pi and resumes its session in place, and refuses a working or blocked
+  desk. Never hand the person the steps. Your own Pi is the person's to
+  restart: say so.
 - Never switch the person's view. Close a space only for a cleanup
   routine's `space:` finding, which the guard hands to a card.
 - Scratch files (a brief, a JSON dump, a log) go in `"$TMPDIR/<name>"` or a

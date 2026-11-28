@@ -83,23 +83,22 @@ pi_code_stale_json() {
 # a terminal's own when it is the terminal's process or its child (Shep's Pi
 # under bercail shep run); any other only inherited the terminal's env.
 pi_code_report() {
-  local stale p terminal detail record hc=1 rc
+  local stale p terminal detail hc=1 rc
   stale="$(pi_code_stale_json)" || return 1
   [[ "$(jq length <<<"$stale")" -gt 0 ]] || return 0
   log ""
   log "Pi that may still run bercail code older than what is installed (restart each to load it):"
   while IFS= read -r p; do
     terminal="$(jq -r .terminal <<<"$p")"
-    detail='null' record='null'
+    detail='null'
     if [[ -n "$terminal" ]] && ((hc)); then
       # A Herdr core that does not answer names no terminal; it must not hold up the update.
       rc=0
       detail="$(_git_backend_bounded 3 _desk_hc get "$terminal" --json 2>/dev/null </dev/null)" || rc=$?
       ((rc != 124)) || hc=0
       ((rc == 0)) || detail='null'
-      record="$(jq -c 'objects' "$(_desk_sessions_dir)/$terminal.json" 2>/dev/null)" || record='null'
     fi
-    jq -nr --argjson d "${detail:-null}" --argjson r "${record:-null}" --argjson p "$p" '
+    jq -nr --argjson d "${detail:-null}" --argjson p "$p" '
       ($d.labels // {}) as $l | ($d.name // $p.terminal) as $name
       | if $d == null or ($d.pid != $p.pid and $d.pid != $p.ppid) then
           "pid \($p.pid)" + (if $p.terminal != "" then " (started from \($p.terminal))" else "" end) + ": quit it and start it again"
@@ -108,8 +107,7 @@ pi_code_report() {
           "background Shep \($name) (\($p.terminal)): let it report, then start a new one if \($l["bercail.issue"] // "its job") still needs it: bercail shep bg --issue \($l["bercail.issue"] // "ID") --cwd \($d.cwd // "DIR")"
         elif $l["bercail.role"] == "agent" then
           "desk \($p.terminal)" + (if $l["bercail.issue"] then " (\($l["bercail.issue"]): \($l["bercail.issue_title"] // ""))" else "" end)
-          + ": quit its Pi, press Ctrl+Shift+A in its space, then /resume and pick "
-          + (if $r.pid == $p.pid and ($r.session // "") != "" then "session \($r.session[0:8])" else "its session" end)
+          + " is \($d.status.state // "in an unknown state"); bercail desk restart \($p.terminal) restarts it once it is idle"
         else "\($l["bercail.role"] // "terminal") \($name) (\($p.terminal)): let it finish, then start it again" end
       | "  - \(.) · changed: \($p.changed | map(split("/") | if .[-1] == "index.ts" then .[-2] else .[-1] end) | unique | join(", "))"'
   done < <(jq -c '.[]' <<<"$stale")

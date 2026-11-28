@@ -19,6 +19,7 @@ Post-install CLI (bercail):
                 set <section> <key> <value> | unset <section> <key> [--dry-run] (change that key alone, and print the diff;
                 a write needs your terminal or Shep's card)
   desk          Desk agents: restore [--dry-run] (bring back what a reboot took) |
+                restart DESK (an idle desk's Pi again on its session, to load updated code) |
                 model DESK PROVIDER/MODEL[:thinking] (switch a live desk's model) |
                 prompt DESK (the guard prompt it waits on, as JSON) |
                 answer DESK yes|no --prompt ID [--reason TEXT] [--dry-run] (answer that prompt; no needs a reason)

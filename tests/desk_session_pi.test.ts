@@ -219,6 +219,24 @@ describe("the extension's events", () => {
     expect(mode(claimFile)).toBe(0o600);
   });
 
+  test("session_start publishes what a desk restart must not lose: a run, queued messages, unsent text", () => {
+    const runtime = join(dir, "state/bercail/runtime", `${process.pid}.json`);
+    let text = "";
+    const full = {
+      ...ctx,
+      hasUI: true,
+      getSystemPrompt: () => "prompt",
+      isIdle: () => true,
+      hasPendingMessages: () => false,
+      ui: { getEditorText: () => text },
+    };
+    handlers.session_start!({}, full);
+    expect(readJSON(runtime)).toMatchObject({ idle: true, pending: false, draft: false });
+    text = "half a thought";
+    handlers.session_start!({}, { ...full, isIdle: () => false, hasPendingMessages: () => true });
+    expect(readJSON(runtime)).toMatchObject({ idle: false, pending: true, draft: true });
+  });
+
   test("session_info_changed publishes the new id and claim; the same id is not rewritten", () => {
     handlers.session_start!({}, ctx);
     ctx.sessionManager.getSessionId = () => "uuid-2";
