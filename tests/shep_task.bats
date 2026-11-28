@@ -77,13 +77,13 @@ teardown() {
   done
 }
 
-# Starts the Pi stand-in in the worktree, waits until /proc names it pi, and
-# sets the variable named $1 to its pid. It is bash blocked in a builtin read,
-# not a renamed sleep: a multicall coreutils (uutils, on Ubuntu 26.04) picks
+# Starts the Pi stand-in in the worktree (the binary $2, bin/pi by default),
+# waits until /proc names it pi, and sets the variable named $1 to its pid.
+# It is bash blocked in a builtin read, not a renamed sleep: a multicall coreutils (uutils, on Ubuntu 26.04) picks
 # its applet from argv[0], so a copy named pi exits at once.
 start_pi() {
   local pid n
-  (cd "$REPO.fix" && exec "$BATS_TEST_TMPDIR/bin/pi" -c 'read -rt 120 <>"$0"' "$BATS_TEST_TMPDIR/pi.hold") >/dev/null 2>&1 &
+  (cd "$REPO.fix" && exec "${2:-$BATS_TEST_TMPDIR/bin/pi}" -c 'read -rt 120 <>"$0"' "$BATS_TEST_TMPDIR/pi.hold") >/dev/null 2>&1 &
   pid=$!
   for ((n=0; n<200; n++)); do
     [[ "$(basename "$(readlink "/proc/$pid/exe")")" == pi ]] && break
@@ -638,6 +638,26 @@ EOF
   out="$(request | task dispatch 2>&1)" && fail "$out"
   [[ "$out" == *"exact-session process claims"* ]]
   ! grep -Eq 'hc (run|send|keys|kill|rm)' "$LOG"
+}
+
+@test "a desk whose Pi binary was upgraded away under it still takes a follow-up after the person spoke" {
+  local out
+  jq -nc '{type:"message",message:{role:"user",content:"LGTM"}}' >>"$TASK_DATA/s1.jsonl"
+  rm "$BATS_TEST_TMPDIR/bin/pi"
+  [[ "$(readlink "/proc/$PID/exe")" == *"/pi (deleted)" ]] || fail "exe: $(readlink "/proc/$PID/exe")"
+  out="$(request | task dispatch)" || fail "$out"
+  jq -e --argjson pid "$PID" '.status == "queued" and .owner.desk == "t9" and .owner.pid == $pid' <<<"$out" || fail "$out"
+}
+
+@test "a competing session writer whose Pi binary was upgraded away is still ambiguous" {
+  local out ticks
+  mkdir "$BATS_TEST_TMPDIR/old" && cp "$BASH" "$BATS_TEST_TMPDIR/old/pi"
+  start_pi OTHER_PID "$BATS_TEST_TMPDIR/old/pi"
+  rm "$BATS_TEST_TMPDIR/old/pi"
+  ticks="$(awk '{print $22}' "/proc/$OTHER_PID/stat")"
+  jq -n --argjson pid "$OTHER_PID" --arg ticks "$ticks" '{pid:$pid,start_ticks:$ticks,sessions:["s1"]}' >"$XDG_RUNTIME_DIR/bercail/open-sessions/$OTHER_PID.json"
+  out="$(request | task dispatch 2>&1)" && fail "$out"
+  [[ "$out" == *"exact-session process claims"* ]] || fail "$out"
 }
 
 # The original desk t9 is gone. A stand-in spawn starts t10 in the same checkout

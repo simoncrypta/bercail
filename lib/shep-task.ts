@@ -289,6 +289,11 @@ export function processTicks(pid: number): string {
   const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
   return stat.slice(stat.lastIndexOf(")") + 2).split(/\s+/)[19]!;
 }
+// Whether pid runs a Pi binary. An upgrade that removes the binary under a
+// running Pi leaves its exe link reading "…/pi (deleted)"; it is still that Pi.
+function isPi(pid: number): boolean {
+  return basename(readlinkSync(`/proc/${pid}/exe`)).replace(/ \(deleted\)$/, "") === "pi";
+}
 // Every live terminal in this repository's checkouts, as hc get prints it.
 function terminalsIn(repo: string): any[] {
   const snapshot = JSON.parse(run(bin("hc"), ["ls", "--json"], repo));
@@ -395,10 +400,7 @@ function verify(repo: string, terminal: any, id: string, saved?: Owner | null): 
     throw new Error(`stale or unsupported visible owner ${address}; inspect its record/profile, do not replace it`);
   }
   if (processTicks(r.pid) !== r.start_ticks) throw new Error(`stale process for ${address}`);
-  if (
-    basename(readlinkSync(`/proc/${r.pid}/exe`)) !== "pi" ||
-    realpathSync(`/proc/${r.pid}/cwd`) !== realpathSync(r.cwd)
-  )
+  if (!isPi(r.pid) || realpathSync(`/proc/${r.pid}/cwd`) !== realpathSync(r.cwd))
     throw new Error("record does not name a live Pi in the original checkout");
   let foreground = t.foreground?.pid;
   for (let depth = 0; foreground && foreground !== r.pid && depth < 32; depth++) {
@@ -421,8 +423,7 @@ function verify(repo: string, terminal: any, id: string, saved?: Owner | null): 
     if (other.pid === r.pid || !Number.isSafeInteger(other.pid) || !other.sessions?.includes(r.session)) continue;
     let active = false;
     try {
-      active =
-        processTicks(other.pid) === other.start_ticks && basename(readlinkSync(`/proc/${other.pid}/exe`)) === "pi";
+      active = processTicks(other.pid) === other.start_ticks && isPi(other.pid);
     } catch {}
     if (active)
       throw new Error(
