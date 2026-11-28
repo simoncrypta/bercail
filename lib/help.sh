@@ -104,7 +104,8 @@ Post-install CLI (bercail):
                 --ci-branch NAME: the commit goes to CI on origin's NAME, not the work
                 branch, which keeps its name. Desks are refused, and so, where the
                 policy says integrate = "direct", is a trunk that moved past HEAD, before
-                any commit (the desk reruns /validate); a PR branch gets a warning.
+                any commit (the desk reruns /validate); a PR branch gets a warning. Where
+                direct, a desk's merge of the trunk's tip lands as one commit on that tip.
                 land ask WORKTREE puts up one land card where the repo's trusted policy says
                 push = "main", integrate = "direct" and names required_ci: the person's pick
                 commits, pushes, waits for CI, lands, cleans up, syncs main and closes the job

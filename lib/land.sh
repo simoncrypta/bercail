@@ -91,6 +91,7 @@ _land_ci_bad() {
 # so that commit could not land as it is. A PR's merge is the forge's to check.
 land_run() {
   local dir="$1" reviewer="$2" ci="${3:-}" root branch trunk msg sha described name backend moved why full=0 rc=0 ref what style
+  local gd saved="" pre
   local hc="${HC_BIN:-hc}"
   local -a wait=()
   root="$(_desc_root "$dir")" || return 1
@@ -119,16 +120,35 @@ land_run() {
     [[ -z "$why" ]] || { _land_err "$why; nothing was committed"; return 1; }
     wait+=(--ci-branch "$ci")
   fi
-  # A merge under way is committed even when its tree is HEAD's: its trunk parent is the point.
+  # Straight to the trunk, which takes no merge commit (a linear-history rule refuses one
+  # at the push): a desk's merge of the trunk's tip lands as one commit on that tip.
+  if [[ "$style" == commit ]]; then
+    gd="$(git -C "$root" rev-parse --absolute-git-dir)"
+    saved="$(_land_linear "$root" "$gd" "$trunk")" || return 1
+  fi
+  # On a PR branch, a merge under way is committed even when its tree is HEAD's: its trunk parent is the point.
   if [[ -z "$(_desc_merge_heads "$root")" ]] && git -C "$root" diff --cached --quiet; then
     described="$(_desc_meta "$root/$DESC_FILE" tree)"
     [[ "$(git -C "$root" rev-parse 'HEAD^{tree}')" == "$described" ]] \
       || { _land_err "nothing is staged in $root: the desk stages its change and runs /validate"; return 1; }
     printf 'HEAD is already the described tree; no new commit\n'
   else
-    git -C "$root" commit -q -F - <<<"$msg" \
-      || { _land_err "git commit failed in $root; its error is above, and nothing was committed"; return 1; }
+    described="$(_desc_meta "$root/$DESC_FILE" tree)" pre="$(git -C "$root" rev-parse HEAD)"
+    git -C "$root" commit -q -F - <<<"$msg" || {
+      [[ -z "$saved" ]] || _land_unflatten "$root" "$gd" "$saved"
+      _land_err "git commit failed in $root; its error is above, and nothing was committed"
+      return 1
+    }
+    # Straight to the trunk, what git wrote is read back: a hook that changed the tree changed
+    # what was described and reviewed. (A PR's commit is the forge's to show.)
+    sha="$(git -C "$root" rev-parse HEAD)"
+    if [[ "$style" == commit && "$(git -C "$root" rev-parse "$sha^{tree}" "$sha^@" | tr '\n' ' ')" != "$described $pre " ]]; then
+      if [[ -n "$saved" ]]; then _land_unflatten "$root" "$gd" "$saved"; else git -C "$root" reset -q --soft "$pre"; fi
+      _land_err "the commit ${sha:0:12} was not the described tree ${described:0:12} on ${pre:0:12} (a hook changed it), so land undid it: what the hook made is staged in $root for the desk to review, and it runs /validate again; no CI wait was started"
+      return 1
+    fi
   fi
+  [[ -z "$saved" ]] || { rm -rf "$saved"; printf "the desk's merge of %s lands as one commit on its tip, not a merge commit\n" "$trunk"; }
   sha="$(git -C "$root" rev-parse HEAD)"
   # An Entire repo's CI is its trail's gates, which gh run list never sees: no wait to start.
   if [[ "$backend" == entire ]]; then
@@ -296,22 +316,73 @@ _land_profile() {
     else empty end' <<<"$policy"
 }
 
-# Put back a desk's merge as land_ask found it: HEAD, the merge's own files, ORIG_HEAD
+# Keep ROOT's HEAD, merge and rerere files and description in a new folder, end the merge,
+# and put HEAD on TIP with the tree staged as it was. Prints the folder, for _land_unflatten.
+_land_flatten() {
+  local root="$1" gd="$2" tip="$3" saved name
+  saved="$(mktemp -d)" && git -C "$root" rev-parse HEAD >"$saved/HEAD" && cp "$root/$DESC_FILE" "$saved/description.md" \
+    || { rm -rf "$saved"; _land_err "could not keep $root's merge state to put back, so it was left as it is"; return 1; }
+  for name in MERGE_HEAD MERGE_MSG MERGE_MODE MERGE_RR AUTO_MERGE ORIG_HEAD; do
+    [[ ! -f "$gd/$name" ]] || cp "$gd/$name" "$saved/$name" \
+      || { rm -rf "$saved"; _land_err "could not keep $root's $name to put back, so its merge was left as it is"; return 1; }
+  done
+  git -C "$root" merge --quit && git -C "$root" reset -q --soft "$tip" \
+    || { _land_unflatten "$root" "$gd" "$saved"; _land_err "could not put HEAD on ${tip:0:12} with the merged tree staged in $root; its merge is as it was"; return 1; }
+  printf '%s\n' "$saved"
+}
+
+# Where the trunk takes no merge commit: a merge of the trunk's tip, under way or committed
+# as HEAD, is flattened onto the tip (_land_flatten), so land commits its exact tree as one
+# commit whose only parent is the tip. Any other merge is refused, as is a description not
+# measured from the tip: the flat commit carries the whole change since the tip, and that
+# is what must have been described and reviewed. Prints _land_flatten's folder, or nothing
+# with no merge.
+_land_linear() {
+  local root="$1" gd="$2" trunk="$3" ref tip="" heads base fix
+  ref="$(_desc_trunk_refs "$root" | head -n 1)"
+  [[ -z "$ref" ]] || tip="$(git -C "$root" rev-parse "$ref^{commit}")"
+  heads="$(_desc_merge_heads "$root")"
+  if [[ -n "$heads" ]]; then
+    [[ -n "$tip" && "$heads" == "$tip" ]] \
+      || { _land_err "$root is merging something other than $trunk's tip${tip:+ (${tip:0:12})}, and $trunk takes no merge commit: the desk merges only $trunk's tip, or ends the merge, and runs /validate again; nothing was committed"; return 1; }
+    [[ ! -e "$gd/MERGE_AUTOSTASH" ]] \
+      || { _land_err "$root's merge holds an autostash, which ending the merge would move to the stash list: the desk commits or drops what it stashed, and runs /validate again; nothing was committed"; return 1; }
+  elif [[ -z "$tip" || -z "$(git -C "$root" rev-list --merges "$tip..HEAD")" ]]; then
+    return 0
+  else
+    [[ "$(git -C "$root" rev-parse HEAD^@ | tail -n +2)" == "$tip" ]] \
+      || { _land_err "$root's branch holds a merge commit other than HEAD's merge of $trunk's tip (${tip:0:12}), and $trunk takes no merge commit: the desk brings its change onto $trunk's tip as one staged change and runs /validate again; nothing was committed"; return 1; }
+  fi
+  base="$(_desc_meta "$root/$DESC_FILE" base)"
+  if [[ "$base" != "$tip" ]]; then
+    fix="the desk runs /validate again"
+    [[ -n "$heads" ]] || fix="the desk puts its change on $trunk's tip as one staged change (git reset --soft ${tip:0:12}) and runs /validate again"
+    _land_err "the description in $root was measured from ${base:0:12}, not $trunk's tip (${tip:0:12}), where its merge lands as one commit: $fix; nothing was committed"
+    return 1
+  fi
+  [[ "$(_desc_meta "$root/$DESC_FILE" tree)" != "$(git -C "$root" rev-parse "$tip^{tree}")" ]] \
+    || { _land_err "the merged tree in $root is $trunk's own tip: $trunk already has this change, so there is nothing to land; nothing was committed"; return 1; }
+  _land_flatten "$root" "$gd" "$tip"
+}
+
+# Put back a desk's merge as _land_flatten found it: HEAD, the merge's own files, ORIG_HEAD
 # (which the reset rewrites) and the description, from SAVED.
 _land_unflatten() {
-  local root="$1" gd="$2" saved="$3" name
-  git -C "$root" reset -q --soft "$(cat "$saved/HEAD")"
-  for name in MERGE_HEAD MERGE_MSG MERGE_MODE AUTO_MERGE ORIG_HEAD; do
-    if [[ -f "$saved/$name" ]]; then cp "$saved/$name" "$gd/$name"; else rm -f "$gd/$name"; fi
+  local root="$1" gd="$2" saved="$3" name ok=0
+  git -C "$root" reset -q --soft "$(cat "$saved/HEAD")" || ok=1
+  for name in MERGE_HEAD MERGE_MSG MERGE_MODE MERGE_RR AUTO_MERGE ORIG_HEAD; do
+    if [[ -f "$saved/$name" ]]; then cp "$saved/$name" "$gd/$name" || ok=1; else rm -f "$gd/$name"; fi
   done
-  cp "$saved/description.md" "$root/$DESC_FILE"
+  cp "$saved/description.md" "$root/$DESC_FILE" || ok=1
+  # The only copy stays when any of it could not be put back.
+  ((ok == 0)) || { _land_err "could not put all of $root's merge back; its saved state is in $saved"; return 1; }
   rm -rf "$saved"
 }
 
 # One land card for a desk's described change, through the ledger's land-create,
 # which pins every fact. It refuses, with the fix, what one pick cannot land.
 land_ask() {
-  local dir="$1" root gd common branch trunk why issue remote head title card token flat="" saved="" name
+  local dir="$1" root gd common branch trunk why issue remote head title card token flat="" saved=""
   root="$(_desc_root "$dir")" || return 1
   gd="$(git -C "$root" rev-parse --absolute-git-dir)"
   common="$(git -C "$root" rev-parse --path-format=absolute --git-common-dir)"
@@ -343,13 +414,9 @@ land_ask() {
       || { _land_err "$root still has merge conflicts: the desk resolves and stages them, and runs /validate again"; return 1; }
     [[ ! -e "$gd/MERGE_AUTOSTASH" ]] \
       || { _land_err "$root's merge holds an autostash, which ending the merge would move to the stash list: the desk commits or drops what it stashed, and runs /validate again"; return 1; }
-    saved="$(mktemp -d)" && git -C "$root" rev-parse HEAD >"$saved/HEAD" && cp "$root/$DESC_FILE" "$saved/description.md" \
-      || { _land_err "could not keep $root's merge state to put back; nothing was asked"; return 1; }
-    for name in MERGE_HEAD MERGE_MSG MERGE_MODE AUTO_MERGE ORIG_HEAD; do
-      [[ ! -f "$gd/$name" ]] || cp "$gd/$name" "$saved/$name"
-    done
-    git -C "$root" merge --quit && git -C "$root" reset -q --soft "$remote" && _desc_stamp "$root" >/dev/null \
-      || { _land_unflatten "$root" "$gd" "$saved"; _land_err "could not put HEAD on $trunk's tip with the merged tree staged in $root; its merge is as it was, and nothing was asked"; return 1; }
+    saved="$(_land_flatten "$root" "$gd" "$remote")" || return 1
+    _desc_stamp "$root" >/dev/null \
+      || { _land_unflatten "$root" "$gd" "$saved"; _land_err "could not stamp the description on $trunk's tip in $root; its merge is as it was, and nothing was asked"; return 1; }
     flat=" The desk's merge of $trunk lands as one commit with its exact tree."
   fi
   head="$(git -C "$root" rev-parse HEAD)"

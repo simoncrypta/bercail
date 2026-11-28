@@ -306,14 +306,20 @@ function message(cwd: string, oid: string): Buffer | null {
 
 // The approved tree was committed: `now` is one commit, with `old` its only parent and
 // the approved tree its tree. On a merge or land card asked while the desk merged in the
-// asked base, the commit that finishes that merge has the base as second parent. Anything
-// more (other commits, another merge, an amend) is new work.
+// asked base, the commit that finishes that merge has the base as second parent. Where
+// bercail land flattens that merge, or a merge of the base the asked HEAD already is, for a
+// trunk that takes no merge commit, the base is its only parent. Anything more (other
+// commits, another merge, an amend) is new work.
 function committedOnce(cwd: string, old: string, now: string, tree: string | null, target?: QuestionTarget) {
   const commit = headers(cwd, now);
-  const finishes =
-    (target?.action === "merge" || target?.action === "land") && target.mergeHead && target.mergeHead === target.base;
-  const want = finishes ? [old, target.base] : [old];
-  return !!commit && commit.tree === tree && JSON.stringify(commit.parents) === JSON.stringify(want);
+  const merges = target?.action === "merge" || target?.action === "land";
+  const finishes = merges && target.mergeHead && target.mergeHead === target.base;
+  const asked = merges && !finishes ? headers(cwd, old) : null;
+  const merged = asked?.tree === tree && asked.parents.length === 2 && asked.parents[1] === target!.base;
+  const wants = finishes ? [[old, target.base], [target.base]] : merged ? [[old], [target!.base]] : [[old]];
+  return (
+    !!commit && commit.tree === tree && wants.some((want) => JSON.stringify(commit.parents) === JSON.stringify(want))
+  );
 }
 
 // Merging `head` into `base`, which moved ahead from `pinned`, has no conflict, as git's

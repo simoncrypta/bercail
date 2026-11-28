@@ -315,6 +315,76 @@ describe("a merge pick stays fresh across its own steps, and only those", () => 
     });
   });
 
+  // bercail land on a trunk that takes no merge commit: the merge's tree as one commit on the base.
+  test("the approved merge flattened onto the asked base, its only parent, is fresh on a merge or land card and approves its push", () => {
+    branches();
+    const remote = join(dir, "remote.git");
+    execFileSync("git", ["init", "-q", "--bare", remote], { env });
+    git("remote", "add", "origin", remote);
+    const base = git("rev-parse", "trunk");
+    const ref = git("symbolic-ref", "HEAD");
+    git("merge", "-q", "--no-commit", "--no-ff", "trunk");
+    const push = { approves: "Ship it", remote: "origin", refs: [ref] };
+    ok("create", spec({ base, action: "merge" }));
+    ok(
+      "create",
+      spec({ requestId: "land", topic: "land", base, action: "land", options: ["Ship it", "Not yet"], push }),
+    );
+    ok("create", spec({ requestId: "commit", topic: "commit", base, action: "commit" }));
+    pick("p2", "Ship it", "Q2@1");
+    git("merge", "--quit");
+    git("reset", "-q", "--soft", base);
+    git("commit", "-qm", "the job, flat on trunk");
+    expect(git("rev-list", "--parents", "-n1", "HEAD").split(" ").slice(1)).toEqual([base]);
+    expect(check()).toMatchObject({ status: "fresh", reasons: [] });
+    expect(ok("check", undefined, ["Q2@1"])).toMatchObject({ status: "fresh", reasons: [] });
+    // A commit card never had the merge-finishing pass.
+    expect(ok("check", undefined, ["Q3@1"])).toMatchObject({
+      status: "stale",
+      reasons: ["head changed", "mergeHead changed"],
+    });
+    expect(ok("push-approval", undefined, [repo, "origin", `${git("rev-parse", "HEAD")}^{commit}:${ref}`])).toEqual({
+      approved: "Q2@1",
+    });
+  });
+
+  test("a land card asked on a committed merge of the base stays fresh once that merge is flattened onto the base", () => {
+    branches();
+    const base = git("rev-parse", "trunk");
+    git("merge", "-q", "--no-ff", "-m", "merge trunk", "trunk");
+    ok("create", spec({ base, action: "land" }));
+    ok("create", spec({ requestId: "commit", topic: "commit", base, action: "commit" }));
+    git("reset", "-q", "--soft", base);
+    git("commit", "-qm", "the job, flat on trunk");
+    expect(check()).toMatchObject({ status: "fresh", reasons: [] });
+    expect(ok("check", undefined, ["Q2@1"])).toMatchObject({ status: "stale", reasons: ["head changed"] });
+  });
+
+  test("a land card asked on a committed merge of another branch is stale once its tree is put on the base", () => {
+    branches();
+    const base = git("rev-parse", "trunk");
+    git("switch", "-qc", "side", `${base}^`);
+    writeFileSync(join(repo, "side"), "side\n");
+    git("add", "side");
+    git("commit", "-qm", "side work");
+    git("switch", "-q", "-");
+    git("merge", "-q", "--no-ff", "-m", "merge side", "side");
+    expect(git("rev-parse", "HEAD^2")).toBe(git("rev-parse", "side"));
+    ok("create", spec({ base, action: "land" }));
+    git("update-ref", "HEAD", commitTree("flat on trunk\n", base));
+    expect(check()).toMatchObject({ status: "stale", reasons: ["head changed"] });
+  });
+
+  test("the approved tree as one commit on anything but the base the desk was merging is stale", () => {
+    branches();
+    const base = git("rev-parse", "trunk");
+    git("merge", "-q", "--no-commit", "--no-ff", "trunk");
+    ok("create", spec({ base, action: "land" }));
+    git("update-ref", "HEAD", commitTree("flat on trunk's parent\n", `${base}^`));
+    git("merge", "--quit");
+    expect(check()).toMatchObject({ status: "stale", reasons: ["head changed", "mergeHead changed"] });
+  });
+
   test("the approved tree with a second parent other than the asked base is stale", () => {
     branches();
     const asked = git("rev-parse", "HEAD");

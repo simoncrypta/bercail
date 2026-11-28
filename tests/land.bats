@@ -392,24 +392,172 @@ GIT
   done
 }
 
-@test "where the policy integrates direct, a staged merge of the trunk's tip is on the trunk: committed as the merge, no moved base" {
-  direct
+# The trunk gets a commit of its own, and the desk merges it into feature, uncommitted.
+merged() {
   git branch -f main HEAD
-  base="$(git rev-parse HEAD)"
   git checkout -q main
   printf 'trunk\n' >trunk.txt && git add trunk.txt && git commit -qm trunk
   git checkout -q feature
   git merge -q --no-commit --no-ff main
+}
+
+@test "where the policy integrates direct, a staged merge of the trunk's tip lands as one commit on that tip, with the merge's exact tree" {
+  direct
+  merged
   described
+  tree="$(git write-tree)"
   runs CI:completed:success
   run land "$REPO"
   [ "$status" -eq 0 ] || fail "refused: $output"
   [[ "$output" != *"base moved"* ]] || fail "called the base moved: $output"
-  [ "$(git rev-parse HEAD^1) $(git rev-parse HEAD^2)" = "$base $(git rev-parse main)" ] || fail "not the merge: $(git log --format='%H %P' -1)"
+  [ "$(git log -1 --format=%P)" = "$(git rev-parse main)" ] || fail "not one commit on the trunk's tip: $(git log --format='%H %P' -1)"
+  [ "$(git rev-parse 'HEAD^{tree}')" = "$tree" ] || fail "not the merge's tree"
+  [[ "$output" == *"lands as one commit on its tip"* ]] || fail "no word of the flattening: $output"
+  [ "$(git log -1 --format=%s)" = "file: add a line" ] || fail "subject: $(git log -1 --format=%s)"
+  [ -z "$(git rev-list --merges main..HEAD)" ] || fail "a merge commit is on the branch"
+  [ ! -e .git/MERGE_HEAD ] || fail "the merge is still under way"
+  # A rerun, as after a wait that could not start, makes no second commit.
+  sha="$(git rev-parse HEAD)"
+  rm -f "$INBOX"/*.json
+  run land "$REPO"
+  [ "$status" -eq 0 ] || fail "rerun: $output"
+  [[ "$output" == *"no new commit"* ]] || fail "rerun: $output"
+  [ "$(git rev-parse HEAD)" = "$sha" ] || fail "the rerun made a commit"
 }
 
-@test "a staged merge of the trunk whose tree is HEAD's is still committed as the merge, never taken as already landed" {
+@test "where the policy integrates direct, a merge of the trunk's tip that land committed before is flattened onto that tip on a rerun" {
   direct
+  merged
+  described
+  tree="$(git write-tree)"
+  git commit -q -F - <<<"file: add a line"
+  [ -n "$(git rev-list --merges main..HEAD)" ] || fail "setup: no merge commit"
+  runs CI:completed:success
+  run land "$REPO"
+  [ "$status" -eq 0 ] || fail "refused: $output"
+  [[ "$output" != *"no new commit"* ]] || fail "waited on the merge commit: $output"
+  [ "$(git log -1 --format=%P)" = "$(git rev-parse main)" ] || fail "not one commit on the trunk's tip: $(git log --format='%H %P' -1)"
+  [ "$(git rev-parse 'HEAD^{tree}')" = "$tree" ] || fail "not the merge's tree"
+  jq -e --arg sha "$(git rev-parse HEAD)" '.land.head == $sha' <<<"$(event)" >/dev/null || fail "the wait is not on the flat commit"
+}
+
+@test "where the policy integrates direct, a committed merge with more staged on top and described from that merge is refused: the flat commit would carry what was not described" {
+  direct
+  merged
+  described
+  git commit -q -F - <<<"file: add a line"
+  head="$(git rev-parse HEAD)"
+  described "file: one more line"
+  [ "$(sed -n 's/^base: //p' .bercail/description.md)" = "$head" ] || fail "setup: not described from the merge"
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "squashed an undescribed merge into the new commit: $output"
+  [[ "$output" == *"measured from ${head:0:12}, not main's tip"*"git reset --soft $(git rev-parse --short=12 main)"*"nothing was committed"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "HEAD moved"
+  ! git diff --cached --quiet || fail "the staged change is gone"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "where the policy integrates direct, a committed merge of another branch is refused before any commit, never flattened" {
+  direct
+  git branch -f main HEAD
+  git checkout -qb side
+  printf 'side\n' >side.txt && git add side.txt && git commit -qm side
+  git checkout -q feature
+  git merge -q --no-ff -m 'merge side' side
+  head="$(git rev-parse HEAD)"
+  described
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "landed a branch with a merge of another branch: $output"
+  [[ "$output" == *"a merge commit other than HEAD's merge of main's tip"*"nothing was committed"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "HEAD moved"
+  ! git diff --cached --quiet || fail "the staged change is gone"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "where the policy integrates direct, a commit a hook changed is undone, with or without a merge, and starts no wait" {
+  direct
+  # pre-commit: a formatter that rewrites the staged file.
+  printf '#!/bin/sh\nprintf formatted >file.txt && git add file.txt\n' >.git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+  head="$(git rev-parse HEAD)"
+  described
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "plain: landed what the hook made: $output"
+  [[ "$output" == *"a hook changed it"*"no CI wait was started"* ]] || fail "plain: $output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "plain: the commit stayed"
+  [ "$(git show :file.txt)" = formatted ] || fail "plain: the hook's change is not staged"
+  [ ! -s "$LOG" ] || fail "plain: hc or gh ran: $(cat "$LOG")"
+  git reset -q --hard
+  merged
+  head="$(git rev-parse HEAD)"
+  described
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "merge: landed what the hook made: $output"
+  [[ "$output" == *"a hook changed it"*"no CI wait was started"* ]] || fail "merge: $output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "merge: HEAD is not the desk's"
+  [ "$(cat .git/MERGE_HEAD)" = "$(git rev-parse main)" ] || fail "merge: the merge is gone"
+  [ ! -s "$LOG" ] || fail "merge: hc or gh ran: $(cat "$LOG")"
+}
+
+@test "where the policy integrates direct, a merge of anything but the trunk's tip is refused before any commit, and the merge is left as it was" {
+  direct
+  git branch -f main HEAD
+  git checkout -qb side
+  printf 'side\n' >side.txt && git add side.txt && git commit -qm side
+  git checkout -q feature
+  head="$(git rev-parse HEAD)"
+  git merge -q --no-commit --no-ff side
+  described
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "landed a merge of another branch: $output"
+  [[ "$output" == *"merging something other than main's tip"*"nothing was committed"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "HEAD moved"
+  [ "$(cat .git/MERGE_HEAD)" = "$(git rev-parse side)" ] || fail "the merge is gone"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "where the policy integrates direct, a commit that fails after the flattening puts the desk's merge back as it was" {
+  direct
+  merged
+  described
+  head="$(git rev-parse HEAD)" tree="$(git write-tree)" desc="$(cat .bercail/description.md)"
+  # As rerere leaves a resolved conflict; ending the merge removes it.
+  printf 'rr\n' >.git/MERGE_RR
+  printf '#!/bin/sh\nexit 1\n' >.git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "landed past a refusing hook: $output"
+  [[ "$output" == *"git commit failed"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "HEAD is not the desk's: $(git rev-parse HEAD)"
+  [ "$(cat .git/MERGE_HEAD)" = "$(git rev-parse main)" ] || fail "the merge is gone"
+  [ "$(git write-tree)" = "$tree" ] || fail "the staged tree changed"
+  [ "$(cat .bercail/description.md)" = "$desc" ] || fail "the description changed"
+  [ "$(cat .git/MERGE_RR)" = rr ] || fail "the rerere record is gone"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "where the policy integrates direct, a staged merge whose tree is the trunk's own tip is refused: nothing to land" {
+  direct
+  git branch -f main HEAD
+  # Both sides make the same edit, so the merge's tree is the trunk tip's.
+  printf 'same\n' >>file.txt && git commit -qam same
+  head="$(git rev-parse HEAD)"
+  git checkout -q main
+  printf 'same\n' >>file.txt && git commit -qam 'same on the trunk'
+  git checkout -q feature
+  git merge -q --no-commit --no-ff main
+  [ "$(git write-tree)" = "$(git rev-parse 'main^{tree}')" ] || fail "setup: the merge is not the trunk's tree"
+  jq -n --arg t "$(git write-tree)" \
+    '{tree: $t, checks: [{kind: "test", command: "bash tests/run.sh", exit_code: 0, evidence: "all passed"}]}' >.bercail/validate.json
+  printf -- '---\ntitle: merge the trunk\n---\nBrings the branch onto the trunk.\n\nValidation: bash tests/run.sh passed.\n' >.bercail/description.md
+  "$ROOT/bin/bercail" describe stamp >/dev/null || fail "stamp"
+  run land "$REPO"
+  [ "$status" -ne 0 ] || fail "landed nothing: $output"
+  [[ "$output" == *"main already has this change"*"nothing was committed"* ]] || fail "$output"
+  [ "$(git rev-parse HEAD)" = "$head" ] || fail "HEAD moved"
+  [ -e .git/MERGE_HEAD ] || fail "the merge is gone"
+  [ ! -s "$LOG" ] || fail "hc or gh ran: $(cat "$LOG")"
+}
+
+@test "on a PR branch, a staged merge of the trunk whose tree is HEAD's is still committed as the merge, never taken as already landed" {
   git branch -f main HEAD
   # Both sides make the same edit, so the merge's tree is HEAD's.
   printf 'same\n' >>file.txt && git commit -qam same
@@ -419,6 +567,7 @@ GIT
   git checkout -q feature
   git merge -q --no-commit --no-ff main
   [ "$(git write-tree)" = "$(git rev-parse 'HEAD^{tree}')" ] || fail "the merge changed the tree"
+  mkdir -p .bercail
   jq -n --arg t "$(git write-tree)" \
     '{tree: $t, checks: [{kind: "test", command: "bash tests/run.sh", exit_code: 0, evidence: "all passed"}]}' >.bercail/validate.json
   printf -- '---\ntitle: merge the trunk\n---\nBrings the branch onto the trunk.\n\nValidation: bash tests/run.sh passed.\n' >.bercail/description.md

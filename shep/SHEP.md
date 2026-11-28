@@ -617,7 +617,8 @@ and `--issue` when there is one, and say so in one line with its link:
 - Run `bercail describe check <worktree>` before shipping. On any failure,
   tell the person why, send the reason to the desk for /validate and stop.
   To ship the reviewed branch, run `bercail land <worktree>`: it checks the
-  description, commits the staged tree with its text and starts a CI waiter
+  description, commits the staged tree with its text (a desk's merge of the
+  trunk's tip, as one commit on that tip) and starts a CI waiter
   (none with git backend `entire`: the trail's gates decide, below). On trunk or detached HEAD,
   stop and identify the desk branch. If the waiter could not start after
   the commit, rerun the same `bercail land` command.
