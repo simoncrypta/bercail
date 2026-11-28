@@ -4174,7 +4174,7 @@ async function pinConfigEdit(read: Read, dir: string, words: string[]) {
   const shown = await read(bin, [...words.slice(1), "--dry-run"], dir);
   const lines = shown.split("\n").filter((line) => /^[-+]/.test(line));
   const diff = lines.length ? lines.join("\n") : shown;
-  const argv = [bin, ...words.slice(1), "--expect", createHash("sha256").update(diff).digest("hex")];
+  const argv = ["bercail", ...words.slice(1), "--expect", createHash("sha256").update(diff).digest("hex")];
   return { kind: "command" as const, dir, argv, diff };
 }
 
@@ -4206,7 +4206,7 @@ async function pinPolicyTrust(read: Read, dir: string, words: string[]) {
   const hash = /^sha256: ([0-9a-f]{64})$/.exec(first)?.[1];
   const main = /^repo: {3}(\/.*)$/.exec(second ?? "")?.[1];
   if (!hash || !main) fail("bercail policy preview did not start with the file's sha256 and its repo");
-  return { kind: "command" as const, dir: repo, argv: [bin, "policy", "trust-pinned", hash, main, repo], trust };
+  return { kind: "command" as const, dir: repo, argv: ["bercail", "policy", "trust-pinned", hash, main, repo], trust };
 }
 
 // A desk answer's Yes, run by bercail itself in the desk's worktree: the prompt as its
@@ -4220,13 +4220,18 @@ async function pinDeskAnswer(read: Read, dir: string, words: string[]) {
     fail(`desk ${words[3]} has another prompt waiting now, or none`);
   const desk = realpathSync(prompt.cwd);
   const answer = await read(bin, [...words.slice(1), "--dry-run"], desk);
-  return { kind: "command" as const, dir: desk, argv: [bin, ...words.slice(1)], answer };
+  return { kind: "command" as const, dir: desk, argv: ["bercail", ...words.slice(1)], answer };
 }
 
 // The fixed argv the worker runs, and where: never the text Shep wrote. A push goes
 // to the pinned URL with no tags or submodules a config could add, each commit as
 // <hash>^{commit}, which no ref named like the hash can shadow.
+// A config edit, a policy trust or a desk answer pins the word bercail and runs this process's bercail:
+// Shep's session finds it on PATH and the worker by its path, so a pinned path would
+// read as changed in the worker and never run.
 export function runOf(facts: GuardFacts): { argv: string[]; cwd: string } {
+  if (facts.kind === "command" && ("diff" in facts || "trust" in facts || "answer" in facts))
+    return { argv: [process.env.BERCAIL_BIN || "bercail", ...facts.argv.slice(1)], cwd: facts.dir };
   if (facts.kind === "command") return { argv: facts.argv, cwd: facts.dir };
   if (facts.kind === "cleanup" && "gone" in facts)
     return { argv: [process.env.BERCAIL_BIN || "bercail", "cleanup", "--gone", facts.path], cwd: "/" };

@@ -11,8 +11,10 @@ import guard, {
   decideBash,
   defaultPolicy,
   deskPrompts,
+  changedFacts,
   guardOperation,
   pinOperation,
+  runOf,
 } from "../bstack/pi/extensions/guard.ts";
 
 const none = { "/work": defaultPolicy, "/other": defaultPolicy };
@@ -195,6 +197,22 @@ test("a desk answer's card pins the prompt waiting now, in the desk's worktree, 
   ]);
   // Another prompt waits now: nothing pins.
   await expect(pinOperation(op, read({ id: "other", cwd: "/" }))).rejects.toThrow(/another prompt waiting now/);
+});
+
+test("a desk answer's card pinned in Shep's session pins the same in its worker, which runs its own bercail", async () => {
+  const id = "0b7f3c1e-2a4d-4e5f-8a9b-0c1d2e3f4a5b";
+  const read = async (_command: string, args: string[]) =>
+    args[1] === "prompt" ? JSON.stringify({ id, cwd: "/" }) : "Answer Yes to desk t1's guard prompt";
+  const op = { kind: "command" as const, dir: "/", argv: ["bercail", "desk", "answer", "t1", "yes", "--prompt", id] };
+  // Shep's session leaves BERCAIL_BIN unset; bin/bercail guard sets it to its own path.
+  vi.stubEnv("BERCAIL_BIN", undefined);
+  const asked = await pinOperation(op, read);
+  vi.stubEnv("BERCAIL_BIN", "/opt/bercail/bin/bercail");
+  expect(changedFacts(asked, await pinOperation(op, read))).toStrictEqual([]);
+  expect(runOf(asked)).toStrictEqual({
+    argv: ["/opt/bercail/bin/bercail", "desk", "answer", "t1", "yes", "--prompt", id],
+    cwd: "/",
+  });
 });
 
 // A prompt as the desk's guard publishes it, and a confirm the test settles by hand.

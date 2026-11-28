@@ -722,7 +722,7 @@ test("a config change pins bercail itself, the lines its --dry-run changes and t
   const facts = await pin("/elsewhere/bercail config set shep rollover true", repo);
   const diff = `--- ${config}\n+++ ${config}\n-rollover = false # mine\n+rollover = true # mine`;
   const argv = [
-    cli,
+    "bercail",
     "config",
     "set",
     "shep",
@@ -732,7 +732,7 @@ test("a config change pins bercail itself, the lines its --dry-run changes and t
     createHash("sha256").update(diff).digest("hex"),
   ];
   expect(facts).toStrictEqual({ kind: "command", dir: repo, argv, diff });
-  expect(runOf(facts)).toStrictEqual({ argv, cwd: repo });
+  expect(runOf(facts)).toStrictEqual({ argv: [cli, ...argv.slice(1)], cwd: repo });
   expect(readFileSync(config, "utf8")).toBe("[shep]\nrollover = false # mine\n");
   expect(await pin(`cd ${repo} && bercail routine enable deps`)).toMatchObject({
     diff: `--- ${config}\n+++ ${config}\n+\n+[routine.deps]\n+run = "deps"\n+at = "08:00"`,
@@ -759,7 +759,7 @@ test("a policy trust pins bercail itself in the repo's real path, the file's sha
   const hash = createHash("sha256").update('push = "main"\n').digest("hex");
   symlinkSync(repo, join(dir, "here"));
   const facts = await pin(`/elsewhere/bercail policy trust ${join(dir, "here")}`, dir);
-  const argv = [cli, "policy", "trust-pinned", hash, repo, repo];
+  const argv = ["bercail", "policy", "trust-pinned", hash, repo, repo];
   expect(facts).toMatchObject({
     kind: "command",
     dir: repo,
@@ -768,7 +768,7 @@ test("a policy trust pins bercail itself in the repo's real path, the file's sha
       new RegExp(`^sha256: ${hash}\nrepo: +${repo}\nfile: +${repo}/\\.bercail/policy\\.toml\n[^]*\n\\+push = "main"$`),
     ),
   });
-  expect(runOf(facts)).toStrictEqual({ argv, cwd: repo });
+  expect(runOf(facts)).toStrictEqual({ argv: [cli, ...argv.slice(1)], cwd: repo });
   expect(existsSync(join(dir, "state/bercail/policy-trust.json"))).toBe(false);
   // Only the person's Allow trusts it: nobody answering is a Deny.
   expect(await guardDefault(facts)).toStrictEqual({

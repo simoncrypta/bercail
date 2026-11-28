@@ -440,15 +440,16 @@ arg[--json]" ]] || fail "argv: $(cat "$LOG")"
 }
 
 @test "Shep's config change shows each line on its card, runs as bercail on an Allow, and a Deny or a change by the person writes nothing" {
-  export BERCAIL_BIN="$ROOT/bin/bercail"
+  # As in Shep's session: bercail on PATH and no BERCAIL_BIN, which the worker sets to its path.
+  ln -s "$ROOT/bin/bercail" "$BATS_TEST_TMPDIR/bin/bercail"
   config="$HOME/.config/bercail/config.toml"
   mkdir -p "${config%/*}"
   printf '[shep]\nrollover = false\n' >"$config"
   id="$(ticket "cd $REPO && bercail config set shep rollover true")"
   worker "$id"
   token="$(card "$id")"
-  bercail shep question json | jq -e --arg t "$token" --arg c "$config" --arg r "$ROOT" '.questions[] | select("\(.id)@\(.revision)" == $t)
-    | .brief | contains("runs \($r)/bin/bercail config set shep rollover true --expect ")
+  bercail shep question json | jq -e --arg t "$token" --arg c "$config" '.questions[] | select("\(.id)@\(.revision)" == $t)
+    | .brief | contains("runs bercail config set shep rollover true --expect ")
       and contains("It changes config.toml so:\n--- \($c)\n+++ \($c)\n-rollover = false\n+rollover = true\n")' \
     >/dev/null || fail "brief: $(bercail shep question json | jq -c '.questions[-1].brief')"
   [[ "$(cat "$config")" == $'[shep]\nrollover = false' ]] || fail "written before the Allow: $(cat "$config")"
@@ -472,7 +473,8 @@ arg[--json]" ]] || fail "argv: $(cat "$LOG")"
 }
 
 @test "Shep's policy trust goes on a card with the repo, the sha256 and the diff, waits for the person, and trusts only that file on an Allow" {
-  export BERCAIL_BIN="$ROOT/bin/bercail"
+  # As in Shep's session: bercail on PATH and no BERCAIL_BIN, which the worker sets to its path.
+  ln -s "$ROOT/bin/bercail" "$BATS_TEST_TMPDIR/bin/bercail"
   mkdir -p "$REPO/.bercail"
   printf 'push = "branch"\n' >"$REPO/.bercail/policy.toml"
   git -C "$REPO" add .bercail && git -C "$REPO" commit -qm policy
@@ -483,9 +485,9 @@ arg[--json]" ]] || fail "argv: $(cat "$LOG")"
   id="$(ticket "bercail policy trust $REPO")"
   worker "$id"
   token="$(card "$id")"
-  bercail shep question json | jq -e --arg t "$token" --arg r "$(cd "$REPO" && pwd -P)" --arg h "$hash" --arg b "$ROOT/bin/bercail" \
+  bercail shep question json | jq -e --arg t "$token" --arg r "$(cd "$REPO" && pwd -P)" --arg h "$hash" \
     '.questions[] | select("\(.id)@\(.revision)" == $t) | (.guard | has("defaults") | not) and (.brief
-      | contains("runs \($b) policy trust-pinned \($h) \($r) \($r) in \($r)")
+      | contains("runs bercail policy trust-pinned \($h) \($r) \($r) in \($r)")
       and contains("It trusts this policy file:\nsha256: \($h)\nrepo:   \($r)\nfile:   \($r)/.bercail/policy.toml\n")
       and contains("\n-push = \"branch\"\n+push = \"main\"\n")
       and test("It waits for you: nobody answering by [0-9:]+ counts as a Deny, because trusting a repo.s policy file is the person.s call"))' \
