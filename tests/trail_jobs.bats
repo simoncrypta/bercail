@@ -735,13 +735,38 @@ Find where it expires."* ]] || fail "show: $out"
   [[ "$out" == *"is neither a beads id nor a trail (trail:N)"* ]] || fail "bad id: $out"
 }
 
-# changes N 'R/C:STATUS'...: trail N's changes, in the repo/number form entire shows.
+# origin_up: origin's entire:// URL reaches a bare repo here, through a stand-in for
+# Entire's git remote helper, and holds main.
+origin_up() {
+  export ORIGIN_GIT="$BATS_TEST_TMPDIR/origin.git"
+  [[ -d "$ORIGIN_GIT" ]] && return
+  cat >"$BATS_TEST_TMPDIR/bin/git-remote-entire" <<'EOF'
+#!/usr/bin/env bash
+while read -r cmd arg; do
+  case "$cmd" in
+    capabilities) printf 'connect\n\n' ;;
+    connect) printf '\n'; exec git "${arg#git-}" "$ORIGIN_GIT" ;;
+    *) exit 1 ;;
+  esac
+done
+EOF
+  chmod +x "$BATS_TEST_TMPDIR/bin/git-remote-entire"
+  git init -q --bare "$ORIGIN_GIT"
+  git -C "$REPO" push -q origin main
+}
+
+# changes N 'R/C:STATUS'...: trail N's changes, in the repo/number form entire shows,
+# each with its branch b<C> on origin at main's tip, the head Entire shows.
 changes() {
   local n="$1" c list="[]"
   shift
+  origin_up
   for c in "$@"; do
+    git -C "$REPO" push -q origin "main:refs/heads/b$(cut -d/ -f2 <<<"${c%%:*}")"
     list="$(jq -c --arg r "${c%%/*}" --argjson num "$(cut -d/ -f2 <<<"${c%%:*}")" --arg s "${c##*:}" \
-      '. + [{repository: $r, number: $num, branch: "b\($num)", base: "main", status: $s, url: "u"}]' <<<"$list")"
+      --arg head "$(git -C "$REPO" rev-parse main)" \
+      '. + [{repository: $r, repositoryId: "R-\($r)", number: $num, branch: "b\($num)", base: "main", status: $s, url: "u",
+        mergeability: {head_sha: $head}}]' <<<"$list")"
   done
   jq --argjson c "$list" '.changes = $c' "$TRAILS/$n.json" >"$TRAILS/t" && mv "$TRAILS/t" "$TRAILS/$n.json"
 }
@@ -775,6 +800,61 @@ changes() {
   out="$(cd "$REPO" && bercail job merge trail:3 --change app/9)" || fail "merge: $out"
   [[ "$out" == "merged app/9; trail:3 stays open for api/10" ]] || fail "$out"
   jq -e '.status == "open"' "$TRAILS/3.json" >/dev/null || fail "closed with api/10 open: $(cat "$TRAILS/3.json")"
+}
+
+@test "job merge refuses a change behind its base on origin, whose merged tree no gate checked, and merges it once it holds the base" {
+  local out head
+  trail 3 "Add r2 buckets" open building
+  changes 3 app/9:open
+  git -C "$REPO" config user.email s@example.invalid
+  git -C "$REPO" switch -qc b9
+  git -C "$REPO" commit -q --allow-empty -m "r2 buckets"
+  head="$(git -C "$REPO" rev-parse HEAD)"
+  git -C "$REPO" push -q origin b9
+  # Another trail merged onto main meanwhile, from another clone: this one has not seen it.
+  git clone -q -b main "$ORIGIN_GIT" "$BATS_TEST_TMPDIR/other"
+  git -C "$BATS_TEST_TMPDIR/other" -c user.name=t -c user.email=t@example.invalid commit -q --allow-empty -m "strict schema"
+  git -C "$BATS_TEST_TMPDIR/other" push -q origin main
+  jq --arg h "$head" '.changes[0].mergeability.head_sha = $h' "$TRAILS/3.json" >"$TRAILS/t" && mv "$TRAILS/t" "$TRAILS/3.json"
+  : >"$LOG"
+  out="$(cd "$REPO" && bercail job merge trail:3 2>&1)" && fail "merged behind its base: $out"
+  [[ "$out" == *"app/9 at ${head:0:12} is behind main on origin ($(git -C "$ORIGIN_GIT" rev-parse --short=12 main)): merging it now would put a tree on main that no check ran on"* ]] || fail "$out"
+  [[ "$out" == *"entire trail update-branch app/9"*"nothing was merged or closed" ]] || fail "$out"
+  ! grep -qE '^entire trail (merge|update)' "$LOG" || fail "a change behind its base was merged: $(cat "$LOG")"
+  # The branch merges main in: its new head holds the base, so it merges.
+  git -C "$REPO" pull -q --no-rebase --no-edit origin main
+  git -C "$REPO" push -q origin b9
+  jq --arg h "$(git -C "$REPO" rev-parse HEAD)" '.changes[0].mergeability.head_sha = $h' "$TRAILS/3.json" >"$TRAILS/t" && mv "$TRAILS/t" "$TRAILS/3.json"
+  out="$(cd "$REPO" && bercail job merge trail:3)" || fail "merge once up to date: $out"
+  [[ "$out" == "merged app/9; closed trail:3" ]] || fail "$out"
+}
+
+@test "job merge checks the base only where it can: no head yet, another repo's change, a head origin's branch moved past, a shallow clone, or an origin it cannot read merge nothing" {
+  local out
+  trail 3 "Two repos" open building
+  changes 3 app/9:open api/10:open
+  out="$(cd "$REPO" && bercail job merge trail:3 --change api/10 2>&1)" && fail "merged another repo's change: $out"
+  [[ "$out" == *"api/10 is a change of api, not of $REPO: merge it from a checkout of api"* ]] || fail "$out"
+  jq '.changes[0].mergeability = null' "$TRAILS/3.json" >"$TRAILS/t" && mv "$TRAILS/t" "$TRAILS/3.json"
+  out="$(cd "$REPO" && bercail job merge trail:3 --change app/9 2>&1)" && fail "merged with no head: $out"
+  [[ "$out" == *"entire trail show gives no head commit, branch and base for app/9 yet"* ]] || fail "$out"
+  # Entire shows a head the branch on origin has moved past: its gates are of another tree.
+  changes 3 app/9:open
+  git -C "$REPO" config user.email s@example.invalid
+  git -C "$REPO" commit -q --allow-empty -m "after the gates"
+  git -C "$REPO" push -q origin HEAD:refs/heads/b9
+  out="$(cd "$REPO" && bercail job merge trail:3 2>&1)" && fail "merged a head origin's branch is not at: $out"
+  [[ "$out" == *"origin's b9 is $(git -C "$REPO" rev-parse --short=12 HEAD), not $(git -C "$REPO" rev-parse --short=12 HEAD~1), the head Entire shows"* ]] || fail "$out"
+  # A shallow clone lacks the history that joins the branch to main: unknown, not behind.
+  git clone -q --depth 1 -b b9 "file://$ORIGIN_GIT" "$HOME/Work/shallow"
+  git -C "$HOME/Work/shallow" remote set-url origin entire://entire.example/et/proj/app
+  jq --arg h "$(git -C "$REPO" rev-parse HEAD)" '.changes[0].mergeability.head_sha = $h' "$TRAILS/3.json" >"$TRAILS/t" && mv "$TRAILS/t" "$TRAILS/3.json"
+  out="$(cd "$HOME/Work/shallow" && bercail job merge trail:3 2>&1)" && fail "merged from a shallow clone: $out"
+  [[ "$out" == *"is a shallow clone, so whether app/9 holds main's tip is not known: git fetch --unshallow origin there"* ]] || fail "$out"
+  rm -rf "$ORIGIN_GIT"
+  out="$(cd "$REPO" && bercail job merge trail:3 2>&1)" && fail "merged with origin unreadable: $out"
+  [[ "$out" == *"could not check app/9 against main on origin: "*"; nothing was merged or closed" ]] || fail "$out"
+  ! grep -q '^entire trail merge' "$LOG" || fail "$(cat "$LOG")"
 }
 
 @test "job merge closes nothing when Entire refuses the merge, names the close when it fails, and leaves a closed trail alone" {
