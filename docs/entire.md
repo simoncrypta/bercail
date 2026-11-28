@@ -155,8 +155,10 @@ On top of the repo's policy, for every role:
   commands, Brain and Graph (`entire trail link --help`,
   `entire brain remember --help 2>&1 | head`), when the words are bare, with
   no wrapper, quote, backslash, substitution, or redirect other than one fd
-  joined to another. So is a last `-h` on a Brain or Graph command the guard
-  lists, other than setup (`entire brain remember -h`). Another plugin is its own program, so its
+  joined to another. So is a last `-h` on `entire repo …`, and on a Brain or
+  Graph command the guard lists, other than setup (`entire brain remember -h`).
+  `entire repo`'s help and `entire agent-help repo …` run with a warning that
+  says how a create or grant reaches you (below). Another plugin is its own program, so its
   `--help` is not. Anywhere else, `--help` and
   `--dry-run` are not reads: a flag takes the next word as its value, so
   `trail approve 3 -m --help` approves.
@@ -188,9 +190,18 @@ On top of the repo's policy, for every role:
   `--force`, which skips the gates, or with a flag before `merge` that bercail
   does not know. Every other role is blocked: the lead, its siblings,
   autopilot, headless runs, and background Shep.
+- **A new repository or grant:** `entire repo create <name> --project <project>
+  --visibility public|private [--json]` and `entire repo grant add
+  /et/<project>/<repo> <provider>:<handle> --role reader|writer|admin [--json]`
+  ask you, whatever the policy: Shep's go to a guard card that shows those
+  words and never defaults, a desk's to its dialog. Any other shape is
+  blocked, so nothing is left to a default or a wizard: a visibility, project
+  or role left out, `--context`, `--no-wait`, a `--repo`, a path to `entire`,
+  a wrapper, or a substitution. Headless runs, the judge and background Shep
+  are refused.
 - **Blocked:** `trail approve`, `trail finding dismiss`, `entire api` calls
   whose path or fields name a merge, an approval or a dismissal, setup
-  (`enable`, `configure`, `agent`, `login`, `repo …`), and commands that
+  (`enable`, `configure`, `agent`, `login`, any other `repo …` change), and commands that
   amend, reset or delete (`session attach --force`, `checkpoint delete`).
 - **A flag bercail does not know** may take the next word as its value, the way
   cobra reads it, so `entire --json 3 trail merge` merges trail 3.

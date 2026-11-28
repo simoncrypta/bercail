@@ -182,6 +182,12 @@ const shepMerge =
   "Shep merges a trail only as a plain entire trail merge [<trail>], when the person asks: no --force, which skips the trail's gates, and no flag before merge that bercail does not know.";
 const entirePerson =
   "This entire command changes Entire's setup, hooks, login, or repositories. Suggest it to the person; do not run it.";
+const repoHeadless =
+  "A headless run does not create Entire repositories or grant access to them. Put what you need in your report, and Shep asks the person on a card.";
+const repoShapes =
+  "entire repo create <name> --project <project> --visibility public|private [--json], or entire repo grant add /et/<project>/<repo> <provider>:<handle> --role reader|writer|admin [--json]";
+const repoHelpNote = `This only printed entire repo's help. A repo create or grant goes to the person's Allow, Shep's on a guard card, only as ${repoShapes}.`;
+const repoShape = `A repo create or grant goes to the person's Allow only as ${repoShapes}, so the question shows all it does. Any other shape is the person's to run.`;
 const entireDestroy =
   "This entire command amends a commit, resets git state, or deletes checkpoints. Ask the person to run it.";
 const entireUnknown = "A headless run only uses entire commands bercail knows. Leave this one to the person.";
@@ -1125,12 +1131,15 @@ const entireCommands = new Set(
 function cliHelp(words: string[], strict: boolean, graphiteAliases: readonly string[] | undefined): boolean {
   const name = basename(words[0]);
   // entire's own commands, Brain and Graph parse flags anywhere: a last --help with no flag
-  // before it, which could take it as a value, prints help. So does -h, kept to the Brain and
-  // Graph commands the guard lists, setup aside. Another plugin is its own program.
+  // before it, which could take it as a value, prints help. So does -h, kept to entire repo,
+  // run as entire itself, and to the Brain and Graph commands the guard lists, setup aside.
+  // Another plugin is its own program.
   if (/^entire(-brain|-graph)?$/.test(name)) {
     const last = words.at(-1);
     const call = pluginCall([name, ...words.slice(1)]);
-    const shortHelp = call !== undefined && pluginKind.has(call.key) && pluginCallKind(call) !== "setup";
+    const shortHelp = call
+      ? pluginKind.has(call.key) && pluginCallKind(call) !== "setup"
+      : words[0] === "entire" && words[1] === "repo";
     return (
       words.length > 2 &&
       (name !== "entire" || entireCommands.has(words[1])) &&
@@ -1367,7 +1376,19 @@ function forgePublish(words: string[]): "commit" | "push" | undefined {
 // write like gh pr edit, or one that is the person's (bercail-znd's classes,
 // starting from `entire agent-help`).
 // trail: a trail write on entire.com that pushes no git ref (create --no-branch, update).
-type EntireKind = "read" | "push" | "write" | "trail" | "ask" | "merge" | "approve" | "person" | "destroy" | BrainKind;
+// repo: a repository created, or access to one granted, which only the person's Allow runs.
+type EntireKind =
+  | "read"
+  | "push"
+  | "write"
+  | "trail"
+  | "ask"
+  | "merge"
+  | "approve"
+  | "person"
+  | "destroy"
+  | "repo"
+  | BrainKind;
 // Brain and Graph (bercail-shr): a local index rebuild, a repository memory, a
 // model call on the person's tokens, and setup, sync or background work.
 type BrainKind = "refresh" | "remember" | "spend" | "setup";
@@ -1558,6 +1579,7 @@ function entireKind(words: string[]): EntireKind | undefined {
   if (among(cmd, "enable disable configure clean login logout auth cluster org project service-account"))
     return "person";
   if (cmd === "agent") return sub === "list" ? "read" : "person";
+  if (cmd === "repo" && (sub === "create" || (sub === "grant" && third === "add"))) return "repo";
   if (cmd === "repo")
     return sub === "view" || sub === "list" || (sub === "mirror" && third === "list") ? "read" : "person";
   // A dismissed finding can clear a merge gate, so it counts as an approval.
@@ -1587,6 +1609,54 @@ function entireKind(words: string[]): EntireKind | undefined {
   return "ask";
 }
 
+// entire repo create and repo grant add in the one shape whose words name all they do
+// (bercail-1uzz): the name, project and visibility, or the repo, user and role, each
+// written out, so none is a default the card does not show, and no wizard opens.
+const repoWord = /^\w[\w.-]*$/;
+const repoForms: [verb: string[], args: RegExp[], flags: Record<string, RegExp>][] = [
+  [["create"], [repoWord], { "--project": repoWord, "--visibility": /^(public|private)$/ }],
+  [["grant", "add"], [/^\/et\/\w[\w.-]*\/\w[\w.-]*$/, /^[a-z]+:\w[\w.-]*$/], { "--role": /^(reader|writer|admin)$/ }],
+];
+
+// entire repo's help, or agent-help's: it runs, with a warning that says how a create gets
+// to the person (bercail-1uzz asks for one).
+function repoHelp(words: string[], help: boolean): boolean {
+  const [first, second] = entirePath(words);
+  return (help && first === "repo") || (first === "agent-help" && second === "repo");
+}
+
+// The person's question, naming each word that decides what it does; undefined in any other shape.
+function repoCard(words: string[]): string | undefined {
+  if (words[0] !== "entire" || words[1] !== "repo") return undefined;
+  const form = repoForms.find(([verb]) => verb.every((word, i) => words[2 + i] === word));
+  if (!form) return undefined;
+  const [verb, args, flags] = form;
+  const given: string[] = [];
+  const set = new Map<string, string>();
+  let json = false;
+  for (let i = 2 + verb.length; i < words.length; i++) {
+    const word = words[i];
+    if (word === "--json" && !json) json = true;
+    else if (!word.startsWith("-")) given.push(word);
+    else {
+      const name = word.split("=")[0];
+      const value = word.includes("=") ? word.slice(name.length + 1) : words[++i];
+      if (!(name in flags) || set.has(name) || value === undefined) return undefined;
+      set.set(name, value);
+    }
+  }
+  const fits =
+    given.length === args.length &&
+    args.every((shape, i) => shape.test(given[i])) &&
+    Object.entries(flags).every(([name, shape]) => shape.test(set.get(name) ?? ""));
+  if (!fits) return undefined;
+  const question =
+    verb[0] === "create"
+      ? `Create the ${set.get("--visibility")} Entire repository ${given[0]} in the project ${set.get("--project")}?`
+      : `Give ${given[1]} ${set.get("--role")} access to the Entire repository ${given[0]}?`;
+  return `${question} Allow it only if you picked it.`;
+}
+
 // Shep merges a trail when the person asks (bercail-wd0). It asks rather than
 // following a policy: a project trail can merge a change in another repo, so no
 // checkout's policy covers it. --force skips the trail's gates: the person's.
@@ -1598,6 +1668,7 @@ function decideTrailMerge(words: string[], input: GuardInput): GuardDecision {
 
 // reading: the words as this kind was read from them, for agent-help's list. literal:
 // entire itself, in the folder the guard reads, with the words bash passes as written.
+// written: the segment's words as written, when nothing substitutes into them.
 function decideEntire(
   kind: EntireKind,
   words: string[],
@@ -1605,10 +1676,17 @@ function decideEntire(
   input: GuardInput,
   reading = words,
   literal = false,
+  written?: string[],
 ): GuardDecision {
   if (kind === "read") return allow;
   if (kind === "approve") return block(entireMerge);
   if (kind === "merge") return decideTrailMerge(words, input);
+  if (kind === "repo") {
+    // The words as written: no wrapper, path to entire, or selector forgeCall drops.
+    const question = written && repoCard(written);
+    if (!question) return block(repoShape);
+    return noChange(input.role) ?? askOr(input, question, repoHeadless);
+  }
   if (kind === "person") return block(entirePerson);
   if (kind === "destroy") return block(entireDestroy);
   if (kind === "setup") return block(brainSetup);
@@ -3213,10 +3291,12 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
     // wrapper (env -C, sudo, …) that commandWords dropped and that could change its folder or argv.
     const literal =
       depth === 0 && staticArgs && !segment.subs.length && raw[0] === "entire" && words.length === raw.length;
+    const written = depth === 0 && !segment.subs.length ? raw : undefined;
     const kinds = readings.map((reading) => reading && entireKind(reading));
     if (kinds[1] && !help) {
       kinds.forEach((kind, i) => {
-        if (kind) decision = worse(decision, decideEntire(kind, forge.words, forge.dir, here, readings[i], literal));
+        if (kind)
+          decision = worse(decision, decideEntire(kind, forge.words, forge.dir, here, readings[i], literal, written));
       });
       // It runs them in --repo, which forgeCall left out of forge.dir.
       for (const script of pluginScripts(forge.words))
@@ -3225,6 +3305,7 @@ export function decideBash(command: string, input: GuardInput, depth = 0): Guard
       if (path.includes("checkout") || path.includes("resume") || forge.words.includes("--checkout"))
         branchMoved = true;
     }
+    if (forge.words[0] === "entire" && repoHelp(forge.words, help)) decision = worse(decision, warn(repoHelpNote));
     const publishing = help ? undefined : forgePublish(forge.words);
     const forgePlain = plainWords(forge.words);
     const sync = words[0] === "gh" && forgePlain[1] === "repo" && forgePlain[2] === "sync";

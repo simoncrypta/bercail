@@ -2455,6 +2455,20 @@ for (const command of [
     for (const role of roleNames) allowed(command, at(role, policies.default));
   });
 }
+// bercail-1uzz: entire repo's help runs for every role, -h too, with a warning that says
+// how a create or grant reaches the person.
+for (const command of [
+  "entire repo --help",
+  "entire repo -h",
+  "entire repo create -h",
+  "entire repo grant add --help 2>&1 | head -40",
+  "entire agent-help repo",
+  "entire agent-help repo create",
+]) {
+  test(`entire repo's help runs with a warning: ${command}`, () => {
+    for (const role of roleNames) warned(command, at(role, policies.default), /only printed entire repo's help/);
+  });
+}
 // Another plugin is its own program: its --help may run it.
 test("an entire plugin bercail does not know gets no --help read", () => {
   asked("entire frob settings --help", at("shep", policies.default));
@@ -2582,9 +2596,70 @@ for (const [command, reason] of [
   ["entire session attach 01a1 -fa pi", /amends a commit/],
   ["entire enable --agent pi --initial-commit-message -h", /Suggest it to the person/],
   ["entire configure --checkpoint-remote --help", /Suggest it to the person/],
+  ["entire repo delete /et/lesentiel/web", /Suggest it to the person/],
+  ["entire repo grant remove /et/lesentiel/web github:alice", /Suggest it to the person/],
+  ["entire repo edit /et/lesentiel/web --visibility public", /Suggest it to the person/],
+  // -h is help only on entire repo, of entire's own commands, and only from entire itself.
+  ["entire login -h", /Suggest it to the person/],
+  ["/opt/other/entire repo -h", /Suggest it to the person/],
 ] as const) {
   test(`entire setup, rewrites and deletes are blocked: ${command}`, () => {
     for (const role of roleNames) blocked(command, at(role, policies.loosest), reason);
+  });
+}
+// bercail-1uzz: a repo create or grant asks the person, on Shep's card or a desk's dialog,
+// whatever the policy: it is never a default. Headless runs and the judge are refused.
+for (const [command, question] of [
+  [
+    "entire repo create lesentiel-design --project lesentiel --visibility private",
+    "Create the private Entire repository lesentiel-design in the project lesentiel?",
+  ],
+  [
+    "entire repo create lesentiel-design --visibility=public --project=lesentiel --json",
+    "Create the public Entire repository lesentiel-design in the project lesentiel?",
+  ],
+  [
+    "entire repo grant add /et/lesentiel/lesentiel-design github:alice --role admin",
+    "Give github:alice admin access to the Entire repository /et/lesentiel/lesentiel-design?",
+  ],
+] as const) {
+  test(`an Entire repo create or grant asks the person, naming what it does: ${command}`, () => {
+    for (const role of ["shep", "desk"] as const) {
+      const got = decision(command, at(role, policies.loosest));
+      assertEqual(got.action, "ask", `${role}: ${JSON.stringify(got)}`);
+      assertEqual(got.reason, `${question} Allow it only if you picked it.`);
+    }
+    for (const role of ["headless", "autopilot"] as const)
+      blocked(command, at(role, policies.loosest), /headless run does not create Entire repositories/);
+    blocked(command, at("judge", policies.loosest), /read-only/);
+  });
+}
+// Only in the shape whose words name all it does: no visibility, project or role left to a
+// default or a wizard, no flag bercail does not know, and nothing before repo.
+for (const command of [
+  "entire repo create lesentiel-design --project lesentiel",
+  "entire repo create lesentiel-design --visibility private",
+  "entire repo create lesentiel-design",
+  "entire repo create --project lesentiel --visibility private",
+  "entire repo create lesentiel-design --project lesentiel --visibility internal",
+  "entire repo create lesentiel-design --project --visibility --visibility private",
+  "entire repo create lesentiel-design --project lesentiel --visibility private --context work",
+  "entire repo create lesentiel-design --project lesentiel --visibility private --no-wait",
+  "entire repo create a b --project lesentiel --visibility private",
+  "entire --context work repo create lesentiel-design --project lesentiel --visibility private",
+  "entire repo grant add /et/lesentiel/lesentiel-design github:alice",
+  "entire repo grant add /et/lesentiel/lesentiel-design --role admin",
+  "entire repo grant add /et/lesentiel/lesentiel-design github:alice --role owner",
+  // The words as written, not as the guard reads them: a selector it drops, a path to
+  // entire, a wrapper, or a substitution.
+  "entire repo create lesentiel-design --repo gh/o/r --project lesentiel --visibility private",
+  "/usr/bin/entire repo create lesentiel-design --project lesentiel --visibility private",
+  "env FOO=1 entire repo create lesentiel-design --project lesentiel --visibility private",
+  "bash -c 'entire repo create lesentiel-design --project lesentiel --visibility private'",
+  'entire repo create "$(cat name)" --project lesentiel --visibility private',
+]) {
+  test(`an Entire repo create or grant in another shape is refused: ${command}`, () => {
+    for (const role of roleNames) blocked(command, at(role, policies.loosest), /only as entire repo create <name>/);
   });
 }
 for (const command of [
@@ -2848,8 +2923,9 @@ test("an unknown brain or graph command, or a flag before its subcommand, asks a
     for (const role of ["headless", "autopilot", "judge"] as const) blocked(command, at(role, policies.loosest));
   }
 });
-// -h stays off entire's own commands, and help takes no redirect but one fd joined to another.
-test("entire's own -h, and help with a closed or moved fd, keep their usual decision", () => {
+// -h is no help for a command entire plugin hands to a plugin, and help takes no redirect but
+// one fd joined to another.
+test("entire plugin's -h, and help with a closed or moved fd, keep their usual decision", () => {
   blocked("entire plugin frob -h", at("desk", policies.loosest), /person/);
   for (const command of ["entire brain remember --help 2>&-", "entire brain remember --help 2>&1-"]) {
     asked(command, at("desk", policies.loosest));

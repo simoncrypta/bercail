@@ -1184,6 +1184,16 @@ test.each([
     world(entireUrl),
     false,
   ],
+  [
+    "a private Entire repo created from a private, reversible repo",
+    {
+      kind: "command",
+      dir: "/r",
+      argv: ["entire", "repo", "create", "web", "--project", "acme", "--visibility", "private"],
+    },
+    world(entireUrl, viewed("/et/acme/app", true)),
+    false,
+  ],
 ] as const)("%s: defaults %s", async (_name, facts, read, defaults) => {
   vi.stubEnv("ENTIRE_BIN", undefined);
   const got = await guardDefault(facts as GuardFacts, read);
@@ -1306,7 +1316,7 @@ test("Shep's bercail job merge goes to a card as a trail merge; its supersede ru
   expect(shep.confirm).not.toHaveBeenCalled();
 });
 
-test("Shep's quoted Brain memory and its trail link go to cards as the words they run", async () => {
+test("Shep's quoted Brain memory, its trail link, and an Entire repo create or grant go to cards as the words they run", async () => {
   const shep = session("shep", (args) => {
     markStart(args.at(-1)!, "started");
     return { code: 0 };
@@ -1320,6 +1330,15 @@ test("Shep's quoted Brain memory and its trail link go to cards as the words the
     [
       `cd ${repo} && entire trail link 41 --branch feature --base main`,
       ["entire", "trail", "link", "41", "--branch", "feature", "--base", "main"],
+    ],
+    // bercail-1uzz: the card shows the name, project and visibility, or the repo, user and role.
+    [
+      `cd ${repo} && entire repo create lesentiel-design --project lesentiel --visibility private`,
+      ["entire", "repo", "create", "lesentiel-design", "--project", "lesentiel", "--visibility", "private"],
+    ],
+    [
+      `cd ${repo} && entire repo grant add /et/lesentiel/lesentiel-design github:alice --role reader`,
+      ["entire", "repo", "grant", "add", "/et/lesentiel/lesentiel-design", "github:alice", "--role", "reader"],
     ],
   ] as const) {
     const before = existsSync(asks()) ? tickets() : [];
