@@ -38,10 +38,10 @@ export function trailNumber(id: string): string {
   return match[1]!;
 }
 
-function run(command: string, args: string[], cwd: string): string {
+function run(command: string, args: string[], cwd: string, timeout = 20000): string {
   return execFileSync(command, args, {
     cwd,
-    timeout: 20000,
+    timeout,
     env: {
       ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_"))),
       GIT_TERMINAL_PROMPT: "0",
@@ -177,7 +177,7 @@ export function ownTrail(repo: string, id: string): any {
   const mine = entire(repo, ["repo", "view", "--json"])?.id;
   if (!mine || !Array.isArray(trail.repoIds) || !trail.repoIds.includes(mine))
     throw new Error(`${id} is not a trail of ${repo}; use the checkout of the repo it belongs to`);
-  return trail;
+  return { ...trail, repoId: mine };
 }
 
 // What one trail waits on, read only when its body names blockers: the repo's
@@ -313,6 +313,12 @@ function mergeJob(repo: string, id: string, change: string): string {
           : `${id} has no change to merge; when its work landed elsewhere, close it with bercail job supersede ${id} --with trail:<n>|<commit>`,
     );
   const target = change || open[0]!;
+  onBase(
+    repo,
+    trail.repoId,
+    trail.changes.find((c: any) => `${c.repository}/${c.number}` === target),
+    target,
+  );
   // No --force: the trail's gates decide, and Entire says which failed.
   const out = entireText(repo, ["trail", "merge", target]);
   let after: { change: string; status: string }[];
@@ -334,6 +340,81 @@ function mergeJob(repo: string, id: string, change: string): string {
     throw new Error(`merged ${target}, but ${id} is not closed: ${(error as Error).message}; close it with ${close}`);
   }
   return `merged ${target}; closed ${id}`;
+}
+
+// A change merges only when its branch on origin is the head Entire shows and holds its
+// base's tip there: a change behind its base would put a combined tree on the base that
+// no gate checked. Two trails that each pass alone can break main once both merge. Read in
+// git, since Entire shows no base commit, and only in a checkout of the change's own repo.
+function onBase(repo: string, repoId: string, c: any, target: string): void {
+  const none = "nothing was merged or closed";
+  if (c.repositoryId !== repoId)
+    throw new Error(
+      `${target} is a change of ${c.repository}, not of ${repo}: merge it from a checkout of ${c.repository}, where its base can be checked; ${none}`,
+    );
+  const head = c.mergeability?.head_sha;
+  if (
+    typeof head !== "string" ||
+    !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(head) ||
+    typeof c.base !== "string" ||
+    !c.base ||
+    typeof c.branch !== "string" ||
+    !c.branch
+  )
+    throw new Error(
+      `entire trail show gives no head commit, branch and base for ${target} yet, so whether its gates ran on its base's tip is unknown; merge it once its gates have run; ${none}`,
+    );
+  const git = (args: string[], timeout?: number) => run("git", args, repo, timeout);
+  const have = (sha: string) => {
+    try {
+      git(["cat-file", "-e", `${sha}^{commit}`]);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  const ref = `refs/heads/${c.base}`;
+  const topic = `refs/heads/${c.branch}`;
+  let tip: string | undefined;
+  try {
+    // Both in one read, so the base and the branch are of one moment.
+    const refs = new Map(
+      git(["ls-remote", "origin", ref, topic], 60000)
+        .split("\n")
+        .map((line) => line.split("\t"))
+        .map((cols) => [cols[1], cols[0]] as [string, string]),
+    );
+    tip = refs.get(ref);
+    if (!tip) throw new Error(`origin has no branch ${c.base}`);
+    if (refs.get(topic) !== head)
+      throw new Error(
+        `origin's ${c.branch} is ${refs.get(topic)?.slice(0, 12) || "missing"}, not ${head.slice(0, 12)}, the head Entire shows; merge it once Entire shows its gates on the branch's head`,
+      );
+    const want = [...(have(tip) ? [] : [ref]), ...(have(head) ? [] : [topic])];
+    if (want.length) git(["fetch", "--quiet", "--no-tags", "origin", ...want], 120000);
+  } catch (error: any) {
+    const why = String(error?.stderr || error?.message || error)
+      .trim()
+      .split("\n")[0];
+    throw new Error(`could not check ${target} against ${c.base} on origin: ${why}; ${none}`);
+  }
+  try {
+    git(["merge-base", "--is-ancestor", tip, head]);
+    return;
+  } catch (error: any) {
+    if (error?.status !== 1)
+      throw new Error(
+        `git merge-base could not compare ${target} with ${c.base}: ${String(error?.stderr || error).trim()}; ${none}`,
+      );
+  }
+  // A shallow clone may lack the history that joins them: not knowing is not behind.
+  if (git(["rev-parse", "--is-shallow-repository"]) === "true")
+    throw new Error(
+      `${repo} is a shallow clone, so whether ${target} holds ${c.base}'s tip is not known: git fetch --unshallow origin there, then merge again; ${none}`,
+    );
+  throw new Error(
+    `${target} at ${head.slice(0, 12)} is behind ${c.base} on origin (${tip.slice(0, 12)}): merging it now would put a tree on ${c.base} that no check ran on. Bring ${c.branch} up to date with ${c.base} (merge ${c.base} into it and push, or entire trail update-branch ${target} in an Entire-native repo), let its gates pass on the new head, and merge again; ${none}`,
+  );
 }
 
 // Close a trail whose work landed elsewhere, with a line in its body that says where.

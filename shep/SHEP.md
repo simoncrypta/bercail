@@ -673,6 +673,9 @@ and `--issue` when there is one, and say so in one line with its link:
   says the merge ran but the trail is not closed, close it as the log says,
   once `entire trail show <n>` shows no open change. If gates are pending, report which and hand the wait to a background
   Shep pinned to that head. Report a failed gate or changed head; do not merge.
+  A change behind its base on origin is refused (its gates never saw the
+  combined tree): the desk merges the base in, and you push it and merge once
+  its gates pass on the new head.
   Approving, dismissing a finding and `--force` stay the person's.
 - Someone else's PR: `bercail review-pr <url or branch>`, then report what its
   JSON says needs a decision.
